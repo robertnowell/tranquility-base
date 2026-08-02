@@ -1,0 +1,28 @@
+# Swift / SPM
+.build/
+.swiftpm/
+*.xcodeproj
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Never commit anything resembling a credential. Keys live in the macOS Keychain
+# and are read at runtime — see Secrets.swift for why the ambient
+# ANTHROPIC_API_KEY is deliberately ignored.
+*.pem
+*.p12
+.env
+.env.*
+secrets.json
+config.local.json
+
+# Local runtime state (queue, spooled hook payloads, recorded audio, transcripts).
+# None of this belongs in the repo; it contains real session content.
+/local/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.jsonl
+*.wav
+*.caf
