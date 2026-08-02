@@ -223,6 +223,64 @@ do {
             label: "test harness", readinessSource: .processAlive)
         report(await TerminalAppTransport().send(text: args.dropFirst(4).joined(separator: " "), to: target))
 
+    // MARK: summarize
+
+    case "set-key":
+        guard args.count > 1, let key = Secrets.Key(rawValue: args[1] + "-api-key")
+            ?? Secrets.Key.allCases.first(where: { $0.rawValue.hasPrefix(args[1]) })
+        else {
+            print("usage: vdctl set-key <anthropic|elevenlabs|assemblyai>")
+            exit(1)
+        }
+        // getpass keeps the value off the terminal and out of any process argv.
+        guard let entered = getpass("Paste \(key.rawValue) (input hidden): ").map({ String(cString: $0) }),
+              !entered.isEmpty
+        else { print("nothing entered"); exit(1) }
+        try Secrets.write(key, value: entered)
+        print("stored \(key.rawValue) in the login keychain (service: \(Secrets.service))")
+
+    case "summarize":
+        guard args.count > 1 else { usage() }
+        let text = args.dropFirst().joined(separator: " ")
+        let summary = await SummarizerChain().summarize(
+            SummaryRequest(lastAssistantMessage: text, projectLabel: "scratch"))
+        print("[\(summary.provider), \(summary.latencyMs)ms, \(summary.spoken.wordCount) words]")
+        print(summary.spoken.text)
+        if !summary.spoken.redactions.isEmpty {
+            print("redacted: \(Set(summary.spoken.redactions).sorted().joined(separator: ", "))")
+        }
+
+    case "summarize-corpus":
+        let n = args.count > 1 ? Int(args[1]) ?? 10 : 10
+        let samples = TranscriptArchive.recentSamples(limit: n)
+        guard !samples.isEmpty else { print("no archived transcripts found"); break }
+
+        let chain = SummarizerChain()
+        var overBudget = 0, withRedactions = 0, totalWords = 0, totalMs = 0
+        print("running \(samples.count) real transcripts through the summarizer\n")
+
+        for sample in samples {
+            let summary = await chain.summarize(SummaryRequest(
+                lastAssistantMessage: sample.lastAssistantMessage,
+                projectLabel: sample.projectLabel))
+            let w = summary.spoken.wordCount
+            totalWords += w
+            totalMs += summary.latencyMs
+            if w > SpokenTextSanitizer.maxWords { overBudget += 1 }
+            if !summary.spoken.redactions.isEmpty { withRedactions += 1 }
+
+            // ~13s of speech at 35 words; scale linearly from the measured rate.
+            let seconds = Double(w) * 0.39
+            print("\(pad(sample.projectLabel, 16)) \(pad("\(w)w", 5)) \(pad(String(format: "%.0fs", seconds), 5)) \(pad("\(summary.latencyMs)ms", 8)) \(summary.spoken.text)")
+            if !summary.spoken.redactions.isEmpty {
+                print("\(String(repeating: " ", count: 16)) redacted: \(Set(summary.spoken.redactions).sorted().joined(separator: ", "))")
+            }
+        }
+
+        print("")
+        print("mean \(totalWords / samples.count) words (~\(String(format: "%.0f", Double(totalWords) / Double(samples.count) * 0.39))s), \(totalMs / samples.count)ms")
+        print("over budget: \(overBudget)/\(samples.count)   needed redaction: \(withRedactions)/\(samples.count)")
+
     default:
         usage()
     }
