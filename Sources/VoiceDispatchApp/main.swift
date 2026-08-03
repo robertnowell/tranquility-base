@@ -97,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // straight at it changed nothing and the count went stale. Only
                 // while idle: speech, a recording, a countdown or a failure notice
                 // are conversations in progress and must not be redrawn under.
-                let waiting = (try? self.coordinator?.waitingCount()) ?? 0
+                let waiting = self.waitingNow()
                 let unsent = (try? self.store?.unsentReplyCount()) ?? 0
                 // Only on a change. Redrawing every tick repositions the panel and
                 // resets its layout for no reason, which reads as flicker on a
@@ -155,7 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onLeaveSettings = { [weak self] in
             guard let self else { return }
             self.coordinator?.speech.stop()
-            self.hud.showIdle(waiting: (try? self.coordinator?.waitingCount()) ?? 0,
+            self.hud.showIdle(waiting: self.waitingNow(),
                               unsentReplies: (try? self.store?.unsentReplyCount()) ?? 0)
         }
 
@@ -260,7 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             announceLaunch()
             // Visible proof of life. A menu-bar-only app with a full menu bar is
             // indistinguishable from a broken one; this makes launch observable.
-            hud.showIdle(waiting: (try? coordinator?.waitingCount()) ?? 0,
+            hud.showIdle(waiting: waitingNow(),
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
         }
     }
@@ -377,6 +377,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Permissions.log("dismissed \(sessionId.prefix(8)) through event \(latest.latestId)")
     }
 
+    /// The badge, from the same predicate a keypress uses.
+    private func waitingNow() -> Int { (try? coordinator?.waitingCount()) ?? 0 }
+
     private func refresh() {
         if !hotkey.isRunning { _ = hotkey.start() }
         rebuildMenu()
@@ -478,7 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hud.recordingEnded()
             recorder.abandon()
             updateTitle()
-            hud.showIdle(waiting: (try? coordinator?.waitingCount()) ?? 0,
+            hud.showIdle(waiting: waitingNow(),
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
         }
     }
@@ -572,18 +575,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     } else {
                         lastStatusLine = "stopped, still unread"
                         hud.showIdle(note: "Stopped, still unread.",
-                                     waiting: (try? coordinator.waitingCount()) ?? 0,
+                                     waiting: waitingNow(),
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
                     }
                 case .held(let reason):
                     lastStatusLine = "held: \(reason)"
                     hud.showIdle(note: "Holding. \(reason).",
-                                 waiting: (try? coordinator.waitingCount()) ?? 0,
+                                 waiting: waitingNow(),
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
                 case .nothingWaiting:
                     Permissions.log("announce: nothingWaiting")
                     lastStatusLine = "nothing waiting"
-                    hud.showIdle(waiting: (try? coordinator?.waitingCount()) ?? 0,
+                    hud.showIdle(waiting: waitingNow(),
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
                 }
             } catch {
@@ -684,7 +687,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.coordinator?.speech.stop()
             guard let chain = self.coordinator?.speech else { return }
             _ = await chain.speak(SpokenTextSanitizer().sanitize(self.previewText()))
-            hud.showIdle(waiting: (try? coordinator?.waitingCount()) ?? 0,
+            hud.showIdle(waiting: waitingNow(),
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
         }
     }
@@ -745,7 +748,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showPanel() {
-        hud.showIdle(waiting: (try? coordinator?.waitingCount()) ?? 0,
+        hud.showIdle(waiting: waitingNow(),
                      unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
     }
 
