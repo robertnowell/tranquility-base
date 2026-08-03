@@ -347,6 +347,14 @@ public final class QueueStore: Sendable {
     /// supersession is "not the latest", and typing into a session stops it waiting
     /// because the user_prompt_submit is simply a later event.
     ///
+    /// No tty filter. Recording the hook's controlling terminal looked like a way
+    /// to spot machine-driven runs, and it is not: a hook spawned by a real
+    /// interactive session records "??" just as a `claude -p` run does, because
+    /// neither hook process has a terminal of its own. Filtering on it hid live
+    /// conversations, which is the one failure that must never happen here. Whether
+    /// a session is machine-driven is decided by liveness, in the Coordinator, where
+    /// the agents API is available.
+    ///
     /// Ordered by rowid, never by timestamp. Wall-clock time is stamped
     /// independently by each short-lived hook process and is not monotonic — Kafka
     /// orders by offset for exactly this reason, and a clock step silently loses the
@@ -362,7 +370,6 @@ public final class QueueStore: Sendable {
                 WHERE l.hookEvent = ?
                   AND l.latestId > max(coalesce(c.heardThrough, 0),
                                        coalesce(c.dismissedThrough, 0))
-                  AND (l.tty IS NULL OR l.tty <> '??')
                 ORDER BY l.latestId DESC
                 LIMIT ?
                 """, arguments: [HookEventKind.stop.rawValue, limit])
