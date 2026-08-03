@@ -51,6 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// What the idle panel is currently displaying, so it is redrawn on change
     /// rather than on every poll.
     private var lastShownCounts: (Int, Int) = (-1, -1)
+    /// Consulted only for unprompted surfacing. A keypress is never gated: you
+    /// cannot interrupt someone who has just asked for something.
+    private let gate = InterruptGate(minimumIdleSeconds: 0)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -94,11 +97,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let arrived = waiting > self.lastShownCounts.0
                 if self.hud.canSurfaceAmbiently, (waiting, unsent) != self.lastShownCounts {
                     self.lastShownCounts = (waiting, unsent)
-                    // Silently. Showing up is the whole signal; a voice starting on
-                    // its own while you are mid-sentence somewhere else is the
-                    // thing that gets an app deleted.
-                    self.hud.showIdle(waiting: waiting, unsentReplies: unsent)
-                    if arrived { Permissions.log("ambient: surfaced for \(waiting) waiting") }
+                    if arrived {
+                        self.surfaceArrival(waiting: waiting, unsent: unsent)
+                    } else if self.hud.isOnScreen {
+                        // Count fell (something was heard or dismissed). Keep the
+                        // panel truthful, but never raise it for a decrease: a
+                        // window appearing to tell you there is less to do is noise.
+                        self.hud.showIdle(waiting: waiting, unsentReplies: unsent)
+                    }
                 }
             }
         }
@@ -646,6 +652,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0,
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
         }
+    }
+
+    /// A turn came back. Decide whether to raise the panel for it.
+    ///
+    /// Silently, always: showing up IS the signal, and a voice starting on its own
+    /// while you are mid-sentence in another session is what gets an app deleted.
+    ///
+    /// The gate is consulted here for the first time. Until now it only ever vetoed
+    /// a keypress, which is backwards — you cannot interrupt someone who just asked
+    /// for something. Interrupting is exactly what this does, so this is where a
+    /// veto belongs.
+    private func surfaceArrival(waiting: Int, unsent: Int) {
+        let decision = gate.evaluate()
+        guard decision.allowed else {
+            // Held, not dropped. The count is still right the moment the panel is
+            // next shown, and nothing was lost by staying quiet.
+            Permissions.log("ambient: held (\(decision.reason))")
+            return
+        }
+        if let front = frontmostSessionTty(), let target = try? coordinator?.nextToAnnounce(),
+           let pid = ClaudeAgentsCLI().sessions().first(where: { $0.sessionId == target.sessionId })?.pid,
+           ProcessProbe.tty(of: pid) == front {
+            // You are looking straight at the tab that just finished. Announcing it
+            // is telling you something you can already see.
+            Permissions.log("ambient: skipped, that session is the frontmost tab")
+            return
+        }
+        Permissions.log("ambient: surfaced for \(waiting) waiting")
+        hud.showIdle(waiting: waiting, unsentReplies: unsent)
+    }
+
+    /// The tty of the frontmost Terminal tab, or nil if Terminal is not in front.
+    private func frontmostSessionTty() -> String? {
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.Terminal"
+        else { return nil }
+        let script = "tell application \"Terminal\" to return tty of selected tab of front window"
+        guard case .success(let out) = AppleScript.run(script: script) else { return nil }
+        let tty = out.trimmingCharacters(in: .whitespacesAndNewlines)
+        return tty.isEmpty ? nil : tty
     }
 
     /// The most recent thing it actually said, so a voice is judged on real work.
