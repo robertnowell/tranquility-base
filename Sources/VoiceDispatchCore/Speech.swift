@@ -279,6 +279,21 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
 /// imperceptible, while the difference in listenability across that duration is not.
 /// The system voice remains the fallback and needs no network or key.
 public struct SpeechChain: Sendable {
+    /// Chain-wide stop counter.
+    ///
+    /// The ElevenLabs provider had one, so audio arriving after a stop was
+    /// discarded. The system voice did not, so a stop during the network round trip
+    /// silenced nothing and the fallback then read the whole thing aloud — a second
+    /// voice, arriving late, over whatever had started since. Putting the counter on
+    /// the chain covers both providers and every path between them.
+    final class Generation: @unchecked Sendable {
+        private let queue = DispatchQueue(label: "speechchain.generation")
+        private var value = 0
+        var current: Int { queue.sync { value } }
+        func bump() { queue.sync { value += 1 } }
+    }
+
+    let generation = Generation()
     public let preferred: (any SpeechProvider)?
     public let fallback: any SpeechProvider
 
@@ -311,6 +326,7 @@ public struct SpeechChain: Sendable {
     /// Cut speech off immediately. A tap while it is talking means "stop", and a
     /// voice you cannot interrupt is worse than one you have to summon.
     public func stop() {
+        generation.bump()
         preferred?.stop()
         fallback.stop()
     }
@@ -340,6 +356,13 @@ public struct SpeechChain: Sendable {
     ) async -> Spoken {
         var degraded: String?
         var heardAny = false
+        // Anything that happens after a stop belongs to an announcement the user
+        // already dismissed. Checked before each provider, because the expensive
+        // part is the gap between them.
+        let mine = generation.current
+        guard mine == generation.current else {
+            return Spoken(provider: "none", completed: false)
+        }
         if let preferred, preferred.isConfigured {
             do {
                 ElevenLabsSpeechProvider.trace?("chain: trying \(preferred.name)")
@@ -370,6 +393,12 @@ public struct SpeechChain: Sendable {
         } else {
             ElevenLabsSpeechProvider.trace?(
                 "chain: preferred unavailable (configured=\(preferred?.isConfigured ?? false))")
+        }
+        guard mine == generation.current else {
+            // Stopped while the preferred voice was still working. Falling back now
+            // would speak an announcement that was cancelled several seconds ago.
+            ElevenLabsSpeechProvider.trace?("chain: stopped before fallback; staying silent")
+            return Spoken(provider: "none", completed: false, heardAny: heardAny)
         }
         ElevenLabsSpeechProvider.trace?("chain: falling back to \(fallback.name)")
         do {

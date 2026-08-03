@@ -30,6 +30,15 @@ PAYLOAD=$(cat 2>/dev/null || true)
 
 mkdir -p "$SUPPORT_DIR" 2>/dev/null || exit 0
 
+# Headless runs — `claude -p` from launchd, cron, or a script — have no controlling
+# terminal. There is no tab to open and no session to answer, so an announcement
+# about one is pure noise: you cannot act on it and it competes with sessions you
+# can. The parent process's tty is `??` exactly in that case.
+PARENT_TTY=$(ps -o tty= -p "$PPID" 2>/dev/null | tr -d '[:space:]')
+if [ -z "$PARENT_TTY" ] || [ "$PARENT_TTY" = "??" ]; then
+  exit 0
+fi
+
 python3 - "$SPOOL" "$PAYLOAD" <<'PY' 2>/dev/null || true
 import json, os, sys, time, uuid
 

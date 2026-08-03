@@ -37,6 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set when a reply interrupts playback, so the announce task does not undo the
     /// markHeard that made the reply possible.
     private var repliedToEventId: String?
+    /// The one announcement allowed to exist. See `announceNext`.
+    private var announceTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -293,12 +295,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handle(_ transition: HotkeyMonitor.Transition) {
         switch transition {
         case .next:
-            // Control on its own. Talking already? Stop and move on — it stays
-            // unread, so skipping ahead loses nothing.
-            if isAnnouncing || (coordinator?.speech.isSpeaking ?? false) {
-                coordinator?.speech.stop()
-                isAnnouncing = false
-            }
+            // Stopping and starting are both handled inside announceNext, which
+            // serializes them. Doing any of it here is what let two run at once.
             announceNext()
 
         case .pauseToggled:
@@ -351,15 +349,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Tap: play the next waiting update, then that session becomes the reply target.
+    /// Announcements are strictly serialized: at most one exists at any moment, and
+    /// a new one cannot begin until the previous one has fully finished.
+    ///
+    /// A boolean guard was not enough, and could not have been. Pressing again
+    /// during the slow part cleared the flag and started a second announcement while
+    /// the first was still in flight — so the flag said "one at a time" while two
+    /// were running, and both eventually spoke. Two voices talking over each other
+    /// is the single worst thing this app can do, so the guarantee has to be
+    /// structural: hold the task, cancel it, and AWAIT it before starting anything.
+    /// Nothing about timing or ordering is then left to chance.
     private func announceNext() {
-        guard let coordinator, !isAnnouncing else { return }
-        isAnnouncing = true
+        guard let coordinator else { return }
+        let previous = announceTask
         hud.isSpeakingNow = true
         // Summarizing and fetching the voice take several seconds. Without this the
         // app shows nothing at all for the whole of that and reads as broken.
         hud.showPreparing()
-        Task { @MainActor in
+        announceTask = Task { @MainActor in
+            // Silence the old one first, then wait for it to actually be over.
+            coordinator.speech.stop()
+            previous?.cancel()
+            _ = await previous?.value
+
             defer { isAnnouncing = false; hud.isSpeakingNow = false }
+            guard !Task.isCancelled else { return }
+            isAnnouncing = true
             do {
                 // A tap is an explicit request to hear something, so the
                 // interruptibility gate does not apply — you cannot interrupt
