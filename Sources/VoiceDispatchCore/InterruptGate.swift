@@ -25,18 +25,52 @@ public struct InterruptGate: Sendable {
     /// Apps where an interruption is especially unwelcome (calls, presentations).
     public var mutedApps: Set<String>
 
+    public var signals: Signals
+
     public init(
         minimumIdleSeconds: Double = 8,
-        mutedApps: Set<String> = ["zoom.us", "Google Meet", "Microsoft Teams", "FaceTime", "Keynote"]
+        mutedApps: Set<String> = ["zoom.us", "Google Meet", "Microsoft Teams", "FaceTime", "Keynote"],
+        signals: Signals = Signals()
     ) {
         self.minimumIdleSeconds = minimumIdleSeconds
         self.mutedApps = mutedApps
+        self.signals = signals
+    }
+
+    /// Signals, injectable so the gate can be evaluated without asking the machine.
+    ///
+    /// They defaulted to reading live system state, which meant every test that ran
+    /// an announcement silently depended on what was in front on the developer's
+    /// screen. Fifteen of them failed the moment a Zoom window took focus, and the
+    /// same fifteen had passed twenty minutes earlier. A test that consults the
+    /// desktop is not testing the thing it claims to.
+    public struct Signals: Sendable {
+        public var idleSeconds: @Sendable () -> Double
+        public var frontmostApp: @Sendable () -> String?
+        public var screenLocked: @Sendable () -> Bool
+
+        public init(
+            idleSeconds: @escaping @Sendable () -> Double = { InterruptGate.idleSeconds() },
+            frontmostApp: @escaping @Sendable () -> String? = { InterruptGate.frontmostApplication() },
+            screenLocked: @escaping @Sendable () -> Bool = { InterruptGate.screenIsLocked() }
+        ) {
+            self.idleSeconds = idleSeconds
+            self.frontmostApp = frontmostApp
+            self.screenLocked = screenLocked
+        }
+
+        /// Nothing in front, nothing locked, idle forever. For tests that are about
+        /// the loop rather than about the gate.
+        public static let quiescent = Signals(
+            idleSeconds: { .greatestFiniteMagnitude },
+            frontmostApp: { nil },
+            screenLocked: { false })
     }
 
     public func evaluate() -> Decision {
-        let idle = Self.idleSeconds()
-        let app = Self.frontmostApplication()
-        let locked = Self.screenIsLocked()
+        let idle = signals.idleSeconds()
+        let app = signals.frontmostApp()
+        let locked = signals.screenLocked()
 
         if locked {
             return Decision(allowed: false, reason: "screen is locked",

@@ -77,7 +77,7 @@ final class CoordinatorTests: XCTestCase {
         transport: RecordingTransport = RecordingTransport(),
         enrolled: Bool = true,
         sessionLive: Bool = true,
-        gate: InterruptGate = InterruptGate(minimumIdleSeconds: 0)
+        gate: InterruptGate = InterruptGate(minimumIdleSeconds: 0, signals: .quiescent)
     ) throws -> Coordinator {
         let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
         if enrolled { try registry.enrol(sessionId: "sess-1") }
@@ -162,7 +162,7 @@ final class CoordinatorTests: XCTestCase {
         let coordinator = Coordinator(
             store: store, summarizer: SummarizerChain(providers: [FixedSummary()]),
             speech: SpeechChain(preferred: cut, fallback: cut),
-            gate: InterruptGate(minimumIdleSeconds: 0), transport: RecordingTransport(),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent), transport: RecordingTransport(),
             enrolment: registry, agents: FakeAgents(live: []),
             recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
         try seedEvent()
@@ -195,7 +195,7 @@ final class CoordinatorTests: XCTestCase {
         let coordinator = Coordinator(
             store: store, summarizer: SummarizerChain(providers: [FixedSummary()]),
             speech: SpeechChain(preferred: cut, fallback: cut),
-            gate: InterruptGate(minimumIdleSeconds: 0), transport: RecordingTransport(),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent), transport: RecordingTransport(),
             enrolment: registry, agents: FakeAgents(live: []),
             recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
         try seedEvent()
@@ -230,7 +230,7 @@ final class CoordinatorTests: XCTestCase {
         let coordinator = Coordinator(
             store: store, summarizer: SummarizerChain(providers: [FixedSummary()]),
             speech: SpeechChain(preferred: speech, fallback: speech),
-            gate: InterruptGate(minimumIdleSeconds: 0), transport: RecordingTransport(),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent), transport: RecordingTransport(),
             enrolment: registry, agents: FakeAgents(live: []),
             recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
 
@@ -273,7 +273,7 @@ final class CoordinatorTests: XCTestCase {
         let coordinator = Coordinator(
             store: store, summarizer: SummarizerChain(providers: [FixedSummary()]),
             speech: SpeechChain(preferred: half, fallback: half),
-            gate: InterruptGate(minimumIdleSeconds: 0), transport: RecordingTransport(),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent), transport: RecordingTransport(),
             enrolment: registry, agents: FakeAgents(live: []),
             recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
         try seedEvent()
@@ -524,7 +524,14 @@ final class CoordinatorTests: XCTestCase {
         let speech = SilentSpeech()
         // A gate that always vetoes: nothing is idle for a negative duration.
         let coordinator = try makeCoordinator(
-            speech: speech, gate: InterruptGate(minimumIdleSeconds: .greatestFiniteMagnitude))
+            speech: speech,
+            // Says it plainly: you are mid-keystroke, and the gate wants eight
+            // seconds of quiet. Expressing the veto through a real signal rather
+            // than an impossible threshold is also what the gate does in life.
+            gate: InterruptGate(
+                minimumIdleSeconds: 8,
+                signals: .init(idleSeconds: { 0 }, frontmostApp: { nil },
+                               screenLocked: { false })))
         try seedEvent()
 
         guard case .held = try await coordinator.announceNext() else {
@@ -635,7 +642,7 @@ final class CoordinatorTests: XCTestCase {
         let coordinator = Coordinator(
             store: store, summarizer: SummarizerChain(providers: [counting]),
             speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
-            gate: InterruptGate(minimumIdleSeconds: 0), transport: RecordingTransport(),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent), transport: RecordingTransport(),
             enrolment: registry, agents: FakeAgents(live: []),
             recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
         try seedEvent()

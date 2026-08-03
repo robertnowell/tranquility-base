@@ -190,6 +190,14 @@ public struct TerminalAppTransport: DispatchTransport {
         // Step 2 — submit. This MUST be its own AppleEvent: `do script` delivers
         // long text without submitting it, and it then sits silently in the input
         // box while the session still reports `idle`. Verified with 1687 chars.
+        //
+        // The pause matters. A session mid-work is redrawing constantly, and a
+        // Return arriving in the same instant as the text was dropped: the words sat
+        // in the input box, unsent, looking exactly like a successful delivery.
+        // Giving the TUI a moment to accept the text first is what makes the Return
+        // land on a settled prompt.
+        try? await Task.sleep(nanoseconds: 250_000_000)
+
         switch AppleScript.run(script: injectScript(tty: tty, literal: "\"\"")) {
         case .failure(let e): return .failed(.injectionFailed("submit: \(e.message)"))
         case .success: break
@@ -202,6 +210,22 @@ public struct TerminalAppTransport: DispatchTransport {
         }
         let landed = await TranscriptWatcher.waitForUserText(
             payload, in: transcriptPath, timeout: verificationTimeout, pollInterval: pollInterval)
+
+        // One retry of the Return, and only the Return.
+        //
+        // If the text never appeared, the likeliest cause by far is that the submit
+        // was swallowed while the words themselves arrived — which is safe to repeat,
+        // because a Return on an empty prompt does nothing, whereas repeating the
+        // TEXT would duplicate the message. That asymmetry is the whole reason this
+        // is worth retrying at all.
+        if !landed {
+            _ = AppleScript.run(script: injectScript(tty: tty, literal: "\"\""))
+            let landedAfterRetry = await TranscriptWatcher.waitForUserText(
+                payload, in: transcriptPath, timeout: 3, pollInterval: pollInterval)
+            if landedAfterRetry {
+                return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
+            }
+        }
 
         // A busy session cannot echo the text until its current turn finishes, which
         // can take minutes. Not seeing it inside the window is expected there, and
