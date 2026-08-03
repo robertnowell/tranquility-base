@@ -67,10 +67,21 @@ public struct SpoolDrainer: Sendable {
             // Not an announcement — the user answered that session themselves, so
             // whatever was queued for it is now history rather than news.
             if event.hookEvent == .userPromptSubmit {
-                // Including already-announced rows: you typed into that session, so
-                // the agent is no longer the last turn and it is not waiting on you.
+                // Only what predates the message you typed.
+                //
+                // This retired everything for the session, which is catastrophic in
+                // the ordinary case and took hours to see: you type, the agent
+                // works, the agent finishes, and you press to hear it. But typing
+                // your NEXT message retires the turn you were about to listen to,
+                // because that turn is newer than nothing in particular. Every row
+                // from an active conversation ended up superseded and the app had
+                // nothing to say about the session you were actually using.
+                //
+                // A turn that arrives AFTER you typed is a reply to you and is
+                // exactly what you want to hear.
                 result.retired += try store.supersedePending(
-                    sessionId: event.sessionId, includeAnnounced: true)
+                    sessionId: event.sessionId, before: event.createdAtMs,
+                    includeAnnounced: true)
                 continue
             }
 

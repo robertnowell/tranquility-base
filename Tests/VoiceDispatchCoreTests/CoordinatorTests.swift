@@ -607,6 +607,32 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertNil(try coordinator.nextToAnnounce(), "and it is not offered again")
     }
 
+    /// The ordinary conversation, which was completely broken.
+    ///
+    /// You type, the agent works, the agent finishes. That finished turn is a reply
+    /// to you and is exactly what you want to hear. Retiring everything for the
+    /// session when you typed meant the reply was retired the moment you sent your
+    /// next message, so an active session could never have anything waiting.
+    func testATurnThatArrivesAfterYouTypedIsStillOffered() async throws {
+        let coordinator = try makeCoordinator()
+
+        // You type at t=1000.
+        try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .stop, sessionId: "sess-1", promptId: "before",
+            cwd: "/tmp", lastAssistantMessage: "an older turn you never got to"))
+        XCTAssertEqual(try store.supersedePending(
+            sessionId: "sess-1", before: 1_000, includeAnnounced: true), 0)
+
+        // The agent replies at t=2000.
+        try store.insert(event: QueuedEvent(
+            createdAtMs: 2_000, hookEvent: .stop, sessionId: "sess-1", promptId: "after",
+            cwd: "/tmp", lastAssistantMessage: "the reply to what you just typed"))
+        _ = try store.supersedePending(sessionId: "sess-1", before: 1_000, includeAnnounced: true)
+
+        XCTAssertEqual(try coordinator.nextToAnnounce()?.promptId, "after",
+                       "the reply to your message must survive your message")
+    }
+
     func testNothingIsAnnouncedTwiceAsNew() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)
