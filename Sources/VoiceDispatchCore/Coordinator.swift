@@ -141,6 +141,27 @@ public struct Coordinator: Sendable {
         try store.supersedePending(sessionId: sessionId)
     }
 
+    /// Something already heard, offered again so you can work backwards.
+    ///
+    /// Being caught up on the unread is not the same as being caught up. Nothing is
+    /// ever deleted here, so the history is already on disk; this just stops
+    /// pretending it is not there once the unread runs out.
+    ///
+    /// Ordered by when you last heard it, oldest first, and hearing it again moves
+    /// it to the back. Pressing repeatedly therefore walks the whole history once
+    /// before repeating anything, with no cursor to store and nothing to reset.
+    ///
+    /// Excludes three things deliberately. `superseded` is a turn the same session
+    /// has already replaced, so replaying it would be telling you something that
+    /// stopped being true. `answered` you replied to. `dismissed` you said no to.
+    /// Catching up should surface what you have not dealt with, not everything that
+    /// ever happened.
+    public func nextForCatchUp() throws -> QueuedEvent? {
+        try store.events(limit: 500)
+            .filter { $0.status == .announced && $0.summaryText?.isEmpty == false }
+            .min { ($0.announcedAtMs ?? 0) < ($1.announcedAtMs ?? 0) }
+    }
+
     // MARK: - Announce
 
     public struct Announcement: Sendable {
@@ -148,6 +169,10 @@ public struct Coordinator: Sendable {
         public let brief: SessionBrief
         public let spoken: SanitizedSpokenText
         public let via: String
+        /// True when this is something you have heard before, offered again because
+        /// the unread ran out. The distinction matters on screen: a summary you
+        /// half-remember reads as new unless it says otherwise.
+        public var isCatchUp = false
         /// Set when the preferred voice failed and the system voice covered for it,
         /// carrying the reason. A downgrade the user cannot see is a downgrade they
         /// will assume is just how the app sounds now.
@@ -174,7 +199,13 @@ public struct Coordinator: Sendable {
         onWillSpeak: (@MainActor (Announcement) -> Void)? = nil,
         onWord: (@Sendable (Range<Int>) -> Void)? = nil
     ) async throws -> AnnounceOutcome {
-        guard var event = try nextToAnnounce() else { return .nothingWaiting }
+        var isCatchUp = false
+        var candidate = try nextToAnnounce()
+        if candidate == nil {
+            candidate = try nextForCatchUp()
+            isCatchUp = candidate != nil
+        }
+        guard var event = candidate else { return .nothingWaiting }
 
         if !ignoringGate {
             let decision = gate.evaluate()
@@ -198,11 +229,13 @@ public struct Coordinator: Sendable {
                 .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
 
         if let ready = await prepared.take(event.id) {
-            return try await speak(ready, for: &event, onWillSpeak: onWillSpeak, onWord: onWord)
+            return try await speak(ready, for: &event, isCatchUp: isCatchUp,
+                                   onWillSpeak: onWillSpeak, onWord: onWord)
         }
 
         let summary = await summarize(event)
-        return try await speak(summary, for: &event, onWillSpeak: onWillSpeak, onWord: onWord)
+        return try await speak(summary, for: &event, isCatchUp: isCatchUp,
+                               onWillSpeak: onWillSpeak, onWord: onWord)
     }
 
     private func summarize(_ event: QueuedEvent) async -> Summary {
@@ -225,7 +258,7 @@ public struct Coordinator: Sendable {
     }
 
     private func speak(
-        _ summary: Summary, for event: inout QueuedEvent,
+        _ summary: Summary, for event: inout QueuedEvent, isCatchUp: Bool = false,
         onWillSpeak: (@MainActor (Announcement) -> Void)?,
         onWord: (@Sendable (Range<Int>) -> Void)?
     ) async throws -> AnnounceOutcome {
@@ -235,7 +268,8 @@ public struct Coordinator: Sendable {
         try store.update(event: event)
 
         let announcement = Announcement(
-            event: event, brief: summary.brief, spoken: summary.spoken, via: speech.fallback.name)
+            event: event, brief: summary.brief, spoken: summary.spoken,
+            via: speech.fallback.name, isCatchUp: isCatchUp)
         await onWillSpeak?(announcement)
 
         let spoken = await speech.speak(summary.spoken, onWord: onWord)
@@ -262,7 +296,7 @@ public struct Coordinator: Sendable {
 
         return .spoke(Announcement(
             event: event, brief: summary.brief, spoken: summary.spoken,
-            via: spoken.provider, degraded: spoken.degraded))
+            via: spoken.provider, isCatchUp: isCatchUp, degraded: spoken.degraded))
     }
 
     /// You started answering it, so you heard it.

@@ -452,18 +452,79 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertTrue(Readiness.waiting(nil).canDispatch)
     }
 
-    func testNothingIsAnnouncedTwice() async throws {
+    /// Being caught up on the unread is not the same as being caught up. Once the
+    /// unread runs out, pressing again works back through what you have heard.
+    func testCatchUpWalksHistoryOldestHeardFirst() async throws {
+        let speech = SilentSpeech()
+        let coordinator = try makeCoordinator(speech: speech)
+        for (index, session) in ["s-a", "s-b"].enumerated() {
+            try store.insert(event: QueuedEvent(
+                createdAtMs: Int64(1_000 + index), hookEvent: .stop, sessionId: session,
+                promptId: "p\(index)", cwd: "/tmp", lastAssistantMessage: "turn \(index)"))
+        }
+
+        // Hear both, so nothing is unread.
+        guard case .spoke(let first) = try await coordinator.announceNext(),
+              case .spoke(let second) = try await coordinator.announceNext()
+        else { return XCTFail("both should be heard") }
+        XCTAssertFalse(first.isCatchUp)
+        XCTAssertFalse(second.isCatchUp)
+        XCTAssertNil(try coordinator.nextToAnnounce(), "nothing unread remains")
+
+        // Pressing again replays the one heard longest ago, marked as catch-up.
+        guard case .spoke(let third) = try await coordinator.announceNext() else {
+            return XCTFail("history should still be offered")
+        }
+        XCTAssertTrue(third.isCatchUp)
+        XCTAssertEqual(third.event.id, first.event.id, "oldest heard comes back first")
+
+        // And hearing it moves it to the back, so the next press is the other one.
+        guard case .spoke(let fourth) = try await coordinator.announceNext() else {
+            return XCTFail("history should keep going")
+        }
+        XCTAssertEqual(fourth.event.id, second.event.id,
+                       "repeated presses walk history rather than repeating one item")
+    }
+
+    /// Catching up must not resurface what a session has already replaced, what you
+    /// answered, or what you dismissed.
+    func testCatchUpSkipsSupersededAnsweredAndDismissed() async throws {
+        let coordinator = try makeCoordinator()
+        for (index, status) in [EventStatus.superseded, .answered, .dismissed].enumerated() {
+            var event = QueuedEvent(
+                createdAtMs: Int64(1_000 + index), hookEvent: .stop, sessionId: "s\(index)",
+                promptId: "p\(index)", cwd: "/tmp", lastAssistantMessage: "m")
+            event.status = status
+            event.summaryText = "a summary"
+            event.announcedAtMs = 1_000
+            _ = try store.insert(event: event)
+            try store.update(event: event)
+        }
+
+        XCTAssertNil(try coordinator.nextForCatchUp(),
+                     "history is what you have not dealt with, not everything that happened")
+    }
+
+    /// Nothing is announced twice AS NEW. It can come back as catch-up once the
+    /// unread is exhausted, which is a different claim and a deliberate one: the
+    /// badge and the "new" framing must only ever mean genuinely unheard.
+    func testNothingIsAnnouncedTwiceAsNew() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)
         try seedEvent()
 
-        _ = try await coordinator.announceNext()
-        let second = try await coordinator.announceNext()
-
-        guard case .nothingWaiting = second else {
-            return XCTFail("an announced event must not be offered again")
+        guard case .spoke(let first) = try await coordinator.announceNext() else {
+            return XCTFail("expected an announcement")
         }
-        XCTAssertEqual(speech.spoken.count, 1)
+        XCTAssertFalse(first.isCatchUp)
+        XCTAssertNil(try coordinator.nextToAnnounce(), "no longer unread")
+        XCTAssertEqual(try store.pendingCount(), 0, "and the badge says so")
+
+        guard case .spoke(let second) = try await coordinator.announceNext() else {
+            return XCTFail("history is still available")
+        }
+        XCTAssertTrue(second.isCatchUp, "the same item, correctly labelled as a replay")
+        XCTAssertEqual(second.event.id, first.event.id)
     }
 
     /// A session speaks for itself in the present tense. Four turns back is not a
