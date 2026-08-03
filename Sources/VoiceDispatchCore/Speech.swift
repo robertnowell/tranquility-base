@@ -7,9 +7,19 @@ public protocol SpeechProvider: Sendable {
     var name: String { get }
     var isConfigured: Bool { get }
     /// Returns when the audio finishes, or throws. Must be interruptible.
-    func speak(_ text: SanitizedSpokenText) async throws
+    ///
+    /// `onWord` reports the character range currently being spoken, so a UI can
+    /// follow along. Without it the text can only be shown before or after, and
+    /// "after" is useless — by then you have already heard it.
+    func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws
     func stop()
     var isSpeaking: Bool { get }
+}
+
+extension SpeechProvider {
+    public func speak(_ text: SanitizedSpokenText) async throws {
+        try await speak(text, onWord: nil)
+    }
 }
 
 public enum SpeechError: Error, Sendable {
@@ -29,6 +39,7 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
 
     private let synthesizer = AVSpeechSynthesizer()
     private var continuation: CheckedContinuation<Void, Error>?
+    private var wordCallback: (@Sendable (Range<Int>) -> Void)?
     private let lock = NSLock()
 
     /// Measured with `say`: 25 words ≈ 9.9s at the default rate. A little above
@@ -45,7 +56,7 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
 
     public var isSpeaking: Bool { synthesizer.isSpeaking }
 
-    public func speak(_ text: SanitizedSpokenText) async throws {
+    public func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
         stop()
         let utterance = AVSpeechUtterance(string: text.text)
         utterance.rate = rate
@@ -56,6 +67,7 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             lock.lock()
             continuation = cont
+            wordCallback = onWord
             lock.unlock()
             synthesizer.speak(utterance)
         }
@@ -80,6 +92,15 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
 }
 
 extension SystemSpeechProvider: AVSpeechSynthesizerDelegate {
+    /// Fires once per word as it is spoken — this is what drives the highlight.
+    public func speechSynthesizer(
+        _ s: AVSpeechSynthesizer, willSpeakRangeOfSpeechString characterRange: NSRange,
+        utterance: AVSpeechUtterance
+    ) {
+        lock.lock(); let callback = wordCallback; lock.unlock()
+        callback?(characterRange.location..<(characterRange.location + characterRange.length))
+    }
+
     public func speechSynthesizer(_ s: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         resume(with: .success(()))
     }
@@ -117,11 +138,13 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
     public var isConfigured: Bool { Secrets.has(.elevenLabsAPIKey) }
     public var isSpeaking: Bool { player?.isPlaying ?? false }
 
-    public func speak(_ text: SanitizedSpokenText) async throws {
+    public func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
         guard let key = Secrets.read(.elevenLabsAPIKey) else { throw SpeechError.notConfigured }
 
+        // The /with-timestamps variant returns per-character start times alongside the
+        // audio, which is the only way to follow along with a pre-rendered clip.
         var request = URLRequest(
-            url: URL(string: "https://api.elevenlabs.io/v1/text-to-speech/\(voiceId)")!)
+            url: URL(string: "https://api.elevenlabs.io/v1/text-to-speech/\(voiceId)/with-timestamps")!)
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.setValue(key, forHTTPHeaderField: "xi-api-key")
@@ -136,11 +159,38 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
             throw SpeechError.synthesisFailed("http \((response as? HTTPURLResponse)?.statusCode ?? -1)")
         }
 
-        let audio = try AVAudioPlayer(data: data)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let base64 = json["audio_base64"] as? String,
+              let audioData = Data(base64Encoded: base64)
+        else { throw SpeechError.synthesisFailed("unexpected response shape") }
+
+        let starts = (json["alignment"] as? [String: Any])?["character_start_times_seconds"] as? [Double]
+
+        let audio = try AVAudioPlayer(data: audioData)
         player = audio
         audio.play()
+
+        // Only poll when there is a highlight to drive, and at a rate matched to
+        // reading rather than to rendering — 40ms was needless CPU for a cosmetic
+        // effect. ~8/second is well past what the eye resolves for word highlighting.
+        guard let starts, let onWord else {
+            while audio.isPlaying { try await Task.sleep(nanoseconds: 200_000_000) }
+            return
+        }
+
+        var lastIndex = -1
         while audio.isPlaying {
-            try await Task.sleep(nanoseconds: 50_000_000)
+            do {
+                // Character index whose start time has just passed.
+                let now = audio.currentTime
+                var index = lastIndex
+                while index + 1 < starts.count, starts[index + 1] <= now { index += 1 }
+                if index != lastIndex, index >= 0 {
+                    lastIndex = index
+                    onWord(0..<min(index + 1, text.text.count))
+                }
+            }
+            try await Task.sleep(nanoseconds: 125_000_000)
         }
     }
 
@@ -173,11 +223,24 @@ public struct SpeechChain: Sendable {
         self.fallback = fallback
     }
 
+    public var isSpeaking: Bool {
+        (preferred?.isSpeaking ?? false) || fallback.isSpeaking
+    }
+
+    /// Cut speech off immediately. A tap while it is talking means "stop", and a
+    /// voice you cannot interrupt is worse than one you have to summon.
+    public func stop() {
+        preferred?.stop()
+        fallback.stop()
+    }
+
     @discardableResult
-    public func speak(_ text: SanitizedSpokenText) async -> String {
+    public func speak(
+        _ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)? = nil
+    ) async -> String {
         if let preferred, preferred.isConfigured {
             do {
-                try await preferred.speak(text)
+                try await preferred.speak(text, onWord: onWord)
                 return preferred.name
             } catch SpeechError.interrupted {
                 return preferred.name
@@ -185,7 +248,7 @@ public struct SpeechChain: Sendable {
                 // fall through to the system voice for this utterance only
             }
         }
-        try? await fallback.speak(text)
+        try? await fallback.speak(text, onWord: onWord)
         return fallback.name
     }
 }

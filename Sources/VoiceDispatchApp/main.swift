@@ -14,10 +14,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkey: HotkeyMonitor!
     private let recorder = Recorder()
     private var store: QueueStore?
+    private var coordinator: Coordinator?
     private var permissionTimer: Timer?
+    private var intakeTimer: Timer?
+    private let onboarding = OnboardingWindow()
+    private let hud = StatusHUD()
 
     private var lastStatusLine = "starting…"
     private var isBusy = false
+
+    /// Tap versus hold on the same chord. A tap plays the next waiting update; a
+    /// hold records a reply to whatever last spoke. One gesture, two verbs — which
+    /// beats two chords to remember, and the boundary is unambiguous in practice
+    /// because nobody holds a key for a third of a second by accident.
+    private static let tapThreshold: TimeInterval = 0.35
+    private var pressStartedAt: Date?
+    private var listeningIndicator: DispatchWorkItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -27,12 +39,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let store = try QueueStore()
             self.store = store
+            self.coordinator = Coordinator(store: store)
             let report = try store.reconcileOnBoot()
-            if !report.needsDeliveryCheck.isEmpty {
-                lastStatusLine = "\(report.needsDeliveryCheck.count) reply/replies need checking"
-            }
+            lastStatusLine = report.needsDeliveryCheck.isEmpty
+                ? "ready"
+                : "\(report.needsDeliveryCheck.count) reply/replies need checking"
         } catch {
             lastStatusLine = "queue unavailable: \(error)"
+        }
+
+        // Pull spooled hook events in on a timer. The hook only appends to a file,
+        // so nothing is lost while the app is closed — this just moves them across.
+        intakeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let coordinator = self.coordinator else { return }
+                if let result = try? coordinator.intake(), result.inserted > 0 {
+                    self.rebuildMenu()
+                }
+            }
         }
 
         hotkey = HotkeyMonitor { [weak self] transition in
@@ -41,12 +65,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in self?.handle(transition) }
         }
 
+        // The panel can drive a recording itself, so answering never depends on
+        // knowing a hotkey that is invisible in the UI.
+        hud.onReply = { [weak self] in
+            guard let self, self.micGranted, !self.recorder.isRecording else { return }
+            try? self.recorder.start()
+            self.isBusy = true
+            self.updateTitle()
+        }
+        hud.onStopReply = { [weak self] in
+            guard let self, let captured = try? self.recorder.stop() else {
+                self?.hud.recordingEnded()
+                return
+            }
+            self.isBusy = false
+            self.updateTitle()
+            self.hud.recordingEnded()
+            self.sendReply(captured)
+        }
+
         startPermissionPolling()
         refresh()
+
+        // Ask for the microphone at LAUNCH, not on a button press.
+        // Calling requestAccess is what registers the app in the Microphone pane —
+        // an app that has never asked is not listed there at all, so waiting for a
+        // click left the user staring at a list this app could never appear in.
+        Permissions.logEnvironment()
+        Task { @MainActor in
+            let granted = await Permissions.request(.microphone)
+            Permissions.log("requestAccess(.audio) returned \(granted); status now \(Permissions.statusDescription(.microphone))")
+            refresh()
+            announceLaunch()
+            // Visible proof of life. A menu-bar-only app with a full menu bar is
+            // indistinguishable from a broken one; this makes launch observable.
+            let waiting = (try? store?.pendingCount()) ?? 0
+            hud.showIdle(waiting > 0
+                ? "\(waiting) waiting. Tap ⌃⌥ to hear the oldest, hold ⌃⌥ to reply."
+                : "Ready. Tap ⌃⌥ to hear what's waiting, hold ⌃⌥ to reply.")
+        }
+    }
+
+    /// Say something on launch.
+    ///
+    /// A menu-bar-only app gives no other evidence that it started — there is no
+    /// window, no dock icon, and the status item is easy to miss. Since the whole
+    /// product is a voice, using it to confirm its own liveness is both the cheapest
+    /// signal and a real smoke test of the speech path.
+    private func announceLaunch() {
+        let missing = [micGranted ? nil : "microphone",
+                       hotkeyWorking ? nil : "input monitoring"].compactMap { $0 }
+        let line = missing.isEmpty
+            ? "Voice dispatch is running. Tap control option to hear what's waiting."
+            : "Voice dispatch is running. Setting up permissions now."
+
+        Task { @MainActor in
+            // System voice deliberately: the network provider would read the
+            // keychain, which prompts for a password before the user has granted
+            // anything — a confusing first thing to meet.
+            await SpeechChain(preferred: nil).speak(SpokenTextSanitizer().sanitize(line))
+            if !Permissions.allGranted {
+                onboarding.show { [weak self] in self?.refresh() }
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         permissionTimer?.invalidate()
+        intakeTimer?.invalidate()
         hotkey?.stop()
         if recorder.isRecording { recorder.abandon() }
     }
@@ -72,11 +158,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var micGranted: Bool { Recorder.microphoneAuthorized() }
     private var hotkeyWorking: Bool { hotkey?.isRunning ?? false }
 
+    /// An SF Symbol rather than a text glyph.
+    ///
+    /// The first version used "◌", which is technically visible and practically
+    /// invisible: faint, narrow, and indistinguishable from noise in a crowded menu
+    /// bar — and on a notched display a narrow new item can end up behind the notch
+    /// entirely. A template image renders at the right weight and is findable.
     private func updateTitle() {
         guard let button = statusItem.button else { return }
-        if isBusy { button.title = "●" }
-        else if !micGranted || !hotkeyWorking { button.title = "◌!" }
-        else { button.title = "◌" }
+        button.title = ""
+
+        let symbol: String
+        if isBusy { symbol = "waveform.circle.fill" }
+        else if !micGranted || !hotkeyWorking { symbol = "exclamationmark.bubble" }
+        else { symbol = "waveform.circle" }
+
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Voice Dispatch")
+        image?.isTemplate = true
+        button.image = image
+        // Fall back to text if the symbol is unavailable, rather than showing nothing.
+        if button.image == nil { button.title = isBusy ? "VD●" : "VD" }
+        button.toolTip = "Voice Dispatch — tap ⌃⌥ to hear, hold to reply"
     }
 
     // MARK: - Push to talk
@@ -84,47 +186,139 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handle(_ transition: HotkeyMonitor.Transition) {
         switch transition {
         case .pressed:
+            pressStartedAt = Date()
+            // Start capturing immediately. If this turns out to be a tap the audio
+            // is thrown away — the alternative, waiting to see if it's a hold, would
+            // clip the first third of a second off every reply.
             guard micGranted, !recorder.isRecording else { return }
-            do {
-                try recorder.start()
-                isBusy = true
-                lastStatusLine = "listening…"
-                updateTitle()
-            } catch {
-                lastStatusLine = "mic failed: \(error)"
+            // Capture starts now so a hold never loses its opening words — but the
+            // "Listening" indicator waits until the press outlives the tap threshold.
+            // Showing it immediately meant a tap flashed "Listening" over whatever was
+            // being said, which is exactly backwards.
+            try? recorder.start()
+            let indicator = DispatchWorkItem { [weak self] in
+                guard let self, self.recorder.isRecording else { return }
+                self.isBusy = true
+                self.updateTitle()
+                self.hud.showListening()
             }
+            listeningIndicator = indicator
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.tapThreshold, execute: indicator)
+
         case .released:
-            guard recorder.isRecording else { return }
-            let captured = try? recorder.stop()
+            let held = pressStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+            pressStartedAt = nil
             isBusy = false
-            updateTitle()
-            guard let captured else {
+
+            listeningIndicator?.cancel()
+            listeningIndicator = nil
+
+            if held < Self.tapThreshold {
+                recorder.abandon()
+                updateTitle()
+                // A tap while it is talking means "stop talking", not "queue another".
+                if let coordinator, coordinator.speech.isSpeaking {
+                    coordinator.speech.stop()
+                    hud.showIdle("Stopped. Tap ⌃⌥ again for the next one.")
+                    rebuildMenu()
+                    return
+                }
+                announceNext()
+                return
+            }
+
+            guard let captured = try? recorder.stop() else {
+                updateTitle()
                 lastStatusLine = "nothing recorded"
                 rebuildMenu()
                 return
             }
-            lastStatusLine = "transcribing \(captured.count / 32000)s…"
-            rebuildMenu()
-            transcribe(captured)
+            updateTitle()
+            sendReply(captured)
         }
     }
 
-    private func transcribe(_ pcm: Data) {
-        guard let store else { return }
+    /// Tap: play the next waiting update, then that session becomes the reply target.
+    private func announceNext() {
+        guard let coordinator else { return }
         Task { @MainActor in
             do {
-                // Audio hits disk inside here, before any network call.
-                let utterance = try await store.captureAndTranscribe(pcm16: pcm, sampleRate: 16000)
-                switch utterance.status {
-                case .transcribed:
-                    lastStatusLine = "heard: \(utterance.transcriptText ?? "")"
-                case .transcriptionFailed:
-                    lastStatusLine = "transcription failed — audio kept, retry from the menu"
-                default:
-                    lastStatusLine = "utterance \(utterance.status.rawValue)"
+                // A tap is an explicit request to hear something, so the
+                // interruptibility gate does not apply — you cannot interrupt
+                // someone who just asked.
+                switch try await coordinator.announceNext(
+                    ignoringGate: true,
+                    onWillSpeak: { [weak self] announcement in
+                        // Render BEFORE the audio starts. Showing it afterwards is
+                        // useless — you have already heard the whole thing by then.
+                        guard let self else { return }
+                        let live = ClaudeAgentsCLI().sessions()
+                            .first { $0.sessionId == announcement.event.sessionId }
+                        self.hud.showAnnouncement(
+                            topic: announcement.brief.topic,
+                            spoken: announcement.spoken.text,
+                            sessionId: announcement.event.sessionId,
+                            pid: live?.pid,
+                            project: announcement.event.projectLabel)
+                    },
+                    onWord: { [weak self] range in
+                        Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
+                    }
+                ) {
+                case .spoke(let announcement):
+                    lastStatusLine = "◀ \(announcement.brief.topic)"
+                    hud.highlight(upTo: announcement.spoken.text.count)
+                case .held(let reason):
+                    lastStatusLine = "held: \(reason)"
+                    hud.showIdle("Holding — \(reason)")
+                case .nothingWaiting:
+                    lastStatusLine = "nothing waiting"
+                    hud.showIdle("Nothing waiting. Sessions will queue up here as they finish.")
                 }
             } catch {
-                lastStatusLine = "capture failed: \(error)"
+                lastStatusLine = "announce failed: \(error)"
+            }
+            rebuildMenu()
+        }
+    }
+
+    /// Hold: transcribe and route the reply back to whichever session last spoke.
+    private func sendReply(_ pcm: Data) {
+        guard let coordinator else { return }
+        lastStatusLine = "transcribing…"
+        hud.showWorking("Transcribing your reply…")
+        rebuildMenu()
+
+        Task { @MainActor in
+            do {
+                switch try await coordinator.submitReply(pcm16: pcm) {
+                case .dispatched(let text, let ms, _):
+                    lastStatusLine = "▶ sent (\(ms)ms): \(text.prefix(48))"
+                    hud.showResult("Sent: \(text)", ok: true)
+                case .noTarget:
+                    lastStatusLine = "nothing to reply to — tap to hear one first"
+                    hud.showResult("Nothing to reply to yet — tap ⌃⌥ to hear one first.", ok: false)
+                case .notEnrolled(let sessionId):
+                    lastStatusLine = "not enrolled: \(sessionId.prefix(8)) — audio kept"
+                    hud.showResult(
+                        "That session isn't enrolled, so nothing was typed into it. "
+                        + "Your recording is saved. Enrol it with: vdctl enroll \(sessionId)", ok: false)
+                case .sessionNotReady(let readiness):
+                    lastStatusLine = "session busy or blocked (\(readiness)) — audio kept"
+                    hud.showResult("Session isn't ready (\(readiness)). Recording kept — try again shortly.", ok: false)
+                case .transcriptionFailed:
+                    lastStatusLine = "couldn't transcribe — audio kept, retry from the menu"
+                    hud.showResult("Couldn't transcribe that. The audio is saved — retry from the menu.", ok: false)
+                case .dispatchFailed(.verificationTimedOut, _):
+                    lastStatusLine = "⚠ unconfirmed — check the tab before resending"
+                    hud.showResult(
+                        "Sent, but never confirmed. It may or may not have landed — "
+                        + "check the tab before resending.", ok: false)
+                case .dispatchFailed(let failure, _):
+                    lastStatusLine = "send failed: \(failure) — audio kept"
+                }
+            } catch {
+                lastStatusLine = "reply failed: \(error)"
             }
             rebuildMenu()
         }
@@ -137,7 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(disabled(lastStatusLine))
         menu.addItem(.separator())
 
-        menu.addItem(disabled("Hold ⌃⌥ to reply"))
+        menu.addItem(disabled("Tap ⌃⌥ to hear · hold to reply"))
         menu.addItem(.separator())
 
         menu.addItem(permissionRow(
@@ -174,6 +368,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.target = granted ? nil : self
         item.isEnabled = !granted
         return item
+    }
+
+    @objc private func showOnboarding() {
+        onboarding.show { [weak self] in self?.refresh() }
     }
 
     @objc private func openMicrophoneSettings() {
