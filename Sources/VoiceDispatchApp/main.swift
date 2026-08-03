@@ -255,10 +255,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             : "Voice dispatch is running. Setting up permissions now."
 
         Task { @MainActor in
-            // System voice deliberately: the network provider would read the
-            // keychain, which prompts for a password before the user has granted
-            // anything — a confusing first thing to meet.
-            await SpeechChain(preferred: nil).speak(SpokenTextSanitizer().sanitize(line))
+            // The good voice or none at all.
+            //
+            // This used the system voice deliberately, because the network provider
+            // once read the keychain and would prompt for a password before the user
+            // had granted anything. Secrets moved to a file months of debugging ago,
+            // so that reason is gone — but the robot voice stayed, and it was the
+            // first thing you heard every launch.
+            //
+            // A greeting is not worth a bad impression. If the good voice is
+            // unavailable the app simply starts quietly; the panel still appears,
+            // which is the part that matters.
+            let chain = SpeechChain()
+            if chain.preferred?.isConfigured == true {
+                _ = await chain.speak(SpokenTextSanitizer().sanitize(line))
+            }
             if !Permissions.allGranted {
                 onboarding.show { [weak self] in self?.refresh() }
             }
