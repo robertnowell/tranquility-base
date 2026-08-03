@@ -322,6 +322,33 @@ final class CoordinatorTests: XCTestCase {
                        "a stopped item must not monopolise the queue")
     }
 
+    /// Replying while it is still talking is the normal case — you answer as soon
+    /// as you have heard enough. Stopping playback to record must not revert the
+    /// announcement, or the reply has nowhere to go and is thrown away.
+    func testReplyingDuringPlaybackKeepsItsTarget() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(transport: transport)
+        try seedEvent()
+        _ = try await coordinator.announceNext()
+        let event = try XCTUnwrap(store.events().first)
+
+        // What the app does when a reply begins mid-announcement.
+        try coordinator.markHeard(eventId: event.id)
+
+        // What the announce task then does to an interrupted item.
+        var reverted = try XCTUnwrap(store.events().first)
+        reverted.status = .new
+        try store.update(event: reverted)
+
+        // And the app's re-apply, which runs after the revert.
+        try coordinator.markHeard(eventId: event.id)
+
+        XCTAssertEqual(try coordinator.replyTarget()?.sessionId, "sess-1",
+                       "the announcement you are answering must still be the target")
+        guard case .readyToSend = try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("the reply must have somewhere to go") }
+    }
+
     func testNothingIsAnnouncedTwice() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)

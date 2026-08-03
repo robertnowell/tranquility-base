@@ -260,6 +260,23 @@ public struct Coordinator: Sendable {
             event: event, brief: summary.brief, spoken: summary.spoken, via: spoken.provider))
     }
 
+    /// You started answering it, so you heard it.
+    ///
+    /// Beginning a reply stops playback, and a stopped announcement reverts to
+    /// unread — which wiped out the very thing being replied to and lost the
+    /// recording with "nothing to reply to yet". Talking back is a deliberate
+    /// interaction with one specific announcement; it cannot also be the thing that
+    /// invalidates it.
+    public func markHeard(eventId: String) throws {
+        guard var event = try store.events(limit: 500).first(where: { $0.id == eventId })
+        else { return }
+        event.status = .announced
+        if event.announcedAtMs == nil {
+            event.announcedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        }
+        try store.update(event: event)
+    }
+
     /// Take an item out of the queue without answering it. This is what Dismiss
     /// means, and it means only this.
     public func dismiss(eventId: String) throws {
