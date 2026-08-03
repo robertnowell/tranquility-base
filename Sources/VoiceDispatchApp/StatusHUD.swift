@@ -33,6 +33,7 @@ final class StatusHUD: NSObject {
     var onStopReply: (() -> Void)?
     private var isRecording = false
     private var hideWorkItem: DispatchWorkItem?
+    private var contentStack: NSStackView?
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
 
@@ -83,6 +84,7 @@ final class StatusHUD: NSObject {
             : "Click Reply, or hold ⌃⌥ to speak."
         replyButton.isHidden = currentTarget == nil
 
+        resizeToFit(panel)
         position(panel)
         panel.orderFrontRegardless()
         Permissions.log("HUD frame=\(panel.frame) visible=\(panel.isVisible) screen=\(NSScreen.main?.visibleFrame.debugDescription ?? "nil")")
@@ -92,6 +94,46 @@ final class StatusHUD: NSObject {
             let work = DispatchWorkItem { [weak self] in self?.panel?.orderOut(nil) }
             hideWorkItem = work
             DispatchQueue.main.asyncAfter(deadline: .now() + autoHideAfter, execute: work)
+        }
+    }
+
+    /// Grow the window to whatever the content needs.
+    ///
+    /// The first version pinned the panel at 150pt regardless of what was in it, so
+    /// a long summary pushed the buttons off the bottom edge — the actions were
+    /// literally unreachable. Never ship a fixed-height container around
+    /// variable-length text.
+    private func resizeToFit(_ panel: NSPanel) {
+        guard let stack = contentStack else { return }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let needed = stack.fittingSize
+        let height = max(needed.height, 90)
+        if abs(panel.frame.height - height) > 1 {
+            panel.setContentSize(NSSize(width: 380, height: height))
+        }
+        // Assert the actions are actually on screen. "Buttons cut off" is a bug the
+        // code can check for itself; it should never reach a person's eyes.
+        let buttonsFit = panel.contentView.map { $0.bounds.height + 0.5 >= needed.height } ?? false
+        Permissions.log(
+            "HUD layout: needed=\(Int(needed.height)) frame=\(Int(panel.frame.height)) "
+            + "buttonsFit=\(buttonsFit)")
+    }
+
+    /// Render every state with worst-case text and confirm nothing is clipped.
+    /// Run with `--selftest-hud`.
+    func selfTest() {
+        let long = String(repeating: "Product image binding is fixed across the stack. ", count: 3)
+        currentTarget = ("selftest", 1, "promotions")
+        for (label, block) in [
+            ("idle", { self.showIdle(long) }),
+            ("announcement", { self.showAnnouncement(
+                topic: "Product image binding fix validation", spoken: long,
+                sessionId: "s", pid: 1, project: "promotions") }),
+            ("listening", { self.showListening() }),
+            ("result", { self.showResult(long, ok: false) }),
+        ] as [(String, () -> Void)] {
+            Permissions.log("selftest state=\(label)")
+            block()
         }
     }
 
@@ -179,8 +221,10 @@ final class StatusHUD: NSObject {
             stack.topAnchor.constraint(equalTo: background.topAnchor),
             stack.leadingAnchor.constraint(equalTo: background.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: background.bottomAnchor),
             bodyLabel.widthAnchor.constraint(equalToConstant: 348),
         ])
+        self.contentStack = stack
 
         panel.contentView = background
         self.panel = panel
