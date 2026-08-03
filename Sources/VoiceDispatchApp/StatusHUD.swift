@@ -657,6 +657,10 @@ final class StatusHUD: NSObject {
         header.orientation = .horizontal
         header.spacing = 6
         header.alignment = .centerY
+        // The gear is borderless, so it has none of the visual inset a bezel gives
+        // the buttons below it and reads as jammed against the edge at the same
+        // margin. Optical alignment, not geometric.
+        header.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 6)
 
         let stack = NSStackView(views: [header, titleLabel, bodyLabel, progressBar, meter,
                                         voicePicker, hintLabel, buttons])

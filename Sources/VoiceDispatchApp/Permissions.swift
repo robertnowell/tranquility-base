@@ -190,8 +190,12 @@ final class PermissionOnboarding {
     }
 
     private func celebrate() async {
-        // Spoken, because that is the thing being confirmed.
-        await SpeechChain(preferred: nil).speak(
+        // Spoken, because working audio is the thing being confirmed. In the good
+        // voice or not at all: this is the first thing the app ever says, and the
+        // system voice is a worse introduction than silence.
+        let chain = SpeechChain()
+        guard chain.preferred?.isConfigured == true else { return }
+        _ = await chain.speak(
             SpokenTextSanitizer().sanitize(
                 "All set. Tap control option to hear what's waiting, hold to reply."))
     }
