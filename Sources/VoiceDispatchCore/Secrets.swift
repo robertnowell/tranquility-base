@@ -74,8 +74,7 @@ public enum Secrets {
     }
 
     private static func writeFile(_ values: [String: String]) throws {
-        try FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? PrivateStorage.createDirectory(at: fileURL.deletingLastPathComponent())
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(values).write(to: fileURL, options: [.atomic, .completeFileProtection])

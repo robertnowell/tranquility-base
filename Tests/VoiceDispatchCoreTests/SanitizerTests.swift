@@ -11,7 +11,7 @@ final class SanitizerTests: XCTestCase {
         let cases: [(String, String)] = [
             ("Fixed in commit a3f9c21b4e including tests", "hash"),
             ("Session 58c91a82-b640-47db-a969-b56bba09d4ab finished", "uuid"),
-            ("Edited /Users/robertnowell/Projects/kopi/promotions/src/index.ts", "path"),
+            ("Edited /Users/example/Projects/app/src/index.ts", "path"),
             ("Updated globals.css and tokens.swift", "filename"),
             ("Run `npm run migrate` before deploying", "code-span"),
             ("See https://github.com/foo/bar/pull/2261 for details", "url"),
@@ -27,7 +27,7 @@ final class SanitizerTests: XCTestCase {
     }
 
     func testRedactedOutputKeepsReadableProse() throws {
-        let result = sanitizer.sanitize("Fixed in commit a3f9c21b4e and edited /Users/rob/app/main.swift")
+        let result = sanitizer.sanitize("Fixed in commit a3f9c21b4e and edited /Users/example/app/main.swift")
         XCTAssertEqual(result.text, "Fixed in commit a commit and edited a file path")
         XCTAssertFalse(result.text.contains("a3f9c21b4e"))
         XCTAssertFalse(result.text.contains("/Users"))

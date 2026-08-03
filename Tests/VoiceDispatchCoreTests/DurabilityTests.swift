@@ -5,6 +5,30 @@ import XCTest
 /// the audio is on disk and the row is committed — before anything touches the
 /// network. Everything downstream may fail freely.
 final class DurabilityTests: XCTestCase {
+
+    /// The data directory holds every session's assistant messages and every
+    /// recording of the user's voice. On a machine with more than one account those
+    /// were readable by any other local user, because FileManager creates
+    /// directories 0755 and GRDB creates the database 0644.
+    func testStoredDataIsNotReadableByOtherLocalUsers() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vd-perms-\(UUID().uuidString)", isDirectory: true)
+        let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
+        try store.insert(event: QueuedEvent(
+            hookEvent: .stop, sessionId: "s", promptId: "p",
+            cwd: "/tmp", lastAssistantMessage: "real work content"))
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        func mode(_ url: URL) throws -> Int {
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            return (attrs[.posixPermissions] as? NSNumber)?.intValue ?? 0
+        }
+
+        XCTAssertEqual(try mode(dir) & 0o077, 0, "the directory must deny group and other")
+        XCTAssertEqual(try mode(dir.appendingPathComponent("queue.sqlite")) & 0o077, 0,
+                       "the queue holds real session content")
+    }
+
     var tmpDir: URL!
     var store: QueueStore!
     var audio: AudioStore!

@@ -28,10 +28,16 @@ public final class QueueStore: Sendable {
 
     public init(url: URL? = nil) throws {
         let dbURL = url ?? Self.databaseURL
-        try FileManager.default.createDirectory(
-            at: dbURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(
-            at: Self.audioDirectory, withIntermediateDirectories: true)
+        try? PrivateStorage.createDirectory(at: dbURL.deletingLastPathComponent())
+        try? PrivateStorage.createDirectory(at: Self.audioDirectory)
+        defer {
+            // GRDB creates the database 0644, and the -wal and -shm siblings too.
+            // The directory being 0700 already denies access, but the file modes
+            // should not depend on that alone.
+            PrivateStorage.protect(dbURL)
+            PrivateStorage.protect(URL(fileURLWithPath: dbURL.path + "-wal"))
+            PrivateStorage.protect(URL(fileURLWithPath: dbURL.path + "-shm"))
+        }
 
         var config = Configuration()
         // The hook may be writing from another process at any moment. Wait rather
