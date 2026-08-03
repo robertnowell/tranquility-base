@@ -8,13 +8,19 @@ import Foundation
 /// So the model fills fields, and the spoken line is assembled from them in priority
 /// order rather than being freely written.
 public struct SessionBrief: Codable, Sendable, Equatable {
-    /// The one sentence you actually hear, written by the model FOR THE EAR.
+    /// Spoken section one: where things stand. Under 40 words.
     ///
-    /// Assembling this from the fields below produced noun-phrase salad — "Product
-    /// grid images inheriting from reference email" is a ticket title, not something
-    /// a person says. Six fields also cannot be spoken: reading the whole card aloud
-    /// runs past a minute, and the point is a seven-second interruption.
-    public var spoken: String?
+    /// Uses Claude Code's own session-recap instruction verbatim — goal, current
+    /// task, next action, and an explicit skip-list.
+    public var recap: String?
+    /// Spoken section two: what happens next and what it costs you to agree. Under
+    /// 30 words.
+    ///
+    /// Separate from the recap because they serve different purposes: one orients,
+    /// the other asks. It must carry the risk, not just the proposal — the failure
+    /// mode being designed against is approving something you later regret, and a
+    /// proposal without its risk is exactly how that happens.
+    public var proposal: String?
     /// 3–6 words naming the subject. Always spoken first, because "which session?"
     /// is the question you have before any other.
     public var topic: String
@@ -36,9 +42,10 @@ public struct SessionBrief: Codable, Sendable, Equatable {
     public init(
         topic: String, goal: String? = nil, happened: String, nextStep: String? = nil,
         question: String? = nil, risk: String? = nil, branch: String? = nil,
-        pullRequest: PullRequestRef? = nil, spoken: String? = nil
+        pullRequest: PullRequestRef? = nil, recap: String? = nil, proposal: String? = nil
     ) {
-        self.spoken = spoken
+        self.recap = recap
+        self.proposal = proposal
         self.topic = topic
         self.goal = goal
         self.happened = happened
@@ -54,13 +61,15 @@ public struct SessionBrief: Codable, Sendable, Equatable {
     /// question outranks a next step because it blocks; everything else is readable
     /// on the card.
     public func spokenText() -> String {
-        // Prefer the authored sentence. The assembled form is a fallback for the
+        // Prefer the authored sections. The assembled form is a fallback for the
         // deterministic provider, which has no model to write one.
-        if let spoken, !spoken.isEmpty {
-            if let pullRequest, !spoken.lowercased().contains("pull request") {
-                return "\(spoken) Pull request \(pullRequest.number) is \(pullRequest.state.lowercased())."
+        if let recap, !recap.isEmpty {
+            var out = recap
+            if let proposal, !proposal.isEmpty { out += " " + proposal }
+            if let pullRequest, !out.lowercased().contains("pull request") {
+                out += " Pull request \(pullRequest.number) is \(pullRequest.state.lowercased())."
             }
-            return spoken
+            return out
         }
         var parts: [String] = ["\(topic)."]
         parts.append(happened.hasSuffix(".") ? happened : happened + ".")
