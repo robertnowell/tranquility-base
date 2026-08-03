@@ -137,8 +137,9 @@ public struct Coordinator: Sendable {
         /// The gate said not now. The item stays queued — a veto can only delay.
         case held(reason: String)
         case nothingWaiting
-        /// Stopped part-way through. The item is still unread.
-        case interrupted
+        /// Stopped part-way through; the item is still unread. `failure` is nil when
+        /// you stopped it and set when it stopped itself.
+        case interrupted(failure: String?)
     }
 
     /// Speak the next waiting item.
@@ -226,7 +227,7 @@ public struct Coordinator: Sendable {
             event.announcedAtMs = nil
             try store.update(event: event)
             await prepared.put(summary, for: event.id)
-            return .interrupted
+            return .interrupted(failure: spoken.failure)
         }
 
         return .spoke(Announcement(
