@@ -48,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// future one, because it asks "is this still the reply the user wants" rather
     /// than "is a particular UI state showing".
     private var replyGeneration = 0
+    /// What the idle panel is currently displaying, so it is redrawn on change
+    /// rather than on every poll.
+    private var lastShownCounts: (Int, Int) = (-1, -1)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -77,6 +80,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Write the summary before it is asked for. Doing it on demand meant
                 // every use opened with a model call you had to sit through.
                 try? await coordinator.prepareNext()
+
+                // Reflect arrivals without being asked. The panel only ever redrew
+                // on a keypress, so a session finishing while you were looking
+                // straight at it changed nothing and the count went stale. Only
+                // while idle: speech, a recording, a countdown or a failure notice
+                // are conversations in progress and must not be redrawn under.
+                let waiting = (try? self.store?.pendingCount()) ?? 0
+                let unsent = (try? self.store?.unsentReplyCount()) ?? 0
+                // Only on a change. Redrawing every tick repositions the panel and
+                // resets its layout for no reason, which reads as flicker on a
+                // window that is meant to sit still.
+                if self.hud.isIdle, (waiting, unsent) != self.lastShownCounts {
+                    self.lastShownCounts = (waiting, unsent)
+                    self.hud.showIdle(waiting: waiting, unsentReplies: unsent)
+                }
             }
         }
 
