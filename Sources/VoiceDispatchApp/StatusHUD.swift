@@ -166,7 +166,7 @@ final class StatusHUD: NSObject {
         currentEventId = nil
 
         let status = waiting > 0
-            ? "Tap ⌃ for the most recent, hold ⌥ to reply."
+            ? "Tap ⌃⌥ for the most recent, hold ⌥ to reply."
             : "Nothing waiting. Sessions appear here as they finish."
         let body = [note, status].compactMap { $0 }.joined(separator: " ")
 

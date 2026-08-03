@@ -34,6 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the audio is still being fetched, so two quick taps used to start two
     /// announcements that then talked over each other.
     private var isAnnouncing = false
+    /// Set when a reply interrupts playback, so the announce task does not undo the
+    /// markHeard that made the reply possible.
+    private var repliedToEventId: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -277,7 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.image = image
         // Fall back to text if the symbol is unavailable, rather than showing nothing.
         if button.image == nil { button.title = isBusy ? "VD●" : "VD" }
-        button.toolTip = "Voice Dispatch — tap ⌃ to hear, hold ⌥ to reply"
+        button.toolTip = "Voice Dispatch — tap ⌃⌥ to hear, hold ⌥ to reply"
     }
 
     // MARK: - Push to talk
@@ -301,6 +304,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case .replyBegan:
             guard micGranted, !recorder.isRecording else { return }
+            // Replying to what is currently playing is the normal case, not an edge
+            // one — you answer as soon as you have heard enough. Mark it heard
+            // BEFORE stopping, because stopping reverts it to unread and that is
+            // what threw the reply away.
+            if let eventId = hud.currentEventId {
+                try? coordinator?.markHeard(eventId: eventId)
+                repliedToEventId = eventId
+            }
             coordinator?.speech.stop()  // never record over playback
             try? recorder.start()
             isBusy = true
@@ -367,13 +378,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     lastStatusLine = "◀ \(announcement.brief.topic)"
                     hud.highlight(upTo: announcement.spoken.text.count)
                 case .interrupted(let failure):
+                    // The announce task reverts an interrupted item to unread. If the
+                    // interruption WAS the reply, re-apply the mark — this runs after
+                    // the revert, so ordering is settled rather than raced.
+                    if let replied = repliedToEventId {
+                        try? coordinator.markHeard(eventId: replied)
+                        repliedToEventId = nil
+                        lastStatusLine = "replying"
+                        return
+                    }
                     if let failure {
                         // Nobody asked for this one. Say so, rather than letting a
                         // dropped connection masquerade as something you chose.
                         lastStatusLine = "playback failed — still unread"
                         hud.showResult(
                             "Playback failed (\(failure)). It's still waiting — "
-                            + "tap ⌃ to hear it again.", ok: false)
+                            + "tap ⌃⌥ to hear it again.", ok: false)
                     } else {
                         lastStatusLine = "stopped — still unread"
                         hud.showIdle(note: "Stopped — still unread.",
@@ -409,7 +429,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     hud.showResult("Sent: \(text)", ok: true)
                 case .noTarget:
                     lastStatusLine = "nothing to reply to — tap to hear one first"
-                    hud.showResult("Nothing to reply to yet — tap ⌃ to hear one first.", ok: false)
+                    hud.showResult("Nothing to reply to yet — tap ⌃⌥ to hear one first.", ok: false)
                 case .readyToSend(let utteranceId, let text, let label, _):
                     // Sending is the default. The window exists to stop it, not to
                     // permit it — approving every correct transcript is a toll.
@@ -458,7 +478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(disabled(lastStatusLine))
         menu.addItem(.separator())
 
-        menu.addItem(disabled("Tap ⌃ hear · hold ⌥ reply · tap ⇧ pause"))
+        menu.addItem(disabled("Tap ⌃⌥ hear · hold ⌥ reply · tap ⇧ pause"))
         menu.addItem(.separator())
 
         menu.addItem(permissionRow(

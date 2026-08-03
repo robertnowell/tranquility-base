@@ -66,7 +66,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
 
         stack.addArrangedSubview(label("Voice Dispatch", size: 18, weight: .semibold))
         stack.addArrangedSubview(label(
-            "When a coding session finishes, tap Control to hear what happened, hold Option to reply out loud, and tap Shift to pause.",
+            "When a coding session finishes, tap Control-Option to hear what happened, hold Option to reply out loud, and tap Shift to pause.",
             size: 12, secondary: true, width: 400))
 
         stack.addArrangedSubview(spacer(4))

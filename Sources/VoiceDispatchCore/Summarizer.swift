@@ -201,12 +201,28 @@ public struct AnthropicSummaryProvider: SummaryProvider {
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
         guard let key = Secrets.read(.anthropicAPIKey) else { throw SummaryError.notConfigured }
 
-        if request.hookEvent == .notification {
-            // An LLM adds nothing to "it wants permission" — and this must be instant.
+        // Notifications used to short-circuit to the deterministic line on the
+        // grounds that a model adds nothing to "it wants permission". That was true
+        // when a notification carried no content. It now carries the transcript's
+        // last assistant message, and for a plan-approval prompt that message IS the
+        // plan — so "waiting for permission to continue" throws away the only thing
+        // worth saying. Fall back only when there is genuinely nothing to read.
+        if request.hookEvent == .notification, request.lastAssistantMessage.isEmpty {
             return try await DeterministicSummarizer().brief(for: request)
         }
 
         var context = "Project: \(request.projectLabel)"
+        if request.hookEvent == .notification {
+            context += """
+
+
+                THIS SESSION IS BLOCKED AND WAITING ON THE USER \
+                (\(request.notificationMatcher ?? "needs input")). The message below \
+                is what it is asking about. Say what it wants to do and what the \
+                decision is — approving a plan is a decision, and reading out \
+                "waiting for permission" tells them nothing they did not already know.
+                """
+        }
         if let branch = request.gitBranch { context += "\nBranch: \(branch)" }
         if let ask = request.firstUserMessage {
             // Background only, and explicitly stale. A long session drifts far from

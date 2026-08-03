@@ -31,7 +31,8 @@ public final class HotkeyMonitor: @unchecked Sendable {
         case replyAborted
     }
 
-    /// One modifier per action, rather than chords.
+    /// One gesture per action, told apart by which modifiers were held and for how
+    /// long — not by a chord table.
     ///
     /// A three-key combination is a thing you have to remember; a single modifier is
     /// a thing you press. These are safe as bare keys for the same reason the old
@@ -43,7 +44,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
     /// ignored. Control alone is next; Control-C is not. So a gesture is only ours
     /// if no other key or click happened while the modifier was down.
     public struct Bindings: Sendable {
-        public var next: CGEventFlags = .maskControl
+        public var next: CGEventFlags = [.maskControl, .maskAlternate]
         public var pause: CGEventFlags = .maskShift
         public var reply: CGEventFlags = .maskAlternate
         public init() {}
