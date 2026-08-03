@@ -49,7 +49,7 @@ final class StatusHUD: NSObject {
 
     func showListening() {
         show(state: "● Listening…", title: currentTarget?.label ?? "Voice Dispatch",
-             body: "Speak your reply, then let go of ⌃⌥.", autoHideAfter: nil)
+             body: "Speak your reply, then let go of ⌥.", autoHideAfter: nil)
     }
 
     func showAnnouncement(
@@ -140,9 +140,9 @@ final class StatusHUD: NSObject {
     func setPaused(_ paused: Bool) {
         stateLabel.stringValue = paused ? "❙❙ Paused" : "◀ Speaking"
         hintLabel.stringValue = paused
-            ? "Tap ⌃⌥ to carry on, or Dismiss to be done with it."
-            : (identity.map { "\($0)\nTap ⌃⌥ to pause, hold to reply." }
-                ?? "Tap ⌃⌥ to pause, hold to reply.")
+            ? "Tap ⇧ to carry on, or Dismiss to be done with it."
+            : (identity.map { "\($0)\nTap ⇧ to pause, hold ⌥ to reply." }
+                ?? "Tap ⇧ to pause, hold ⌥ to reply.")
     }
 
     func showWorking(_ message: String) {
@@ -166,7 +166,7 @@ final class StatusHUD: NSObject {
         currentEventId = nil
 
         let status = waiting > 0
-            ? "Tap ⌃⌥ for the most recent, hold ⌃⌥ to reply."
+            ? "Tap ⌃ for the most recent, hold ⌥ to reply."
             : "Nothing waiting. Sessions appear here as they finish."
         let body = [note, status].compactMap { $0 }.joined(separator: " ")
 
@@ -209,8 +209,8 @@ final class StatusHUD: NSObject {
             action = "Sending in a moment — stop it if that isn't what you said."
         } else {
             action = isRecording
-                ? "Listening — click Send, or let go of ⌃⌥."
-                : "Click Reply, or hold ⌃⌥ to speak."
+                ? "Listening — click Send, or let go of ⌥."
+                : "Click Reply, or hold ⌥ to speak."
         }
         hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
         replyButton.isHidden = awaitingConfirm ? false : (currentTarget == nil)
@@ -490,8 +490,8 @@ final class StatusHUD: NSObject {
             action = "Sending in a moment — stop it if that isn't what you said."
         } else {
             action = isRecording
-                ? "Listening — click Send, or let go of ⌃⌥."
-                : "Click Reply, or hold ⌃⌥ to speak."
+                ? "Listening — click Send, or let go of ⌥."
+                : "Click Reply, or hold ⌥ to speak."
         }
         hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
     }

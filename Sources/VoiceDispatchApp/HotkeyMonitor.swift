@@ -20,35 +20,99 @@ import Foundation
 /// reach whatever app is focused. Wispr Flow refuses bare keys for the same reason.
 public final class HotkeyMonitor: @unchecked Sendable {
     public enum Transition: Sendable {
-        case pressed, released
-        /// ⌃⌥⇧ tapped. A separate gesture so ⌃⌥ can keep meaning "next" — pausing
-        /// on the same chord left no way to move on, since a tap on a finished
-        /// announcement simply started it over.
+        /// Control, tapped on its own.
+        case next
+        /// Shift, tapped on its own.
         case pauseToggled
+        /// Option, held past the threshold.
+        case replyBegan
+        case replyEnded
+        /// The hold turned out to be part of a real shortcut. Throw the audio away.
+        case replyAborted
     }
 
-    /// ⌃⌥ held together. Matches Clicky's default and avoids every system chord.
-    public struct Chord: Sendable {
-        public var flags: CGEventFlags
-        public init(flags: CGEventFlags = [.maskControl, .maskAlternate]) { self.flags = flags }
-
-        func isSatisfied(by eventFlags: CGEventFlags) -> Bool {
-            let relevant: CGEventFlags = [.maskControl, .maskAlternate, .maskCommand, .maskShift]
-            return eventFlags.intersection(relevant) == flags
-        }
+    /// One modifier per action, rather than chords.
+    ///
+    /// A three-key combination is a thing you have to remember; a single modifier is
+    /// a thing you press. These are safe as bare keys for the same reason the old
+    /// chord was: on their own they type nothing, so the listen-only tap can observe
+    /// them without the keystroke doing damage on its way to the focused app.
+    ///
+    /// What makes them safe in PRACTICE is the other-input guard below. Shift alone
+    /// is a pause; Shift followed by a letter is a capital letter and must be
+    /// ignored. Control alone is next; Control-C is not. So a gesture is only ours
+    /// if no other key or click happened while the modifier was down.
+    public struct Bindings: Sendable {
+        public var next: CGEventFlags = .maskControl
+        public var pause: CGEventFlags = .maskShift
+        public var reply: CGEventFlags = .maskAlternate
+        public init() {}
     }
 
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private let chord: Chord
+    private let bindings = Bindings()
+    private let holdThreshold: TimeInterval
     private let onTransition: @Sendable (Transition) -> Void
+
+    /// State of the modifier press currently in progress.
+    private var seenFlags: CGEventFlags = []
+    private var pressStartedAt: Date?
+    private var sawOtherInput = false
+    private var isReplying = false
+    private var holdCheck: DispatchWorkItem?
 
     /// Mutated only from the tap callback, which runs on the main run loop.
     public private(set) var isPressed = false
-    private var isPauseHeld = false
 
-    public init(chord: Chord = Chord(), onTransition: @escaping @Sendable (Transition) -> Void) {
-        self.chord = chord
+    private func beginGesture(with flags: CGEventFlags) {
+        seenFlags = flags
+        pressStartedAt = Date()
+        sawOtherInput = false
+        isReplying = false
+
+        // Recording starts only once the hold outlives the threshold, so a tap never
+        // opens the microphone.
+        let check = DispatchWorkItem { [weak self] in
+            guard let self, self.pressStartedAt != nil, !self.sawOtherInput,
+                  self.seenFlags == self.bindings.reply else { return }
+            self.isReplying = true
+            self.isPressed = true
+            self.onTransition(.replyBegan)
+        }
+        holdCheck = check
+        DispatchQueue.main.asyncAfter(deadline: .now() + holdThreshold, execute: check)
+    }
+
+    private func endGesture() {
+        holdCheck?.cancel()
+        holdCheck = nil
+        guard let started = pressStartedAt else { return }
+        let duration = Date().timeIntervalSince(started)
+        let flags = seenFlags
+        let interfered = sawOtherInput
+        pressStartedAt = nil
+        seenFlags = []
+        isPressed = false
+
+        if isReplying {
+            isReplying = false
+            onTransition(interfered ? .replyAborted : .replyEnded)
+            return
+        }
+        guard !interfered, duration < holdThreshold else { return }
+        switch flags {
+        case bindings.next: onTransition(.next)
+        case bindings.pause: onTransition(.pauseToggled)
+        default: break  // Option tapped, or two modifiers: no action.
+        }
+    }
+
+    public init(
+        holdThreshold: TimeInterval = 0.35,
+        onTransition: @escaping @Sendable (Transition) -> Void
+    ) {
+        self.holdThreshold = holdThreshold
         self.onTransition = onTransition
     }
 
@@ -123,23 +187,26 @@ public final class HotkeyMonitor: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
 
-        // ⌃⌥⇧ is its own gesture. Shift adds nothing typeable, and the whole
-        // combination still reaches the focused app harmlessly.
-        let withShift = Chord(flags: [.maskControl, .maskAlternate, .maskShift])
-        if withShift.isSatisfied(by: event.flags) {
-            if !isPauseHeld { isPauseHeld = true; onTransition(.pauseToggled) }
+        // Any other key or a click while a modifier is down means this is a real
+        // shortcut — Shift-A, Control-C, Option-drag — not one of ours.
+        if type == .keyDown || type == .leftMouseDown || type == .rightMouseDown {
+            if pressStartedAt != nil { sawOtherInput = true }
             return Unmanaged.passUnretained(event)
         }
-        isPauseHeld = false
 
-        let satisfied = chord.isSatisfied(by: event.flags)
-        if satisfied, !isPressed {
-            isPressed = true
-            onTransition(.pressed)
-        } else if !satisfied, isPressed {
-            isPressed = false
-            onTransition(.released)
+        let relevant: CGEventFlags = [.maskControl, .maskAlternate, .maskShift, .maskCommand]
+        let held = event.flags.intersection(relevant)
+
+        if held.isEmpty {
+            endGesture()
+        } else if pressStartedAt == nil {
+            beginGesture(with: held)
+        } else {
+            // Adding a second modifier disqualifies the gesture: one modifier each
+            // is the whole point, and ⌃⌥ must not be mistaken for either.
+            seenFlags.formUnion(held)
         }
+
         return Unmanaged.passUnretained(event)
     }
 }

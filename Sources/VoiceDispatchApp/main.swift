@@ -277,60 +277,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.image = image
         // Fall back to text if the symbol is unavailable, rather than showing nothing.
         if button.image == nil { button.title = isBusy ? "VD●" : "VD" }
-        button.toolTip = "Voice Dispatch — tap ⌃⌥ to hear, hold to reply"
+        button.toolTip = "Voice Dispatch — tap ⌃ to hear, hold ⌥ to reply"
     }
 
     // MARK: - Push to talk
 
     private func handle(_ transition: HotkeyMonitor.Transition) {
         switch transition {
+        case .next:
+            // Control on its own. Talking already? Stop and move on — it stays
+            // unread, so skipping ahead loses nothing.
+            if isAnnouncing || (coordinator?.speech.isSpeaking ?? false) {
+                coordinator?.speech.stop()
+                isAnnouncing = false
+            }
+            announceNext()
+
         case .pauseToggled:
-            return  // handled before this, in the monitor callback
-        case .pressed:
-            pressStartedAt = Date()
-            // Start capturing immediately. If this turns out to be a tap the audio
-            // is thrown away — the alternative, waiting to see if it's a hold, would
-            // clip the first third of a second off every reply.
+            guard let speech = coordinator?.speech, speech.isSpeaking || speech.isPaused
+            else { return }
+            speech.togglePause()
+            hud.setPaused(speech.isPaused)
+
+        case .replyBegan:
             guard micGranted, !recorder.isRecording else { return }
-            // Recording starts only once the press outlives the tap threshold.
-            // Starting on press meant every tap opened the microphone while also
-            // playing the next announcement — it listened to its own voice. Losing
-            // the first ~350ms of a hold is the correct trade: people pause before
-            // speaking, and a tap must be silent.
-            let indicator = DispatchWorkItem { [weak self] in
-                guard let self, !self.recorder.isRecording else { return }
-                // Never record over playback.
-                self.coordinator?.speech.stop()
-                try? self.recorder.start()
-                self.isBusy = true
-                self.updateTitle()
-                self.hud.showListening()
-            }
-            listeningIndicator = indicator
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.tapThreshold, execute: indicator)
+            coordinator?.speech.stop()  // never record over playback
+            try? recorder.start()
+            isBusy = true
+            updateTitle()
+            hud.showListening()
 
-        case .released:
-            let held = pressStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-            pressStartedAt = nil
+        case .replyEnded:
             isBusy = false
-
-            listeningIndicator?.cancel()
-            listeningIndicator = nil
-
-            if held < Self.tapThreshold {
-                recorder.abandon()
-                updateTitle()
-                // ⌃⌥ means "next", always. Talking already? Stop this one and move
-                // on — it stays unread, so nothing is lost by skipping ahead.
-                // Pausing lives on ⌃⌥⇧ precisely so this gesture keeps its meaning.
-                if isAnnouncing || (coordinator?.speech.isSpeaking ?? false) {
-                    coordinator?.speech.stop()
-                    isAnnouncing = false
-                }
-                announceNext()
-                return
-            }
-
             guard let captured = try? recorder.stop() else {
                 updateTitle()
                 lastStatusLine = "nothing recorded"
@@ -339,6 +317,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             updateTitle()
             sendReply(captured)
+
+        case .replyAborted:
+            // The hold turned out to be part of a real shortcut. Drop the audio
+            // rather than transcribing whatever happened to be in the room.
+            isBusy = false
+            recorder.abandon()
+            updateTitle()
+            hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0)
         }
     }
 
@@ -387,7 +373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         lastStatusLine = "playback failed — still unread"
                         hud.showResult(
                             "Playback failed (\(failure)). It's still waiting — "
-                            + "tap ⌃⌥ to hear it again.", ok: false)
+                            + "tap ⌃ to hear it again.", ok: false)
                     } else {
                         lastStatusLine = "stopped — still unread"
                         hud.showIdle(note: "Stopped — still unread.",
@@ -423,7 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     hud.showResult("Sent: \(text)", ok: true)
                 case .noTarget:
                     lastStatusLine = "nothing to reply to — tap to hear one first"
-                    hud.showResult("Nothing to reply to yet — tap ⌃⌥ to hear one first.", ok: false)
+                    hud.showResult("Nothing to reply to yet — tap ⌃ to hear one first.", ok: false)
                 case .readyToSend(let utteranceId, let text, let label, _):
                     // Sending is the default. The window exists to stop it, not to
                     // permit it — approving every correct transcript is a toll.
@@ -472,7 +458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(disabled(lastStatusLine))
         menu.addItem(.separator())
 
-        menu.addItem(disabled("Tap ⌃⌥ to hear · hold to reply"))
+        menu.addItem(disabled("Tap ⌃ hear · hold ⌥ reply · tap ⇧ pause"))
         menu.addItem(.separator())
 
         menu.addItem(permissionRow(
