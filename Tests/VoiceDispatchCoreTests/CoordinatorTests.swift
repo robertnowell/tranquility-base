@@ -126,10 +126,14 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(try coordinator.replyTarget()?.sessionId, "sess-1")
 
         // 3. The reply is transcribed and routed there.
-        let outcome = try await coordinator.submitReply(
-            pcm16: silence(),
-            sampleRate: 16000)
+        // Transcription hands back a pending send rather than dispatching, so the
+        // undo window has something to cancel.
+        guard case .readyToSend(let utteranceId, _, _, _) = try await coordinator.submitReply(
+            pcm16: silence(), sampleRate: 16000)
+        else { return XCTFail("expected a pending send") }
+        XCTAssertTrue(transport.sent.isEmpty, "nothing is typed while the window is open")
 
+        let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
         guard case .dispatched(let text, _, let sessionId) = outcome else {
             return XCTFail("expected dispatch, got \(outcome)")
         }
@@ -231,7 +235,9 @@ final class CoordinatorTests: XCTestCase {
 
     // MARK: - Refusals
 
-    func testUnenrolledSessionIsNeverInjectedInto() async throws {
+    /// Transcribing must never type anything by itself, enrolled or not. Dispatch
+    /// happens only once the undo window has closed.
+    func testTranscribingNeverTypesAnything() async throws {
         let transport = RecordingTransport()
         let coordinator = try makeCoordinator(transport: transport, enrolled: false)
         try seedEvent()
@@ -239,9 +245,29 @@ final class CoordinatorTests: XCTestCase {
 
         let outcome = try await coordinator.submitReply(pcm16: silence())
 
-        guard case .notEnrolled = outcome else { return XCTFail("expected refusal, got \(outcome)") }
-        XCTAssertTrue(transport.sent.isEmpty, "nothing may be typed into an unenrolled session")
-        XCTAssertNotNil(try store.utterances().first?.audioPath, "the recording is still kept")
+        guard case .readyToSend = outcome else { return XCTFail("expected a pending send, got \(outcome)") }
+        XCTAssertTrue(transport.sent.isEmpty, "nothing is typed before the window closes")
+        XCTAssertNotNil(try store.utterances().first?.audioPath, "the recording is kept")
+    }
+
+    /// Stopping it must actually stop it — and must not leave the recording looking
+    /// sendable, or a later sweep could deliver words you rejected.
+    func testCancellingLeavesNothingSendable() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(transport: transport)
+        try seedEvent()
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+
+        try coordinator.cancelSend(utteranceId: utteranceId)
+
+        XCTAssertTrue(transport.sent.isEmpty)
+        XCTAssertEqual(try store.utterances().first?.status, .discarded)
+        XCTAssertNotEqual(try store.events().first?.status, .answered,
+                          "the session is still owed an answer")
     }
 
     /// Absent from `claude agents --json` means blocked on a dialog. Injecting would
@@ -252,8 +278,11 @@ final class CoordinatorTests: XCTestCase {
         try seedEvent()
         _ = try await coordinator.announceNext()
 
-        let outcome = try await coordinator.submitReply(pcm16: silence())
+        guard case .readyToSend(let utteranceId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
 
+        let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
         guard case .sessionNotReady(.notRegistered) = outcome else {
             return XCTFail("expected refusal, got \(outcome)")
         }
@@ -268,8 +297,11 @@ final class CoordinatorTests: XCTestCase {
         try seedEvent()
         _ = try await coordinator.announceNext()
 
-        let outcome = try await coordinator.submitReply(pcm16: silence())
+        guard case .readyToSend(let utteranceId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
 
+        let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
         guard case .dispatchFailed(.verificationTimedOut, _) = outcome else {
             return XCTFail("expected an ambiguous result, got \(outcome)")
         }
@@ -313,22 +345,24 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(counting.calls, 1, "announcing must not summarize again")
     }
 
-    /// An unenrolled session is a confirmation, not a dead end: the transcript is
-    /// kept ready and one approval sends it.
-    func testUnenrolledReplyStaysSendableAndConfirmingSendsIt() async throws {
+    /// An unenrolled session is no longer a dead end: the transcript is kept ready
+    /// and the undo window closing sends it.
+    func testUnenrolledReplyStaysSendableAndSendsWhenTheWindowCloses() async throws {
         let transport = RecordingTransport()
         let coordinator = try makeCoordinator(transport: transport, enrolled: false)
         try seedEvent()
         _ = try await coordinator.announceNext()
 
-        guard case .notEnrolled(_, let utteranceId, _, _) =
+        guard case .readyToSend(let utteranceId, _, _, _) =
             try await coordinator.submitReply(pcm16: silence())
-        else { return XCTFail("expected a confirmation request") }
+        else { return XCTFail("expected a pending send") }
         XCTAssertEqual(try store.utterances().first?.status, .ready, "still sendable")
         XCTAssertTrue(transport.sent.isEmpty)
 
+        // Letting the window close enrols the session — choosing not to stop it is
+        // the consent, so a first reply needs no separate approval.
         guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
-        else { return XCTFail("confirming must send the recording already made") }
+        else { return XCTFail("letting it send must dispatch the recording already made") }
         XCTAssertEqual(transport.sent.count, 1, "no re-recording required")
         XCTAssertEqual(try store.utterances().first?.status, .confirmed)
     }
