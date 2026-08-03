@@ -88,6 +88,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     turnArrived = true
                     self.rebuildMenu()
                 }
+                // Warm the liveness cache off-main first. The probe is a ~0.3s
+                // subprocess; called synchronously from the main actor it froze the
+                // UI on every tick and every press — which also risks the CGEvent
+                // tap timing out, and a timed-out tap is dropped keystrokes.
+                await Task.detached { _ = ClaudeAgentsCLI().sessions() }.value
+
                 // Write the summary before it is asked for. Doing it on demand meant
                 // every use opened with a model call you had to sit through.
                 try? await coordinator.prepareNext()
@@ -135,13 +141,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The panel can drive a recording itself, so answering never depends on
         // knowing a hotkey that is invisible in the UI.
-        // Escape does what Dismiss does — but only when the panel is actually up and
-        // busy, so it stays inert while you are using Escape for its usual purpose.
-        hotkey.onEscape = { [weak self] in
-            guard let self, self.hud.isBusyOnScreen else { return }
-            self.hud.dismiss()
-        }
-
         hud.onOpenSettings = { [weak self] in self?.openSettings() }
         hud.onOpenWaitingList = { [weak self] in
             guard let self, let waiting = try? self.coordinator?.waiting() else { return }
@@ -419,7 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Acknowledge before acting. Every recognized gesture pulses the panel
         // border, so a registered press is visibly different from a missed one.
         switch transition {
-        case .next, .pauseToggled, .replyBegan:
+        case .next, .pauseToggled, .replyBegan, .dismiss:
             hud.flashAcknowledge()
         case .replyEnded, .replyAborted:
             break
@@ -441,6 +440,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             default: break
             }
             announceNext()
+
+        case .dismiss:
+            // Same action as the Dismiss button; a chord because Escape leaks ESC
+            // into the focused terminal and interrupts the Claude session there.
+            if hud.isBusyOnScreen || hud.isOnScreen { hud.dismiss() }
 
         case .pauseToggled:
             guard let speech = coordinator?.speech, speech.isSpeaking || speech.isPaused
@@ -509,15 +513,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func announceNext(only eventId: String? = nil) {
         guard let coordinator else { return }
         let previous = announceTask
-
-        // Nothing to play: say so and stop. No preparing state, no flash. History
-        // counts as something to play, which is the whole point of catching up.
-        if eventId == nil, (try? coordinator.nextToAnnounce()) == nil {
-            hud.showIdle(waiting: 0,
-                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
-            return
-        }
-
         hud.isSpeakingNow = true
         // Summarizing and fetching the voice take several seconds. Without this the
         // app shows nothing at all for the whole of that and reads as broken.
@@ -534,6 +529,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             isAnnouncing = true
+
+            // The emptiness check runs HERE, after Preparing has painted, with the
+            // probe warmed off-main. It used to run before anything was shown, so a
+            // press sat on a frozen panel for the length of a subprocess call and a
+            // registered press looked exactly like a missed one.
+            await Task.detached { _ = ClaudeAgentsCLI().sessions() }.value
+            if eventId == nil, (try? coordinator.nextToAnnounce()) == nil {
+                hud.showIdle(waiting: 0,
+                             unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+                return
+            }
             Permissions.log("announce: starting")
             do {
                 // A tap is an explicit request to hear something, so the
@@ -801,7 +807,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(.separator())
 
-        menu.addItem(disabled("Tap ⌃⌥ hear · hold ⌥ reply · tap ⇧ pause"))
+        menu.addItem(disabled("⌃⌥ hear · hold ⌥ reply · ⇧ pause · ⌃⇧ dismiss"))
         menu.addItem(.separator())
 
         menu.addItem(permissionRow(

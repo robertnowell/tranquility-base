@@ -501,21 +501,40 @@ final class StatusHUD: NSObject {
     /// press and a missed press look identical, so you press again — which is how
     /// every double-trigger bug this weekend started. The pulse says "heard you"
     /// before any work begins.
-    func flashAcknowledge() {
-        guard let layer = (panel?.contentView as? NSVisualEffectView)?.layer
-            ?? panel?.contentView?.layer else { return }
-        if panel?.isVisible != true { panel?.orderFrontRegardless() }
-        layer.borderColor = NSColor.controlAccentColor.cgColor
-        layer.cornerRadius = 12
-        layer.borderWidth = 3
+    /// Our own overlay layer, not the NSVisualEffectView's.
+    ///
+    /// The first version set a border on the effect view's backing layer and
+    /// nothing appeared: that layer is privately managed and does not render
+    /// externally-set borders reliably. A plain CALayer we own, sitting above the
+    /// content, has no such opinions.
+    private var ackLayer: CALayer?
 
-        let fade = CABasicAnimation(keyPath: "borderWidth")
-        fade.fromValue = 3
-        fade.toValue = 0
-        fade.duration = 0.35
-        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        layer.add(fade, forKey: "ack")
-        layer.borderWidth = 0
+    func flashAcknowledge() {
+        guard let host = panel?.contentView, let hostLayer = host.layer else { return }
+        if panel?.isVisible != true { panel?.orderFrontRegardless() }
+
+        let layer: CALayer
+        if let existing = ackLayer {
+            layer = existing
+        } else {
+            layer = CALayer()
+            layer.borderColor = NSColor.controlAccentColor.cgColor
+            layer.borderWidth = 3
+            layer.cornerRadius = 12
+            layer.opacity = 0
+            hostLayer.addSublayer(layer)
+            ackLayer = layer
+        }
+        layer.frame = host.bounds
+
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1.0
+        pulse.toValue = 0.0
+        pulse.duration = 0.4
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.removeAnimation(forKey: "ack")
+        layer.add(pulse, forKey: "ack")
+        Permissions.log("ack: pulsed (visible=\(panel?.isVisible == true))")
     }
 
     func showPreparing() {
