@@ -2,6 +2,25 @@ import XCTest
 @testable import VoiceDispatchCore
 
 final class QueueStoreTests: XCTestCase {
+
+    /// The badge counts sessions waiting to be heard — nothing else. It read 52
+    /// against two real rows because it counted everything that was not explicitly
+    /// terminal, so every status added later inflated it.
+    func testPendingCountIsOnlyWhatCanStillBeAnnounced() throws {
+        for (index, status) in [EventStatus.new, .announced, .superseded, .answered,
+                                .dismissed, .held].enumerated() {
+            var event = QueuedEvent(
+                createdAtMs: Int64(1_000 + index), hookEvent: .stop,
+                sessionId: "s-\(index)", promptId: "p\(index)",
+                cwd: "/tmp", lastAssistantMessage: "m")
+            event.status = status
+            _ = try store.insert(event: event)
+            if status != .new { try store.update(event: event) }
+        }
+
+        XCTAssertEqual(try store.pendingCount(), 2, "only .new and .held are still waiting")
+    }
+
     var tmpDir: URL!
     var store: QueueStore!
 
