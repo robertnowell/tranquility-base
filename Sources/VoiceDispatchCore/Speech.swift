@@ -25,7 +25,13 @@ extension SpeechProvider {
 public enum SpeechError: Error, Sendable {
     case notConfigured
     case synthesisFailed(String)
+    /// `stop()` was called. Somebody asked for this.
     case interrupted
+    /// The audio stopped short and nobody asked. A dropped connection, a decode
+    /// failure, a device change. Distinguishable from `interrupted` because
+    /// interruption is caused, not inferred: `stop()` bumps a counter, so if the
+    /// counter is unchanged when the audio ends early, no one requested it.
+    case truncated(playedSeconds: Double, ofSeconds: Double)
 }
 
 // MARK: - System (default)
@@ -192,6 +198,7 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         // effect. ~8/second is well past what the eye resolves for word highlighting.
         guard let starts, let onWord else {
             while audio.isPlaying { try await Task.sleep(nanoseconds: 200_000_000) }
+            try checkForTruncation(audio, generation: mine)
             return
         }
 
@@ -210,6 +217,16 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
             }
             try await Task.sleep(nanoseconds: 125_000_000)
         }
+        try checkForTruncation(audio, generation: mine)
+    }
+
+    /// Playback that ends early with the generation unchanged was not stopped by
+    /// anyone — that is a failure, and it should not be reported as your choice.
+    private func checkForTruncation(_ audio: AVAudioPlayer, generation mine: Int) throws {
+        guard mine == currentGeneration() else { throw SpeechError.interrupted }
+        let remaining = audio.duration - audio.currentTime
+        guard remaining > 0.25 else { return }
+        throw SpeechError.truncated(playedSeconds: audio.currentTime, ofSeconds: audio.duration)
     }
 
     public func stop() {
@@ -258,6 +275,10 @@ public struct SpeechChain: Sendable {
         /// False when the audio was cut off. An interrupted announcement was not
         /// heard, so it must not be treated as delivered.
         public let completed: Bool
+        /// Set only when the audio stopped short without anyone asking. The item is
+        /// still unread either way, but this is a fault to surface rather than a
+        /// choice to respect quietly.
+        public var failure: String?
     }
 
     @discardableResult
@@ -271,6 +292,10 @@ public struct SpeechChain: Sendable {
                 return Spoken(provider: preferred.name, completed: true)
             } catch SpeechError.interrupted {
                 return Spoken(provider: preferred.name, completed: false)
+            } catch SpeechError.truncated(let played, let total) {
+                return Spoken(
+                    provider: preferred.name, completed: false,
+                    failure: String(format: "audio stopped at %.0fs of %.0fs", played, total))
             } catch {
                 ElevenLabsSpeechProvider.trace?("chain: \(preferred.name) failed: \(error)")
                 // fall through to the system voice for this utterance only

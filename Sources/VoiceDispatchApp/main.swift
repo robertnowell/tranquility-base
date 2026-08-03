@@ -74,6 +74,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The panel can drive a recording itself, so answering never depends on
         // knowing a hotkey that is invisible in the UI.
+        // Escape does what Dismiss does — but only when the panel is actually up and
+        // busy, so it stays inert while you are using Escape for its usual purpose.
+        hotkey.onEscape = { [weak self] in
+            guard let self, self.hud.isBusyOnScreen else { return }
+            self.hud.dismiss()
+        }
+
         hud.onDismiss = { [weak self] in
             guard let self else { return }
             self.coordinator?.speech.stop()
@@ -327,11 +334,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func announceNext() {
         guard let coordinator, !isAnnouncing else { return }
         isAnnouncing = true
+        hud.isSpeakingNow = true
         // Summarizing and fetching the voice take several seconds. Without this the
         // app shows nothing at all for the whole of that and reads as broken.
         hud.showPreparing()
         Task { @MainActor in
-            defer { isAnnouncing = false }
+            defer { isAnnouncing = false; hud.isSpeakingNow = false }
             do {
                 // A tap is an explicit request to hear something, so the
                 // interruptibility gate does not apply — you cannot interrupt
@@ -359,9 +367,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .spoke(let announcement):
                     lastStatusLine = "◀ \(announcement.brief.topic)"
                     hud.highlight(upTo: announcement.spoken.text.count)
-                case .interrupted:
-                    lastStatusLine = "stopped — still unread"
-                    hud.showIdle("Stopped. It's still waiting — tap ⌃⌥ to hear it again.")
+                case .interrupted(let failure):
+                    if let failure {
+                        // Nobody asked for this one. Say so, rather than letting a
+                        // dropped connection masquerade as something you chose.
+                        lastStatusLine = "playback failed — still unread"
+                        hud.showResult(
+                            "Playback failed (\(failure)). It's still waiting — "
+                            + "tap ⌃⌥ to hear it again.", ok: false)
+                    } else {
+                        lastStatusLine = "stopped — still unread"
+                        hud.showIdle("Stopped. It's still waiting — tap ⌃⌥ to hear it again.")
+                    }
                 case .held(let reason):
                     lastStatusLine = "held: \(reason)"
                     hud.showIdle("Holding — \(reason)")

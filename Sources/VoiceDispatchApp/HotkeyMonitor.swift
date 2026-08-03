@@ -96,12 +96,23 @@ public final class HotkeyMonitor: @unchecked Sendable {
         }
     }
 
+    /// Called on Escape. Set by the app; ignored when nothing is active.
+    var onEscape: (() -> Void)?
+
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // The system disables a tap that times out or is interrupted by user input.
         // Silently re-enabling is the difference between "works" and "worked until
         // the machine got busy once".
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+
+        // Escape dismisses, but only while the panel is showing something you would
+        // want to stop. The tap is listen-only, so the keystroke still reaches
+        // whatever is frontmost — we observe it, we do not swallow it.
+        if type == .keyDown, event.getIntegerValueField(.keyboardEventKeycode) == 53 {
+            onEscape?()
             return Unmanaged.passUnretained(event)
         }
 

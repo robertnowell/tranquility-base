@@ -149,6 +149,20 @@ final class StatusHUD: NSObject {
         show(state: "◌ Ready", title: "Voice Dispatch", body: message, autoHideAfter: nil)
     }
 
+    /// True when the panel is visible and doing something worth stopping. Escape is
+    /// a key with a job in every terminal app, so it only acts here when there is
+    /// speech, a countdown, or a recording to interrupt.
+    var isBusyOnScreen: Bool {
+        guard panel?.isVisible == true else { return false }
+        return awaitingConfirm || isRecording || isSpeakingNow
+    }
+
+    /// Set by the app; the HUD cannot see the speech chain itself.
+    var isSpeakingNow = false
+
+    /// Same path as the Dismiss button, so both can never drift apart.
+    func dismiss() { dismissTapped() }
+
     func hide() {
         hideWorkItem?.cancel()
         panel?.orderOut(nil)

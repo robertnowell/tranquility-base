@@ -167,12 +167,42 @@ final class CoordinatorTests: XCTestCase {
             recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
         try seedEvent()
 
-        guard case .interrupted = try await coordinator.announceNext() else {
+        guard case .interrupted(let failure) = try await coordinator.announceNext() else {
             return XCTFail("expected an interrupted announcement")
         }
+        XCTAssertNil(failure, "a requested stop is not a fault")
         XCTAssertEqual(try store.events().first?.status, .new, "still unread")
         XCTAssertNil(try store.events().first?.announcedAtMs)
         XCTAssertNotNil(try coordinator.nextToAnnounce(), "offered again")
+    }
+
+    /// Audio that stops short with nobody asking is a fault, and must not be
+    /// reported as a choice the user made.
+    func testTruncatedPlaybackIsReportedAsAFailureNotAChoice() async throws {
+        final class TruncatingSpeech: SpeechProvider, @unchecked Sendable {
+            let name = "truncating"
+            let isConfigured = true
+            var isSpeaking = false
+            func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
+                throw SpeechError.truncated(playedSeconds: 3, ofSeconds: 19)
+            }
+            func stop() {}
+        }
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
+        let cut = TruncatingSpeech()
+        let coordinator = Coordinator(
+            store: store, summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: cut, fallback: cut),
+            gate: InterruptGate(minimumIdleSeconds: 0), transport: RecordingTransport(),
+            enrolment: registry, agents: FakeAgents(live: []),
+            recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
+        try seedEvent()
+
+        guard case .interrupted(let failure) = try await coordinator.announceNext() else {
+            return XCTFail("expected an interrupted announcement")
+        }
+        XCTAssertNotNil(failure, "nobody asked for this stop — it is a fault")
+        XCTAssertEqual(try store.events().first?.status, .new, "and it is still unread")
     }
 
     func testNothingIsAnnouncedTwice() async throws {
