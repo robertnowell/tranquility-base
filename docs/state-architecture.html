@@ -1,0 +1,256 @@
+<title>Voice Dispatch — the state architecture, settled</title>
+<style>
+  :root {
+    --bg:#fbfaf8; --fg:#16150f; --dim:#6b675c; --rule:#e2ded4;
+    --accent:#1f4f8f; --bad:#a3311f; --bad-bg:#fdf1ee; --good-bg:#eef4ee;
+    --code:#f2efe8; --measure:70ch;
+  }
+  @media (prefers-color-scheme: dark){:root{
+    --bg:#131310; --fg:#eceae2; --dim:#8f8a7c; --rule:#2c2b25;
+    --accent:#7fb0e8; --bad:#e8836c; --bad-bg:#2a1a15; --good-bg:#18211a; --code:#1e1d19;}}
+  :root[data-theme="dark"]{--bg:#131310;--fg:#eceae2;--dim:#8f8a7c;--rule:#2c2b25;
+    --accent:#7fb0e8;--bad:#e8836c;--bad-bg:#2a1a15;--good-bg:#18211a;--code:#1e1d19;}
+  :root[data-theme="light"]{--bg:#fbfaf8;--fg:#16150f;--dim:#6b675c;--rule:#e2ded4;
+    --accent:#1f4f8f;--bad:#a3311f;--bad-bg:#fdf1ee;--good-bg:#eef4ee;--code:#f2efe8;}
+  body{background:var(--bg);color:var(--fg);margin:0;
+    font:16px/1.6 ui-sans-serif,-apple-system,"Helvetica Neue",sans-serif;}
+  .wrap{max-width:940px;margin:0 auto;padding:56px 24px 100px;}
+  h1{font-size:30px;letter-spacing:-.02em;margin:0 0 8px;}
+  .sub{color:var(--dim);margin:0 0 40px;max-width:var(--measure);font-size:17px;}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);
+    margin:48px 0 14px;padding-top:16px;border-top:1px solid var(--rule);}
+  h3{font-size:18px;margin:28px 0 6px;}
+  p,li{max-width:var(--measure);}
+  code{background:var(--code);padding:1px 5px;border-radius:3px;
+    font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:13.5px;}
+  pre{background:var(--code);padding:14px 16px;border-radius:6px;overflow-x:auto;
+    font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:13px;line-height:1.5;}
+  blockquote{margin:12px 0;padding:8px 0 8px 16px;border-left:3px solid var(--rule);
+    color:var(--dim);max-width:var(--measure);}
+  .box{border:1px solid var(--rule);border-radius:8px;padding:18px 20px;margin:20px 0;}
+  .bad{background:var(--bad-bg);border-color:transparent;}
+  .bad h3{color:var(--bad);margin-top:0;}
+  .good{background:var(--good-bg);border-color:transparent;}
+  .good h3{margin-top:0;}
+  .scroll{overflow-x:auto;}
+  table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:520px;}
+  th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--dim);padding:6px 14px 6px 0;border-bottom:1px solid var(--rule);}
+  td{padding:8px 14px 8px 0;border-bottom:1px solid var(--rule);vertical-align:top;}
+  td.num{font-family:ui-monospace,Menlo,monospace;white-space:nowrap;}
+  .win{font-weight:700;color:var(--accent);}
+  .src{color:var(--dim);font-size:13.5px;}
+  a{color:var(--accent);}
+</style>
+
+<div class="wrap">
+
+<h1>The state architecture, settled</h1>
+<p class="sub">Five research agents, mostly against primary sources: two IETF RFCs, a WHATWG
+standard, Apple / Android / Google / Slack first-party docs, SQLite's own documentation,
+and Kafka's design notes. They converge on one architecture — and they identify three
+specific traps, one of which I was about to walk into and two of which are already live
+bugs.</p>
+
+<h2>The answer</h2>
+
+<p><strong>The log is immutable and is the only system of record. Everything else is
+derived.</strong> State lives on two separate axes that must never share a column:</p>
+
+<pre>WORLD FACTS  →  the event log        (append-only, never mutated)
+                 what happened, in order, per session
+
+USER FACTS   →  a small cursor       (one row per session)
+                 how far I have got: heard-through, dismissed-through
+
+WAITING      →  a query              (never a stored value)
+                 latest event per session is a Stop,
+                 and its sequence &gt; my cursors</pre>
+
+<p>That is the whole design. Every bug tonight was a consequence of collapsing those three
+things into one mutable <code>status</code> column with six writers.</p>
+
+<h2>The three traps</h2>
+
+<div class="box bad">
+<h3>1. Ordering by wall-clock timestamps — a live bug</h3>
+<p>Events are ordered by <code>createdAtMs</code>, a millisecond stamp taken independently by
+each short-lived hook process. Kafka — the reference implementation of latest-value-per-key
+— deliberately does not do this. It compacts by <strong>offset</strong>:</p>
+<blockquote>"The offset for a message never changes. It is the permanent identifier for a
+position in the log."</blockquote>
+<p>Timestamp-based compaction exists there only as a non-default opt-in, and even it falls
+back to offset as a tiebreaker. The failure mode is silent: Kingsbury's worked example has
+the newer write losing to the older one after a clock step, with nothing surfacing the
+loss. POSIX time is not monotonic, and NTP is one of the causes rather than the cure.</p>
+<p><strong>Fix:</strong> <code>INTEGER PRIMARY KEY AUTOINCREMENT</code>. SQLite guarantees
+those rowids are never reused and monotonically increasing. Plain rowids do <em>not</em>
+carry that guarantee once rows are deleted. The timestamp stays as data about when the
+world changed; it stops being the ordering key.</p>
+</div>
+
+<div class="box bad">
+<h3>2. Bare-column <code>max()</code> returns the wrong row on ties — reproduced</h3>
+<p>SQLite documents the guarantee <em>and</em> the hole:</p>
+<blockquote>"If the same minimum or maximum value occurs on two or more rows, then bare
+values might be selected from any of those rows. The choice is arbitrary."</blockquote>
+<p>The agent built the case and ran it. A session whose <code>heard</code> and
+<code>waiting</code> events share a timestamp: <code>GROUP BY sid</code> with
+<code>max(ts)</code> returned <strong>heard</strong> — the wrong state, silently.
+<code>max(id)</code> over the rowid returned the right row and matched the window-function
+result.</p>
+<p>A timestamp collision — two events in the same millisecond, which two hooks firing
+together will absolutely produce — <strong>flips the badge</strong>. Aggregating on the
+rowid closes it, because rowids cannot tie.</p>
+<p class="src">Worth noting: the most-cited secondary write-up on this SQLite feature does
+not mention the tie caveat at all.</p>
+</div>
+
+<div class="box bad">
+<h3>3. Dismissal as a boolean — a live bug</h3>
+<p>Android states the rule plainly:</p>
+<blockquote>"If the previous notification is dismissed, a new notification is created
+instead."</blockquote>
+<p>Dismissal is scoped to <em>the instance that existed when you dismissed it</em>, not to
+the key forever. So a <code>dismissed</code> flag per session is wrong — the next turn from
+that session must revive it. A <strong>dismissed-through-event-id</strong> watermark
+reproduces the platform semantics exactly, and revives by construction rather than by
+rule.</p>
+</div>
+
+<h2>What the inbox world already settled</h2>
+
+<p>The separation I needed has standard vocabulary — it just isn't universal, so I never
+found it by searching for it directly.</p>
+
+<p><strong>IMAP</strong> defines message attributes that "MUST never change" — internal
+date, size, envelope, body structure, message texts — and separately a flag list, where
+<code>\Seen</code> means exactly "Message has been read." <strong>JMAP</strong> tightens it
+almost to totality: nearly every Email property is marked <em>"(immutable; server-set)"</em>,
+and only <code>keywords</code> and <code>mailboxIds</code> are mutable.</p>
+
+<p><strong>Nobody stores unread.</strong> JMAP defines <code>unreadEmails</code> as a count
+of emails lacking <code>$seen</code>. Gmail is the presence of an <code>UNREAD</code> label.
+Google Chat compares <code>lastReadTime</code> against the latest message. All queries.</p>
+
+<p><strong>Google Chat is the closest structural match to what I need</strong>: read state
+is a separate resource, <code>users/{user}/spaces/{space}/spaceReadState</code>, carrying
+nothing but a <code>lastReadTime</code>. Slack is the same shape —
+<code>conversations.mark</code> sets one cursor per conversation and derives the unread
+count from it.</p>
+
+<div class="box good">
+<h3>Gmail describes my worst bug, and the fix is structural</h3>
+<blockquote>"Labels only exist on messages… <strong>If messages are added to a thread after
+you add a label, the new messages don't inherit the existing label associated with the
+thread.</strong>"</blockquote>
+<p>Thread-level unread is a derived aggregate over per-message annotations. So a new arrival
+makes the thread unread again <strong>with no extra logic and no write.</strong></p>
+<p>That is precisely the bug where typing a message retired the reply that arrived after it.
+I kept trying to fix it by adding retirement rules — <code>before:</code> timestamps,
+<code>includeAnnounced</code> flags — and it kept not working, because the annotation was on
+the container. Gmail gets it for free by never annotating the container at all.</p>
+</div>
+
+<h2>Supersession is a key, not a stored fact</h2>
+
+<p>Android replaces on <code>(tag, id)</code>. Apple replaces on <code>identifier</code>.
+APNs merges on <code>apns-collapse-id</code>. WHATWG specifies it as an algorithm over a
+list. Four platforms, one mechanism: a caller-supplied identity key, newest wins.</p>
+
+<p>But the agent caught the category error I was about to make. Those platforms
+<em>destructively mutate</em> because they have <strong>no log underneath</strong> — the
+coalesced set is their only state. Reading that as an endorsement of storing supersession
+is wrong. What transfers is the explicit key; the mutation does not.</p>
+
+<p>Also worth separating: <strong>grouping is not supersession.</strong> Apple's
+<code>threadIdentifier</code> and Android's <code>setGroup()</code> are display-only, and
+deliberately different APIs from replacement. And Android's
+<code>setOnlyAlertOnce()</code> makes a third distinction I had collapsed: "the record
+updated" and "re-alert the user" are separate concerns.</p>
+
+<h2>Compute on read — measured, not assumed</h2>
+
+<p>The agent benchmarked the options rather than citing anyone. SQLite 3.51, warm cache,
+full query = latest per session, filtered to waiting, newest first:</p>
+
+<div class="scroll">
+<table>
+<tr><th>Approach</th><th>8k events</th><th>100k events</th></tr>
+<tr><td>GROUP BY + bare columns</td><td class="num">1.13 ms</td><td class="num">12.61 ms</td></tr>
+<tr><td><code>ROW_NUMBER()</code> in a subquery</td><td class="num">9.89 ms</td><td class="num">185.68 ms</td></tr>
+<tr><td>correlated subquery over events</td><td class="num">1.65 ms</td><td class="num">—</td></tr>
+<tr><td class="win">sessions JOIN correlated LIMIT 1</td><td class="num win">0.33 ms</td><td class="num win">3.26 ms</td></tr>
+<tr><td>pre-materialized projection table</td><td class="num">0.15 ms</td><td class="num">—</td></tr>
+</table>
+</div>
+
+<p>Window functions are the slowest by an order of magnitude — the plan builds nested
+co-routines and scans every row. The winner does one index seek per session, so its cost
+tracks <strong>session count, not event count</strong>.</p>
+
+<p><strong>So: compute on read.</strong> 0.33 ms against a five-second tick is a 0.007% duty
+cycle. A projection table saves 0.18 ms and costs a schema, a migration, a trigger, and an
+invariant that can silently drift — which is the exact class of thing that has been biting
+me all day. SQLite also has no materialized views, so a <code>VIEW</code> buys nothing; the
+choice is genuinely binary.</p>
+
+<p>Two details that matter more than the shape: put every column the derivation reads
+<em>into the index</em> (a covering index "can make many queries run twice as fast"), and
+aggregate on the rowid rather than the timestamp per trap 2.</p>
+
+<h2>What I'd build</h2>
+
+<pre>events            append-only, never updated
+  id              INTEGER PRIMARY KEY AUTOINCREMENT   ← the ordering key
+  session_id      TEXT                                ← the coalescing key
+  kind            TEXT    stop | user_prompt | notification
+  created_at_ms   INTEGER                             ← data, not ordering
+  payload…
+
+session_cursor    one row per session, one writer
+  session_id      TEXT PRIMARY KEY
+  heard_through   INTEGER   ← event id
+  dismissed_through INTEGER ← event id
+
+waiting = for each session, latest event by id;
+          keep it if kind = 'stop'
+          and id &gt; max(heard_through, dismissed_through)</pre>
+
+<p>No <code>status</code> column. No supersession pass — "superseded" is just "not the
+latest." No retirement sweep — a <code>user_prompt</code> event is simply a later event, so
+the session stops being waiting without anything being written. No resurrection bug, because
+nothing is ever overwritten.</p>
+
+<p>The one genuinely new constraint, from Fowler: <strong>replay must not re-fire the
+voice.</strong> Rebuilding the derived view must not announce everything again, so dispatch
+has to be driven off the <em>diff</em> the derivation produces, never off the events
+themselves.</p>
+
+<h2>What is still uncertain</h2>
+
+<p><strong>Per-claim verification did not run.</strong> The findings above are quoted from
+primary sources, but the independent fact-checking pass was skipped for context reasons.
+The load-bearing claims are direct quotes from RFCs, platform docs and SQLite's own
+documentation, so I am comfortable acting on them — but that is the one gate this research
+did not clear.</p>
+
+<p><strong>No source documents multi-writer mutable status columns as a named
+anti-pattern.</strong> The support is indirect: Nat Pryce's retrospective lists "command
+processors both stored events and current state" as a mistake, with the recovery being a
+single-writer read-through cache. That is the closest published precedent.</p>
+
+<p><strong>Performance numbers are one machine, warm cache.</strong> The ordering between
+approaches is solid and explained by the query plans; the absolute milliseconds are not
+gospel.</p>
+
+<p><strong>A lead worth following:</strong> IMAP's CONDSTORE extension (RFC 7162) gives each
+message a <code>MODSEQ</code> and a conditional <code>UNCHANGEDSINCE</code> store, so a
+racing write <em>fails</em> instead of silently winning. That is the direct precedent for the
+interrupt handler that resurrected a dismissed row — worth reading before writing anything
+that can be written from two places.</p>
+
+<p class="src" style="margin-top:40px">Full record, with every source and quote:<br>
+<code>~/Documents/deep-research/2026-08-03-notification-state-from-event-log.md</code></p>
+
+</div>
