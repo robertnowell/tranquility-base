@@ -50,6 +50,9 @@ final class StatusHUD: NSObject {
     private var settingsVoices: [Voice] = []
     private var gearButton: NSButton!
     private var backButton: NSButton!
+    private var stateButton: NSButton!
+    private var waitingRows: NSStackView!
+    var onPickWaiting: ((String) -> Void)?
     private var actionRow: NSStackView!
     private static let spokenMark = NSAttributedString.Key("vdSpoken")
 
@@ -338,8 +341,12 @@ final class StatusHUD: NSObject {
         _ = unsentReplies
         let body = [note, status].compactMap { $0 }.joined(separator: " ")
 
-        show(state: waiting > 0 ? "◌ \(waiting) waiting" : "◌ Ready",
+        show(state: waiting > 0 ? "" : "◌ Ready",
              title: "Voice Dispatch", body: body, autoHideAfter: nil)
+        // Clickable when there is something behind it.
+        stateButton.title = waiting > 0 ? "◌ \(waiting) waiting  ›" : ""
+        stateButton.isHidden = waiting == 0
+        stateLabel.isHidden = waiting > 0
         transition(to: .idle(waiting: waiting), because: "idle repaint")
     }
 
@@ -390,6 +397,9 @@ final class StatusHUD: NSObject {
         // should end a pending send now says so itself.
         if voicePicker != nil, state != "Settings" {
             voicePicker.isHidden = true
+            waitingRows?.isHidden = true
+            stateButton?.isHidden = true
+            stateLabel?.isHidden = false
             backButton.isHidden = true
             gearButton.isHidden = false
             actionRow.isHidden = false
@@ -602,6 +612,10 @@ final class StatusHUD: NSObject {
         background.layer?.masksToBounds = true
 
         stateLabel = NSTextField(labelWithString: "")
+        stateButton = NSButton(title: "", target: self, action: #selector(stateTapped))
+        stateButton.isBordered = false
+        stateButton.controlSize = .small
+        stateButton.isHidden = true
         stateLabel.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
         stateLabel.textColor = .secondaryLabelColor
 
@@ -675,7 +689,14 @@ final class StatusHUD: NSObject {
         voicePicker.action = #selector(voicePicked)
         voicePicker.isHidden = true
 
-        let stack = NSStackView(views: [backButton, stateLabel, titleLabel, bodyLabel,
+        waitingRows = NSStackView()
+        waitingRows.orientation = .vertical
+        waitingRows.alignment = .leading
+        waitingRows.spacing = 2
+        waitingRows.isHidden = true
+
+        let stack = NSStackView(views: [backButton, stateButton, stateLabel, titleLabel,
+                                        waitingRows, bodyLabel,
                                         progressBar, meter, voicePicker, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -837,6 +858,46 @@ final class StatusHUD: NSObject {
     @objc nonisolated private func gearTapped() {
         MainActor.assumeIsolated { onOpenSettings?() }
     }
+
+    @objc nonisolated private func stateTapped() {
+        MainActor.assumeIsolated { onOpenWaitingList?() }
+    }
+
+    /// A list of what is waiting, so the count can be opened rather than believed.
+    func showWaitingList(_ items: [(id: String, label: String, topic: String)]) {
+        transition(to: .settings, because: "waiting list opened")
+        show(state: "", title: "\(items.count) waiting", body: "", autoHideAfter: nil)
+        stateLabel.stringValue = ""
+        backButton.isHidden = false
+        gearButton.isHidden = true
+        actionRow.isHidden = true
+        hintLabel.stringValue = ""
+        bodyLabel.stringValue = ""
+
+        waitingRows.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for item in items.prefix(8) {
+            let row = NSButton(title: "\(item.label): \(item.topic)",
+                               target: self, action: #selector(waitingRowTapped(_:)))
+            row.isBordered = false
+            row.alignment = .left
+            row.font = .systemFont(ofSize: 12)
+            row.identifier = NSUserInterfaceItemIdentifier(item.id)
+            row.lineBreakMode = .byTruncatingTail
+            waitingRows.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalToConstant: 348).isActive = true
+        }
+        waitingRows.isHidden = false
+        if let panel { resizeToFit(panel); position(panel) }
+    }
+
+    @objc nonisolated private func waitingRowTapped(_ sender: NSButton) {
+        MainActor.assumeIsolated {
+            guard let id = sender.identifier?.rawValue else { return }
+            onPickWaiting?(id)
+        }
+    }
+
+    var onOpenWaitingList: (() -> Void)?
 
     @objc nonisolated private func backTapped() {
         MainActor.assumeIsolated {
