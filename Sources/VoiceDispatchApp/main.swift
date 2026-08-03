@@ -402,8 +402,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handle(_ transition: HotkeyMonitor.Transition) {
         switch transition {
         case .next:
-            // Stopping and starting are both handled inside announceNext, which
-            // serializes them. Doing any of it here is what let two run at once.
+            // Next means done with this one. Stopping used to revert the item to
+            // unread, and being the newest it was handed straight back, so pressing
+            // again replayed what you had just skipped and there was no way past it.
+            //
+            // The trade, stated plainly: a stray press now retires a summary you had
+            // not finished. Nothing is deleted, so it survives in the data, and a
+            // queue you cannot drain is the worse problem of the two.
+            if case .speaking = hud.state, let eventId = hud.currentEventId {
+                try? coordinator?.dismiss(eventId: eventId)
+                Permissions.log("next: dismissed \(eventId.prefix(8)) and moved on")
+            } else if case .paused = hud.state, let eventId = hud.currentEventId {
+                try? coordinator?.dismiss(eventId: eventId)
+                Permissions.log("next: dismissed \(eventId.prefix(8)) and moved on")
+            }
             announceNext()
 
         case .pauseToggled:
