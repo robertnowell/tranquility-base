@@ -145,15 +145,15 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(try store.utterances().first?.status, .confirmed)
     }
 
-    /// A stray tap during playback must not spend a session's only unread turn on
-    /// audio that was never heard.
-    func testInterruptedAnnouncementStaysUnread() async throws {
+    /// An announcement that never made a sound is still unread.
+    func testAnnouncementThatNeverPlayedStaysUnread() async throws {
         final class InterruptingSpeech: SpeechProvider, @unchecked Sendable {
             let name = "interrupting"
             let isConfigured = true
             var isSpeaking = false
             func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
-                throw SpeechError.interrupted
+                // Never started: no audio reached the speakers.
+                throw SpeechError.truncated(playedSeconds: 0, ofSeconds: 21)
             }
             func stop() {}
         }
@@ -167,10 +167,9 @@ final class CoordinatorTests: XCTestCase {
             recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
         try seedEvent()
 
-        guard case .interrupted(let failure) = try await coordinator.announceNext() else {
+        guard case .interrupted = try await coordinator.announceNext() else {
             return XCTFail("expected an interrupted announcement")
         }
-        XCTAssertNil(failure, "a requested stop is not a fault")
         XCTAssertEqual(try store.events().first?.status, .new, "still unread")
         XCTAssertNotNil(try store.events().first?.announcedAtMs,
                         "the attempt is still recorded, so nothing older can inherit the reply")
@@ -255,6 +254,50 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertNil(try coordinator.replyTarget(),
                      "A must not inherit the reply — the user never heard B, and a "
                      + "refusal is recoverable where a misrouted reply is not")
+    }
+
+    /// Half an announcement tells you half of what happened, so stopping part-way
+    /// leaves it waiting. Only hearing it out, or dismissing it, marks it read.
+    func testStoppingPartWayLeavesItWaiting() async throws {
+        final class HalfSpoken: SpeechProvider, @unchecked Sendable {
+            let name = "half"
+            let isConfigured = true
+            var isSpeaking = false
+            func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
+                throw SpeechError.truncated(playedSeconds: 4, ofSeconds: 19)
+            }
+            func stop() {}
+        }
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
+        let half = HalfSpoken()
+        let coordinator = Coordinator(
+            store: store, summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: half, fallback: half),
+            gate: InterruptGate(minimumIdleSeconds: 0), transport: RecordingTransport(),
+            enrolment: registry, agents: FakeAgents(live: []),
+            recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
+        try seedEvent()
+
+        guard case .interrupted = try await coordinator.announceNext() else {
+            return XCTFail("expected a part-way stop")
+        }
+        XCTAssertEqual(try store.events().first?.status, .new, "still waiting")
+        XCTAssertNotNil(try coordinator.nextToAnnounce(), "offered again")
+        XCTAssertNil(try coordinator.replyTarget(),
+                     "you did not hear it out, so there is nothing to answer yet")
+    }
+
+    /// Dismiss means gone: out of the queue, not merely off the screen.
+    func testDismissRemovesTheItemFromTheQueue() async throws {
+        let coordinator = try makeCoordinator()
+        try seedEvent()
+        let event = try XCTUnwrap(store.events().first)
+
+        try coordinator.dismiss(eventId: event.id)
+
+        XCTAssertEqual(try store.events().first?.status, .dismissed)
+        XCTAssertNil(try coordinator.nextToAnnounce())
+        XCTAssertEqual(try store.pendingCount(), 0)
     }
 
     func testNothingIsAnnouncedTwice() async throws {

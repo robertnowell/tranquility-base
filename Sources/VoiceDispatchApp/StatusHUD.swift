@@ -36,6 +36,8 @@ final class StatusHUD: NSObject {
     private var contentStack: NSStackView?
     private var identity: String?
     private var awaitingConfirm = false
+    /// The event the panel is currently about, so Dismiss can retire it.
+    private(set) var currentEventId: String?
     private var countdownTimer: Timer?
     private var onCancelSend: (() -> Void)?
     private var progressBar: NSProgressIndicator!
@@ -50,7 +52,11 @@ final class StatusHUD: NSObject {
              body: "Speak your reply, then let go of ⌃⌥.", autoHideAfter: nil)
     }
 
-    func showAnnouncement(topic: String, spoken: String, sessionId: String, pid: Int?, project: String, cwd: String?) {
+    func showAnnouncement(
+        topic: String, spoken: String, sessionId: String, pid: Int?, project: String,
+        cwd: String?, eventId: String? = nil
+    ) {
+        currentEventId = eventId
         currentTarget = (sessionId, pid, project)
         // Only prefix when the topic adds something. A topic equal to the project
         // rendered as "promotions — promotions", which names the folder twice and
@@ -143,6 +149,7 @@ final class StatusHUD: NSObject {
     func showIdle(_ message: String, waiting: Int = 0) {
         currentTarget = nil
         identity = nil
+        currentEventId = nil
         show(state: waiting > 0 ? "◌ \(waiting) waiting" : "◌ Ready",
              title: "Voice Dispatch", body: message, autoHideAfter: nil)
     }
