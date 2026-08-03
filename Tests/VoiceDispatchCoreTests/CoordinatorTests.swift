@@ -172,7 +172,10 @@ final class CoordinatorTests: XCTestCase {
         }
         XCTAssertNil(failure, "a requested stop is not a fault")
         XCTAssertEqual(try store.events().first?.status, .new, "still unread")
-        XCTAssertNil(try store.events().first?.announcedAtMs)
+        XCTAssertNotNil(try store.events().first?.announcedAtMs,
+                        "the attempt is still recorded, so nothing older can inherit the reply")
+        XCTAssertNil(try coordinator.replyTarget(),
+                     "you heard nothing, so there is nothing to reply to")
         XCTAssertNotNil(try coordinator.nextToAnnounce(), "offered again")
     }
 
@@ -203,6 +206,55 @@ final class CoordinatorTests: XCTestCase {
         }
         XCTAssertNotNil(failure, "nobody asked for this stop — it is a fault")
         XCTAssertEqual(try store.events().first?.status, .new, "and it is still unread")
+    }
+
+    /// The regression that typed a reply into the wrong terminal.
+    ///
+    /// Session A is announced and heard. Session B is announced and fails. A reply
+    /// must NOT go to A — it is no longer what the user was answering, and sending
+    /// it there puts their words into a session they were not talking to.
+    func testAFailedAnnouncementNeverHandsTheReplyToAnOlderSession() async throws {
+        final class SwitchableSpeech: SpeechProvider, @unchecked Sendable {
+            let name = "switchable"
+            let isConfigured = true
+            var isSpeaking = false
+            var shouldFail = false
+            func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
+                if shouldFail { throw SpeechError.truncated(playedSeconds: 0, ofSeconds: 21) }
+            }
+            func stop() {}
+        }
+        let speech = SwitchableSpeech()
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
+        try registry.enrol(sessionId: "sess-A")
+        try registry.enrol(sessionId: "sess-B")
+        let coordinator = Coordinator(
+            store: store, summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: speech, fallback: speech),
+            gate: InterruptGate(minimumIdleSeconds: 0), transport: RecordingTransport(),
+            enrolment: registry, agents: FakeAgents(live: []),
+            recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
+
+        try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .stop, sessionId: "sess-A", promptId: "a",
+            cwd: "/tmp/a", lastAssistantMessage: "session A finished"))
+        guard case .spoke = try await coordinator.announceNext() else {
+            return XCTFail("A should be heard")
+        }
+        XCTAssertEqual(try coordinator.replyTarget()?.sessionId, "sess-A")
+
+        // B finishes and its announcement fails — nothing is heard.
+        speech.shouldFail = true
+        try store.insert(event: QueuedEvent(
+            createdAtMs: 9_000, hookEvent: .stop, sessionId: "sess-B", promptId: "b",
+            cwd: "/tmp/b", lastAssistantMessage: "session B finished"))
+        guard case .interrupted = try await coordinator.announceNext() else {
+            return XCTFail("B should have failed to play")
+        }
+
+        XCTAssertNil(try coordinator.replyTarget(),
+                     "A must not inherit the reply — the user never heard B, and a "
+                     + "refusal is recoverable where a misrouted reply is not")
     }
 
     func testNothingIsAnnouncedTwice() async throws {

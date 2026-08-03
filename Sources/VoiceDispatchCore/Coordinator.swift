@@ -47,6 +47,11 @@ public struct Coordinator: Sendable {
     // MARK: - Intake
 
     @discardableResult
+    /// Set by the app. Routing decisions are logged because the one failure that
+    /// cannot be undone — words typed into a session you were not talking to —
+    /// otherwise leaves no evidence at all.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
     public func intake() throws -> SpoolDrainer.DrainResult {
         try SpoolDrainer(store: store).drain()
     }
@@ -223,8 +228,10 @@ public struct Coordinator: Sendable {
         // then silently spent a session's only unread turn on audio you never heard.
         // Put it back and re-prepare it, so the next tap plays it again.
         guard spoken.completed else {
+            // Status reverts so it can be heard again, but announcedAtMs STAYS: it
+            // records that this session was the most recent thing we tried to say,
+            // which is what stops an older announcement from inheriting the reply.
             event.status = .new
-            event.announcedAtMs = nil
             try store.update(event: event)
             await prepared.put(summary, for: event.id)
             return .interrupted(failure: spoken.failure)
@@ -241,11 +248,28 @@ public struct Coordinator: Sendable {
     // `announcedAtMs` means it survives an app restart for free, with no extra state
     // that could disagree with the queue.
 
+    /// The session you last actually heard from — never merely the last one we
+    /// tried to read out.
+    ///
+    /// This routed a reply into the wrong terminal. The old rule took the most
+    /// recent event whose status was `announced`, which silently skipped over any
+    /// newer announcement that had failed or been cut off. So a failed announcement
+    /// for session B left session A — minutes older, and no longer what you were
+    /// answering — as the target, and your words were typed into it.
+    ///
+    /// The rule now: take the most recent announcement ATTEMPT, whether or not it
+    /// succeeded, and offer it only if it was heard through to the end. A failed
+    /// attempt therefore blocks replies rather than deferring to a stale one.
+    /// Refusing is recoverable; typing into the wrong session is not.
     public func replyTarget() throws -> QueuedEvent? {
         let cutoff = Int64(Date().addingTimeInterval(-replyWindow).timeIntervalSince1970 * 1000)
-        return try store.events(status: .announced, limit: 50)
+        let attempts = try store.events(limit: 500)
             .filter { ($0.announcedAtMs ?? 0) >= cutoff }
-            .max { ($0.announcedAtMs ?? 0) < ($1.announcedAtMs ?? 0) }
+        guard let latestAttempt = attempts.max(by: {
+            ($0.announcedAtMs ?? 0) < ($1.announcedAtMs ?? 0)
+        }) else { return nil }
+
+        return latestAttempt.status == .announced ? latestAttempt : nil
     }
 
     // MARK: - Reply
@@ -282,6 +306,9 @@ public struct Coordinator: Sendable {
         // subsumes enrolment, since choosing to let it send IS the consent.
         utterance.status = .ready
         try store.update(utterance: utterance)
+        Coordinator.trace?(
+            "replyTarget resolved: session=\(target.sessionId) label=\(target.projectLabel) "
+            + "cwd=\(target.cwd ?? "-") announcedAt=\(target.announcedAtMs ?? -1)")
         return .readyToSend(
             utteranceId: utterance.id, text: text, label: target.projectLabel,
             sessionId: target.sessionId)
