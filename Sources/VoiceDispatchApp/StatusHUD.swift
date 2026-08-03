@@ -494,6 +494,30 @@ final class StatusHUD: NSObject {
     /// Shown the instant ⌃⌥ is tapped, so the gap before audio isn't dead air.
     /// Summarizing and fetching the voice take a few seconds; without this the app
     /// looks broken for the whole of it.
+    /// A visible pulse the instant a gesture registers.
+    ///
+    /// The gap between pressing and anything happening is where the app feels
+    /// broken: summarizing takes seconds, and with no acknowledgment a registered
+    /// press and a missed press look identical, so you press again — which is how
+    /// every double-trigger bug this weekend started. The pulse says "heard you"
+    /// before any work begins.
+    func flashAcknowledge() {
+        guard let layer = (panel?.contentView as? NSVisualEffectView)?.layer
+            ?? panel?.contentView?.layer else { return }
+        if panel?.isVisible != true { panel?.orderFrontRegardless() }
+        layer.borderColor = NSColor.controlAccentColor.cgColor
+        layer.cornerRadius = 12
+        layer.borderWidth = 3
+
+        let fade = CABasicAnimation(keyPath: "borderWidth")
+        fade.fromValue = 3
+        fade.toValue = 0
+        fade.duration = 0.35
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(fade, forKey: "ack")
+        layer.borderWidth = 0
+    }
+
     func showPreparing() {
         transition(to: .preparing, because: "announce requested")
         show(state: "◌ Preparing", title: "Voice Dispatch",

@@ -64,7 +64,13 @@ final class CoordinatorTests: XCTestCase {
 
     struct FakeAgents: ClaudeAgentsReading {
         let live: [LiveSession]
-        func sessions() -> [LiveSession] { live }
+        func sessions() -> [LiveSession]? { live }
+    }
+
+    /// The probe itself failing — CLI missing, spawn error, bad JSON — which is a
+    /// different fact from "no sessions", and must behave differently.
+    struct FailingAgents: ClaudeAgentsReading {
+        func sessions() -> [LiveSession]? { nil }
     }
 
     struct FixedTranscript: RecoveryTranscriptionProvider {
@@ -369,6 +375,54 @@ final class CoordinatorTests: XCTestCase {
         guard case .queued = try await coordinator.confirmAndSend(utteranceId: utteranceId)
         else { return XCTFail("a busy session must still receive the reply") }
         XCTAssertEqual(transport.sent.count, 1)
+    }
+
+    /// A liveness probe failure must never hide waiting work. It did: failure
+    /// collapsed into an empty list, the filter treated "I don't know" as "nobody
+    /// is home", and every session vanished silently — observed live, with two
+    /// sessions the terminal could see and the app called gone.
+    func testProbeFailureFailsOpenForAnnouncing() async throws {
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
+        let coordinator = Coordinator(
+            store: store,
+            summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            transport: RecordingTransport(), enrolment: registry,
+            agents: FailingAgents(),
+            recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
+        try append()
+
+        XCTAssertEqual(try coordinator.waiting().count, 1,
+                       "cannot verify liveness means announce anyway; noise is recoverable")
+        XCTAssertNotNil(try coordinator.nextToAnnounce())
+    }
+
+    /// The same failure must refuse TYPING. Injecting into a session we cannot
+    /// verify could answer a dialog; the asymmetry with announcing is the point.
+    func testProbeFailureFailsClosedForTyping() async throws {
+        let transport = RecordingTransport()
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
+        try registry.enrol(sessionId: "sess-1")
+        let coordinator = Coordinator(
+            store: store,
+            summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            transport: transport, enrolment: registry,
+            agents: FailingAgents(),
+            recovery: RecoveryChain(
+                providers: [FixedTranscript(text: "yes go ahead")],
+                maxAttemptsPerProvider: 1, backoff: [0]))
+        try append()
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+        guard case .sessionNotReady = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("an unverifiable session must refuse injection") }
+        XCTAssertTrue(transport.sent.isEmpty, "and nothing was typed")
     }
 
     func testDialogBlockedAndGoneAreTheOnlyRefusals() {

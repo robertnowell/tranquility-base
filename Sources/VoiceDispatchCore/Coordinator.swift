@@ -94,7 +94,16 @@ public struct Coordinator: Sendable {
 
     /// Everything waiting, newest first, for a UI that shows rather than describes.
     public func waiting() throws -> [WaitingSession] {
-        let live = Set(agents.sessions().map(\.sessionId))
+        // Announcing fails OPEN. If the probe cannot answer, every session is
+        // treated as live: the worst outcome is announcing a job that already
+        // exited, which costs one keypress. The old collapse of failure into []
+        // hid every waiting session the moment the CLI hiccuped — real work,
+        // silently gone, which is the one failure this app must never have.
+        guard let sessions = agents.sessions() else {
+            Coordinator.trace?("liveness probe failed; failing open")
+            return try store.waitingSessions()
+        }
+        let live = Set(sessions.map(\.sessionId))
         return try store.waitingSessions().filter { session in
             // Machine-driven runs exit the moment they finish, so by the time we
             // would announce, they are gone from the agents API. An interactive
@@ -359,7 +368,10 @@ public struct Coordinator: Sendable {
     private func dispatch(
         utterance: inout Utterance, text: String, target: WaitingSession
     ) async throws -> ReplyOutcome {
-        guard let live = agents.sessions().first(where: { $0.sessionId == target.sessionId }) else {
+        // Typing fails CLOSED: probe failure and genuine absence refuse alike,
+        // because injecting into a session we cannot verify could answer a dialog.
+        guard let live = (agents.sessions() ?? [])
+            .first(where: { $0.sessionId == target.sessionId }) else {
             // Absent from `claude agents --json` means blocked on a dialog or gone.
             // Injecting would answer the dialog, so we refuse and keep the audio.
             utterance.status = .ready

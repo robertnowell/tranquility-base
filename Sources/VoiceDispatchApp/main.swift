@@ -219,6 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.rebuildMenu()
         }
         Coordinator.trace = { Permissions.log("routing: \($0)") }
+        ClaudeAgentsCLI.trace = { Permissions.log("liveness: \($0)") }
         Secrets.trace = { Permissions.log("secrets: \($0)") }
         QueueStore.trace = { Permissions.log("queue: \($0)") }
         Permissions.log("args=\(CommandLine.arguments)")
@@ -415,6 +416,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Push to talk
 
     private func handle(_ transition: HotkeyMonitor.Transition) {
+        // Acknowledge before acting. Every recognized gesture pulses the panel
+        // border, so a registered press is visibly different from a missed one.
+        switch transition {
+        case .next, .pauseToggled, .replyBegan:
+            hud.flashAcknowledge()
+        case .replyEnded, .replyAborted:
+            break
+        }
         switch transition {
         case .next:
             // Next means done with this one. Stopping used to revert the item to
@@ -537,7 +546,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         // Render BEFORE the audio starts. Showing it afterwards is
                         // useless — you have already heard the whole thing by then.
                         guard let self else { return }
-                        let live = ClaudeAgentsCLI().sessions()
+                        let live = (ClaudeAgentsCLI().sessions() ?? [])
                             .first { $0.sessionId == announcement.event.sessionId }
                         self.hud.showAnnouncement(
                             topic: announcement.brief.topic,
@@ -710,7 +719,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         if let front = frontmostSessionTty(), let target = try? coordinator?.nextToAnnounce(),
-           let pid = ClaudeAgentsCLI().sessions().first(where: { $0.sessionId == target.sessionId })?.pid,
+           let pid = (ClaudeAgentsCLI().sessions() ?? []).first(where: { $0.sessionId == target.sessionId })?.pid,
            ProcessProbe.tty(of: pid) == front {
             // You are looking straight at the tab that just finished. Announcing it
             // is telling you something you can already see.

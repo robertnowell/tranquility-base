@@ -214,7 +214,9 @@ case "reconcile":
 
     case "targets":
         let enrolment = EnrolmentRegistry()
-        let live = ClaudeAgentsCLI().sessions()
+        guard let live = ClaudeAgentsCLI().sessions() else {
+            print("(liveness probe FAILED — the app is failing open right now)"); break
+        }
         if live.isEmpty { print("(no live sessions)"); break }
         print("\(pad("STATUS", 8))  \(pad("PID", 7))  \(pad("TTY", 14))  \(pad("ENROLLED", 9))  PROJECT")
         for s in live.sorted(by: { ($0.cwd ?? "") < ($1.cwd ?? "") }) {
@@ -247,7 +249,7 @@ case "reconcile":
         let sessionId = args[1]
         let text = args.dropFirst(2).joined(separator: " ")
 
-        guard let live = ClaudeAgentsCLI().sessions().first(where: { $0.sessionId == sessionId }) else {
+        guard let live = (ClaudeAgentsCLI().sessions() ?? []).first(where: { $0.sessionId == sessionId }) else {
             print("not dispatched: session is not registered in `claude agents --json`.")
             print("  It is either blocked on a dialog or still starting. Injecting now")
             print("  would answer that dialog, so we refuse.")
