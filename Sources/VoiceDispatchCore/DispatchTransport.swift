@@ -152,7 +152,12 @@ public struct TerminalAppTransport: DispatchTransport {
         case .processAlive:
             return .ready
         case .claudeAgents:
-            guard let live = agents.sessions().first(where: { $0.sessionId == target.sessionId })
+            // Typing fails CLOSED: a probe failure and a genuinely absent session
+            // are treated the same, because injecting into a session we cannot
+            // verify could answer a dialog. This is the opposite direction from
+            // announcing, and the asymmetry is deliberate.
+            guard let live = (agents.sessions() ?? [])
+                .first(where: { $0.sessionId == target.sessionId })
             else {
                 // Alive but unregistered — blocked on a dialog, or still booting.
                 return .notRegistered
@@ -314,7 +319,13 @@ public struct LiveSession: Sendable, Decodable {
 }
 
 public protocol ClaudeAgentsReading: Sendable {
-    func sessions() -> [LiveSession]
+    /// nil means "could not determine", which is different from "none" — and the
+    /// difference is load-bearing. Collapsing failure into an empty list made one
+    /// CLI hiccup silently hide every waiting session: the filter treated "I don't
+    /// know" as "nobody is home". Callers decide the failure direction themselves,
+    /// because it differs: announcing fails OPEN (show the work), typing fails
+    /// CLOSED (never inject into a session you cannot verify).
+    func sessions() -> [LiveSession]?
 }
 
 public struct ClaudeAgentsCLI: ClaudeAgentsReading {
@@ -354,18 +365,62 @@ public struct ClaudeAgentsCLI: ClaudeAgentsReading {
         return out.isEmpty ? nil : out
     }
 
-    public func sessions() -> [LiveSession] {
-        guard let binary = Self.resolveBinary() else { return [] }
+    /// Set by the app so a failing liveness probe explains itself. Every previous
+    /// failure here was invisible: [] on error looked identical to [] on success.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
+    /// Last good answer, kept briefly. The badge, the announcer and the ambient
+    /// refresh all ask within the same tick; one subprocess per tick is plenty, and
+    /// a shorter failure window is a correctness feature here, not a performance one.
+    private final class Cache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: [LiveSession]?
+        private var at = Date.distantPast
+        func get(maxAge: TimeInterval) -> [LiveSession]? {
+            lock.lock(); defer { lock.unlock() }
+            guard Date().timeIntervalSince(at) < maxAge else { return nil }
+            return value
+        }
+        func put(_ sessions: [LiveSession]) {
+            lock.lock(); value = sessions; at = Date(); lock.unlock()
+        }
+    }
+    private static let cache = Cache()
+
+    public func sessions() -> [LiveSession]? {
+        if let cached = Self.cache.get(maxAge: 3) { return cached }
+        guard let binary = Self.resolveBinary() else {
+            Self.trace?("liveness: claude binary not found")
+            return nil
+        }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: binary)
         p.arguments = ["agents", "--json"]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = Pipe()
-        do { try p.run() } catch { return [] }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let out = Pipe(), err = Pipe()
+        p.standardOutput = out
+        p.standardError = err
+        do { try p.run() } catch {
+            Self.trace?("liveness: spawn failed: \(error)")
+            return nil
+        }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        let errData = err.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
-        return (try? JSONDecoder().decode([LiveSession].self, from: data)) ?? []
+        guard p.terminationStatus == 0 else {
+            let stderr = String(data: errData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines).prefix(160) ?? ""
+            Self.trace?("liveness: exit \(p.terminationStatus): \(stderr)")
+            return nil
+        }
+        do {
+            let sessions = try JSONDecoder().decode([LiveSession].self, from: data)
+            Self.cache.put(sessions)
+            return sessions
+        } catch {
+            Self.trace?("liveness: decode failed: \(error) "
+                + "body=\(String(data: data, encoding: .utf8)?.prefix(120) ?? "")")
+            return nil
+        }
     }
 }
 
