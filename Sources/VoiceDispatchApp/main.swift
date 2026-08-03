@@ -218,6 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Coordinator.trace = { Permissions.log("routing: \($0)") }
         Secrets.trace = { Permissions.log("secrets: \($0)") }
+        QueueStore.trace = { Permissions.log("queue: \($0)") }
         Permissions.log("args=\(CommandLine.arguments)")
 
         if CommandLine.arguments.contains("--selftest-hud") {

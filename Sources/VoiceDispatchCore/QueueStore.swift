@@ -183,7 +183,20 @@ public final class QueueStore: Sendable {
                 sql += " AND createdAtMs < ?"
                 arguments.append(before)
             }
+            // Log which rows were retired and by what rule. This is the one path
+            // with no observability, and it is where every "nothing waiting" bug so
+            // far has actually happened: rows are retired correctly-looking code
+            // and nobody can see which rule did it.
+            let doomed = try String.fetchAll(
+                db, sql: sql.replacingOccurrences(
+                    of: "UPDATE events SET status = 'superseded'", with: "SELECT id FROM events"),
+                arguments: StatementArguments(arguments))
             try db.execute(sql: sql, arguments: StatementArguments(arguments))
+            if !doomed.isEmpty {
+                QueueStore.trace?("superseded \(doomed.map { $0.prefix(8) }.joined(separator: ",")) "
+                    + "session=\(sessionId.prefix(8)) before=\(before.map(String.init) ?? "any") "
+                    + "includeAnnounced=\(includeAnnounced)")
+            }
             return db.changesCount
         }
     }
@@ -246,6 +259,9 @@ public final class QueueStore: Sendable {
                 .fetchCount(db)
         }
     }
+
+    /// Set by the app so retirements explain themselves.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 
     public func pendingCount() throws -> Int {
         try dbQueue.read { db in
