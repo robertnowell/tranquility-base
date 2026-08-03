@@ -46,6 +46,9 @@ final class StatusHUD: NSObject {
     private var onCancelSend: ((_ restartListening: Bool) -> Void)?
     private var progressBar: NSProgressIndicator!
     private var meter: LevelMeterView!
+    private var voicePicker: NSPopUpButton!
+    private var settingsVoices: [Voice] = []
+    private var gearButton: NSButton!
     private static let spokenMark = NSAttributedString.Key("vdSpoken")
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
@@ -210,6 +213,54 @@ final class StatusHUD: NSObject {
         if let panel { resizeToFit(panel); position(panel) }
     }
 
+    /// Settings, in the same panel rather than a second window.
+    ///
+    /// One setting today. It lives here because the panel is already the place you
+    /// look, and a preferences window for a single dropdown is furniture.
+    var onChooseVoice: ((String) -> Void)?
+
+    func showSettings(voices: [Voice], selected: String, previewNote: String) {
+        isIdle = false
+        awaitingConfirm = false
+        currentTarget = nil
+        identity = nil
+        settingsVoices = voices
+
+        show(state: "⚙ Settings", title: "Voice", body: previewNote, autoHideAfter: nil)
+
+        voicePicker.removeAllItems()
+        for group in ["cloned", "generated", "professional", "premade"] {
+            let inGroup = voices.filter { $0.category == group }.sorted { $0.name < $1.name }
+            guard !inGroup.isEmpty else { continue }
+            voicePicker.menu?.addItem(.separator())
+            let header = NSMenuItem(title: group.capitalized, action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            voicePicker.menu?.addItem(header)
+            for voice in inGroup {
+                let item = NSMenuItem(title: voice.name, action: nil, keyEquivalent: "")
+                item.representedObject = voice.id
+                voicePicker.menu?.addItem(item)
+            }
+        }
+        if let match = voicePicker.menu?.items.first(where: {
+            ($0.representedObject as? String) == selected
+        }) {
+            voicePicker.select(match)
+        }
+        voicePicker.isHidden = false
+    }
+
+    var voicePickerItemCount: Int { voicePicker.numberOfItems }
+    var voicePickerHidden: Bool { voicePicker.isHidden }
+    var voicePickerSelection: String? { voicePicker.selectedItem?.title }
+
+    @objc nonisolated private func voicePicked() {
+        MainActor.assumeIsolated {
+            guard let id = voicePicker.selectedItem?.representedObject as? String else { return }
+            onChooseVoice?(id)
+        }
+    }
+
     func showWorking(_ message: String) {
         isIdle = false
         awaitingConfirm = false
@@ -313,6 +364,7 @@ final class StatusHUD: NSObject {
         // Deliberately NOT inferred from the state text: it was, the text changed,
         // and the countdown silently stopped being cancellable. Each state that
         // should end a pending send now says so itself.
+        if voicePicker != nil, state != "⚙ Settings" { voicePicker.isHidden = true }
         let panel = panel ?? build()
         stateLabel.stringValue = state
         titleLabel.stringValue = title
@@ -449,6 +501,18 @@ final class StatusHUD: NSObject {
                     "meter frame=\(self.meter.frame) hidden=\(self.meter.isHidden) style=centred")
             }),
             ("result", { self.showResult(long, ok: false) }),
+            ("settings", {
+                self.showSettings(
+                    voices: [Voice(id: "a", name: "Archer", category: "professional"),
+                             Voice(id: "b", name: "My Clone", category: "cloned"),
+                             Voice(id: "c", name: "Sarah", category: "premade")],
+                    selected: "c",
+                    previewNote: "Pick a voice and it reads your most recent summary.")
+                self.panel?.contentView?.layoutSubtreeIfNeeded()
+                Permissions.log("settings picker items=\(self.voicePickerItemCount) "
+                                + "hidden=\(self.voicePickerHidden) "
+                                + "selected=\(self.voicePickerSelection ?? "nil")")
+            }),
         ] as [(String, () -> Void)] {
             Permissions.log("selftest state=\(label)")
             block()
@@ -521,6 +585,11 @@ final class StatusHUD: NSObject {
         replyButton.font = .systemFont(ofSize: 11)
         replyButton.keyEquivalent = "\r"
 
+        gearButton = NSButton(title: "⚙", target: self, action: #selector(gearTapped))
+        gearButton.bezelStyle = .rounded
+        gearButton.controlSize = .small
+        gearButton.font = .systemFont(ofSize: 11)
+
         let dismiss = NSButton(title: "Dismiss", target: self, action: #selector(dismissTapped))
         dismiss.bezelStyle = .rounded
         dismiss.controlSize = .small
@@ -530,7 +599,7 @@ final class StatusHUD: NSObject {
         hintLabel.font = .systemFont(ofSize: 10)
         hintLabel.textColor = .tertiaryLabelColor
 
-        let buttons = NSStackView(views: [replyButton, goButton, dismiss])
+        let buttons = NSStackView(views: [replyButton, goButton, gearButton, dismiss])
         buttons.orientation = .horizontal
         buttons.spacing = 8
 
@@ -547,8 +616,15 @@ final class StatusHUD: NSObject {
         meter = LevelMeterView()
         meter.isHidden = true
 
+        voicePicker = NSPopUpButton()
+        voicePicker.controlSize = .small
+        voicePicker.font = .systemFont(ofSize: 11)
+        voicePicker.target = self
+        voicePicker.action = #selector(voicePicked)
+        voicePicker.isHidden = true
+
         let stack = NSStackView(views: [stateLabel, titleLabel, bodyLabel, progressBar, meter,
-                                        hintLabel, buttons])
+                                        voicePicker, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
@@ -698,6 +774,11 @@ final class StatusHUD: NSObject {
 
     /// Set by the app so Dismiss can silence the voice, not just hide the panel.
     var onDismiss: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
+
+    @objc nonisolated private func gearTapped() {
+        MainActor.assumeIsolated { onOpenSettings?() }
+    }
 
     // AppKit guarantees target/action runs on the main thread. The implicit
     // executor check that Swift emits for an @objc method on a @MainActor class is

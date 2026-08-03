@@ -127,6 +127,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.hud.dismiss()
         }
 
+        hud.onOpenSettings = { [weak self] in self?.openSettings() }
+        hud.onChooseVoice = { [weak self] id in
+            guard let self else { return }
+            VoiceCatalog.selectedVoiceId = id
+            self.rebuildMenu()
+            // Play the real thing. A stock sample tells you how a voice handles a
+            // stock sentence; what you actually want to know is how it handles YOUR
+            // summaries, which are dense, full of proper nouns, and end in a question.
+            Task { @MainActor in
+                _ = await SpeechChain().speak(SpokenTextSanitizer().sanitize(self.previewText()))
+            }
+        }
+
         hud.onDismiss = { [weak self] in
             guard let self else { return }
             self.coordinator?.speech.stop()
@@ -609,6 +622,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0,
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
         }
+    }
+
+    /// The most recent thing it actually said, so a voice is judged on real work.
+    private func previewText() -> String {
+        let recent = (try? store?.events(limit: 200))?
+            .compactMap { $0.summaryText }
+            .first(where: { !$0.isEmpty })
+        return recent ?? "No sessions have finished yet, so this is what I sound like "
+            + "reading nothing in particular."
+    }
+
+    private func openSettings() {
+        hud.showSettings(
+            voices: VoiceCatalog.cached(),
+            selected: VoiceCatalog.selectedVoiceId,
+            previewNote: "Pick a voice and it reads your most recent summary.")
     }
 
     @objc private func showPanel() {
