@@ -78,7 +78,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
 
         stack.addArrangedSubview(spacer(8))
         let note = label(
-            "macOS only lists an app under Input Monitoring after it has asked once — "
+            "macOS only lists an app under Input Monitoring after it has asked once. "
             + "which this app now does on launch. If a switch is off, flip it and this "
             + "window updates within a second.",
             size: 11, secondary: true, width: 400)
@@ -105,7 +105,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         rows[kind] = status
         row.addArrangedSubview(status)
 
-        let text = NSTextField(labelWithString: "\(kind.title) — \(kind.why)")
+        let text = NSTextField(labelWithString: "\(kind.title): \(kind.why)")
         text.font = .systemFont(ofSize: 12)
         row.addArrangedSubview(text)
 

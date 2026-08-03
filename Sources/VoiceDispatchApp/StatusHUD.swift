@@ -94,7 +94,7 @@ final class StatusHUD: NSObject {
         // rendered as "promotions — promotions", which names the folder twice and
         // tells you nothing.
         let headline = topic.caseInsensitiveCompare(project) == .orderedSame || topic.isEmpty
-            ? project : "\(project) — \(topic)"
+            ? project : "\(project): \(topic)"
         identity = Self.identify(pid: pid, cwd: cwd)
         show(state: "◀ Speaking", title: headline, body: spoken, autoHideAfter: nil)
     }
@@ -216,13 +216,12 @@ final class StatusHUD: NSObject {
         let status = waiting > 0
             ? "Tap ⌃⌥ for the most recent, hold ⌥ to reply."
             : "Nothing waiting. Sessions appear here as they finish."
-        // Named separately from the waiting count, because the action is different:
-        // these are replies that never landed, not sessions asking to be heard.
-        let stuck = unsentReplies > 0
-            ? "\(unsentReplies) repl\(unsentReplies == 1 ? "y" : "ies") never confirmed "
-                + "— see vdctl utterances."
-            : nil
-        let body = [note, status, stuck].compactMap { $0 }.joined(separator: " ")
+        // Unconfirmed replies are deliberately NOT shown here. A count you cannot
+        // act on is clutter, and naming a CLI command from a floating panel asks
+        // you to go somewhere else to do something you did not ask to do. They are
+        // still recorded, and `vdctl utterances` still lists them.
+        _ = unsentReplies
+        let body = [note, status].compactMap { $0 }.joined(separator: " ")
 
         show(state: waiting > 0 ? "◌ \(waiting) waiting" : "◌ Ready",
              title: "Voice Dispatch", body: body, autoHideAfter: nil)
@@ -263,11 +262,15 @@ final class StatusHUD: NSObject {
         if isListening {
             action = "Let go of ⌥ to send, or Dismiss to throw it away."
         } else if awaitingConfirm {
-            action = "Sending in a moment — stop it if that isn't what you said."
+            action = "Sending in a moment. Stop it if that isn't what you said."
         } else {
-            action = isRecording
-                ? "Listening — click Send, or let go of ⌥."
-                : "Click Reply, or hold ⌥ to speak."
+            if currentTarget == nil {
+                action = ""
+            } else if isRecording {
+                action = "Listening. Click Send, or let go of ⌥."
+            } else {
+                action = "Click Reply, or hold ⌥ to speak."
+            }
         }
         hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
         replyButton.isHidden = awaitingConfirm ? false : (currentTarget == nil)
@@ -494,7 +497,7 @@ final class StatusHUD: NSObject {
             return
         }
         guard let tty = ProcessProbe.tty(of: pid) else {
-            bodyLabel.stringValue = "Couldn't find a terminal for process \(pid) — it may have exited."
+            bodyLabel.stringValue = "Couldn't find a terminal for process \(pid). It may have exited."
             Permissions.log("goToSession: no tty for pid \(pid)")
             return
         }
@@ -566,11 +569,15 @@ final class StatusHUD: NSObject {
         if isListening {
             action = "Let go of ⌥ to send, or Dismiss to throw it away."
         } else if awaitingConfirm {
-            action = "Sending in a moment — stop it if that isn't what you said."
+            action = "Sending in a moment. Stop it if that isn't what you said."
         } else {
-            action = isRecording
-                ? "Listening — click Send, or let go of ⌥."
-                : "Click Reply, or hold ⌥ to speak."
+            if currentTarget == nil {
+                action = ""
+            } else if isRecording {
+                action = "Listening. Click Send, or let go of ⌥."
+            } else {
+                action = "Click Reply, or hold ⌥ to speak."
+            }
         }
         hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
     }
