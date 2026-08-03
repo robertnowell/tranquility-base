@@ -13,11 +13,11 @@ func usage() -> Never {
       vdctl events [status]     list events (optionally filtered)
       vdctl utterances [status] list utterances
       vdctl reconcile           run the boot reconciliation sweep
-      vdctl collapse            retire every session's stale unread turns
       vdctl reap [hours]        delete audio for confirmed/discarded rows (default 72h)
       vdctl hook-config         print the settings.json snippet to install the hook
       vdctl paths               show where everything lives
       vdctl secrets             which credentials are readable, and from where
+      vdctl cursors             how far you have got with each session
       vdctl calls [n]           full input and output of the last n model calls
 
     dispatch:
@@ -106,12 +106,12 @@ do {
         let spoolLines = (try? String(contentsOf: spool, encoding: .utf8))?
             .split(separator: "\n").count ?? 0
         print("spool pending   \(spoolLines)")
-        print("pending total   \(try store.pendingCount())")
+        print("waiting         \(try store.pendingCount())")
+        print("events total    \(try store.events(limit: 100_000).count)")
         print("")
-        print("events by status:")
-        for s in EventStatus.allCases {
-            let n = try store.events(status: s, limit: 10_000).count
-            if n > 0 { print("  \(pad(s.rawValue, 16)) \(n)") }
+        print("waiting sessions:")
+        for w in try store.waitingSessions() {
+            print("  \(pad(truncate(w.projectLabel, 22), 22)) event \(w.latestId)")
         }
         let utts = try store.utterances(limit: 10_000)
         if !utts.isEmpty {
@@ -128,16 +128,26 @@ do {
         print("inserted \(r.inserted)  duplicates \(r.duplicates)  malformed \(r.malformed)")
 
     case "events":
-        let status = args.count > 1 ? EventStatus(rawValue: args[1]) : nil
-        let rows = try store.events(status: status, limit: 40)
+        // The log, as it is: no status, because events do not have one.
+        let rows = try store.events(limit: 40)
         if rows.isEmpty { print("(none)"); break }
-        print("\(pad("WHEN", 14))  \(pad("KIND", 6))  \(pad("PROJECT", 18))  \(pad("STATUS", 11))  LAST MESSAGE")
+        print("\(pad("WHEN", 14))  \(pad("KIND", 8))  \(pad("PROJECT", 18))  LAST MESSAGE")
         for e in rows {
-            print("\(pad(ms(e.createdAtMs), 14))  "
-                + "\(pad(String(e.hookEvent.rawValue.prefix(6)), 6))  "
-                + "\(pad(truncate(e.projectLabel, 18), 18))  "
-                + "\(pad(e.status.rawValue, 11))  "
-                + truncate(e.summaryText ?? e.lastAssistantMessage, 60))
+            let when = pad(ms(e.createdAtMs), 14)
+            let kind = pad(String(e.hookEvent.rawValue.prefix(8)), 8)
+            let project = pad(truncate(e.projectLabel, 18), 18)
+            let message = truncate(e.summaryText ?? e.lastAssistantMessage, 56)
+            print(when + "  " + kind + "  " + project + "  " + message)
+        }
+
+    case "cursors":
+        // The only mutable state left, so it gets its own command.
+        for w in try store.waitingSessionsIncludingHeard(limit: 100) {
+            guard let c = try store.cursor(for: w.sessionId) else { continue }
+            let heard = c.heardThrough.map(String.init) ?? "-"
+            let dismissed = c.dismissedThrough.map(String.init) ?? "-"
+            print("  \(pad(truncate(w.projectLabel, 22), 22)) latest \(pad(String(w.latestId), 7)) "
+                + "heard \(pad(heard, 7)) dismissed \(dismissed)")
         }
 
     case "utterances":
@@ -176,27 +186,6 @@ case "calls":
         print("\n--- SYSTEM ---\n\(entry["system"] as? String ?? "")")
         print("\n--- USER ---\n\(entry["user"] as? String ?? "")")
         print("\n--- RESPONSE ---\n\(entry["response"] as? String ?? "")")
-    }
-
-case "collapse":
-    // One slot per session. Everything older than a session's newest unread turn
-    // is retired — this is the same sweep the app runs before each announcement,
-    // exposed so a queue that accumulated under the old FIFO rules can be cleaned.
-    let pending = try store.events(limit: 1000)
-        .filter { EventStatus.pendingAnnouncement.contains($0.status) }
-    var newest: [String: Int64] = [:]
-    for event in pending {
-        newest[event.sessionId] = max(newest[event.sessionId] ?? .min, event.createdAtMs)
-    }
-    var retired = 0
-    for (sessionId, latest) in newest {
-        retired += try store.supersedePending(sessionId: sessionId, before: latest)
-    }
-    print("retired \(retired) stale turn(s); \(newest.count) session(s) still unread")
-    for event in try store.events(limit: 1000)
-    where EventStatus.pendingAnnouncement.contains(event.status) {
-        let text = event.lastAssistantMessage?.prefix(56) ?? "—"
-        print("  \(event.projectLabel)  \(text)")
     }
 
 case "reconcile":

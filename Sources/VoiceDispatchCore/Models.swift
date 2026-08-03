@@ -45,6 +45,15 @@ public enum EventStatus: String, Codable, DatabaseValueConvertible, Sendable, Ca
 }
 
 public struct QueuedEvent: Codable, FetchableRecord, PersistableRecord, Identifiable, Sendable {
+    /// There is deliberately no `status` here.
+    ///
+    /// An event is a fact about what happened, and facts do not change. Everything
+    /// that used to live in a status column is now either derived (waiting =
+    /// this is the latest event for its session and it is a Stop) or a fact about
+    /// the user rather than the world (heard, dismissed), which lives in
+    /// `SessionCursor`. Six code paths used to write that column and none of them
+    /// owned it.
+
     /// Machine-driven, not human-driven: `claude -p` from launchd or cron, with no
     /// controlling terminal. Nothing to open, nothing to answer, and every run gets
     /// a new session id so supersession cannot collapse them either.
@@ -71,7 +80,6 @@ public struct QueuedEvent: Codable, FetchableRecord, PersistableRecord, Identifi
     /// The hook's controlling terminal. "??" means headless. Nil means the row
     /// predates this being recorded, which is unknown rather than headless.
     public var tty: String?
-    public var status: EventStatus
     public var summaryText: String?
     public var summaryError: String?
     public var announcedAtMs: Int64?
@@ -87,7 +95,6 @@ public struct QueuedEvent: Codable, FetchableRecord, PersistableRecord, Identifi
         lastAssistantMessage: String? = nil,
         notificationMatcher: String? = nil,
         tty: String? = nil,
-        status: EventStatus = .new,
         summaryText: String? = nil,
         summaryError: String? = nil,
         announcedAtMs: Int64? = nil
@@ -102,7 +109,6 @@ public struct QueuedEvent: Codable, FetchableRecord, PersistableRecord, Identifi
         self.lastAssistantMessage = lastAssistantMessage
         self.notificationMatcher = notificationMatcher
         self.tty = tty
-        self.status = status
         self.summaryText = summaryText
         self.summaryError = summaryError
         self.announcedAtMs = announcedAtMs
@@ -261,5 +267,64 @@ public struct Utterance: Codable, FetchableRecord, PersistableRecord, Identifiab
         self.lastError = lastError
         self.confirmedAtMs = confirmedAtMs
         self.discardedReason = discardedReason
+    }
+}
+
+/// How far the user has got with one session.
+///
+/// The only mutable state left in the model, and the only thing that can therefore
+/// be wrong. Watermarks rather than booleans, because dismissal is scoped to the
+/// item that existed when you dismissed it — Android states it plainly: "If the
+/// previous notification is dismissed, a new notification is created instead." A
+/// boolean would silence a session for ever; a watermark lets the next turn revive
+/// it with nothing written.
+public struct SessionCursor: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "session_cursor"
+
+    public var sessionId: String
+    /// Event id heard through to the end. Stopping half way does not advance it.
+    public var heardThrough: Int64?
+    /// Event id explicitly dismissed.
+    public var dismissedThrough: Int64?
+    /// When you heard it. The reply window measures from your attention, not from
+    /// when the agent happened to finish.
+    public var heardAtMs: Int64?
+
+    public init(sessionId: String, heardThrough: Int64? = nil,
+                dismissedThrough: Int64? = nil, heardAtMs: Int64? = nil) {
+        self.sessionId = sessionId
+        self.heardThrough = heardThrough
+        self.dismissedThrough = dismissedThrough
+        self.heardAtMs = heardAtMs
+    }
+
+    /// The high-water mark past which this session has nothing to say.
+    public var seenThrough: Int64 { max(heardThrough ?? 0, dismissedThrough ?? 0) }
+}
+
+/// A session with something to say, as returned by the derived query.
+///
+/// Deliberately not a `QueuedEvent`: it is the answer to a question about a session,
+/// not a row from the log. `latestId` is the event it refers to, and is what the
+/// cursor is advanced to once you have heard it.
+public struct WaitingSession: Codable, FetchableRecord, Sendable {
+    public var sessionId: String
+    public var latestId: Int64
+    public var createdAtMs: Int64
+    public var cwd: String?
+    public var tty: String?
+    public var promptId: String?
+    public var transcriptPath: String?
+    public var lastAssistantMessage: String?
+    public var notificationMatcher: String?
+    public var summaryText: String?
+    /// The kind of the latest event. `stop` is the only one that waits, but the
+    /// summarizer needs to know when it is describing a permission prompt.
+    public var hookEvent: HookEventKind
+
+    /// Same derivation the old QueuedEvent used, kept so the summarizer is unchanged.
+    public var projectLabel: String {
+        guard let cwd, let last = cwd.split(separator: "/").last else { return "session" }
+        return String(last)
     }
 }

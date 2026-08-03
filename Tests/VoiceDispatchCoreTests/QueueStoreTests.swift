@@ -3,22 +3,42 @@ import XCTest
 
 final class QueueStoreTests: XCTestCase {
 
-    /// The badge counts sessions waiting to be heard — nothing else. It read 52
-    /// against two real rows because it counted everything that was not explicitly
-    /// terminal, so every status added later inflated it.
-    func testPendingCountIsOnlyWhatCanStillBeAnnounced() throws {
-        for (index, status) in [EventStatus.new, .announced, .superseded, .answered,
-                                .dismissed, .held].enumerated() {
-            var event = QueuedEvent(
-                createdAtMs: Int64(1_000 + index), hookEvent: .stop,
-                sessionId: "s-\(index)", promptId: "p\(index)",
-                cwd: "/tmp", lastAssistantMessage: "m")
-            event.status = status
-            _ = try store.insert(event: event)
-            if status != .new { try store.update(event: event) }
-        }
+    /// The badge counts sessions waiting to be heard, and nothing else. It read 52
+    /// against two real rows when it counted every non-terminal status, and later
+    /// "2 waiting" when it added stuck replies. Both were possible because the badge
+    /// had its own predicate; it now shares one with the announcer.
+    func testPendingCountIsExactlyWhatCanBeAnnounced() throws {
+        _ = try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .stop, sessionId: "waiting-one",
+            promptId: "a", cwd: "/tmp", lastAssistantMessage: "waiting", tty: "ttys1"))
 
-        XCTAssertEqual(try store.pendingCount(), 2, "only .new and .held are still waiting")
+        // Answered by the user typing: a later event, so no longer waiting.
+        _ = try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .stop, sessionId: "answered-one",
+            promptId: "b", cwd: "/tmp", lastAssistantMessage: "old", tty: "ttys1"))
+        _ = try store.insert(event: QueuedEvent(
+            createdAtMs: 2_000, hookEvent: .userPromptSubmit, sessionId: "answered-one",
+            promptId: "c", cwd: "/tmp", lastAssistantMessage: "", tty: "ttys1"))
+
+        // Machine-driven: no terminal, nothing to answer.
+        _ = try store.insert(event: QueuedEvent(
+            createdAtMs: 3_000, hookEvent: .stop, sessionId: "cron-one",
+            promptId: "d", cwd: "/tmp", lastAssistantMessage: "job", tty: "??"))
+
+        XCTAssertEqual(try store.pendingCount(), 1)
+        XCTAssertEqual(try store.waitingSessions().first?.sessionId, "waiting-one")
+    }
+
+    /// A cursor only ever moves forward. An out-of-order advance must not rewind it,
+    /// or dismissing something would un-dismiss it.
+    func testCursorsOnlyAdvance() throws {
+        try store.advanceCursor(sessionId: "s", heardThrough: 10)
+        try store.advanceCursor(sessionId: "s", heardThrough: 4)
+        XCTAssertEqual(try store.cursor(for: "s")?.heardThrough, 10)
+
+        try store.advanceCursor(sessionId: "s", dismissedThrough: 7)
+        XCTAssertEqual(try store.cursor(for: "s")?.heardThrough, 10, "unrelated axis untouched")
+        XCTAssertEqual(try store.cursor(for: "s")?.dismissedThrough, 7)
     }
 
     /// The badge read "3 waiting" with nothing announceable, because it added
