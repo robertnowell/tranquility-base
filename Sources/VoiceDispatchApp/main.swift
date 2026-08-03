@@ -128,15 +128,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         hud.onOpenSettings = { [weak self] in self?.openSettings() }
+        hud.onLeaveSettings = { [weak self] in
+            guard let self else { return }
+            self.coordinator?.speech.stop()
+            self.hud.showIdle(waiting: (try? self.store?.pendingCount()) ?? 0,
+                              unsentReplies: (try? self.store?.unsentReplyCount()) ?? 0)
+        }
+
         hud.onChooseVoice = { [weak self] id in
             guard let self else { return }
             VoiceCatalog.selectedVoiceId = id
             self.rebuildMenu()
+            // Silence the last preview first. Auditioning voices means switching
+            // fast, and without this each pick layered onto the one before it,
+            // which is the one thing this app must never do.
+            self.coordinator?.speech.stop()
             // Play the real thing. A stock sample tells you how a voice handles a
             // stock sentence; what you actually want to know is how it handles YOUR
             // summaries, which are dense, full of proper nouns, and end in a question.
             Task { @MainActor in
-                _ = await SpeechChain().speak(SpokenTextSanitizer().sanitize(self.previewText()))
+                guard let chain = self.coordinator?.speech else { return }
+                _ = await chain.speak(SpokenTextSanitizer().sanitize(self.previewText()))
             }
         }
 
@@ -616,9 +628,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Hear it now. Choosing from a list of names is guesswork otherwise.
         Task { @MainActor in
             hud.showWorking("Voice set to \(sender.title).")
-            _ = await SpeechChain().speak(
-                SpokenTextSanitizer().sanitize(
-                    "This is \(sender.title). I'll read your session summaries in this voice."))
+            self.coordinator?.speech.stop()
+            guard let chain = self.coordinator?.speech else { return }
+            _ = await chain.speak(SpokenTextSanitizer().sanitize(self.previewText()))
             hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0,
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
         }

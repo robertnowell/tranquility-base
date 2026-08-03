@@ -49,6 +49,8 @@ final class StatusHUD: NSObject {
     private var voicePicker: NSPopUpButton!
     private var settingsVoices: [Voice] = []
     private var gearButton: NSButton!
+    private var backButton: NSButton!
+    private var actionRow: NSStackView!
     private static let spokenMark = NSAttributedString.Key("vdSpoken")
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
@@ -226,7 +228,12 @@ final class StatusHUD: NSObject {
         identity = nil
         settingsVoices = voices
 
-        show(state: "⚙ Settings", title: "Voice", body: previewNote, autoHideAfter: nil)
+        show(state: "Settings", title: "Voice", body: previewNote, autoHideAfter: nil)
+        backButton.isHidden = false
+        gearButton.isHidden = true
+        actionRow.isHidden = true
+        hintLabel.stringValue = ""
+        stateLabel.stringValue = ""
 
         voicePicker.removeAllItems()
         for group in ["cloned", "generated", "professional", "premade"] {
@@ -251,6 +258,9 @@ final class StatusHUD: NSObject {
     }
 
     var voicePickerItemCount: Int { voicePicker.numberOfItems }
+    var backButtonHidden: Bool { backButton.isHidden }
+    var gearHidden: Bool { gearButton.isHidden }
+    var actionRowHidden: Bool { actionRow.isHidden }
     var voicePickerHidden: Bool { voicePicker.isHidden }
     var voicePickerSelection: String? { voicePicker.selectedItem?.title }
 
@@ -364,7 +374,12 @@ final class StatusHUD: NSObject {
         // Deliberately NOT inferred from the state text: it was, the text changed,
         // and the countdown silently stopped being cancellable. Each state that
         // should end a pending send now says so itself.
-        if voicePicker != nil, state != "⚙ Settings" { voicePicker.isHidden = true }
+        if voicePicker != nil, state != "Settings" {
+            voicePicker.isHidden = true
+            backButton.isHidden = true
+            gearButton.isHidden = false
+            actionRow.isHidden = false
+        }
         let panel = panel ?? build()
         stateLabel.stringValue = state
         titleLabel.stringValue = title
@@ -509,8 +524,9 @@ final class StatusHUD: NSObject {
                     selected: "c",
                     previewNote: "Pick a voice and it reads your most recent summary.")
                 self.panel?.contentView?.layoutSubtreeIfNeeded()
-                Permissions.log("settings picker items=\(self.voicePickerItemCount) "
-                                + "hidden=\(self.voicePickerHidden) "
+                Permissions.log("settings chrome: picker=\(self.voicePickerItemCount) "
+                                + "back=\(!self.backButtonHidden) gear=\(!self.gearHidden) "
+                                + "actions=\(!self.actionRowHidden) "
                                 + "selected=\(self.voicePickerSelection ?? "nil")")
             }),
         ] as [(String, () -> Void)] {
@@ -586,9 +602,19 @@ final class StatusHUD: NSObject {
         replyButton.keyEquivalent = "\r"
 
         gearButton = NSButton(title: "⚙", target: self, action: #selector(gearTapped))
-        gearButton.bezelStyle = .rounded
+        gearButton.isBordered = false
         gearButton.controlSize = .small
-        gearButton.font = .systemFont(ofSize: 11)
+        gearButton.font = .systemFont(ofSize: 12)
+        gearButton.contentTintColor = .secondaryLabelColor
+
+        // A breadcrumb, not a button in a row of actions: it says where you are and
+        // the only way out is back the way you came.
+        backButton = NSButton(title: "‹ Back", target: self, action: #selector(backTapped))
+        backButton.isBordered = false
+        backButton.controlSize = .small
+        backButton.font = .systemFont(ofSize: 11, weight: .medium)
+        backButton.contentTintColor = .secondaryLabelColor
+        backButton.isHidden = true
 
         let dismiss = NSButton(title: "Dismiss", target: self, action: #selector(dismissTapped))
         dismiss.bezelStyle = .rounded
@@ -599,7 +625,8 @@ final class StatusHUD: NSObject {
         hintLabel.font = .systemFont(ofSize: 10)
         hintLabel.textColor = .tertiaryLabelColor
 
-        let buttons = NSStackView(views: [replyButton, goButton, gearButton, dismiss])
+        let buttons = NSStackView(views: [replyButton, goButton, dismiss])
+        actionRow = buttons
         buttons.orientation = .horizontal
         buttons.spacing = 8
 
@@ -623,7 +650,15 @@ final class StatusHUD: NSObject {
         voicePicker.action = #selector(voicePicked)
         voicePicker.isHidden = true
 
-        let stack = NSStackView(views: [stateLabel, titleLabel, bodyLabel, progressBar, meter,
+        // Header: where you are on the left, the way deeper on the right.
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let header = NSStackView(views: [backButton, stateLabel, spacer, gearButton])
+        header.orientation = .horizontal
+        header.spacing = 6
+        header.alignment = .centerY
+
+        let stack = NSStackView(views: [header, titleLabel, bodyLabel, progressBar, meter,
                                         voicePicker, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -775,9 +810,18 @@ final class StatusHUD: NSObject {
     /// Set by the app so Dismiss can silence the voice, not just hide the panel.
     var onDismiss: (() -> Void)?
     var onOpenSettings: (() -> Void)?
+    var onLeaveSettings: (() -> Void)?
 
     @objc nonisolated private func gearTapped() {
         MainActor.assumeIsolated { onOpenSettings?() }
+    }
+
+    @objc nonisolated private func backTapped() {
+        MainActor.assumeIsolated {
+            // Leaving settings stops whatever the preview was saying. Walking away
+            // from a screen should not leave its sound running.
+            onLeaveSettings?()
+        }
     }
 
     // AppKit guarantees target/action runs on the main thread. The implicit
