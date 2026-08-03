@@ -58,6 +58,7 @@ final class StatusHUD: NSObject {
     /// you were already obeying, and three buttons for actions unrelated to
     /// speaking. A live level meter answers the only question you actually have.
     func showListening(level: @escaping () -> Float) {
+        isIdle = false
         awaitingConfirm = false
         isListening = true
         levelSource = level
@@ -90,6 +91,7 @@ final class StatusHUD: NSObject {
         cwd: String?, eventId: String? = nil
     ) {
         awaitingConfirm = false
+        isIdle = false
         currentEventId = eventId
         currentTarget = (sessionId, pid, project)
         // Only prefix when the topic adds something. A topic equal to the project
@@ -134,6 +136,7 @@ final class StatusHUD: NSObject {
     ) {
         countdownTimer?.invalidate()
         onCancelSend = cancel
+        isIdle = false
         show(state: "→ Sending to \(label)", title: "Your reply",
              body: "\u{201C}\(text)\u{201D}", autoHideAfter: nil)
         // After show(), never before: the state entry points clear this flag, and
@@ -208,6 +211,7 @@ final class StatusHUD: NSObject {
     }
 
     func showWorking(_ message: String) {
+        isIdle = false
         awaitingConfirm = false
         show(state: "◌ Working", title: currentTarget?.label ?? "Voice Dispatch",
              body: message, autoHideAfter: nil)
@@ -221,6 +225,7 @@ final class StatusHUD: NSObject {
     /// on screen with buttons implies there is something left to do. A failure is
     /// the opposite and stays until dismissed.
     func showResult(_ message: String, ok: Bool) {
+        isIdle = false
         awaitingConfirm = false
         // Reply and Go to session are about the announcement, not the receipt, and
         // offering them here suggests the send is still in your hands. It is not.
@@ -234,6 +239,14 @@ final class StatusHUD: NSObject {
     /// what is waiting is always derived from `waiting`, never passed in — the two
     /// were computed at different call sites and drifted, so the panel showed
     /// "2 waiting" directly above "Nothing waiting".
+    /// True when the panel is showing the passive idle state and nothing else.
+    ///
+    /// Used to decide whether an arriving turn may refresh the panel underneath. It
+    /// must never redraw over speech, a recording, a countdown or a failure notice:
+    /// those are conversations in progress, and a background update that interrupts
+    /// one is worse than a stale count.
+    private(set) var isIdle = false
+
     func showIdle(note: String? = nil, waiting: Int, unsentReplies: Int = 0) {
         awaitingConfirm = false
         currentTarget = nil
@@ -252,6 +265,7 @@ final class StatusHUD: NSObject {
 
         show(state: waiting > 0 ? "◌ \(waiting) waiting" : "◌ Ready",
              title: "Voice Dispatch", body: body, autoHideAfter: nil)
+        isIdle = true
     }
 
     /// True when the panel is visible and doing something worth stopping. Escape is
@@ -360,6 +374,7 @@ final class StatusHUD: NSObject {
     /// Summarizing and fetching the voice take a few seconds; without this the app
     /// looks broken for the whole of it.
     func showPreparing() {
+        isIdle = false
         show(state: "◌ Preparing", title: "Voice Dispatch",
              body: "Writing the summary and fetching the voice…", autoHideAfter: nil)
     }
