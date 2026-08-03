@@ -89,13 +89,37 @@ public struct Coordinator: Sendable {
     /// older is history. There is no supersession pass and no retirement sweep,
     /// because both were describing "not the latest", which the query already knows.
     public func nextToAnnounce() throws -> WaitingSession? {
-        try store.waitingSessions(limit: 50).first
+        try waiting().first
     }
 
     /// Everything waiting, newest first, for a UI that shows rather than describes.
     public func waiting() throws -> [WaitingSession] {
-        try store.waitingSessions()
+        let live = Set(agents.sessions().map(\.sessionId))
+        return try store.waitingSessions().filter { session in
+            // Machine-driven runs exit the moment they finish, so by the time we
+            // would announce, they are gone from the agents API. An interactive
+            // session persists while its tab is open. This is also the honest
+            // definition: if the session is gone there is no tab to open and nobody
+            // to answer.
+            //
+            // Measured rather than assumed: all five sessions with recent turns were
+            // present, including the one being typed in; the finished content-engine
+            // run was absent.
+            //
+            // The limit, stated: a headless run still executing IS live, so a long
+            // job could be announced. That is noise, and noise is recoverable —
+            // unlike the tty filter this replaces, which hid real conversations.
+            let isLive = live.contains(session.sessionId)
+            if !isLive {
+                Coordinator.trace?("skipping \(session.projectLabel): session is gone")
+            }
+            return isLive
+        }
     }
+
+    /// The badge. Shares the predicate with what a keypress will play, so the two
+    /// cannot disagree.
+    public func waitingCount() throws -> Int { try waiting().count }
 
     /// You heard it through to the end.
     ///

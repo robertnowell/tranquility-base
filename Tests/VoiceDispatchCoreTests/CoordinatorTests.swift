@@ -93,9 +93,11 @@ final class CoordinatorTests: XCTestCase {
             transport: transport,
             enrolment: registry,
             agents: FakeAgents(live: sessionLive
-                ? [LiveSession(pid: Int(ProcessInfo.processInfo.processIdentifier),
-                               sessionId: "sess-1", cwd: "/tmp/p", status: "idle",
-                               name: "p", waitingFor: nil)]
+                ? ["sess-1", "old", "new", "human", "cron", "waiting-one"].map {
+                    LiveSession(pid: Int(ProcessInfo.processInfo.processIdentifier),
+                                sessionId: $0, cwd: "/tmp/p", status: "idle",
+                                name: "p", waitingFor: nil)
+                  }
                 : []),
             recovery: RecoveryChain(
                 providers: [FixedTranscript(text: "yes go ahead")],
@@ -219,23 +221,40 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(try coordinator.waiting().count, 2)
     }
 
-    /// Machine-driven runs have no terminal to open and no session to answer, and
-    /// every run gets a fresh session id so nothing collapses them.
-    func testHeadlessRunsAreNeitherOfferedNorCounted() async throws {
-        let coordinator = try makeCoordinator()
-        try append(.stop, session: "cron", at: 9_000, message: "a nightly job", tty: "??")
-        try append(.stop, session: "human", at: 1_000, message: "your session", tty: "ttys012")
+    /// Machine-driven runs are identified by being GONE, not by their terminal.
+    ///
+    /// Three attempts tried to read the hook's controlling terminal and all three
+    /// were wrong: a hook spawned by a real interactive session records "??" exactly
+    /// as a `claude -p` run does. That filter hid live conversations. Liveness is
+    /// the honest question — if the session is gone there is no tab to open and
+    /// nobody to answer.
+    func testSessionsThatHaveExitedAreNotOffered() async throws {
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
+        let coordinator = Coordinator(
+            store: store,
+            summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            transport: RecordingTransport(), enrolment: registry,
+            agents: FakeAgents(live: [
+                LiveSession(pid: 1, sessionId: "human", cwd: "/tmp", status: "idle",
+                            name: "p", waitingFor: nil)]),
+            recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
+
+        try append(.stop, session: "cron", at: 9_000, message: "a nightly job that exited")
+        try append(.stop, session: "human", at: 1_000, message: "your session")
 
         XCTAssertEqual(try coordinator.nextToAnnounce()?.sessionId, "human",
-                       "the human session wins even though the job is newer")
-        XCTAssertEqual(try store.pendingCount(), 1)
+                       "the live session wins even though the job is newer")
+        XCTAssertEqual(try coordinator.waitingCount(), 1)
     }
 
-    /// A row written before the terminal was recorded is unknown, not headless.
-    func testUnknownTerminalIsNotTreatedAsHeadless() async throws {
+    /// The tty is recorded but must never decide anything: real sessions report "??".
+    func testTerminalIsNeverUsedToExclude() async throws {
         let coordinator = try makeCoordinator()
-        try append(tty: nil)
-        XCTAssertNotNil(try coordinator.nextToAnnounce())
+        try append(tty: "??")
+        XCTAssertNotNil(try coordinator.nextToAnnounce(),
+                        "a live session reporting no terminal is still a live session")
     }
 
     /// The badge and the keypress share one predicate, so they cannot disagree —
@@ -299,13 +318,16 @@ final class CoordinatorTests: XCTestCase {
     /// answer the dialog, so we refuse and keep the audio.
     func testDialogBlockedSessionIsRefusedNotGuessed() async throws {
         let transport = RecordingTransport()
-        let coordinator = try makeCoordinator(transport: transport, sessionLive: false)
+        // Heard while live, then the session blocks on a dialog and disappears from
+        // the agents API before the reply is sent.
+        let live = try makeCoordinator(transport: transport)
         try append()
-        _ = try await coordinator.announceNext()
-
+        _ = try await live.announceNext()
         guard case .readyToSend(let utteranceId, _, _, _) =
-            try await coordinator.submitReply(pcm16: silence())
+            try await live.submitReply(pcm16: silence())
         else { return XCTFail("expected a pending send") }
+
+        let coordinator = try makeCoordinator(transport: transport, sessionLive: false)
 
         guard case .sessionNotReady(.notRegistered) =
             try await coordinator.confirmAndSend(utteranceId: utteranceId)

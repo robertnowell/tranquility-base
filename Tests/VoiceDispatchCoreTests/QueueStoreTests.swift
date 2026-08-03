@@ -20,11 +20,10 @@ final class QueueStoreTests: XCTestCase {
             createdAtMs: 2_000, hookEvent: .userPromptSubmit, sessionId: "answered-one",
             promptId: "c", cwd: "/tmp", lastAssistantMessage: "", tty: "ttys1"))
 
-        // Machine-driven: no terminal, nothing to answer.
-        _ = try store.insert(event: QueuedEvent(
-            createdAtMs: 3_000, hookEvent: .stop, sessionId: "cron-one",
-            promptId: "d", cwd: "/tmp", lastAssistantMessage: "job", tty: "??"))
-
+        // The store answers "whose latest event is an unheard Stop" and nothing
+        // else. Whether a session still exists is liveness, which the Coordinator
+        // decides — the store has no business guessing from a recorded terminal,
+        // which is exactly the mistake that hid live conversations.
         XCTAssertEqual(try store.pendingCount(), 1)
         XCTAssertEqual(try store.waitingSessions().first?.sessionId, "waiting-one")
     }
