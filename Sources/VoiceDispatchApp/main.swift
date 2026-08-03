@@ -60,6 +60,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let result = try? coordinator.intake(), result.inserted > 0 {
                     self.rebuildMenu()
                 }
+                // Write the summary before it is asked for. Doing it on demand meant
+                // every use opened with a model call you had to sit through.
+                try? await coordinator.prepareNext()
             }
         }
 
@@ -338,11 +341,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .noTarget:
                     lastStatusLine = "nothing to reply to — tap to hear one first"
                     hud.showResult("Nothing to reply to yet — tap ⌃⌥ to hear one first.", ok: false)
-                case .notEnrolled(let sessionId):
-                    lastStatusLine = "not enrolled: \(sessionId.prefix(8)) — audio kept"
-                    hud.showResult(
-                        "That session isn't enrolled, so nothing was typed into it. "
-                        + "Your recording is saved. Enrol it with: vdctl enroll \(sessionId)", ok: false)
+                case .notEnrolled(_, let utteranceId, let label, let text):
+                    // First reply to a session: confirm the target here, where you
+                    // can see it, rather than sending you to another window.
+                    lastStatusLine = "confirm send to \(label)"
+                    hud.showConfirmSend(text: text, label: label) { [weak self] in
+                        guard let self, let coordinator = self.coordinator else { return }
+                        Task { @MainActor in
+                            self.hud.showWorking("Sending…")
+                            let outcome = try? await coordinator.confirmAndSend(utteranceId: utteranceId)
+                            if case .dispatched = outcome {
+                                self.hud.showResult("Sent to \(label).", ok: true)
+                            } else {
+                                self.hud.showResult(
+                                    "Couldn't send it. The recording is kept.", ok: false)
+                            }
+                            self.rebuildMenu()
+                        }
+                    }
                 case .sessionNotReady(let readiness):
                     lastStatusLine = "session busy or blocked (\(readiness)) — audio kept"
                     hud.showResult("Session isn't ready (\(readiness)). Recording kept — try again shortly.", ok: false)

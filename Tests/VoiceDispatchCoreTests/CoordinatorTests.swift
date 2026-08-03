@@ -279,6 +279,60 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertNotEqual(try store.events().first?.status, .answered)
     }
 
+    /// The summary is written before it is asked for, so pressing plays audio
+    /// rather than starting a model call you have to wait through.
+    func testPreparedSummaryIsUsedInsteadOfSummarizingOnDemand() async throws {
+        final class CountingSummary: SummaryProvider, @unchecked Sendable {
+            let name = "counting"
+            let isConfigured = true
+            var calls = 0
+            func brief(for request: SummaryRequest) async throws -> SessionBrief {
+                calls += 1
+                return SessionBrief(topic: "T", happened: "H", recap: "R", proposal: "P")
+            }
+        }
+        let counting = CountingSummary()
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
+        let coordinator = Coordinator(
+            store: store, summarizer: SummarizerChain(providers: [counting]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0), transport: RecordingTransport(),
+            enrolment: registry, agents: FakeAgents(live: []),
+            recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
+        try seedEvent()
+
+        try await coordinator.prepareNext()
+        XCTAssertEqual(counting.calls, 1)
+
+        try await coordinator.prepareNext()
+        XCTAssertEqual(counting.calls, 1, "already-prepared work is not repeated")
+
+        guard case .spoke = try await coordinator.announceNext() else {
+            return XCTFail("expected the prepared summary to be spoken")
+        }
+        XCTAssertEqual(counting.calls, 1, "announcing must not summarize again")
+    }
+
+    /// An unenrolled session is a confirmation, not a dead end: the transcript is
+    /// kept ready and one approval sends it.
+    func testUnenrolledReplyStaysSendableAndConfirmingSendsIt() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(transport: transport, enrolled: false)
+        try seedEvent()
+        _ = try await coordinator.announceNext()
+
+        guard case .notEnrolled(_, let utteranceId, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a confirmation request") }
+        XCTAssertEqual(try store.utterances().first?.status, .ready, "still sendable")
+        XCTAssertTrue(transport.sent.isEmpty)
+
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("confirming must send the recording already made") }
+        XCTAssertEqual(transport.sent.count, 1, "no re-recording required")
+        XCTAssertEqual(try store.utterances().first?.status, .confirmed)
+    }
+
     func testReplyWithNoAnnouncementHasNowhereToGo() async throws {
         let coordinator = try makeCoordinator()
         guard case .noTarget = try await coordinator.submitReply(pcm16: silence()) else {

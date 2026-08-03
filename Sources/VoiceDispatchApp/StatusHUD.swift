@@ -35,6 +35,7 @@ final class StatusHUD: NSObject {
     private var hideWorkItem: DispatchWorkItem?
     private var contentStack: NSStackView?
     private var identity: String?
+    private var awaitingConfirm = false
     private static let spokenMark = NSAttributedString.Key("vdSpoken")
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
@@ -78,6 +79,18 @@ final class StatusHUD: NSObject {
         return dir.isEmpty ? tty : "\(dir) · \(tty)"
     }
 
+    /// The first reply to a session asks once, showing the words that are about to
+    /// be typed and the tab they are going into. Approving here enrols it, so this
+    /// appears once per session and never again.
+    var onConfirmSend: (() -> Void)?
+
+    func showConfirmSend(text: String, label: String, confirm: @escaping () -> Void) {
+        onConfirmSend = confirm
+        awaitingConfirm = true
+        show(state: "⌁ Send this?", title: "First reply to \(label)",
+             body: "\u{201C}\(text)\u{201D}", autoHideAfter: nil)
+    }
+
     func showWorking(_ message: String) {
         show(state: "◌ Working", title: currentTarget?.label ?? "Voice Dispatch",
              body: message, autoHideAfter: nil)
@@ -102,17 +115,23 @@ final class StatusHUD: NSObject {
 
     private func show(state: String, title: String, body: String, autoHideAfter: TimeInterval?) {
         Permissions.log("HUD.show state=\(state) title=\(title)")
+        if state != "⌁ Send this?" { awaitingConfirm = false }
         let panel = panel ?? build()
         stateLabel.stringValue = state
         titleLabel.stringValue = title
         bodyLabel.stringValue = body
         goButton.isHidden = currentTarget?.pid == nil
-        replyButton.title = isRecording ? "Send reply" : "Reply"
-        let action = isRecording
-            ? "Listening — click Send, or let go of ⌃⌥."
-            : "Click Reply, or hold ⌃⌥ to speak."
+        replyButton.title = awaitingConfirm ? "Send" : (isRecording ? "Send reply" : "Reply")
+        let action: String
+        if awaitingConfirm {
+            action = "Sending confirms this session; you won't be asked again."
+        } else {
+            action = isRecording
+                ? "Listening — click Send, or let go of ⌃⌥."
+                : "Click Reply, or hold ⌃⌥ to speak."
+        }
         hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
-        replyButton.isHidden = currentTarget == nil
+        replyButton.isHidden = awaitingConfirm ? false : (currentTarget == nil)
 
         resizeToFit(panel)
         position(panel)
@@ -357,12 +376,22 @@ final class StatusHUD: NSObject {
     }
 
     @objc private func replyTapped() {
+        if awaitingConfirm {
+            awaitingConfirm = false
+            onConfirmSend?()
+            return
+        }
         if isRecording { isRecording = false; onStopReply?() }
         else { isRecording = true; onReply?() }
         replyButton.title = isRecording ? "Send reply" : "Reply"
-        let action = isRecording
-            ? "Listening — click Send, or let go of ⌃⌥."
-            : "Click Reply, or hold ⌃⌥ to speak."
+        let action: String
+        if awaitingConfirm {
+            action = "Sending confirms this session; you won't be asked again."
+        } else {
+            action = isRecording
+                ? "Listening — click Send, or let go of ⌃⌥."
+                : "Click Reply, or hold ⌃⌥ to speak."
+        }
         hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
     }
 
