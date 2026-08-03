@@ -88,8 +88,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.sendReply(captured)
         }
 
+        ElevenLabsSpeechProvider.trace = { Permissions.log("11labs: \($0)") }
+        Permissions.log("args=\(CommandLine.arguments)")
+
         if CommandLine.arguments.contains("--selftest-hud") {
             hud.selfTest()
+        }
+
+        // Drive the real speech chain end to end so the highlight can be checked
+        // from code instead of from a screenshot.
+        if CommandLine.arguments.contains("--selftest-speak") {
+            let text = SpokenTextSanitizer().sanitize(
+                "Testing the word highlight. The second sentence should light up after the first.")
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                hud.showAnnouncement(topic: "Highlight check", spoken: text.text,
+                                     sessionId: "selftest", pid: nil,
+                                     project: "voice-dispatch", cwd: nil)
+                _ = await SpeechChain().speak(text, onWord: { [weak self] range in
+                    Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
+                })
+                Permissions.log("selftest-speak finished")
+            }
         }
 
         startPermissionPolling()
@@ -277,7 +297,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             spoken: announcement.spoken.text,
                             sessionId: announcement.event.sessionId,
                             pid: live?.pid,
-                            project: announcement.event.projectLabel)
+                            project: announcement.event.projectLabel,
+                            cwd: announcement.event.cwd)
                     },
                     onWord: { [weak self] range in
                         Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }

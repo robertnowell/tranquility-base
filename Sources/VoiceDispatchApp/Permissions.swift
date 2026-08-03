@@ -45,7 +45,11 @@ struct Permissions {
     /// Permission failures are invisible from the outside — no prompt, no error, no
     /// listing — so guessing at them wastes the user's time. This records what was
     /// actually called and what it returned.
-    static func log(_ message: String) {
+    /// `nonisolated` because the speech and dispatch paths log from background
+    /// executors. `Permissions` is `@MainActor`, so an isolated `log` traps under
+    /// Swift 6's executor check — a diagnostic that kills the process the moment
+    /// it is called from the code you most need to diagnose.
+    nonisolated static func log(_ message: String) {
         let line = "\(ISO8601DateFormatter().string(from: Date()))  \(message)\n"
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/VoiceDispatch/app.log")
