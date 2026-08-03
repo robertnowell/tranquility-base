@@ -165,6 +165,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .appendingPathComponent("Library/Application Support/VoiceDispatch"))
 
         ElevenLabsSpeechProvider.trace = { Permissions.log("11labs: \($0)") }
+        // Populate the picker from the account rather than a hardcoded list.
+        Task { @MainActor in
+            _ = await VoiceCatalog.refresh()
+            self.rebuildMenu()
+        }
         Coordinator.trace = { Permissions.log("routing: \($0)") }
         Secrets.trace = { Permissions.log("secrets: \($0)") }
         Permissions.log("args=\(CommandLine.arguments)")
@@ -589,6 +594,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func chooseVoice(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        VoiceCatalog.selectedVoiceId = id
+        lastStatusLine = "voice: \(sender.title)"
+        rebuildMenu()
+
+        // Hear it now. Choosing from a list of names is guesswork otherwise.
+        Task { @MainActor in
+            hud.showWorking("Voice set to \(sender.title).")
+            _ = await SpeechChain().speak(
+                SpokenTextSanitizer().sanitize(
+                    "This is \(sender.title). I'll read your session summaries in this voice."))
+            hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0,
+                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+        }
+    }
+
     @objc private func showPanel() {
         hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0,
                      unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
@@ -607,6 +629,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let show = NSMenuItem(title: "Show panel", action: #selector(showPanel), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
+
+        // Picking a voice plays it immediately. A name in a list tells you nothing
+        // about what it sounds like, and the whole point of choosing is hearing.
+        let voices = VoiceCatalog.cached()
+        if !voices.isEmpty {
+            let item = NSMenuItem(title: "Voice", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            let selected = VoiceCatalog.selectedVoiceId
+            for group in ["cloned", "generated", "professional", "premade"] {
+                let inGroup = voices.filter { $0.category == group }
+                guard !inGroup.isEmpty else { continue }
+                if submenu.numberOfItems > 0 { submenu.addItem(.separator()) }
+                submenu.addItem(disabled(group.capitalized))
+                for voice in inGroup.sorted(by: { $0.name < $1.name }) {
+                    let entry = NSMenuItem(
+                        title: voice.name, action: #selector(chooseVoice(_:)), keyEquivalent: "")
+                    entry.target = self
+                    entry.representedObject = voice.id
+                    entry.state = voice.id == selected ? .on : .off
+                    submenu.addItem(entry)
+                }
+            }
+            item.submenu = submenu
+            menu.addItem(item)
+        }
         menu.addItem(.separator())
 
         menu.addItem(disabled("Tap ⌃⌥ hear · hold ⌥ reply · tap ⇧ pause"))
