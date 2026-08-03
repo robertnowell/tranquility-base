@@ -292,6 +292,11 @@ public struct SpeechChain: Sendable {
         /// Set when the preferred voice failed and the system voice covered for it.
         /// The announcement WAS heard; this exists so a silent downgrade is visible.
         public var degraded: String?
+        /// Whether any audio actually reached the speakers. Starting to talk counts
+        /// as read — but an announcement that never made a sound was not read, and
+        /// that distinction is what keeps a silent failure from being marked
+        /// delivered and from handing the reply to an older session.
+        public var heardAny: Bool = false
     }
 
     @discardableResult
@@ -299,17 +304,21 @@ public struct SpeechChain: Sendable {
         _ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)? = nil
     ) async -> Spoken {
         var degraded: String?
+        var heardAny = false
         if let preferred, preferred.isConfigured {
             do {
                 ElevenLabsSpeechProvider.trace?("chain: trying \(preferred.name)")
                 try await preferred.speak(text, onWord: onWord)
-                return Spoken(provider: preferred.name, completed: true)
+                return Spoken(provider: preferred.name, completed: true, heardAny: true)
             } catch SpeechError.interrupted {
-                return Spoken(provider: preferred.name, completed: false)
+                // Stopped on purpose, part-way through. It was being spoken, so it
+                // counts as read.
+                return Spoken(provider: preferred.name, completed: false, heardAny: true)
             } catch SpeechError.truncated(let played, let total) {
                 // Cut off part-way. Re-reading the whole thing in the system voice is
                 // better than leaving you with a fragment and a fault message.
                 degraded = String(format: "cut off at %.0fs of %.0fs", played, total)
+                heardAny = played > 0
             } catch {
                 degraded = "\(error)"
                 ElevenLabsSpeechProvider.trace?("chain: \(preferred.name) failed: \(error)")
@@ -324,12 +333,13 @@ public struct SpeechChain: Sendable {
             try await fallback.speak(text, onWord: onWord)
             // Heard, in the plainer voice. Not a failure — a degradation, reported
             // so an outage cannot hide behind a robotic voice you assume is normal.
-            return Spoken(provider: fallback.name, completed: true, degraded: degraded)
+            return Spoken(provider: fallback.name, completed: true,
+                          degraded: degraded, heardAny: true)
         } catch SpeechError.interrupted {
-            return Spoken(provider: fallback.name, completed: false)
+            return Spoken(provider: fallback.name, completed: false, heardAny: true)
         } catch {
-            return Spoken(
-                provider: fallback.name, completed: false, failure: "\(error)")
+            return Spoken(provider: fallback.name, completed: false,
+                          failure: "\(error)", heardAny: heardAny)
         }
     }
 }

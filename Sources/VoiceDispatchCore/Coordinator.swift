@@ -46,12 +46,12 @@ public struct Coordinator: Sendable {
 
     // MARK: - Intake
 
-    @discardableResult
     /// Set by the app. Routing decisions are logged because the one failure that
     /// cannot be undone — words typed into a session you were not talking to —
     /// otherwise leaves no evidence at all.
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 
+    @discardableResult
     public func intake() throws -> SpoolDrainer.DrainResult {
         try SpoolDrainer(store: store).drain()
     }
@@ -142,8 +142,8 @@ public struct Coordinator: Sendable {
         /// The gate said not now. The item stays queued — a veto can only delay.
         case held(reason: String)
         case nothingWaiting
-        /// Stopped part-way through; the item is still unread. `failure` is nil when
-        /// you stopped it and set when it stopped itself.
+        /// Never made a sound, so it is still unread. `failure` is nil when you
+        /// stopped it before it started and set when it stopped itself.
         case interrupted(failure: String?)
     }
 
@@ -227,10 +227,16 @@ public struct Coordinator: Sendable {
         // front is what makes the reply target derivable, but a stray second tap
         // then silently spent a session's only unread turn on audio you never heard.
         // Put it back and re-prepare it, so the next tap plays it again.
+        // Hearing it through is what marks it read. Anything short of that leaves it
+        // waiting: half an announcement tells you half of what happened, and a
+        // system that quietly retires those is one you cannot trust to have shown
+        // you everything. The other way to mark something read is to dismiss it,
+        // which is deliberate and explicit.
+        //
+        // announcedAtMs survives the revert: it records that this session was the
+        // most recent thing we tried to say, which is what stops an older
+        // announcement from inheriting the reply.
         guard spoken.completed else {
-            // Status reverts so it can be heard again, but announcedAtMs STAYS: it
-            // records that this session was the most recent thing we tried to say,
-            // which is what stops an older announcement from inheriting the reply.
             event.status = .new
             try store.update(event: event)
             await prepared.put(summary, for: event.id)
@@ -239,6 +245,15 @@ public struct Coordinator: Sendable {
 
         return .spoke(Announcement(
             event: event, brief: summary.brief, spoken: summary.spoken, via: spoken.provider))
+    }
+
+    /// Take an item out of the queue without answering it. This is what Dismiss
+    /// means, and it means only this.
+    public func dismiss(eventId: String) throws {
+        guard var event = try store.events(limit: 500).first(where: { $0.id == eventId })
+        else { return }
+        event.status = .dismissed
+        try store.update(event: event)
     }
 
     // MARK: - Reply target

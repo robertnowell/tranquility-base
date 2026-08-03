@@ -87,7 +87,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.isAnnouncing = false
             if self.recorder.isRecording { _ = try? self.recorder.stop() }
             self.isBusy = false
+            // Dismiss means the item is done with — not "hide the window and leave
+            // it in the queue", which is what made the button meaningless.
+            if let eventId = self.hud.currentEventId {
+                try? self.coordinator?.dismiss(eventId: eventId)
+            }
             self.updateTitle()
+            self.rebuildMenu()
         }
 
         hud.onReply = { [weak self] in
@@ -359,7 +365,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             sessionId: announcement.event.sessionId,
                             pid: live?.pid,
                             project: announcement.event.projectLabel,
-                            cwd: announcement.event.cwd)
+                            cwd: announcement.event.cwd,
+                            eventId: announcement.event.id)
                     },
                     onWord: { [weak self] range in
                         Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
@@ -378,7 +385,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             + "tap ⌃⌥ to hear it again.", ok: false)
                     } else {
                         lastStatusLine = "stopped — still unread"
-                        hud.showIdle("Stopped. It's still waiting — tap ⌃⌥ to hear it again.", waiting: (try? store?.pendingCount()) ?? 0)
+                        hud.showIdle(
+                            "Stopped — still waiting. Tap ⌃⌥ to hear it, "
+                            + "or Dismiss to be done with it.",
+                            waiting: (try? store?.pendingCount()) ?? 0)
                     }
                 case .held(let reason):
                     lastStatusLine = "held: \(reason)"
