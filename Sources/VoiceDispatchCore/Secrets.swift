@@ -24,9 +24,12 @@ public enum Secrets {
     /// secrets on every summarize and every utterance. Uncached, that reads as macOS
     /// nagging endlessly even after "Always Allow" — the grant is fine, the call
     /// volume is the problem. One read per key per launch.
-    private static let cache = SecretCache()
+    static let cache = SecretCache()
 
-    private final class SecretCache: @unchecked Sendable {
+    /// Internal rather than private so its behaviour can be tested without
+    /// writing to the real secrets file.
+    public final class SecretCache: @unchecked Sendable {
+        public init() {}
         private var values: [Key: String?] = [:]
         private let lock = NSLock()
 
@@ -37,7 +40,7 @@ public enum Secrets {
         /// for the life of the process and the good voice never came back. A miss is
         /// cheap to retry — it is one small file read — and a wrong answer that
         /// never re-checks is expensive.
-        func value(for key: Key, load: () -> String?) -> String? {
+        public func value(for key: Key, load: () -> String?) -> String? {
             lock.lock()
             if let cached = values[key], let hit = cached { lock.unlock(); return hit }
             lock.unlock()

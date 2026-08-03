@@ -10,15 +10,29 @@ final class DurabilityTests: XCTestCase {
     /// disabled the good voice for the life of the process, with no way back short
     /// of a restart — and nothing on screen saying why.
     ///
-    /// Uses the assemblyai slot, which nothing else in the suite touches.
+    /// Exercises the cache directly rather than the shared secrets file. Writing to
+    /// that file made the test depend on machine state and leave a key behind: it
+    /// passed once, then failed on the second run because the value it wrote was
+    /// still there. A unit test that mutates a real credential store is the wrong
+    /// shape regardless of whether it happens to pass.
     func testAMissingSecretIsRetriedRatherThanCached() throws {
-        let key = Secrets.Key.assemblyAIAPIKey
-        XCTAssertNil(Secrets.read(key), "precondition: nothing stored yet")
+        let cache = Secrets.SecretCache()
+        var stored: String?
+        var loads = 0
+        let load: () -> String? = { loads += 1; return stored }
 
-        try Secrets.write(key, value: "written-after-a-miss")
+        XCTAssertNil(cache.value(for: .assemblyAIAPIKey, load: load))
+        XCTAssertEqual(loads, 1)
 
-        XCTAssertEqual(Secrets.read(key), "written-after-a-miss",
-                       "a later read must see the value, not a cached absence")
+        stored = "arrived-later"
+        XCTAssertEqual(cache.value(for: .assemblyAIAPIKey, load: load), "arrived-later",
+                       "a miss must be retried, not remembered")
+        XCTAssertEqual(loads, 2, "the failed read was not cached")
+
+        stored = nil
+        XCTAssertEqual(cache.value(for: .assemblyAIAPIKey, load: load), "arrived-later",
+                       "a success is cached, so a later blip cannot take it away")
+        XCTAssertEqual(loads, 2)
     }
 
 
