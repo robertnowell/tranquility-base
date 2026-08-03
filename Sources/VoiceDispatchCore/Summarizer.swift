@@ -196,7 +196,20 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         never take one from how the session opened. Naming work the session is not
         doing is the worst failure available to you: it is confident, specific, and
         wrong, and it is indistinguishable from a correct summary when heard aloud.
-        """
+        
+        Never say that no input is needed, and never imply the user can ignore this.
+        You are writing the only thing they will hear about this session; if it
+        genuinely needed nothing from them, it should not have been read out at all,
+        so a line saying so is self-defeating. There is always a decision, even when
+        the agent has stated what it intends to do: the decision is whether to let it
+        proceed or to redirect it. End on that decision, phrased so it can be
+        answered out loud in a word — "Shall I go ahead?", "Proceed?", "Anything to
+        change first?"
+
+        And "no input needed" was not in the source message the one time it appeared.
+        It was inferred. Do not add it, or anything like it, ever.
+
+"""
 
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
         guard let key = Secrets.read(.anthropicAPIKey) else { throw SummaryError.notConfigured }
