@@ -104,6 +104,7 @@ public struct SpoolDrainer: Sendable {
         var transcriptPath: String?
         var lastAssistantMessage: String?
         var notificationMatcher: String?
+        var tty: String?
 
         func toEvent() -> QueuedEvent {
             QueuedEvent(
@@ -116,6 +117,7 @@ public struct SpoolDrainer: Sendable {
                 transcriptPath: transcriptPath,
                 lastAssistantMessage: lastAssistantMessage,
                 notificationMatcher: notificationMatcher,
+                tty: tty,
                 status: .new
             )
         }

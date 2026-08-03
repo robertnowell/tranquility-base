@@ -28,10 +28,27 @@ were wrong — `$PPID` is not reliably the claude process, and walking the ances
 crosses the session boundary — and both silently dropped *real* turns. The hook is
 the one place where being wrong is unrecoverable.
 
-**The fix:** the hook now records its own controlling terminal on every row. Plumb
-that field into the events table and filter at selection time, where a wrong answer
-costs a query and the evidence stays on disk. Do not put the decision back in the
-hook.
+**Built so far:** the `tty` column, the model field, the filter in every selection
+path and in the badge, and tests pinning both directions. All of it is safe: a NULL
+tty means *unknown* and is never filtered, so nothing can be silently lost.
+
+**Measured, and this is where it stands:**
+
+| source | recorded tty |
+|---|---|
+| real `claude -p` (setsid, no terminal) | `??` |
+| same hook under a pty (`script`) | `ttys147` |
+| **hooks spawned by real Claude Code sessions** | **NULL — empty, not `??`** |
+
+So the discriminator works in a lab and does not fire in the field: real sessions
+report nothing at all, which the filter correctly treats as unknown. The filter is
+therefore inert today rather than wrong.
+
+**Next:** `$$`'s tty is not available to a claude-spawned hook. Read
+`CLAUDE_CODE_ENTRYPOINT` from the hook environment instead — a probe hook is written
+at `/tmp/probe-hook.sh` but never fired, because project-level `.claude/settings.json`
+was not picked up for `-p`. Install the probe in user settings and read one real
+value from each path before choosing the signal. Do not ship a third guess.
 
 ---
 

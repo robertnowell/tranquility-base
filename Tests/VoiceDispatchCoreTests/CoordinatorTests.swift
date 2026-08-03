@@ -527,6 +527,36 @@ final class CoordinatorTests: XCTestCase {
                      "you answered it yourself, so there is nothing to catch up on")
     }
 
+    /// Headless runs are machine-driven and unanswerable, and because every run
+    /// gets a new session id, supersession cannot collapse them: a daily job adds a
+    /// near-identical unread row every day until the queue is nothing else.
+    func testHeadlessRunsAreNeverOfferedOrCounted() async throws {
+        let coordinator = try makeCoordinator()
+        try store.insert(event: QueuedEvent(
+            createdAtMs: 9_000, hookEvent: .stop, sessionId: "cron-1", promptId: "h1",
+            cwd: "/tmp/job", lastAssistantMessage: "a nightly job finished", tty: "??"))
+        try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .stop, sessionId: "human-1", promptId: "i1",
+            cwd: "/tmp/work", lastAssistantMessage: "your session finished", tty: "ttys012"))
+
+        XCTAssertEqual(try coordinator.nextToAnnounce()?.promptId, "i1",
+                       "the human session wins even though the job is newer")
+        XCTAssertEqual(try store.pendingCount(), 1, "and the badge agrees")
+        XCTAssertEqual(try coordinator.waiting().count, 1)
+    }
+
+    /// A row written before the terminal was recorded is unknown, not headless.
+    /// Treating unknown as headless would silently stop announcing real sessions.
+    func testUnknownTerminalIsNotTreatedAsHeadless() async throws {
+        let coordinator = try makeCoordinator()
+        try store.insert(event: QueuedEvent(
+            hookEvent: .stop, sessionId: "old-row", promptId: "o1",
+            cwd: "/tmp", lastAssistantMessage: "written before tty was recorded"))
+
+        XCTAssertNotNil(try coordinator.nextToAnnounce())
+        XCTAssertEqual(try store.pendingCount(), 1)
+    }
+
     func testNothingIsAnnouncedTwiceAsNew() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)
