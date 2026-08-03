@@ -43,7 +43,10 @@ except Exception:
 event = p.get("hook_event_name")
 # Only these two drive the loop. SubagentStop shares a prompt_id with its parent
 # Stop and would double-announce a single turn, so it is dropped at the source.
-if event not in ("Stop", "Notification"):
+# UserPromptSubmit is not announced. It is recorded because it is the signal
+# that you answered that session yourself, which retires whatever was waiting
+# to be read out of it.
+if event not in ("Stop", "Notification", "UserPromptSubmit"):
     sys.exit(0)
 
 # idle_prompt fires when you haven't replied for a while. It carries no content —
