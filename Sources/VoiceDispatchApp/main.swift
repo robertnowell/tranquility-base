@@ -74,6 +74,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The panel can drive a recording itself, so answering never depends on
         // knowing a hotkey that is invisible in the UI.
+        hud.onDismiss = { [weak self] in
+            guard let self else { return }
+            self.coordinator?.speech.stop()
+            self.isAnnouncing = false
+            if self.recorder.isRecording { _ = try? self.recorder.stop() }
+            self.isBusy = false
+            self.updateTitle()
+        }
+
         hud.onReply = { [weak self] in
             guard let self, self.micGranted, !self.recorder.isRecording else { return }
             try? self.recorder.start()
@@ -350,6 +359,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .spoke(let announcement):
                     lastStatusLine = "◀ \(announcement.brief.topic)"
                     hud.highlight(upTo: announcement.spoken.text.count)
+                case .interrupted:
+                    lastStatusLine = "stopped — still unread"
+                    hud.showIdle("Stopped. It's still waiting — tap ⌃⌥ to hear it again.")
                 case .held(let reason):
                     lastStatusLine = "held: \(reason)"
                     hud.showIdle("Holding — \(reason)")

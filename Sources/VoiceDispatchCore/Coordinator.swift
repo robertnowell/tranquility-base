@@ -137,6 +137,8 @@ public struct Coordinator: Sendable {
         /// The gate said not now. The item stays queued — a veto can only delay.
         case held(reason: String)
         case nothingWaiting
+        /// Stopped part-way through. The item is still unread.
+        case interrupted
     }
 
     /// Speak the next waiting item.
@@ -213,9 +215,22 @@ public struct Coordinator: Sendable {
             event: event, brief: summary.brief, spoken: summary.spoken, via: speech.fallback.name)
         await onWillSpeak?(announcement)
 
-        let via = await speech.speak(summary.spoken, onWord: onWord)
+        let spoken = await speech.speak(summary.spoken, onWord: onWord)
+
+        // Interrupting an announcement must not consume it. Marking it announced up
+        // front is what makes the reply target derivable, but a stray second tap
+        // then silently spent a session's only unread turn on audio you never heard.
+        // Put it back and re-prepare it, so the next tap plays it again.
+        guard spoken.completed else {
+            event.status = .new
+            event.announcedAtMs = nil
+            try store.update(event: event)
+            await prepared.put(summary, for: event.id)
+            return .interrupted
+        }
+
         return .spoke(Announcement(
-            event: event, brief: summary.brief, spoken: summary.spoken, via: via))
+            event: event, brief: summary.brief, spoken: summary.spoken, via: spoken.provider))
     }
 
     // MARK: - Reply target

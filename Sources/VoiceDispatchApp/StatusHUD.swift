@@ -451,5 +451,14 @@ final class StatusHUD: NSObject {
         replyButton?.title = "Reply"
     }
 
-    @objc private func dismissTapped() { hide() }
+    /// Set by the app so Dismiss can silence the voice, not just hide the panel.
+    var onDismiss: (() -> Void)?
+
+    @objc private func dismissTapped() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        awaitingConfirm = false
+        onDismiss?()
+        hide()
+    }
 }

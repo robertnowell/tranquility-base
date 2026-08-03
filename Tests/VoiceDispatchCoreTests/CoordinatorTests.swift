@@ -145,6 +145,36 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(try store.utterances().first?.status, .confirmed)
     }
 
+    /// A stray tap during playback must not spend a session's only unread turn on
+    /// audio that was never heard.
+    func testInterruptedAnnouncementStaysUnread() async throws {
+        final class InterruptingSpeech: SpeechProvider, @unchecked Sendable {
+            let name = "interrupting"
+            let isConfigured = true
+            var isSpeaking = false
+            func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
+                throw SpeechError.interrupted
+            }
+            func stop() {}
+        }
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
+        let cut = InterruptingSpeech()
+        let coordinator = Coordinator(
+            store: store, summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: cut, fallback: cut),
+            gate: InterruptGate(minimumIdleSeconds: 0), transport: RecordingTransport(),
+            enrolment: registry, agents: FakeAgents(live: []),
+            recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
+        try seedEvent()
+
+        guard case .interrupted = try await coordinator.announceNext() else {
+            return XCTFail("expected an interrupted announcement")
+        }
+        XCTAssertEqual(try store.events().first?.status, .new, "still unread")
+        XCTAssertNil(try store.events().first?.announcedAtMs)
+        XCTAssertNotNil(try coordinator.nextToAnnounce(), "offered again")
+    }
+
     func testNothingIsAnnouncedTwice() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)
