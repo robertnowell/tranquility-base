@@ -45,6 +45,7 @@ final class StatusHUD: NSObject {
     private var countdownTimer: Timer?
     private var onCancelSend: ((_ restartListening: Bool) -> Void)?
     private var progressBar: NSProgressIndicator!
+    private var meter: LevelMeterView!
     private static let spokenMark = NSAttributedString.Key("vdSpoken")
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
@@ -62,15 +63,16 @@ final class StatusHUD: NSObject {
         listenStartedAt = Date()
         show(state: "● Listening", title: "Replying to \(currentTarget?.label ?? "this session")",
              body: "", autoHideAfter: nil)
-        progressBar.isHidden = false
-        progressBar.doubleValue = 0
+        meter.isHidden = false
+        meter.reset()
 
         meterTimer?.invalidate()
-        let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] timer in
+        // 20Hz: fast enough that the waveform tracks syllables rather than words.
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] timer in
             guard let self, self.isListening else { return timer.invalidate() }
             let seconds = Date().timeIntervalSince(self.listenStartedAt ?? Date())
             self.stateLabel.stringValue = String(format: "● Listening  %.0fs", seconds)
-            self.progressBar.doubleValue = Self.meterFraction(self.levelSource?() ?? 0) * 100
+            self.meter.push(CGFloat(Self.meterFraction(self.levelSource?() ?? 0)))
         }
         RunLoop.main.add(timer, forMode: .common)
         meterTimer = timer
@@ -336,7 +338,18 @@ final class StatusHUD: NSObject {
             ("announcement", { self.showAnnouncement(
                 topic: "Product image binding fix validation", spoken: long,
                 sessionId: "s", pid: 1, project: "promotions", cwd: "/tmp/promotions") }),
-            ("listening", { self.showListening(level: { 0.4 }) }),
+            ("listening", {
+                var t = 0.0
+                self.showListening(level: {
+                    t += 0.05
+                    return Float(0.25 + 0.25 * sin(t * 6))  // something speech-shaped
+                })
+                // Fill the history so the drawing path runs against real geometry.
+                for i in 0..<80 { self.meter.push(CGFloat(0.2 + 0.6 * abs(sin(Double(i) / 4)))) }
+                self.panel?.contentView?.layoutSubtreeIfNeeded()
+                Permissions.log(
+                    "meter frame=\(self.meter.frame) hidden=\(self.meter.isHidden)")
+            }),
             ("result", { self.showResult(long, ok: false) }),
         ] as [(String, () -> Void)] {
             Permissions.log("selftest state=\(label)")
@@ -426,7 +439,10 @@ final class StatusHUD: NSObject {
         progressBar.controlSize = .small
         progressBar.isHidden = true
 
-        let stack = NSStackView(views: [stateLabel, titleLabel, bodyLabel, progressBar,
+        meter = LevelMeterView()
+        meter.isHidden = true
+
+        let stack = NSStackView(views: [stateLabel, titleLabel, bodyLabel, progressBar, meter,
                                         hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -444,6 +460,8 @@ final class StatusHUD: NSObject {
             hintLabel.widthAnchor.constraint(equalToConstant: 348),
             titleLabel.widthAnchor.constraint(equalToConstant: 348),
             stateLabel.widthAnchor.constraint(equalToConstant: 348),
+            meter.widthAnchor.constraint(equalToConstant: 348),
+            meter.heightAnchor.constraint(equalToConstant: 28),
         ])
         self.contentStack = stack
 
@@ -551,7 +569,7 @@ final class StatusHUD: NSObject {
         isListening = false
         meterTimer?.invalidate()
         meterTimer = nil
-        progressBar?.isHidden = true
+        meter?.isHidden = true
         replyButton?.title = "Reply"
     }
 
