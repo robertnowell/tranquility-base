@@ -125,6 +125,16 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
 
     private var player: AVAudioPlayer?
 
+    /// Bumped by `stop()`. Any speak call whose generation is stale drops its audio
+    /// on arrival rather than playing it. Without this, tapping to stop during the
+    /// network round trip stopped nothing — the response landed a second later and
+    /// played on top of whatever had started since.
+    private var generation = 0
+    private let generationQueue = DispatchQueue(label: "elevenlabs.generation")
+
+    private func currentGeneration() -> Int { generationQueue.sync { generation } }
+    private func bumpGeneration() { generationQueue.sync { generation += 1 } }
+
     /// Set by the app so highlight failures are visible instead of silent.
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 
@@ -143,6 +153,7 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
 
     public func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
         guard let key = Secrets.read(.elevenLabsAPIKey) else { throw SpeechError.notConfigured }
+        let mine = currentGeneration()
 
         // The /with-timestamps variant returns per-character start times alongside the
         // audio, which is the only way to follow along with a pre-rendered clip.
@@ -169,6 +180,8 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
 
         let starts = (json["alignment"] as? [String: Any])?["character_start_times_seconds"] as? [Double]
         ElevenLabsSpeechProvider.trace?("alignment starts=\(starts?.count ?? -1) chars=\(text.text.count) onWord=\(onWord != nil)")
+
+        guard mine == currentGeneration() else { throw SpeechError.interrupted }
 
         let audio = try AVAudioPlayer(data: audioData)
         player = audio
@@ -200,6 +213,7 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
     }
 
     public func stop() {
+        bumpGeneration()
         player?.stop()
         player = nil
     }
@@ -239,17 +253,24 @@ public struct SpeechChain: Sendable {
         fallback.stop()
     }
 
+    public struct Spoken: Sendable {
+        public let provider: String
+        /// False when the audio was cut off. An interrupted announcement was not
+        /// heard, so it must not be treated as delivered.
+        public let completed: Bool
+    }
+
     @discardableResult
     public func speak(
         _ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)? = nil
-    ) async -> String {
+    ) async -> Spoken {
         if let preferred, preferred.isConfigured {
             do {
                 ElevenLabsSpeechProvider.trace?("chain: trying \(preferred.name)")
                 try await preferred.speak(text, onWord: onWord)
-                return preferred.name
+                return Spoken(provider: preferred.name, completed: true)
             } catch SpeechError.interrupted {
-                return preferred.name
+                return Spoken(provider: preferred.name, completed: false)
             } catch {
                 ElevenLabsSpeechProvider.trace?("chain: \(preferred.name) failed: \(error)")
                 // fall through to the system voice for this utterance only
@@ -259,7 +280,11 @@ public struct SpeechChain: Sendable {
                 "chain: preferred unavailable (configured=\(preferred?.isConfigured ?? false))")
         }
         ElevenLabsSpeechProvider.trace?("chain: falling back to \(fallback.name)")
-        try? await fallback.speak(text, onWord: onWord)
-        return fallback.name
+        do {
+            try await fallback.speak(text, onWord: onWord)
+            return Spoken(provider: fallback.name, completed: true)
+        } catch {
+            return Spoken(provider: fallback.name, completed: false)
+        }
     }
 }
