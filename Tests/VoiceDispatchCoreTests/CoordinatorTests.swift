@@ -419,6 +419,39 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertFalse(result.completed)
     }
 
+    /// A session mid-turn still takes input. Claude Code holds typed text in the
+    /// input box and sends it when the turn ends, which is exactly what a person
+    /// does, so refusing was a self-imposed limit rather than a safety property.
+    func testMidTurnSessionsStillAcceptReplies() async throws {
+        let transport = RecordingTransport()
+        transport.readinessValue = .busy
+        transport.outcome = .queued
+        let coordinator = try makeCoordinator(transport: transport)
+        try seedEvent()
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+
+        guard case .queued = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("a busy session must still receive the reply") }
+
+        XCTAssertEqual(transport.sent.count, 1)
+        XCTAssertEqual(try store.utterances().first?.status, .confirmed,
+                       "the words are in the tab; nothing else is required of anyone")
+        XCTAssertEqual(try store.events().first?.status, .answered)
+    }
+
+    /// The one state that must still refuse: alive but absent from the agents API
+    /// means blocked on a modal, where typed text would answer the dialog.
+    func testDialogBlockedSessionsStillRefuse() async throws {
+        XCTAssertFalse(Readiness.notRegistered.canDispatch)
+        XCTAssertFalse(Readiness.targetGone.canDispatch)
+        XCTAssertTrue(Readiness.busy.canDispatch)
+        XCTAssertTrue(Readiness.waiting(nil).canDispatch)
+    }
+
     func testNothingIsAnnouncedTwice() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)

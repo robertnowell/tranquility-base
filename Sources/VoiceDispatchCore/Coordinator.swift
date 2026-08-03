@@ -326,6 +326,8 @@ public struct Coordinator: Sendable {
 
     public enum ReplyOutcome: Sendable {
         case dispatched(text: String, latencyMs: Int, sessionId: String)
+        /// Typed into a session that was mid-turn; it sends when that turn ends.
+        case queued(text: String, sessionId: String)
         case transcriptionFailed(utteranceId: String)
         case noTarget
         /// Transcribed and about to be sent unless the user intervenes.
@@ -418,6 +420,20 @@ public struct Coordinator: Sendable {
         try store.update(utterance: utterance)
 
         switch await transport.send(text: text, to: dispatchTarget) {
+        case .queued:
+            // Delivered into a session that is mid-turn. It will send itself when
+            // that turn ends. Treated as answered, because it is: the words are in
+            // the tab and nobody has to do anything else.
+            utterance.status = .confirmed
+            utterance.confirmedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+            utterance.lastError = "queued behind the current turn"
+            try store.update(utterance: utterance)
+
+            var answered = target
+            answered.status = .answered
+            try store.update(event: answered)
+            return .queued(text: text, sessionId: target.sessionId)
+
         case .confirmed(let latencyMs):
             utterance.status = .confirmed
             utterance.confirmedAtMs = Int64(Date().timeIntervalSince1970 * 1000)

@@ -48,14 +48,27 @@ public enum Readiness: Sendable, Equatable {
     /// the session is blocked on a dialog (trust prompt, permission prompt) or is
     /// still starting. Injecting here would ANSWER the dialog — never do it.
     case notRegistered
-    /// Mid-turn. Text would queue rather than start a turn; wait instead.
+    /// Mid-turn. Claude Code accepts typed input while it works and queues it as
+    /// the next message, which is exactly what a person does: you type your reply
+    /// while it is still going. Deferring here bounced a perfectly good reply for
+    /// no reason, so `busy` dispatches.
     case busy
-    /// Explicitly waiting on the user for something.
+    /// Explicitly waiting on the user for something. Also dispatchable: waiting is
+    /// the state most in need of an answer.
     case waiting(String?)
     /// The process is gone.
     case targetGone
 
-    public var canDispatch: Bool { self == .ready }
+    /// The only real hazard is `notRegistered`: alive but absent from
+    /// `claude agents --json` means blocked on a modal dialog, where typed text
+    /// would ANSWER the dialog rather than reach the prompt. Everything else is a
+    /// session that can take input, even if it is mid-thought.
+    public var canDispatch: Bool {
+        switch self {
+        case .ready, .busy, .waiting: return true
+        case .notRegistered, .targetGone: return false
+        }
+    }
 }
 
 public enum DispatchFailure: Error, Sendable, Equatable {
@@ -70,6 +83,11 @@ public enum DispatchFailure: Error, Sendable, Equatable {
 
 public enum DispatchOutcome: Sendable {
     case confirmed(latencyMs: Int)
+    /// Typed into a session that was mid-turn. Claude Code holds it in the input box
+    /// and sends it when the turn ends, so it cannot appear in the transcript yet.
+    /// This is a success with a delay, and must not be reported as the ambiguous
+    /// case: nothing is in doubt except when.
+    case queued
     case deferred(Readiness)
     case failed(DispatchFailure)
 }
@@ -150,6 +168,7 @@ public struct TerminalAppTransport: DispatchTransport {
 
     public func send(text: String, to target: DispatchTarget) async -> DispatchOutcome {
         let state = await readiness(for: target)
+        let wasBusy = state == .busy
         guard state.canDispatch else {
             return state == .targetGone ? .failed(.targetGone) : .deferred(state)
         }
@@ -183,6 +202,12 @@ public struct TerminalAppTransport: DispatchTransport {
         }
         let landed = await TranscriptWatcher.waitForUserText(
             payload, in: transcriptPath, timeout: verificationTimeout, pollInterval: pollInterval)
+
+        // A busy session cannot echo the text until its current turn finishes, which
+        // can take minutes. Not seeing it inside the window is expected there, and
+        // calling that ambiguous would make every mid-turn reply look like a
+        // possible loss.
+        if !landed, wasBusy { return .queued }
 
         return landed
             ? .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
