@@ -213,11 +213,21 @@ final class StatusHUD: NSObject {
              body: message, autoHideAfter: nil)
     }
 
+    /// A receipt, not a state you live in.
+    ///
+    /// A success needs nothing from you, so it says what happened and gets out of
+    /// the way. "It's mid-turn, so it sends when that finishes" is worth a few
+    /// seconds because it is not something you could otherwise know, but leaving it
+    /// on screen with buttons implies there is something left to do. A failure is
+    /// the opposite and stays until dismissed.
     func showResult(_ message: String, ok: Bool) {
         awaitingConfirm = false
+        // Reply and Go to session are about the announcement, not the receipt, and
+        // offering them here suggests the send is still in your hands. It is not.
+        currentTarget = ok ? nil : currentTarget
         show(state: ok ? "▶ Sent" : "⚠ Needs you",
-             title: currentTarget?.label ?? "Voice Dispatch",
-             body: message, autoHideAfter: nil)
+             title: ok ? "Voice Dispatch" : (currentTarget?.label ?? "Voice Dispatch"),
+             body: message, autoHideAfter: ok ? 6 : nil)
     }
 
     /// `note` is a prefix about what just happened ("Stopped."). The sentence about
