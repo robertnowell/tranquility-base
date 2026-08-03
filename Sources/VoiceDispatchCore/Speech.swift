@@ -20,10 +20,9 @@ public enum SpeechError: Error, Sendable {
 
 // MARK: - System (default)
 
-/// `AVSpeechSynthesizer`. Free, offline, and by far the fastest to first audio, so
-/// it is the default rather than merely the fallback: for an ambient notification
-/// nobody needs a premium voice, and a network round trip before speech is a worse
-/// experience than a plainer voice that starts immediately.
+/// `AVSpeechSynthesizer`. Free, offline, and the fastest to first audio — the
+/// guaranteed floor, used whenever the network provider is unconfigured or fails.
+/// It is not the default: see `SpeechChain` for why that changed after listening.
 public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Sendable {
     public let name = "system"
     public let isConfigured = true
@@ -156,11 +155,20 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
 /// Speech is not on the never-lose-data path — a failed announcement is an
 /// annoyance, not data loss. So it degrades quietly to the system voice rather than
 /// blocking or retrying.
+///
+/// ElevenLabs is the default after listening to both back to back. The engineering
+/// argument for the system voice was time-to-first-audio, and that argument loses:
+/// for a twenty-five-second update the extra second before speech starts is
+/// imperceptible, while the difference in listenability across that duration is not.
+/// The system voice remains the fallback and needs no network or key.
 public struct SpeechChain: Sendable {
     public let preferred: (any SpeechProvider)?
     public let fallback: any SpeechProvider
 
-    public init(preferred: (any SpeechProvider)? = nil, fallback: any SpeechProvider = SystemSpeechProvider()) {
+    public init(
+        preferred: (any SpeechProvider)? = ElevenLabsSpeechProvider(),
+        fallback: any SpeechProvider = SystemSpeechProvider()
+    ) {
         self.preferred = preferred
         self.fallback = fallback
     }
