@@ -30,6 +30,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let tapThreshold: TimeInterval = 0.35
     private var pressStartedAt: Date?
     private var listeningIndicator: DispatchWorkItem?
+    /// Guards against overlapping announcements. `speech.isSpeaking` is false while
+    /// the audio is still being fetched, so two quick taps used to start two
+    /// announcements that then talked over each other.
+    private var isAnnouncing = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -82,6 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.updateTitle()
             self.hud.recordingEnded()
             self.sendReply(captured)
+        }
+
+        if CommandLine.arguments.contains("--selftest-hud") {
+            hud.selfTest()
         }
 
         startPermissionPolling()
@@ -191,13 +199,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // is thrown away — the alternative, waiting to see if it's a hold, would
             // clip the first third of a second off every reply.
             guard micGranted, !recorder.isRecording else { return }
-            // Capture starts now so a hold never loses its opening words — but the
-            // "Listening" indicator waits until the press outlives the tap threshold.
-            // Showing it immediately meant a tap flashed "Listening" over whatever was
-            // being said, which is exactly backwards.
-            try? recorder.start()
+            // Recording starts only once the press outlives the tap threshold.
+            // Starting on press meant every tap opened the microphone while also
+            // playing the next announcement — it listened to its own voice. Losing
+            // the first ~350ms of a hold is the correct trade: people pause before
+            // speaking, and a tap must be silent.
             let indicator = DispatchWorkItem { [weak self] in
-                guard let self, self.recorder.isRecording else { return }
+                guard let self, !self.recorder.isRecording else { return }
+                // Never record over playback.
+                self.coordinator?.speech.stop()
+                try? self.recorder.start()
                 self.isBusy = true
                 self.updateTitle()
                 self.hud.showListening()
@@ -216,9 +227,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if held < Self.tapThreshold {
                 recorder.abandon()
                 updateTitle()
-                // A tap while it is talking means "stop talking", not "queue another".
-                if let coordinator, coordinator.speech.isSpeaking {
-                    coordinator.speech.stop()
+                // A tap while it is talking — or while an announcement is still being
+                // prepared — means "stop", not "queue another".
+                if isAnnouncing || (coordinator?.speech.isSpeaking ?? false) {
+                    coordinator?.speech.stop()
+                    isAnnouncing = false
                     hud.showIdle("Stopped. Tap ⌃⌥ again for the next one.")
                     rebuildMenu()
                     return
@@ -240,8 +253,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Tap: play the next waiting update, then that session becomes the reply target.
     private func announceNext() {
-        guard let coordinator else { return }
+        guard let coordinator, !isAnnouncing else { return }
+        isAnnouncing = true
         Task { @MainActor in
+            defer { isAnnouncing = false }
             do {
                 // A tap is an explicit request to hear something, so the
                 // interruptibility gate does not apply — you cannot interrupt
