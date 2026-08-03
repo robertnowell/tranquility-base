@@ -157,7 +157,7 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 
     public init(
-        voiceId: String = "EXAVITQu4vr4xnSDxMaL",
+        voiceId: String = VoiceCatalog.selectedVoiceId,
         model: String = "eleven_flash_v2_5",
         timeout: TimeInterval = 3
     ) {
@@ -182,7 +182,8 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         // The /with-timestamps variant returns per-character start times alongside the
         // audio, which is the only way to follow along with a pre-rendered clip.
         var request = URLRequest(
-            url: URL(string: "https://api.elevenlabs.io/v1/text-to-speech/\(voiceId)/with-timestamps")!)
+            url: URL(string: "https://api.elevenlabs.io/v1/text-to-speech/"
+                     + "\(VoiceCatalog.selectedVoiceId)/with-timestamps")!)
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.setValue(key, forHTTPHeaderField: "xi-api-key")
