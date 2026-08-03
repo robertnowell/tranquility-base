@@ -67,6 +67,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         hotkey = HotkeyMonitor { [weak self] transition in
+            if case .pauseToggled = transition {
+                Task { @MainActor in
+                    guard let self, let speech = self.coordinator?.speech,
+                          speech.isSpeaking || speech.isPaused else { return }
+                    speech.togglePause()
+                    self.hud.setPaused(speech.isPaused)
+                }
+                return
+            }
             // The tap callback runs on the main run loop, but hop explicitly so the
             // compiler agrees and so this stays correct if the tap ever moves.
             Task { @MainActor in self?.handle(transition) }
@@ -275,6 +284,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handle(_ transition: HotkeyMonitor.Transition) {
         switch transition {
+        case .pauseToggled:
+            return  // handled before this, in the monitor callback
         case .pressed:
             pressStartedAt = Date()
             // Start capturing immediately. If this turns out to be a tap the audio
@@ -309,27 +320,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if held < Self.tapThreshold {
                 recorder.abandon()
                 updateTitle()
-                // A tap while it is talking pauses; another resumes. Pausing keeps
-                // the announcement in progress and therefore unread, which is the
-                // behaviour you want from a key you might hit by accident.
-                //
-                // This reuses the chord we already own rather than watching a new
-                // key. The event tap is listen-only by design, so any key we observe
-                // also reaches whatever is focused — a bare space would type a space,
-                // and ⌥Space would insert a non-breaking space, which is worse for
-                // being invisible. ⌃⌥ types nothing anywhere.
-                if let speech = coordinator?.speech, speech.isSpeaking || speech.isPaused {
-                    speech.togglePause()
-                    hud.setPaused(speech.isPaused)
-                    return
-                }
-                if isAnnouncing {
-                    // Still fetching audio; nothing to pause yet, so stop instead.
+                // ⌃⌥ means "next", always. Talking already? Stop this one and move
+                // on — it stays unread, so nothing is lost by skipping ahead.
+                // Pausing lives on ⌃⌥⇧ precisely so this gesture keeps its meaning.
+                if isAnnouncing || (coordinator?.speech.isSpeaking ?? false) {
                     coordinator?.speech.stop()
                     isAnnouncing = false
-                    hud.showIdle(note: "Stopped.", waiting: (try? store?.pendingCount()) ?? 0)
-                    rebuildMenu()
-                    return
                 }
                 announceNext()
                 return

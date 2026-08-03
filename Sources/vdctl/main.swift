@@ -17,6 +17,7 @@ func usage() -> Never {
       vdctl reap [hours]        delete audio for confirmed/discarded rows (default 72h)
       vdctl hook-config         print the settings.json snippet to install the hook
       vdctl paths               show where everything lives
+      vdctl calls [n]           full input and output of the last n model calls
 
     dispatch:
       vdctl targets                       live sessions, with tty and enrolment
@@ -145,7 +146,26 @@ do {
             if let e = u.lastError { print("    error: \(truncate(e, 90))") }
         }
 
-    case "collapse":
+    case "calls":
+    // Every model call, whole. A summary that reads wrong is otherwise
+    // undebuggable: the inputs come from four places and the output is opaque.
+    let count = Int(CommandLine.arguments.dropFirst(2).first ?? "") ?? 3
+    let text = (try? String(contentsOf: ModelCallLog.url, encoding: .utf8)) ?? ""
+    let lines = text.split(separator: "\n").suffix(count)
+    if lines.isEmpty { print("no model calls recorded yet at \(ModelCallLog.url.path)") }
+    for line in lines {
+        guard let data = line.data(using: .utf8),
+              let entry = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { continue }
+        print(String(repeating: "=", count: 78))
+        print("\(entry["at"] as? String ?? "?")  \(entry["model"] as? String ?? "?")  "
+              + "status \(entry["status"] as? Int ?? -1)  \(entry["elapsedMs"] as? Int ?? -1)ms")
+        print("\n--- SYSTEM ---\n\(entry["system"] as? String ?? "")")
+        print("\n--- USER ---\n\(entry["user"] as? String ?? "")")
+        print("\n--- RESPONSE ---\n\(entry["response"] as? String ?? "")")
+    }
+
+case "collapse":
     // One slot per session. Everything older than a session's newest unread turn
     // is retired — this is the same sweep the app runs before each announcement,
     // exposed so a queue that accumulated under the old FIFO rules can be cleaned.

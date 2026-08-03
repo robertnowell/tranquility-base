@@ -19,7 +19,13 @@ import Foundation
 /// modifier combination rather than a bare key: an unconsumed bare key would still
 /// reach whatever app is focused. Wispr Flow refuses bare keys for the same reason.
 public final class HotkeyMonitor: @unchecked Sendable {
-    public enum Transition: Sendable { case pressed, released }
+    public enum Transition: Sendable {
+        case pressed, released
+        /// ⌃⌥⇧ tapped. A separate gesture so ⌃⌥ can keep meaning "next" — pausing
+        /// on the same chord left no way to move on, since a tap on a finished
+        /// announcement simply started it over.
+        case pauseToggled
+    }
 
     /// ⌃⌥ held together. Matches Clicky's default and avoids every system chord.
     public struct Chord: Sendable {
@@ -39,6 +45,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
 
     /// Mutated only from the tap callback, which runs on the main run loop.
     public private(set) var isPressed = false
+    private var isPauseHeld = false
 
     public init(chord: Chord = Chord(), onTransition: @escaping @Sendable (Transition) -> Void) {
         self.chord = chord
@@ -115,6 +122,15 @@ public final class HotkeyMonitor: @unchecked Sendable {
             onEscape?()
             return Unmanaged.passUnretained(event)
         }
+
+        // ⌃⌥⇧ is its own gesture. Shift adds nothing typeable, and the whole
+        // combination still reaches the focused app harmlessly.
+        let withShift = Chord(flags: [.maskControl, .maskAlternate, .maskShift])
+        if withShift.isSatisfied(by: event.flags) {
+            if !isPauseHeld { isPauseHeld = true; onTransition(.pauseToggled) }
+            return Unmanaged.passUnretained(event)
+        }
+        isPauseHeld = false
 
         let satisfied = chord.isSatisfied(by: event.flags)
         if satisfied, !isPressed {

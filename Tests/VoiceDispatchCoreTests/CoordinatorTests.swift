@@ -300,6 +300,28 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(try store.pendingCount(), 0)
     }
 
+    /// Tapping again must reach a different session. Stopping leaves an item
+    /// unread and it is also the newest, so newest-first replayed it forever.
+    func testStoppedItemDoesNotBlockTheRest() async throws {
+        try store.insert(event: QueuedEvent(
+            createdAtMs: 9_000, hookEvent: .stop, sessionId: "sess-1", promptId: "newest",
+            cwd: "/tmp/a", lastAssistantMessage: "newest"))
+        try store.insert(event: QueuedEvent(
+            createdAtMs: 5_000, hookEvent: .stop, sessionId: "sess-2", promptId: "older",
+            cwd: "/tmp/b", lastAssistantMessage: "older"))
+        let coordinator = try makeCoordinator()
+
+        XCTAssertEqual(try coordinator.nextToAnnounce()?.promptId, "newest")
+
+        // Offered, then stopped: still unread, but no longer the thing to offer.
+        var offered = try XCTUnwrap(store.events().first { $0.promptId == "newest" })
+        offered.announcedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        try store.update(event: offered)
+
+        XCTAssertEqual(try coordinator.nextToAnnounce()?.promptId, "older",
+                       "a stopped item must not monopolise the queue")
+    }
+
     func testNothingIsAnnouncedTwice() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)

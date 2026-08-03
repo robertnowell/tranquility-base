@@ -188,6 +188,14 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         than they heard. 12 words or fewer each; these MAY name symbols, since they are \
         read rather than heard. Use null when a field genuinely does not apply — never \
         invent a question or a risk.
+        
+        GROUNDING — this overrides everything above.
+        Every fact, and especially the proposed next step, must come from the
+        agent's final message. If that message does not say what comes next, say
+        what it says happened and stop; do not invent a plausible next task, and
+        never take one from how the session opened. Naming work the session is not
+        doing is the worst failure available to you: it is confident, specific, and
+        wrong, and it is indistinguishable from a correct summary when heard aloud.
         """
 
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
@@ -201,7 +209,17 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         var context = "Project: \(request.projectLabel)"
         if let branch = request.gitBranch { context += "\nBranch: \(branch)" }
         if let ask = request.firstUserMessage {
-            context += "\n\nWhat the user originally asked for:\n\(ask)"
+            // Background only, and explicitly stale. A long session drifts far from
+            // how it opened, and without this the model narrates the original brief
+            // — describing a Kanban viewer hours after that idea was abandoned.
+            context += """
+
+
+                How this session opened, HOURS AGO and possibly abandoned since. \
+                Use it only to disambiguate names. Never describe it as current \
+                work, and never propose a next step from it:
+                \(ask)
+                """
         }
 
         let user = """
@@ -226,8 +244,15 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
+        let started = Date()
         let (data, response) = try await URLSession.shared.data(for: req)
+        let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
         guard let http = response as? HTTPURLResponse else { throw SummaryError.emptyResponse }
+
+        ModelCallLog.record(
+            model: model, status: http.statusCode, elapsedMs: elapsedMs,
+            system: Self.systemPrompt, user: user,
+            response: String(data: data, encoding: .utf8) ?? "<undecodable>")
         guard http.statusCode == 200 else {
             throw SummaryError.http(http.statusCode, String(String(data: data, encoding: .utf8)?.prefix(200) ?? ""))
         }

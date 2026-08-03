@@ -246,8 +246,10 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
     /// anyone — that is a failure, and it should not be reported as your choice.
     private func checkForTruncation(_ audio: AVAudioPlayer, generation mine: Int) throws {
         guard mine == currentGeneration() else { throw SpeechError.interrupted }
+        // 0.75s, not 0.25s: the poll runs every 125ms and AVAudioPlayer rounds its
+        // duration, so a tighter bound calls a completed announcement truncated.
         let remaining = audio.duration - audio.currentTime
-        guard remaining > 0.25 else { return }
+        guard remaining > 0.75 else { return }
         throw SpeechError.truncated(playedSeconds: audio.currentTime, ofSeconds: audio.duration)
     }
 
@@ -348,10 +350,18 @@ public struct SpeechChain: Sendable {
                 // counts as read.
                 return Spoken(provider: preferred.name, completed: false, heardAny: true)
             } catch SpeechError.truncated(let played, let total) {
-                // Cut off part-way. Re-reading the whole thing in the system voice is
-                // better than leaving you with a fragment and a fault message.
-                degraded = String(format: "cut off at %.0fs of %.0fs", played, total)
                 heardAny = played > 0
+                // Only start over if you effectively heard nothing. Re-reading a
+                // whole summary in the mechanical voice after you already sat
+                // through most of it is worse than the truncation — that is the
+                // "ElevenLabs, then immediately the robot voice" double-read.
+                guard played < 2 else {
+                    return Spoken(
+                        provider: preferred.name, completed: false,
+                        failure: String(format: "cut off at %.0fs of %.0fs", played, total),
+                        heardAny: true)
+                }
+                degraded = String(format: "no audio (stopped at %.0fs of %.0fs)", played, total)
             } catch {
                 degraded = "\(error)"
                 ElevenLabsSpeechProvider.trace?("chain: \(preferred.name) failed: \(error)")
