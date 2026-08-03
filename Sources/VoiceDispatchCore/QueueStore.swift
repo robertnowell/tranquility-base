@@ -197,11 +197,17 @@ public final class QueueStore: Sendable {
     }
 
     /// Count of things still wanting attention — the menu-bar badge number.
+    ///
+    /// Defined positively, as exactly the rows `nextToAnnounce` would offer. It used
+    /// to be everything NOT in a terminal set, which reported 52 when two rows were
+    /// actually waiting: `announced` was never terminal, and `superseded` was added
+    /// later without anyone remembering to exclude it. A negative filter over an
+    /// enum you keep extending grows wrong every time it is extended, silently.
     public func pendingCount() throws -> Int {
         try dbQueue.read { db in
-            let terminal = EventStatus.terminal.map(\.rawValue)
+            let pending = EventStatus.pendingAnnouncement.map(\.rawValue)
             let events = try QueuedEvent
-                .filter(!terminal.contains(Column("status")))
+                .filter(pending.contains(Column("status")))
                 .fetchCount(db)
             let stuck = try Utterance
                 .filter(UtteranceStatus.inFlight.map(\.rawValue).contains(Column("status")))

@@ -129,7 +129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // indistinguishable from a broken one; this makes launch observable.
             let waiting = (try? store?.pendingCount()) ?? 0
             hud.showIdle(waiting > 0
-                ? "\(waiting) waiting. Tap ⌃⌥ to hear the oldest, hold ⌃⌥ to reply."
+                ? "\(waiting) session\(waiting == 1 ? "" : "s") to hear. "
+                    + "Tap ⌃⌥ for the most recent, hold ⌃⌥ to reply."
                 : "Ready. Tap ⌃⌥ to hear what's waiting, hold ⌃⌥ to reply.")
         }
     }
