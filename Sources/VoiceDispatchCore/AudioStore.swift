@@ -37,7 +37,7 @@ public struct AudioStore: Sendable {
 
     @discardableResult
     public func write(pcm16Data: Data, sampleRate: Double, utteranceId: String) throws -> Stored {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? PrivateStorage.createDirectory(at: directory)
         let target = url(for: utteranceId)
         let wav = BuddyWAVBuilder.wavData(fromPCM16: pcm16Data, sampleRate: sampleRate)
 
@@ -49,6 +49,8 @@ public struct AudioStore: Sendable {
             try FileManager.default.removeItem(at: target)
         }
         try FileManager.default.moveItem(at: temp, to: target)
+        // A recording of the user's voice, so owner-only.
+        PrivateStorage.protect(target)
 
         let bytesPerFrame = 2.0
         let durationMs = Int64((Double(pcm16Data.count) / bytesPerFrame / sampleRate) * 1000)

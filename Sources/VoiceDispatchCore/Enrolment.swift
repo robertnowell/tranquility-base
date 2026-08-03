@@ -28,8 +28,7 @@ public struct EnrolmentRegistry: Sendable {
     }
 
     private func save(_ file: File) throws {
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? PrivateStorage.createDirectory(at: url.deletingLastPathComponent())
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(file).write(to: url, options: .atomic)

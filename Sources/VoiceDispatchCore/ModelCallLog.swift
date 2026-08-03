@@ -31,8 +31,7 @@ public enum ModelCallLog {
         else { return }
         line += "\n"
 
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? PrivateStorage.createDirectory(at: url.deletingLastPathComponent())
         let fd = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
         guard fd >= 0 else { return }
         _ = line.withCString { write(fd, $0, strlen($0)) }

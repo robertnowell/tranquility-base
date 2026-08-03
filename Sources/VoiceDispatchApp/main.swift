@@ -125,6 +125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.sendReply(captured)
         }
 
+        // Existing installations were created before storage was private by
+        // default, so their modes are only fixed by doing it explicitly at startup.
+        PrivateStorage.harden(directory: FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/VoiceDispatch"))
+
         ElevenLabsSpeechProvider.trace = { Permissions.log("11labs: \($0)") }
         Coordinator.trace = { Permissions.log("routing: \($0)") }
         Permissions.log("args=\(CommandLine.arguments)")
