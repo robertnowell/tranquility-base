@@ -63,7 +63,7 @@ final class StatusHUD: NSObject {
     /// you were already obeying, and three buttons for actions unrelated to
     /// speaking. A live level meter answers the only question you actually have.
     func showListening(level: @escaping () -> Float) {
-        isIdle = false
+        transition(to: .listening(eventId: currentEventId), because: "recording started")
         awaitingConfirm = false
         isListening = true
         levelSource = level
@@ -97,7 +97,6 @@ final class StatusHUD: NSObject {
         cwd: String?, eventId: String? = nil
     ) {
         awaitingConfirm = false
-        isIdle = false
         currentEventId = eventId
         currentTarget = (sessionId, pid, project)
         // Only prefix when the topic adds something. A topic equal to the project
@@ -106,6 +105,7 @@ final class StatusHUD: NSObject {
         let headline = topic.caseInsensitiveCompare(project) == .orderedSame || topic.isEmpty
             ? project : "\(project): \(topic)"
         identity = Self.identify(pid: pid, cwd: cwd)
+        transition(to: .speaking(eventId: eventId, catchUp: isCatchUp), because: "audio starting")
         show(state: isCatchUp ? "↺ Catching up" : "◀ Speaking",
              title: headline, body: spoken, autoHideAfter: nil)
     }
@@ -143,7 +143,7 @@ final class StatusHUD: NSObject {
     ) {
         countdownTimer?.invalidate()
         onCancelSend = cancel
-        isIdle = false
+        transition(to: .pendingSend(utteranceId: ""), because: "undo window open")
         show(state: "→ Sending to \(label)", title: "Your reply",
              body: "\u{201C}\(text)\u{201D}", autoHideAfter: nil)
         // After show(), never before: the state entry points clear this flag, and
@@ -224,11 +224,11 @@ final class StatusHUD: NSObject {
     var onChooseVoice: ((String) -> Void)?
 
     func showSettings(voices: [Voice], selected: String, previewNote: String) {
-        isIdle = false
         awaitingConfirm = false
         currentTarget = nil
         identity = nil
         settingsVoices = voices
+        transition(to: .settings, because: "settings opened")
 
         show(state: "Settings", title: "Voice", body: previewNote, autoHideAfter: nil)
         backButton.isHidden = false
@@ -274,7 +274,7 @@ final class StatusHUD: NSObject {
     }
 
     func showWorking(_ message: String) {
-        isIdle = false
+        transition(to: .transcribing(startedAt: Date()), because: "working")
         awaitingConfirm = false
         show(state: "◌ Working", title: currentTarget?.label ?? "Voice Dispatch",
              body: message, autoHideAfter: nil)
@@ -288,7 +288,7 @@ final class StatusHUD: NSObject {
     /// on screen with buttons implies there is something left to do. A failure is
     /// the opposite and stays until dismissed.
     func showResult(_ message: String, ok: Bool) {
-        isIdle = false
+        transition(to: .result(ok: ok), because: "reply resolved")
         awaitingConfirm = false
         // Reply and Go to session are about the announcement, not the receipt, and
         // offering them here suggests the send is still in your hands. It is not.
@@ -308,7 +308,19 @@ final class StatusHUD: NSObject {
     /// must never redraw over speech, a recording, a countdown or a failure notice:
     /// those are conversations in progress, and a background update that interrupts
     /// one is worse than a stale count.
-    private(set) var isIdle = false
+    private(set) var state: PanelState = .hidden
+
+    /// The only way state changes. Every transition is logged, which is the whole
+    /// point: when the panel gets stuck, the log says exactly which state it is in
+    /// and what put it there, instead of leaving five booleans to be inferred.
+    private func transition(to next: PanelState, because reason: String) {
+        guard next != state else { return }
+        Permissions.log("state: \(state.name) -> \(next.name)  (\(reason))")
+        state = next
+    }
+
+    /// Kept as a computed view over the state so existing call sites keep working.
+    var isIdle: Bool { state.allowsAmbientSurface }
 
     func showIdle(note: String? = nil, waiting: Int, unsentReplies: Int = 0) {
         awaitingConfirm = false
@@ -328,7 +340,7 @@ final class StatusHUD: NSObject {
 
         show(state: waiting > 0 ? "◌ \(waiting) waiting" : "◌ Ready",
              title: "Voice Dispatch", body: body, autoHideAfter: nil)
-        isIdle = true
+        transition(to: .idle(waiting: waiting), because: "idle repaint")
     }
 
     /// True when the panel is visible and doing something worth stopping. Escape is
@@ -336,8 +348,11 @@ final class StatusHUD: NSObject {
     /// speech, a countdown, or a recording to interrupt.
     var isBusyOnScreen: Bool {
         guard panel?.isVisible == true else { return false }
-        return awaitingConfirm || isRecording || isSpeakingNow
+        return state.acceptsEscape
     }
+
+    var isCapturingAudio: Bool { state.isCapturingAudio }
+    var canStartReply: Bool { state.canStartReply }
 
     /// Set by the app; the HUD cannot see the speech chain itself.
     var isSpeakingNow = false
@@ -348,11 +363,10 @@ final class StatusHUD: NSObject {
     func hide() {
         hideWorkItem?.cancel()
         panel?.orderOut(nil)
-        // Dismissing ends the conversation the panel was having. Leaving isIdle
-        // false meant a hidden panel could never surface again by itself: the
-        // ambient refresh was gated on it, so after one Dismiss the app went silent
-        // for the rest of the session.
-        isIdle = true
+        // Hidden still allows ambient surfacing, which is the property that broke
+        // when this left a non-idle flag behind: after one Dismiss the app went
+        // silent for the rest of the session.
+        transition(to: .hidden, because: "panel hidden")
         currentTarget = nil
         currentEventId = nil
         identity = nil
@@ -363,9 +377,7 @@ final class StatusHUD: NSObject {
     /// Anything mid-conversation says no: speech, a recording, a send countdown, or
     /// a failure still waiting to be read. Everything else, hidden included, is a
     /// moment where showing up is welcome rather than an interruption.
-    var canSurfaceAmbiently: Bool {
-        !isSpeakingNow && !isRecording && !isListening && !awaitingConfirm && isIdle
-    }
+    var canSurfaceAmbiently: Bool { state.allowsAmbientSurface }
 
     var isOnScreen: Bool { panel?.isVisible ?? false }
 
@@ -473,7 +485,7 @@ final class StatusHUD: NSObject {
     /// Summarizing and fetching the voice take a few seconds; without this the app
     /// looks broken for the whole of it.
     func showPreparing() {
-        isIdle = false
+        transition(to: .preparing, because: "announce requested")
         show(state: "◌ Preparing", title: "Voice Dispatch",
              body: "Writing the summary and fetching the voice…", autoHideAfter: nil)
     }
