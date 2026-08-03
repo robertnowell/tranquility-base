@@ -202,23 +202,36 @@ public final class QueueStore: Sendable {
         }
     }
 
-    /// Count of things still wanting attention — the menu-bar badge number.
+    /// How many sessions are waiting to be heard.
+    ///
+    /// This used to add in utterances stuck mid-flight, which made the badge read
+    /// "3 waiting" while there was nothing at all to announce — so tapping did
+    /// nothing and the app looked broken. Replies in limbo are a real problem, but
+    /// they are a different problem, and a number labelled "waiting" next to a key
+    /// that plays announcements has to mean announcements. See `unsentReplyCount`.
     ///
     /// Defined positively, as exactly the rows `nextToAnnounce` would offer. It used
     /// to be everything NOT in a terminal set, which reported 52 when two rows were
     /// actually waiting: `announced` was never terminal, and `superseded` was added
     /// later without anyone remembering to exclude it. A negative filter over an
     /// enum you keep extending grows wrong every time it is extended, silently.
+    /// Replies that were recorded and never confirmed as delivered. Surfaced apart
+    /// from the waiting count because the action they want is different.
+    public func unsentReplyCount() throws -> Int {
+        try dbQueue.read { db in
+            try Utterance
+                .filter(UtteranceStatus.inFlight.map(\.rawValue).contains(Column("status")))
+                .fetchCount(db)
+        }
+    }
+
     public func pendingCount() throws -> Int {
         try dbQueue.read { db in
             let pending = EventStatus.pendingAnnouncement.map(\.rawValue)
             let events = try QueuedEvent
                 .filter(pending.contains(Column("status")))
                 .fetchCount(db)
-            let stuck = try Utterance
-                .filter(UtteranceStatus.inFlight.map(\.rawValue).contains(Column("status")))
-                .fetchCount(db)
-            return events + stuck
+            return events
         }
     }
 

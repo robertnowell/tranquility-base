@@ -21,6 +21,19 @@ final class QueueStoreTests: XCTestCase {
         XCTAssertEqual(try store.pendingCount(), 2, "only .new and .held are still waiting")
     }
 
+    /// The badge read "3 waiting" with nothing announceable, because it added
+    /// stuck replies to the count. Tapping then did nothing and the app looked
+    /// broken. A number next to the key that plays announcements has to mean
+    /// announcements.
+    func testStuckRepliesAreNotCountedAsWaitingSessions() throws {
+        var utterance = Utterance(status: .dispatching)
+        utterance.transcriptText = "a reply that never landed"
+        try store.update(utterance: utterance)
+
+        XCTAssertEqual(try store.pendingCount(), 0, "nothing to announce")
+        XCTAssertEqual(try store.unsentReplyCount(), 1, "counted, but as its own thing")
+    }
+
     var tmpDir: URL!
     var store: QueueStore!
 

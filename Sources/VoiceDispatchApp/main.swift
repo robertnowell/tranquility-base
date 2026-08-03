@@ -172,7 +172,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             announceLaunch()
             // Visible proof of life. A menu-bar-only app with a full menu bar is
             // indistinguishable from a broken one; this makes launch observable.
-            hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0)
+            hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0,
+                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
         }
     }
 
@@ -344,7 +345,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hud.recordingEnded()
             recorder.abandon()
             updateTitle()
-            hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0)
+            hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0,
+                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
         }
     }
 
@@ -373,8 +375,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = await previous?.value
 
             defer { isAnnouncing = false; hud.isSpeakingNow = false }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                Permissions.log("announce: cancelled before starting")
+                return
+            }
             isAnnouncing = true
+            Permissions.log("announce: starting")
             do {
                 // A tap is an explicit request to hear something, so the
                 // interruptibility gate does not apply — you cannot interrupt
@@ -401,6 +407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 ) {
                 case .spoke(let announcement):
+                    Permissions.log("announce: spoke via \(announcement.via)")
                     if let degraded = announcement.degraded {
                         // Heard, but in the plainer voice. Say why, or an outage
                         // reads as the app just sounding worse for no reason.
@@ -428,17 +435,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     } else {
                         lastStatusLine = "stopped — still unread"
                         hud.showIdle(note: "Stopped — still unread.",
-                                     waiting: (try? store?.pendingCount()) ?? 0)
+                                     waiting: (try? store?.pendingCount()) ?? 0,
+                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
                     }
                 case .held(let reason):
                     lastStatusLine = "held: \(reason)"
                     hud.showIdle(note: "Holding — \(reason).",
-                                 waiting: (try? store?.pendingCount()) ?? 0)
+                                 waiting: (try? store?.pendingCount()) ?? 0,
+                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
                 case .nothingWaiting:
+                    Permissions.log("announce: nothingWaiting")
                     lastStatusLine = "nothing waiting"
-                    hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0)
+                    hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0,
+                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
                 }
             } catch {
+                Permissions.log("announce: threw \(error)")
                 lastStatusLine = "announce failed: \(error)"
             }
             rebuildMenu()
