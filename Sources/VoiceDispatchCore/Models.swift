@@ -12,6 +12,9 @@ public enum HookEventKind: String, Codable, DatabaseValueConvertible, Sendable, 
     case stop = "Stop"
     case notification = "Notification"
     case subagentStop = "SubagentStop"
+    /// Not announced. Carries the fact that the user typed into that session,
+    /// which retires anything of that session's still waiting to be read out.
+    case userPromptSubmit = "UserPromptSubmit"
 }
 
 public enum EventStatus: String, Codable, DatabaseValueConvertible, Sendable, CaseIterable {
@@ -27,8 +30,15 @@ public enum EventStatus: String, Codable, DatabaseValueConvertible, Sendable, Ca
     case answered
     /// User dismissed it, or it aged out of relevance.
     case dismissed
+    /// A newer turn from the same session replaced it, or the user typed into
+    /// that session themselves. Never announced, never deleted — the record of
+    /// what was skipped is worth keeping.
+    case superseded
     /// Summarization failed; a deterministic fallback line is used instead.
     case summaryFailed = "summary_failed"
+
+    /// Statuses that are still candidates to be spoken.
+    public static let pendingAnnouncement: [EventStatus] = [.new, .summarized, .held]
 
     /// Statuses that no longer need any work.
     public static let terminal: Set<EventStatus> = [.answered, .dismissed]

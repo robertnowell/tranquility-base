@@ -137,6 +137,29 @@ public final class QueueStore: Sendable {
         }
     }
 
+    /// Retire everything still waiting for a session.
+    ///
+    /// Used for both supersession (a newer turn arrived) and self-answering (the
+    /// user typed into that session). Rows are marked, never deleted — knowing
+    /// what was skipped is part of the record.
+    @discardableResult
+    public func supersedePending(sessionId: String, before: Int64? = nil) throws -> Int {
+        try dbQueue.write { db in
+            let pending = EventStatus.pendingAnnouncement.map { $0.rawValue }
+            var sql = """
+                UPDATE events SET status = 'superseded'
+                WHERE sessionId = ? AND status IN (\(pending.map { _ in "?" }.joined(separator: ",")))
+                """
+            var arguments: [DatabaseValueConvertible] = [sessionId] + pending
+            if let before {
+                sql += " AND createdAtMs < ?"
+                arguments.append(before)
+            }
+            try db.execute(sql: sql, arguments: StatementArguments(arguments))
+            return db.changesCount
+        }
+    }
+
     public func update(event: QueuedEvent) throws {
         try dbQueue.write { db in try event.update(db) }
     }

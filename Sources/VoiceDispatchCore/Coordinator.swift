@@ -50,13 +50,49 @@ public struct Coordinator: Sendable {
         try SpoolDrainer(store: store).drain()
     }
 
-    /// Oldest first. A queue you walk should hand back what has been waiting
-    /// longest, not the freshest thing — otherwise a busy project starves the rest.
+    /// The newest unread turn, and only ever one per session.
+    ///
+    /// This was a FIFO queue, which is wrong for the job. Sessions are not work
+    /// items: a session that ended four turns ago has already superseded itself
+    /// three times over, and hearing the oldest first means hearing something
+    /// twenty minutes stale while the thing that just finished waits behind it.
+    /// What you want to know is what each session is saying *now*, so an older
+    /// turn from the same session is not a backlog entry — it is a dead letter.
     public func nextToAnnounce() throws -> QueuedEvent? {
+        try supersedeStaleTurns()
         let waiting = try store.events(limit: 200).filter {
             $0.status == .new || $0.status == .summarized || $0.status == .held
         }
-        return waiting.min { $0.createdAtMs < $1.createdAtMs }
+        return waiting.max { $0.createdAtMs < $1.createdAtMs }
+    }
+
+    /// Collapse each session's unread turns down to its most recent one.
+    ///
+    /// Run before every selection rather than only at intake, so rows written
+    /// while the app was closed are collapsed too.
+    @discardableResult
+    public func supersedeStaleTurns() throws -> Int {
+        let waiting = try store.events(limit: 500).filter {
+            $0.status == .new || $0.status == .summarized || $0.status == .held
+        }
+        var newest: [String: Int64] = [:]
+        for event in waiting {
+            newest[event.sessionId] = max(newest[event.sessionId] ?? .min, event.createdAtMs)
+        }
+        var superseded = 0
+        for (sessionId, latest) in newest {
+            superseded += try store.supersedePending(sessionId: sessionId, before: latest)
+        }
+        _ = waiting
+        return superseded
+    }
+
+    /// The user typed into that session themselves, so whatever was waiting to be
+    /// read out has been overtaken by them doing the thing. Announcing it now is
+    /// worse than useless — it reports a state they have already moved past.
+    @discardableResult
+    public func invalidatePending(sessionId: String) throws -> Int {
+        try store.supersedePending(sessionId: sessionId)
     }
 
     // MARK: - Announce

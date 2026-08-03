@@ -20,6 +20,9 @@ public struct SpoolDrainer: Sendable {
         public var inserted: Int = 0
         public var duplicates: Int = 0
         public var malformed: Int = 0
+        /// Rows retired without being spoken: superseded by a newer turn, or
+        /// answered by the user typing into that session.
+        public var retired: Int = 0
     }
 
     /// Move every spooled line into the queue. Safe to call repeatedly.
@@ -60,6 +63,21 @@ public struct SpoolDrainer: Sendable {
                 continue
             }
             let event = record.toEvent()
+
+            // Not an announcement — the user answered that session themselves, so
+            // whatever was queued for it is now history rather than news.
+            if event.hookEvent == .userPromptSubmit {
+                result.retired += try store.supersedePending(sessionId: event.sessionId)
+                continue
+            }
+
+            // A new turn from this session retires its own earlier ones. Only the
+            // latest state of a session is worth reading out.
+            if event.hookEvent == .stop {
+                result.retired += try store.supersedePending(
+                    sessionId: event.sessionId, before: event.createdAtMs)
+            }
+
             if try store.insert(event: event) != nil {
                 result.inserted += 1
             } else {

@@ -13,6 +13,7 @@ func usage() -> Never {
       vdctl events [status]     list events (optionally filtered)
       vdctl utterances [status] list utterances
       vdctl reconcile           run the boot reconciliation sweep
+      vdctl collapse            retire every session's stale unread turns
       vdctl reap [hours]        delete audio for confirmed/discarded rows (default 72h)
       vdctl hook-config         print the settings.json snippet to install the hook
       vdctl paths               show where everything lives
@@ -143,7 +144,28 @@ do {
             if let e = u.lastError { print("    error: \(truncate(e, 90))") }
         }
 
-    case "reconcile":
+    case "collapse":
+    // One slot per session. Everything older than a session's newest unread turn
+    // is retired — this is the same sweep the app runs before each announcement,
+    // exposed so a queue that accumulated under the old FIFO rules can be cleaned.
+    let pending = try store.events(limit: 1000)
+        .filter { EventStatus.pendingAnnouncement.contains($0.status) }
+    var newest: [String: Int64] = [:]
+    for event in pending {
+        newest[event.sessionId] = max(newest[event.sessionId] ?? .min, event.createdAtMs)
+    }
+    var retired = 0
+    for (sessionId, latest) in newest {
+        retired += try store.supersedePending(sessionId: sessionId, before: latest)
+    }
+    print("retired \(retired) stale turn(s); \(newest.count) session(s) still unread")
+    for event in try store.events(limit: 1000)
+    where EventStatus.pendingAnnouncement.contains(event.status) {
+        let text = event.lastAssistantMessage?.prefix(56) ?? "—"
+        print("  \(event.projectLabel)  \(text)")
+    }
+
+case "reconcile":
         let r = try store.reconcileOnBoot()
         print("requeued for transcription  \(r.requeuedForTranscription.count)")
         print("needs delivery check        \(r.needsDeliveryCheck.count)   <- never auto-resent")

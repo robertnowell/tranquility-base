@@ -155,7 +155,10 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(speech.spoken.count, 1)
     }
 
-    func testOldestWaitsFirst() async throws {
+    /// A session speaks for itself in the present tense. Four turns back is not a
+    /// backlog to work through — it is a description of a state the session has
+    /// already left, and reading it out is actively misleading.
+    func testOnlyTheNewestTurnOfASessionIsOffered() async throws {
         try store.insert(event: QueuedEvent(
             createdAtMs: 1_000, hookEvent: .stop, sessionId: "sess-1", promptId: "old",
             cwd: "/tmp/old", lastAssistantMessage: "older"))
@@ -163,8 +166,45 @@ final class CoordinatorTests: XCTestCase {
             createdAtMs: 9_000, hookEvent: .stop, sessionId: "sess-1", promptId: "new",
             cwd: "/tmp/new", lastAssistantMessage: "newer"))
 
-        XCTAssertEqual(try makeCoordinator().nextToAnnounce()?.promptId, "old",
-                       "a busy project would otherwise starve every other session")
+        let coordinator = try makeCoordinator()
+        XCTAssertEqual(try coordinator.nextToAnnounce()?.promptId, "new")
+
+        let statuses = try store.events().reduce(into: [String: EventStatus]()) {
+            if let id = $1.promptId { $0[id] = $1.status }
+        }
+        XCTAssertEqual(statuses["old"], .superseded, "the stale turn is retired, not queued behind")
+    }
+
+    /// Sessions do not queue behind each other either — each keeps its own slot,
+    /// and the most recently finished one is what you hear.
+    func testEachSessionKeepsItsOwnSlot() async throws {
+        try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .stop, sessionId: "sess-1", promptId: "a",
+            cwd: "/tmp/a", lastAssistantMessage: "session one"))
+        try store.insert(event: QueuedEvent(
+            createdAtMs: 5_000, hookEvent: .stop, sessionId: "sess-2", promptId: "b",
+            cwd: "/tmp/b", lastAssistantMessage: "session two"))
+
+        let coordinator = try makeCoordinator()
+        XCTAssertEqual(try coordinator.nextToAnnounce()?.promptId, "b")
+
+        let statuses = try store.events().reduce(into: [String: EventStatus]()) {
+            if let id = $1.promptId { $0[id] = $1.status }
+        }
+        XCTAssertEqual(statuses["a"], .new, "another session's turn is not superseded by yours")
+    }
+
+    /// You typed into that session yourself, so you already know. Reading out a
+    /// summary of the state you just moved past is worse than saying nothing.
+    func testTypingIntoASessionRetiresWhatWasWaitingForIt() async throws {
+        try seedEvent()
+        let coordinator = try makeCoordinator()
+        XCTAssertNotNil(try coordinator.nextToAnnounce())
+
+        XCTAssertEqual(try coordinator.invalidatePending(sessionId: "sess-1"), 1)
+
+        XCTAssertNil(try coordinator.nextToAnnounce())
+        XCTAssertEqual(try store.events().first?.status, .superseded)
     }
 
     // MARK: - The gate can only delay
