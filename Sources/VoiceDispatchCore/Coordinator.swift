@@ -33,6 +33,7 @@ public struct Coordinator: Sendable {
         replyWindow: TimeInterval = 15 * 60
     ) {
         self.store = store
+        self.prepared = PreparedSummaries()
         self.summarizer = summarizer
         self.speech = speech
         self.gate = gate
@@ -48,6 +49,33 @@ public struct Coordinator: Sendable {
     @discardableResult
     public func intake() throws -> SpoolDrainer.DrainResult {
         try SpoolDrainer(store: store).drain()
+    }
+
+    /// Summaries computed in memory, ahead of being asked for.
+    ///
+    /// Summarizing on demand meant every single use began with a wait for a model
+    /// call — the whole point is to hear a session while your attention is
+    /// elsewhere, and a four-second pause after you press is the tax that makes
+    /// you stop pressing. Only the newest turn per session is prepared, which is
+    /// also the only one that can be announced, so nothing is paid for twice.
+    /// An actor because `Coordinator` is a value type and preparation happens on a
+    /// background task while announcement may read it from another.
+    actor PreparedSummaries {
+        private var byEventID: [String: Summary] = [:]
+        func has(_ id: String) -> Bool { byEventID[id] != nil }
+        func put(_ summary: Summary, for id: String) { byEventID[id] = summary }
+        /// Removing on read keeps a summary from being spoken twice.
+        func take(_ id: String) -> Summary? { byEventID.removeValue(forKey: id) }
+    }
+
+    private let prepared: PreparedSummaries
+
+    /// Prepare whatever is currently announceable. Cheap to call repeatedly:
+    /// anything already prepared is skipped.
+    public func prepareNext() async throws {
+        guard let event = try nextToAnnounce() else { return }
+        guard await !prepared.has(event.id) else { return }
+        await prepared.put(await summarize(event), for: event.id)
     }
 
     /// The newest unread turn, and only ever one per session.
@@ -111,8 +139,7 @@ public struct Coordinator: Sendable {
         case nothingWaiting
     }
 
-    /// Speak the next waiting item. Summarization happens here rather than at intake
-    /// so nothing is paid for that is never heard.
+    /// Speak the next waiting item.
     /// `onWillSpeak` fires with the brief BEFORE the audio starts, and `onWord`
     /// reports progress during it. Without the first callback the UI could only
     /// render after `speak` returned — i.e. after you had already heard the whole
@@ -145,7 +172,24 @@ public struct Coordinator: Sendable {
             : (event.transcriptPath
                 .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
 
-        let summary = await summarizer.summarize(SummaryRequest(
+        if let ready = await prepared.take(event.id) {
+            return try await speak(ready, for: &event, onWillSpeak: onWillSpeak, onWord: onWord)
+        }
+
+        let summary = await summarize(event)
+        return try await speak(summary, for: &event, onWillSpeak: onWillSpeak, onWord: onWord)
+    }
+
+    private func summarize(_ event: QueuedEvent) async -> Summary {
+        let context = event.transcriptPath.map {
+            TranscriptArchive.sessionContext(in: URL(fileURLWithPath: $0))
+        }
+        let lastMessage = event.lastAssistantMessage?.isEmpty == false
+            ? event.lastAssistantMessage!
+            : (event.transcriptPath
+                .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
+
+        return await summarizer.summarize(SummaryRequest(
             lastAssistantMessage: lastMessage,
             projectLabel: event.projectLabel,
             firstUserMessage: context?.firstUserMessage,
@@ -153,7 +197,13 @@ public struct Coordinator: Sendable {
             cwd: event.cwd,
             hookEvent: event.hookEvent,
             notificationMatcher: event.notificationMatcher))
+    }
 
+    private func speak(
+        _ summary: Summary, for event: inout QueuedEvent,
+        onWillSpeak: (@MainActor (Announcement) -> Void)?,
+        onWord: (@Sendable (Range<Int>) -> Void)?
+    ) async throws -> AnnounceOutcome {
         event.summaryText = summary.spoken.text
         event.status = .announced
         event.announcedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -188,7 +238,7 @@ public struct Coordinator: Sendable {
         case dispatched(text: String, latencyMs: Int, sessionId: String)
         case transcriptionFailed(utteranceId: String)
         case noTarget
-        case notEnrolled(sessionId: String)
+        case notEnrolled(sessionId: String, utteranceId: String, label: String, text: String)
         case sessionNotReady(Readiness)
         case dispatchFailed(DispatchFailure, utteranceId: String)
     }
@@ -208,12 +258,41 @@ public struct Coordinator: Sendable {
         }
 
         guard enrolment.isEnrolled(sessionId: target.sessionId, cwd: target.cwd) else {
-            utterance.status = .dispatchFailed
-            utterance.lastError = "session not enrolled"
+            // Ready, not failed: the recording is transcribed and one confirmation
+            // away from being sent. Marking it failed stranded it, and the only way
+            // out was a CLI command typed into another window — which is not a
+            // consent gate, it is a place where replies go to die.
+            utterance.status = .ready
+            utterance.lastError = "awaiting confirmation for \(target.projectLabel)"
             try store.update(utterance: utterance)
-            return .notEnrolled(sessionId: target.sessionId)
+            return .notEnrolled(
+                sessionId: target.sessionId, utteranceId: utterance.id,
+                label: target.projectLabel, text: text)
         }
 
+        return try await dispatch(utterance: &utterance, text: text, target: target)
+    }
+
+    /// Confirm this session and send the reply already recorded for it.
+    ///
+    /// Consent belongs at the moment it means something — you have heard the
+    /// summary, spoken an answer, and been shown which tab it is going to. One
+    /// button there is a real gate. A command in another window is not.
+    @discardableResult
+    public func confirmAndSend(utteranceId: String) async throws -> ReplyOutcome {
+        guard var utterance = try store.utterances().first(where: { $0.id == utteranceId }),
+              let text = utterance.transcriptText,
+              let eventId = utterance.eventId,
+              let target = try store.events().first(where: { $0.id == eventId })
+        else { return .noTarget }
+
+        try enrolment.enrol(sessionId: target.sessionId)
+        return try await dispatch(utterance: &utterance, text: text, target: target)
+    }
+
+    private func dispatch(
+        utterance: inout Utterance, text: String, target: QueuedEvent
+    ) async throws -> ReplyOutcome {
         guard let live = agents.sessions().first(where: { $0.sessionId == target.sessionId }) else {
             // Absent from `claude agents --json` means blocked on a dialog or gone.
             // Injecting would answer the dialog, so we refuse and keep the audio.

@@ -21,6 +21,7 @@ func usage() -> Never {
     dispatch:
       vdctl targets                       live sessions, with tty and enrolment
       vdctl enroll <sessionId>            allow dispatch into a session
+                                      (normally unnecessary — the panel asks once)
       vdctl enroll --cwd <prefix>         allow dispatch into any session under a path
       vdctl enrolment                     show the allowlist
       vdctl send <sessionId> <text...>    dispatch into a real session (enrolled only)
