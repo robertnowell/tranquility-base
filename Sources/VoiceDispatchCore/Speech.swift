@@ -166,7 +166,13 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         self.timeout = timeout
     }
 
-    public var isConfigured: Bool { Secrets.has(.elevenLabsAPIKey) }
+    public var isConfigured: Bool {
+        let key = Secrets.read(.elevenLabsAPIKey)
+        if key == nil {
+            ElevenLabsSpeechProvider.trace?("isConfigured=false: no key readable")
+        }
+        return key != nil
+    }
     public var isSpeaking: Bool { player?.isPlaying ?? false }
 
     public func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
@@ -188,7 +194,15 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw SpeechError.synthesisFailed("http \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+            // ElevenLabs explains itself in the body: invalid_api_key, quota
+            // exceeded, and detected_unusual_activity are all 401 and all mean
+            // different things. Throwing away the body left "http 401" as the whole
+            // diagnosis, which is why this took three rounds to get anywhere.
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let body = String(data: data, encoding: .utf8)?
+                .replacingOccurrences(of: "\n", with: " ").prefix(300) ?? ""
+            ElevenLabsSpeechProvider.trace?("http \(code) body=\(body)")
+            throw SpeechError.synthesisFailed("http \(code): \(body)")
         }
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -386,7 +400,8 @@ public struct SpeechChain: Sendable {
                 }
                 degraded = String(format: "no audio (stopped at %.0fs of %.0fs)", played, total)
             } catch SpeechError.synthesisFailed(let reason) where reason.contains("401") {
-                degraded = "ElevenLabs rejected the API key (401)"
+                ElevenLabsSpeechProvider.trace?("chain: 401 from elevenlabs: \(reason)")
+                degraded = "ElevenLabs returned 401"
             } catch {
                 degraded = "\(error)"
                 ElevenLabsSpeechProvider.trace?("chain: \(preferred.name) failed: \(error)")
