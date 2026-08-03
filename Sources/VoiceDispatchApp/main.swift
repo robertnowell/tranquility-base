@@ -77,7 +77,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         intakeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let coordinator = self.coordinator else { return }
+                var turnArrived = false
                 if let result = try? coordinator.intake(), result.inserted > 0 {
+                    // Rows were inserted: a turn came back. This is the honest
+                    // trigger. Keying off the count changing missed every arrival
+                    // that replaced something — a newer turn superseding an older
+                    // one leaves the count identical, and that is the commonest
+                    // case of all, because it is what a session doing several turns
+                    // in a row looks like.
+                    turnArrived = true
                     self.rebuildMenu()
                 }
                 // Write the summary before it is asked for. Doing it on demand meant
@@ -94,8 +102,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Only on a change. Redrawing every tick repositions the panel and
                 // resets its layout for no reason, which reads as flicker on a
                 // window that is meant to sit still.
-                let arrived = waiting > self.lastShownCounts.0
-                if self.hud.canSurfaceAmbiently, (waiting, unsent) != self.lastShownCounts {
+                let arrived = turnArrived && waiting > 0
+                if self.hud.canSurfaceAmbiently,
+                   arrived || (waiting, unsent) != self.lastShownCounts {
                     self.lastShownCounts = (waiting, unsent)
                     if arrived {
                         self.surfaceArrival(waiting: waiting, unsent: unsent)
