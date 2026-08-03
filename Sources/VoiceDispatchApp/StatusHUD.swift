@@ -36,6 +36,10 @@ final class StatusHUD: NSObject {
     private var contentStack: NSStackView?
     private var identity: String?
     private var awaitingConfirm = false
+    private var isListening = false
+    private var meterTimer: Timer?
+    private var levelSource: (() -> Float)?
+    private var listenStartedAt: Date?
     /// The event the panel is currently about, so Dismiss can retire it.
     private(set) var currentEventId: String?
     private var countdownTimer: Timer?
@@ -47,9 +51,37 @@ final class StatusHUD: NSObject {
 
     // MARK: - Public surface
 
-    func showListening() {
-        show(state: "● Listening…", title: currentTarget?.label ?? "Voice Dispatch",
-             body: "Speak your reply, then let go of ⌥.", autoHideAfter: nil)
+    /// While you are talking, the panel's whole job is to prove it can hear you.
+    ///
+    /// It previously showed the same identity line, the same "hold ⌥ to speak" hint
+    /// you were already obeying, and three buttons for actions unrelated to
+    /// speaking. A live level meter answers the only question you actually have.
+    func showListening(level: @escaping () -> Float) {
+        isListening = true
+        levelSource = level
+        listenStartedAt = Date()
+        show(state: "● Listening", title: "Replying to \(currentTarget?.label ?? "this session")",
+             body: Self.meter(0), autoHideAfter: nil)
+
+        meterTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] timer in
+            guard let self, self.isListening else { return timer.invalidate() }
+            let seconds = Date().timeIntervalSince(self.listenStartedAt ?? Date())
+            self.stateLabel.stringValue = String(format: "● Listening  %.0fs", seconds)
+            self.bodyLabel.stringValue = Self.meter(self.levelSource?() ?? 0)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        meterTimer = timer
+    }
+
+    /// RMS is tiny for speech, so this is scaled to make normal talking fill most of
+    /// the bar rather than sitting near zero and looking broken.
+    nonisolated private static func meter(_ level: Float) -> String {
+        let width = 28
+        let scaled = min(1, sqrt(max(0, Double(level))) * 3.2)
+        let filled = Int((scaled * Double(width)).rounded())
+        return String(repeating: "\u{2588}", count: filled)
+            + String(repeating: "\u{2591}", count: width - filled)
     }
 
     func showAnnouncement(
@@ -203,9 +235,12 @@ final class StatusHUD: NSObject {
         titleLabel.stringValue = title
         bodyLabel.stringValue = body
         goButton.isHidden = currentTarget?.pid == nil
-        replyButton.title = awaitingConfirm ? "Don't send" : (isRecording ? "Send reply" : "Reply")
+        replyButton.title = awaitingConfirm ? "Don't send"
+            : (isRecording || isListening ? "Send now" : "Reply")
         let action: String
-        if awaitingConfirm {
+        if isListening {
+            action = "Let go of ⌥ to send, or Dismiss to throw it away."
+        } else if awaitingConfirm {
             action = "Sending in a moment — stop it if that isn't what you said."
         } else {
             action = isRecording
@@ -216,6 +251,8 @@ final class StatusHUD: NSObject {
         replyButton.isHidden = awaitingConfirm ? false : (currentTarget == nil)
         // With no session in hand, Dismiss is the only honest control.
         if currentTarget == nil, !awaitingConfirm { goButton.isHidden = true }
+        // Nothing about another session matters while you are mid-sentence.
+        if isListening { goButton.isHidden = true }
 
         resizeToFit(panel)
         position(panel)
@@ -290,7 +327,7 @@ final class StatusHUD: NSObject {
             ("announcement", { self.showAnnouncement(
                 topic: "Product image binding fix validation", spoken: long,
                 sessionId: "s", pid: 1, project: "promotions", cwd: "/tmp/promotions") }),
-            ("listening", { self.showListening() }),
+            ("listening", { self.showListening(level: { 0.4 }) }),
             ("result", { self.showResult(long, ok: false) }),
         ] as [(String, () -> Void)] {
             Permissions.log("selftest state=\(label)")
@@ -486,7 +523,9 @@ final class StatusHUD: NSObject {
         else { isRecording = true; onReply?() }
         replyButton.title = isRecording ? "Send reply" : "Reply"
         let action: String
-        if awaitingConfirm {
+        if isListening {
+            action = "Let go of ⌥ to send, or Dismiss to throw it away."
+        } else if awaitingConfirm {
             action = "Sending in a moment — stop it if that isn't what you said."
         } else {
             action = isRecording
@@ -498,6 +537,9 @@ final class StatusHUD: NSObject {
 
     func recordingEnded() {
         isRecording = false
+        isListening = false
+        meterTimer?.invalidate()
+        meterTimer = nil
         replyButton?.title = "Reply"
     }
 

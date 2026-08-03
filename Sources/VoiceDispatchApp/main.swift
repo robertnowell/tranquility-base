@@ -316,10 +316,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try? recorder.start()
             isBusy = true
             updateTitle()
-            hud.showListening()
+            hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
 
         case .replyEnded:
             isBusy = false
+            hud.recordingEnded()
             guard let captured = try? recorder.stop() else {
                 updateTitle()
                 lastStatusLine = "nothing recorded"
@@ -333,6 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The hold turned out to be part of a real shortcut. Drop the audio
             // rather than transcribing whatever happened to be in the room.
             isBusy = false
+            hud.recordingEnded()
             recorder.abandon()
             updateTitle()
             hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0)
@@ -443,7 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             // Straight back to listening: you stopped it because the
                             // words were wrong, so the next thing you want is to say
                             // them again, not to hunt for a button.
-                            self.hud.showListening()
+                            self.hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
                             if self.micGranted, !self.recorder.isRecording {
                                 try? self.recorder.start()
                                 self.isBusy = true
