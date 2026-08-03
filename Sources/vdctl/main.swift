@@ -276,7 +276,9 @@ do {
         for sample in samples {
             let summary = await chain.summarize(SummaryRequest(
                 lastAssistantMessage: sample.lastAssistantMessage,
-                projectLabel: sample.projectLabel))
+                projectLabel: sample.projectLabel,
+                firstUserMessage: sample.firstUserMessage,
+                gitBranch: sample.gitBranch))
             let w = summary.spoken.wordCount
             totalWords += w
             totalMs += summary.latencyMs
@@ -304,10 +306,34 @@ do {
                 }
                 print("")
             } else {
-                print("\(pad(sample.projectLabel, 16)) \(pad("\(w)w", 5)) \(pad(String(format: "%.0fs", seconds), 5)) \(pad("\(summary.latencyMs)ms", 8)) \(summary.spoken.text)")
-                if !summary.spoken.redactions.isEmpty {
-                    print("\(String(repeating: " ", count: 16)) redacted: \(Set(summary.spoken.redactions).sorted().joined(separator: ", "))")
+                // Render the actual audio to get a real duration, not an estimate —
+                // "how long does this take to say" is the whole question.
+                let tmp = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("vd-\(UUID().uuidString).aiff")
+                let say = Process()
+                say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+                say.arguments = ["-r", "200", "-o", tmp.path, summary.spoken.text]
+                try? say.run(); say.waitUntilExit()
+                var spokenSeconds = "?"
+                let info = Process()
+                info.executableURL = URL(fileURLWithPath: "/usr/bin/afinfo")
+                info.arguments = [tmp.path]
+                let pipe = Pipe(); info.standardOutput = pipe; info.standardError = Pipe()
+                try? info.run()
+                let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                info.waitUntilExit()
+                if let line = out.split(separator: "\n").first(where: { $0.contains("estimated duration") }),
+                   let value = line.split(separator: ":").last?.trimmingCharacters(in: .whitespaces).split(separator: " ").first {
+                    spokenSeconds = String(format: "%.1f", Double(value) ?? 0)
                 }
+                try? FileManager.default.removeItem(at: tmp)
+
+                print("── \(sample.projectLabel)  ·  \(w) words, \(spokenSeconds)s to say, \(summary.latencyMs)ms to generate")
+                print("   HEARD:  \(summary.spoken.text)")
+                print("   card:   " + summary.brief.cardLines()
+                    .filter { $0.0 != "topic" }
+                    .map { "\($0.0)=\($0.1)" }.joined(separator: " · "))
+                print("")
             }
         }
 

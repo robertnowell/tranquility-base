@@ -75,8 +75,9 @@ final class SanitizerTests: XCTestCase {
         let request = SummaryRequest(
             lastAssistantMessage: Array(repeating: "sentence here", count: 200).joined(separator: ". "),
             projectLabel: "promotions")
-        let raw = try await provider.summarize(request)
-        XCTAssertLessThanOrEqual(sanitizer.sanitize(raw).wordCount, SpokenTextSanitizer.maxWords)
+        let brief = try await provider.brief(for: request)
+        XCTAssertLessThanOrEqual(
+            sanitizer.sanitize(brief.spokenText()).wordCount, SpokenTextSanitizer.maxWords)
     }
 
     func testNotificationLinesAreSpecificToTheirMatcher() {
@@ -96,14 +97,56 @@ final class SanitizerTests: XCTestCase {
         struct AlwaysFails: SummaryProvider {
             let name = "always-fails"
             let isConfigured = true
-            func summarize(_ request: SummaryRequest) async throws -> String {
+            func brief(for request: SummaryRequest) async throws -> SessionBrief {
                 throw SummaryError.emptyResponse
             }
         }
-        let chain = SummarizerChain(providers: [AlwaysFails()])
+        let chain = SummarizerChain(providers: [AlwaysFails()], resolvePullRequests: false)
         let summary = await chain.summarize(
             SummaryRequest(lastAssistantMessage: "Did the thing.", projectLabel: "kopi"))
         XCTAssertFalse(summary.spoken.text.isEmpty)
         XCTAssertEqual(summary.provider, "deterministic-fallback")
+    }
+}
+
+// MARK: - Brief assembly
+
+extension SanitizerTests {
+    /// The spoken line must always name the session first. Out of context,
+    /// "the fix has never run in the deployed pipeline" is unusable.
+    func testSpokenLineLeadsWithTopic() {
+        let brief = SessionBrief(
+            topic: "Merge tag validation",
+            happened: "three-part fix outlined",
+            nextStep: "start with the token family")
+        XCTAssertTrue(brief.spokenText().hasPrefix("Merge tag validation."))
+    }
+
+    /// A question blocks progress, so it outranks a proposed next step.
+    func testQuestionOutranksNextStep() {
+        let brief = SessionBrief(
+            topic: "Export refactor",
+            happened: "tests pass",
+            nextStep: "deploy to staging",
+            question: "Should I run the migration first?")
+        let spoken = brief.spokenText()
+        XCTAssertTrue(spoken.contains("Should I run the migration first?"))
+        XCTAssertFalse(spoken.contains("deploy to staging"))
+    }
+
+    func testPullRequestIsAnnouncedWhenPresent() {
+        let brief = SessionBrief(
+            topic: "Footer flag",
+            happened: "migration written",
+            pullRequest: PullRequestRef(number: 2258, title: "Canonical footer", state: "OPEN", url: ""))
+        XCTAssertTrue(brief.spokenText().contains("Pull request 2258 is open"))
+    }
+
+    func testCardCarriesEveryFieldThatExists() {
+        let brief = SessionBrief(
+            topic: "T", goal: "G", happened: "H", nextStep: "N", question: "Q?", risk: "R",
+            branch: "feature/x")
+        let keys = brief.cardLines().map(\.0)
+        XCTAssertEqual(keys, ["topic", "goal", "happened", "question", "next", "risk", "branch"])
     }
 }

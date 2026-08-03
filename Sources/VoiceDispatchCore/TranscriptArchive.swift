@@ -6,7 +6,12 @@ public enum TranscriptArchive {
     public struct Sample: Sendable {
         public let sessionId: String
         public let projectLabel: String
+        /// The session's opening ask. Without this a summary is a fragment — you
+        /// cannot tell what "the fix has never run in the deployed pipeline" is
+        /// *about* when ten sessions are in flight.
+        public let firstUserMessage: String?
         public let lastAssistantMessage: String
+        public let gitBranch: String?
         public let modifiedAt: Date
     }
 
@@ -37,13 +42,52 @@ public enum TranscriptArchive {
             guard samples.count < limit else { break }
             guard let message = lastAssistantMessage(in: url), message.count >= minimumLength
             else { continue }
+            let context = sessionContext(in: url)
             samples.append(Sample(
                 sessionId: url.deletingPathExtension().lastPathComponent,
                 projectLabel: projectLabel(from: url.deletingLastPathComponent().lastPathComponent),
+                firstUserMessage: context.firstUserMessage,
                 lastAssistantMessage: message,
+                gitBranch: context.gitBranch,
                 modifiedAt: modified))
         }
         return samples
+    }
+
+    /// The session's opening ask and its branch. Both come from the transcript
+    /// envelope, so no extra process or lookup is needed.
+    public static func sessionContext(in url: URL) -> (firstUserMessage: String?, gitBranch: String?) {
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return (nil, nil) }
+        var firstUser: String?
+        var branch: String?
+
+        for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let data = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+
+            if branch == nil, let b = obj["gitBranch"] as? String, !b.isEmpty { branch = b }
+
+            if firstUser == nil, (obj["type"] as? String) == "user",
+               let message = obj["message"] as? [String: Any] {
+                var text = ""
+                if let s = message["content"] as? String {
+                    text = s
+                } else if let blocks = message["content"] as? [[String: Any]] {
+                    text = blocks
+                        .filter { ($0["type"] as? String) == "text" }
+                        .compactMap { $0["text"] as? String }
+                        .joined(separator: " ")
+                }
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Skip hook-injected context and command wrappers — they aren't the ask.
+                if !trimmed.isEmpty, !trimmed.hasPrefix("<"), !trimmed.hasPrefix("Caveat:") {
+                    firstUser = String(trimmed.prefix(1200))
+                }
+            }
+            if firstUser != nil, branch != nil { break }
+        }
+        return (firstUser, branch)
     }
 
     /// Project directories are the cwd with `/` replaced by `-`, so the tail is the
