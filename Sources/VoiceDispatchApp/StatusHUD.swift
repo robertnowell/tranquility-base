@@ -186,6 +186,13 @@ final class StatusHUD: NSObject {
                 ?? "Tap ⇧ to pause, hold ⌥ to reply.")
     }
 
+    /// Append a line to the current panel without disturbing what it is showing.
+    func note(_ message: String) {
+        hintLabel.stringValue = [message, hintLabel.stringValue]
+            .filter { !$0.isEmpty }.joined(separator: "\n")
+        if let panel { resizeToFit(panel); position(panel) }
+    }
+
     func showWorking(_ message: String) {
         show(state: "◌ Working", title: currentTarget?.label ?? "Voice Dispatch",
              body: message, autoHideAfter: nil)
