@@ -92,6 +92,7 @@ final class StatusHUD: NSObject {
     }
 
     func showAnnouncement(
+        isCatchUp: Bool = false,
         topic: String, spoken: String, sessionId: String, pid: Int?, project: String,
         cwd: String?, eventId: String? = nil
     ) {
@@ -105,7 +106,8 @@ final class StatusHUD: NSObject {
         let headline = topic.caseInsensitiveCompare(project) == .orderedSame || topic.isEmpty
             ? project : "\(project): \(topic)"
         identity = Self.identify(pid: pid, cwd: cwd)
-        show(state: "◀ Speaking", title: headline, body: spoken, autoHideAfter: nil)
+        show(state: isCatchUp ? "↺ Catching up" : "◀ Speaking",
+             title: headline, body: spoken, autoHideAfter: nil)
     }
 
     /// The concrete tab this is about: working directory and tty. Without it you

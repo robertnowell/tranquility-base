@@ -459,8 +459,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let coordinator else { return }
         let previous = announceTask
 
-        // Nothing to play: say so and stop. No preparing state, no flash.
-        if (try? coordinator.nextToAnnounce()) == nil {
+        // Nothing to play: say so and stop. No preparing state, no flash. History
+        // counts as something to play, which is the whole point of catching up.
+        if (try? coordinator.nextToAnnounce()) == nil,
+           (try? coordinator.nextForCatchUp()) == nil {
             hud.showIdle(waiting: 0,
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
             return
@@ -496,6 +498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         let live = ClaudeAgentsCLI().sessions()
                             .first { $0.sessionId == announcement.event.sessionId }
                         self.hud.showAnnouncement(
+                            isCatchUp: announcement.isCatchUp,
                             topic: announcement.brief.topic,
                             spoken: announcement.spoken.text,
                             sessionId: announcement.event.sessionId,
