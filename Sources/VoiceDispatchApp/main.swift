@@ -39,6 +39,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var repliedToEventId: String?
     /// The one announcement allowed to exist. See `announceNext`.
     private var announceTask: Task<Void, Never>?
+    /// Incremented every time a reply gesture starts.
+    ///
+    /// Cancelling the countdown only covers the four seconds it is on screen.
+    /// Speaking again during transcription — the gap between letting go and the
+    /// window appearing — left the earlier reply in flight with nothing watching
+    /// it, so it surfaced and sent anyway. A counter covers both windows and any
+    /// future one, because it asks "is this still the reply the user wants" rather
+    /// than "is a particular UI state showing".
+    private var replyGeneration = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -139,6 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if CommandLine.arguments.contains("--selftest-hud") {
             hud.selfTest()
+            hud.selfTestPendingSend()
         }
 
         // Drive the real speech chain end to end so the highlight can be checked
@@ -227,7 +237,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the read-back could not confirm it.
     private func send(utteranceId: String, label: String) {
         guard let coordinator else { return }
+        let mine = replyGeneration
         Task { @MainActor in
+            guard mine == replyGeneration else {
+                // Superseded between the timer firing and this running.
+                try? coordinator.cancelSend(utteranceId: utteranceId)
+                return
+            }
             hud.showWorking("Sending to \(label)…")
             do {
                 let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
@@ -313,6 +329,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case .replyBegan:
             guard micGranted, !recorder.isRecording else { return }
+            // Anything already in flight belongs to a reply you have just replaced.
+            replyGeneration += 1
             // Holding ⌥ during the send window means "no, let me say that again".
             // The old transcript is discarded rather than deleted, and the gesture
             // itself starts the new recording, so nothing restarts it twice.
@@ -473,13 +491,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Hold: transcribe and route the reply back to whichever session last spoke.
     private func sendReply(_ pcm: Data) {
         guard let coordinator else { return }
+        let mine = replyGeneration
         lastStatusLine = "transcribing…"
         hud.showWorking("Transcribing your reply…")
         rebuildMenu()
 
         Task { @MainActor in
             do {
-                switch try await coordinator.submitReply(pcm16: pcm) {
+                let outcome = try await coordinator.submitReply(pcm16: pcm)
+
+                // You started saying it again while this was still transcribing.
+                // Drop it rather than offering it: the words you replaced must never
+                // reach the session, and they must not queue up behind the new ones.
+                if mine != replyGeneration {
+                    if case .readyToSend(let staleId, _, _, _) = outcome {
+                        try? coordinator.cancelSend(utteranceId: staleId)
+                    }
+                    lastStatusLine = "replaced by a newer reply"
+                    rebuildMenu()
+                    return
+                }
+
+                switch outcome {
                 case .dispatched(let text, let ms, _):
                     lastStatusLine = "▶ sent (\(ms)ms): \(text.prefix(48))"
                     hud.showResult("Sent: \(text)", ok: true)
