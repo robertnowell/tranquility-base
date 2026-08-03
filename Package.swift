@@ -22,6 +22,10 @@ let package = Package(
             dependencies: ["VoiceDispatchCore"]
         ),
         .executableTarget(name: "dispatch-test-target"),
+        .executableTarget(
+            name: "VoiceDispatchApp",
+            dependencies: ["VoiceDispatchCore"]
+        ),
         .testTarget(
             name: "VoiceDispatchCoreTests",
             dependencies: ["VoiceDispatchCore"]
