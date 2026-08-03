@@ -36,6 +36,9 @@ final class StatusHUD: NSObject {
     private var contentStack: NSStackView?
     private var identity: String?
     private var awaitingConfirm = false
+    private var countdownTimer: Timer?
+    private var onCancelSend: (() -> Void)?
+    private var progressBar: NSProgressIndicator!
     private static let spokenMark = NSAttributedString.Key("vdSpoken")
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
@@ -84,11 +87,51 @@ final class StatusHUD: NSObject {
     /// appears once per session and never again.
     var onConfirmSend: (() -> Void)?
 
-    func showConfirmSend(text: String, label: String, confirm: @escaping () -> Void) {
-        onConfirmSend = confirm
+    /// Show what is about to be typed, and send it when the bar runs out.
+    ///
+    /// The bar is the whole design. A dialog asking permission taxes every correct
+    /// transcript to catch the occasional wrong one; a countdown reverses that —
+    /// doing nothing is doing the right thing, and stopping it costs one click on
+    /// the rare occasion you need to.
+    func showPendingSend(
+        text: String, label: String, seconds: TimeInterval,
+        send: @escaping () -> Void, cancel: @escaping () -> Void
+    ) {
+        countdownTimer?.invalidate()
+        onCancelSend = cancel
         awaitingConfirm = true
-        show(state: "⌁ Send this?", title: "First reply to \(label)",
+        show(state: "→ Sending to \(label)", title: "Your reply",
              body: "\u{201C}\(text)\u{201D}", autoHideAfter: nil)
+
+        progressBar.isHidden = false
+        progressBar.doubleValue = 0
+        let started = Date()
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] timer in
+            guard let self else { return timer.invalidate() }
+            let elapsed = Date().timeIntervalSince(started)
+            self.progressBar.doubleValue = min(elapsed / seconds, 1) * 100
+            guard elapsed >= seconds else { return }
+            timer.invalidate()
+            self.countdownTimer = nil
+            self.awaitingConfirm = false
+            self.progressBar.isHidden = true
+            send()
+        }
+        // .common so the countdown keeps running while a menu or drag is tracking —
+        // otherwise it silently stalls and the reply never goes.
+        RunLoop.main.add(timer, forMode: .common)
+        countdownTimer = timer
+    }
+
+    /// Stop a pending send. Safe to call when nothing is pending.
+    @objc private func cancelPendingSend() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        awaitingConfirm = false
+        progressBar.isHidden = true
+        let cancel = onCancelSend
+        onCancelSend = nil
+        cancel?()
     }
 
     func showWorking(_ message: String) {
@@ -121,10 +164,10 @@ final class StatusHUD: NSObject {
         titleLabel.stringValue = title
         bodyLabel.stringValue = body
         goButton.isHidden = currentTarget?.pid == nil
-        replyButton.title = awaitingConfirm ? "Send" : (isRecording ? "Send reply" : "Reply")
+        replyButton.title = awaitingConfirm ? "Don't send" : (isRecording ? "Send reply" : "Reply")
         let action: String
         if awaitingConfirm {
-            action = "Sending confirms this session; you won't be asked again."
+            action = "Sending in a moment — stop it if that isn't what you said."
         } else {
             action = isRecording
                 ? "Listening — click Send, or let go of ⌃⌥."
@@ -280,7 +323,16 @@ final class StatusHUD: NSObject {
         buttons.spacing = 8
 
         hintLabel.maximumNumberOfLines = 0
-        let stack = NSStackView(views: [stateLabel, titleLabel, bodyLabel, hintLabel, buttons])
+        progressBar = NSProgressIndicator()
+        progressBar.isIndeterminate = false
+        progressBar.style = .bar
+        progressBar.minValue = 0
+        progressBar.maxValue = 100
+        progressBar.controlSize = .small
+        progressBar.isHidden = true
+
+        let stack = NSStackView(views: [stateLabel, titleLabel, bodyLabel, progressBar,
+                                        hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
@@ -377,8 +429,7 @@ final class StatusHUD: NSObject {
 
     @objc private func replyTapped() {
         if awaitingConfirm {
-            awaitingConfirm = false
-            onConfirmSend?()
+            cancelPendingSend()
             return
         }
         if isRecording { isRecording = false; onStopReply?() }
@@ -386,7 +437,7 @@ final class StatusHUD: NSObject {
         replyButton.title = isRecording ? "Send reply" : "Reply"
         let action: String
         if awaitingConfirm {
-            action = "Sending confirms this session; you won't be asked again."
+            action = "Sending in a moment — stop it if that isn't what you said."
         } else {
             action = isRecording
                 ? "Listening — click Send, or let go of ⌃⌥."

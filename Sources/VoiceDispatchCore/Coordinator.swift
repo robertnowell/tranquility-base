@@ -238,7 +238,8 @@ public struct Coordinator: Sendable {
         case dispatched(text: String, latencyMs: Int, sessionId: String)
         case transcriptionFailed(utteranceId: String)
         case noTarget
-        case notEnrolled(sessionId: String, utteranceId: String, label: String, text: String)
+        /// Transcribed and about to be sent unless the user intervenes.
+        case readyToSend(utteranceId: String, text: String, label: String, sessionId: String)
         case sessionNotReady(Readiness)
         case dispatchFailed(DispatchFailure, utteranceId: String)
     }
@@ -257,20 +258,17 @@ public struct Coordinator: Sendable {
             return .transcriptionFailed(utteranceId: utterance.id)
         }
 
-        guard enrolment.isEnrolled(sessionId: target.sessionId, cwd: target.cwd) else {
-            // Ready, not failed: the recording is transcribed and one confirmation
-            // away from being sent. Marking it failed stranded it, and the only way
-            // out was a CLI command typed into another window — which is not a
-            // consent gate, it is a place where replies go to die.
-            utterance.status = .ready
-            utterance.lastError = "awaiting confirmation for \(target.projectLabel)"
-            try store.update(utterance: utterance)
-            return .notEnrolled(
-                sessionId: target.sessionId, utteranceId: utterance.id,
-                label: target.projectLabel, text: text)
-        }
-
-        return try await dispatch(utterance: &utterance, text: text, target: target)
+        // Stop here. Dispatch is the caller's next step, after an undo window.
+        //
+        // A confirmation you must approve is a toll on the common case, where the
+        // transcript is fine and you want it sent. An undo window costs nothing
+        // when it is right and everything it needs to when it is wrong — and it
+        // subsumes enrolment, since choosing to let it send IS the consent.
+        utterance.status = .ready
+        try store.update(utterance: utterance)
+        return .readyToSend(
+            utteranceId: utterance.id, text: text, label: target.projectLabel,
+            sessionId: target.sessionId)
     }
 
     /// Confirm this session and send the reply already recorded for it.
@@ -280,14 +278,23 @@ public struct Coordinator: Sendable {
     /// button there is a real gate. A command in another window is not.
     @discardableResult
     public func confirmAndSend(utteranceId: String) async throws -> ReplyOutcome {
-        guard var utterance = try store.utterances().first(where: { $0.id == utteranceId }),
+        guard var utterance = try store.utterances(limit: 500).first(where: { $0.id == utteranceId }),
               let text = utterance.transcriptText,
               let eventId = utterance.eventId,
-              let target = try store.events().first(where: { $0.id == eventId })
+              let target = try store.events(limit: 500).first(where: { $0.id == eventId })
         else { return .noTarget }
 
         try enrolment.enrol(sessionId: target.sessionId)
         return try await dispatch(utterance: &utterance, text: text, target: target)
+    }
+
+    /// The user said no. Keep the audio and transcript — they are evidence of what
+    /// was heard — but take it out of the sendable set so nothing resends it later.
+    public func cancelSend(utteranceId: String) throws {
+        guard var utterance = try store.utterances(limit: 500).first(where: { $0.id == utteranceId })
+        else { return }
+        utterance.status = .discarded
+        try store.update(utterance: utterance)
     }
 
     private func dispatch(

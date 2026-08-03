@@ -181,6 +181,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Dispatch a transcript whose undo window has closed, and say exactly what
+    /// happened. "Couldn't send it" hid a `try?` that swallowed the real outcome —
+    /// including the one case that matters most, where the text may have landed but
+    /// the read-back could not confirm it.
+    private func send(utteranceId: String, label: String) {
+        guard let coordinator else { return }
+        Task { @MainActor in
+            hud.showWorking("Sending to \(label)…")
+            do {
+                let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+                Permissions.log("confirmAndSend -> \(outcome)")
+                switch outcome {
+                case .dispatched:
+                    lastStatusLine = "sent to \(label)"
+                    hud.showResult("Sent to \(label).", ok: true)
+                case .sessionNotReady(let readiness):
+                    hud.showResult(
+                        "\(label) isn't accepting input right now (\(readiness)). "
+                        + "Your words are kept — try again in a moment.", ok: false)
+                case .dispatchFailed(.verificationTimedOut, _):
+                    hud.showResult(
+                        "Typed it into \(label), but couldn't confirm it landed. "
+                        + "Check the tab before repeating yourself.", ok: false)
+                case .dispatchFailed(let failure, _):
+                    hud.showResult("Couldn't type into \(label): \(failure). "
+                                   + "Your words are kept.", ok: false)
+                case .noTarget:
+                    hud.showResult("That reply lost its session. Your words are kept.", ok: false)
+                default:
+                    hud.showResult("Unexpected result: \(outcome). Your words are kept.", ok: false)
+                }
+            } catch {
+                Permissions.log("confirmAndSend threw: \(error)")
+                hud.showResult("Send failed: \(error). Your words are kept.", ok: false)
+            }
+            rebuildMenu()
+        }
+    }
+
     private func refresh() {
         if !hotkey.isRunning { _ = hotkey.start() }
         rebuildMenu()
@@ -341,24 +380,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .noTarget:
                     lastStatusLine = "nothing to reply to — tap to hear one first"
                     hud.showResult("Nothing to reply to yet — tap ⌃⌥ to hear one first.", ok: false)
-                case .notEnrolled(_, let utteranceId, let label, let text):
-                    // First reply to a session: confirm the target here, where you
-                    // can see it, rather than sending you to another window.
-                    lastStatusLine = "confirm send to \(label)"
-                    hud.showConfirmSend(text: text, label: label) { [weak self] in
-                        guard let self, let coordinator = self.coordinator else { return }
-                        Task { @MainActor in
-                            self.hud.showWorking("Sending…")
-                            let outcome = try? await coordinator.confirmAndSend(utteranceId: utteranceId)
-                            if case .dispatched = outcome {
-                                self.hud.showResult("Sent to \(label).", ok: true)
-                            } else {
-                                self.hud.showResult(
-                                    "Couldn't send it. The recording is kept.", ok: false)
+                case .readyToSend(let utteranceId, let text, let label, _):
+                    // Sending is the default. The window exists to stop it, not to
+                    // permit it — approving every correct transcript is a toll.
+                    lastStatusLine = "sending to \(label)…"
+                    hud.showPendingSend(
+                        text: text, label: label, seconds: 4,
+                        send: { [weak self] in self?.send(utteranceId: utteranceId, label: label) },
+                        cancel: { [weak self] in
+                            guard let self else { return }
+                            try? self.coordinator?.cancelSend(utteranceId: utteranceId)
+                            // Straight back to listening: you stopped it because the
+                            // words were wrong, so the next thing you want is to say
+                            // them again, not to hunt for a button.
+                            self.hud.showListening()
+                            if self.micGranted, !self.recorder.isRecording {
+                                try? self.recorder.start()
+                                self.isBusy = true
+                                self.updateTitle()
                             }
-                            self.rebuildMenu()
-                        }
-                    }
+                        })
                 case .sessionNotReady(let readiness):
                     lastStatusLine = "session busy or blocked (\(readiness)) — audio kept"
                     hud.showResult("Session isn't ready (\(readiness)). Recording kept — try again shortly.", ok: false)
