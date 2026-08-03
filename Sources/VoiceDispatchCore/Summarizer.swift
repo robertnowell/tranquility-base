@@ -139,7 +139,8 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         Reply with ONLY a JSON object, no prose and no code fence:
 
         {
-          "spoken":   "the spoken update — see below",
+          "recap":    "spoken section one — under 40 words",
+          "proposal": "spoken section two — under 40 words",
           "topic":    "3-6 words naming this work, for a list",
           "goal":     "what this session is trying to achieve, or null",
           "happened": "what just concluded, one clause",
@@ -148,29 +149,44 @@ public struct AnthropicSummaryProvider: SummaryProvider {
           "risk":     "a risk worth knowing before deciding, or null"
         }
 
-        THE SPOKEN FIELD is the only part the user hears. Write it in two parts.
+        ── SECTION ONE: "recap" ──  where things stand. Under 40 words.
 
-        Part one — this is Claude Code's own session-recap instruction, used verbatim:
+        Use this instruction exactly as written:
 
           The user stepped away and is coming back. Recap in under 40 words, 1-2 plain \
           sentences, no markdown. Lead with the overall goal and current task, then the \
           one next action. Skip root-cause narrative, fix internals, secondary to-dos, \
           and em-dash tangents.
 
-        Part two — up to 30 more words: the key result, the planned next step, and any \
-        decision the user needs to make or risk they should be aware of. If there is a \
-        decision, end on it as a direct question.
+        ── SECTION TWO: "proposal" ──  what happens next. Under 40 words.
 
-        Seventy words total, maximum.
+        This section exists so the user can answer without opening the tab. Write it so \
+        that "yes, go ahead" is a complete and safe reply:
 
-        One rule on top of the above, because unlike Claude Code's recap this text is \
-        SPOKEN rather than displayed: never say a function name, variable name, file, \
-        branch or identifier out loud. Describe it instead — "the asset pool", not the \
-        actual symbol. A reader can skim a symbol; a listener cannot.
+        - State the proposed action plainly. Not "continue with the plan" — say what \
+          will actually be done, specifically enough that "yes" is a safe answer.
+        - If you filled the "risk" field, the risk MUST also appear here, in the \
+          spoken text. Not on the card alone. A proposal heard without its risk is \
+          exactly how someone approves something they later regret, and that is the \
+          specific failure this section exists to prevent. Compress it to a clause if \
+          you must, but say it.
+        - End on the decision as a direct question when there is one.
+        - If nothing needs deciding, say what will happen next and that no input is needed.
+        - Never let the risk be the thing that runs out of room. If you are close to \
+          the limit, cut detail from the action, not from the warning.
 
-        For the other fields: 12 words or fewer each. These are read on a card, so they \
-        may be more specific than the spoken text and may name symbols. Use null when a \
-        field genuinely does not apply — never invent a question or a risk.
+        ── BOTH SPOKEN SECTIONS ──
+
+        This text is SPOKEN, not displayed. Never say a function name, variable name, \
+        file, branch or identifier out loud — describe it instead ("the asset pool", \
+        not the symbol). A reader can skim a symbol; a listener cannot.
+
+        ── THE REMAINING FIELDS ──
+
+        Card only, never spoken. Background context the user reads if they want more \
+        than they heard. 12 words or fewer each; these MAY name symbols, since they are \
+        read rather than heard. Use null when a field genuinely does not apply — never \
+        invent a question or a risk.
         """
 
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
@@ -254,7 +270,8 @@ public struct AnthropicSummaryProvider: SummaryProvider {
             question: field("question"),
             risk: field("risk"),
             branch: request.gitBranch,
-            spoken: field("spoken"))
+            recap: field("recap"),
+            proposal: field("proposal"))
     }
 }
 
@@ -294,6 +311,15 @@ public struct SummarizerChain: Sendable {
 
         if resolvePullRequests, let branch = request.gitBranch {
             brief.pullRequest = PullRequestLookup.forBranch(branch, cwd: request.cwd)
+        }
+
+        // Each section is clamped against its own budget before composing, so a long
+        // recap can never eat the proposal — the half that carries the decision.
+        if let recap = brief.recap {
+            brief.recap = sanitizer.sanitize(recap, maxWords: SpokenTextSanitizer.recapWords).text
+        }
+        if let proposal = brief.proposal {
+            brief.proposal = sanitizer.sanitize(proposal, maxWords: SpokenTextSanitizer.proposalWords).text
         }
 
         return Summary(

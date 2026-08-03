@@ -29,6 +29,17 @@ public struct SpokenTextSanitizer: Sendable {
     /// result, the next step, and any decision or risk. That is about thirty seconds.
     /// Longer than a notification, shorter than opening the tab and reading.
     public static let maxWords = 75
+    /// Section one — Claude Code's recap instruction is "under 40 words".
+    public static let recapWords = 40
+    /// Section two — the proposal, the decision, and the risk that would change
+    /// your answer.
+    ///
+    /// 40 rather than the 30 originally specified. At 30 the risk was being clamped
+    /// mid-clause ("…a queue may be simpler and sidestep…"), and half a warning is
+    /// worse than no warning: it is exactly the "approved something I later
+    /// regretted" failure the section exists to prevent. Three things — action,
+    /// decision, risk — do not fit in thirty words when the risk is substantive.
+    public static let proposalWords = 40
 
     public init() {}
 
@@ -76,7 +87,7 @@ public struct SpokenTextSanitizer: Sendable {
         .init(pattern: "\\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,}\\b", replacement: "a variable", label: "symbol"),
     ]
 
-    public func sanitize(_ raw: String) -> SanitizedSpokenText {
+    public func sanitize(_ raw: String, maxWords: Int = SpokenTextSanitizer.maxWords) -> SanitizedSpokenText {
         var working = raw.replacingOccurrences(of: "\n", with: " ")
         var redactions: [String] = []
 
@@ -104,23 +115,52 @@ public struct SpokenTextSanitizer: Sendable {
             .replacingOccurrences(of: "\\s+([.,;:!?])", with: "$1", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        return SanitizedSpokenText(text: Self.clamp(working), redactions: redactions)
+        return SanitizedSpokenText(text: Self.clamp(working, maxWords: maxWords), redactions: redactions)
     }
 
-    /// Trim to the word budget, preferring a sentence boundary so the speech doesn't
-    /// stop mid-clause.
+    /// Trim to the word budget WITHOUT ever cutting mid-clause.
+    ///
+    /// Speech is not text you can re-read. A clipped sentence — "…a queue may be
+    /// simpler and sidestep…" — is worse than saying nothing, because the listener
+    /// hears half a warning and has no way to recover the rest. So this drops whole
+    /// sentences and never appends an ellipsis. If even the first sentence exceeds
+    /// the budget it is spoken in full: a slightly long complete thought beats a
+    /// correctly-sized fragment.
+    ///
+    /// The budget is therefore a target for the model, and this is a safety net that
+    /// should rarely fire — not a formatter.
     static func clamp(_ text: String, maxWords: Int = maxWords) -> String {
-        let words = text.split(separator: " ", omittingEmptySubsequences: true)
-        guard words.count > maxWords else { return text }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.split(separator: " ", omittingEmptySubsequences: true).count > maxWords,
+              !trimmed.isEmpty
+        else { return trimmed }
 
-        let head = words.prefix(maxWords).joined(separator: " ")
-        if let lastStop = head.lastIndex(where: { ".!?".contains($0) }) {
-            let upTo = head[...lastStop]
-            // Only honour the sentence break if it keeps most of the budget.
-            if upTo.split(separator: " ").count >= maxWords / 2 {
-                return String(upTo)
-            }
+        var kept: [String] = []
+        var total = 0
+        for sentence in sentences(in: trimmed) {
+            let count = sentence.split(separator: " ", omittingEmptySubsequences: true).count
+            if !kept.isEmpty, total + count > maxWords { break }
+            kept.append(sentence)
+            total += count
+            // First sentence is always kept, even if it alone blows the budget.
+            if total >= maxWords { break }
         }
-        return head + "…"
+        return kept.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Split on sentence-ending punctuation followed by whitespace, keeping the
+    /// punctuation attached.
+    static func sentences(in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: "(?<=[.!?])\\s+") else { return [text] }
+        var out: [String] = []
+        var cursor = text.startIndex
+        let full = NSRange(text.startIndex..., in: text)
+        regex.enumerateMatches(in: text, range: full) { match, _, _ in
+            guard let match, let range = Range(match.range, in: text) else { return }
+            out.append(String(text[cursor..<range.lowerBound]))
+            cursor = range.upperBound
+        }
+        if cursor < text.endIndex { out.append(String(text[cursor...])) }
+        return out.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 }

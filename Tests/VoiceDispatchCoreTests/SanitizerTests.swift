@@ -42,10 +42,23 @@ final class SanitizerTests: XCTestCase {
         XCTAssertTrue(result.redactions.isEmpty)
     }
 
-    func testWordBudgetIsEnforced() throws {
-        let long = Array(repeating: "word", count: SpokenTextSanitizer.maxWords * 3).joined(separator: " ")
+    /// The budget is honoured by dropping whole sentences.
+    func testWordBudgetIsEnforcedAcrossSentences() throws {
+        let sentence = Array(repeating: "word", count: 10).joined(separator: " ") + "."
+        let long = Array(repeating: sentence, count: 20).joined(separator: " ")
         let result = sanitizer.sanitize(long)
         XCTAssertLessThanOrEqual(result.wordCount, SpokenTextSanitizer.maxWords)
+        XCTAssertTrue(result.text.hasSuffix("."), "must end on a complete sentence")
+    }
+
+    /// Deliberate: text with no sentence structure is spoken whole rather than cut.
+    /// Clipping mid-clause is the one outcome that is never acceptable in speech,
+    /// because the listener cannot go back and read the rest.
+    func testUnpunctuatedTextIsSpokenWholeRatherThanCut() throws {
+        let blob = Array(repeating: "word", count: SpokenTextSanitizer.maxWords * 3).joined(separator: " ")
+        let result = sanitizer.sanitize(blob)
+        XCTAssertEqual(result.text, blob)
+        XCTAssertFalse(result.text.contains("…"))
     }
 
     /// Pass an explicit budget so this tests the clamping behaviour rather than
@@ -59,9 +72,26 @@ final class SanitizerTests: XCTestCase {
         XCTAssertFalse(clamped.contains("beta"))
     }
 
-    func testClampFallsBackToEllipsisWhenNoUsableBoundary() throws {
-        let text = Array(repeating: "gamma", count: 80).joined(separator: " ")
-        XCTAssertTrue(SpokenTextSanitizer.clamp(text, maxWords: 30).hasSuffix("…"))
+    /// A single over-long sentence is spoken in full rather than clipped. Half a
+    /// warning is worse than a long one — the listener cannot re-read it.
+    func testOverlongSingleSentenceIsKeptWholeNotCut() throws {
+        let text = Array(repeating: "gamma", count: 80).joined(separator: " ") + "."
+        let clamped = SpokenTextSanitizer.clamp(text, maxWords: 30)
+        XCTAssertEqual(clamped, text)
+        XCTAssertFalse(clamped.contains("…"))
+    }
+
+    func testClampNeverEmitsAnEllipsis() throws {
+        for count in [31, 45, 60, 120] {
+            let text = (0..<count).map { "w\($0)" }.joined(separator: " ")
+            XCTAssertFalse(SpokenTextSanitizer.clamp(text, maxWords: 30).contains("…"))
+        }
+    }
+
+    func testClampDropsWholeTrailingSentences() throws {
+        let text = "First sentence here. Second sentence here. " + Array(repeating: "tail", count: 60).joined(separator: " ") + "."
+        let clamped = SpokenTextSanitizer.clamp(text, maxWords: 12)
+        XCTAssertEqual(clamped, "First sentence here. Second sentence here.")
     }
 
     func testShortCleanTextIsUntouched() throws {
