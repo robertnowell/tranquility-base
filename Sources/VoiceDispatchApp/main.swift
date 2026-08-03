@@ -255,6 +255,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func announceNext() {
         guard let coordinator, !isAnnouncing else { return }
         isAnnouncing = true
+        // Summarizing and fetching the voice take several seconds. Without this the
+        // app shows nothing at all for the whole of that and reads as broken.
+        hud.showPreparing()
         Task { @MainActor in
             defer { isAnnouncing = false }
             do {
