@@ -90,13 +90,13 @@ struct Permissions {
         case .microphone:
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
             case .authorized: return "granted"
-            case .notDetermined: return "not asked yet — click Grant"
-            case .denied: return "denied earlier — must be switched on in Settings"
+            case .notDetermined: return "not asked yet. Click Grant"
+            case .denied: return "denied earlier. Switch it on in Settings"
             case .restricted: return "restricted by policy"
             @unknown default: return "unknown"
             }
         case .inputMonitoring:
-            return CGPreflightListenEventAccess() ? "granted" : "not granted — click Grant"
+            return CGPreflightListenEventAccess() ? "granted" : "not granted. Click Grant"
         }
     }
 

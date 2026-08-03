@@ -238,7 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .sessionNotReady(let readiness):
                     hud.showResult(
                         "\(label) isn't accepting input right now (\(readiness)). "
-                        + "Your words are kept — try again in a moment.", ok: false)
+                        + "Your words are kept. Try again in a moment.", ok: false)
                 case .dispatchFailed(.verificationTimedOut, _):
                     hud.showResult(
                         "Typed it into \(label), but couldn't confirm it landed. "
@@ -288,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.image = image
         // Fall back to text if the symbol is unavailable, rather than showing nothing.
         if button.image == nil { button.title = isBusy ? "VD●" : "VD" }
-        button.toolTip = "Voice Dispatch — tap ⌃⌥ to hear, hold ⌥ to reply"
+        button.toolTip = "Voice Dispatch. Tap ⌃⌥ to hear, hold ⌥ to reply"
     }
 
     // MARK: - Push to talk
@@ -364,6 +364,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func announceNext() {
         guard let coordinator else { return }
         let previous = announceTask
+
+        // Nothing to play: say so and stop. No preparing state, no flash.
+        if (try? coordinator.nextToAnnounce()) == nil {
+            hud.showIdle(waiting: 0,
+                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+            return
+        }
+
         hud.isSpeakingNow = true
         // Summarizing and fetching the voice take several seconds. Without this the
         // app shows nothing at all for the whole of that and reads as broken.
@@ -411,7 +419,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if let degraded = announcement.degraded {
                         // Heard, but in the plainer voice. Say why, or an outage
                         // reads as the app just sounding worse for no reason.
-                        hud.note("Read in the system voice — \(degraded)")
+                        hud.note("Read in the system voice. \(degraded)")
                     }
                     lastStatusLine = "◀ \(announcement.brief.topic)"
                     hud.highlight(upTo: announcement.spoken.text.count)
@@ -428,19 +436,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if let failure {
                         // Nobody asked for this one. Say so, rather than letting a
                         // dropped connection masquerade as something you chose.
-                        lastStatusLine = "playback failed — still unread"
+                        lastStatusLine = "playback failed, still unread"
                         hud.showResult(
-                            "Playback failed (\(failure)). It's still waiting — "
+                            "Playback failed (\(failure)). It's still waiting. "
                             + "tap ⌃⌥ to hear it again.", ok: false)
                     } else {
-                        lastStatusLine = "stopped — still unread"
-                        hud.showIdle(note: "Stopped — still unread.",
+                        lastStatusLine = "stopped, still unread"
+                        hud.showIdle(note: "Stopped, still unread.",
                                      waiting: (try? store?.pendingCount()) ?? 0,
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
                     }
                 case .held(let reason):
                     lastStatusLine = "held: \(reason)"
-                    hud.showIdle(note: "Holding — \(reason).",
+                    hud.showIdle(note: "Holding. \(reason).",
                                  waiting: (try? store?.pendingCount()) ?? 0,
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
                 case .nothingWaiting:
@@ -471,8 +479,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     lastStatusLine = "▶ sent (\(ms)ms): \(text.prefix(48))"
                     hud.showResult("Sent: \(text)", ok: true)
                 case .noTarget:
-                    lastStatusLine = "nothing to reply to — tap to hear one first"
-                    hud.showResult("Nothing to reply to yet — tap ⌃⌥ to hear one first.", ok: false)
+                    lastStatusLine = "nothing to reply to yet"
+                    hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.", ok: false)
                 case .readyToSend(let utteranceId, let text, let label, _):
                     // Sending is the default. The window exists to stop it, not to
                     // permit it — approving every correct transcript is a toll.
@@ -497,18 +505,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             }
                         })
                 case .sessionNotReady(let readiness):
-                    lastStatusLine = "session busy or blocked (\(readiness)) — audio kept"
-                    hud.showResult("Session isn't ready (\(readiness)). Recording kept — try again shortly.", ok: false)
+                    lastStatusLine = "session busy or blocked (\(readiness)), audio kept"
+                    hud.showResult("Session isn't ready (\(readiness)). Recording kept. Try again shortly.", ok: false)
                 case .transcriptionFailed:
-                    lastStatusLine = "couldn't transcribe — audio kept, retry from the menu"
-                    hud.showResult("Couldn't transcribe that. The audio is saved — retry from the menu.", ok: false)
+                    lastStatusLine = "couldn't transcribe, audio kept"
+                    hud.showResult("Couldn't transcribe that. The audio is saved. Retry from the menu.", ok: false)
                 case .dispatchFailed(.verificationTimedOut, _):
-                    lastStatusLine = "⚠ unconfirmed — check the tab before resending"
+                    lastStatusLine = "⚠ unconfirmed. Check the tab before resending"
                     hud.showResult(
-                        "Sent, but never confirmed. It may or may not have landed — "
+                        "Sent, but never confirmed. It may or may not have landed. "
                         + "check the tab before resending.", ok: false)
                 case .dispatchFailed(let failure, _):
-                    lastStatusLine = "send failed: \(failure) — audio kept"
+                    lastStatusLine = "send failed: \(failure), audio kept"
                 }
             } catch {
                 lastStatusLine = "reply failed: \(error)"
