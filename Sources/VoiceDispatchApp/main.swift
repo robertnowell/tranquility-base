@@ -91,9 +91,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Only on a change. Redrawing every tick repositions the panel and
                 // resets its layout for no reason, which reads as flicker on a
                 // window that is meant to sit still.
-                if self.hud.isIdle, (waiting, unsent) != self.lastShownCounts {
+                let arrived = waiting > self.lastShownCounts.0
+                if self.hud.canSurfaceAmbiently, (waiting, unsent) != self.lastShownCounts {
                     self.lastShownCounts = (waiting, unsent)
+                    // Silently. Showing up is the whole signal; a voice starting on
+                    // its own while you are mid-sentence somewhere else is the
+                    // thing that gets an app deleted.
                     self.hud.showIdle(waiting: waiting, unsentReplies: unsent)
+                    if arrived { Permissions.log("ambient: surfaced for \(waiting) waiting") }
                 }
             }
         }
@@ -584,11 +589,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func showPanel() {
+        hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0,
+                     unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+    }
+
     // MARK: - Menu
 
     private func rebuildMenu() {
         let menu = NSMenu()
         menu.addItem(disabled(lastStatusLine))
+        menu.addItem(.separator())
+
+        // A guaranteed way back to the panel. The status icon can end up behind the
+        // notch or in the overflow on a crowded menu bar, and then there is no
+        // discoverable route to a window that has no Dock icon by design.
+        let show = NSMenuItem(title: "Show panel", action: #selector(showPanel), keyEquivalent: "")
+        show.target = self
+        menu.addItem(show)
         menu.addItem(.separator())
 
         menu.addItem(disabled("Tap ⌃⌥ hear · hold ⌥ reply · tap ⇧ pause"))

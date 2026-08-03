@@ -285,7 +285,26 @@ final class StatusHUD: NSObject {
     func hide() {
         hideWorkItem?.cancel()
         panel?.orderOut(nil)
+        // Dismissing ends the conversation the panel was having. Leaving isIdle
+        // false meant a hidden panel could never surface again by itself: the
+        // ambient refresh was gated on it, so after one Dismiss the app went silent
+        // for the rest of the session.
+        isIdle = true
+        currentTarget = nil
+        currentEventId = nil
+        identity = nil
     }
+
+    /// Whether an arriving turn may raise the panel right now.
+    ///
+    /// Anything mid-conversation says no: speech, a recording, a send countdown, or
+    /// a failure still waiting to be read. Everything else, hidden included, is a
+    /// moment where showing up is welcome rather than an interruption.
+    var canSurfaceAmbiently: Bool {
+        !isSpeakingNow && !isRecording && !isListening && !awaitingConfirm && isIdle
+    }
+
+    var isOnScreen: Bool { panel?.isVisible ?? false }
 
     // MARK: - Rendering
 
