@@ -153,11 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             announceLaunch()
             // Visible proof of life. A menu-bar-only app with a full menu bar is
             // indistinguishable from a broken one; this makes launch observable.
-            let waiting = (try? store?.pendingCount()) ?? 0
-            hud.showIdle(waiting > 0
-                ? "Tap ⌃⌥ for the most recent, hold ⌃⌥ to reply."
-                : "Nothing waiting. Sessions appear here as they finish.",
-                waiting: waiting)
+            hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0)
         }
     }
 
@@ -313,12 +309,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if held < Self.tapThreshold {
                 recorder.abandon()
                 updateTitle()
-                // A tap while it is talking — or while an announcement is still being
-                // prepared — means "stop", not "queue another".
-                if isAnnouncing || (coordinator?.speech.isSpeaking ?? false) {
+                // A tap while it is talking pauses; another resumes. Pausing keeps
+                // the announcement in progress and therefore unread, which is the
+                // behaviour you want from a key you might hit by accident.
+                //
+                // This reuses the chord we already own rather than watching a new
+                // key. The event tap is listen-only by design, so any key we observe
+                // also reaches whatever is focused — a bare space would type a space,
+                // and ⌥Space would insert a non-breaking space, which is worse for
+                // being invisible. ⌃⌥ types nothing anywhere.
+                if let speech = coordinator?.speech, speech.isSpeaking || speech.isPaused {
+                    speech.togglePause()
+                    hud.setPaused(speech.isPaused)
+                    return
+                }
+                if isAnnouncing {
+                    // Still fetching audio; nothing to pause yet, so stop instead.
                     coordinator?.speech.stop()
                     isAnnouncing = false
-                    hud.showIdle("Stopped. Tap ⌃⌥ again for the next one.", waiting: (try? store?.pendingCount()) ?? 0)
+                    hud.showIdle(note: "Stopped.", waiting: (try? store?.pendingCount()) ?? 0)
                     rebuildMenu()
                     return
                 }
@@ -385,17 +394,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             + "tap ⌃⌥ to hear it again.", ok: false)
                     } else {
                         lastStatusLine = "stopped — still unread"
-                        hud.showIdle(
-                            "Stopped — still waiting. Tap ⌃⌥ to hear it, "
-                            + "or Dismiss to be done with it.",
-                            waiting: (try? store?.pendingCount()) ?? 0)
+                        hud.showIdle(note: "Stopped — still unread.",
+                                     waiting: (try? store?.pendingCount()) ?? 0)
                     }
                 case .held(let reason):
                     lastStatusLine = "held: \(reason)"
-                    hud.showIdle("Holding — \(reason)")
+                    hud.showIdle(note: "Holding — \(reason).",
+                                 waiting: (try? store?.pendingCount()) ?? 0)
                 case .nothingWaiting:
                     lastStatusLine = "nothing waiting"
-                    hud.showIdle("Nothing waiting. Sessions appear here as they finish.", waiting: (try? store?.pendingCount()) ?? 0)
+                    hud.showIdle(waiting: (try? store?.pendingCount()) ?? 0)
                 }
             } catch {
                 lastStatusLine = "announce failed: \(error)"

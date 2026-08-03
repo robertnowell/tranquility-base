@@ -135,6 +135,16 @@ final class StatusHUD: NSObject {
         cancel?()
     }
 
+    /// Reflect a pause without rebuilding the panel — the spoken text and its
+    /// highlight must stay exactly where they are.
+    func setPaused(_ paused: Bool) {
+        stateLabel.stringValue = paused ? "❙❙ Paused" : "◀ Speaking"
+        hintLabel.stringValue = paused
+            ? "Tap ⌃⌥ to carry on, or Dismiss to be done with it."
+            : (identity.map { "\($0)\nTap ⌃⌥ to pause, hold to reply." }
+                ?? "Tap ⌃⌥ to pause, hold to reply.")
+    }
+
     func showWorking(_ message: String) {
         show(state: "◌ Working", title: currentTarget?.label ?? "Voice Dispatch",
              body: message, autoHideAfter: nil)
@@ -146,12 +156,22 @@ final class StatusHUD: NSObject {
              body: message, autoHideAfter: nil)
     }
 
-    func showIdle(_ message: String, waiting: Int = 0) {
+    /// `note` is a prefix about what just happened ("Stopped."). The sentence about
+    /// what is waiting is always derived from `waiting`, never passed in — the two
+    /// were computed at different call sites and drifted, so the panel showed
+    /// "2 waiting" directly above "Nothing waiting".
+    func showIdle(note: String? = nil, waiting: Int) {
         currentTarget = nil
         identity = nil
         currentEventId = nil
+
+        let status = waiting > 0
+            ? "Tap ⌃⌥ for the most recent, hold ⌃⌥ to reply."
+            : "Nothing waiting. Sessions appear here as they finish."
+        let body = [note, status].compactMap { $0 }.joined(separator: " ")
+
         show(state: waiting > 0 ? "◌ \(waiting) waiting" : "◌ Ready",
-             title: "Voice Dispatch", body: message, autoHideAfter: nil)
+             title: "Voice Dispatch", body: body, autoHideAfter: nil)
     }
 
     /// True when the panel is visible and doing something worth stopping. Escape is
@@ -266,7 +286,7 @@ final class StatusHUD: NSObject {
                 + "product-image-binding-oracle/promotions")
         Permissions.log("selftest identity=\(identity ?? "nil")")
         for (label, block) in [
-            ("idle", { self.showIdle(long, waiting: 3) }),
+            ("idle", { self.showIdle(note: long, waiting: 3) }),
             ("announcement", { self.showAnnouncement(
                 topic: "Product image binding fix validation", spoken: long,
                 sessionId: "s", pid: 1, project: "promotions", cwd: "/tmp/promotions") }),
