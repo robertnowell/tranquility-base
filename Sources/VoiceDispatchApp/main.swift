@@ -487,8 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Nothing to play: say so and stop. No preparing state, no flash. History
         // counts as something to play, which is the whole point of catching up.
-        if eventId == nil, (try? coordinator.nextToAnnounce()) == nil,
-           (try? coordinator.nextForCatchUp()) == nil {
+        if eventId == nil, (try? coordinator.nextToAnnounce()) == nil {
             hud.showIdle(waiting: 0,
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
             return
