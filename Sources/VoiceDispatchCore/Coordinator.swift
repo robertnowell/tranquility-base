@@ -202,14 +202,35 @@ public struct Coordinator: Sendable {
     /// reports progress during it. Without the first callback the UI could only
     /// render after `speak` returned — i.e. after you had already heard the whole
     /// thing, which is exactly when the text stops being useful.
+    /// What is waiting, for a UI that wants to show it rather than describe it.
+    /// A count you cannot inspect is a number you have to trust.
+    public func waiting() throws -> [(id: String, label: String, topic: String)] {
+        try store.events(limit: 200)
+            .filter { EventStatus.pendingAnnouncement.contains($0.status) }
+            .sorted { $0.createdAtMs > $1.createdAtMs }
+            .map { event in
+                let topic = event.summaryText?.split(separator: ".").first.map(String.init)
+                    ?? event.lastAssistantMessage?.prefix(60).description
+                    ?? "waiting"
+                return (event.id, event.projectLabel, topic.trimmingCharacters(in: .whitespaces))
+            }
+    }
+
     public func announceNext(
+        only eventId: String? = nil,
         ignoringGate: Bool = false,
         onWillSpeak: (@MainActor (Announcement) -> Void)? = nil,
         onWord: (@Sendable (Range<Int>) -> Void)? = nil
     ) async throws -> AnnounceOutcome {
         var isCatchUp = false
-        var candidate = try nextToAnnounce()
-        if candidate == nil {
+        var candidate: QueuedEvent?
+        if let eventId {
+            // Chosen explicitly from the list, so ordering does not apply.
+            candidate = try store.events(limit: 500).first { $0.id == eventId }
+        } else {
+            candidate = try nextToAnnounce()
+        }
+        if candidate == nil, eventId == nil {
             candidate = try nextForCatchUp()
             isCatchUp = candidate != nil
         }

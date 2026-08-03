@@ -134,6 +134,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         hud.onOpenSettings = { [weak self] in self?.openSettings() }
+        hud.onOpenWaitingList = { [weak self] in
+            guard let self, let waiting = try? self.coordinator?.waiting() else { return }
+            self.hud.showWaitingList(waiting ?? [])
+        }
+        hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onLeaveSettings = { [weak self] in
             guard let self else { return }
             self.coordinator?.speech.stop()
@@ -455,13 +460,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// is the single worst thing this app can do, so the guarantee has to be
     /// structural: hold the task, cancel it, and AWAIT it before starting anything.
     /// Nothing about timing or ordering is then left to chance.
-    private func announceNext() {
+    private func announceNext(only eventId: String? = nil) {
         guard let coordinator else { return }
         let previous = announceTask
 
         // Nothing to play: say so and stop. No preparing state, no flash. History
         // counts as something to play, which is the whole point of catching up.
-        if (try? coordinator.nextToAnnounce()) == nil,
+        if eventId == nil, (try? coordinator.nextToAnnounce()) == nil,
            (try? coordinator.nextForCatchUp()) == nil {
             hud.showIdle(waiting: 0,
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
@@ -490,6 +495,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // interruptibility gate does not apply — you cannot interrupt
                 // someone who just asked.
                 switch try await coordinator.announceNext(
+                    only: eventId,
                     ignoringGate: true,
                     onWillSpeak: { [weak self] announcement in
                         // Render BEFORE the audio starts. Showing it afterwards is
