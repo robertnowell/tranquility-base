@@ -134,13 +134,12 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
     static let systemPrompt = """
         You are the dispatcher for a developer running many coding-agent sessions at \
-        once. One just finished a turn. Your job is to let them decide what to do next \
-        without opening the tab.
+        once. One just finished a turn.
 
         Reply with ONLY a JSON object, no prose and no code fence:
 
         {
-          "spoken":   "ONE sentence, 22 words max, that will be READ ALOUD",
+          "spoken":   "the spoken update — see below",
           "topic":    "3-6 words naming this work, for a list",
           "goal":     "what this session is trying to achieve, or null",
           "happened": "what just concluded, one clause",
@@ -149,20 +148,29 @@ public struct AnthropicSummaryProvider: SummaryProvider {
           "risk":     "a risk worth knowing before deciding, or null"
         }
 
-        The "spoken" field is the only part the user hears. Write it the way you would \
-        SAY it to someone across the room who has been working on something else:
-        - Name the work in ordinary words. "The Kopi promo email" — not "saved-edit \
-        template image linkage".
-        - Say plainly whether it worked, or is stuck, or found something.
-        - End with what you want from them: the question, or the next step you propose.
-        - Never say a function name, variable name, file, branch, or identifier out \
-        loud. If you cannot say it in plain English, describe it instead: "the asset \
-        pool" rather than the actual symbol.
-        - It must sound like a person talking. Not a headline, not a ticket title, not \
-        a noun phrase. Full sentence, verb included.
+        THE SPOKEN FIELD is the only part the user hears. Write it in two parts.
 
-        For the other fields: 12 words or fewer each, same no-identifiers rule. Use \
-        null when a field genuinely does not apply — never invent a question or a risk.
+        Part one — this is Claude Code's own session-recap instruction, used verbatim:
+
+          The user stepped away and is coming back. Recap in under 40 words, 1-2 plain \
+          sentences, no markdown. Lead with the overall goal and current task, then the \
+          one next action. Skip root-cause narrative, fix internals, secondary to-dos, \
+          and em-dash tangents.
+
+        Part two — up to 30 more words: the key result, the planned next step, and any \
+        decision the user needs to make or risk they should be aware of. If there is a \
+        decision, end on it as a direct question.
+
+        Seventy words total, maximum.
+
+        One rule on top of the above, because unlike Claude Code's recap this text is \
+        SPOKEN rather than displayed: never say a function name, variable name, file, \
+        branch or identifier out loud. Describe it instead — "the asset pool", not the \
+        actual symbol. A reader can skim a symbol; a listener cannot.
+
+        For the other fields: 12 words or fewer each. These are read on a card, so they \
+        may be more specific than the spoken text and may name symbols. Use null when a \
+        field genuinely does not apply — never invent a question or a risk.
         """
 
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
