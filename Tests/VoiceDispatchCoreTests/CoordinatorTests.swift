@@ -381,6 +381,44 @@ final class CoordinatorTests: XCTestCase {
                         "you rejected the words, not the recording")
     }
 
+    /// Two voices talking over each other is the worst thing this app can do, and
+    /// the slow path is exactly when a second press happens. A stop must silence
+    /// what is coming as well as what is already playing.
+    func testStopBeforeFallbackSpeaksNothing() async throws {
+        final class SlowFailing: SpeechProvider, @unchecked Sendable {
+            let name = "slow"
+            let isConfigured = true
+            var isSpeaking = false
+            func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                throw SpeechError.synthesisFailed("network")  // would fall back
+            }
+            func stop() {}
+        }
+        final class CountingVoice: SpeechProvider, @unchecked Sendable {
+            let name = "counting"
+            let isConfigured = true
+            var isSpeaking = false
+            var spoke = 0
+            func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
+                spoke += 1
+            }
+            func stop() {}
+        }
+        let fallback = CountingVoice()
+        let chain = SpeechChain(preferred: SlowFailing(), fallback: fallback)
+        let text = SpokenTextSanitizer().sanitize("This should never be read aloud.")
+
+        async let spoken = chain.speak(text)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        chain.stop()   // pressed again while the first was still fetching
+        let result = await spoken
+
+        XCTAssertEqual(fallback.spoke, 0,
+                       "a cancelled announcement must not reappear in the system voice")
+        XCTAssertFalse(result.completed)
+    }
+
     func testNothingIsAnnouncedTwice() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)
