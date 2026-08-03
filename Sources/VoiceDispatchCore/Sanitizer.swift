@@ -21,10 +21,14 @@ public struct SanitizedSpokenText: Sendable, Equatable {
 }
 
 public struct SpokenTextSanitizer: Sendable {
-    /// Spoken summaries are budgeted in seconds, not words. Measured with `say`:
-    /// 25 words ≈ 9.9s, 42 words ≈ 16.3s, 81 words ≈ 29.0s. 35 words is ~13s, which
-    /// is about as long as an unsolicited interruption can reasonably be.
-    public static let maxWords = 35
+    /// Budgeted in seconds, not words. Measured with `say -r 200`: 39 words = 16.5s,
+    /// so roughly 0.42s per word.
+    ///
+    /// 70 words is the deliberate target: Claude Code's own session recap (under 40
+    /// words — goal, current task, next action) followed by ~30 more covering the key
+    /// result, the next step, and any decision or risk. That is about thirty seconds.
+    /// Longer than a notification, shorter than opening the tab and reading.
+    public static let maxWords = 75
 
     public init() {}
 
