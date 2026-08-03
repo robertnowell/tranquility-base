@@ -14,6 +14,18 @@ public protocol SpeechProvider: Sendable {
     func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws
     func stop()
     var isSpeaking: Bool { get }
+
+    /// Hold playback without ending it. `speak` stays suspended, so an announcement
+    /// paused half-way is still in progress and still unread.
+    func pause()
+    func resume()
+    var isPaused: Bool { get }
+}
+
+extension SpeechProvider {
+    public func pause() {}
+    public func resume() {}
+    public var isPaused: Bool { false }
 }
 
 extension SpeechProvider {
@@ -207,13 +219,13 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         // reading rather than to rendering — 40ms was needless CPU for a cosmetic
         // effect. ~8/second is well past what the eye resolves for word highlighting.
         guard let starts, let onWord else {
-            while audio.isPlaying { try await Task.sleep(nanoseconds: 200_000_000) }
+            while audio.isPlaying || isPaused { try await Task.sleep(nanoseconds: 200_000_000) }
             try checkForTruncation(audio, generation: mine)
             return
         }
 
         var lastIndex = -1
-        while audio.isPlaying {
+        while audio.isPlaying || isPaused {
             do {
                 // Character index whose start time has just passed.
                 let now = audio.currentTime
@@ -244,6 +256,13 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         player?.stop()
         player = nil
     }
+
+    public var isPaused: Bool { player != nil && !(player?.isPlaying ?? false) }
+
+    /// AVAudioPlayer keeps `currentTime` across a pause, so resuming continues from
+    /// where it stopped rather than starting the summary over.
+    public func pause() { player?.pause() }
+    public func resume() { player?.play() }
 }
 
 // MARK: - Chain
@@ -271,6 +290,20 @@ public struct SpeechChain: Sendable {
 
     public var isSpeaking: Bool {
         (preferred?.isSpeaking ?? false) || fallback.isSpeaking
+    }
+
+    public var isPaused: Bool { (preferred?.isPaused ?? false) || fallback.isPaused }
+
+    /// Pause and resume, so stopping to think does not cost you the announcement.
+    /// Toggling is one call because the caller has one button and one chord.
+    public func togglePause() {
+        if isPaused {
+            preferred?.resume()
+            fallback.resume()
+        } else {
+            preferred?.pause()
+            fallback.pause()
+        }
     }
 
     /// Cut speech off immediately. A tap while it is talking means "stop", and a
