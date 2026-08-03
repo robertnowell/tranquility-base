@@ -134,7 +134,7 @@ final class SanitizerTests: XCTestCase {
                 throw SummaryError.emptyResponse
             }
         }
-        let chain = SummarizerChain(providers: [AlwaysFails()], resolvePullRequests: false)
+        let chain = SummarizerChain(providers: [AlwaysFails()])
         let summary = await chain.summarize(
             SummaryRequest(lastAssistantMessage: "Did the thing.", projectLabel: "kopi"))
         XCTAssertFalse(summary.spoken.text.isEmpty)
@@ -167,12 +167,19 @@ extension SanitizerTests {
         XCTAssertFalse(spoken.contains("deploy to staging"))
     }
 
-    func testPullRequestIsAnnouncedWhenPresent() {
-        let brief = SessionBrief(
-            topic: "Footer flag",
-            happened: "migration written",
-            pullRequest: PullRequestRef(number: 2258, title: "Canonical footer", state: "OPEN", url: ""))
-        XCTAssertTrue(brief.spokenText().contains("Pull request 2258 is open"))
+    /// A PR reaches the summary only by way of the session having talked about it.
+    /// Nothing appends one from a lookup, so a merged-months-ago PR whose branch is
+    /// still checked out can no longer be announced as though it were news.
+    func testNothingAppendsAPullRequestTheSessionDidNotMention() {
+        let quiet = SessionBrief(topic: "Footer flag", happened: "migration written",
+                                 branch: "feat/canonical-footer")
+        XCTAssertFalse(quiet.spokenText().lowercased().contains("pull request"))
+
+        let spoke = SessionBrief(
+            topic: "Footer flag", happened: "migration written",
+            recap: "Footer flag is wired and PR 2258 is up.", proposal: "Merge it?")
+        XCTAssertTrue(spoke.spokenText().contains("PR 2258"),
+                      "what the session itself said still comes through verbatim")
     }
 
     func testCardCarriesEveryFieldThatExists() {
