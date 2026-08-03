@@ -70,8 +70,6 @@ final class StatusHUD: NSObject {
         // 20Hz: fast enough that the waveform tracks syllables rather than words.
         let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] timer in
             guard let self, self.isListening else { return timer.invalidate() }
-            let seconds = Date().timeIntervalSince(self.listenStartedAt ?? Date())
-            self.stateLabel.stringValue = String(format: "● Listening  %.0fs", seconds)
             self.meter.push(CGFloat(Self.meterFraction(self.levelSource?() ?? 0)))
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -348,7 +346,7 @@ final class StatusHUD: NSObject {
                 for i in 0..<80 { self.meter.push(CGFloat(0.2 + 0.6 * abs(sin(Double(i) / 4)))) }
                 self.panel?.contentView?.layoutSubtreeIfNeeded()
                 Permissions.log(
-                    "meter frame=\(self.meter.frame) hidden=\(self.meter.isHidden)")
+                    "meter frame=\(self.meter.frame) hidden=\(self.meter.isHidden) style=centred")
             }),
             ("result", { self.showResult(long, ok: false) }),
         ] as [(String, () -> Void)] {
