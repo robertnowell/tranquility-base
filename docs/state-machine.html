@@ -1,0 +1,199 @@
+<title>Voice Dispatch — input state machine</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #16150f; --dim: #6b675c; --rule: #e2ded4;
+    --ok: #1f6f43; --gap: #a3311f; --gap-bg: #fdf1ee; --code-bg: #f2efe8;
+    --measure: 74ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #131310; --fg: #eceae2; --dim: #8f8a7c; --rule: #2c2b25;
+            --ok: #6fbf8e; --gap: #e8836c; --gap-bg: #2a1a15; --code-bg: #1e1d19; }
+  }
+  :root[data-theme="dark"] {
+    --bg: #131310; --fg: #eceae2; --dim: #8f8a7c; --rule: #2c2b25;
+    --ok: #6fbf8e; --gap: #e8836c; --gap-bg: #2a1a15; --code-bg: #1e1d19;
+  }
+  :root[data-theme="light"] {
+    --bg: #fbfaf8; --fg: #16150f; --dim: #6b675c; --rule: #e2ded4;
+    --ok: #1f6f43; --gap: #a3311f; --gap-bg: #fdf1ee; --code-bg: #f2efe8;
+  }
+  body { background: var(--bg); color: var(--fg); margin: 0;
+         font: 16px/1.55 ui-sans-serif, -apple-system, "Helvetica Neue", sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 56px 24px 96px; }
+  h1 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .sub { color: var(--dim); margin: 0 0 40px; max-width: var(--measure); }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.1em;
+       margin: 44px 0 4px; padding-top: 18px; border-top: 1px solid var(--rule); }
+  .when { color: var(--dim); font-size: 14px; margin: 0 0 14px; max-width: var(--measure); }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 720px; }
+  th { text-align: left; font-weight: 600; color: var(--dim); font-size: 12px;
+       text-transform: uppercase; letter-spacing: 0.07em; padding: 6px 12px 6px 0;
+       border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  td { padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  td:first-child { white-space: nowrap; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+                   font-size: 13.5px; }
+  tr.gap td { background: var(--gap-bg); }
+  .tag { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+         font-weight: 700; color: var(--gap); }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px;
+         font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+  .gaps { margin-top: 52px; }
+  .gaps ol { max-width: var(--measure); padding-left: 20px; }
+  .gaps li { margin-bottom: 14px; }
+  .note { color: var(--dim); font-size: 14px; max-width: var(--measure); }
+</style>
+
+<div class="wrap">
+
+<h1>Voice Dispatch — input state machine</h1>
+<p class="sub">Every state, every input, and what actually happens today. Read from the
+handlers rather than from memory. Rows shaded red are gaps: behaviour that is undefined,
+inconsistent, or wrong. There are seven of them.</p>
+
+<p class="note"><strong>Inputs.</strong> <code>⌃⌥</code> tap = hear next ·
+<code>⌥</code> hold = reply · <code>⇧</code> tap = pause/resume ·
+<code>Esc</code> = dismiss · plus the panel buttons.
+A modifier gesture is cancelled if any other key or click happens during it.</p>
+
+<h2>1 · Idle, nothing waiting</h2>
+<p class="when">Panel shows <code>◌ Ready</code>. No session in hand.</p>
+<div class="scroll"><table>
+<tr><th>Input</th><th>Today</th><th>Should be</th></tr>
+<tr><td>⌃⌥ tap</td><td>Checks unread, then history. Both empty → repaints idle, no flash.</td><td>Same.</td></tr>
+<tr class="gap"><td>⌥ hold</td><td>Starts recording with no reply target. Transcribes, then fails with "nothing to reply to".</td><td><span class="tag">Gap 1</span> Refuse before recording. Don't spend a transcription on a reply that cannot land.</td></tr>
+<tr><td>⇧ tap</td><td>Nothing (nothing playing).</td><td>Same.</td></tr>
+<tr class="gap"><td>Esc</td><td>Nothing. <code>isBusyOnScreen</code> is false, so the panel cannot be hidden with the keyboard.</td><td><span class="tag">Gap 2</span> Hide the panel.</td></tr>
+<tr><td>Dismiss</td><td>Hides the panel. No event to retire.</td><td>Same.</td></tr>
+<tr><td>⚙</td><td>Settings.</td><td>Same.</td></tr>
+</table></div>
+
+<h2>2 · Idle, n waiting</h2>
+<p class="when">Panel shows <code>◌ 3 waiting</code>. Reached by arrival, or after hearing something.</p>
+<div class="scroll"><table>
+<tr><th>Input</th><th>Today</th><th>Should be</th></tr>
+<tr><td>⌃⌥ tap</td><td>Announces the newest unread. → Speaking.</td><td>Same.</td></tr>
+<tr class="gap"><td>⌥ hold</td><td>Same as gap 1: records against no target.</td><td><span class="tag">Gap 1</span> Refuse, and say why.</td></tr>
+<tr><td>⇧ tap</td><td>Nothing.</td><td>Same.</td></tr>
+<tr class="gap"><td>Esc</td><td>Nothing.</td><td><span class="tag">Gap 2</span> Hide the panel.</td></tr>
+<tr><td>Dismiss</td><td>Hides. Queue untouched.</td><td>Same.</td></tr>
+</table></div>
+
+<h2>3 · Preparing</h2>
+<p class="when"><code>◌ Preparing</code>. Summarizing and fetching audio; 1–3 seconds.</p>
+<div class="scroll"><table>
+<tr><th>Input</th><th>Today</th><th>Should be</th></tr>
+<tr><td>⌃⌥ tap</td><td>Cancels this one, awaits it, starts the next. Serialized, so no overlap.</td><td>Same.</td></tr>
+<tr class="gap"><td>⌥ hold</td><td>Records. <code>currentEventId</code> is nil, so nothing is marked heard and the reply has no target.</td><td><span class="tag">Gap 3</span> Either wait for the announcement to resolve, or refuse.</td></tr>
+<tr><td>⇧ tap</td><td>Nothing — no audio yet.</td><td>Same. (Arguably should cancel.)</td></tr>
+<tr><td>Esc</td><td>Stops and dismisses the pending item.</td><td>Same.</td></tr>
+</table></div>
+
+<h2>4 · Speaking / Catching up</h2>
+<p class="when"><code>◀ Speaking</code> or <code>↺ Catching up</code>. Audio playing, highlight advancing.</p>
+<div class="scroll"><table>
+<tr><th>Input</th><th>Today</th><th>Should be</th></tr>
+<tr><td>⌃⌥ tap</td><td>Stops, moves to the next. The stopped item stays unread.</td><td>Same.</td></tr>
+<tr><td>⌥ hold</td><td>Marks this heard, stops playback, records. This is the main path.</td><td>Same.</td></tr>
+<tr><td>⇧ tap</td><td>Pauses. → Paused.</td><td>Same.</td></tr>
+<tr><td>Esc</td><td>Stops the voice and retires the item.</td><td>Same.</td></tr>
+<tr><td>Reply</td><td>Starts recording, same as ⌥ hold.</td><td>Same.</td></tr>
+<tr><td>Go to session</td><td>Focuses the tab. Audio keeps playing.</td><td>Same.</td></tr>
+</table></div>
+
+<h2>5 · Paused</h2>
+<p class="when"><code>❙❙ Paused</code>. Position retained; the item is still unread.</p>
+<div class="scroll"><table>
+<tr><th>Input</th><th>Today</th><th>Should be</th></tr>
+<tr><td>⇧ tap</td><td>Resumes from the same position.</td><td>Same.</td></tr>
+<tr class="gap"><td>⌃⌥ tap</td><td>Announces the next item. The paused player is stopped, but the panel still reads Paused until the new one renders.</td><td><span class="tag">Gap 4</span> Clear the paused state when moving on.</td></tr>
+<tr><td>⌥ hold</td><td>Marks heard, stops, records.</td><td>Same.</td></tr>
+<tr><td>Esc</td><td>Stops and retires.</td><td>Same.</td></tr>
+</table></div>
+
+<h2>6 · Listening</h2>
+<p class="when"><code>● Listening</code> with the meter. Mic open, ⌥ still held.</p>
+<div class="scroll"><table>
+<tr><th>Input</th><th>Today</th><th>Should be</th></tr>
+<tr><td>release ⌥</td><td>Stops, transcribes, then the send window.</td><td>Same.</td></tr>
+<tr class="gap"><td>Esc</td><td>Nothing. <code>isBusyOnScreen</code> checks <code>isRecording</code> (the button flag) but not <code>isListening</code> (the hold flag), so Escape is dead during the exact gesture people use.</td><td><span class="tag">Gap 5</span> Cancel the recording and discard the audio.</td></tr>
+<tr class="gap"><td>⌃⌥ tap</td><td>Starts an announcement while the mic is open. It would record the announcement.</td><td><span class="tag">Gap 6</span> Ignore while recording.</td></tr>
+<tr><td>any other key / click</td><td>Gesture aborted, audio discarded.</td><td>Same.</td></tr>
+<tr><td>Dismiss</td><td>Stops the recorder and hides.</td><td>Same.</td></tr>
+</table></div>
+
+<h2>7 · Transcribing</h2>
+<p class="when"><code>◌ Working</code>. Between release and the send window; roughly a second.</p>
+<div class="scroll"><table>
+<tr><th>Input</th><th>Today</th><th>Should be</th></tr>
+<tr><td>⌥ hold</td><td>Supersedes the in-flight reply and records again. The old transcript is discarded, never sent.</td><td>Same.</td></tr>
+<tr><td>Esc</td><td>Nothing — no flag is set for this state.</td><td>Cancel the pending transcription.</td></tr>
+<tr><td>⌃⌥ tap</td><td>Announces over the top. The reply still completes.</td><td>Same, arguably.</td></tr>
+</table></div>
+
+<h2>8 · Send window (4s)</h2>
+<p class="when"><code>→ Sending to promotions</code> with the bar. Sends when it runs out.</p>
+<div class="scroll"><table>
+<tr><th>Input</th><th>Today</th><th>Should be</th></tr>
+<tr><td>⌥ hold</td><td>Cancels the send, discards that transcript, records again.</td><td>Same.</td></tr>
+<tr><td>Don't send</td><td>Cancels and reopens the mic.</td><td>Same.</td></tr>
+<tr><td>Esc</td><td>Cancels the send and dismisses.</td><td>Same.</td></tr>
+<tr class="gap"><td>⌃⌥ tap</td><td>Starts an announcement. The countdown keeps running, so the reply sends while a new summary plays.</td><td><span class="tag">Gap 7</span> Decide: either the countdown wins and the tap is ignored, or the tap cancels the send.</td></tr>
+</table></div>
+
+<h2>9 · Result</h2>
+<p class="when"><code>▶ Sent</code> auto-hides after 6s. <code>⚠ Needs you</code> stays until dismissed.</p>
+<div class="scroll"><table>
+<tr><th>Input</th><th>Today</th><th>Should be</th></tr>
+<tr><td>⌃⌥ tap</td><td>Announces the next.</td><td>Same.</td></tr>
+<tr><td>Esc</td><td>On failure, dismisses. On success, nothing (already inert).</td><td>Same.</td></tr>
+<tr><td>Dismiss</td><td>Hides.</td><td>Same.</td></tr>
+</table></div>
+
+<h2>10 · Settings</h2>
+<p class="when"><code>‹ Back</code> breadcrumb, voice popup, no action row.</p>
+<div class="scroll"><table>
+<tr><th>Input</th><th>Today</th><th>Should be</th></tr>
+<tr><td>pick a voice</td><td>Saves, stops the last preview, reads your most recent summary.</td><td>Same.</td></tr>
+<tr><td>‹ Back</td><td>Stops the preview, returns to idle.</td><td>Same.</td></tr>
+<tr class="gap"><td>Esc</td><td>Nothing. Settings sets none of the busy flags, so the one key everyone presses to leave a screen does nothing.</td><td><span class="tag">Gap 2</span> Same as Back.</td></tr>
+<tr><td>⌃⌥ tap</td><td>Announces over the settings panel, which then repaints as Speaking.</td><td>Acceptable.</td></tr>
+</table></div>
+
+<div class="gaps">
+<h2>The seven gaps, ranked</h2>
+<ol>
+  <li><strong>Escape is dead in three states</strong> (idle, listening, settings) because
+  <code>isBusyOnScreen</code> tests <code>isRecording</code> — the button flag — and not
+  <code>isListening</code>, the flag the hold gesture actually sets. So Escape does nothing
+  during the single most common interaction. One condition, three states fixed.</li>
+
+  <li><strong>⌃⌥ while the mic is open</strong> starts an announcement into a live
+  microphone. It would literally record itself. Should be ignored while recording.</li>
+
+  <li><strong>⌥ with no target</strong> (idle, or during Preparing) records and transcribes
+  a reply that has nowhere to go, then fails. Refuse at the gesture instead of spending a
+  transcription to discover it.</li>
+
+  <li><strong>⌃⌥ during the send window</strong> is genuinely ambiguous: the reply still
+  sends while a new summary starts playing. Needs a decision, not a fix.</li>
+
+  <li><strong>⌃⌥ while paused</strong> leaves the panel reading Paused until the next
+  announcement renders. Cosmetic, one line.</li>
+
+  <li><strong>Escape during transcription</strong> has no state to hang off. Lowest value:
+  the window is about a second.</li>
+
+  <li><strong>⇧ during Preparing</strong> does nothing. Arguably it should cancel, since
+  "stop this" is what the key means everywhere else.</li>
+</ol>
+
+<p class="note">The pattern behind most of these: the panel tracks
+<code>isRecording</code>, <code>isListening</code>, <code>isSpeakingNow</code>,
+<code>awaitingConfirm</code> and <code>isIdle</code> as five independent booleans, and
+every guard picks its own subset. That is why Escape works in some states and not others,
+and why <code>isBusyOnScreen</code> could silently omit the hold path. One enum with one
+case per state would make each of these unrepresentable rather than merely fixed.</p>
+</div>
+
+</div>
