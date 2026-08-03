@@ -155,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onDismiss = { [weak self] in
             guard let self else { return }
             self.coordinator?.speech.stop()
+            GreetingCache.stop()
             self.isAnnouncing = false
             if self.recorder.isRecording { _ = try? self.recorder.stop() }
             self.isBusy = false
@@ -266,10 +267,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // A greeting is not worth a bad impression. If the good voice is
             // unavailable the app simply starts quietly; the panel still appears,
             // which is the part that matters.
-            let chain = SpeechChain()
-            if chain.preferred?.isConfigured == true {
-                _ = await chain.speak(SpokenTextSanitizer().sanitize(line))
-            }
+            // Cached per voice: the same sentence every launch is not worth
+            // re-synthesizing, or worth a network round trip in front of the first
+            // thing the app does.
+            await GreetingCache.speak(line)
             if !Permissions.allGranted {
                 onboarding.show { [weak self] in self?.refresh() }
             }
