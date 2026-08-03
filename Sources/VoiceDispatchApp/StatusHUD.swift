@@ -61,27 +61,27 @@ final class StatusHUD: NSObject {
         levelSource = level
         listenStartedAt = Date()
         show(state: "● Listening", title: "Replying to \(currentTarget?.label ?? "this session")",
-             body: Self.meter(0), autoHideAfter: nil)
+             body: "", autoHideAfter: nil)
+        progressBar.isHidden = false
+        progressBar.doubleValue = 0
 
         meterTimer?.invalidate()
         let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] timer in
             guard let self, self.isListening else { return timer.invalidate() }
             let seconds = Date().timeIntervalSince(self.listenStartedAt ?? Date())
             self.stateLabel.stringValue = String(format: "● Listening  %.0fs", seconds)
-            self.bodyLabel.stringValue = Self.meter(self.levelSource?() ?? 0)
+            self.progressBar.doubleValue = Self.meterFraction(self.levelSource?() ?? 0) * 100
         }
         RunLoop.main.add(timer, forMode: .common)
         meterTimer = timer
     }
 
-    /// RMS is tiny for speech, so this is scaled to make normal talking fill most of
-    /// the bar rather than sitting near zero and looking broken.
-    nonisolated private static func meter(_ level: Float) -> String {
-        let width = 28
-        let scaled = min(1, sqrt(max(0, Double(level))) * 3.2)
-        let filled = Int((scaled * Double(width)).rounded())
-        return String(repeating: "\u{2588}", count: filled)
-            + String(repeating: "\u{2591}", count: width - filled)
+    /// RMS for speech is small, so it is square-rooted and scaled. The old factor of
+    /// 3.2 pinned the bar at full for ordinary talking, which reads as clipping and
+    /// makes you drop your voice to compensate; 2.0 leaves normal speech around
+    /// two-thirds and keeps headroom visible.
+    nonisolated private static func meterFraction(_ level: Float) -> Double {
+        min(1, sqrt(max(0, Double(level))) * 2.0)
     }
 
     func showAnnouncement(
@@ -433,6 +433,8 @@ final class StatusHUD: NSObject {
             stack.bottomAnchor.constraint(equalTo: background.bottomAnchor),
             bodyLabel.widthAnchor.constraint(equalToConstant: 348),
             hintLabel.widthAnchor.constraint(equalToConstant: 348),
+            titleLabel.widthAnchor.constraint(equalToConstant: 348),
+            stateLabel.widthAnchor.constraint(equalToConstant: 348),
         ])
         self.contentStack = stack
 
@@ -540,6 +542,7 @@ final class StatusHUD: NSObject {
         isListening = false
         meterTimer?.invalidate()
         meterTimer = nil
+        progressBar?.isHidden = true
         replyButton?.title = "Reply"
     }
 
