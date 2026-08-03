@@ -191,7 +191,17 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
 
         let audio = try AVAudioPlayer(data: audioData)
         player = audio
-        audio.play()
+        audio.prepareToPlay()
+        guard audio.play() else { throw SpeechError.synthesisFailed("player refused to start") }
+
+        // play() returns before isPlaying flips. Without this the polling loop below
+        // exits on its first test and the audio is reported as having stopped at 0s.
+        for _ in 0..<20 where !audio.isPlaying {
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        guard audio.isPlaying || audio.currentTime > 0 else {
+            throw SpeechError.synthesisFailed("playback never started")
+        }
 
         // Only poll when there is a highlight to drive, and at a rate matched to
         // reading rather than to rendering — 40ms was needless CPU for a cosmetic
@@ -279,12 +289,16 @@ public struct SpeechChain: Sendable {
         /// still unread either way, but this is a fault to surface rather than a
         /// choice to respect quietly.
         public var failure: String?
+        /// Set when the preferred voice failed and the system voice covered for it.
+        /// The announcement WAS heard; this exists so a silent downgrade is visible.
+        public var degraded: String?
     }
 
     @discardableResult
     public func speak(
         _ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)? = nil
     ) async -> Spoken {
+        var degraded: String?
         if let preferred, preferred.isConfigured {
             do {
                 ElevenLabsSpeechProvider.trace?("chain: trying \(preferred.name)")
@@ -293,10 +307,11 @@ public struct SpeechChain: Sendable {
             } catch SpeechError.interrupted {
                 return Spoken(provider: preferred.name, completed: false)
             } catch SpeechError.truncated(let played, let total) {
-                return Spoken(
-                    provider: preferred.name, completed: false,
-                    failure: String(format: "audio stopped at %.0fs of %.0fs", played, total))
+                // Cut off part-way. Re-reading the whole thing in the system voice is
+                // better than leaving you with a fragment and a fault message.
+                degraded = String(format: "cut off at %.0fs of %.0fs", played, total)
             } catch {
+                degraded = "\(error)"
                 ElevenLabsSpeechProvider.trace?("chain: \(preferred.name) failed: \(error)")
                 // fall through to the system voice for this utterance only
             }
@@ -307,9 +322,14 @@ public struct SpeechChain: Sendable {
         ElevenLabsSpeechProvider.trace?("chain: falling back to \(fallback.name)")
         do {
             try await fallback.speak(text, onWord: onWord)
-            return Spoken(provider: fallback.name, completed: true)
-        } catch {
+            // Heard, in the plainer voice. Not a failure — a degradation, reported
+            // so an outage cannot hide behind a robotic voice you assume is normal.
+            return Spoken(provider: fallback.name, completed: true, degraded: degraded)
+        } catch SpeechError.interrupted {
             return Spoken(provider: fallback.name, completed: false)
+        } catch {
+            return Spoken(
+                provider: fallback.name, completed: false, failure: "\(error)")
         }
     }
 }
