@@ -232,10 +232,14 @@ public struct Coordinator: Sendable {
         } else {
             candidate = try nextToAnnounce()
         }
-        if candidate == nil, eventId == nil {
-            candidate = try nextForCatchUp()
-            isCatchUp = candidate != nil
-        }
+        // Catch-up is no longer a fallback. It was mine, and it made the app feel
+        // broken: with the unread empty, every press replayed something already
+        // heard, so new arrivals were indistinguishable from old ones being read
+        // out again. Nothing waiting should mean nothing waiting.
+        //
+        // History is still reachable, deliberately and never by accident: the
+        // waiting list shows it and picking a row plays it.
+        _ = isCatchUp
         guard var event = candidate else { return .nothingWaiting }
 
         if !ignoringGate {
