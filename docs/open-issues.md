@@ -52,19 +52,24 @@ value from each path before choosing the signal. Do not ship a third guess.
 
 ---
 
-## 2. Ambient surfacing does not fire when the panel is hidden
+## 2. Ambient surfacing did not fire for a superseding turn — FIXED
 
-**Status:** open, partially built.
+**Status:** fixed, verified by experiment.
 
-`surfaceArrival` exists and the gate is consulted, but arrivals are not reaching the
-screen in practice. Two candidate causes, untested:
+The mechanism was working; the trigger was wrong. Surfacing fired on the waiting
+COUNT changing, which misses the commonest case there is: a session taking several
+turns in a row. Each new turn supersedes the previous, so the count goes 1 to 1 and
+nothing repaints.
 
-- the panel is `.hidden`, and the refresh only runs when the count *changes* — a
-  count that was already 2 stays 2, so nothing repaints;
-- issue 1 keeps the count permanently non-zero, so a genuine new arrival never looks
-  like a change.
+Proven rather than argued. Two turns were injected for one session with the panel
+idle:
 
-Fix 1 first, then re-test this. They may be the same bug.
+- turn A (new session, count 0 to 1) — surfaced;
+- turn B (same session, supersedes A, count 1 to 1) — **nothing**, `a1` went
+  superseded and `a2` went new and the panel never moved.
+
+The trigger is now "rows were inserted", which is what "a turn came back" actually
+means. Re-run against a settled baseline: a superseding turn surfaces.
 
 ---
 
