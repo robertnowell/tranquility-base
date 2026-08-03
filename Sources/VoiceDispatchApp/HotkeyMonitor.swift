@@ -24,6 +24,8 @@ public final class HotkeyMonitor: @unchecked Sendable {
         case next
         /// Shift, tapped on its own.
         case pauseToggled
+        /// ⌃⇧ tapped: dismiss what the panel is showing.
+        case dismiss
         /// Option, held past the threshold.
         case replyBegan
         case replyEnded
@@ -47,6 +49,13 @@ public final class HotkeyMonitor: @unchecked Sendable {
         public var next: CGEventFlags = [.maskControl, .maskAlternate]
         public var pause: CGEventFlags = .maskShift
         public var reply: CGEventFlags = .maskAlternate
+        /// Dismiss is a modifier chord, NOT Escape. The tap is listen-only, so any
+        /// Escape variant still delivers ESC to the focused terminal — and in a
+        /// Claude Code session ESC interrupts the running turn. A dismiss key that
+        /// cancels your agent's work is worse than no dismiss key. Bare modifiers
+        /// type nothing anywhere, which is the property the whole gesture set is
+        /// built on.
+        public var dismiss: CGEventFlags = [.maskControl, .maskShift]
         public init() {}
     }
 
@@ -105,7 +114,8 @@ public final class HotkeyMonitor: @unchecked Sendable {
         switch flags {
         case bindings.next: onTransition(.next)
         case bindings.pause: onTransition(.pauseToggled)
-        default: break  // Option tapped, or two modifiers: no action.
+        case bindings.dismiss: onTransition(.dismiss)
+        default: break  // Option tapped, or an unassigned combination: no action.
         }
     }
 
@@ -168,23 +178,12 @@ public final class HotkeyMonitor: @unchecked Sendable {
         }
     }
 
-    /// Called on Escape. Set by the app; ignored when nothing is active.
-    var onEscape: (() -> Void)?
-
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // The system disables a tap that times out or is interrupted by user input.
         // Silently re-enabling is the difference between "works" and "worked until
         // the machine got busy once".
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
-            return Unmanaged.passUnretained(event)
-        }
-
-        // Escape dismisses, but only while the panel is showing something you would
-        // want to stop. The tap is listen-only, so the keystroke still reaches
-        // whatever is frontmost — we observe it, we do not swallow it.
-        if type == .keyDown, event.getIntegerValueField(.keyboardEventKeycode) == 53 {
-            onEscape?()
             return Unmanaged.passUnretained(event)
         }
 

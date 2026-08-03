@@ -388,7 +388,7 @@ public struct ClaudeAgentsCLI: ClaudeAgentsReading {
     private static let cache = Cache()
 
     public func sessions() -> [LiveSession]? {
-        if let cached = Self.cache.get(maxAge: 3) { return cached }
+        if let cached = Self.cache.get(maxAge: 6) { return cached }
         guard let binary = Self.resolveBinary() else {
             Self.trace?("liveness: claude binary not found")
             return nil
