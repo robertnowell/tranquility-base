@@ -34,26 +34,20 @@ mkdir -p "$SUPPORT_DIR" 2>/dev/null || exit 0
 # terminal. There is no tab to open and no session to answer, so an announcement
 # about one is pure noise: you cannot act on it and it competes with sessions you
 # can. The parent process's tty is `??` exactly in that case.
-# Walk up the process tree rather than trusting $PPID.
+# Record the controlling terminal; do not act on it here.
 #
-# $PPID is whatever spawned this script, which is not reliably the claude process:
-# a wrapper shell, a pipeline, or a tool harness can sit in between, and any of
-# those can lack a controlling terminal while claude itself has one. Trusting it
-# silently dropped real turns from real terminals, which is the worst possible
-# failure for a hook whose entire job is not losing events.
+# Headless runs (claude -p from launchd or cron) have no tty and are not worth
+# announcing: no tab to open, no session to answer. But deciding that HERE means
+# deciding it in the one place where being wrong is unrecoverable, and two attempts
+# were already wrong. $PPID is not reliably claude, so real turns from real
+# terminals were dropped silently. Walking the ancestry crosses the session
+# boundary, so headless runs looked interactive.
 #
-# A truly headless run has no tty ANYWHERE in its ancestry, so that is what to ask.
-PID=$$
-HAS_TTY=0
-for _ in 1 2 3 4 5 6 7 8; do
-  [ -z "$PID" ] || [ "$PID" = "0" ] || [ "$PID" = "1" ] && break
-  T=$(ps -o tty= -p "$PID" 2>/dev/null | tr -d '[:space:]')
-  if [ -n "$T" ] && [ "$T" != "??" ]; then HAS_TTY=1; break; fi
-  PID=$(ps -o ppid= -p "$PID" 2>/dev/null | tr -d '[:space:]')
-done
-if [ "$HAS_TTY" = "0" ]; then
-  exit 0
-fi
+# So the hook records what it sees and the app decides. A row that should not have
+# been kept costs one filtered query; a row that should have been kept and was
+# thrown away at the source is gone, with no trace that it ever existed.
+OWN_TTY=$(ps -o tty= -p $$ 2>/dev/null | tr -d '[:space:]')
+export VOICE_DISPATCH_TTY="$OWN_TTY"
 
 python3 - "$SPOOL" "$PAYLOAD" <<'PY' 2>/dev/null || true
 import json, os, sys, time, uuid
@@ -98,6 +92,7 @@ record = {
     "transcriptPath": p.get("transcript_path"),
     "lastAssistantMessage": msg,
     "notificationMatcher": p.get("matcher") or p.get("notification_type"),
+    "tty": os.environ.get("VOICE_DISPATCH_TTY") or None,
 }
 
 if not record["sessionId"]:
