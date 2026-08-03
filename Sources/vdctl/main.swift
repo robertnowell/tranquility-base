@@ -232,11 +232,24 @@ do {
             print("usage: vdctl set-key <anthropic|elevenlabs|assemblyai>")
             exit(1)
         }
-        // getpass keeps the value off the terminal and out of any process argv.
-        guard let entered = getpass("Paste \(key.rawValue) (input hidden): ").map({ String(cString: $0) }),
-              !entered.isEmpty
-        else { print("nothing entered"); exit(1) }
-        try Secrets.write(key, value: entered)
+        let value: String
+        if args.count > 3, args[2] == "--from-env" {
+            // Lets a secret broker inject the value (e.g.
+            //   claude-secrets run --inject NAME=VD_KEY -- vdctl set-key anthropic --from-env VD_KEY)
+            // so it never appears in argv, in a terminal, or in scrollback.
+            guard let injected = ProcessInfo.processInfo.environment[args[3]], !injected.isEmpty else {
+                print("environment variable \(args[3]) is empty or unset")
+                exit(1)
+            }
+            value = injected
+        } else {
+            // getpass keeps the value off the terminal and out of any process argv.
+            guard let entered = getpass("Paste \(key.rawValue) (input hidden): ").map({ String(cString: $0) }),
+                  !entered.isEmpty
+            else { print("nothing entered"); exit(1) }
+            value = entered
+        }
+        try Secrets.write(key, value: value)
         print("stored \(key.rawValue) in the login keychain (service: \(Secrets.service))")
 
     case "summarize":
@@ -252,6 +265,7 @@ do {
 
     case "summarize-corpus":
         let n = args.count > 1 ? Int(args[1]) ?? 10 : 10
+        let showInput = args.contains("--show-input")
         let samples = TranscriptArchive.recentSamples(limit: n)
         guard !samples.isEmpty else { print("no archived transcripts found"); break }
 
@@ -271,15 +285,97 @@ do {
 
             // ~13s of speech at 35 words; scale linearly from the measured rate.
             let seconds = Double(w) * 0.39
-            print("\(pad(sample.projectLabel, 16)) \(pad("\(w)w", 5)) \(pad(String(format: "%.0fs", seconds), 5)) \(pad("\(summary.latencyMs)ms", 8)) \(summary.spoken.text)")
-            if !summary.spoken.redactions.isEmpty {
-                print("\(String(repeating: " ", count: 16)) redacted: \(Set(summary.spoken.redactions).sorted().joined(separator: ", "))")
+
+            if showInput {
+                print(String(repeating: "─", count: 100))
+                print("PROJECT  \(sample.projectLabel)   (\(sample.lastAssistantMessage.count) chars in)")
+                print("")
+                print("INPUT — the agent's final message:")
+                let input = sample.lastAssistantMessage
+                let shown = input.count > 900 ? String(input.prefix(900)) + "\n[… \(input.count - 900) more chars]" : input
+                for line in shown.split(separator: "\n", omittingEmptySubsequences: false) {
+                    print("  \(line)")
+                }
+                print("")
+                print("OUTPUT — \(w) words, ~\(String(format: "%.0f", seconds))s spoken, \(summary.latencyMs)ms, via \(summary.provider):")
+                print("  \(summary.spoken.text)")
+                if !summary.spoken.redactions.isEmpty {
+                    print("  redacted: \(Set(summary.spoken.redactions).sorted().joined(separator: ", "))")
+                }
+                print("")
+            } else {
+                print("\(pad(sample.projectLabel, 16)) \(pad("\(w)w", 5)) \(pad(String(format: "%.0fs", seconds), 5)) \(pad("\(summary.latencyMs)ms", 8)) \(summary.spoken.text)")
+                if !summary.spoken.redactions.isEmpty {
+                    print("\(String(repeating: " ", count: 16)) redacted: \(Set(summary.spoken.redactions).sorted().joined(separator: ", "))")
+                }
             }
         }
 
         print("")
         print("mean \(totalWords / samples.count) words (~\(String(format: "%.0f", Double(totalWords) / Double(samples.count) * 0.39))s), \(totalMs / samples.count)ms")
         print("over budget: \(overBudget)/\(samples.count)   needed redaction: \(withRedactions)/\(samples.count)")
+
+    // MARK: speech + gate
+
+    case "speak":
+        guard args.count > 1 else { usage() }
+        let spoken = SpokenTextSanitizer().sanitize(args.dropFirst().joined(separator: " "))
+        print("[\(spoken.wordCount) words, ~\(String(format: "%.0f", Double(spoken.wordCount) * 0.39))s]")
+        print(spoken.text)
+        let start = Date()
+        let used = await SpeechChain(preferred: ElevenLabsSpeechProvider()).speak(spoken)
+        print("spoken via \(used) in \(Int(Date().timeIntervalSince(start) * 1000))ms")
+
+    case "gate":
+        let decision = InterruptGate().evaluate()
+        print("allowed:      \(decision.allowed)")
+        print("reason:       \(decision.reason)")
+        print(String(format: "idle:         %.1fs", decision.idleSeconds))
+        print("frontmost:    \(decision.frontmostApp ?? "unknown")")
+        print("screenLocked: \(decision.screenLocked)")
+
+    case "gate-watch":
+        // Log-only observation. Records what the gate WOULD decide, and acts on
+        // nothing — thresholds picked in the abstract are usually wrong, so this
+        // runs for a day before the gate is allowed to suppress anything.
+        let seconds = args.count > 1 ? Double(args[1]) ?? 3600 : 3600
+        let gate = InterruptGate()
+        let log = GateObservationLog()
+        let deadline = Date().addingTimeInterval(seconds)
+        print("observing for \(Int(seconds))s, sampling every 15s -> \(log.url.path)")
+        print("(nothing is suppressed; this only records what would have happened)")
+        var samples = 0, wouldAllow = 0
+        while Date() < deadline {
+            let d = gate.evaluate()
+            log.record(d, context: "watch")
+            samples += 1
+            if d.allowed { wouldAllow += 1 }
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+        }
+        print("\(samples) samples, would have allowed \(wouldAllow) (\(samples > 0 ? wouldAllow * 100 / samples : 0)%)")
+
+    case "gate-report":
+        let log = GateObservationLog()
+        guard let raw = try? String(contentsOf: log.url, encoding: .utf8), !raw.isEmpty else {
+            print("no observations yet — run `vdctl gate-watch` first")
+            break
+        }
+        var total = 0, allowed = 0
+        var reasons: [String: Int] = [:]
+        var apps: [String: Int] = [:]
+        for line in raw.split(separator: "\n") {
+            guard let d = line.data(using: .utf8),
+                  let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+            total += 1
+            if (o["allowed"] as? Bool) == true { allowed += 1 }
+            reasons[(o["reason"] as? String) ?? "?", default: 0] += 1
+            if let a = o["frontmostApp"] as? String, !a.isEmpty { apps[a, default: 0] += 1 }
+        }
+        print("\(total) observations, \(allowed) would have been allowed (\(total > 0 ? allowed * 100 / total : 0)%)")
+        print("\nveto reasons:")
+        for (r, n) in reasons.sorted(by: { $0.value > $1.value }).prefix(6) { print("  \(pad(String(n), 6)) \(r)") }
+        print("\nfrontmost apps:")
+        for (a, n) in apps.sorted(by: { $0.value > $1.value }).prefix(6) { print("  \(pad(String(n), 6)) \(a)") }
 
     default:
         usage()
