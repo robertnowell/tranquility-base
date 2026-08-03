@@ -61,6 +61,9 @@ func pad(_ s: String, _ width: Int) -> String {
 /// Print a dispatch result and exit with a code that scripts can branch on.
 func report(_ outcome: DispatchOutcome) -> Never {
     switch outcome {
+    case .queued:
+        print("queued: typed into a session that is mid-turn; it sends when that turn ends")
+        exit(0)
     case .confirmed(let ms):
         print("confirmed — text landed and was read back in \(ms)ms")
         exit(0)

@@ -232,6 +232,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
                 Permissions.log("confirmAndSend -> \(outcome)")
                 switch outcome {
+                case .queued:
+                    lastStatusLine = "queued in \(label)"
+                    hud.showResult(
+                        "In \(label). It's mid-turn, so it sends when that finishes.", ok: true)
                 case .dispatched:
                     lastStatusLine = "sent to \(label)"
                     hud.showResult("Sent to \(label).", ok: true)
@@ -478,12 +482,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .dispatched(let text, let ms, _):
                     lastStatusLine = "▶ sent (\(ms)ms): \(text.prefix(48))"
                     hud.showResult("Sent: \(text)", ok: true)
+                case .queued(let text, _):
+                    lastStatusLine = "▶ queued: \(text.prefix(48))"
+                    hud.showResult("Queued: \(text)", ok: true)
                 case .noTarget:
                     lastStatusLine = "nothing to reply to yet"
                     hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.", ok: false)
                 case .readyToSend(let utteranceId, let text, let label, _):
                     // Sending is the default. The window exists to stop it, not to
-                    // permit it — approving every correct transcript is a toll.
+                    // permit it: approving every correct transcript is a toll.
                     lastStatusLine = "sending to \(label)…"
                     hud.showPendingSend(
                         text: text, label: label, seconds: 4,
