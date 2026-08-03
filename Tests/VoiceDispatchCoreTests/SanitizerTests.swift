@@ -43,22 +43,25 @@ final class SanitizerTests: XCTestCase {
     }
 
     func testWordBudgetIsEnforced() throws {
-        let long = Array(repeating: "word", count: 120).joined(separator: " ")
+        let long = Array(repeating: "word", count: SpokenTextSanitizer.maxWords * 3).joined(separator: " ")
         let result = sanitizer.sanitize(long)
         XCTAssertLessThanOrEqual(result.wordCount, SpokenTextSanitizer.maxWords)
     }
 
+    /// Pass an explicit budget so this tests the clamping behaviour rather than
+    /// whatever `maxWords` currently happens to be — the budget has changed three
+    /// times as the spoken format evolved, and each time it silently broke this.
     func testClampPrefersASentenceBoundary() throws {
         let text = (Array(repeating: "alpha", count: 20).joined(separator: " "))
             + ". " + (Array(repeating: "beta", count: 40).joined(separator: " "))
-        let clamped = SpokenTextSanitizer.clamp(text)
+        let clamped = SpokenTextSanitizer.clamp(text, maxWords: 30)
         XCTAssertTrue(clamped.hasSuffix("."), "should stop at the sentence break, not mid-clause")
         XCTAssertFalse(clamped.contains("beta"))
     }
 
     func testClampFallsBackToEllipsisWhenNoUsableBoundary() throws {
         let text = Array(repeating: "gamma", count: 80).joined(separator: " ")
-        XCTAssertTrue(SpokenTextSanitizer.clamp(text).hasSuffix("…"))
+        XCTAssertTrue(SpokenTextSanitizer.clamp(text, maxWords: 30).hasSuffix("…"))
     }
 
     func testShortCleanTextIsUntouched() throws {
