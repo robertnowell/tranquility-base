@@ -148,9 +148,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // indistinguishable from a broken one; this makes launch observable.
             let waiting = (try? store?.pendingCount()) ?? 0
             hud.showIdle(waiting > 0
-                ? "\(waiting) session\(waiting == 1 ? "" : "s") to hear. "
-                    + "Tap ⌃⌥ for the most recent, hold ⌃⌥ to reply."
-                : "Ready. Tap ⌃⌥ to hear what's waiting, hold ⌃⌥ to reply.")
+                ? "Tap ⌃⌥ for the most recent, hold ⌃⌥ to reply."
+                : "Nothing waiting. Sessions appear here as they finish.",
+                waiting: waiting)
         }
     }
 
@@ -311,7 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if isAnnouncing || (coordinator?.speech.isSpeaking ?? false) {
                     coordinator?.speech.stop()
                     isAnnouncing = false
-                    hud.showIdle("Stopped. Tap ⌃⌥ again for the next one.")
+                    hud.showIdle("Stopped. Tap ⌃⌥ again for the next one.", waiting: (try? store?.pendingCount()) ?? 0)
                     rebuildMenu()
                     return
                 }
@@ -377,14 +377,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             + "tap ⌃⌥ to hear it again.", ok: false)
                     } else {
                         lastStatusLine = "stopped — still unread"
-                        hud.showIdle("Stopped. It's still waiting — tap ⌃⌥ to hear it again.")
+                        hud.showIdle("Stopped. It's still waiting — tap ⌃⌥ to hear it again.", waiting: (try? store?.pendingCount()) ?? 0)
                     }
                 case .held(let reason):
                     lastStatusLine = "held: \(reason)"
                     hud.showIdle("Holding — \(reason)")
                 case .nothingWaiting:
                     lastStatusLine = "nothing waiting"
-                    hud.showIdle("Nothing waiting. Sessions will queue up here as they finish.")
+                    hud.showIdle("Nothing waiting. Sessions appear here as they finish.", waiting: (try? store?.pendingCount()) ?? 0)
                 }
             } catch {
                 lastStatusLine = "announce failed: \(error)"

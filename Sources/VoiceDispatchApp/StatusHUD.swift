@@ -65,21 +65,16 @@ final class StatusHUD: NSObject {
     /// cannot tell whether "Go to session" opened the right one — a project name is
     /// not an address, and several tabs share it.
     private static func identify(pid: Int?, cwd: String?) -> String? {
-        guard let pid else { return nil }
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-p", String(pid), "-o", "tty="]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
-        try? proc.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        proc.waitUntilExit()
-        let tty = (String(data: data, encoding: .utf8) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !tty.isEmpty, tty != "??" else { return nil }
-        let dir = (cwd ?? "").replacingOccurrences(of: NSHomeDirectory(), with: "~")
-        return dir.isEmpty ? tty : "\(dir) · \(tty)"
+        guard let cwd, !cwd.isEmpty else { return nil }
+        let parts = URL(fileURLWithPath: cwd).pathComponents.filter { $0 != "/" }
+
+        // Worktrees nest the real name under .claude/worktrees/<name>/<project>, so
+        // the last component alone is ambiguous — every one of them ends in the same
+        // project directory. The component before the plumbing is the one you named.
+        if let marker = parts.firstIndex(of: "worktrees"), marker + 1 < parts.count {
+            return "worktree: \(parts[marker + 1])"
+        }
+        return parts.suffix(2).joined(separator: "/")
     }
 
     /// The first reply to a session asks once, showing the words that are about to
@@ -145,8 +140,11 @@ final class StatusHUD: NSObject {
              body: message, autoHideAfter: nil)
     }
 
-    func showIdle(_ message: String) {
-        show(state: "◌ Ready", title: "Voice Dispatch", body: message, autoHideAfter: nil)
+    func showIdle(_ message: String, waiting: Int = 0) {
+        currentTarget = nil
+        identity = nil
+        show(state: waiting > 0 ? "◌ \(waiting) waiting" : "◌ Ready",
+             title: "Voice Dispatch", body: message, autoHideAfter: nil)
     }
 
     /// True when the panel is visible and doing something worth stopping. Escape is
@@ -189,6 +187,8 @@ final class StatusHUD: NSObject {
         }
         hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
         replyButton.isHidden = awaitingConfirm ? false : (currentTarget == nil)
+        // With no session in hand, Dismiss is the only honest control.
+        if currentTarget == nil, !awaitingConfirm { goButton.isHidden = true }
 
         resizeToFit(panel)
         position(panel)
@@ -251,8 +251,15 @@ final class StatusHUD: NSObject {
     func selfTest() {
         let long = String(repeating: "Product image binding is fixed across the stack. ", count: 8)
         currentTarget = ("selftest", 1, "promotions")
+        // The exact path that drew past the panel edge.
+        identity = Self.identify(
+            pid: 1,
+            cwd: NSHomeDirectory()
+                + "/Projects/kopi/promotions/.claude/worktrees/"
+                + "product-image-binding-oracle/promotions")
+        Permissions.log("selftest identity=\(identity ?? "nil")")
         for (label, block) in [
-            ("idle", { self.showIdle(long) }),
+            ("idle", { self.showIdle(long, waiting: 3) }),
             ("announcement", { self.showAnnouncement(
                 topic: "Product image binding fix validation", spoken: long,
                 sessionId: "s", pid: 1, project: "promotions", cwd: "/tmp/promotions") }),
@@ -337,6 +344,7 @@ final class StatusHUD: NSObject {
         buttons.spacing = 8
 
         hintLabel.maximumNumberOfLines = 0
+        hintLabel.lineBreakMode = .byTruncatingMiddle
         progressBar = NSProgressIndicator()
         progressBar.isIndeterminate = false
         progressBar.style = .bar
@@ -360,6 +368,7 @@ final class StatusHUD: NSObject {
             stack.trailingAnchor.constraint(equalTo: background.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: background.bottomAnchor),
             bodyLabel.widthAnchor.constraint(equalToConstant: 348),
+            hintLabel.widthAnchor.constraint(equalToConstant: 348),
         ])
         self.contentStack = stack
 
