@@ -97,18 +97,18 @@ public struct Coordinator: Sendable {
             $0.status == .new || $0.status == .summarized || $0.status == .held
         }
 
-        // Never-offered items first, newest of those first. Then anything you have
-        // already been offered and did not finish, least recently offered first.
+        // A stack, not a queue: the newest thing a session said is the thing you
+        // want, because it is the state that is actually true now.
         //
-        // Plain newest-first looped: stopping an announcement leaves it unread AND
-        // it is still the newest, so the next tap replayed it forever and there was
-        // no way to reach anything else.
+        // The one wrinkle is items you started and stopped. They stay unread, and
+        // being newest they would be handed back forever with no way past them, so
+        // anything already attempted sorts behind everything untouched. Within each
+        // group it is strictly newest first.
         return waiting.min { a, b in
-            let aOffered = a.announcedAtMs ?? 0
-            let bOffered = b.announcedAtMs ?? 0
-            if (aOffered == 0) != (bOffered == 0) { return aOffered == 0 }
-            if aOffered == 0 { return a.createdAtMs > b.createdAtMs }
-            return aOffered < bOffered
+            let aTried = a.announcedAtMs != nil
+            let bTried = b.announcedAtMs != nil
+            if aTried != bTried { return !aTried }
+            return a.createdAtMs > b.createdAtMs
         }
     }
 
@@ -138,7 +138,7 @@ public struct Coordinator: Sendable {
     /// worse than useless — it reports a state they have already moved past.
     @discardableResult
     public func invalidatePending(sessionId: String) throws -> Int {
-        try store.supersedePending(sessionId: sessionId)
+        try store.supersedePending(sessionId: sessionId, includeAnnounced: true)
     }
 
     /// Something already heard, offered again so you can work backwards.
@@ -147,9 +147,9 @@ public struct Coordinator: Sendable {
     /// ever deleted here, so the history is already on disk; this just stops
     /// pretending it is not there once the unread runs out.
     ///
-    /// Ordered by when you last heard it, oldest first, and hearing it again moves
-    /// it to the back. Pressing repeatedly therefore walks the whole history once
-    /// before repeating anything, with no cursor to store and nothing to reset.
+    /// Newest first, same as everything else, so working backwards means working
+    /// backwards in time. Hearing one again moves it to the back of the tie-break,
+    /// so repeated presses keep descending rather than sticking on the newest.
     ///
     /// Excludes three things deliberately. `superseded` is a turn the same session
     /// has already replaced, so replaying it would be telling you something that
@@ -157,9 +157,17 @@ public struct Coordinator: Sendable {
     /// Catching up should surface what you have not dealt with, not everything that
     /// ever happened.
     public func nextForCatchUp() throws -> QueuedEvent? {
-        try store.events(limit: 500)
+        let heard = try store.events(limit: 500)
             .filter { $0.status == .announced && $0.summaryText?.isEmpty == false }
-            .min { ($0.announcedAtMs ?? 0) < ($1.announcedAtMs ?? 0) }
+        // Anything replayed in this pass sorts last, so a single press cannot hand
+        // back what the previous press just gave you.
+        let mostRecentReplay = heard.map { $0.announcedAtMs ?? 0 }.max() ?? 0
+        return heard.min { a, b in
+            let aJust = (a.announcedAtMs ?? 0) == mostRecentReplay
+            let bJust = (b.announcedAtMs ?? 0) == mostRecentReplay
+            if aJust != bJust { return !aJust }
+            return a.createdAtMs > b.createdAtMs
+        }
     }
 
     // MARK: - Announce
