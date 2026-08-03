@@ -46,6 +46,14 @@ event = p.get("hook_event_name")
 if event not in ("Stop", "Notification"):
     sys.exit(0)
 
+# idle_prompt fires when you haven't replied for a while. It carries no content —
+# no assistant message, nothing to summarize — so announcing it produces a line
+# made entirely of the folder name. It is also a nag about a turn whose Stop we
+# already announced. Dropped at the source.
+matcher = p.get("matcher") or p.get("notification_type")
+if event == "Notification" and matcher == "idle_prompt":
+    sys.exit(0)
+
 msg = p.get("last_assistant_message")
 if isinstance(msg, str) and len(msg) > 4000:
     # Keep spool lines small so appends stay atomic. The summarizer only needs

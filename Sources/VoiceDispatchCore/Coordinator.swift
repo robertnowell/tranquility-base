@@ -100,8 +100,17 @@ public struct Coordinator: Sendable {
         }
 
         let context = event.transcriptPath.map { TranscriptArchive.sessionContext(in: URL(fileURLWithPath: $0)) }
+        // A Notification payload carries no assistant message, so those rows used to
+        // be summarized from nothing but the folder name — "promotions. idle and
+        // waiting on you." said three times over. The transcript is in the payload;
+        // read the real message so a prompt can say what it is actually waiting on.
+        let lastMessage = event.lastAssistantMessage?.isEmpty == false
+            ? event.lastAssistantMessage!
+            : (event.transcriptPath
+                .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
+
         let summary = await summarizer.summarize(SummaryRequest(
-            lastAssistantMessage: event.lastAssistantMessage ?? "",
+            lastAssistantMessage: lastMessage,
             projectLabel: event.projectLabel,
             firstUserMessage: context?.firstUserMessage,
             gitBranch: context?.gitBranch,

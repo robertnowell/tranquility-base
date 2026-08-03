@@ -100,6 +100,7 @@ public struct DeterministicSummarizer: SummaryProvider {
 
     static func notificationLine(_ request: SummaryRequest) -> String {
         switch request.notificationMatcher {
+
         case "permission_prompt": return "waiting for permission to continue"
         case "idle_prompt": return "idle and waiting on you"
         case "agent_needs_input": return "needs input before it can carry on"

@@ -34,6 +34,7 @@ final class StatusHUD: NSObject {
     private var isRecording = false
     private var hideWorkItem: DispatchWorkItem?
     private var contentStack: NSStackView?
+    private var identity: String?
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
 
@@ -46,7 +47,36 @@ final class StatusHUD: NSObject {
 
     func showAnnouncement(topic: String, spoken: String, sessionId: String, pid: Int?, project: String) {
         currentTarget = (sessionId, pid, project)
-        show(state: "◀ Speaking", title: "\(project) — \(topic)", body: spoken, autoHideAfter: nil)
+        // Only prefix when the topic adds something. A topic equal to the project
+        // rendered as "promotions — promotions", which names the folder twice and
+        // tells you nothing.
+        let headline = topic.caseInsensitiveCompare(project) == .orderedSame || topic.isEmpty
+            ? project : "\(project) — \(topic)"
+        identity = Self.identify(pid: pid)
+        show(state: "◀ Speaking", title: headline, body: spoken, autoHideAfter: nil)
+    }
+
+    /// The concrete tab this is about: working directory and tty. Without it you
+    /// cannot tell whether "Go to session" opened the right one — a project name is
+    /// not an address, and several tabs share it.
+    private static func identify(pid: Int?) -> String? {
+        guard let pid else { return nil }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-p", String(pid), "-o", "tty=,cwd="]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        try? proc.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        let fields = (String(data: data, encoding: .utf8) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard let tty = fields.first else { return nil }
+        let dir = fields.count > 1
+            ? String(fields[1]).replacingOccurrences(of: NSHomeDirectory(), with: "~") : ""
+        return dir.isEmpty ? "tty \(tty)" : "\(dir) · tty \(tty)"
     }
 
     func showWorking(_ message: String) {
@@ -79,9 +109,10 @@ final class StatusHUD: NSObject {
         bodyLabel.stringValue = body
         goButton.isHidden = currentTarget?.pid == nil
         replyButton.title = isRecording ? "Send reply" : "Reply"
-        hintLabel.stringValue = isRecording
+        let action = isRecording
             ? "Listening — click Send, or let go of ⌃⌥."
             : "Click Reply, or hold ⌃⌥ to speak."
+        hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
         replyButton.isHidden = currentTarget == nil
 
         resizeToFit(panel)
@@ -114,15 +145,36 @@ final class StatusHUD: NSObject {
         // Assert the actions are actually on screen. "Buttons cut off" is a bug the
         // code can check for itself; it should never reach a person's eyes.
         let buttonsFit = panel.contentView.map { $0.bounds.height + 0.5 >= needed.height } ?? false
+
+        // Does the label actually show all of its text? Comparing the rendered
+        // height to the text's natural height at this width is the only way to
+        // see truncation from code — the panel happily fits a clipped label, so
+        // the previous check passed while four lines of every summary were lost.
+        let width = bodyLabel.bounds.width
+        let natural = (bodyLabel.stringValue as NSString).boundingRect(
+            with: NSSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: bodyLabel.font ?? .systemFont(ofSize: 12)]).height
+        let textFits = bodyLabel.bounds.height + 1 >= natural
+
         Permissions.log(
             "HUD layout: needed=\(Int(needed.height)) frame=\(Int(panel.frame.height)) "
-            + "buttonsFit=\(buttonsFit)")
+            + "buttonsFit=\(buttonsFit) textFits=\(textFits) "
+            + "labelH=\(Int(bodyLabel.bounds.height)) naturalH=\(Int(natural))")
+    }
+
+    /// Shown the instant ⌃⌥ is tapped, so the gap before audio isn't dead air.
+    /// Summarizing and fetching the voice take a few seconds; without this the app
+    /// looks broken for the whole of it.
+    func showPreparing() {
+        show(state: "◌ Preparing", title: "Voice Dispatch",
+             body: "Writing the summary and fetching the voice…", autoHideAfter: nil)
     }
 
     /// Render every state with worst-case text and confirm nothing is clipped.
     /// Run with `--selftest-hud`.
     func selfTest() {
-        let long = String(repeating: "Product image binding is fixed across the stack. ", count: 3)
+        let long = String(repeating: "Product image binding is fixed across the stack. ", count: 8)
         currentTarget = ("selftest", 1, "promotions")
         for (label, block) in [
             ("idle", { self.showIdle(long) }),
@@ -182,7 +234,7 @@ final class StatusHUD: NSObject {
         bodyLabel = NSTextField(wrappingLabelWithString: "")
         bodyLabel.font = .systemFont(ofSize: 12)
         bodyLabel.textColor = .labelColor
-        bodyLabel.maximumNumberOfLines = 4
+        bodyLabel.maximumNumberOfLines = 0
         bodyLabel.isSelectable = true
 
         goButton = NSButton(title: "Go to session", target: self, action: #selector(goToSession))
@@ -209,6 +261,7 @@ final class StatusHUD: NSObject {
         buttons.orientation = .horizontal
         buttons.spacing = 8
 
+        hintLabel.maximumNumberOfLines = 0
         let stack = NSStackView(views: [stateLabel, titleLabel, bodyLabel, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -297,9 +350,10 @@ final class StatusHUD: NSObject {
         if isRecording { isRecording = false; onStopReply?() }
         else { isRecording = true; onReply?() }
         replyButton.title = isRecording ? "Send reply" : "Reply"
-        hintLabel.stringValue = isRecording
+        let action = isRecording
             ? "Listening — click Send, or let go of ⌃⌥."
             : "Click Reply, or hold ⌃⌥ to speak."
+        hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
     }
 
     func recordingEnded() {
