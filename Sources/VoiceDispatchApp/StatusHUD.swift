@@ -450,6 +450,17 @@ final class StatusHUD: NSObject {
             attributes: [.font: bodyLabel.font ?? .systemFont(ofSize: 12)]).height
         let textFits = bodyLabel.bounds.height + 1 >= natural
 
+        // Frames live in each view's own superview, and the header is a nested
+        // stack, so comparing raw minX values across rows compares nothing. Convert
+        // into the panel's space before drawing any conclusion about alignment.
+        if let root = panel.contentView {
+            func box(_ v: NSView) -> NSRect { v.convert(v.bounds, to: root) }
+            Permissions.log(
+                "HUD chrome: state.x=\(Int(box(stateLabel).minX)) "
+                + "title.x=\(Int(box(titleLabel).minX)) body.x=\(Int(box(bodyLabel).minX)) "
+                + "gear.maxX=\(Int(box(gearButton).maxX)) panelW=\(Int(panel.frame.width)) "
+                + "rightMargin=\(Int(panel.frame.width - box(gearButton).maxX))")
+        }
         Permissions.log(
             "HUD layout: needed=\(Int(needed.height)) frame=\(Int(panel.frame.height)) "
             + "buttonsFit=\(buttonsFit) textFits=\(textFits) "
@@ -650,20 +661,8 @@ final class StatusHUD: NSObject {
         voicePicker.action = #selector(voicePicked)
         voicePicker.isHidden = true
 
-        // Header: where you are on the left, the way deeper on the right.
-        let spacer = NSView()
-        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let header = NSStackView(views: [backButton, stateLabel, spacer, gearButton])
-        header.orientation = .horizontal
-        header.spacing = 6
-        header.alignment = .centerY
-        // The gear is borderless, so it has none of the visual inset a bezel gives
-        // the buttons below it and reads as jammed against the edge at the same
-        // margin. Optical alignment, not geometric.
-        header.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 6)
-
-        let stack = NSStackView(views: [header, titleLabel, bodyLabel, progressBar, meter,
-                                        voicePicker, hintLabel, buttons])
+        let stack = NSStackView(views: [backButton, stateLabel, titleLabel, bodyLabel,
+                                        progressBar, meter, voicePicker, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
@@ -671,6 +670,8 @@ final class StatusHUD: NSObject {
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         background.addSubview(stack)
+        background.addSubview(gearButton)
+        gearButton.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: background.topAnchor),
             stack.leadingAnchor.constraint(equalTo: background.leadingAnchor),
@@ -680,6 +681,9 @@ final class StatusHUD: NSObject {
             hintLabel.widthAnchor.constraint(equalToConstant: 348),
             titleLabel.widthAnchor.constraint(equalToConstant: 348),
             stateLabel.widthAnchor.constraint(equalToConstant: 348),
+            // Same margin as every text row, so the eye reads one column.
+            gearButton.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -12),
+            gearButton.centerYAnchor.constraint(equalTo: stateLabel.centerYAnchor),
             meter.widthAnchor.constraint(equalToConstant: 348),
             meter.heightAnchor.constraint(equalToConstant: 28),
         ])
