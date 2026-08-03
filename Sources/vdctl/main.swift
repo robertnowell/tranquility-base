@@ -266,6 +266,7 @@ do {
     case "summarize-corpus":
         let n = args.count > 1 ? Int(args[1]) ?? 10 : 10
         let showInput = args.contains("--show-input")
+        let speakIt = args.contains("--speak")
         let samples = TranscriptArchive.recentSamples(limit: n)
         guard !samples.isEmpty else { print("no archived transcripts found"); break }
 
@@ -329,10 +330,23 @@ do {
                 try? FileManager.default.removeItem(at: tmp)
 
                 print("── \(sample.projectLabel)  ·  \(w) words, \(spokenSeconds)s to say, \(summary.latencyMs)ms to generate")
-                print("   HEARD:  \(summary.spoken.text)")
-                print("   card:   " + summary.brief.cardLines()
+                if let recap = summary.brief.recap {
+                    print("   RECAP:    \(recap)   [\(recap.split(separator: " ").count)w]")
+                }
+                if let proposal = summary.brief.proposal {
+                    print("   PROPOSAL: \(proposal)   [\(proposal.split(separator: " ").count)w]")
+                }
+                if summary.brief.recap == nil {
+                    print("   HEARD:    \(summary.spoken.text)")
+                }
+                print("   card:     " + summary.brief.cardLines()
                     .filter { $0.0 != "topic" }
                     .map { "\($0.0)=\($0.1)" }.joined(separator: " · "))
+                if speakIt {
+                    let voice = await SpeechChain(preferred: ElevenLabsSpeechProvider())
+                        .speak(summary.spoken)
+                    print("   → spoken via \(voice)")
+                }
                 print("")
             }
         }
