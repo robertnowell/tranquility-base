@@ -83,7 +83,7 @@ final class CoordinatorTests: XCTestCase {
         if enrolled { try registry.enrol(sessionId: "sess-1") }
         return Coordinator(
             store: store,
-            summarizer: SummarizerChain(providers: [FixedSummary()], resolvePullRequests: false),
+            summarizer: SummarizerChain(providers: [FixedSummary()]),
             speech: SpeechChain(preferred: speech, fallback: speech),
             gate: gate,
             transport: transport,

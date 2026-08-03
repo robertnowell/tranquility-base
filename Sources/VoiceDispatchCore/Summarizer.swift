@@ -285,11 +285,9 @@ public struct SummarizerChain: Sendable {
     public let sanitizer = SpokenTextSanitizer()
     /// Pull request lookup is deterministic — the model is never asked whether a PR
     /// exists, because it would guess.
-    public var resolvePullRequests: Bool
 
-    public init(providers: [any SummaryProvider]? = nil, resolvePullRequests: Bool = true) {
+    public init(providers: [any SummaryProvider]? = nil) {
         self.providers = providers ?? [AnthropicSummaryProvider(), DeterministicSummarizer()]
-        self.resolvePullRequests = resolvePullRequests
     }
 
     public func summarize(_ request: SummaryRequest) async -> Summary {
@@ -309,10 +307,6 @@ public struct SummarizerChain: Sendable {
 
         var (brief, providerName) = produced
             ?? (SessionBrief(topic: request.projectLabel, happened: "finished a turn"), "none")
-
-        if resolvePullRequests, let branch = request.gitBranch {
-            brief.pullRequest = PullRequestLookup.forBranch(branch, cwd: request.cwd)
-        }
 
         // Each section is clamped against its own budget before composing, so a long
         // recap can never eat the proposal — the half that carries the decision.

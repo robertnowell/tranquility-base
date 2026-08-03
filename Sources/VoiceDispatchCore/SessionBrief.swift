@@ -37,12 +37,25 @@ public struct SessionBrief: Codable, Sendable, Equatable {
 
     // Deterministic — never written by the model.
     public var branch: String?
-    public var pullRequest: PullRequestRef?
+
+    // There is no `pullRequest` field, and that is deliberate.
+    //
+    // Looking one up from the branch announced "pull request 2023 is merged" for a
+    // PR merged months earlier whose branch was still checked out — true, unrelated
+    // to the work, and indistinguishable from a hallucination. The fix is not a
+    // better query. It is noticing that the session already tells us: across every
+    // session here that ran `gh pr create`, the assistant's own next message named
+    // the PR correctly, 7 for 7. That text is already the summarizer's input.
+    //
+    // So a PR is spoken exactly when the session spoke about it. That is
+    // attributable by construction, needs no `gh`, no GitHub, no worktree
+    // convention, and no state — and it works the same for Codex or anything else
+    // that ends a turn with a sentence about what it just did.
 
     public init(
         topic: String, goal: String? = nil, happened: String, nextStep: String? = nil,
         question: String? = nil, risk: String? = nil, branch: String? = nil,
-        pullRequest: PullRequestRef? = nil, recap: String? = nil, proposal: String? = nil
+        recap: String? = nil, proposal: String? = nil
     ) {
         self.recap = recap
         self.proposal = proposal
@@ -53,7 +66,6 @@ public struct SessionBrief: Codable, Sendable, Equatable {
         self.question = question
         self.risk = risk
         self.branch = branch
-        self.pullRequest = pullRequest
     }
 
     /// The ~12 seconds you actually hear. Topic first so you know which session is
@@ -66,9 +78,6 @@ public struct SessionBrief: Codable, Sendable, Equatable {
         if let recap, !recap.isEmpty {
             var out = recap
             if let proposal, !proposal.isEmpty { out += " " + proposal }
-            if let pullRequest, !out.lowercased().contains("pull request") {
-                out += " Pull request \(pullRequest.number) is \(pullRequest.state.lowercased())."
-            }
             return out
         }
         var parts: [String] = ["\(topic)."]
@@ -80,9 +89,6 @@ public struct SessionBrief: Codable, Sendable, Equatable {
             parts.append(nextStep.hasSuffix(".") ? nextStep : nextStep + ".")
         }
 
-        if let pullRequest {
-            parts.append("Pull request \(pullRequest.number) is \(pullRequest.state.lowercased()).")
-        }
         return parts.joined(separator: " ")
     }
 
@@ -96,63 +102,10 @@ public struct SessionBrief: Codable, Sendable, Equatable {
         if let risk { lines.append(("risk", risk)) }
         // Branch is card metadata only — nobody needs a branch name read aloud.
         if let branch { lines.append(("branch", branch)) }
-        if let pullRequest {
-            lines.append(("pr", "#\(pullRequest.number) \(pullRequest.state) — \(pullRequest.title)"))
-        }
         return lines
     }
 }
 
-public struct PullRequestRef: Codable, Sendable, Equatable {
-    public var number: Int
-    public var title: String
-    public var state: String
-    public var url: String
-    /// Present only on the merged-PR fallback query, used to reject stale merges.
-    public var mergedAt: String?
-}
-
-/// Looks up a pull request for a branch. Deterministic — the model is never asked
-/// whether a PR exists, because it would guess.
-public enum PullRequestLookup {
-    public static func forBranch(_ branch: String, cwd: String?) -> PullRequestRef? {
-        guard !branch.isEmpty, branch != "main", branch != "master" else { return nil }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = [
-            "-lc",
-            // Open PRs only, plus one merged in the last two hours.
-            //
-            // `--state all` announced "pull request 2023 is merged" for a PR merged
-            // months ago, because its branch was still checked out. True, useless,
-            // and it reads as a hallucination — which is worse than saying nothing.
-            // An open PR is awaiting you; an old merged one is history.
-            "gh pr list --head \(branch.shellQuoted) --state open --limit 1 "
-                + "--json number,title,state,url "
-                + "|| gh pr list --head \(branch.shellQuoted) --state merged --limit 1 "
-                + "--json number,title,state,url,mergedAt",
-        ]
-        if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        do { try process.run() } catch { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        guard let ref = (try? JSONDecoder().decode([PullRequestRef].self, from: data))?.first
-        else { return nil }
-        guard ref.state.uppercased() == "MERGED" else { return ref }
-
-        // A merge only counts as news while it is still fresh.
-        guard let stamp = ref.mergedAt,
-              let merged = ISO8601DateFormatter().date(from: stamp),
-              Date().timeIntervalSince(merged) < 2 * 3600
-        else { return nil }
-        return ref
-    }
-}
 
 extension String {
     var shellQuoted: String { "'" + replacingOccurrences(of: "'", with: "'\\''") + "'" }
