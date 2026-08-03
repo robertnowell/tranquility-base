@@ -124,6 +124,83 @@ public final class QueueStore: Sendable {
             try db.alter(table: "events") { t in t.add(column: "tty", .text) }
         }
 
+        // Derived state. The single biggest change in the app's life.
+        //
+        // Session state was a mutable `status` column written by six paths — intake,
+        // supersession, user-typed retirement, dismissal, announcement, and the
+        // interrupt handler. They raced and clobbered each other. Fixing individual
+        // rules stopped changing the outcome, which is the signal that the model is
+        // wrong rather than the rules.
+        //
+        // Now: events are append-only and never updated. What the user has seen
+        // lives in one small cursor per session. Waiting is a query. Supersession
+        // stops existing — "superseded" is just "not the latest" — and typing into
+        // a session retires nothing, because a user_prompt_submit is simply a later
+        // event.
+        m.registerMigration("v3_derived_state") { db in
+            try db.create(table: "session_cursor") { t in
+                t.column("sessionId", .text).primaryKey()
+                // Event ids, not timestamps. See the index comment below.
+                t.column("heardThrough", .integer)
+                t.column("dismissedThrough", .integer)
+                // When you heard it, which is what the reply window is about. The
+                // event's own timestamp is when the AGENT finished, and those are
+                // different questions — the old code used the latter and a reply
+                // window therefore expired against hook wall-clock rather than
+                // against your attention.
+                t.column("heardAtMs", .integer)
+            }
+
+            // Carry the old statuses across so nothing already dealt with comes back.
+            // `superseded` needs no cursor: it is simply not the latest any more.
+            try db.execute(sql: """
+                INSERT INTO session_cursor (sessionId, heardThrough)
+                SELECT sessionId, max(rowid) FROM events
+                WHERE status IN ('announced', 'answered') GROUP BY sessionId
+                """)
+            try db.execute(sql: """
+                INSERT INTO session_cursor (sessionId, dismissedThrough)
+                SELECT sessionId, max(rowid) FROM events
+                WHERE status = 'dismissed' GROUP BY sessionId
+                ON CONFLICT(sessionId) DO UPDATE SET
+                    dismissedThrough = excluded.dismissedThrough
+                """)
+
+            // Exactly one max(), over a column that cannot tie.
+            //
+            // SQLite guarantees bare columns come from the max row — but only when
+            // the maximum is unique: "If the same minimum or maximum value occurs on
+            // two or more rows, then bare values might be selected from any of those
+            // rows. The choice is arbitrary." Aggregating on a timestamp therefore
+            // returns the WRONG row whenever two hooks fire in the same millisecond,
+            // silently flipping the state. rowids cannot tie, so the guarantee
+            // becomes total.
+            try db.execute(sql: """
+                CREATE VIEW latest_per_session AS
+                SELECT sessionId, max(rowid) AS latestId, hookEvent, createdAtMs,
+                       cwd, tty, promptId, transcriptPath, lastAssistantMessage,
+                       notificationMatcher, summaryText
+                FROM events GROUP BY sessionId
+                """)
+
+            // rowid cannot appear in an index — it is the b-tree key itself, and is
+            // carried along for free by any index entry. Indexing sessionId is
+            // therefore enough to make the grouping a range scan per session rather
+            // than a table scan.
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_events_session_latest
+                ON events(sessionId, hookEvent, tty)
+                """)
+
+            // The v1 index on status has to go first: SQLite refuses to drop a
+            // column an index still references.
+            try db.execute(sql: "DROP INDEX IF EXISTS idx_events_status")
+
+            // Drop the column so nothing can write it again. Any code still
+            // referencing it now fails to build, which is the point.
+            try db.alter(table: "events") { $0.drop(column: "status") }
+        }
+
         return m
     }
 
@@ -263,19 +340,100 @@ public final class QueueStore: Sendable {
     /// Set by the app so retirements explain themselves.
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 
-    public func pendingCount() throws -> Int {
+    /// Sessions waiting on you, newest first.
+    ///
+    /// The whole model in one query. A session is waiting when its latest event is a
+    /// Stop that you have neither heard through nor dismissed. Nothing is stored:
+    /// supersession is "not the latest", and typing into a session stops it waiting
+    /// because the user_prompt_submit is simply a later event.
+    ///
+    /// Ordered by rowid, never by timestamp. Wall-clock time is stamped
+    /// independently by each short-lived hook process and is not monotonic — Kafka
+    /// orders by offset for exactly this reason, and a clock step silently loses the
+    /// newer write. rowids are assigned under the writer lock and cannot tie.
+    public func waitingSessions(limit: Int = 200) throws -> [WaitingSession] {
         try dbQueue.read { db in
-            let pending = EventStatus.pendingAnnouncement.map(\.rawValue)
-            // Headless rows are excluded here too, or the badge counts things no
-            // keypress can reach — which is exactly how it came to read "2 waiting"
-            // while nothing could be played.
-            let events = try QueuedEvent
-                .filter(pending.contains(Column("status")))
-                .filter(Column("tty") == nil || Column("tty") != "??")
-                .fetchCount(db)
-            return events
+            try WaitingSession.fetchAll(db, sql: """
+                SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
+                       l.promptId, l.transcriptPath, l.lastAssistantMessage,
+                       l.notificationMatcher, l.summaryText, l.hookEvent
+                FROM latest_per_session l
+                LEFT JOIN session_cursor c ON c.sessionId = l.sessionId
+                WHERE l.hookEvent = ?
+                  AND l.latestId > max(coalesce(c.heardThrough, 0),
+                                       coalesce(c.dismissedThrough, 0))
+                  AND (l.tty IS NULL OR l.tty <> '??')
+                ORDER BY l.latestId DESC
+                LIMIT ?
+                """, arguments: [HookEventKind.stop.rawValue, limit])
         }
     }
+
+    /// How many sessions are waiting. Identical predicate to `waitingSessions`, so
+    /// the badge and the keypress can never disagree — they used to, and the badge
+    /// read "2 waiting" while nothing could be played.
+    public func pendingCount() throws -> Int {
+        try waitingSessions().count
+    }
+
+    /// Advance a cursor. The only write in the model, and therefore the only thing
+    /// that can be wrong, so it says what it did.
+    public func advanceCursor(
+        sessionId: String, heardThrough: Int64? = nil, dismissedThrough: Int64? = nil
+    ) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO session_cursor (sessionId, heardThrough, dismissedThrough, heardAtMs)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(sessionId) DO UPDATE SET
+                    heardThrough = max(coalesce(heardThrough, 0), coalesce(excluded.heardThrough, 0)),
+                    dismissedThrough = max(coalesce(dismissedThrough, 0), coalesce(excluded.dismissedThrough, 0)),
+                    heardAtMs = coalesce(excluded.heardAtMs, heardAtMs)
+                """, arguments: [sessionId, heardThrough, dismissedThrough,
+                                  heardThrough == nil ? nil
+                                      : Int64(Date().timeIntervalSince1970 * 1000)])
+        }
+        QueueStore.trace?("cursor \(sessionId.prefix(8)) heard=\(heardThrough.map(String.init) ?? "-") "
+                          + "dismissed=\(dismissedThrough.map(String.init) ?? "-")")
+    }
+
+    /// The session whose cursor was advanced most recently by hearing something,
+    /// provided that event is still its latest. One query, no scan over statuses.
+    public func mostRecentlyHeard(since cutoffMs: Int64) throws -> WaitingSession? {
+        try dbQueue.read { db in
+            try WaitingSession.fetchOne(db, sql: """
+                SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
+                       l.promptId, l.transcriptPath, l.lastAssistantMessage,
+                       l.notificationMatcher, l.summaryText, l.hookEvent
+                FROM session_cursor c
+                JOIN latest_per_session l ON l.sessionId = c.sessionId
+                WHERE c.heardThrough IS NOT NULL
+                  AND c.heardThrough = l.latestId
+                  AND c.heardAtMs >= ?
+                ORDER BY c.heardAtMs DESC
+                LIMIT 1
+                """, arguments: [cutoffMs])
+        }
+    }
+
+    /// Latest per session regardless of cursors. Used when sending a reply that was
+    /// recorded a moment ago: hearing it advanced the cursor, so the session is no
+    /// longer "waiting", but it is still exactly the session being answered.
+    public func waitingSessionsIncludingHeard(limit: Int = 500) throws -> [WaitingSession] {
+        try dbQueue.read { db in
+            try WaitingSession.fetchAll(db, sql: """
+                SELECT sessionId, latestId, createdAtMs, cwd, tty, promptId,
+                       transcriptPath, lastAssistantMessage, notificationMatcher,
+                       summaryText, hookEvent
+                FROM latest_per_session ORDER BY latestId DESC LIMIT ?
+                """, arguments: [limit])
+        }
+    }
+
+    public func cursor(for sessionId: String) throws -> SessionCursor? {
+        try dbQueue.read { db in try SessionCursor.fetchOne(db, key: sessionId) }
+    }
+
 
     // MARK: - Boot reconciliation
     //

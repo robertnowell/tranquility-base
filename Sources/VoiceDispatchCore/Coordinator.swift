@@ -78,111 +78,49 @@ public struct Coordinator: Sendable {
     /// Prepare whatever is currently announceable. Cheap to call repeatedly:
     /// anything already prepared is skipped.
     public func prepareNext() async throws {
-        guard let event = try nextToAnnounce() else { return }
-        guard await !prepared.has(event.id) else { return }
-        await prepared.put(await summarize(event), for: event.id)
+        guard let session = try nextToAnnounce() else { return }
+        guard await !prepared.has(session.sessionId) else { return }
+        await prepared.put(await summarize(session), for: session.sessionId)
     }
 
-    /// The newest unread turn, and only ever one per session.
+    /// The newest session waiting on you.
     ///
-    /// This was a FIFO queue, which is wrong for the job. Sessions are not work
-    /// items: a session that ended four turns ago has already superseded itself
-    /// three times over, and hearing the oldest first means hearing something
-    /// twenty minutes stale while the thing that just finished waits behind it.
-    /// What you want to know is what each session is saying *now*, so an older
-    /// turn from the same session is not a backlog entry — it is a dead letter.
-    public func nextToAnnounce() throws -> QueuedEvent? {
-        try supersedeStaleTurns()
-        let waiting = try store.events(limit: 200).filter {
-            ($0.status == .new || $0.status == .summarized || $0.status == .held)
-                && !$0.isHeadless
-        }
-
-        // A stack, not a queue: the newest thing a session said is the thing you
-        // want, because it is the state that is actually true now.
-        //
-        // The one wrinkle is items you started and stopped. They stay unread, and
-        // being newest they would be handed back forever with no way past them, so
-        // anything already attempted sorts behind everything untouched. Within each
-        // group it is strictly newest first.
-        return waiting.min { a, b in
-            let aTried = a.announcedAtMs != nil
-            let bTried = b.announcedAtMs != nil
-            if aTried != bTried { return !aTried }
-            return a.createdAtMs > b.createdAtMs
-        }
+    /// A stack: the newest turn is the state that is actually true, and everything
+    /// older is history. There is no supersession pass and no retirement sweep,
+    /// because both were describing "not the latest", which the query already knows.
+    public func nextToAnnounce() throws -> WaitingSession? {
+        try store.waitingSessions(limit: 50).first
     }
 
-    /// Collapse each session's unread turns down to its most recent one.
-    ///
-    /// Run before every selection rather than only at intake, so rows written
-    /// while the app was closed are collapsed too.
-    @discardableResult
-    public func supersedeStaleTurns() throws -> Int {
-        let waiting = try store.events(limit: 500).filter {
-            $0.status == .new || $0.status == .summarized || $0.status == .held
-        }
-        var newest: [String: Int64] = [:]
-        for event in waiting {
-            newest[event.sessionId] = max(newest[event.sessionId] ?? .min, event.createdAtMs)
-        }
-        var superseded = 0
-        for (sessionId, latest) in newest {
-            superseded += try store.supersedePending(sessionId: sessionId, before: latest)
-        }
-        _ = waiting
-        return superseded
+    /// Everything waiting, newest first, for a UI that shows rather than describes.
+    public func waiting() throws -> [WaitingSession] {
+        try store.waitingSessions()
     }
 
-    /// The user typed into that session themselves, so whatever was waiting to be
-    /// read out has been overtaken by them doing the thing. Announcing it now is
-    /// worse than useless — it reports a state they have already moved past.
-    @discardableResult
-    public func invalidatePending(sessionId: String) throws -> Int {
-        try store.supersedePending(sessionId: sessionId, includeAnnounced: true)
+    /// You heard it through to the end.
+    ///
+    /// Advances the cursor rather than mutating the event. Stopping half way must
+    /// NOT call this: half an announcement tells you half of what happened.
+    public func markHeard(sessionId: String, through eventId: Int64) throws {
+        try store.advanceCursor(sessionId: sessionId, heardThrough: eventId)
     }
 
-    /// Something already heard, offered again so you can work backwards.
+    /// You are done with it without hearing it.
     ///
-    /// Being caught up on the unread is not the same as being caught up. Nothing is
-    /// ever deleted here, so the history is already on disk; this just stops
-    /// pretending it is not there once the unread runs out.
-    ///
-    /// Newest first, same as everything else, so working backwards means working
-    /// backwards in time. Hearing one again moves it to the back of the tie-break,
-    /// so repeated presses keep descending rather than sticking on the newest.
-    ///
-    /// Excludes three things deliberately. `superseded` is a turn the same session
-    /// has already replaced, so replaying it would be telling you something that
-    /// stopped being true. `answered` you replied to. `dismissed` you said no to.
-    /// Catching up should surface what you have not dealt with, not everything that
-    /// ever happened.
-    public func nextForCatchUp() throws -> QueuedEvent? {
-        let heard = try store.events(limit: 500)
-            .filter { $0.status == .announced && $0.summaryText?.isEmpty == false
-                      && !$0.isHeadless }
-        // Anything replayed in this pass sorts last, so a single press cannot hand
-        // back what the previous press just gave you.
-        let mostRecentReplay = heard.map { $0.announcedAtMs ?? 0 }.max() ?? 0
-        return heard.min { a, b in
-            let aJust = (a.announcedAtMs ?? 0) == mostRecentReplay
-            let bJust = (b.announcedAtMs ?? 0) == mostRecentReplay
-            if aJust != bJust { return !aJust }
-            return a.createdAtMs > b.createdAtMs
-        }
+    /// A watermark, not a flag. The next turn from this session arrives with a
+    /// higher id and revives it by construction — which is what Android does, and
+    /// what a boolean cannot do.
+    public func dismiss(sessionId: String, through eventId: Int64) throws {
+        try store.advanceCursor(sessionId: sessionId, dismissedThrough: eventId)
     }
 
     // MARK: - Announce
 
     public struct Announcement: Sendable {
-        public let event: QueuedEvent
+        public let event: WaitingSession
         public let brief: SessionBrief
         public let spoken: SanitizedSpokenText
         public let via: String
-        /// True when this is something you have heard before, offered again because
-        /// the unread ran out. The distinction matters on screen: a summary you
-        /// half-remember reads as new unless it says otherwise.
-        public var isCatchUp = false
         /// Set when the preferred voice failed and the system voice covered for it,
         /// carrying the reason. A downgrade the user cannot see is a downgrade they
         /// will assume is just how the app sounds now.
@@ -204,76 +142,40 @@ public struct Coordinator: Sendable {
     /// reports progress during it. Without the first callback the UI could only
     /// render after `speak` returned — i.e. after you had already heard the whole
     /// thing, which is exactly when the text stops being useful.
-    /// What is waiting, for a UI that wants to show it rather than describe it.
-    /// A count you cannot inspect is a number you have to trust.
-    public func waiting() throws -> [(id: String, label: String, topic: String)] {
-        try store.events(limit: 200)
-            .filter { EventStatus.pendingAnnouncement.contains($0.status) && !$0.isHeadless }
-            .sorted { $0.createdAtMs > $1.createdAtMs }
-            .map { event in
-                let topic = event.summaryText?.split(separator: ".").first.map(String.init)
-                    ?? event.lastAssistantMessage?.prefix(60).description
-                    ?? "waiting"
-                return (event.id, event.projectLabel, topic.trimmingCharacters(in: .whitespaces))
-            }
-    }
-
     public func announceNext(
-        only eventId: String? = nil,
+        only sessionId: String? = nil,
         ignoringGate: Bool = false,
         onWillSpeak: (@MainActor (Announcement) -> Void)? = nil,
         onWord: (@Sendable (Range<Int>) -> Void)? = nil
     ) async throws -> AnnounceOutcome {
-        var isCatchUp = false
-        var candidate: QueuedEvent?
-        if let eventId {
+        let candidate: WaitingSession?
+        if let sessionId {
             // Chosen explicitly from the list, so ordering does not apply.
-            candidate = try store.events(limit: 500).first { $0.id == eventId }
+            candidate = try store.waitingSessions(limit: 500)
+                .first { $0.sessionId == sessionId }
         } else {
             candidate = try nextToAnnounce()
         }
-        // Catch-up is no longer a fallback. It was mine, and it made the app feel
-        // broken: with the unread empty, every press replayed something already
-        // heard, so new arrivals were indistinguishable from old ones being read
-        // out again. Nothing waiting should mean nothing waiting.
-        //
-        // History is still reachable, deliberately and never by accident: the
-        // waiting list shows it and picking a row plays it.
-        _ = isCatchUp
-        guard var event = candidate else { return .nothingWaiting }
+        guard let session = candidate else { return .nothingWaiting }
 
         if !ignoringGate {
             let decision = gate.evaluate()
             guard decision.allowed else {
-                if event.status != .held {
-                    event.status = .held
-                    try store.update(event: event)
-                }
+                // Held writes nothing. It was a status before, which meant a veto
+                // mutated the log; now it is simply a decision not to speak yet, and
+                // the session stays waiting because it still is.
                 return .held(reason: decision.reason)
             }
         }
 
-        let context = event.transcriptPath.map { TranscriptArchive.sessionContext(in: URL(fileURLWithPath: $0)) }
-        // A Notification payload carries no assistant message, so those rows used to
-        // be summarized from nothing but the folder name — "promotions. idle and
-        // waiting on you." said three times over. The transcript is in the payload;
-        // read the real message so a prompt can say what it is actually waiting on.
-        let lastMessage = event.lastAssistantMessage?.isEmpty == false
-            ? event.lastAssistantMessage!
-            : (event.transcriptPath
-                .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
-
-        if let ready = await prepared.take(event.id) {
-            return try await speak(ready, for: &event, isCatchUp: isCatchUp,
-                                   onWillSpeak: onWillSpeak, onWord: onWord)
+        if let ready = await prepared.take(session.sessionId) {
+            return try await speak(ready, for: session, onWillSpeak: onWillSpeak, onWord: onWord)
         }
-
-        let summary = await summarize(event)
-        return try await speak(summary, for: &event, isCatchUp: isCatchUp,
-                               onWillSpeak: onWillSpeak, onWord: onWord)
+        let summary = await summarize(session)
+        return try await speak(summary, for: session, onWillSpeak: onWillSpeak, onWord: onWord)
     }
 
-    private func summarize(_ event: QueuedEvent) async -> Summary {
+    private func summarize(_ event: WaitingSession) async -> Summary {
         let context = event.transcriptPath.map {
             TranscriptArchive.sessionContext(in: URL(fileURLWithPath: $0))
         }
@@ -293,81 +195,36 @@ public struct Coordinator: Sendable {
     }
 
     private func speak(
-        _ summary: Summary, for event: inout QueuedEvent, isCatchUp: Bool = false,
+        _ summary: Summary, for session: WaitingSession,
         onWillSpeak: (@MainActor (Announcement) -> Void)?,
         onWord: (@Sendable (Range<Int>) -> Void)?
     ) async throws -> AnnounceOutcome {
-        event.summaryText = summary.spoken.text
-        event.status = .announced
-        event.announcedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        try store.update(event: event)
-
+        // Nothing is written before the audio. Marking it announced up front is what
+        // let a stray tap spend a session's turn on something never heard, and what
+        // let an interrupt handler write a stale copy back over a dismissal.
         let announcement = Announcement(
-            event: event, brief: summary.brief, spoken: summary.spoken,
-            via: speech.fallback.name, isCatchUp: isCatchUp)
+            event: session, brief: summary.brief, spoken: summary.spoken,
+            via: speech.fallback.name)
         await onWillSpeak?(announcement)
 
         let spoken = await speech.speak(summary.spoken, onWord: onWord)
 
-        // Interrupting an announcement must not consume it. Marking it announced up
-        // front is what makes the reply target derivable, but a stray second tap
-        // then silently spent a session's only unread turn on audio you never heard.
-        // Put it back and re-prepare it, so the next tap plays it again.
-        // Hearing it through is what marks it read. Anything short of that leaves it
-        // waiting: half an announcement tells you half of what happened, and a
-        // system that quietly retires those is one you cannot trust to have shown
-        // you everything. The other way to mark something read is to dismiss it,
-        // which is deliberate and explicit.
+        // Hearing it through is the only thing that advances the cursor. Anything
+        // short of that leaves the session waiting, because it still is: half an
+        // announcement tells you half of what happened.
         //
-        // announcedAtMs survives the revert: it records that this session was the
-        // most recent thing we tried to say, which is what stops an older
-        // announcement from inheriting the reply.
+        // There is nothing to revert. Nothing was written before the audio, so a
+        // stopped announcement needs no undo — which is what makes the resurrection
+        // bug unrepresentable rather than fixed.
         guard spoken.completed else {
-            // Re-read before reverting. `event` is a copy captured before the audio
-            // started, and anything that happened during playback is not in it —
-            // notably a dismissal. Writing the stale copy back resurrected the row
-            // as unread, which is why pressing next appeared to replay the item it
-            // had just retired, word for word, forever.
-            let current = try store.events(limit: 500).first { $0.id == event.id }
-            guard current?.status == .announced else {
-                Coordinator.trace?("interrupt: not reverting \(event.id.prefix(8)); status is now \(current?.status.rawValue ?? "gone")")
-                return .interrupted(failure: spoken.failure)
-            }
-            event.status = .new
-            try store.update(event: event)
-            await prepared.put(summary, for: event.id)
+            await prepared.put(summary, for: session.sessionId)
             return .interrupted(failure: spoken.failure)
         }
 
+        try store.advanceCursor(sessionId: session.sessionId, heardThrough: session.latestId)
         return .spoke(Announcement(
-            event: event, brief: summary.brief, spoken: summary.spoken,
-            via: spoken.provider, isCatchUp: isCatchUp, degraded: spoken.degraded))
-    }
-
-    /// You started answering it, so you heard it.
-    ///
-    /// Beginning a reply stops playback, and a stopped announcement reverts to
-    /// unread — which wiped out the very thing being replied to and lost the
-    /// recording with "nothing to reply to yet". Talking back is a deliberate
-    /// interaction with one specific announcement; it cannot also be the thing that
-    /// invalidates it.
-    public func markHeard(eventId: String) throws {
-        guard var event = try store.events(limit: 500).first(where: { $0.id == eventId })
-        else { return }
-        event.status = .announced
-        if event.announcedAtMs == nil {
-            event.announcedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        }
-        try store.update(event: event)
-    }
-
-    /// Take an item out of the queue without answering it. This is what Dismiss
-    /// means, and it means only this.
-    public func dismiss(eventId: String) throws {
-        guard var event = try store.events(limit: 500).first(where: { $0.id == eventId })
-        else { return }
-        event.status = .dismissed
-        try store.update(event: event)
+            event: session, brief: summary.brief, spoken: summary.spoken,
+            via: spoken.provider, degraded: spoken.degraded))
     }
 
     // MARK: - Reply target
@@ -390,15 +247,17 @@ public struct Coordinator: Sendable {
     /// succeeded, and offer it only if it was heard through to the end. A failed
     /// attempt therefore blocks replies rather than deferring to a stale one.
     /// Refusing is recoverable; typing into the wrong session is not.
-    public func replyTarget() throws -> QueuedEvent? {
+    public func replyTarget() throws -> WaitingSession? {
+        // The session you last heard from, and only while that is still true.
+        //
+        // This used to scan for the most recent `announced` row, which silently
+        // stepped over a NEWER announcement that had failed — and routed a reply
+        // into a terminal the user was not talking to. Now it is the cursor: the
+        // last thing heard through to the end, valid only while it is still that
+        // session's latest event. If a newer turn has arrived since, there is no
+        // target, because you have not heard the thing you would be answering.
         let cutoff = Int64(Date().addingTimeInterval(-replyWindow).timeIntervalSince1970 * 1000)
-        let attempts = try store.events(limit: 500)
-            .filter { ($0.announcedAtMs ?? 0) >= cutoff }
-        guard let latestAttempt = attempts.max(by: {
-            ($0.announcedAtMs ?? 0) < ($1.announcedAtMs ?? 0)
-        }) else { return nil }
-
-        return latestAttempt.status == .announced ? latestAttempt : nil
+        return try store.mostRecentlyHeard(since: cutoff)
     }
 
     // MARK: - Reply
@@ -423,7 +282,7 @@ public struct Coordinator: Sendable {
         guard let target = try replyTarget() else { return .noTarget }
 
         var utterance = try await store.captureAndTranscribe(
-            pcm16: pcm16, sampleRate: sampleRate, chain: recovery, eventId: target.id)
+            pcm16: pcm16, sampleRate: sampleRate, chain: recovery, eventId: nil)
 
         guard utterance.status == .transcribed, let text = utterance.transcriptText else {
             return .transcriptionFailed(utteranceId: utterance.id)
@@ -436,10 +295,11 @@ public struct Coordinator: Sendable {
         // when it is right and everything it needs to when it is wrong — and it
         // subsumes enrolment, since choosing to let it send IS the consent.
         utterance.status = .ready
+        utterance.targetSessionId = target.sessionId
         try store.update(utterance: utterance)
         Coordinator.trace?(
             "replyTarget resolved: session=\(target.sessionId) label=\(target.projectLabel) "
-            + "cwd=\(target.cwd ?? "-") announcedAt=\(target.announcedAtMs ?? -1)")
+            + "cwd=\(target.cwd ?? "-") event=\(target.latestId)")
         return .readyToSend(
             utteranceId: utterance.id, text: text, label: target.projectLabel,
             sessionId: target.sessionId)
@@ -454,8 +314,9 @@ public struct Coordinator: Sendable {
     public func confirmAndSend(utteranceId: String) async throws -> ReplyOutcome {
         guard var utterance = try store.utterances(limit: 500).first(where: { $0.id == utteranceId }),
               let text = utterance.transcriptText,
-              let eventId = utterance.eventId,
-              let target = try store.events(limit: 500).first(where: { $0.id == eventId })
+              let sessionId = utterance.targetSessionId,
+              let target = try store.waitingSessionsIncludingHeard()
+                  .first(where: { $0.sessionId == sessionId })
         else { return .noTarget }
 
         try enrolment.enrol(sessionId: target.sessionId)
@@ -472,7 +333,7 @@ public struct Coordinator: Sendable {
     }
 
     private func dispatch(
-        utterance: inout Utterance, text: String, target: QueuedEvent
+        utterance: inout Utterance, text: String, target: WaitingSession
     ) async throws -> ReplyOutcome {
         guard let live = agents.sessions().first(where: { $0.sessionId == target.sessionId }) else {
             // Absent from `claude agents --json` means blocked on a dialog or gone.
@@ -508,9 +369,7 @@ public struct Coordinator: Sendable {
             utterance.lastError = "queued behind the current turn"
             try store.update(utterance: utterance)
 
-            var answered = target
-            answered.status = .answered
-            try store.update(event: answered)
+            try store.advanceCursor(sessionId: target.sessionId, heardThrough: target.latestId)
             return .queued(text: text, sessionId: target.sessionId)
 
         case .confirmed(let latencyMs):
@@ -518,9 +377,7 @@ public struct Coordinator: Sendable {
             utterance.confirmedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             try store.update(utterance: utterance)
 
-            var answered = target
-            answered.status = .answered
-            try store.update(event: answered)
+            try store.advanceCursor(sessionId: target.sessionId, heardThrough: target.latestId)
             return .dispatched(text: text, latencyMs: latencyMs, sessionId: target.sessionId)
 
         case .deferred(let readiness):

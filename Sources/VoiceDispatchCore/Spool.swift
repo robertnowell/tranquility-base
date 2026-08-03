@@ -64,33 +64,14 @@ public struct SpoolDrainer: Sendable {
             }
             let event = record.toEvent()
 
-            // Not an announcement — the user answered that session themselves, so
-            // whatever was queued for it is now history rather than news.
-            if event.hookEvent == .userPromptSubmit {
-                // Only what predates the message you typed.
-                //
-                // This retired everything for the session, which is catastrophic in
-                // the ordinary case and took hours to see: you type, the agent
-                // works, the agent finishes, and you press to hear it. But typing
-                // your NEXT message retires the turn you were about to listen to,
-                // because that turn is newer than nothing in particular. Every row
-                // from an active conversation ended up superseded and the app had
-                // nothing to say about the session you were actually using.
-                //
-                // A turn that arrives AFTER you typed is a reply to you and is
-                // exactly what you want to hear.
-                result.retired += try store.supersedePending(
-                    sessionId: event.sessionId, before: event.createdAtMs,
-                    includeAnnounced: true)
-                continue
-            }
-
-            // A new turn from this session retires its own earlier ones. Only the
-            // latest state of a session is worth reading out.
-            if event.hookEvent == .stop {
-                result.retired += try store.supersedePending(
-                    sessionId: event.sessionId, before: event.createdAtMs)
-            }
+            // Every event is stored, including user_prompt_submit and the turns it
+            // used to retire. Retirement was the bug: typing your next message
+            // deleted the reply you were about to hear, because the rule looked at
+            // the container rather than at the order of events. Gmail gets this
+            // right by never annotating the container — "if messages are added to a
+            // thread after you add a label, the new messages don't inherit the
+            // existing label" — so a new arrival is unread again with no logic and
+            // no write. Same here: a later event simply wins.
 
             if try store.insert(event: event) != nil {
                 result.inserted += 1
@@ -128,8 +109,7 @@ public struct SpoolDrainer: Sendable {
                 transcriptPath: transcriptPath,
                 lastAssistantMessage: lastAssistantMessage,
                 notificationMatcher: notificationMatcher,
-                tty: tty,
-                status: .new
+                tty: tty
             )
         }
     }

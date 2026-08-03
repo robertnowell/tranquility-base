@@ -145,7 +145,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onOpenSettings = { [weak self] in self?.openSettings() }
         hud.onOpenWaitingList = { [weak self] in
             guard let self, let waiting = try? self.coordinator?.waiting() else { return }
-            self.hud.showWaitingList(waiting ?? [])
+            self.hud.showWaitingList((waiting ?? []).map {
+                (id: $0.sessionId, label: $0.projectLabel,
+                 topic: $0.summaryText?.split(separator: ".").first.map(String.init)
+                     ?? $0.lastAssistantMessage?.prefix(60).description ?? "waiting")
+            })
         }
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onLeaveSettings = { [weak self] in
@@ -181,9 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.isBusy = false
             // Dismiss means the item is done with — not "hide the window and leave
             // it in the queue", which is what made the button meaningless.
-            if let eventId = self.hud.currentEventId {
-                try? self.coordinator?.dismiss(eventId: eventId)
-            }
+            if let sessionId = self.hud.currentEventId { self.dismissCurrent(sessionId) }
             self.updateTitle()
             self.rebuildMenu()
         }
@@ -366,6 +368,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Dismiss whatever the panel is showing, through its latest event.
+    private func dismissCurrent(_ sessionId: String) {
+        guard let coordinator else { return }
+        guard let latest = try? coordinator.waiting().first(where: { $0.sessionId == sessionId })
+        else { return }
+        try? coordinator.dismiss(sessionId: sessionId, through: latest.latestId)
+        Permissions.log("dismissed \(sessionId.prefix(8)) through event \(latest.latestId)")
+    }
+
     private func refresh() {
         if !hotkey.isRunning { _ = hotkey.start() }
         rebuildMenu()
@@ -410,12 +421,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The trade, stated plainly: a stray press now retires a summary you had
             // not finished. Nothing is deleted, so it survives in the data, and a
             // queue you cannot drain is the worse problem of the two.
-            if case .speaking = hud.state, let eventId = hud.currentEventId {
-                try? coordinator?.dismiss(eventId: eventId)
-                Permissions.log("next: dismissed \(eventId.prefix(8)) and moved on")
-            } else if case .paused = hud.state, let eventId = hud.currentEventId {
-                try? coordinator?.dismiss(eventId: eventId)
-                Permissions.log("next: dismissed \(eventId.prefix(8)) and moved on")
+            // Next means done with this one. Dismissal is a watermark, so a later
+            // turn from the same session revives it without anything being undone.
+            switch hud.state {
+            case .speaking, .paused:
+                if let sessionId = hud.currentEventId { dismissCurrent(sessionId) }
+            default: break
             }
             announceNext()
 
@@ -437,9 +448,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // one — you answer as soon as you have heard enough. Mark it heard
             // BEFORE stopping, because stopping reverts it to unread and that is
             // what threw the reply away.
-            if let eventId = hud.currentEventId {
-                try? coordinator?.markHeard(eventId: eventId)
-                repliedToEventId = eventId
+            // Answering it counts as hearing it: you replied, so it is dealt with.
+            if let sessionId = hud.currentEventId,
+               let latest = try? coordinator?.waiting().first(where: { $0.sessionId == sessionId }) {
+                try? coordinator?.markHeard(sessionId: sessionId, through: latest.latestId)
             }
             coordinator?.speech.stop()  // never record over playback
             try? recorder.start()
@@ -525,14 +537,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         let live = ClaudeAgentsCLI().sessions()
                             .first { $0.sessionId == announcement.event.sessionId }
                         self.hud.showAnnouncement(
-                            isCatchUp: announcement.isCatchUp,
                             topic: announcement.brief.topic,
                             spoken: announcement.spoken.text,
                             sessionId: announcement.event.sessionId,
                             pid: live?.pid,
                             project: announcement.event.projectLabel,
                             cwd: announcement.event.cwd,
-                            eventId: announcement.event.id)
+                            eventId: announcement.event.sessionId)
                     },
                     onWord: { [weak self] range in
                         Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
@@ -551,12 +562,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // The announce task reverts an interrupted item to unread. If the
                     // interruption WAS the reply, re-apply the mark — this runs after
                     // the revert, so ordering is settled rather than raced.
-                    if let replied = repliedToEventId {
-                        try? coordinator.markHeard(eventId: replied)
-                        repliedToEventId = nil
-                        lastStatusLine = "replying"
-                        return
-                    }
                     if let failure {
                         // Nobody asked for this one. Say so, rather than letting a
                         // dropped connection masquerade as something you chose.
