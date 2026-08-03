@@ -208,7 +208,7 @@ final class StatusHUD: NSObject {
     /// what is waiting is always derived from `waiting`, never passed in — the two
     /// were computed at different call sites and drifted, so the panel showed
     /// "2 waiting" directly above "Nothing waiting".
-    func showIdle(note: String? = nil, waiting: Int) {
+    func showIdle(note: String? = nil, waiting: Int, unsentReplies: Int = 0) {
         currentTarget = nil
         identity = nil
         currentEventId = nil
@@ -216,7 +216,13 @@ final class StatusHUD: NSObject {
         let status = waiting > 0
             ? "Tap ⌃⌥ for the most recent, hold ⌥ to reply."
             : "Nothing waiting. Sessions appear here as they finish."
-        let body = [note, status].compactMap { $0 }.joined(separator: " ")
+        // Named separately from the waiting count, because the action is different:
+        // these are replies that never landed, not sessions asking to be heard.
+        let stuck = unsentReplies > 0
+            ? "\(unsentReplies) repl\(unsentReplies == 1 ? "y" : "ies") never confirmed "
+                + "— see vdctl utterances."
+            : nil
+        let body = [note, status, stuck].compactMap { $0 }.joined(separator: " ")
 
         show(state: waiting > 0 ? "◌ \(waiting) waiting" : "◌ Ready",
              title: "Voice Dispatch", body: body, autoHideAfter: nil)
