@@ -58,6 +58,7 @@ final class StatusHUD: NSObject {
     /// you were already obeying, and three buttons for actions unrelated to
     /// speaking. A live level meter answers the only question you actually have.
     func showListening(level: @escaping () -> Float) {
+        awaitingConfirm = false
         isListening = true
         levelSource = level
         listenStartedAt = Date()
@@ -88,6 +89,7 @@ final class StatusHUD: NSObject {
         topic: String, spoken: String, sessionId: String, pid: Int?, project: String,
         cwd: String?, eventId: String? = nil
     ) {
+        awaitingConfirm = false
         currentEventId = eventId
         currentTarget = (sessionId, pid, project)
         // Only prefix when the topic adds something. A topic equal to the project
@@ -132,9 +134,14 @@ final class StatusHUD: NSObject {
     ) {
         countdownTimer?.invalidate()
         onCancelSend = cancel
-        awaitingConfirm = true
         show(state: "→ Sending to \(label)", title: "Your reply",
              body: "\u{201C}\(text)\u{201D}", autoHideAfter: nil)
+        // After show(), never before: the state entry points clear this flag, and
+        // setting it first meant the countdown was uncancellable from the moment it
+        // appeared.
+        awaitingConfirm = true
+        replyButton.title = "Don't send"
+        replyButton.isHidden = false
 
         progressBar.isHidden = false
         progressBar.doubleValue = 0
@@ -201,11 +208,13 @@ final class StatusHUD: NSObject {
     }
 
     func showWorking(_ message: String) {
+        awaitingConfirm = false
         show(state: "◌ Working", title: currentTarget?.label ?? "Voice Dispatch",
              body: message, autoHideAfter: nil)
     }
 
     func showResult(_ message: String, ok: Bool) {
+        awaitingConfirm = false
         show(state: ok ? "▶ Sent" : "⚠ Needs you",
              title: currentTarget?.label ?? "Voice Dispatch",
              body: message, autoHideAfter: nil)
@@ -216,6 +225,7 @@ final class StatusHUD: NSObject {
     /// were computed at different call sites and drifted, so the panel showed
     /// "2 waiting" directly above "Nothing waiting".
     func showIdle(note: String? = nil, waiting: Int, unsentReplies: Int = 0) {
+        awaitingConfirm = false
         currentTarget = nil
         identity = nil
         currentEventId = nil
@@ -257,7 +267,9 @@ final class StatusHUD: NSObject {
 
     private func show(state: String, title: String, body: String, autoHideAfter: TimeInterval?) {
         Permissions.log("HUD.show state=\(state) title=\(title)")
-        if state != "⌁ Send this?" { awaitingConfirm = false }
+        // Deliberately NOT inferred from the state text: it was, the text changed,
+        // and the countdown silently stopped being cancellable. Each state that
+        // should end a pending send now says so itself.
         let panel = panel ?? build()
         stateLabel.stringValue = state
         titleLabel.stringValue = title
@@ -340,6 +352,27 @@ final class StatusHUD: NSObject {
     func showPreparing() {
         show(state: "◌ Preparing", title: "Voice Dispatch",
              body: "Writing the summary and fetching the voice…", autoHideAfter: nil)
+    }
+
+    /// Prove a pending send can be stopped for its whole life.
+    ///
+    /// It could not: the flag was inferred from the state text, the text changed,
+    /// and cancelling silently became a no-op. Asserted here rather than trusted.
+    func selfTestPendingSend() {
+        var sent = false
+        var cancelled = false
+        currentTarget = ("selftest", 1, "promotions")
+        showPendingSend(text: "words that should never be sent", label: "promotions",
+                        seconds: 4, send: { sent = true }, cancel: { _ in cancelled = true })
+
+        let cancellable = cancelPendingSend(restartListening: false)
+        Permissions.log("selftest pendingSend: cancellable=\(cancellable) "
+                        + "cancelled=\(cancelled) sent=\(sent)")
+
+        // And it must stay stopped: the timer should be dead, not merely ignored.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            Permissions.log("selftest pendingSend: after the window, sent=\(sent)")
+        }
     }
 
     /// Render every state with worst-case text and confirm nothing is clipped.
