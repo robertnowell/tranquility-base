@@ -17,6 +17,7 @@ func usage() -> Never {
       vdctl reap [hours]        delete audio for confirmed/discarded rows (default 72h)
       vdctl hook-config         print the settings.json snippet to install the hook
       vdctl paths               show where everything lives
+      vdctl secrets             which credentials are readable, and from where
       vdctl calls [n]           full input and output of the last n model calls
 
     dispatch:
@@ -149,7 +150,16 @@ do {
             if let e = u.lastError { print("    error: \(truncate(e, 90))") }
         }
 
-    case "calls":
+    case "secrets":
+    Secrets.trace = { print("  trace: \($0)") }
+    print("file: \(Secrets.fileURL.path)")
+    for key in Secrets.Key.allCases {
+        let value = Secrets.read(key)
+        print("  \(key.rawValue): \(value == nil ? "MISSING" : "present (\(value!.count) chars)")")
+    }
+    exit(0)
+
+case "calls":
     // Every model call, whole. A summary that reads wrong is otherwise
     // undebuggable: the inputs come from four places and the output is opaque.
     let count = Int(CommandLine.arguments.dropFirst(2).first ?? "") ?? 3

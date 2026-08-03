@@ -174,7 +174,14 @@ final class StatusHUD: NSObject {
         return true
     }
 
-    @objc private func cancelPendingSendTapped() { cancelPendingSend(restartListening: true) }
+    // AppKit guarantees target/action runs on the main thread. The implicit
+    // executor check that Swift emits for an @objc method on a @MainActor class is
+    // therefore redundant, and it was not free: it crashed in swift_getObjectType
+    // on a bad executor pointer, killing the app on a button press. `nonisolated`
+    // plus assumeIsolated keeps the isolation guarantee without the check.
+    @objc nonisolated private func cancelPendingSendTapped() {
+        MainActor.assumeIsolated { cancelPendingSend(restartListening: true) }
+    }
 
     /// Reflect a pause without rebuilding the panel — the spoken text and its
     /// highlight must stay exactly where they are.
@@ -389,6 +396,13 @@ final class StatusHUD: NSObject {
             // becoming frontmost, so it never steals a keystroke mid-sentence.
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
+        // NSWindow defaults isReleasedWhenClosed to true, which predates ARC: closing
+        // the window performs a manual release while `panel` still holds a strong
+        // reference. The result is an over-release, and the panel's content — the
+        // buttons among it — becomes freed memory that AppKit still hands mouse
+        // events to. Clicking Reply then crashed inside the executor check on a
+        // garbage object pointer, taking the window with it.
+        panel.isReleasedWhenClosed = false
         panel.level = .floating
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -491,40 +505,47 @@ final class StatusHUD: NSObject {
     /// Same addressing chain the dispatcher uses — pid to tty to tab — so "go to
     /// session" lands on exactly the tab a reply would be typed into, rather than
     /// merely activating Terminal and leaving you to find it.
-    @objc private func goToSession() {
-        guard let pid = currentTarget?.pid else {
-            bodyLabel.stringValue = "That session is no longer running, so there's no tab to open."
-            return
-        }
-        guard let tty = ProcessProbe.tty(of: pid) else {
-            bodyLabel.stringValue = "Couldn't find a terminal for process \(pid). It may have exited."
-            Permissions.log("goToSession: no tty for pid \(pid)")
-            return
-        }
-        let script = """
-            tell application "Terminal"
-              activate
-              repeat with w in windows
-                repeat with t in tabs of w
-                  if (tty of t) as text is "\(tty)" then
-                    set selected tab of w to t
-                    set index of w to 1
-                    return "ok"
-                  end if
-                end repeat
-              end repeat
-              return "notfound"
-            end tell
-            """
-        switch AppleScript.run(script: script) {
-        case .success(let out) where out.contains("notfound"):
-            bodyLabel.stringValue = "That session's tab isn't open in Terminal any more (\(tty))."
-            Permissions.log("goToSession: tab not found for \(tty)")
-        case .success:
-            Permissions.log("goToSession: focused \(tty)")
-        case .failure(let error):
-            bodyLabel.stringValue = "Couldn't control Terminal: \(error.message)"
-            Permissions.log("goToSession FAILED: \(error.message)")
+    // AppKit guarantees target/action runs on the main thread. The implicit
+    // executor check that Swift emits for an @objc method on a @MainActor class is
+    // therefore redundant, and it was not free: it crashed in swift_getObjectType
+    // on a bad executor pointer, killing the app on a button press. `nonisolated`
+    // plus assumeIsolated keeps the isolation guarantee without the check.
+    @objc nonisolated private func goToSession() {
+        MainActor.assumeIsolated {
+            guard let pid = currentTarget?.pid else {
+                bodyLabel.stringValue = "That session is no longer running, so there's no tab to open."
+                return
+            }
+            guard let tty = ProcessProbe.tty(of: pid) else {
+                bodyLabel.stringValue = "Couldn't find a terminal for process \(pid). It may have exited."
+                Permissions.log("goToSession: no tty for pid \(pid)")
+                return
+            }
+            let script = """
+                tell application "Terminal"
+                  activate
+                  repeat with w in windows
+                    repeat with t in tabs of w
+                      if (tty of t) as text is "\(tty)" then
+                        set selected tab of w to t
+                        set index of w to 1
+                        return "ok"
+                      end if
+                    end repeat
+                  end repeat
+                  return "notfound"
+                end tell
+                """
+            switch AppleScript.run(script: script) {
+            case .success(let out) where out.contains("notfound"):
+                bodyLabel.stringValue = "That session's tab isn't open in Terminal any more (\(tty))."
+                Permissions.log("goToSession: tab not found for \(tty)")
+            case .success:
+                Permissions.log("goToSession: focused \(tty)")
+            case .failure(let error):
+                bodyLabel.stringValue = "Couldn't control Terminal: \(error.message)"
+                Permissions.log("goToSession FAILED: \(error.message)")
+            }
         }
     }
 
@@ -557,29 +578,36 @@ final class StatusHUD: NSObject {
         Permissions.log("highlight rendered bright=\(bright)/\(full.length)")
     }
 
-    @objc private func replyTapped() {
-        if awaitingConfirm {
-            cancelPendingSendTapped()
-            return
-        }
-        if isRecording { isRecording = false; onStopReply?() }
-        else { isRecording = true; onReply?() }
-        replyButton.title = isRecording ? "Send reply" : "Reply"
-        let action: String
-        if isListening {
-            action = "Let go of ⌥ to send, or Dismiss to throw it away."
-        } else if awaitingConfirm {
-            action = "Sending in a moment. Stop it if that isn't what you said."
-        } else {
-            if currentTarget == nil {
-                action = ""
-            } else if isRecording {
-                action = "Listening. Click Send, or let go of ⌥."
-            } else {
-                action = "Click Reply, or hold ⌥ to speak."
+    // AppKit guarantees target/action runs on the main thread. The implicit
+    // executor check that Swift emits for an @objc method on a @MainActor class is
+    // therefore redundant, and it was not free: it crashed in swift_getObjectType
+    // on a bad executor pointer, killing the app on a button press. `nonisolated`
+    // plus assumeIsolated keeps the isolation guarantee without the check.
+    @objc nonisolated private func replyTapped() {
+        MainActor.assumeIsolated {
+            if awaitingConfirm {
+                cancelPendingSendTapped()
+                return
             }
+            if isRecording { isRecording = false; onStopReply?() }
+            else { isRecording = true; onReply?() }
+            replyButton.title = isRecording ? "Send reply" : "Reply"
+            let action: String
+            if isListening {
+                action = "Let go of ⌥ to send, or Dismiss to throw it away."
+            } else if awaitingConfirm {
+                action = "Sending in a moment. Stop it if that isn't what you said."
+            } else {
+                if currentTarget == nil {
+                    action = ""
+                } else if isRecording {
+                    action = "Listening. Click Send, or let go of ⌥."
+                } else {
+                    action = "Click Reply, or hold ⌥ to speak."
+                }
+            }
+            hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
         }
-        hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
     }
 
     func recordingEnded() {
@@ -594,11 +622,18 @@ final class StatusHUD: NSObject {
     /// Set by the app so Dismiss can silence the voice, not just hide the panel.
     var onDismiss: (() -> Void)?
 
-    @objc private func dismissTapped() {
-        countdownTimer?.invalidate()
-        countdownTimer = nil
-        awaitingConfirm = false
-        onDismiss?()
-        hide()
+    // AppKit guarantees target/action runs on the main thread. The implicit
+    // executor check that Swift emits for an @objc method on a @MainActor class is
+    // therefore redundant, and it was not free: it crashed in swift_getObjectType
+    // on a bad executor pointer, killing the app on a button press. `nonisolated`
+    // plus assumeIsolated keeps the isolation guarantee without the check.
+    @objc nonisolated private func dismissTapped() {
+        MainActor.assumeIsolated {
+            countdownTimer?.invalidate()
+            countdownTimer = nil
+            awaitingConfirm = false
+            onDismiss?()
+            hide()
+        }
     }
 }

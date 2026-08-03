@@ -77,18 +77,31 @@ public enum Secrets {
         QueueStore.supportDirectory.appendingPathComponent("secrets.json")
     }
 
+    /// Set by the app so a failed read explains itself instead of silently
+    /// degrading the voice.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
     private static func readFile() -> [String: String] {
-        guard let data = try? Data(contentsOf: fileURL),
-              let dict = try? JSONDecoder().decode([String: String].self, from: data)
-        else { return [:] }
-        return dict
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let dict = try JSONDecoder().decode([String: String].self, from: data)
+            Secrets.trace?("read \(fileURL.path) -> keys \(dict.keys.sorted())")
+            return dict
+        } catch {
+            Secrets.trace?("read failed at \(fileURL.path): \(error)")
+            return [:]
+        }
     }
 
     private static func writeFile(_ values: [String: String]) throws {
         try? PrivateStorage.createDirectory(at: fileURL.deletingLastPathComponent())
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(values).write(to: fileURL, options: [.atomic, .completeFileProtection])
+        // No .completeFileProtection: it is a data-protection class designed for iOS
+        // device lock, and on macOS it can make the file unreadable depending on
+        // lock state. The protection here is the 0600 mode and the 0700 directory,
+        // which do not depend on anything being unlocked.
+        try encoder.encode(values).write(to: fileURL, options: [.atomic])
         // Belt and braces — .atomic can replace the file and reset the mode.
         try? FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: fileURL.path)

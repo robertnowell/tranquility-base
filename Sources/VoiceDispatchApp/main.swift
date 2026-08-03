@@ -134,6 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         ElevenLabsSpeechProvider.trace = { Permissions.log("11labs: \($0)") }
         Coordinator.trace = { Permissions.log("routing: \($0)") }
+        Secrets.trace = { Permissions.log("secrets: \($0)") }
         Permissions.log("args=\(CommandLine.arguments)")
 
         if CommandLine.arguments.contains("--selftest-hud") {
