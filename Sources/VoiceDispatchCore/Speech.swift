@@ -385,6 +385,8 @@ public struct SpeechChain: Sendable {
                         heardAny: true)
                 }
                 degraded = String(format: "no audio (stopped at %.0fs of %.0fs)", played, total)
+            } catch SpeechError.synthesisFailed(let reason) where reason.contains("401") {
+                degraded = "ElevenLabs rejected the API key (401)"
             } catch {
                 degraded = "\(error)"
                 ElevenLabsSpeechProvider.trace?("chain: \(preferred.name) failed: \(error)")

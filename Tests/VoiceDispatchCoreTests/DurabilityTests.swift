@@ -6,6 +6,22 @@ import XCTest
 /// network. Everything downstream may fail freely.
 final class DurabilityTests: XCTestCase {
 
+    /// A failed secret read must not latch. Caching the failure meant one bad read
+    /// disabled the good voice for the life of the process, with no way back short
+    /// of a restart — and nothing on screen saying why.
+    ///
+    /// Uses the assemblyai slot, which nothing else in the suite touches.
+    func testAMissingSecretIsRetriedRatherThanCached() throws {
+        let key = Secrets.Key.assemblyAIAPIKey
+        XCTAssertNil(Secrets.read(key), "precondition: nothing stored yet")
+
+        try Secrets.write(key, value: "written-after-a-miss")
+
+        XCTAssertEqual(Secrets.read(key), "written-after-a-miss",
+                       "a later read must see the value, not a cached absence")
+    }
+
+
     /// The data directory holds every session's assistant messages and every
     /// recording of the user's voice. On a machine with more than one account those
     /// were readable by any other local user, because FileManager creates

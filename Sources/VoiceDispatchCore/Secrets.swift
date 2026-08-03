@@ -30,12 +30,20 @@ public enum Secrets {
         private var values: [Key: String?] = [:]
         private let lock = NSLock()
 
+        /// Only successes are cached.
+        ///
+        /// Caching a failure made one bad read permanent: `values[key] = nil` stores
+        /// `.some(nil)`, which the lookup treats as a hit, so the key stayed missing
+        /// for the life of the process and the good voice never came back. A miss is
+        /// cheap to retry — it is one small file read — and a wrong answer that
+        /// never re-checks is expensive.
         func value(for key: Key, load: () -> String?) -> String? {
             lock.lock()
-            if let cached = values[key] { lock.unlock(); return cached }
+            if let cached = values[key], let hit = cached { lock.unlock(); return hit }
             lock.unlock()
 
             let loaded = load()
+            guard let loaded else { return nil }
             lock.lock()
             values[key] = loaded
             lock.unlock()

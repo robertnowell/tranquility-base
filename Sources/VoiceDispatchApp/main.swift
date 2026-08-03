@@ -401,6 +401,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 ) {
                 case .spoke(let announcement):
+                    if let degraded = announcement.degraded {
+                        // Heard, but in the plainer voice. Say why, or an outage
+                        // reads as the app just sounding worse for no reason.
+                        hud.note("Read in the system voice — \(degraded)")
+                    }
                     lastStatusLine = "◀ \(announcement.brief.topic)"
                     hud.highlight(upTo: announcement.spoken.text.count)
                 case .interrupted(let failure):

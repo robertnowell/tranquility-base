@@ -148,6 +148,10 @@ public struct Coordinator: Sendable {
         public let brief: SessionBrief
         public let spoken: SanitizedSpokenText
         public let via: String
+        /// Set when the preferred voice failed and the system voice covered for it,
+        /// carrying the reason. A downgrade the user cannot see is a downgrade they
+        /// will assume is just how the app sounds now.
+        public var degraded: String?
     }
 
     public enum AnnounceOutcome: Sendable {
@@ -257,7 +261,8 @@ public struct Coordinator: Sendable {
         }
 
         return .spoke(Announcement(
-            event: event, brief: summary.brief, spoken: summary.spoken, via: spoken.provider))
+            event: event, brief: summary.brief, spoken: summary.spoken,
+            via: spoken.provider, degraded: spoken.degraded))
     }
 
     /// You started answering it, so you heard it.
