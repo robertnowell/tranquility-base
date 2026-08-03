@@ -108,6 +108,8 @@ public struct PullRequestRef: Codable, Sendable, Equatable {
     public var title: String
     public var state: String
     public var url: String
+    /// Present only on the merged-PR fallback query, used to reject stale merges.
+    public var mergedAt: String?
 }
 
 /// Looks up a pull request for a branch. Deterministic — the model is never asked
@@ -120,7 +122,16 @@ public enum PullRequestLookup {
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = [
             "-lc",
-            "gh pr list --head \(branch.shellQuoted) --state all --limit 1 --json number,title,state,url",
+            // Open PRs only, plus one merged in the last two hours.
+            //
+            // `--state all` announced "pull request 2023 is merged" for a PR merged
+            // months ago, because its branch was still checked out. True, useless,
+            // and it reads as a hallucination — which is worse than saying nothing.
+            // An open PR is awaiting you; an old merged one is history.
+            "gh pr list --head \(branch.shellQuoted) --state open --limit 1 "
+                + "--json number,title,state,url "
+                + "|| gh pr list --head \(branch.shellQuoted) --state merged --limit 1 "
+                + "--json number,title,state,url,mergedAt",
         ]
         if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
         let pipe = Pipe()
@@ -130,7 +141,16 @@ public enum PullRequestLookup {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
-        return (try? JSONDecoder().decode([PullRequestRef].self, from: data))?.first
+        guard let ref = (try? JSONDecoder().decode([PullRequestRef].self, from: data))?.first
+        else { return nil }
+        guard ref.state.uppercased() == "MERGED" else { return ref }
+
+        // A merge only counts as news while it is still fresh.
+        guard let stamp = ref.mergedAt,
+              let merged = ISO8601DateFormatter().date(from: stamp),
+              Date().timeIntervalSince(merged) < 2 * 3600
+        else { return nil }
+        return ref
     }
 }
 

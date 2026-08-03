@@ -35,6 +35,7 @@ final class StatusHUD: NSObject {
     private var hideWorkItem: DispatchWorkItem?
     private var contentStack: NSStackView?
     private var identity: String?
+    private static let spokenMark = NSAttributedString.Key("vdSpoken")
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
 
@@ -45,38 +46,36 @@ final class StatusHUD: NSObject {
              body: "Speak your reply, then let go of ⌃⌥.", autoHideAfter: nil)
     }
 
-    func showAnnouncement(topic: String, spoken: String, sessionId: String, pid: Int?, project: String) {
+    func showAnnouncement(topic: String, spoken: String, sessionId: String, pid: Int?, project: String, cwd: String?) {
         currentTarget = (sessionId, pid, project)
         // Only prefix when the topic adds something. A topic equal to the project
         // rendered as "promotions — promotions", which names the folder twice and
         // tells you nothing.
         let headline = topic.caseInsensitiveCompare(project) == .orderedSame || topic.isEmpty
             ? project : "\(project) — \(topic)"
-        identity = Self.identify(pid: pid)
+        identity = Self.identify(pid: pid, cwd: cwd)
         show(state: "◀ Speaking", title: headline, body: spoken, autoHideAfter: nil)
     }
 
     /// The concrete tab this is about: working directory and tty. Without it you
     /// cannot tell whether "Go to session" opened the right one — a project name is
     /// not an address, and several tabs share it.
-    private static func identify(pid: Int?) -> String? {
+    private static func identify(pid: Int?, cwd: String?) -> String? {
         guard let pid else { return nil }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-p", String(pid), "-o", "tty=,cwd="]
+        proc.arguments = ["-p", String(pid), "-o", "tty="]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
         try? proc.run()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         proc.waitUntilExit()
-        let fields = (String(data: data, encoding: .utf8) ?? "")
+        let tty = (String(data: data, encoding: .utf8) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
-        guard let tty = fields.first else { return nil }
-        let dir = fields.count > 1
-            ? String(fields[1]).replacingOccurrences(of: NSHomeDirectory(), with: "~") : ""
-        return dir.isEmpty ? "tty \(tty)" : "\(dir) · tty \(tty)"
+        guard !tty.isEmpty, tty != "??" else { return nil }
+        let dir = (cwd ?? "").replacingOccurrences(of: NSHomeDirectory(), with: "~")
+        return dir.isEmpty ? tty : "\(dir) · \(tty)"
     }
 
     func showWorking(_ message: String) {
@@ -180,7 +179,7 @@ final class StatusHUD: NSObject {
             ("idle", { self.showIdle(long) }),
             ("announcement", { self.showAnnouncement(
                 topic: "Product image binding fix validation", spoken: long,
-                sessionId: "s", pid: 1, project: "promotions") }),
+                sessionId: "s", pid: 1, project: "promotions", cwd: "/tmp/promotions") }),
             ("listening", { self.showListening() }),
             ("result", { self.showResult(long, ok: false) }),
         ] as [(String, () -> Void)] {
@@ -333,17 +332,28 @@ final class StatusHUD: NSObject {
     /// Everything up to the cursor is shown at full strength and the rest dimmed, so
     /// the eye can follow the voice without the jitter of a per-word box.
     func highlight(upTo index: Int) {
-        guard let body = bodyLabel?.stringValue, !body.isEmpty else { return }
+        guard let body = bodyLabel?.stringValue, !body.isEmpty else {
+            Permissions.log("highlight upTo=\(index) SKIPPED: no body text")
+            return
+        }
+        Permissions.log("highlight upTo=\(index) of \(body.count) thread=\(Thread.isMainThread)")
         let clamped = max(0, min(index, body.count))
         let attributed = NSMutableAttributedString(string: body)
         let full = NSRange(location: 0, length: (body as NSString).length)
-        attributed.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: full)
         attributed.addAttribute(
-            .foregroundColor, value: NSColor.labelColor,
-            range: NSRange(location: 0, length: min(clamped, full.length)))
+            .foregroundColor, value: NSColor.labelColor.withAlphaComponent(0.35), range: full)
+        let spokenRange = NSRange(location: 0, length: min(clamped, full.length))
+        attributed.addAttribute(.foregroundColor, value: NSColor.labelColor, range: spokenRange)
+        attributed.addAttribute(Self.spokenMark, value: true, range: spokenRange)
         attributed.addAttribute(
             .font, value: NSFont.systemFont(ofSize: 12), range: full)
         bodyLabel.attributedStringValue = attributed
+
+        var bright = 0
+        bodyLabel.attributedStringValue.enumerateAttribute(Self.spokenMark, in: full) { value, range, _ in
+            if value != nil { bright += range.length }
+        }
+        Permissions.log("highlight rendered bright=\(bright)/\(full.length)")
     }
 
     @objc private func replyTapped() {

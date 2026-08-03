@@ -125,6 +125,9 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
 
     private var player: AVAudioPlayer?
 
+    /// Set by the app so highlight failures are visible instead of silent.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
     public init(
         voiceId: String = "EXAVITQu4vr4xnSDxMaL",
         model: String = "eleven_flash_v2_5",
@@ -165,6 +168,7 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         else { throw SpeechError.synthesisFailed("unexpected response shape") }
 
         let starts = (json["alignment"] as? [String: Any])?["character_start_times_seconds"] as? [Double]
+        ElevenLabsSpeechProvider.trace?("alignment starts=\(starts?.count ?? -1) chars=\(text.text.count) onWord=\(onWord != nil)")
 
         let audio = try AVAudioPlayer(data: audioData)
         player = audio
@@ -187,6 +191,7 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
                 while index + 1 < starts.count, starts[index + 1] <= now { index += 1 }
                 if index != lastIndex, index >= 0 {
                     lastIndex = index
+                    ElevenLabsSpeechProvider.trace?("onWord upTo=\(index + 1) t=\(now)")
                     onWord(0..<min(index + 1, text.text.count))
                 }
             }
@@ -240,14 +245,20 @@ public struct SpeechChain: Sendable {
     ) async -> String {
         if let preferred, preferred.isConfigured {
             do {
+                ElevenLabsSpeechProvider.trace?("chain: trying \(preferred.name)")
                 try await preferred.speak(text, onWord: onWord)
                 return preferred.name
             } catch SpeechError.interrupted {
                 return preferred.name
             } catch {
+                ElevenLabsSpeechProvider.trace?("chain: \(preferred.name) failed: \(error)")
                 // fall through to the system voice for this utterance only
             }
+        } else {
+            ElevenLabsSpeechProvider.trace?(
+                "chain: preferred unavailable (configured=\(preferred?.isConfigured ?? false))")
         }
+        ElevenLabsSpeechProvider.trace?("chain: falling back to \(fallback.name)")
         try? await fallback.speak(text, onWord: onWord)
         return fallback.name
     }
