@@ -123,12 +123,17 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
         Rules:
         - 35 words maximum. Shorter is better. One or two sentences.
-        - Say what was concluded. Then the most important concern, if there is a real \
-        one. Then the suggested next step, if there is a real one. Omit any beat that \
-        isn't genuinely there — do not invent concerns.
+        - Say what was concluded. Then the single most important concern, if there is a \
+        real one. Then the suggested next step, if there is a real one. Omit any beat \
+        that isn't genuinely there — do not invent concerns.
+        - NEVER enumerate. If there are several problems, say how many and name only the \
+        one that matters most: "Four issues, the worst being a fabricated claim about \
+        stock levels." A list that runs out of room mid-item is worse than a count.
         - Never include code, file paths, file names, identifiers, commit hashes, URLs, \
         or numbers that only make sense on a screen.
-        - Do not begin with "The agent", "Claude", or "This session". Just say what happened.
+        - Write as if reporting what happened, not as if describing someone else's work. \
+        Never begin with "The agent", "Claude", "This session", or "It". Start with the \
+        subject of the work itself.
         - Plain prose only. No markdown, no quotes, no preamble, no sign-off.
         """
 
