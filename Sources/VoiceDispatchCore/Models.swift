@@ -45,6 +45,15 @@ public enum EventStatus: String, Codable, DatabaseValueConvertible, Sendable, Ca
 }
 
 public struct QueuedEvent: Codable, FetchableRecord, PersistableRecord, Identifiable, Sendable {
+    /// Machine-driven, not human-driven: `claude -p` from launchd or cron, with no
+    /// controlling terminal. Nothing to open, nothing to answer, and every run gets
+    /// a new session id so supersession cannot collapse them either.
+    ///
+    /// Only an explicit "??" counts. A nil tty is a row written before this was
+    /// recorded, and unknown must never be treated as headless: the cost of being
+    /// wrong here is silently never announcing a real session.
+    public var isHeadless: Bool { tty == "??" }
+
     public static let databaseTableName = "events"
 
     public var id: String
@@ -59,6 +68,9 @@ public struct QueuedEvent: Codable, FetchableRecord, PersistableRecord, Identifi
     public var lastAssistantMessage: String?
     /// For `Notification` events: `permission_prompt`, `idle_prompt`, etc.
     public var notificationMatcher: String?
+    /// The hook's controlling terminal. "??" means headless. Nil means the row
+    /// predates this being recorded, which is unknown rather than headless.
+    public var tty: String?
     public var status: EventStatus
     public var summaryText: String?
     public var summaryError: String?
@@ -74,6 +86,7 @@ public struct QueuedEvent: Codable, FetchableRecord, PersistableRecord, Identifi
         transcriptPath: String? = nil,
         lastAssistantMessage: String? = nil,
         notificationMatcher: String? = nil,
+        tty: String? = nil,
         status: EventStatus = .new,
         summaryText: String? = nil,
         summaryError: String? = nil,
@@ -88,6 +101,7 @@ public struct QueuedEvent: Codable, FetchableRecord, PersistableRecord, Identifi
         self.transcriptPath = transcriptPath
         self.lastAssistantMessage = lastAssistantMessage
         self.notificationMatcher = notificationMatcher
+        self.tty = tty
         self.status = status
         self.summaryText = summaryText
         self.summaryError = summaryError

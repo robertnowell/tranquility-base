@@ -110,6 +110,20 @@ public final class QueueStore: Sendable {
             try db.create(index: "idx_utterances_status", on: "utterances", columns: ["status"])
         }
 
+        // Headless runs are machine-driven: `claude -p` from launchd or cron. There
+        // is no tab to open and no session to answer, and because every run gets a
+        // NEW session id, supersession cannot collapse them either — a daily job
+        // adds one more near-identical unread row every day.
+        //
+        // The signal is the hook's own controlling terminal, which is inherited by
+        // children and severed by setsid. Measured both ways rather than reasoned
+        // about: a real `claude -p` run records "??", the same hook under a pty
+        // records "ttys147". Nullable on purpose, so rows written before this
+        // shipped are unknown rather than assumed headless.
+        m.registerMigration("v2_event_tty") { db in
+            try db.alter(table: "events") { t in t.add(column: "tty", .text) }
+        }
+
         return m
     }
 
@@ -236,8 +250,12 @@ public final class QueueStore: Sendable {
     public func pendingCount() throws -> Int {
         try dbQueue.read { db in
             let pending = EventStatus.pendingAnnouncement.map(\.rawValue)
+            // Headless rows are excluded here too, or the badge counts things no
+            // keypress can reach — which is exactly how it came to read "2 waiting"
+            // while nothing could be played.
             let events = try QueuedEvent
                 .filter(pending.contains(Column("status")))
+                .filter(Column("tty") == nil || Column("tty") != "??")
                 .fetchCount(db)
             return events
         }

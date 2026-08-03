@@ -94,7 +94,8 @@ public struct Coordinator: Sendable {
     public func nextToAnnounce() throws -> QueuedEvent? {
         try supersedeStaleTurns()
         let waiting = try store.events(limit: 200).filter {
-            $0.status == .new || $0.status == .summarized || $0.status == .held
+            ($0.status == .new || $0.status == .summarized || $0.status == .held)
+                && !$0.isHeadless
         }
 
         // A stack, not a queue: the newest thing a session said is the thing you
@@ -158,7 +159,8 @@ public struct Coordinator: Sendable {
     /// ever happened.
     public func nextForCatchUp() throws -> QueuedEvent? {
         let heard = try store.events(limit: 500)
-            .filter { $0.status == .announced && $0.summaryText?.isEmpty == false }
+            .filter { $0.status == .announced && $0.summaryText?.isEmpty == false
+                      && !$0.isHeadless }
         // Anything replayed in this pass sorts last, so a single press cannot hand
         // back what the previous press just gave you.
         let mostRecentReplay = heard.map { $0.announcedAtMs ?? 0 }.max() ?? 0
@@ -206,7 +208,7 @@ public struct Coordinator: Sendable {
     /// A count you cannot inspect is a number you have to trust.
     public func waiting() throws -> [(id: String, label: String, topic: String)] {
         try store.events(limit: 200)
-            .filter { EventStatus.pendingAnnouncement.contains($0.status) }
+            .filter { EventStatus.pendingAnnouncement.contains($0.status) && !$0.isHeadless }
             .sorted { $0.createdAtMs > $1.createdAtMs }
             .map { event in
                 let topic = event.summaryText?.split(separator: ".").first.map(String.init)
