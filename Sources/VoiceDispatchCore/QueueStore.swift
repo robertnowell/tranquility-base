@@ -148,10 +148,18 @@ public final class QueueStore: Sendable {
     /// Used for both supersession (a newer turn arrived) and self-answering (the
     /// user typed into that session). Rows are marked, never deleted — knowing
     /// what was skipped is part of the record.
+    ///
+    /// `includeAnnounced` covers the case that matters for catching up: if you have
+    /// since typed into a session, the agent is no longer the last turn there and
+    /// the session is not waiting on you, so replaying its summary later would be
+    /// describing a conversation you have already moved past.
     @discardableResult
-    public func supersedePending(sessionId: String, before: Int64? = nil) throws -> Int {
+    public func supersedePending(
+        sessionId: String, before: Int64? = nil, includeAnnounced: Bool = false
+    ) throws -> Int {
         try dbQueue.write { db in
-            let pending = EventStatus.pendingAnnouncement.map { $0.rawValue }
+            var pending = EventStatus.pendingAnnouncement.map { $0.rawValue }
+            if includeAnnounced { pending.append(EventStatus.announced.rawValue) }
             var sql = """
                 UPDATE events SET status = 'superseded'
                 WHERE sessionId = ? AND status IN (\(pending.map { _ in "?" }.joined(separator: ",")))

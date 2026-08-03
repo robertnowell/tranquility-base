@@ -454,7 +454,7 @@ final class CoordinatorTests: XCTestCase {
 
     /// Being caught up on the unread is not the same as being caught up. Once the
     /// unread runs out, pressing again works back through what you have heard.
-    func testCatchUpWalksHistoryOldestHeardFirst() async throws {
+    func testCatchUpWalksHistoryNewestFirst() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)
         for (index, session) in ["s-a", "s-b"].enumerated() {
@@ -469,6 +469,8 @@ final class CoordinatorTests: XCTestCase {
         else { return XCTFail("both should be heard") }
         XCTAssertFalse(first.isCatchUp)
         XCTAssertFalse(second.isCatchUp)
+        XCTAssertEqual(first.event.promptId, "p1", "a stack: the newest turn is heard first")
+        XCTAssertEqual(second.event.promptId, "p0")
         XCTAssertNil(try coordinator.nextToAnnounce(), "nothing unread remains")
 
         // Pressing again replays the one heard longest ago, marked as catch-up.
@@ -476,14 +478,15 @@ final class CoordinatorTests: XCTestCase {
             return XCTFail("history should still be offered")
         }
         XCTAssertTrue(third.isCatchUp)
-        XCTAssertEqual(third.event.id, first.event.id, "oldest heard comes back first")
+        // `first` IS the newest: the stack hands back the most recent turn first,
+        // so the initial pass ran newest to oldest and catch-up does the same.
+        XCTAssertEqual(third.event.id, first.event.id, "newest comes back first")
 
-        // And hearing it moves it to the back, so the next press is the other one.
+        // And the next press descends rather than handing back the same one.
         guard case .spoke(let fourth) = try await coordinator.announceNext() else {
             return XCTFail("history should keep going")
         }
-        XCTAssertEqual(fourth.event.id, second.event.id,
-                       "repeated presses walk history rather than repeating one item")
+        XCTAssertEqual(fourth.event.id, second.event.id, "then the one before it")
     }
 
     /// Catching up must not resurface what a session has already replaced, what you
@@ -508,6 +511,22 @@ final class CoordinatorTests: XCTestCase {
     /// Nothing is announced twice AS NEW. It can come back as catch-up once the
     /// unread is exhausted, which is a different claim and a deliberate one: the
     /// badge and the "new" framing must only ever mean genuinely unheard.
+    /// Typing into a session yourself means the agent is no longer the last turn
+    /// there, so it is not waiting on you and must not come back in catch-up.
+    func testTypingIntoASessionRemovesItFromHistoryToo() async throws {
+        let coordinator = try makeCoordinator()
+        try seedEvent()
+        guard case .spoke = try await coordinator.announceNext() else {
+            return XCTFail("expected an announcement")
+        }
+        XCTAssertNotNil(try coordinator.nextForCatchUp(), "heard, and replayable")
+
+        _ = try coordinator.invalidatePending(sessionId: "sess-1")
+
+        XCTAssertNil(try coordinator.nextForCatchUp(),
+                     "you answered it yourself, so there is nothing to catch up on")
+    }
+
     func testNothingIsAnnouncedTwiceAsNew() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)

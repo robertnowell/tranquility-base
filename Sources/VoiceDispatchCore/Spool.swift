@@ -67,7 +67,10 @@ public struct SpoolDrainer: Sendable {
             // Not an announcement — the user answered that session themselves, so
             // whatever was queued for it is now history rather than news.
             if event.hookEvent == .userPromptSubmit {
-                result.retired += try store.supersedePending(sessionId: event.sessionId)
+                // Including already-announced rows: you typed into that session, so
+                // the agent is no longer the last turn and it is not waiting on you.
+                result.retired += try store.supersedePending(
+                    sessionId: event.sessionId, includeAnnounced: true)
                 continue
             }
 
