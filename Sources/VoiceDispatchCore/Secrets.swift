@@ -15,6 +15,7 @@ public enum Secrets {
         case anthropicAPIKey = "anthropic-api-key"
         case elevenLabsAPIKey = "elevenlabs-api-key"
         case assemblyAIAPIKey = "assemblyai-api-key"
+        case openAIAPIKey = "openai-api-key"
     }
 
     public static func read(_ key: Key) -> String? {

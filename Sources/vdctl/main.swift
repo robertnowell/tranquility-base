@@ -417,6 +417,35 @@ do {
         print("\nfrontmost apps:")
         for (a, n) in apps.sorted(by: { $0.value > $1.value }).prefix(6) { print("  \(pad(String(n), 6)) \(a)") }
 
+    // MARK: transcription
+
+    case "transcribe":
+        guard args.count > 1 else { usage() }
+        let url = URL(fileURLWithPath: args[1])
+        let chain = RecoveryChain()
+        print("providers: " + chain.providers
+            .map { "\($0.name)\($0.isConfigured ? "" : " (unconfigured)")" }
+            .joined(separator: " → "))
+        let start = Date()
+        let outcome = await chain.transcribe(fileAt: url)
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        for attempt in outcome.attempts { print("  \(attempt)") }
+        if let result = outcome.result {
+            print("\n[\(result.provider), \(result.finality.rawValue), \(ms)ms]")
+            print(result.text)
+        } else {
+            print("\nno provider succeeded — \(outcome.lastFailure.map { "\($0)" } ?? "unknown")")
+            print("The audio is untouched; retry with `vdctl retry-failed` once a provider is available.")
+            exit(6)
+        }
+
+    case "retry-failed":
+        let recovered = try await store.retryFailedTranscriptions()
+        if recovered.isEmpty { print("nothing to recover"); break }
+        for u in recovered {
+            print("recovered \(u.id) via \(u.transcriptProvider ?? "?"): \(truncate(u.transcriptText, 70))")
+        }
+
     default:
         usage()
     }
