@@ -65,6 +65,11 @@ public struct SpokenTextSanitizer: Sendable {
             replacement: "a file", label: "filename"),
         // Long opaque tokens: session ids, keys, base64-ish blobs.
         .init(pattern: "\\b[A-Za-z0-9_\\-]{24,}\\b", replacement: "an identifier", label: "opaque-token"),
+        // camelCase and snake_case symbol names. English doesn't camelCase, so this
+        // is safe — and it is the rule that was missing when `availableBrandAssets`
+        // and `buildLockedLayoutAssets` were read aloud verbatim.
+        .init(pattern: "\\b[a-z]+(?:[A-Z][a-zA-Z0-9]*){1,}\\b", replacement: "a variable", label: "symbol"),
+        .init(pattern: "\\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,}\\b", replacement: "a variable", label: "symbol"),
     ]
 
     public func sanitize(_ raw: String) -> SanitizedSpokenText {
