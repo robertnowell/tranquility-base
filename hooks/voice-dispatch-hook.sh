@@ -34,8 +34,24 @@ mkdir -p "$SUPPORT_DIR" 2>/dev/null || exit 0
 # terminal. There is no tab to open and no session to answer, so an announcement
 # about one is pure noise: you cannot act on it and it competes with sessions you
 # can. The parent process's tty is `??` exactly in that case.
-PARENT_TTY=$(ps -o tty= -p "$PPID" 2>/dev/null | tr -d '[:space:]')
-if [ -z "$PARENT_TTY" ] || [ "$PARENT_TTY" = "??" ]; then
+# Walk up the process tree rather than trusting $PPID.
+#
+# $PPID is whatever spawned this script, which is not reliably the claude process:
+# a wrapper shell, a pipeline, or a tool harness can sit in between, and any of
+# those can lack a controlling terminal while claude itself has one. Trusting it
+# silently dropped real turns from real terminals, which is the worst possible
+# failure for a hook whose entire job is not losing events.
+#
+# A truly headless run has no tty ANYWHERE in its ancestry, so that is what to ask.
+PID=$$
+HAS_TTY=0
+for _ in 1 2 3 4 5 6 7 8; do
+  [ -z "$PID" ] || [ "$PID" = "0" ] || [ "$PID" = "1" ] && break
+  T=$(ps -o tty= -p "$PID" 2>/dev/null | tr -d '[:space:]')
+  if [ -n "$T" ] && [ "$T" != "??" ]; then HAS_TTY=1; break; fi
+  PID=$(ps -o ppid= -p "$PID" 2>/dev/null | tr -d '[:space:]')
+done
+if [ "$HAS_TTY" = "0" ]; then
   exit 0
 fi
 
