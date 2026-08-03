@@ -349,6 +349,38 @@ final class CoordinatorTests: XCTestCase {
         else { return XCTFail("the reply must have somewhere to go") }
     }
 
+    /// Saying it again during the send window replaces the reply rather than
+    /// queueing a second one — and the rejected recording is kept, not deleted.
+    func testSayingItAgainReplacesThePendingReply() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(transport: transport)
+        try seedEvent()
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let firstId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+
+        try coordinator.cancelSend(utteranceId: firstId)
+
+        guard case .readyToSend(let secondId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("the second attempt must also be sendable") }
+        XCTAssertNotEqual(firstId, secondId)
+
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: secondId)
+        else { return XCTFail("the newer reply is the one that goes") }
+
+        XCTAssertEqual(transport.sent.count, 1, "exactly one reply reaches the session")
+        let statuses = try store.utterances().reduce(into: [String: UtteranceStatus]()) {
+            $0[$1.id] = $1.status
+        }
+        XCTAssertEqual(statuses[firstId], .discarded, "kept, but out of the sendable set")
+        XCTAssertEqual(statuses[secondId], .confirmed)
+        XCTAssertNotNil(try store.utterances().first { $0.id == firstId }?.audioPath,
+                        "you rejected the words, not the recording")
+    }
+
     func testNothingIsAnnouncedTwice() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)

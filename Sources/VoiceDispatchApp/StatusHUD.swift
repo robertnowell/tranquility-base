@@ -43,7 +43,7 @@ final class StatusHUD: NSObject {
     /// The event the panel is currently about, so Dismiss can retire it.
     private(set) var currentEventId: String?
     private var countdownTimer: Timer?
-    private var onCancelSend: (() -> Void)?
+    private var onCancelSend: ((_ restartListening: Bool) -> Void)?
     private var progressBar: NSProgressIndicator!
     private static let spokenMark = NSAttributedString.Key("vdSpoken")
 
@@ -128,7 +128,7 @@ final class StatusHUD: NSObject {
     /// the rare occasion you need to.
     func showPendingSend(
         text: String, label: String, seconds: TimeInterval,
-        send: @escaping () -> Void, cancel: @escaping () -> Void
+        send: @escaping () -> Void, cancel: @escaping (_ restartListening: Bool) -> Void
     ) {
         countdownTimer?.invalidate()
         onCancelSend = cancel
@@ -157,15 +157,24 @@ final class StatusHUD: NSObject {
     }
 
     /// Stop a pending send. Safe to call when nothing is pending.
-    @objc private func cancelPendingSend() {
+    ///
+    /// `restartListening` is false when the caller is already starting a new
+    /// recording of its own — holding ⌥ during the window is itself the instruction
+    /// to say it again, so restarting from here as well would double-start.
+    @discardableResult
+    func cancelPendingSend(restartListening: Bool = true) -> Bool {
+        guard awaitingConfirm else { return false }
         countdownTimer?.invalidate()
         countdownTimer = nil
         awaitingConfirm = false
         progressBar.isHidden = true
         let cancel = onCancelSend
         onCancelSend = nil
-        cancel?()
+        cancel?(restartListening)
+        return true
     }
+
+    @objc private func cancelPendingSendTapped() { cancelPendingSend(restartListening: true) }
 
     /// Reflect a pause without rebuilding the panel — the spoken text and its
     /// highlight must stay exactly where they are.
@@ -518,7 +527,7 @@ final class StatusHUD: NSObject {
 
     @objc private func replyTapped() {
         if awaitingConfirm {
-            cancelPendingSend()
+            cancelPendingSendTapped()
             return
         }
         if isRecording { isRecording = false; onStopReply?() }

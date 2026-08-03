@@ -304,6 +304,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case .replyBegan:
             guard micGranted, !recorder.isRecording else { return }
+            // Holding ⌥ during the send window means "no, let me say that again".
+            // The old transcript is discarded rather than deleted, and the gesture
+            // itself starts the new recording, so nothing restarts it twice.
+            hud.cancelPendingSend(restartListening: false)
             // Replying to what is currently playing is the normal case, not an edge
             // one — you answer as soon as you have heard enough. Mark it heard
             // BEFORE stopping, because stopping reverts it to unread and that is
@@ -439,9 +443,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     hud.showPendingSend(
                         text: text, label: label, seconds: 4,
                         send: { [weak self] in self?.send(utteranceId: utteranceId, label: label) },
-                        cancel: { [weak self] in
+                        cancel: { [weak self] restartListening in
                             guard let self else { return }
+                            // The recording is kept, just taken out of the sendable
+                            // set — you rejected these words, not the audio.
                             try? self.coordinator?.cancelSend(utteranceId: utteranceId)
+                            guard restartListening else { return }
                             // Straight back to listening: you stopped it because the
                             // words were wrong, so the next thing you want is to say
                             // them again, not to hunt for a button.
