@@ -50,6 +50,12 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>NSMicrophoneUsageDescription</key>
   <string>Voice Dispatch records your spoken reply so it can be transcribed and sent back to the coding session that asked for it. Audio stays on this Mac unless you configure a cloud transcription provider.</string>
 
+  <!-- "Go to session" and dispatch both drive Terminal via Apple Events. Without
+       this key the request is denied silently and the app never appears under
+       Privacy > Automation — the same failure mode the microphone had. -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Voice Dispatch focuses the terminal tab a session is running in, and types your dictated reply into it.</string>
+
   <!-- Only needed if Apple's on-device recogniser is used as the fallback tier. -->
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Voice Dispatch can transcribe your reply on-device when no cloud provider is available, so a recording is never lost.</string>
@@ -67,7 +73,12 @@ if [ -z "$IDENTITY" ]; then
   echo "⚠️  no signing identity — the bundle is ad-hoc signed and TCC grants will"
   echo "   reset on every rebuild."
 else
+  # --entitlements is not optional here. With the hardened runtime enabled, a
+  # protected resource needs the entitlement as well as the Info.plist usage string;
+  # without it TCC denies instantly, shows no prompt, and never lists the app in the
+  # Privacy pane — a completely silent failure.
   codesign --force --deep --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
+    --entitlements VoiceDispatch.entitlements \
     --options runtime --timestamp=none "$APP_DIR"
   echo "signed as: $IDENTITY"
 fi

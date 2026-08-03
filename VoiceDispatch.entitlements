@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Required because the bundle is signed with the hardened runtime.
+
+    Under hardened runtime, access to a protected resource needs BOTH the Info.plist
+    usage description AND the matching entitlement. With the usage string alone, TCC
+    denies the request instantly — no prompt, no error, and the app never appears in
+    the Privacy pane, so there is nothing for the user to switch on. That failure is
+    completely silent from the outside, which is what made it hard to find.
+  -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+
+  <!--
+    Not sandboxed. The global CGEvent tap for the hotkey and the always-on-top
+    overlay are both incompatible with the App Sandbox.
+  -->
+  <key>com.apple.security.app-sandbox</key>
+  <false/>
+
+  <!-- Sending Apple Events to Terminal is what "Go to session" and dispatch do.
+       Under the hardened runtime this needs the entitlement as well as the
+       Info.plist usage string. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
+</dict>
+</plist>

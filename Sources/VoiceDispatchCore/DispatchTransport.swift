@@ -271,10 +271,45 @@ public protocol ClaudeAgentsReading: Sendable {
 public struct ClaudeAgentsCLI: ClaudeAgentsReading {
     public init() {}
 
+    /// Locate the `claude` binary without relying on PATH.
+    ///
+    /// A GUI-launched app inherits a minimal environment, not your shell's, so
+    /// `claude` is simply not on PATH there — the lookup silently returned no
+    /// sessions and the app could not resolve a single tab, while the same code
+    /// worked from the terminal. Search the known install locations directly.
+    public static func resolveBinary() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "\(home)/.local/bin/claude",
+            "\(home)/.claude/local/claude",
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+            "\(home)/.bun/bin/claude",
+            "\(home)/.npm-global/bin/claude",
+        ]
+        if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+            return found
+        }
+        // Last resort: ask a login shell, which does read the user's profile.
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let probe = Process()
+        probe.executableURL = URL(fileURLWithPath: shell)
+        probe.arguments = ["-lic", "command -v claude"]
+        let pipe = Pipe()
+        probe.standardOutput = pipe
+        probe.standardError = Pipe()
+        try? probe.run()
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        probe.waitUntilExit()
+        return out.isEmpty ? nil : out
+    }
+
     public func sessions() -> [LiveSession] {
+        guard let binary = Self.resolveBinary() else { return [] }
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = ["-lc", "claude agents --json"]
+        p.executableURL = URL(fileURLWithPath: binary)
+        p.arguments = ["agents", "--json"]
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = Pipe()

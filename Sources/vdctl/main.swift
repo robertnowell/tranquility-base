@@ -82,6 +82,12 @@ do {
     let drainer = SpoolDrainer(store: store)
 
     switch command {
+    case "migrate-secrets":
+        let moved = try Secrets.migrateFromKeychain()
+        print(moved.isEmpty
+            ? "nothing left in the keychain to move"
+            : "moved to \(Secrets.fileURL.path): \(moved.map(\.rawValue).joined(separator: ", "))")
+
     case "paths":
         print("support   \(QueueStore.supportDirectory.path)")
         print("database  \(QueueStore.databaseURL.path)")

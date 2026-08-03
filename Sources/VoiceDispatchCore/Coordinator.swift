@@ -77,7 +77,15 @@ public struct Coordinator: Sendable {
 
     /// Speak the next waiting item. Summarization happens here rather than at intake
     /// so nothing is paid for that is never heard.
-    public func announceNext(ignoringGate: Bool = false) async throws -> AnnounceOutcome {
+    /// `onWillSpeak` fires with the brief BEFORE the audio starts, and `onWord`
+    /// reports progress during it. Without the first callback the UI could only
+    /// render after `speak` returned — i.e. after you had already heard the whole
+    /// thing, which is exactly when the text stops being useful.
+    public func announceNext(
+        ignoringGate: Bool = false,
+        onWillSpeak: (@MainActor (Announcement) -> Void)? = nil,
+        onWord: (@Sendable (Range<Int>) -> Void)? = nil
+    ) async throws -> AnnounceOutcome {
         guard var event = try nextToAnnounce() else { return .nothingWaiting }
 
         if !ignoringGate {
@@ -106,8 +114,13 @@ public struct Coordinator: Sendable {
         event.announcedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         try store.update(event: event)
 
-        let via = await speech.speak(summary.spoken)
-        return .spoke(Announcement(event: event, brief: summary.brief, spoken: summary.spoken, via: via))
+        let announcement = Announcement(
+            event: event, brief: summary.brief, spoken: summary.spoken, via: speech.fallback.name)
+        await onWillSpeak?(announcement)
+
+        let via = await speech.speak(summary.spoken, onWord: onWord)
+        return .spoke(Announcement(
+            event: event, brief: summary.brief, spoken: summary.spoken, via: via))
     }
 
     // MARK: - Reply target

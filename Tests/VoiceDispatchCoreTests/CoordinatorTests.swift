@@ -40,7 +40,9 @@ final class CoordinatorTests: XCTestCase {
         let isConfigured = true
         var spoken: [String] = []
         var isSpeaking = false
-        func speak(_ text: SanitizedSpokenText) async throws { spoken.append(text.text) }
+        func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
+            spoken.append(text.text)
+        }
         func stop() {}
     }
 
