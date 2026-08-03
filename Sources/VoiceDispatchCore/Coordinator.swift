@@ -96,7 +96,20 @@ public struct Coordinator: Sendable {
         let waiting = try store.events(limit: 200).filter {
             $0.status == .new || $0.status == .summarized || $0.status == .held
         }
-        return waiting.max { $0.createdAtMs < $1.createdAtMs }
+
+        // Never-offered items first, newest of those first. Then anything you have
+        // already been offered and did not finish, least recently offered first.
+        //
+        // Plain newest-first looped: stopping an announcement leaves it unread AND
+        // it is still the newest, so the next tap replayed it forever and there was
+        // no way to reach anything else.
+        return waiting.min { a, b in
+            let aOffered = a.announcedAtMs ?? 0
+            let bOffered = b.announcedAtMs ?? 0
+            if (aOffered == 0) != (bOffered == 0) { return aOffered == 0 }
+            if aOffered == 0 { return a.createdAtMs > b.createdAtMs }
+            return aOffered < bOffered
+        }
     }
 
     /// Collapse each session's unread turns down to its most recent one.
