@@ -557,6 +557,33 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(try store.pendingCount(), 1)
     }
 
+    /// Skipping must actually skip. Reverting a stopped item to unread left it as
+    /// the newest, so the stack handed it straight back and pressing again replayed
+    /// what you had just skipped, with no way past it.
+    func testDismissingWhileSpeakingReachesTheNextItem() async throws {
+        let coordinator = try makeCoordinator()
+        try store.insert(event: QueuedEvent(
+            createdAtMs: 9_000, hookEvent: .stop, sessionId: "s-new", promptId: "newer",
+            cwd: "/tmp/a", lastAssistantMessage: "the newer one"))
+        try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .stop, sessionId: "s-old", promptId: "older",
+            cwd: "/tmp/b", lastAssistantMessage: "the older one"))
+
+        guard case .spoke(let first) = try await coordinator.announceNext() else {
+            return XCTFail("expected the newest")
+        }
+        XCTAssertEqual(first.event.promptId, "newer")
+
+        // What ⌃⌥ now does before announcing again.
+        try coordinator.dismiss(eventId: first.event.id)
+
+        XCTAssertEqual(try coordinator.nextToAnnounce()?.promptId, "older",
+                       "the skipped item must not be handed back")
+        XCTAssertNil(try store.events().first { $0.promptId == "newer" }
+                        .flatMap { $0.status == .dismissed ? nil : $0 },
+                     "and it is retired, not merely reordered")
+    }
+
     func testNothingIsAnnouncedTwiceAsNew() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)
