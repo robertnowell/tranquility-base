@@ -584,6 +584,48 @@ final class CoordinatorTests: XCTestCase {
                      "and it is retired, not merely reordered")
     }
 
+    /// A dismissal during playback must survive the interrupt handler.
+    ///
+    /// The handler reverted a stopped announcement to unread by writing back a copy
+    /// captured before the audio started. That copy did not know about the
+    /// dismissal, so it resurrected the row and the next press replayed the item
+    /// that had just been retired, word for word, forever.
+    func testDismissDuringPlaybackIsNotResurrected() async throws {
+        final class Interrupting: SpeechProvider, @unchecked Sendable {
+            let name = "interrupting"
+            let isConfigured = true
+            var isSpeaking = false
+            var onSpeak: (@Sendable () -> Void)?
+            func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
+                onSpeak?()                       // the user presses next, mid-audio
+                throw SpeechError.interrupted
+            }
+            func stop() {}
+        }
+        let speech = Interrupting()
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
+        let coordinator = Coordinator(
+            store: store, summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: speech, fallback: speech),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            transport: RecordingTransport(), enrolment: registry,
+            agents: FakeAgents(live: []),
+            recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
+        try seedEvent()
+        let eventId = try XCTUnwrap(store.events().first).id
+        speech.onSpeak = { [store] in
+            var event = try! store!.events().first { $0.id == eventId }!
+            event.status = .dismissed
+            try! store!.update(event: event)
+        }
+
+        _ = try await coordinator.announceNext()
+
+        XCTAssertEqual(try store.events().first?.status, .dismissed,
+                       "the dismissal stands; the stale copy must not overwrite it")
+        XCTAssertNil(try coordinator.nextToAnnounce(), "and it is not offered again")
+    }
+
     func testNothingIsAnnouncedTwiceAsNew() async throws {
         let speech = SilentSpeech()
         let coordinator = try makeCoordinator(speech: speech)

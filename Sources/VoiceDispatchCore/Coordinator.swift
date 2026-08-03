@@ -319,6 +319,16 @@ public struct Coordinator: Sendable {
         // most recent thing we tried to say, which is what stops an older
         // announcement from inheriting the reply.
         guard spoken.completed else {
+            // Re-read before reverting. `event` is a copy captured before the audio
+            // started, and anything that happened during playback is not in it —
+            // notably a dismissal. Writing the stale copy back resurrected the row
+            // as unread, which is why pressing next appeared to replay the item it
+            // had just retired, word for word, forever.
+            let current = try store.events(limit: 500).first { $0.id == event.id }
+            guard current?.status == .announced else {
+                Coordinator.trace?("interrupt: not reverting \(event.id.prefix(8)); status is now \(current?.status.rawValue ?? "gone")")
+                return .interrupted(failure: spoken.failure)
+            }
             event.status = .new
             try store.update(event: event)
             await prepared.put(summary, for: event.id)
