@@ -437,6 +437,25 @@ public final class QueueStore: Sendable {
         }
     }
 
+    /// The session's most recent finished turn, regardless of cursors and
+    /// regardless of what came after it.
+    ///
+    /// This is the "hear it again" query. The waiting query is deliberately strict —
+    /// unheard Stops only — but an explicit request from a review page means "read
+    /// me this session's last summary", and that stays answerable after you have
+    /// heard it, dismissed it, or typed since.
+    public func latestStop(for sessionId: String) throws -> WaitingSession? {
+        try dbQueue.read { db in
+            try WaitingSession.fetchOne(db, sql: """
+                SELECT sessionId, max(rowid) AS latestId, createdAtMs, cwd, tty,
+                       promptId, transcriptPath, lastAssistantMessage,
+                       notificationMatcher, summaryText, hookEvent
+                FROM events
+                WHERE sessionId = ? AND hookEvent = ?
+                """, arguments: [sessionId, HookEventKind.stop.rawValue])
+        }
+    }
+
     public func cursor(for sessionId: String) throws -> SessionCursor? {
         try dbQueue.read { db in try SessionCursor.fetchOne(db, key: sessionId) }
     }

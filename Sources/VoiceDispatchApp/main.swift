@@ -39,6 +39,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var repliedToEventId: String?
     /// The one announcement allowed to exist. See `announceNext`.
     private var announceTask: Task<Void, Never>?
+    /// Set when a deep link named the session it wants the next reply to reach.
+    /// Consumed by the next send, then cleared — a link's addressing should not
+    /// leak into replies you make later by voice.
+    private var deepLinkReplyTarget: String?
     /// Incremented every time a reply gesture starts.
     ///
     /// Cancelling the countdown only covers the four seconds it is on screen.
@@ -635,6 +639,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Hold: transcribe and route the reply back to whichever session last spoke.
+    // MARK: - Deep links
+
+    /// voicedispatch://hear?session=ID   speak that session's summary
+    /// voicedispatch://reply?session=ID  open the mic, route the reply there
+    /// voicedispatch://show              raise the panel
+    ///
+    /// This is what lets a local HTML page carry live buttons: an <a href> to a
+    /// custom scheme needs no server and no CORS, and the browser confirms before
+    /// launching the app, which is the guard against drive-by pages. A reply link
+    /// only ever OPENS the microphone with the panel visibly listening — nothing
+    /// records silently, and nothing sends without the usual undo window.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            let action = url.host ?? ""
+            let session = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "session" })?.value
+            Permissions.log("deeplink: \(action) session=\(session?.prefix(8) ?? "-")")
+            hud.flashAcknowledge()
+
+            switch action {
+            case "hear":
+                announceNext(only: session)
+            case "reply":
+                guard micGranted, !recorder.isRecording else { break }
+                deepLinkReplyTarget = session
+                // Give the panel the session's identity so Listening shows who this
+                // reply is going to — addressing you cannot see is addressing you
+                // cannot check, and one misroute already taught that lesson.
+                if let session,
+                   let target = try? store?.waitingSessionsIncludingHeard()
+                       .first(where: { $0.sessionId == session }) {
+                    hud.adoptTarget(sessionId: session, label: target.projectLabel,
+                                    cwd: target.cwd)
+                }
+                coordinator?.speech.stop()
+                try? recorder.start()
+                isBusy = true
+                updateTitle()
+                hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
+            case "show":
+                showPanel()
+            default:
+                Permissions.log("deeplink: unknown action \(action)")
+            }
+        }
+    }
+
     private func sendReply(_ pcm: Data) {
         guard let coordinator else { return }
         let mine = replyGeneration
@@ -644,7 +695,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task { @MainActor in
             do {
-                let outcome = try await coordinator.submitReply(pcm16: pcm)
+                let linkTarget = deepLinkReplyTarget
+                deepLinkReplyTarget = nil
+                let outcome = try await coordinator.submitReply(pcm16: pcm, to: linkTarget)
 
                 // You started saying it again while this was still transcribing.
                 // Drop it rather than offering it: the words you replaced must never

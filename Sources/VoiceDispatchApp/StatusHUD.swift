@@ -65,6 +65,14 @@ final class StatusHUD: NSObject {
     /// It previously showed the same identity line, the same "hold ⌥ to speak" hint
     /// you were already obeying, and three buttons for actions unrelated to
     /// speaking. A live level meter answers the only question you actually have.
+    /// A deep link hands the panel its session before the mic opens, so Listening
+    /// can show who the reply is addressed to.
+    func adoptTarget(sessionId: String, label: String, cwd: String?) {
+        currentTarget = (sessionId, nil, label)
+        currentEventId = sessionId
+        identity = Self.identify(pid: nil, cwd: cwd)
+    }
+
     func showListening(level: @escaping () -> Float) {
         transition(to: .listening(eventId: currentEventId), because: "recording started")
         awaitingConfirm = false
