@@ -33,6 +33,7 @@ final class StatusHUD: NSObject {
     var onStopReply: (() -> Void)?
     private var isRecording = false
     private var hideWorkItem: DispatchWorkItem?
+    private var showGeneration = 0
     private var contentStack: NSStackView?
     private var identity: String?
     private var awaitingConfirm = false
@@ -47,6 +48,7 @@ final class StatusHUD: NSObject {
     private(set) var currentEventId: String?
     private var countdownTimer: Timer?
     private var onCancelSend: ((_ restartListening: Bool) -> Void)?
+    private var onCommitSend: (() -> Void)?
     private var progressBar: NSProgressIndicator!
     private var meter: LevelMeterView!
     private var discardButton: NSButton!
@@ -169,6 +171,7 @@ final class StatusHUD: NSObject {
     ) {
         countdownTimer?.invalidate()
         onCancelSend = cancel
+        onCommitSend = send
         transition(to: .pendingSend(utteranceId: ""), because: "undo window open")
         show(state: "→ Sending to \(label)", title: "Your reply",
              body: "\u{201C}\(text)\u{201D}", autoHideAfter: nil)
@@ -197,6 +200,23 @@ final class StatusHUD: NSObject {
         // otherwise it silently stalls and the reply never goes.
         RunLoop.main.add(timer, forMode: .common)
         countdownTimer = timer
+    }
+
+    /// Fast-forward the undo window: fire the send NOW instead of at the bar's
+    /// end. ⌃⌥ during the countdown means "yes, send it, and move on" — the press
+    /// is momentum, not doubt; doubt is what Don't send and ⌃⇧ are for.
+    @discardableResult
+    func commitPendingSendNow() -> Bool {
+        guard awaitingConfirm else { return false }
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        awaitingConfirm = false
+        progressBar.isHidden = true
+        let send = onCommitSend
+        onCommitSend = nil
+        onCancelSend = nil
+        send?()
+        return true
     }
 
     /// Stop a pending send. Safe to call when nothing is pending.
@@ -464,8 +484,18 @@ final class StatusHUD: NSObject {
         Permissions.log("HUD frame=\(panel.frame) visible=\(panel.isVisible) screen=\(NSScreen.main?.visibleFrame.debugDescription ?? "nil")")
 
         hideWorkItem?.cancel()
+        showGeneration += 1
         if let autoHideAfter {
-            let work = DispatchWorkItem { [weak self] in self?.panel?.orderOut(nil) }
+            // The hide belongs to THIS show. Cancellation should make that true on
+            // its own, but a receipt once repainted over a live announcement and its
+            // timer took the window down mid-speech — so the guard is a generation
+            // check, not trust in cancel ordering. Same rule as every fix this
+            // weekend: identity travels with the action.
+            let generation = showGeneration
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.showGeneration == generation else { return }
+                self.hide()
+            }
             hideWorkItem = work
             DispatchQueue.main.asyncAfter(deadline: .now() + autoHideAfter, execute: work)
         }
