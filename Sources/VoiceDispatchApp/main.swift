@@ -230,6 +230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.recordingTarget = ctx.sessionId
             } else {
                 self.dictationMode = true
+                self.hud.dictationDestination = FocusedInput.focusedEditableApp()
+                    .map { "→ \($0)" } ?? "→ clipboard"
             }
             try? self.recorder.start()
             self.isBusy = true
@@ -537,6 +539,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     recordingTarget = ctx.sessionId
                 } else {
                     dictationMode = true
+                hud.dictationDestination = FocusedInput.focusedEditableApp()
+                    .map { "→ \($0)" } ?? "→ clipboard"
                 }
                 if let sessionId = hud.currentEventId,
                    let latest = try? coordinator?.waiting().first(where: { $0.sessionId == sessionId }) {
@@ -566,7 +570,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 label: ctx.label, cwd: ctx.cwd)
                 recordingTarget = ctx.sessionId
             } else {
-                dictationMode = true   // nothing to answer → transcript to clipboard
+                dictationMode = true
+                hud.dictationDestination = FocusedInput.focusedEditableApp()
+                    .map { "→ \($0)" } ?? "→ clipboard"   // nothing to answer → transcript to clipboard
             }
             // Anything already in flight belongs to a reply you have just replaced.
             replyGeneration += 1
