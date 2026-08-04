@@ -150,6 +150,14 @@ are the point.
   your words on the clipboard instead of losing them.
 - `model-calls.jsonl` retains full model inputs/outputs (your session content)
   for debugging, unbounded — delete or truncate freely.
+- `app.log` records **what you dictated**, one line per recognised utterance with
+  its time span. This is deliberate: a transcript that is quietly a fraction of
+  what you said is indistinguishable from one that is merely wrong unless you can
+  see which utterances arrived and what each said — the bug where only the last
+  utterance of a paused recording survived was invisible without it. Everything
+  here is already 0600 in a 0700 directory alongside the recordings themselves, so
+  the one thing to remember is that `app.log` is the file you would attach to an
+  issue. Skim it before you paste it.
 - Long-running headless `claude -p` jobs can be announced while still executing.
 
 ## License

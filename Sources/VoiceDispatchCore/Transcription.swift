@@ -78,10 +78,23 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
     public let name = "apple-speech"
     public init() {}
 
-    /// Per-callback visibility into the recogniser. Worth having permanently: a
-    /// transcript that is quietly a fraction of what was said is indistinguishable
-    /// from a transcript that is simply wrong, unless you can see how many results
-    /// arrived and what time span each covered.
+    /// Per-callback visibility into the recogniser, transcript text included.
+    ///
+    /// A transcript that is quietly a fraction of what was said is indistinguishable
+    /// from one that is simply wrong — unless you can see how many utterances arrived,
+    /// what span each covered, and **what each one said**. The text is the part that
+    /// makes it diagnosable: counts and spans say something was dropped, the text says
+    /// which half.
+    ///
+    /// Logging your words is consistent with where this project already draws the line.
+    /// The same 0700 directory holds the recordings, `utterances.transcriptText`, and a
+    /// `model-calls.jsonl` that keeps full session content unbounded. Omitting the
+    /// transcript from `app.log` alone would be the "theatre, not defence" that
+    /// `Secrets.swift` argues against — one consistent boundary, user-only permissions.
+    ///
+    /// The one asymmetry worth remembering: `app.log` is the file you would paste into
+    /// an issue, which a database is not. So README says plainly that it contains what
+    /// you dictated, the same way it already warns about `model-calls.jsonl`.
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 
     public var isConfigured: Bool {
@@ -137,16 +150,22 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let start = segments.first?.timestamp ?? 0
                 let end = segments.last.map { $0.timestamp + $0.duration } ?? 0
-                AppleSpeechRecovery.trace?(
-                    "callback isFinal=\(result.isFinal) segments=\(segments.count) "
-                    + "span=\(String(format: "%.2f", start))–\(String(format: "%.2f", end))s "
-                    + "chars=\(text.count)")
                 // A zero span means untimed partial text that cannot be attributed to
                 // an utterance. Recording it would double-count the utterance the
                 // settled callback reports properly, which is how a first attempt at
                 // this fix produced "…actually connected To the metric they're working
                 // to improve To the metric they're working to improve".
-                if !text.isEmpty, end > 0 { collected.record(start: start, text: text) }
+                let settled = end > 0
+                AppleSpeechRecovery.trace?(
+                    "\(settled ? "utterance" : "partial") isFinal=\(result.isFinal) "
+                    + "segments=\(segments.count) "
+                    + "span=\(String(format: "%.2f", start))–\(String(format: "%.2f", end))s "
+                    + "chars=\(text.count)"
+                    // Only settled utterances carry their text: partials are cumulative
+                    // re-reports of the same words and would bury the log in dozens of
+                    // near-identical lines per recording.
+                    + (settled ? " | \(text)" : ""))
+                if !text.isEmpty, settled { collected.record(start: start, text: text) }
 
                 guard result.isFinal else { return }
                 if resumed.claim() {

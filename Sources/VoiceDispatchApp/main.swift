@@ -264,6 +264,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ClaudeAgentsCLI.trace = { Permissions.log("liveness: \($0)") }
         Secrets.trace = { Permissions.log("secrets: \($0)") }
         QueueStore.trace = { Permissions.log("queue: \($0)") }
+        // Without this the recogniser was the one unobservable stage in the pipeline —
+        // which is how a bug that silently kept only the last utterance of every paused
+        // recording survived. `vdctl transcribe` had the trace; the app, where dictation
+        // actually happens, logged nothing.
+        AppleSpeechRecovery.trace = { Permissions.log("apple-speech: \($0)") }
         // A refused reply puts the transcript somewhere you can paste from. Core owns
         // when (every refusal, never a cancellation); the app owns how, because
         // NSPasteboard is AppKit and Core is deliberately free of it.
