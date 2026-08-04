@@ -24,6 +24,8 @@ public final class Recorder: @unchecked Sendable {
 
     /// Live input level, for a waveform or an orb pulse.
     public private(set) var level: Float = 0
+    /// Loudest moment of the current recording; the silence gate reads it.
+    public private(set) var peakLevel: Float = 0
 
     public init(sampleRate: Double = 16000) {
         self.sampleRate = sampleRate
@@ -53,6 +55,7 @@ public final class Recorder: @unchecked Sendable {
         lock.lock()
         guard !running else { lock.unlock(); return }
         buffer.removeAll(keepingCapacity: true)
+        peakLevel = 0
         running = true
         lock.unlock()
 
@@ -67,7 +70,9 @@ public final class Recorder: @unchecked Sendable {
                 self.buffer.append(converted)
                 self.lock.unlock()
             }
-            self.level = Self.rms(of: pcmBuffer)
+            let rms = Self.rms(of: pcmBuffer)
+            self.level = rms
+            if rms > self.peakLevel { self.peakLevel = rms }
         }
 
         do {
