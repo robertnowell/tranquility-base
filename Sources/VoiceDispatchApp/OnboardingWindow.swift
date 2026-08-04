@@ -12,6 +12,8 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var rows: [Permissions.Kind: NSTextField] = [:]
     private var details: [Permissions.Kind: NSTextField] = [:]
+    private var grantButtons: [Permissions.Kind: NSButton] = [:]
+    private var doneButton: NSButton?
     private var refreshTimer: Timer?
     private var onDone: (() -> Void)?
 
@@ -24,7 +26,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 340),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 360),
             styleMask: [.titled, .closable],
             backing: .buffered, defer: false)
         window.title = "Voice Dispatch"
@@ -66,11 +68,13 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
 
         stack.addArrangedSubview(label("Voice Dispatch", size: 18, weight: .semibold))
         stack.addArrangedSubview(label(
-            "When a coding session finishes, tap Control-Option to hear what happened, hold Option to reply out loud, and tap Shift to pause.",
-            size: 12, secondary: true, width: 400))
+            "When a coding session finishes: tap ⌃⌥ to hear what happened, hold ⌥ to "
+            + "reply out loud (⌥⌥ locks hands-free), ⇧ pauses, ⌃⇧ dismisses.",
+            size: 12, secondary: true, width: 420))
 
         stack.addArrangedSubview(spacer(4))
-        stack.addArrangedSubview(label("Two permissions are needed:", size: 12, weight: .medium))
+        stack.addArrangedSubview(label("Permissions — each row updates the moment you grant it:",
+                                       size: 12, weight: .medium))
 
         for kind in Permissions.Kind.allCases {
             stack.addArrangedSubview(permissionRow(kind))
@@ -78,13 +82,21 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
 
         stack.addArrangedSubview(spacer(8))
         let note = label(
-            "macOS only lists an app under Input Monitoring after it has asked once. "
-            + "which this app now does on launch. If a switch is off, flip it and this "
-            + "window updates within a second.",
-            size: 11, secondary: true, width: 400)
+            "macOS only lists an app in a Privacy pane after it has asked once — "
+            + "Grant does that ask. If a switch is off, flip it; the dot goes green "
+            + "within a second.",
+            size: 11, secondary: true, width: 420)
         stack.addArrangedSubview(note)
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 340))
+        let done = NSButton(title: "Start using Voice Dispatch",
+                            target: self, action: #selector(doneTapped))
+        done.bezelStyle = .rounded
+        done.keyEquivalent = "\r"
+        done.isEnabled = false
+        doneButton = done
+        stack.addArrangedSubview(done)
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 360))
         container.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: container.topAnchor),
@@ -94,30 +106,41 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         return container
     }
 
+    /// Clicky's checklist shape: a status dot, the name and why, live state text,
+    /// and a Grant button that disappears once its job is done. The button's
+    /// behaviour is two-state — request when never asked (which also registers the
+    /// app in the pane), deep-link to the exact pane when previously denied — so it
+    /// never sends anyone hunting through Settings.
     private func permissionRow(_ kind: Permissions.Kind) -> NSView {
         let row = NSStackView()
         row.orientation = .horizontal
         row.spacing = 8
-        row.alignment = .centerY
+        row.alignment = .firstBaseline
 
-        let status = NSTextField(labelWithString: "")
-        status.font = .systemFont(ofSize: 13)
-        rows[kind] = status
-        row.addArrangedSubview(status)
+        let dot = NSTextField(labelWithString: "●")
+        dot.font = .systemFont(ofSize: 12)
+        rows[kind] = dot
+        row.addArrangedSubview(dot)
 
-        let text = NSTextField(labelWithString: "\(kind.title): \(kind.why)")
-        text.font = .systemFont(ofSize: 12)
-        row.addArrangedSubview(text)
+        let name = NSTextField(labelWithString: kind.title + (kind.isRequired ? "" : "  (optional)"))
+        name.font = .systemFont(ofSize: 12, weight: .medium)
+        name.translatesAutoresizingMaskIntoConstraints = false
+        name.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        row.addArrangedSubview(name)
 
-        let detail = NSTextField(labelWithString: "")
+        let detail = NSTextField(wrappingLabelWithString: "")
         detail.font = .systemFont(ofSize: 11)
         detail.textColor = .secondaryLabelColor
+        detail.translatesAutoresizingMaskIntoConstraints = false
+        detail.widthAnchor.constraint(equalToConstant: 190).isActive = true
         details[kind] = detail
         row.addArrangedSubview(detail)
 
         let button = NSButton(title: "Grant", target: self, action: #selector(grantTapped(_:)))
         button.bezelStyle = .rounded
+        button.controlSize = .small
         button.identifier = NSUserInterfaceItemIdentifier(kind.title)
+        grantButtons[kind] = button
         row.addArrangedSubview(button)
 
         return row
@@ -134,12 +157,23 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         }
     }
 
+    @objc private func doneTapped() { window?.close() }
+
     private func refresh() {
-        for (kind, field) in rows {
-            field.stringValue = Permissions.isGranted(kind) ? "✅" : "⚠️"
-            details[kind]?.stringValue = "(\(Permissions.statusDescription(kind)))"
+        for (kind, dot) in rows {
+            let granted = Permissions.isGranted(kind)
+            dot.textColor = granted ? .systemGreen
+                : (kind.isRequired ? .tertiaryLabelColor : .quaternaryLabelColor)
+            details[kind]?.stringValue = Permissions.statusDescription(kind)
+            grantButtons[kind]?.isHidden = granted
         }
-        if Permissions.allGranted, let window {
+        // The required set completes the checklist; the optional row never holds
+        // the app hostage. Auto-close only when literally everything is green.
+        doneButton?.isEnabled = Permissions.allGranted
+        Permissions.log("onboarding: " + Permissions.Kind.allCases
+            .map { "\($0.title.prefix(4))=\(Permissions.isGranted($0))" }
+            .joined(separator: " "))
+        if Permissions.Kind.allCases.allSatisfy({ Permissions.isGranted($0) }), let window {
             window.close()
         }
     }

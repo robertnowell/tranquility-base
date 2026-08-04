@@ -266,6 +266,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         QueueStore.trace = { Permissions.log("queue: \($0)") }
         Permissions.log("args=\(CommandLine.arguments)")
 
+        if CommandLine.arguments.contains("--show-onboarding") {
+            onboarding.show { }
+        }
         if CommandLine.arguments.contains("--selftest-hud") {
             hud.selfTest()
             hud.selfTestPendingSend()
