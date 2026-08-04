@@ -197,6 +197,12 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         doing is the worst failure available to you: it is confident, specific, and
         wrong, and it is indistinguishable from a correct summary when heard aloud.
         
+        Attribution: the work described in the final message was done by the
+        agent, not by the user. Say "the session validated…", "it found…", never
+        "you validated…" — second person for agent work makes the summary sound
+        like a recap of something the user said, which reads as the app parroting
+        them. Reserve "you" for what the user asked for and what they must decide.
+
         Never say that no input is needed, and never imply the user can ignore this.
         You are writing the only thing they will hear about this session; if it
         genuinely needed nothing from them, it should not have been read out at all,
