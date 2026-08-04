@@ -382,16 +382,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
                 Permissions.log("confirmAndSend -> \(outcome)")
+                // The confirm round-trip can outlive the user's attention: they may
+                // already be listening to the NEXT session when this lands. A
+                // success receipt must not stomp the live panel — that is exactly
+                // how a stale 6s auto-hide took the window down mid-speech.
+                // Failures always surface: they are the case with work left to do.
+                let somethingElseOnStage: Bool = {
+                    switch hud.state {
+                    case .speaking, .preparing, .listening, .pendingSend, .paused: return true
+                    default: return false
+                    }
+                }()
                 switch outcome {
                 case .queued:
                     lastStatusLine = "queued in \(label)"
-                    hud.showResult(
-                        "In \(label), sends when its turn finishes. ⌥ again to follow up.",
-                        ok: true)
+                    if somethingElseOnStage {
+                        Permissions.log("send: queued in \(label) (quiet; stage busy)")
+                    } else {
+                        hud.showResult(
+                            "In \(label), sends when its turn finishes. ⌥ again to follow up.",
+                            ok: true)
+                    }
                 case .dispatched:
                     lastStatusLine = "sent to \(label)"
-                    hud.showResult("Sent to \(label). ⌥ again to follow up, ⌃⌥ for the next.",
-                                   ok: true)
+                    if somethingElseOnStage {
+                        Permissions.log("send: confirmed to \(label) (quiet; stage busy)")
+                    } else {
+                        hud.showResult("Sent to \(label). ⌥ again to follow up, ⌃⌥ for the next.",
+                                       ok: true)
+                    }
                 case .sessionNotReady(let readiness):
                     hud.showResult(
                         "\(label) isn't accepting input right now (\(readiness)). "
@@ -498,6 +517,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         switch transition {
         case .next:
+            // During the undo window, moving on means "send it and move on": the
+            // countdown fast-forwards instead of racing the next announcement.
+            if hud.commitPendingSendNow() {
+                Permissions.log("next: committed the pending send before advancing")
+            }
             activeConversation = nil   // moving on is the explicit end of a conversation
             // Next means done with this one. Stopping used to revert the item to
             // unread, and being the newest it was handed straight back, so pressing
