@@ -40,6 +40,9 @@ final class StatusHUD: NSObject {
     private var meterTimer: Timer?
     private var levelSource: (() -> Float)?
     private var listenStartedAt: Date?
+    /// Where dictation will land ("→ Terminal", "→ clipboard"), probed at mic-open
+    /// so the pill names the real destination, not the fallback.
+    var dictationDestination: String?
     /// The event the panel is currently about, so Dismiss can retire it.
     private(set) var currentEventId: String?
     private var countdownTimer: Timer?
@@ -81,7 +84,7 @@ final class StatusHUD: NSObject {
         isListening = true
         levelSource = level
         listenStartedAt = Date()
-        show(state: "● \(currentTarget?.label ?? "→ clipboard")\(handsFree ? "  ·  hands-free" : "")",
+        show(state: "● \(currentTarget?.label ?? dictationDestination ?? "→ clipboard")\(handsFree ? "  ·  hands-free" : "")",
              title: "", body: "", autoHideAfter: nil)
         // A pill: target name plus waveform, nothing else. Hands-free flanks the
         // waveform with ✕ and ✓, so the controls sit where your eyes already are.
@@ -920,6 +923,7 @@ final class StatusHUD: NSObject {
     }
 
     func recordingEnded() {
+        dictationDestination = nil
         isRecording = false
         isListening = false
         meterTimer?.invalidate()
