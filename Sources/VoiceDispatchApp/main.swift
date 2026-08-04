@@ -77,6 +77,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// future one, because it asks "is this still the reply the user wants" rather
     /// than "is a particular UI state showing".
     private var replyGeneration = 0
+
+    /// Bumped whenever you leave a conversation on purpose — ⌃⌥ to move on, or
+    /// Dismiss. `replyGeneration` cannot stand in for this: it tracks a newer
+    /// *recording*, and moving on does not start one.
+    ///
+    /// A send receipt can outlive your attention, so it must not re-adopt a
+    /// conversation you have since walked away from. Same rule as the auto-hide
+    /// generation check in StatusHUD: identity travels with the action.
+    private var conversationGeneration = 0
     /// What the idle panel is currently displaying, so it is redrawn on change
     /// rather than on every poll.
     private var lastShownCounts: (Int, Int) = (-1, -1)
@@ -218,6 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // it in the queue", which is what made the button meaningless.
             if let sessionId = self.hud.currentEventId { self.dismissCurrent(sessionId) }
             self.activeConversation = nil
+            self.conversationGeneration += 1
             self.updateTitle()
             self.rebuildMenu()
         }
@@ -386,6 +396,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func send(utteranceId: String, label: String) {
         guard let coordinator else { return }
         let mine = replyGeneration
+        let conversationAtStart = conversationGeneration
         Task { @MainActor in
             guard mine == replyGeneration else {
                 // Superseded between the timer firing and this running.
@@ -396,6 +407,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
                 Permissions.log("confirmAndSend -> \(outcome)")
+
+                // A delivered reply makes that session the active conversation, so the
+                // next ⌥ answers the same place you were just talking to.
+                //
+                // Without this, replying DESTROYED its own target. The cursor fallback
+                // requires `heardThrough = latestId`, and your reply lands as a
+                // UserPromptSubmit that advances `latestId` — so the session you are
+                // demonstrably mid-conversation with stops being addressable, and the
+                // next thing you say silently becomes dictation. Observed: a reply
+                // dispatched at 21:51:28 and the panel showing "→ clipboard" twelve
+                // seconds later.
+                //
+                // Guarded on the conversation generation rather than adopted
+                // unconditionally: if you pressed ⌃⌥ or Dismiss while this was in
+                // flight, you left on purpose and a late receipt must not drag you back.
+                switch outcome {
+                case .dispatched(_, _, let sessionId), .queued(_, let sessionId):
+                    if conversationGeneration == conversationAtStart {
+                        let live = (ClaudeAgentsCLI().sessions() ?? [])
+                            .first { $0.sessionId == sessionId }
+                        activeConversation = (sessionId, label, live?.cwd)
+                        Permissions.log("conversation: \(label) stays active after send")
+                    } else {
+                        Permissions.log("conversation: not re-adopting \(label) — you moved on")
+                    }
+                default: break
+                }
                 // The confirm round-trip can outlive the user's attention: they may
                 // already be listening to the NEXT session when this lands. A
                 // success receipt must not stomp the live panel — that is exactly
@@ -543,6 +581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("next: committed the pending send before advancing")
             }
             activeConversation = nil   // moving on is the explicit end of a conversation
+            conversationGeneration += 1
             // Next means done with this one. Stopping used to revert the item to
             // unread, and being the newest it was handed straight back, so pressing
             // again replayed what you had just skipped and there was no way past it.
@@ -736,17 +775,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         guard let self else { return }
                         let live = (ClaudeAgentsCLI().sessions() ?? [])
                             .first { $0.sessionId == announcement.event.sessionId }
+                        // Mirror the terminal: Claude Code puts its own conversation
+                        // title in the tab, so using the same string is what lets you
+                        // match panel to tab without reading a session id. Falls back to
+                        // the brief's topic, which is itself only the folder name when
+                        // the model supplied none.
+                        let title = announcement.event.transcriptPath
+                            .map { URL(fileURLWithPath: $0) }
+                            .flatMap { TranscriptArchive.aiTitle(in: $0) }
+                            ?? announcement.brief.topic
+                        // Live cwd beats the hook's. The hook records whatever directory
+                        // was current when it fired, which for a session running a skill
+                        // is the skill's own folder — how one session came to be labelled
+                        // "share-as-page" while `claude agents` called it "robertnowell-56".
+                        let cwd = live?.cwd ?? announcement.event.cwd
                         self.activeConversation = (
                             announcement.event.sessionId,
-                            announcement.event.projectLabel,
-                            announcement.event.cwd)
+                            live?.name ?? announcement.event.projectLabel,
+                            cwd)
                         self.hud.showAnnouncement(
-                            topic: announcement.brief.topic,
+                            topic: title,
                             spoken: announcement.spoken.text,
                             sessionId: announcement.event.sessionId,
                             pid: live?.pid,
-                            project: announcement.event.projectLabel,
-                            cwd: announcement.event.cwd,
+                            // `claude agents --json`'s name ("robertnowell-56") rather
+                            // than the folder tail: it is the string Claude Code itself
+                            // uses, so it is checkable against the agents list, and it
+                            // does not change when a skill moves the working directory.
+                            project: live?.name ?? announcement.event.projectLabel,
+                            cwd: cwd,
                             eventId: announcement.event.sessionId,
                             // Fails open: an unresolved session keeps its Reply button
                             // and is refused at send, where the reason can be stated.
