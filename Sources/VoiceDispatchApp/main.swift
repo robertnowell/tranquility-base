@@ -48,6 +48,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the panel names while you speak and what the send addresses must be the SAME
     /// stored fact, not two derivations that usually agree.
     private var recordingTarget: String?
+    /// No session to answer? The mic still works: the transcript goes to the
+    /// clipboard instead of a terminal. A voice tool that refuses to listen just
+    /// because nothing is waiting is leaving its best hardware idle.
+    private var dictationMode = false
     /// Hands-free listening: started by a double-tap of ⌥, ended by a single tap.
     /// Distinct from the push-to-talk flag because releasing a key you are not
     /// holding must not end anything.
@@ -208,6 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.recorder.isRecording { _ = try? self.recorder.stop() }
             self.handsFreeListening = false
             self.recordingTarget = nil
+            self.dictationMode = false
             self.isBusy = false
             // Dismiss means the item is done with — not "hide the window and leave
             // it in the queue", which is what made the button meaningless.
@@ -219,13 +224,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hud.onReply = { [weak self] in
             guard let self, self.micGranted, !self.recorder.isRecording else { return }
-            guard let ctx = self.resolveReplyContext() else {
-                self.hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.", ok: false)
-                return
+            if let ctx = self.resolveReplyContext() {
+                self.hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
+                                     label: ctx.label, cwd: ctx.cwd)
+                self.recordingTarget = ctx.sessionId
+            } else {
+                self.dictationMode = true
             }
-            self.hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
-                                 label: ctx.label, cwd: ctx.cwd)
-            self.recordingTarget = ctx.sessionId
             try? self.recorder.start()
             self.isBusy = true
             self.updateTitle()
@@ -524,15 +529,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let last = lastOptionTapAt, Date().timeIntervalSince(last) < 0.45 {
                 lastOptionTapAt = nil
                 guard micGranted, !recorder.isRecording else { return }
-                guard let ctx = resolveReplyContext() else {
-                    hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.", ok: false)
-                    return
-                }
                 hud.flashAcknowledge()
                 handsFreeListening = true
-                hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
-                                label: ctx.label, cwd: ctx.cwd)
-                recordingTarget = ctx.sessionId
+                if let ctx = resolveReplyContext() {
+                    hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
+                                    label: ctx.label, cwd: ctx.cwd)
+                    recordingTarget = ctx.sessionId
+                } else {
+                    dictationMode = true
+                }
                 if let sessionId = hud.currentEventId,
                    let latest = try? coordinator?.waiting().first(where: { $0.sessionId == sessionId }) {
                     try? coordinator?.markHeard(sessionId: sessionId, through: latest.latestId)
@@ -556,13 +561,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case .replyBegan:
             guard micGranted, !recorder.isRecording else { return }
-            guard let ctx = resolveReplyContext() else {
-                hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.", ok: false)
-                return
+            if let ctx = resolveReplyContext() {
+                hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
+                                label: ctx.label, cwd: ctx.cwd)
+                recordingTarget = ctx.sessionId
+            } else {
+                dictationMode = true   // nothing to answer → transcript to clipboard
             }
-            hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
-                            label: ctx.label, cwd: ctx.cwd)
-            recordingTarget = ctx.sessionId
             // Anything already in flight belongs to a reply you have just replaced.
             replyGeneration += 1
             // Holding ⌥ during the send window means "no, let me say that again".
@@ -608,6 +613,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hud.recordingEnded()
             recorder.abandon()
             recordingTarget = nil
+            dictationMode = false
             updateTitle()
             hud.showIdle(waiting: waitingNow(),
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
@@ -817,6 +823,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // HTML button's reply reached the wrong session, so a recording
                 // with no captured address REFUSES rather than falling back to a
                 // derivation: the audio is kept, and nothing is guessed.
+                if dictationMode {
+                    // Dictation: transcribe, copy, done. No terminal is touched.
+                    dictationMode = false
+                    hud.showWorking("Transcribing…")
+                    guard let store = self.store else { return }
+                    let utterance = try await store.captureAndTranscribe(
+                        pcm16: pcm, sampleRate: 16_000, chain: RecoveryChain(), eventId: nil)
+                    guard let text = utterance.transcriptText, !text.isEmpty else {
+                        hud.showResult("Couldn't transcribe that. Audio kept.", ok: false)
+                        return
+                    }
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.setString(text, forType: .string)
+                    Permissions.log("dictation: copied \(text.count) chars to clipboard")
+                    hud.showResult("Copied to clipboard: \u{201C}\(text.prefix(80))\u{201D}",
+                                   ok: true)
+                    rebuildMenu()
+                    return
+                }
                 guard let spokenTo = recordingTarget else {
                     Permissions.log("send: recording has no captured address; refusing")
                     hud.showResult("This recording lost its address. Audio kept; nothing sent.",

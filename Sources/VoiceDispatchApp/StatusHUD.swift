@@ -81,7 +81,7 @@ final class StatusHUD: NSObject {
         isListening = true
         levelSource = level
         listenStartedAt = Date()
-        show(state: "● \(currentTarget?.label ?? "reply")\(handsFree ? "  ·  hands-free" : "")",
+        show(state: "● \(currentTarget?.label ?? "→ clipboard")\(handsFree ? "  ·  hands-free" : "")",
              title: "", body: "", autoHideAfter: nil)
         // A pill: target name plus waveform, nothing else. Hands-free flanks the
         // waveform with ✕ and ✓, so the controls sit where your eyes already are.
