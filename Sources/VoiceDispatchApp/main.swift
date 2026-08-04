@@ -231,6 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.updateTitle()
         }
         hud.onStopReply = { [weak self] in
+            self?.handsFreeListening = false
             guard let self, let captured = try? self.recorder.stop() else {
                 self?.hud.recordingEnded()
                 return

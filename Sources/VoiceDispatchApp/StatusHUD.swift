@@ -46,6 +46,8 @@ final class StatusHUD: NSObject {
     private var onCancelSend: ((_ restartListening: Bool) -> Void)?
     private var progressBar: NSProgressIndicator!
     private var meter: LevelMeterView!
+    private var discardButton: NSButton!
+    private var sendCheckButton: NSButton!
     private var voicePicker: NSPopUpButton!
     private var settingsVoices: [Voice] = []
     private var gearButton: NSButton!
@@ -79,15 +81,18 @@ final class StatusHUD: NSObject {
         isListening = true
         levelSource = level
         listenStartedAt = Date()
-        show(state: handsFree ? "● Listening (hands-free)" : "● Listening",
-             title: "Replying to \(currentTarget?.label ?? "…")",
-             body: "", autoHideAfter: nil)
-        // Where the words are going, always: the identity line names the worktree
-        // or directory, and the action line says what ends the recording. Addressing
-        // you cannot see is addressing you cannot check.
-        let action = handsFree ? "Tap ⌥ to send. ⌃⇧ to discard."
-                               : "Listening. Click Send, or let go of ⌥."
-        hintLabel.stringValue = [identity, action].compactMap { $0 }.joined(separator: "\n")
+        show(state: "● \(currentTarget?.label ?? "reply")\(handsFree ? "  ·  hands-free" : "")",
+             title: "", body: "", autoHideAfter: nil)
+        // A pill: target name plus waveform, nothing else. Hands-free flanks the
+        // waveform with ✕ and ✓, so the controls sit where your eyes already are.
+        // The name stays (unlike Wispr) because our destination is a terminal
+        // somewhere else, not the focused field on this screen.
+        titleLabel.isHidden = true
+        hintLabel.stringValue = ""
+        actionRow.isHidden = true
+        discardButton.isHidden = !handsFree
+        sendCheckButton.isHidden = !handsFree
+        if let panel { resizeToFit(panel); position(panel) }
         meter.isHidden = false
         meter.reset()
 
@@ -412,6 +417,9 @@ final class StatusHUD: NSObject {
         // should end a pending send now says so itself.
         if voicePicker != nil, state != "Settings" {
             voicePicker.isHidden = true
+            titleLabel.isHidden = false
+            discardButton?.isHidden = true
+            sendCheckButton?.isHidden = true
             waitingRows?.isHidden = true
             stateButton?.isHidden = true
             stateLabel?.isHidden = false
@@ -740,6 +748,18 @@ final class StatusHUD: NSObject {
         meter = LevelMeterView()
         meter.isHidden = true
 
+        discardButton = NSButton(title: "✕", target: self, action: #selector(dismissTapped))
+        discardButton.isBordered = false
+        discardButton.font = .systemFont(ofSize: 15, weight: .medium)
+        discardButton.contentTintColor = .secondaryLabelColor
+        discardButton.isHidden = true
+
+        sendCheckButton = NSButton(title: "✓", target: self, action: #selector(checkTapped))
+        sendCheckButton.isBordered = false
+        sendCheckButton.font = .systemFont(ofSize: 15, weight: .semibold)
+        sendCheckButton.contentTintColor = .controlAccentColor
+        sendCheckButton.isHidden = true
+
         voicePicker = NSPopUpButton()
         voicePicker.controlSize = .small
         voicePicker.font = .systemFont(ofSize: 11)
@@ -912,6 +932,13 @@ final class StatusHUD: NSObject {
     var onDismiss: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     var onLeaveSettings: (() -> Void)?
+
+    @objc nonisolated private func checkTapped() {
+        MainActor.assumeIsolated {
+            if isRecording { isRecording = false }
+            onStopReply?()
+        }
+    }
 
     @objc nonisolated private func gearTapped() {
         MainActor.assumeIsolated { onOpenSettings?() }
