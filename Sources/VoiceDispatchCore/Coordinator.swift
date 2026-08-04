@@ -66,11 +66,24 @@ public struct Coordinator: Sendable {
     /// An actor because `Coordinator` is a value type and preparation happens on a
     /// background task while announcement may read it from another.
     actor PreparedSummaries {
-        private var byEventID: [String: Summary] = [:]
-        func has(_ id: String) -> Bool { byEventID[id] != nil }
-        func put(_ summary: Summary, for id: String) { byEventID[id] = summary }
+        /// Keyed by session, VALID only for one specific latest event.
+        ///
+        /// Keying by session alone played a stale summary aloud: one prepared for
+        /// the Cloudflare-token turn survived while the session moved two turns on,
+        /// and the announcement spoke about work the user had already answered. A
+        /// summary is a summary OF an event, so the event id is part of its
+        /// identity — a mismatch discards rather than serves.
+        private var bySession: [String: (latestId: Int64, summary: Summary)] = [:]
+        func has(_ id: String, latest: Int64) -> Bool { bySession[id]?.latestId == latest }
+        func put(_ summary: Summary, for id: String, latest: Int64) {
+            bySession[id] = (latest, summary)
+        }
         /// Removing on read keeps a summary from being spoken twice.
-        func take(_ id: String) -> Summary? { byEventID.removeValue(forKey: id) }
+        func take(_ id: String, latest: Int64) -> Summary? {
+            guard let entry = bySession.removeValue(forKey: id),
+                  entry.latestId == latest else { return nil }
+            return entry.summary
+        }
     }
 
     private let prepared: PreparedSummaries
@@ -79,8 +92,9 @@ public struct Coordinator: Sendable {
     /// anything already prepared is skipped.
     public func prepareNext() async throws {
         guard let session = try nextToAnnounce() else { return }
-        guard await !prepared.has(session.sessionId) else { return }
-        await prepared.put(await summarize(session), for: session.sessionId)
+        guard await !prepared.has(session.sessionId, latest: session.latestId) else { return }
+        await prepared.put(await summarize(session), for: session.sessionId,
+                           latest: session.latestId)
     }
 
     /// The newest session waiting on you.
@@ -203,7 +217,7 @@ public struct Coordinator: Sendable {
             }
         }
 
-        if let ready = await prepared.take(session.sessionId) {
+        if let ready = await prepared.take(session.sessionId, latest: session.latestId) {
             return try await speak(ready, for: session, onWillSpeak: onWillSpeak, onWord: onWord)
         }
         let summary = await summarize(session)
@@ -252,7 +266,7 @@ public struct Coordinator: Sendable {
         // stopped announcement needs no undo — which is what makes the resurrection
         // bug unrepresentable rather than fixed.
         guard spoken.completed else {
-            await prepared.put(summary, for: session.sessionId)
+            await prepared.put(summary, for: session.sessionId, latest: session.latestId)
             return .interrupted(failure: spoken.failure)
         }
 
