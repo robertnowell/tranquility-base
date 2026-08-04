@@ -789,6 +789,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func sendReply(_ pcm: Data) {
         guard let coordinator else { return }
+        // Silence gate. Whisper transcribes near-empty audio into training-data
+        // boilerplate — a 765ms accidental capture became "MBC 뉴스 이덕영입니다."
+        // and was SENT. A recording that is too short or never rose above the
+        // noise floor is refused before any model touches it: hallucinated words
+        // in a real terminal are worse than asking you to speak again.
+        let seconds = Double(pcm.count) / 2.0 / 16_000.0
+        if seconds < 0.5 || recorder.peakLevel < 0.005 {
+            Permissions.log(String(format:
+                "send: refused, silence gate (%.2fs, peak %.4f)", seconds, recorder.peakLevel))
+            recordingTarget = nil
+            hud.showResult("Didn't catch that — too short or too quiet. Nothing sent.",
+                           ok: false)
+            rebuildMenu()
+            return
+        }
         let mine = replyGeneration
         lastStatusLine = "transcribing…"
         hud.showWorking("Transcribing your reply…")
