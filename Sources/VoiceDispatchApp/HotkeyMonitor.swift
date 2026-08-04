@@ -26,6 +26,11 @@ public final class HotkeyMonitor: @unchecked Sendable {
         case pauseToggled
         /// ⌃⇧ tapped: dismiss what the panel is showing.
         case dismiss
+        /// ⌥ tapped once, on its own. The app decides what it means: the second of
+        /// a quick pair locks hands-free listening; a single tap while locked sends.
+        /// The monitor stays dumb about timing on purpose — double-tap windows are
+        /// policy, and policy lives where it can be logged with the rest.
+        case optionTapped
         /// Option, held past the threshold.
         case replyBegan
         case replyEnded
@@ -115,7 +120,8 @@ public final class HotkeyMonitor: @unchecked Sendable {
         case bindings.next: onTransition(.next)
         case bindings.pause: onTransition(.pauseToggled)
         case bindings.dismiss: onTransition(.dismiss)
-        default: break  // Option tapped, or an unassigned combination: no action.
+        case bindings.reply: onTransition(.optionTapped)
+        default: break  // an unassigned combination: no action.
         }
     }
 

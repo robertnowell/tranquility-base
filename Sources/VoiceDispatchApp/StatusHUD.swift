@@ -73,14 +73,19 @@ final class StatusHUD: NSObject {
         identity = Self.identify(pid: nil, cwd: cwd)
     }
 
-    func showListening(level: @escaping () -> Float) {
+    func showListening(level: @escaping () -> Float, handsFree: Bool = false) {
         transition(to: .listening(eventId: currentEventId), because: "recording started")
         awaitingConfirm = false
         isListening = true
         levelSource = level
         listenStartedAt = Date()
-        show(state: "● Listening", title: "Replying to \(currentTarget?.label ?? "this session")",
+        show(state: handsFree ? "● Listening (hands-free)" : "● Listening",
+             title: "Replying to \(currentTarget?.label ?? "this session")",
              body: "", autoHideAfter: nil)
+        if handsFree {
+            // No key is held, so "let go" is meaningless here; say what actually ends it.
+            hintLabel.stringValue = "Tap ⌥ to send. ⌃⇧ to discard."
+        }
         meter.isHidden = false
         meter.reset()
 
