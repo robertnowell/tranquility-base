@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Voice Dispatch — deep-link test</title>
+<style>
+  :root { --bg:#131310; --fg:#eceae2; --dim:#8f8a7c; --accent:#7fb0e8; --card:#1e1d19; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#fbfaf8; --fg:#16150f; --dim:#6b675c; --accent:#1f4f8f; --card:#f2efe8; }
+  }
+  body { background:var(--bg); color:var(--fg); margin:0;
+         font:16px/1.6 ui-sans-serif,-apple-system,sans-serif;
+         display:grid; place-items:center; min-height:100vh; }
+  .card { background:var(--card); border-radius:14px; padding:36px 40px; max-width:520px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  p  { color:var(--dim); margin:0 0 24px; font-size:14.5px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  a.btn { display:inline-block; padding:10px 18px; border-radius:8px; text-decoration:none;
+          background:var(--accent); color:var(--bg); font-weight:600; font-size:15px; }
+  a.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  .session { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--dim);
+             margin-top:22px; }
+</style>
+
+<div class="card">
+  <h1>voice-dispatch session</h1>
+  <p>An ordinary local HTML file. Each button is a plain <code>&lt;a href&gt;</code> to a
+     <code>voicedispatch://</code> URL — no server, no JavaScript required. The reply
+     button opens the microphone with the panel visibly listening, and the reply routes
+     to <em>this</em> session regardless of what you heard last.</p>
+  <div class="row">
+    <a class="btn" href="voicedispatch://reply?session=bd28a0a1-53ba-48c2-ba9a-2bc29065a619">
+      🎙 Reply to this session</a>
+    <a class="btn ghost" href="voicedispatch://hear?session=bd28a0a1-53ba-48c2-ba9a-2bc29065a619">
+      ▶ Hear its summary</a>
+    <a class="btn ghost" href="voicedispatch://show">Show panel</a>
+  </div>
+  <div class="session">session bd28a0a1-53ba-48c2-ba9a-2bc29065a619 · ~/Projects/voice-dispatch</div>
+</div>

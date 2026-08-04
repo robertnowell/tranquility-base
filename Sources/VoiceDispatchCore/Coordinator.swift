@@ -183,9 +183,11 @@ public struct Coordinator: Sendable {
     ) async throws -> AnnounceOutcome {
         let candidate: WaitingSession?
         if let sessionId {
-            // Chosen explicitly from the list, so ordering does not apply.
-            candidate = try store.waitingSessions(limit: 500)
-                .first { $0.sessionId == sessionId }
+            // Explicitly chosen — from the waiting list or a deep link — so neither
+            // the ordering nor the unheard filter applies. "Read me this session's
+            // last summary" stays answerable after you have heard it, dismissed it,
+            // or typed since; the strictness belongs to the automatic path only.
+            candidate = try store.latestStop(for: sessionId)
         } else {
             candidate = try nextToAnnounce()
         }
@@ -311,8 +313,21 @@ public struct Coordinator: Sendable {
     /// last spoke. Ordering is the same invariant as everywhere else: the recording
     /// is durable before anything else is attempted, so every failure below this
     /// line is recoverable rather than lossy.
-    public func submitReply(pcm16: Data, sampleRate: Double = 16000) async throws -> ReplyOutcome {
-        guard let target = try replyTarget() else { return .noTarget }
+    /// `to:` overrides the derived target for replies that arrive with their own
+    /// addressing — a deep link from an HTML review page names the session it is
+    /// about, and that beats "whatever you heard last". The session must still
+    /// exist in the log; an unknown id refuses rather than guessing.
+    public func submitReply(
+        pcm16: Data, sampleRate: Double = 16000, to sessionId: String? = nil
+    ) async throws -> ReplyOutcome {
+        let target: WaitingSession?
+        if let sessionId {
+            target = try store.waitingSessionsIncludingHeard()
+                .first { $0.sessionId == sessionId }
+        } else {
+            target = try replyTarget()
+        }
+        guard let target else { return .noTarget }
 
         var utterance = try await store.captureAndTranscribe(
             pcm16: pcm16, sampleRate: sampleRate, chain: recovery, eventId: nil)

@@ -439,6 +439,40 @@ final class CoordinatorTests: XCTestCase {
         }
     }
 
+    /// A deep link names its session, and that beats "whatever you heard last".
+    /// An HTML review page is ABOUT one session; its reply button must route there
+    /// even if you listened to something else in between.
+    func testTargetedReplyBeatsTheDerivedTarget() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(transport: transport)
+        try append(.stop, session: "old", at: 1_000, message: "the page's session")
+        try append(.stop, session: "sess-1", at: 2_000, message: "the one you heard")
+        _ = try await coordinator.announceNext()   // hears sess-1
+        XCTAssertEqual(try coordinator.replyTarget()?.sessionId, "sess-1")
+
+        guard case .readyToSend(let utteranceId, _, _, let sessionId) =
+            try await coordinator.submitReply(pcm16: silence(), to: "old")
+        else { return XCTFail("expected a pending send") }
+        XCTAssertEqual(sessionId, "old", "the link's addressing wins")
+
+        guard case .dispatched(_, _, let sent) =
+            try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected dispatch") }
+        XCTAssertEqual(sent, "old")
+    }
+
+    /// An unknown session id refuses rather than falling back to the derived
+    /// target — a stale page must not route words into whatever you heard last.
+    func testTargetedReplyToUnknownSessionRefuses() async throws {
+        let coordinator = try makeCoordinator()
+        try append()
+        _ = try await coordinator.announceNext()
+
+        guard case .noTarget = try await coordinator.submitReply(
+            pcm16: silence(), to: "no-such-session")
+        else { return XCTFail("an unknown target must refuse, not guess") }
+    }
+
     /// The misrouting guard, restated as data. Words went to the wrong terminal once
     /// because the old rule scanned for the most recent `announced` row and stepped
     /// over a newer one that had failed. A cursor cannot step over anything.

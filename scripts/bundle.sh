@@ -41,6 +41,16 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <!-- voicedispatch:// deep links, so any local HTML page can carry buttons that
+       hear a session's summary or start a reply to it. The browser confirms
+       before launching an external scheme, which is the drive-by guard. -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>Voice Dispatch actions</string>
+      <key>CFBundleURLSchemes</key><array><string>voicedispatch</string></array>
+    </dict>
+  </array>
 
   <!-- Menu bar only: no dock icon, no main window. -->
   <key>LSUIElement</key><true/>
