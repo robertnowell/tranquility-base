@@ -341,9 +341,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     lastStatusLine = "queued in \(label)"
                     hud.showResult(
                         "In \(label). It's mid-turn, so it sends when that finishes.", ok: true)
+                    continueAfterSend()
                 case .dispatched:
                     lastStatusLine = "sent to \(label)"
                     hud.showResult("Sent to \(label).", ok: true)
+                    continueAfterSend()
                 case .sessionNotReady(let readiness):
                     hud.showResult(
                         "\(label) isn't accepting input right now (\(readiness)). "
@@ -379,6 +381,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The badge, from the same predicate a keypress uses.
     private func waitingNow() -> Int { (try? coordinator?.waitingCount()) ?? 0 }
+
+    /// A successful send is a receipt, not a destination.
+    ///
+    /// The panel used to park on "Sent" until dismissed, which turned every reply
+    /// into a dead end: the queue you were working through just stopped. Now the
+    /// receipt shows for a beat and the next waiting session plays by itself —
+    /// replying ended one conversation, not the session of catching up. If nothing
+    /// is waiting, the receipt simply auto-hides as before.
+    private func continueAfterSend() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            guard let self else { return }
+            // Only if the receipt is still what's on screen — if you started
+            // recording, opened settings, or moved on, this stays out of the way.
+            guard case .result(ok: true) = self.hud.state else { return }
+            guard !self.isAnnouncing, !self.recorder.isRecording else { return }
+            guard self.waitingNow() > 0 else { return }
+            Permissions.log("send: continuing to the next waiting session")
+            self.announceNext()
+        }
+    }
 
     private func refresh() {
         if !hotkey.isRunning { _ = hotkey.start() }
@@ -640,9 +662,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .dispatched(let text, let ms, _):
                     lastStatusLine = "▶ sent (\(ms)ms): \(text.prefix(48))"
                     hud.showResult("Sent: \(text)", ok: true)
+                    continueAfterSend()
                 case .queued(let text, _):
                     lastStatusLine = "▶ queued: \(text.prefix(48))"
                     hud.showResult("Queued: \(text)", ok: true)
+                    continueAfterSend()
                 case .noTarget:
                     lastStatusLine = "nothing to reply to yet"
                     hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.", ok: false)
