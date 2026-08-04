@@ -43,6 +43,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Consumed by the next send, then cleared — a link's addressing should not
     /// leak into replies you make later by voice.
     private var deepLinkReplyTarget: String?
+    /// Hands-free listening: started by a double-tap of ⌥, ended by a single tap.
+    /// Distinct from the push-to-talk flag because releasing a key you are not
+    /// holding must not end anything.
+    private var handsFreeListening = false
+    private var lastOptionTapAt: Date?
     /// Incremented every time a reply gesture starts.
     ///
     /// Cancelling the countdown only covers the four seconds it is on screen.
@@ -185,6 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             GreetingCache.stop()
             self.isAnnouncing = false
             if self.recorder.isRecording { _ = try? self.recorder.stop() }
+            self.handsFreeListening = false
             self.isBusy = false
             // Dismiss means the item is done with — not "hide the window and leave
             // it in the queue", which is what made the button meaningless.
@@ -446,8 +452,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch transition {
         case .next, .pauseToggled, .replyBegan, .dismiss:
             hud.flashAcknowledge()
-        case .replyEnded, .replyAborted:
-            break
+        case .optionTapped, .replyEnded, .replyAborted:
+            break  // optionTapped flashes only when it becomes an action, below
         }
         switch transition {
         case .next:
@@ -471,6 +477,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Same action as the Dismiss button; a chord because Escape leaks ESC
             // into the focused terminal and interrupts the Claude session there.
             if hud.isBusyOnScreen || hud.isOnScreen { hud.dismiss() }
+
+        case .optionTapped:
+            // While locked, one tap sends — the mirror of releasing the held key.
+            if handsFreeListening {
+                hud.flashAcknowledge()
+                handsFreeListening = false
+                handle(.replyEnded)
+                return
+            }
+            // Two quick taps lock hands-free listening: Wispr's pattern, for
+            // replies too long to spend holding a key. Everything downstream is the
+            // ordinary reply path — same meter, same undo window, same routing.
+            if let last = lastOptionTapAt, Date().timeIntervalSince(last) < 0.45 {
+                lastOptionTapAt = nil
+                guard micGranted, !recorder.isRecording else { return }
+                hud.flashAcknowledge()
+                handsFreeListening = true
+                if let sessionId = hud.currentEventId,
+                   let latest = try? coordinator?.waiting().first(where: { $0.sessionId == sessionId }) {
+                    try? coordinator?.markHeard(sessionId: sessionId, through: latest.latestId)
+                }
+                coordinator?.speech.stop()
+                try? recorder.start()
+                isBusy = true
+                updateTitle()
+                hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 },
+                                  handsFree: true)
+                Permissions.log("hands-free: listening locked")
+            } else {
+                lastOptionTapAt = Date()
+            }
 
         case .pauseToggled:
             guard let speech = coordinator?.speech, speech.isSpeaking || speech.isPaused
@@ -512,6 +549,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             updateTitle()
             sendReply(captured)
+
+        case .replyAborted where handsFreeListening:
+            // A stray key during locked listening is not an abort signal: nothing is
+            // being held, so there is no gesture to have interfered with. Ignore.
+            return
 
         case .replyAborted:
             // The hold turned out to be part of a real shortcut. Drop the audio
@@ -884,7 +926,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(.separator())
 
-        menu.addItem(disabled("⌃⌥ hear · hold ⌥ reply · ⇧ pause · ⌃⇧ dismiss"))
+        menu.addItem(disabled("⌃⌥ hear · hold ⌥ reply · ⌥⌥ hands-free · ⇧ pause · ⌃⇧ dismiss"))
         menu.addItem(.separator())
 
         menu.addItem(permissionRow(
