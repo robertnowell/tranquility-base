@@ -660,6 +660,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             isAnnouncing = true
 
+            // Ingest the spool BEFORE selecting. Intake ran only on the 5-second
+            // tick, and a human is faster than that: reply to a session, press to
+            // hear the next thing, and the reply's user_prompt_submit was still
+            // sitting in the spool — so the turn you had just answered played as if
+            // nothing had happened. Measured: Stop at 08:38:09, spoken at 08:41:06,
+            // the retiring reply landing the same second, five seconds too late.
+            _ = try? coordinator.intake()
+
             // The emptiness check runs HERE, after Preparing has painted, with the
             // probe warmed off-main. It used to run before anything was shown, so a
             // press sat on a frozen panel for the length of a subprocess call and a
