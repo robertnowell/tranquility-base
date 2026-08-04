@@ -56,6 +56,38 @@ public enum TranscriptArchive {
 
     /// The session's opening ask and its branch. Both come from the transcript
     /// envelope, so no extra process or lookup is needed.
+    /// Claude Code's own name for the conversation — the string it puts in the
+    /// terminal's title bar.
+    ///
+    /// This exists so the panel and the tab can say the same thing. Voice Dispatch was
+    /// naming sessions after the tail of the hook's `cwd`, which is not a name at all:
+    /// one session showed as "share-as-page" because a skill in
+    /// `.claude/skills/share-as-page` happened to be running when the Stop hook fired,
+    /// while `claude agents --json` reported its cwd as `/Users/robertnowell` and the
+    /// tab read "Analyze Quill AI visibility and retrieval mechanisms". Three names,
+    /// one session, no way to tell they matched.
+    ///
+    /// Read last-wins: the title is re-emitted as the conversation moves on, and the
+    /// newest is the one on the tab right now.
+    public static func aiTitle(in url: URL) -> String? {
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        var title: String?
+        for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
+            // Cheap reject before paying for JSON parsing: these files reach tens of
+            // megabytes and this runs on the announce path.
+            guard line.contains("\"ai-title\""),
+                  let data = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (obj["type"] as? String) == "ai-title",
+                  let value = (obj["aiTitle"] as? String)?
+                      .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty
+            else { continue }
+            title = value
+        }
+        return title
+    }
+
     public static func sessionContext(in url: URL) -> (firstUserMessage: String?, gitBranch: String?) {
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return (nil, nil) }
         var firstUser: String?
