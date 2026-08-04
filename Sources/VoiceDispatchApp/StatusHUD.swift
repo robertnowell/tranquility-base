@@ -709,11 +709,18 @@ final class StatusHUD: NSObject {
         replyButton.font = .systemFont(ofSize: 11)
         replyButton.keyEquivalent = "\r"
 
-        gearButton = NSButton(title: "⚙", target: self, action: #selector(gearTapped))
+        // A real symbol at a real size. The text glyph was 12pt — visually timid
+        // and, worse, a hit target well under the ~24pt a fingertip-sized control
+        // needs even for a mouse.
+        gearButton = NSButton(image: NSImage(systemSymbolName: "gearshape",
+                                             accessibilityDescription: "Settings")!
+                                .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))!,
+                              target: self, action: #selector(gearTapped))
         gearButton.isBordered = false
-        gearButton.controlSize = .small
-        gearButton.font = .systemFont(ofSize: 12)
         gearButton.contentTintColor = .secondaryLabelColor
+        gearButton.translatesAutoresizingMaskIntoConstraints = false
+        gearButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        gearButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
 
         // A breadcrumb, not a button in a row of actions: it says where you are and
         // the only way out is back the way you came.
