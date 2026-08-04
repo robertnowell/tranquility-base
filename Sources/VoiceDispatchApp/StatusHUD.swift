@@ -67,10 +67,10 @@ final class StatusHUD: NSObject {
     /// speaking. A live level meter answers the only question you actually have.
     /// A deep link hands the panel its session before the mic opens, so Listening
     /// can show who the reply is addressed to.
-    func adoptTarget(sessionId: String, label: String, cwd: String?) {
-        currentTarget = (sessionId, nil, label)
+    func adoptTarget(sessionId: String, pid: Int?, label: String, cwd: String?) {
+        currentTarget = (sessionId, pid, label)
         currentEventId = sessionId
-        identity = Self.identify(pid: nil, cwd: cwd)
+        identity = Self.identify(pid: pid, cwd: cwd)
     }
 
     func showListening(level: @escaping () -> Float, handsFree: Bool = false) {
@@ -80,12 +80,14 @@ final class StatusHUD: NSObject {
         levelSource = level
         listenStartedAt = Date()
         show(state: handsFree ? "● Listening (hands-free)" : "● Listening",
-             title: "Replying to \(currentTarget?.label ?? "this session")",
+             title: "Replying to \(currentTarget?.label ?? "…")",
              body: "", autoHideAfter: nil)
-        if handsFree {
-            // No key is held, so "let go" is meaningless here; say what actually ends it.
-            hintLabel.stringValue = "Tap ⌥ to send. ⌃⇧ to discard."
-        }
+        // Where the words are going, always: the identity line names the worktree
+        // or directory, and the action line says what ends the recording. Addressing
+        // you cannot see is addressing you cannot check.
+        let action = handsFree ? "Tap ⌥ to send. ⌃⇧ to discard."
+                               : "Listening. Click Send, or let go of ⌥."
+        hintLabel.stringValue = [identity, action].compactMap { $0 }.joined(separator: "\n")
         meter.isHidden = false
         meter.reset()
 
@@ -442,8 +444,8 @@ final class StatusHUD: NSObject {
         replyButton.isHidden = awaitingConfirm ? false : (currentTarget == nil)
         // With no session in hand, Dismiss is the only honest control.
         if currentTarget == nil, !awaitingConfirm { goButton.isHidden = true }
-        // Nothing about another session matters while you are mid-sentence.
-        if isListening { goButton.isHidden = true }
+        // Go to session stays available while listening — knowing which terminal
+        // your words are about to land in is exactly when you want to check.
 
         resizeToFit(panel)
         position(panel)

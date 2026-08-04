@@ -39,15 +39,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var repliedToEventId: String?
     /// The one announcement allowed to exist. See `announceNext`.
     private var announceTask: Task<Void, Never>?
-    /// Set when a deep link named the session it wants the next reply to reach.
-    /// Consumed by the next send, then cleared — a link's addressing should not
-    /// leak into replies you make later by voice.
-    private var deepLinkReplyTarget: String?
+    /// The session this recording is addressed to, captured at the moment the
+    /// microphone opens and consumed by the send.
+    ///
+    /// The send used to re-derive its target when the audio arrived — seconds after
+    /// you started talking, through fallback chains that could resolve differently
+    /// by then. The HTML button replied to the wrong session exactly that way. What
+    /// the panel names while you speak and what the send addresses must be the SAME
+    /// stored fact, not two derivations that usually agree.
+    private var recordingTarget: String?
     /// Hands-free listening: started by a double-tap of ⌥, ended by a single tap.
     /// Distinct from the push-to-talk flag because releasing a key you are not
     /// holding must not end anything.
     private var handsFreeListening = false
     private var lastOptionTapAt: Date?
+    /// The conversation you are in: set when an announcement starts and kept
+    /// through any number of replies, until you explicitly move on (⌃⌥ or dismiss).
+    ///
+    /// The cursor-derived target could not carry this. Mid-playback the cursor has
+    /// not advanced yet, so a reply resolved to the PREVIOUS session — observed:
+    /// listening to one session, replying to an older one. And after a send, the
+    /// session's own user_prompt_submit lands seconds later, heardThrough stops
+    /// matching latest, and the derived target vanishes — which is why a second
+    /// message to the same session was so hard. A conversation is an app-level
+    /// fact about your attention, not a log-level fact.
+    private var activeConversation: (sessionId: String, label: String, cwd: String?)?
     /// Incremented every time a reply gesture starts.
     ///
     /// Cancelling the countdown only covers the four seconds it is on screen.
@@ -191,16 +207,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.isAnnouncing = false
             if self.recorder.isRecording { _ = try? self.recorder.stop() }
             self.handsFreeListening = false
+            self.recordingTarget = nil
             self.isBusy = false
             // Dismiss means the item is done with — not "hide the window and leave
             // it in the queue", which is what made the button meaningless.
             if let sessionId = self.hud.currentEventId { self.dismissCurrent(sessionId) }
+            self.activeConversation = nil
             self.updateTitle()
             self.rebuildMenu()
         }
 
         hud.onReply = { [weak self] in
             guard let self, self.micGranted, !self.recorder.isRecording else { return }
+            guard let ctx = self.resolveReplyContext() else {
+                self.hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.", ok: false)
+                return
+            }
+            self.hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
+                                 label: ctx.label, cwd: ctx.cwd)
+            self.recordingTarget = ctx.sessionId
             try? self.recorder.start()
             self.isBusy = true
             self.updateTitle()
@@ -350,12 +375,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .queued:
                     lastStatusLine = "queued in \(label)"
                     hud.showResult(
-                        "In \(label). It's mid-turn, so it sends when that finishes.", ok: true)
-                    continueAfterSend()
+                        "In \(label), sends when its turn finishes. ⌥ again to follow up.",
+                        ok: true)
                 case .dispatched:
                     lastStatusLine = "sent to \(label)"
-                    hud.showResult("Sent to \(label).", ok: true)
-                    continueAfterSend()
+                    hud.showResult("Sent to \(label). ⌥ again to follow up, ⌃⌥ for the next.",
+                                   ok: true)
                 case .sessionNotReady(let readiness):
                     hud.showResult(
                         "\(label) isn't accepting input right now (\(readiness)). "
@@ -389,28 +414,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Permissions.log("dismissed \(sessionId.prefix(8)) through event \(latest.latestId)")
     }
 
+    /// Who the next reply would go to, resolved BEFORE the microphone opens.
+    ///
+    /// Every mic-opening path runs through this, for two reasons. First, the panel
+    /// must name the session and terminal while you talk — addressing you cannot
+    /// see is addressing you cannot check, and one misroute already proved it.
+    /// Second, if there is no target, the honest move is refusing to record, not
+    /// transcribing a reply in order to discover it has nowhere to go.
+    private func resolveReplyContext() -> (sessionId: String, pid: Int?, label: String, cwd: String?)? {
+        var resolved: (sessionId: String, label: String, cwd: String?)?
+        if let conversation = activeConversation {
+            // The session on screen or just replied to — your attention, which
+            // outranks anything derived from cursors.
+            resolved = conversation
+        } else if let target = try? coordinator?.replyTarget() ?? nil {
+            resolved = (target.sessionId, target.projectLabel, target.cwd)
+        }
+        guard let resolved else { return nil }
+        let live = (ClaudeAgentsCLI().sessions() ?? [])
+            .first(where: { $0.sessionId == resolved.sessionId })
+        // Prefer the live session name ("promotions-49") over the bare project
+        // label ("promotions"): several sessions share a label, and the name is
+        // the same string Claude Code shows, so it is checkable against the tab.
+        return (resolved.sessionId, live?.pid, live?.name ?? resolved.label, resolved.cwd)
+    }
+
     /// The badge, from the same predicate a keypress uses.
     private func waitingNow() -> Int { (try? coordinator?.waitingCount()) ?? 0 }
-
-    /// A successful send is a receipt, not a destination.
-    ///
-    /// The panel used to park on "Sent" until dismissed, which turned every reply
-    /// into a dead end: the queue you were working through just stopped. Now the
-    /// receipt shows for a beat and the next waiting session plays by itself —
-    /// replying ended one conversation, not the session of catching up. If nothing
-    /// is waiting, the receipt simply auto-hides as before.
-    private func continueAfterSend() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            guard let self else { return }
-            // Only if the receipt is still what's on screen — if you started
-            // recording, opened settings, or moved on, this stays out of the way.
-            guard case .result(ok: true) = self.hud.state else { return }
-            guard !self.isAnnouncing, !self.recorder.isRecording else { return }
-            guard self.waitingNow() > 0 else { return }
-            Permissions.log("send: continuing to the next waiting session")
-            self.announceNext()
-        }
-    }
 
     private func refresh() {
         if !hotkey.isRunning { _ = hotkey.start() }
@@ -457,6 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         switch transition {
         case .next:
+            activeConversation = nil   // moving on is the explicit end of a conversation
             // Next means done with this one. Stopping used to revert the item to
             // unread, and being the newest it was handed straight back, so pressing
             // again replayed what you had just skipped and there was no way past it.
@@ -492,8 +523,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let last = lastOptionTapAt, Date().timeIntervalSince(last) < 0.45 {
                 lastOptionTapAt = nil
                 guard micGranted, !recorder.isRecording else { return }
+                guard let ctx = resolveReplyContext() else {
+                    hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.", ok: false)
+                    return
+                }
                 hud.flashAcknowledge()
                 handsFreeListening = true
+                hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
+                                label: ctx.label, cwd: ctx.cwd)
+                recordingTarget = ctx.sessionId
                 if let sessionId = hud.currentEventId,
                    let latest = try? coordinator?.waiting().first(where: { $0.sessionId == sessionId }) {
                     try? coordinator?.markHeard(sessionId: sessionId, through: latest.latestId)
@@ -517,6 +555,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case .replyBegan:
             guard micGranted, !recorder.isRecording else { return }
+            guard let ctx = resolveReplyContext() else {
+                hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.", ok: false)
+                return
+            }
+            hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
+                            label: ctx.label, cwd: ctx.cwd)
+            recordingTarget = ctx.sessionId
             // Anything already in flight belongs to a reply you have just replaced.
             replyGeneration += 1
             // Holding ⌥ during the send window means "no, let me say that again".
@@ -561,6 +606,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isBusy = false
             hud.recordingEnded()
             recorder.abandon()
+            recordingTarget = nil
             updateTitle()
             hud.showIdle(waiting: waitingNow(),
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
@@ -622,6 +668,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         guard let self else { return }
                         let live = (ClaudeAgentsCLI().sessions() ?? [])
                             .first { $0.sessionId == announcement.event.sessionId }
+                        self.activeConversation = (
+                            announcement.event.sessionId,
+                            announcement.event.projectLabel,
+                            announcement.event.cwd)
                         self.hud.showAnnouncement(
                             topic: announcement.brief.topic,
                             spoken: announcement.spoken.text,
@@ -705,21 +755,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 announceNext(only: session)
             case "reply":
                 guard micGranted, !recorder.isRecording else { break }
-                deepLinkReplyTarget = session
-                // Give the panel the session's identity so Listening shows who this
-                // reply is going to — addressing you cannot see is addressing you
-                // cannot check, and one misroute already taught that lesson.
-                if let session,
-                   let target = try? store?.waitingSessionsIncludingHeard()
-                       .first(where: { $0.sessionId == session }) {
-                    hud.adoptTarget(sessionId: session, label: target.projectLabel,
-                                    cwd: target.cwd)
+                // The page names its session; that is the whole point of the button.
+                // Unknown id → refuse to open the mic, never fall back to a guess.
+                guard let session,
+                      let target = try? store?.waitingSessionsIncludingHeard()
+                          .first(where: { $0.sessionId == session }) else {
+                    hud.showResult("That page's session isn't in the log. Nothing recorded.",
+                                   ok: false)
+                    break
                 }
+                let pid = (ClaudeAgentsCLI().sessions() ?? [])
+                    .first(where: { $0.sessionId == session })?.pid
+                hud.adoptTarget(sessionId: session, pid: pid,
+                                label: target.projectLabel, cwd: target.cwd)
+                recordingTarget = session
+                activeConversation = (session, target.projectLabel, target.cwd)
+                // Hands-free, because no key is held: a single ⌥ tap or the Send
+                // button ends it. Without this the recording had no clean ending.
+                handsFreeListening = true
                 coordinator?.speech.stop()
                 try? recorder.start()
                 isBusy = true
                 updateTitle()
-                hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
+                hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 },
+                                  handsFree: true)
             case "show":
                 showPanel()
             default:
@@ -737,9 +796,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task { @MainActor in
             do {
-                let linkTarget = deepLinkReplyTarget
-                deepLinkReplyTarget = nil
-                let outcome = try await coordinator.submitReply(pcm16: pcm, to: linkTarget)
+                // Address exactly what the panel showed while you spoke — captured
+                // at mic-open, consumed here. Re-deriving at send time is how the
+                // HTML button's reply reached the wrong session.
+                let spokenTo = recordingTarget
+                recordingTarget = nil
+                let outcome = try await coordinator.submitReply(pcm16: pcm, to: spokenTo)
 
                 // You started saying it again while this was still transcribing.
                 // Drop it rather than offering it: the words you replaced must never
@@ -757,11 +819,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .dispatched(let text, let ms, _):
                     lastStatusLine = "▶ sent (\(ms)ms): \(text.prefix(48))"
                     hud.showResult("Sent: \(text)", ok: true)
-                    continueAfterSend()
                 case .queued(let text, _):
                     lastStatusLine = "▶ queued: \(text.prefix(48))"
                     hud.showResult("Queued: \(text)", ok: true)
-                    continueAfterSend()
                 case .noTarget:
                     lastStatusLine = "nothing to reply to yet"
                     hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.", ok: false)
