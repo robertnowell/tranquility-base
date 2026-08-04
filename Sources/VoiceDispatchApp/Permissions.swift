@@ -15,29 +15,52 @@ struct Permissions {
     enum Kind: CaseIterable {
         case microphone
         case inputMonitoring
+        case automation
+        case accessibility
 
         var title: String {
             switch self {
             case .microphone: return "Microphone"
             case .inputMonitoring: return "Input Monitoring"
+            case .automation: return "Automation (Terminal)"
+            case .accessibility: return "Accessibility"
             }
         }
 
         var why: String {
             switch self {
             case .microphone: return "to record your spoken reply"
-            case .inputMonitoring: return "to notice the ⌃⌥ hotkey while you're in another app"
+            case .inputMonitoring: return "to notice the hotkeys while you're in another app"
+            case .automation: return "to type replies into the right Terminal tab"
+            case .accessibility: return "so dictation can type at your cursor"
             }
         }
 
+        /// Accessibility is genuinely optional: without it, dictation still works
+        /// via the clipboard. Everything else is load-bearing for the core loop, so
+        /// onboarding completes on the required set and leaves the optional row
+        /// visible rather than nagging forever about a nice-to-have.
+        var isRequired: Bool { self != .accessibility }
+
         var settingsURL: String {
+            let base = "x-apple.systempreferences:com.apple.preference.security?"
             switch self {
-            case .microphone:
-                return "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-            case .inputMonitoring:
-                return "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+            case .microphone: return base + "Privacy_Microphone"
+            case .inputMonitoring: return base + "Privacy_ListenEvent"
+            case .automation: return base + "Privacy_Automation"
+            case .accessibility: return base + "Privacy_Accessibility"
             }
         }
+    }
+
+    /// Can we send Apple Events to Terminal? Queried WITHOUT prompting, so the
+    /// checklist can show truth before the user acts. procNotFound means Terminal
+    /// is not running, which is indeterminate rather than denied.
+    private static func automationStatus() -> OSStatus {
+        guard let desc = NSAppleEventDescriptor(bundleIdentifier: "com.apple.Terminal")
+            .aeDesc?.pointee else { return OSStatus(procNotFound) }
+        var target = desc
+        return AEDeterminePermissionToAutomateTarget(&target, typeWildCard, typeWildCard, false)
     }
 
     /// Append-only diagnostic log.
@@ -68,6 +91,7 @@ struct Permissions {
         log("micStatus=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue) "
             + "(\(statusDescription(.microphone)))")
         log("inputMonitoring=\(CGPreflightListenEventAccess())")
+        log("automation=\(statusDescription(.automation)) accessibility=\(AXIsProcessTrusted())")
     }
 
     static func isGranted(_ kind: Kind) -> Bool {
@@ -76,6 +100,10 @@ struct Permissions {
             return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         case .inputMonitoring:
             return CGPreflightListenEventAccess()
+        case .automation:
+            return automationStatus() == noErr
+        case .accessibility:
+            return AXIsProcessTrusted()
         }
     }
 
@@ -97,6 +125,16 @@ struct Permissions {
             }
         case .inputMonitoring:
             return CGPreflightListenEventAccess() ? "granted" : "not granted. Click Grant"
+        case .automation:
+            switch automationStatus() {
+            case noErr: return "granted"
+            case OSStatus(procNotFound): return "open Terminal first, then click Grant"
+            case -1744: return "not asked yet. Click Grant"   // errAEEventWouldRequireUserConsent
+            default: return "denied earlier. Switch it on in Settings"
+            }
+        case .accessibility:
+            return AXIsProcessTrusted() ? "granted"
+                : "optional. Click Grant to type dictation at your cursor"
         }
     }
 
@@ -115,6 +153,14 @@ struct Permissions {
             // Prompts the first time and lists the app thereafter. Safe to call
             // repeatedly — it returns the current state once already decided.
             return CGRequestListenEventAccess()
+        case .automation:
+            // The consent prompt only appears when an actual Apple Event is sent,
+            // so send the most harmless one Terminal understands.
+            _ = AppleScript.run(script: "tell application \"Terminal\" to count windows")
+            return isGranted(kind)
+        case .accessibility:
+            FocusedInput.requestTrustOnce()
+            return isGranted(kind)
         }
     }
 
@@ -124,7 +170,10 @@ struct Permissions {
     }
 
     static var missing: [Kind] { Kind.allCases.filter { !isGranted($0) } }
-    static var allGranted: Bool { missing.isEmpty }
+    /// The core loop's gate: required permissions only. Accessibility never blocks.
+    static var allGranted: Bool {
+        Kind.allCases.filter(\.isRequired).allSatisfy { isGranted($0) }
+    }
 }
 
 /// Walks the user through whatever is missing, one step at a time.
@@ -141,7 +190,7 @@ final class PermissionOnboarding {
         isShowing = true
         Task { @MainActor in
             defer { isShowing = false }
-            for kind in Permissions.missing {
+            for kind in Permissions.missing where kind.isRequired {
                 await walk(kind)
                 onChange()
             }
