@@ -834,12 +834,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         hud.showResult("Couldn't transcribe that. Audio kept.", ok: false)
                         return
                     }
-                    let pasteboard = NSPasteboard.general
-                    pasteboard.clearContents()
-                    pasteboard.setString(text, forType: .string)
-                    Permissions.log("dictation: copied \(text.count) chars to clipboard")
-                    hud.showResult("Copied to clipboard: \u{201C}\(text.prefix(80))\u{201D}",
-                                   ok: true)
+                    // Wispr's rule: a focused text field wins; clipboard otherwise.
+                    if let app = FocusedInput.focusedEditableApp() {
+                        FocusedInput.paste(text)
+                        Permissions.log("dictation: typed \(text.count) chars into \(app)")
+                        hud.showResult("Typed into \(app).", ok: true)
+                    } else {
+                        if !FocusedInput.trusted { FocusedInput.requestTrustOnce() }
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString(text, forType: .string)
+                        Permissions.log("dictation: copied \(text.count) chars to clipboard")
+                        hud.showResult("Copied to clipboard: \u{201C}\(text.prefix(80))\u{201D}",
+                                       ok: true)
+                    }
                     rebuildMenu()
                     return
                 }
