@@ -798,8 +798,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 // Address exactly what the panel showed while you spoke — captured
                 // at mic-open, consumed here. Re-deriving at send time is how the
-                // HTML button's reply reached the wrong session.
-                let spokenTo = recordingTarget
+                // HTML button's reply reached the wrong session, so a recording
+                // with no captured address REFUSES rather than falling back to a
+                // derivation: the audio is kept, and nothing is guessed.
+                guard let spokenTo = recordingTarget else {
+                    Permissions.log("send: recording has no captured address; refusing")
+                    hud.showResult("This recording lost its address. Audio kept; nothing sent.",
+                                   ok: false)
+                    rebuildMenu()
+                    return
+                }
                 recordingTarget = nil
                 let outcome = try await coordinator.submitReply(pcm16: pcm, to: spokenTo)
 
