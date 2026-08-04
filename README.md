@@ -27,6 +27,7 @@ Claude Code hook ─▶ append-only event log ─▶ waiting = a query
 | Input | Action |
 |---|---|
 | **⌃⌥** tap | Hear the newest waiting session (press again to skip on) |
+| | *(background agents are announced but never offer a reply — see Caveats)* |
 | **⌥** hold | Push-to-talk reply — release to send |
 | **⌥⌥** double-tap | Lock hands-free listening; single ⌥ tap sends |
 | **⇧** tap | Pause / resume playback |
@@ -64,15 +65,43 @@ deep-links to the exact Settings pane. All granting is observable — the dots g
 green live.
 
 - **Microphone** — record your reply
-- **Input Monitoring** — see the modifier gestures from any app
+- **Accessibility** — see the modifier gestures from any app, and type dictation
+  at your cursor
 - **Automation (Terminal)** — type replies into the right tab
-- **Accessibility** *(optional)* — dictation types at your cursor; without it,
-  clipboard
+- **Input Monitoring** *(alternative)* — also authorises the gestures; you need
+  **either** this or Accessibility, not both
 
-Note for tinkerers: under the hardened runtime, a missing entitlement produces
-a *silent* denial — no prompt, no Privacy-pane listing. `bundle.sh` handles the
-entitlements; if permissions behave strangely after rebuilds, create a free
-Apple Development certificate in Xcode so the signing identity is stable.
+Grant **Accessibility**, not Input Monitoring. A listen-only `CGEvent` tap accepts
+either, but on a normal Mac nothing requests Input Monitoring — that pane sits
+empty while every comparable tool appears under Accessibility — and only
+Accessibility additionally gives you dictation-at-cursor. Relaunch once after
+granting it: `AXIsProcessTrusted()` is evaluated when the process starts, so a
+running instance cannot see a grant you just made.
+
+### Why the signing identity matters
+
+`bundle.sh` creates a stable local code-signing certificate on first run
+(`scripts/make-signing-identity.sh`, idempotent, no Xcode, no system trust
+changes). This is not cosmetic. An **ad-hoc** signature has no certificate, so the
+designated requirement macOS derives is `cdhash H"…"` — the hash of that exact
+binary. TCC stores your grants against that requirement, so **every rebuild
+becomes an app macOS has never seen and every permission silently reverts.**
+
+The symptom is close to undiagnosable: the Privacy pane keeps listing the app with
+its switch ON, while the API that gates the feature returns false. The pane is
+describing a stored row; the API is describing *this* binary. Toggling the switch
+does not help, and neither does removing the row — the grant is keyed to a code
+identity that no longer exists.
+
+If you ever see "granted but not working", the signing identity changed. Fix:
+
+```sh
+./scripts/reset-permissions.sh    # clear grants bound to the dead identity
+open ".build/debug/Voice Dispatch.app"    # then Grant again
+```
+
+Also note: under the hardened runtime a missing *entitlement* produces a silent
+denial — no prompt, no Privacy-pane listing. `bundle.sh` handles those.
 
 ### API keys
 
@@ -112,6 +141,13 @@ are the point.
 ## Caveats (alpha)
 
 - **Terminal.app only** for reply routing; other terminals get announcements.
+  Fullscreen rendering (`/tui fullscreen`) is fine — it changes how the CLI draws
+  inside the tab, and the session keeps its controlling tty.
+- **Background agents cannot be replied to.** A session with `kind: "background"`
+  is hosted by `claude --bg-pty-host`, which owns the pty master, so the session has
+  no controlling terminal and no Terminal tab — there is nothing to type into, and
+  no supported IPC to reach it. Those announcements omit the Reply button and put
+  your words on the clipboard instead of losing them.
 - `model-calls.jsonl` retains full model inputs/outputs (your session content)
   for debugging, unbounded — delete or truncate freely.
 - Long-running headless `claude -p` jobs can be announced while still executing.

@@ -74,18 +74,58 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 PLIST
 
 IDENTITY="${VOICE_DISPATCH_SIGN_IDENTITY:-}"
+# Must match make-signing-identity.sh. Overridable by the same variable so the
+# create-from-nothing path is testable without rotating the real certificate.
+LOCAL_CN="${VD_SIGN_CN:-Voice Dispatch Local Signing}"
 if [ -z "$IDENTITY" ]; then
+  # `|| true` is load-bearing: with `pipefail`, grep finding nothing fails the whole
+  # pipeline, and under `set -e` that aborts the script *before* the ad-hoc branch
+  # below — so the machine that needs the fallback most is the one that never
+  # reaches it, and you are left with an unsigned bundle whose missing entitlements
+  # deny every permission silently.
   IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
-    | grep "Apple Development" | head -1 | sed -E 's/.*"(.*)"/\1/')
+    | grep "Apple Development" | head -1 | sed -E 's/.*"(.*)"/\1/' || true)
+
+  # Fall back to the local self-signed identity from scripts/make-signing-identity.sh.
+  #
+  # This exists because ad-hoc signing is not merely inconvenient, it is unusable:
+  # an ad-hoc designated requirement is `cdhash H"..."`, which changes on EVERY
+  # build, so TCC treats each rebuild as a different application and silently voids
+  # Accessibility, Input Monitoring and the microphone. Worse, the Privacy pane keeps
+  # showing the old row as enabled, so it reads as "granted but broken" and there is
+  # nothing in the UI to fix. `-p codesigning` alone will not list this certificate
+  # (it is untrusted, CSSMERR_TP_NOT_TRUSTED), but codesign signs with it happily and
+  # the resulting requirement is identifier + certificate — stable across rebuilds.
+  if [ -z "$IDENTITY" ]; then
+    IDENTITY=$(security find-identity -p codesigning 2>/dev/null \
+      | grep "$LOCAL_CN" | head -1 \
+      | sed -E 's/^ *[0-9]+\) ([0-9A-F]+) .*/\1/' || true)
+  fi
+
+  # Still nothing: CREATE the identity rather than warning and shipping an ad-hoc
+  # build. A warning was not good enough. Ad-hoc signing does not degrade the app in
+  # some tolerable way — it makes permissions unfixable, and it does so while the
+  # Privacy pane insists everything is granted. Nobody reads a warning and infers
+  # that, so the first run has to be correct by construction rather than by advice.
+  if [ -z "$IDENTITY" ]; then
+    echo "no code-signing identity found — creating a stable local one (once)."
+    "$(dirname "$0")/make-signing-identity.sh" >/dev/null 2>&1 || true
+    IDENTITY=$(security find-identity -p codesigning 2>/dev/null \
+      | grep "$LOCAL_CN" | head -1 \
+      | sed -E 's/^ *[0-9]+\) ([0-9A-F]+) .*/\1/' || true)
+    [ -n "$IDENTITY" ] && echo "created a stable signing identity; grants will now survive rebuilds."
+  fi
 fi
 
 if [ -z "$IDENTITY" ]; then
-  # Ad-hoc, but STILL with entitlements: without them the hardened-runtime denials
-  # are silent (no prompt, no Privacy-pane listing). Grants may reset per rebuild;
-  # creating any free Apple Development certificate in Xcode fixes that.
-  echo "⚠️  no Apple Development identity found; ad-hoc signing."
-  echo "   Permissions may re-prompt after rebuilds. Fix: Xcode → Settings →"
-  echo "   Accounts → Manage Certificates → + Apple Development."
+  # Reached only if identity creation itself failed. Still sign ad-hoc WITH
+  # entitlements — without them the hardened-runtime denials are silent — but say
+  # plainly what will go wrong, because the symptom is otherwise unrecognisable.
+  echo "⚠️  could not create a signing identity; falling back to ad-hoc."
+  echo "   Consequence: every rebuild voids your macOS permissions, while the"
+  echo "   Privacy pane keeps showing them as granted. If that happens, run"
+  echo "   scripts/reset-permissions.sh and grant again."
+  echo "   Retry the identity with: scripts/make-signing-identity.sh"
   codesign --force --deep --sign - --identifier "$BUNDLE_ID" \
     --entitlements VoiceDispatch.entitlements \
     --options runtime --timestamp=none "$APP_DIR"
@@ -105,5 +145,6 @@ echo
 echo "Run it:    open \"$APP_DIR\""
 echo "Stop it:   pkill -f VoiceDispatchApp"
 echo
-echo "On first launch it will ask for the microphone. Input Monitoring (for the"
-echo "⌃⌥ hotkey) has to be granted by hand — the menu links straight to the pane."
+echo "On first launch it will ask for the microphone. Grant ACCESSIBILITY for the"
+echo "gestures — the checklist links straight to the pane — then relaunch once, since"
+echo "macOS only evaluates that grant when the process starts."

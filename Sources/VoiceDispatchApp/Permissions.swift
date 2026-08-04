@@ -30,17 +30,32 @@ struct Permissions {
         var why: String {
             switch self {
             case .microphone: return "to record your spoken reply"
-            case .inputMonitoring: return "to notice the hotkeys while you're in another app"
+            case .inputMonitoring: return "an alternative to Accessibility for the hotkeys"
             case .automation: return "to type replies into the right Terminal tab"
-            case .accessibility: return "so dictation can type at your cursor"
+            case .accessibility: return "to notice the hotkeys, and type dictation at your cursor"
             }
         }
 
-        /// Accessibility is genuinely optional: without it, dictation still works
-        /// via the clipboard. Everything else is load-bearing for the core loop, so
-        /// onboarding completes on the required set and leaves the optional row
-        /// visible rather than nagging forever about a nice-to-have.
-        var isRequired: Bool { self != .accessibility }
+        /// Neither gesture permission is independently required, because macOS accepts
+        /// EITHER for a listen-only `CGEvent` tap — see `gesturesGranted`.
+        ///
+        /// This used to mark `inputMonitoring` required and `accessibility` optional,
+        /// which was backwards in the way that matters: on a normal Mac nothing
+        /// requests Input Monitoring — Wispr Flow, Raycast and every comparable tool
+        /// appear under Accessibility and that pane sits empty — so onboarding blocked
+        /// on the one permission the user could not grant while calling the one that
+        /// actually works a nice-to-have.
+        var isRequired: Bool {
+            switch self {
+            case .microphone, .automation: return true
+            case .accessibility, .inputMonitoring: return false
+            }
+        }
+
+        /// Ask for Accessibility, not Input Monitoring. Both satisfy the tap; only
+        /// Accessibility also gives dictation-at-cursor, and only Accessibility is
+        /// where users already expect to find tools like this.
+        var isPreferredForGestures: Bool { self == .accessibility }
 
         var settingsURL: String {
             let base = "x-apple.systempreferences:com.apple.preference.security?"
@@ -170,9 +185,22 @@ struct Permissions {
     }
 
     static var missing: [Kind] { Kind.allCases.filter { !isGranted($0) } }
-    /// The core loop's gate: required permissions only. Accessibility never blocks.
+
+    /// Whether the gestures can work at all.
+    ///
+    /// A listen-only `CGEvent` tap is authorised by Accessibility OR Input Monitoring.
+    /// Treating them as two independent requirements produced the worst possible
+    /// outcome: the checklist reported a permission as missing while the tap it gates
+    /// was working, and demanded one the user had no way to grant.
+    static var gesturesGranted: Bool {
+        isGranted(.accessibility) || isGranted(.inputMonitoring)
+    }
+
+    /// The core loop's gate: microphone and Automation, plus one of the two gesture
+    /// permissions. Without a gesture permission nothing can be triggered at all, so
+    /// unlike the old model this genuinely does block — it just accepts either route.
     static var allGranted: Bool {
-        Kind.allCases.filter(\.isRequired).allSatisfy { isGranted($0) }
+        Kind.allCases.filter(\.isRequired).allSatisfy { isGranted($0) } && gesturesGranted
     }
 }
 
