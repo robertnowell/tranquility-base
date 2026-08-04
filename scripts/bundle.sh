@@ -80,8 +80,15 @@ if [ -z "$IDENTITY" ]; then
 fi
 
 if [ -z "$IDENTITY" ]; then
-  echo "⚠️  no signing identity — the bundle is ad-hoc signed and TCC grants will"
-  echo "   reset on every rebuild."
+  # Ad-hoc, but STILL with entitlements: without them the hardened-runtime denials
+  # are silent (no prompt, no Privacy-pane listing). Grants may reset per rebuild;
+  # creating any free Apple Development certificate in Xcode fixes that.
+  echo "⚠️  no Apple Development identity found; ad-hoc signing."
+  echo "   Permissions may re-prompt after rebuilds. Fix: Xcode → Settings →"
+  echo "   Accounts → Manage Certificates → + Apple Development."
+  codesign --force --deep --sign - --identifier "$BUNDLE_ID" \
+    --entitlements VoiceDispatch.entitlements \
+    --options runtime --timestamp=none "$APP_DIR"
 else
   # --entitlements is not optional here. With the hardened runtime enabled, a
   # protected resource needs the entitlement as well as the Info.plist usage string;

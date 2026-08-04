@@ -14,6 +14,7 @@ func usage() -> Never {
       vdctl utterances [status] list utterances
       vdctl reconcile           run the boot reconciliation sweep
       vdctl reap [hours]        delete audio for confirmed/discarded rows (default 72h)
+      vdctl install-hooks       merge the hooks into ~/.claude/settings.json (backup kept)
       vdctl hook-config         print the settings.json snippet to install the hook
       vdctl paths               show where everything lives
       vdctl secrets             which credentials are readable, and from where
@@ -201,7 +202,48 @@ case "reconcile":
         let n = try store.reapAudio(olderThan: hours * 3600)
         print("deleted \(n) audio file(s) older than \(Int(hours))h (confirmed/discarded only)")
 
-    case "hook-config":
+    case "install-hooks":
+    // One command instead of JSON surgery. Merges the three hook entries into
+    // ~/.claude/settings.json, backing it up first; already-installed is a no-op.
+    // A botched settings file silently disables everything in it, which is why
+    // this exists.
+    let hookPath = FileManager.default.currentDirectoryPath + "/hooks/voice-dispatch-hook.sh"
+    guard FileManager.default.isExecutableFile(atPath: hookPath) else {
+        print("run from the repo root: hooks/voice-dispatch-hook.sh not found"); exit(1)
+    }
+    let settingsURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".claude/settings.json")
+    var root: [String: Any] = [:]
+    if let data = try? Data(contentsOf: settingsURL) {
+        guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            print("~/.claude/settings.json is not valid JSON; fix it first, nothing touched")
+            exit(1)
+        }
+        root = parsed
+        try? data.write(to: settingsURL.appendingPathExtension("vd-backup"))
+    }
+    var hooks = root["hooks"] as? [String: Any] ?? [:]
+    var changed = 0
+    for event in ["Stop", "Notification", "UserPromptSubmit"] {
+        var entries = hooks[event] as? [[String: Any]] ?? []
+        let present = entries.contains { entry in
+            ((entry["hooks"] as? [[String: Any]]) ?? [])
+                .contains { ($0["command"] as? String)?.contains("voice-dispatch-hook") == true }
+        }
+        if !present {
+            entries.append(["hooks": [["type": "command", "command": hookPath, "timeout": 5]]])
+            hooks[event] = entries
+            changed += 1
+        }
+    }
+    root["hooks"] = hooks
+    let out = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+    try out.write(to: settingsURL)
+    print(changed == 0 ? "already installed; nothing changed"
+          : "installed on \(changed) event(s); backup at settings.json.vd-backup")
+    print("restart Claude Code sessions (or open /hooks once) to load them")
+
+case "hook-config":
         let hookPath = FileManager.default.currentDirectoryPath + "/hooks/voice-dispatch-hook.sh"
         print("""
         Add to ~/.claude/settings.json (merge with existing hooks):
