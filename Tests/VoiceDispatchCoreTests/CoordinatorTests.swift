@@ -218,6 +218,43 @@ final class CoordinatorTests: XCTestCase {
     }
 
     /// A stack, not a queue: the newest turn is the state that is actually true.
+    /// A prepared summary is a summary OF one event. When the session moves on,
+    /// the stale preparation must be discarded, not spoken — one played aloud two
+    /// turns after the user had already answered it.
+    func testPreparedSummaryForAnOlderTurnIsNotSpoken() async throws {
+        final class CountingSummary: SummaryProvider, @unchecked Sendable {
+            let name = "counting"; let isConfigured = true
+            var calls = 0
+            func brief(for request: SummaryRequest) async throws -> SessionBrief {
+                calls += 1
+                return SessionBrief(topic: "T", happened: "H",
+                                    recap: request.lastAssistantMessage, proposal: "P?")
+            }
+        }
+        let counting = CountingSummary()
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
+        let coordinator = Coordinator(
+            store: store, summarizer: SummarizerChain(providers: [counting]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            transport: RecordingTransport(), enrolment: registry,
+            agents: FakeAgents(live: [LiveSession(pid: 1, sessionId: "sess-1", cwd: "/tmp",
+                                                  status: "idle", name: "p", waitingFor: nil)]),
+            recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
+
+        try append(.stop, at: 1_000, message: "the OLD turn")
+        try await coordinator.prepareNext()
+        XCTAssertEqual(counting.calls, 1)
+
+        try append(.stop, at: 2_000, message: "the NEW turn")
+        guard case .spoke(let spoken) = try await coordinator.announceNext() else {
+            return XCTFail("expected an announcement")
+        }
+        XCTAssertTrue(spoken.spoken.text.contains("the NEW turn"),
+                      "the stale preparation must not be what plays")
+        XCTAssertEqual(counting.calls, 2, "re-summarized for the newer event")
+    }
+
     func testNewestSessionFirst() async throws {
         let coordinator = try makeCoordinator()
         try append(.stop, session: "old", at: 1_000, message: "older session")
