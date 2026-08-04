@@ -58,6 +58,11 @@ public enum Readiness: Sendable, Equatable {
     case waiting(String?)
     /// The process is gone.
     case targetGone
+    /// A background agent (`kind: "background"`). Alive, healthy, and answering —
+    /// but hosted without a controlling terminal, so there is no tab to type into.
+    /// Unlike every other refusal this one is permanent: retrying later cannot help,
+    /// because nothing about the session will ever grow a terminal.
+    case hasNoTerminal
 
     /// The only real hazard is `notRegistered`: alive but absent from
     /// `claude agents --json` means blocked on a modal dialog, where typed text
@@ -66,7 +71,16 @@ public enum Readiness: Sendable, Equatable {
     public var canDispatch: Bool {
         switch self {
         case .ready, .busy, .waiting: return true
-        case .notRegistered, .targetGone: return false
+        case .notRegistered, .targetGone, .hasNoTerminal: return false
+        }
+    }
+
+    /// Whether waiting and trying again could plausibly succeed. Drives wording:
+    /// "try again in a moment" is actively misleading for a background agent.
+    public var isTransient: Bool {
+        switch self {
+        case .notRegistered, .busy, .waiting: return true
+        case .ready, .targetGone, .hasNoTerminal: return false
         }
     }
 }
@@ -316,6 +330,23 @@ public struct LiveSession: Sendable, Decodable {
     public var status: String?
     public var name: String?
     public var waitingFor: String?
+    /// `"interactive"` or `"background"`, straight from `claude agents --json`.
+    ///
+    /// This is the discriminator the tty column was never able to be. Measured on a
+    /// live machine: all 10 interactive sessions had a real tty, the one background
+    /// agent had none, and the correlation was exact. It is also first-party, so it
+    /// does not depend on guessing from process ancestry.
+    ///
+    /// Optional because absence must mean *unknown*, never *background* — a future
+    /// CLI that stops emitting the field would otherwise silently make every
+    /// session unrepliable.
+    public var kind: String?
+
+    /// A background agent has no controlling terminal by design: it is hosted by
+    /// `claude --bg-pty-host`, whose pty master the daemon owns. There is no tab to
+    /// find, so a reply cannot be typed anywhere. Announcing one is reasonable;
+    /// offering to reply to it is not.
+    public var isBackground: Bool { kind == "background" }
 }
 
 public protocol ClaudeAgentsReading: Sendable {

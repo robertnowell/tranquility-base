@@ -375,11 +375,19 @@ public struct Coordinator: Sendable {
     @discardableResult
     public func confirmAndSend(utteranceId: String) async throws -> ReplyOutcome {
         guard var utterance = try store.utterances(limit: 500).first(where: { $0.id == utteranceId }),
-              let text = utterance.transcriptText,
-              let sessionId = utterance.targetSessionId,
+              let text = utterance.transcriptText
+        else { return .noTarget }
+
+        // Split from the bind above so the transcript is in scope when the target is
+        // not: "that reply lost its session" is the one refusal where the words are
+        // definitely good and definitely homeless, so they belong on the clipboard.
+        guard let sessionId = utterance.targetSessionId,
               let target = try store.waitingSessionsIncludingHeard()
                   .first(where: { $0.sessionId == sessionId })
-        else { return .noTarget }
+        else {
+            Coordinator.strand(text)
+            return .noTarget
+        }
 
         try enrolment.enrol(sessionId: target.sessionId)
         return try await dispatch(utterance: &utterance, text: text, target: target)
@@ -405,7 +413,20 @@ public struct Coordinator: Sendable {
             // Injecting would answer the dialog, so we refuse and keep the audio.
             utterance.status = .ready
             try store.update(utterance: utterance)
+            Coordinator.strand(text)
             return .sessionNotReady(.notRegistered)
+        }
+
+        // A background agent has no terminal to type into, ever. Refusing here rather
+        // than in the transport keeps the reason honest: the transport would report
+        // `tabNotFound`, which describes a search that never happened and invites a
+        // retry that cannot work.
+        if live.isBackground {
+            utterance.status = .ready
+            utterance.lastError = "background agent: no terminal to type into"
+            try store.update(utterance: utterance)
+            Coordinator.strand(text)
+            return .sessionNotReady(.hasNoTerminal)
         }
 
         let dispatchTarget = DispatchTarget(
@@ -448,6 +469,7 @@ public struct Coordinator: Sendable {
         case .deferred(let readiness):
             utterance.status = .ready
             try store.update(utterance: utterance)
+            Coordinator.strand(text)
             return .sessionNotReady(readiness)
 
         case .failed(let failure):
@@ -456,7 +478,45 @@ public struct Coordinator: Sendable {
             utterance.status = failure == .verificationTimedOut ? .dispatchedUnconfirmed : .dispatchFailed
             utterance.lastError = "\(failure)"
             try store.update(utterance: utterance)
+            // Deliberately NOT on verificationTimedOut: those words may already be in
+            // the tab, and handing you a copy invites the duplicate paste this codebase
+            // refuses to make on your behalf.
+            if failure != .verificationTimedOut { Coordinator.strand(text) }
             return .dispatchFailed(failure, utteranceId: utterance.id)
         }
+    }
+
+    // MARK: - Stranded text
+
+    /// Set by the app layer. Core cannot import AppKit, and `NSPasteboard` lives there.
+    ///
+    /// Mirrors `Secrets.trace`: an optional sink means the core stays testable and a
+    /// host that has no clipboard simply does not set it.
+    public nonisolated(unsafe) static var copyToClipboard: (@Sendable (String) -> Void)?
+
+    /// "Your words are kept" used to mean kept *in sqlite* — true, and useless at the
+    /// moment you are standing there having just spoken a paragraph. A refusal is
+    /// exactly when the transcript needs to be somewhere you can paste from.
+    ///
+    /// Only refusals reach here. A cancelled send does not: you chose not to send it,
+    /// and silently replacing your clipboard on a deliberate "no" would be a side
+    /// effect nobody asked for.
+    static func strand(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        copyToClipboard?(text)
+    }
+
+    /// Whether a reply could reach this session at all, for deciding whether to offer
+    /// one. Answered from `claude agents --json`.
+    ///
+    /// Fails OPEN, unlike `dispatch`. A probe hiccup returning nil must not hide a
+    /// working Reply button — the cost of offering a reply that then refuses is one
+    /// clear message plus a clipboard copy, while the cost of wrongly hiding it is a
+    /// capability that looks broken with no explanation. Refusal happens at send,
+    /// where it can be explained.
+    public func isRepliable(sessionId: String) -> Bool {
+        guard let live = agents.sessions()?.first(where: { $0.sessionId == sessionId })
+        else { return true }
+        return !live.isBackground
     }
 }

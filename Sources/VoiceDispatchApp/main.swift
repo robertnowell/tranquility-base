@@ -264,6 +264,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ClaudeAgentsCLI.trace = { Permissions.log("liveness: \($0)") }
         Secrets.trace = { Permissions.log("secrets: \($0)") }
         QueueStore.trace = { Permissions.log("queue: \($0)") }
+        // A refused reply puts the transcript somewhere you can paste from. Core owns
+        // when (every refusal, never a cancellation); the app owns how, because
+        // NSPasteboard is AppKit and Core is deliberately free of it.
+        Coordinator.copyToClipboard = { text in
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+            Permissions.log("stranded reply copied to clipboard (\(text.count) chars)")
+        }
         Permissions.log("args=\(CommandLine.arguments)")
 
         if CommandLine.arguments.contains("--show-onboarding") {
@@ -411,19 +420,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         hud.showResult("Sent to \(label). ⌥ again to follow up, ⌃⌥ for the next.",
                                        ok: true)
                     }
+                case .sessionNotReady(.hasNoTerminal):
+                    hud.showResult(
+                        "\(label) is a background agent — no terminal to type into. "
+                        + "Your words are on the clipboard.", ok: false)
                 case .sessionNotReady(let readiness):
                     hud.showResult(
                         "\(label) isn't accepting input right now (\(readiness)). "
-                        + "Your words are kept. Try again in a moment.", ok: false)
+                        + "Your words are on the clipboard."
+                        + (readiness.isTransient ? " Try again in a moment." : ""), ok: false)
                 case .dispatchFailed(.verificationTimedOut, _):
                     hud.showResult(
                         "Typed it into \(label), but couldn't confirm it landed. "
                         + "Check the tab before repeating yourself.", ok: false)
                 case .dispatchFailed(let failure, _):
                     hud.showResult("Couldn't type into \(label): \(failure). "
-                                   + "Your words are kept.", ok: false)
+                                   + "Your words are on the clipboard.", ok: false)
                 case .noTarget:
-                    hud.showResult("That reply lost its session. Your words are kept.", ok: false)
+                    hud.showResult("That reply lost its session. "
+                                   + "Your words are on the clipboard.", ok: false)
                 default:
                     hud.showResult("Unexpected result: \(outcome). Your words are kept.", ok: false)
                 }
@@ -727,7 +742,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             pid: live?.pid,
                             project: announcement.event.projectLabel,
                             cwd: announcement.event.cwd,
-                            eventId: announcement.event.sessionId)
+                            eventId: announcement.event.sessionId,
+                            // Fails open: an unresolved session keeps its Reply button
+                            // and is refused at send, where the reason can be stated.
+                            repliable: !(live?.isBackground ?? false))
                     },
                     onWord: { [weak self] range in
                         Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
@@ -947,9 +965,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 self.updateTitle()
                             }
                         })
+                case .sessionNotReady(.hasNoTerminal):
+                    lastStatusLine = "background agent: no terminal, reply on clipboard"
+                    hud.showResult(
+                        "That's a background agent — no terminal to type into. "
+                        + "Your words are on the clipboard.", ok: false)
                 case .sessionNotReady(let readiness):
                     lastStatusLine = "session busy or blocked (\(readiness)), audio kept"
-                    hud.showResult("Session isn't ready (\(readiness)). Recording kept. Try again shortly.", ok: false)
+                    hud.showResult(
+                        "Session isn't ready (\(readiness)). Your words are on the clipboard."
+                        + (readiness.isTransient ? " Try again shortly." : ""), ok: false)
                 case .transcriptionFailed:
                     lastStatusLine = "couldn't transcribe, audio kept"
                     hud.showResult("Couldn't transcribe that. The audio is saved. Retry from the menu.", ok: false)

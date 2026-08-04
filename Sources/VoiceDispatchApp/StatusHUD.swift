@@ -65,6 +65,10 @@ final class StatusHUD: NSObject {
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
 
+    /// False for a background agent: announce it, but never offer a reply that has
+    /// nowhere to land. Defaults true so every other path is unaffected.
+    private var currentTargetRepliable = true
+
     // MARK: - Public surface
 
     /// While you are talking, the panel's whole job is to prove it can hear you.
@@ -74,8 +78,13 @@ final class StatusHUD: NSObject {
     /// speaking. A live level meter answers the only question you actually have.
     /// A deep link hands the panel its session before the mic opens, so Listening
     /// can show who the reply is addressed to.
-    func adoptTarget(sessionId: String, pid: Int?, label: String, cwd: String?) {
+    func adoptTarget(
+        sessionId: String, pid: Int?, label: String, cwd: String?, repliable: Bool = true
+    ) {
         currentTarget = (sessionId, pid, label)
+        // Reset explicitly: a stale `false` from a previous background announcement
+        // would otherwise suppress Reply on a session that can perfectly well take one.
+        currentTargetRepliable = repliable
         currentEventId = sessionId
         identity = Self.identify(pid: pid, cwd: cwd)
     }
@@ -122,11 +131,12 @@ final class StatusHUD: NSObject {
     func showAnnouncement(
         isCatchUp: Bool = false,
         topic: String, spoken: String, sessionId: String, pid: Int?, project: String,
-        cwd: String?, eventId: String? = nil
+        cwd: String?, eventId: String? = nil, repliable: Bool = true
     ) {
         awaitingConfirm = false
         currentEventId = eventId
         currentTarget = (sessionId, pid, project)
+        currentTargetRepliable = repliable
         // Only prefix when the topic adds something. A topic equal to the project
         // rendered as "promotions — promotions", which names the folder twice and
         // tells you nothing.
@@ -467,12 +477,17 @@ final class StatusHUD: NSObject {
                 action = ""
             } else if isRecording {
                 action = "Listening. Click Send, or let go of ⌥."
+            } else if !currentTargetRepliable {
+                // Say why, not just less. A panel that silently drops its Reply button
+                // reads as a bug; naming the reason makes it a fact about the session.
+                action = "Background agent — no terminal to reply into."
             } else {
                 action = "Click Reply, or hold ⌥ to speak."
             }
         }
         hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
-        replyButton.isHidden = awaitingConfirm ? false : (currentTarget == nil)
+        replyButton.isHidden = awaitingConfirm
+            ? false : (currentTarget == nil || !currentTargetRepliable)
         // With no session in hand, Dismiss is the only honest control.
         if currentTarget == nil, !awaitingConfirm { goButton.isHidden = true }
         // Go to session stays available while listening — knowing which terminal

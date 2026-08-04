@@ -260,12 +260,18 @@ case "hook-config":
             print("(liveness probe FAILED — the app is failing open right now)"); break
         }
         if live.isEmpty { print("(no live sessions)"); break }
-        print("\(pad("STATUS", 8))  \(pad("PID", 7))  \(pad("TTY", 14))  \(pad("ENROLLED", 9))  PROJECT")
+        // KIND is printed because it decides repliability: a background agent has no
+        // terminal and never will, so "no tty" against "background" is the expected
+        // pairing rather than a fault to chase.
+        print("\(pad("STATUS", 8))  \(pad("KIND", 12))  \(pad("PID", 7))  \(pad("TTY", 14))  "
+              + "\(pad("REPLY", 6))  \(pad("ENROLLED", 9))  PROJECT")
         for s in live.sorted(by: { ($0.cwd ?? "") < ($1.cwd ?? "") }) {
             let tty = ProcessProbe.tty(of: s.pid) ?? "—"
             let ok = enrolment.isEnrolled(sessionId: s.sessionId, cwd: s.cwd) ? "yes" : "no"
             let project = (s.cwd as NSString?)?.lastPathComponent ?? "—"
-            print("\(pad(s.status ?? "?", 8))  \(pad(String(s.pid), 7))  \(pad(tty, 14))  \(pad(ok, 9))  \(project)")
+            print("\(pad(s.status ?? "?", 8))  \(pad(s.kind ?? "?", 12))  \(pad(String(s.pid), 7))  "
+                  + "\(pad(tty, 14))  \(pad(s.isBackground ? "no" : "yes", 6))  "
+                  + "\(pad(ok, 9))  \(project)")
             print("         \(s.sessionId)")
         }
 
