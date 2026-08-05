@@ -128,6 +128,23 @@ public enum BuddyPCM16Converter {
     }
 }
 
+extension BuddyPCM16Converter {
+    /// Read any audio file AVFoundation can open and convert it to 16-bit mono
+    /// PCM at the target rate — the format every transcription provider here
+    /// consumes. Used by `vdctl transcribe-stream` to replay a saved recording
+    /// through the live provider; nil when the file cannot be read.
+    public static func pcm16Data(contentsOf url: URL, targetSampleRate: Double = 16000) -> Data? {
+        guard let file = try? AVAudioFile(forReading: url),
+              file.length > 0,
+              let buffer = AVAudioPCMBuffer(
+                  pcmFormat: file.processingFormat,
+                  frameCapacity: AVAudioFrameCount(file.length))
+        else { return nil }
+        guard (try? file.read(into: buffer)) != nil else { return nil }
+        return pcm16Data(from: buffer, targetSampleRate: targetSampleRate)
+    }
+}
+
 public enum BuddyWAVBuilder {
     public static func wavData(fromPCM16 pcm: Data, sampleRate: Double, channels: UInt16 = 1) -> Data {
         var out = Data()

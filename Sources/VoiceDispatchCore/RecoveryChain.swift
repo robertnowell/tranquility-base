@@ -92,13 +92,20 @@ extension QueueStore {
     /// only then does anything touch the network. If transcription fails at every
     /// provider the row lands in `transcriptionFailed` with its audio intact, ready
     /// for a manual or boot-sweep retry — never discarded.
+    ///
+    /// `streamed` is a live-transcription result obtained WHILE the audio was
+    /// being recorded (see `StreamedUtterance`). It is accepted only when it
+    /// carries an explicit end-of-turn — anything less trustworthy, or nil, and
+    /// this function behaves exactly as it did before streaming existed. Either
+    /// way the audio is saved first: streaming only ever adds speed.
     @discardableResult
     public func captureAndTranscribe(
         pcm16: Data,
         sampleRate: Double,
         audioStore: AudioStore = AudioStore(),
         chain: RecoveryChain = RecoveryChain(),
-        eventId: String? = nil
+        eventId: String? = nil,
+        streamed: TranscriptionResult? = nil
     ) async throws -> Utterance {
         var utterance = Utterance(eventId: eventId, status: .recorded)
 
@@ -111,6 +118,19 @@ extension QueueStore {
         utterance.audioDurationMs = stored.durationMs
         try update(utterance: utterance)
         // ── from here on, nothing can lose the recording ──────────────────
+
+        // A trustworthy streamed final skips the recovery pass — that is the
+        // entire speed win. The provider tag ("assemblyai-streaming" vs
+        // "openai"/"apple-speech") records which path produced the transcript.
+        if let streamed, streamed.finality == .explicitEndOfTurn,
+           !streamed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            utterance.transcriptText = streamed.text
+            utterance.transcriptProvider = streamed.provider
+            utterance.transcriptFinality = streamed.finality
+            utterance.status = .transcribed
+            try update(utterance: utterance)
+            return utterance
+        }
 
         utterance.status = .transcribing
         try update(utterance: utterance)

@@ -23,6 +23,9 @@ func usage() -> Never {
       vdctl dogfood [days]      WS-E counters summary (default 7 days)
       vdctl dogfood record <kind> [note...]
                                 append a dogfood event by hand (e.g. attribution_error)
+      vdctl transcribe-stream <wav>
+                                replay a saved recording through the AssemblyAI
+                                streaming provider in pseudo-realtime
 
     dispatch:
       vdctl targets                       live sessions, with tty and enrolment
@@ -561,6 +564,53 @@ case "hook-config":
         } else {
             print("\nno provider succeeded — \(outcome.lastFailure.map { "\($0)" } ?? "unknown")")
             print("The audio is untouched; retry with `vdctl retry-failed` once a provider is available.")
+            exit(6)
+        }
+
+    case "transcribe-stream":
+        // Chunk a saved recording through the AssemblyAI streaming provider in
+        // pseudo-realtime — verification of the live path without a live mic.
+        // The file-based chain is untouched by design: in the app this provider
+        // only ever runs ALONGSIDE the always-saved audio file.
+        guard args.count > 1 else { usage() }
+        let provider = AssemblyAIStreaming()
+        guard provider.isConfigured else {
+            print("assemblyai key is not configured — run: vdctl set-key assemblyai")
+            exit(2)
+        }
+        let fileURL = URL(fileURLWithPath: args[1])
+        guard let pcm = BuddyPCM16Converter.pcm16Data(contentsOf: fileURL) else {
+            print("could not read audio at \(fileURL.path)")
+            exit(1)
+        }
+        let lexicon = Lexicon.harvest(store: store)
+        let keyterms = AssemblyAIStreaming.keyterms(from: lexicon.terms)
+        print("streaming \(String(format: "%.1f", Double(pcm.count) / 32_000))s of audio "
+              + "with \(keyterms.count) keyterm(s)")
+
+        let stream = StreamedUtterance(
+            provider: provider, lexicon: lexicon.terms,
+            onPartial: { print("  partial: \($0)") })
+        await stream.start()
+
+        // 100ms chunks (v3 accepts 50–1000ms), paced near realtime as the API
+        // asks for pre-recorded audio — faster makes Turn boundaries unreliable.
+        let chunkBytes = 3200
+        var offset = 0
+        while offset < pcm.count {
+            let end = min(offset + chunkBytes, pcm.count)
+            stream.feed(pcm16: pcm.subdata(in: offset..<end))
+            offset = end
+            try? await Task.sleep(nanoseconds: 90_000_000)
+        }
+        let finalStarted = Date()
+        if let result = await stream.finish(timeout: 15) {
+            let waitMs = Int(Date().timeIntervalSince(finalStarted) * 1000)
+            print("\n[\(result.provider), \(result.finality.rawValue), final \(waitMs)ms after end-of-audio]")
+            print(result.text)
+        } else {
+            print("\nstream produced no trustworthy final — in the app this utterance")
+            print("falls back to the file-based recovery chain (the audio is always saved first).")
             exit(6)
         }
 

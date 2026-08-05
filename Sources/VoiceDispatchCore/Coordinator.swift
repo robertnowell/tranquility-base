@@ -467,8 +467,13 @@ public struct Coordinator: Sendable {
     /// addressing — a deep link from an HTML review page names the session it is
     /// about, and that beats "whatever you heard last". The session must still
     /// exist in the log; an unknown id refuses rather than guessing.
+    /// `streamed:` is an optional live-transcription final captured while the
+    /// user was speaking (`StreamedUtterance.finish`). Nil — the only value the
+    /// app passes until streaming is wired — keeps this path byte-identical to
+    /// before; a trustworthy final skips the recovery pass, nothing else changes.
     public func submitReply(
-        pcm16: Data, sampleRate: Double = 16000, to sessionId: String? = nil
+        pcm16: Data, sampleRate: Double = 16000, to sessionId: String? = nil,
+        streamed: TranscriptionResult? = nil
     ) async throws -> ReplyOutcome {
         let target: WaitingSession?
         if let sessionId {
@@ -480,7 +485,8 @@ public struct Coordinator: Sendable {
         guard let target else { return .noTarget }
 
         var utterance = try await store.captureAndTranscribe(
-            pcm16: pcm16, sampleRate: sampleRate, chain: recovery, eventId: nil)
+            pcm16: pcm16, sampleRate: sampleRate, chain: recovery, eventId: nil,
+            streamed: streamed)
 
         guard utterance.status == .transcribed, let text = utterance.transcriptText else {
             return .transcriptionFailed(utteranceId: utterance.id)
