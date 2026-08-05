@@ -325,6 +325,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Dev tooling: `--pose <name>` renders exactly one panel state with
+        // representative data and holds it until the process is killed. The
+        // whole launch tail is skipped — intake, permission polling, the
+        // microphone request, the idle repaint — so nothing ever advances or
+        // repaints over the posed face. See StatusHUD.pose for the states.
+        if let flag = CommandLine.arguments.firstIndex(of: "--pose"),
+           flag + 1 < CommandLine.arguments.count {
+            let name = CommandLine.arguments[flag + 1]
+            intakeTimer?.invalidate(); intakeTimer = nil
+            if hud.pose(name) {
+                Permissions.log("pose: holding \(name) until killed")
+            } else {
+                Permissions.log("pose: unknown name '\(name)'")
+            }
+            return
+        }
+
         startPermissionPolling()
         refresh()
 

@@ -993,6 +993,166 @@ final class StatusHUD: NSObject {
         showIdle(rows: [])
     }
 
+    // MARK: - Pose driver (dev tooling)
+
+    /// Render exactly ONE state with representative data and hold it — no timers
+    /// advancing state, no repaints. `--pose <name>` (main.swift) calls this in
+    /// place of the normal launch tail, so a screenshot harness can photograph
+    /// each face without racing intake, hotkeys, or the clock.
+    ///
+    /// Same driving idea as `selfTest()`: every pose goes through the exact show*
+    /// entry point production uses, then the state-advancing machinery (meter,
+    /// elapsed ticker, countdown, auto-hide) is frozen and the mid-flight facts a
+    /// still photograph needs (highlight position, elapsed label, countdown
+    /// fraction) are patched on. Data follows the product's own grammar: two-word
+    /// callsigns (Callsign.swift), composed 3–6-word topics, ≤19-word spoken
+    /// summaries ending in a question.
+    func pose(_ name: String) -> Bool {
+        let callsign = "promotions copy"
+        let spoken = "Promotions copy. Hero image binding is fixed across the "
+            + "stack, and every composed variant passes validation. Rerun the "
+            + "backfill now?"
+        let catchUpSpoken = "Syndit citation. While you were away, the daily "
+            + "thread posted with the featured report cited in every reply. "
+            + "Queue tomorrow's rotation?"
+        // The depth-1 rationale, in the brief's own composition: "We propose X
+        // because Y. The risk is Z." — ~40 words, no callsign prefix (ruled).
+        let rationale = "We propose rerunning the hero backfill only for emails "
+            + "shipped after the edge-fade fix, because earlier sends composed "
+            + "against the old header and would double-fade. The risk is a brand "
+            + "whose header changed since; the backfill logs every skipped send "
+            + "for review."
+
+        func adopt() {
+            adoptTarget(sessionId: "pose", pid: nil, label: callsign,
+                        cwd: NSHomeDirectory() + "/Projects/kopi/promotions")
+        }
+        func announce(catchUp: Bool = false, project: String, topic: String,
+                      spoken text: String, highlightFraction: Double,
+                      cwd: String = NSHomeDirectory() + "/Projects/kopi/promotions") {
+            showAnnouncement(isCatchUp: catchUp, topic: topic, spoken: text,
+                             sessionId: "pose", pid: 1, project: project, cwd: cwd)
+            highlight(upTo: Int(Double(text.count) * highlightFraction))
+        }
+        // A mid-level frozen waveform: speech-shaped, never pinned at full.
+        func seedMeter() {
+            for i in 0..<80 { meter.push(CGFloat(0.18 + 0.42 * abs(sin(Double(i) / 3.2)))) }
+        }
+
+        switch name {
+        case "grid":
+            showIdle(rows: [
+                .init(id: "s1", name: "promotions copy",
+                      topic: "Hero image binding validated", lamp: .ready),
+                .init(id: "s2", name: "voice-dispatch recording",
+                      topic: "Pose driver renders every state", lamp: .ready),
+                .init(id: "s3", name: "syndit citation",
+                      topic: "Daily thread cites featured report", lamp: .running),
+                .init(id: "s4", name: "recall dense",
+                      topic: "Hybrid retrieval eval green", lamp: .running),
+                .init(id: "s5", name: "bookmarks provenance",
+                      topic: "Track A provenance fix live", lamp: .running),
+                .init(id: "s6", name: "kopi footer",
+                      topic: "Footer flag migration staged", lamp: .running),
+                .init(id: "s7", name: "m3-tracker poller",
+                      topic: "Shopify-only filter shipped", lamp: .running),
+                .init(id: "s8", name: "live-hud director",
+                      topic: "Personality prompt criteria drafted", lamp: .running),
+            ])
+
+        case "empty":
+            showIdle(rows: [])
+
+        case "preparing":
+            _ = showPreparing()
+
+        case "speaking":
+            announce(project: callsign, topic: "Hero image binding fix",
+                     spoken: spoken, highlightFraction: 0.6)
+
+        case "catchup":
+            announce(catchUp: true, project: "syndit citation",
+                     topic: "Daily thread citations",
+                     spoken: catchUpSpoken, highlightFraction: 0.6,
+                     cwd: NSHomeDirectory() + "/Projects/syndit")
+
+        case "paused":
+            announce(project: callsign, topic: "Hero image binding fix",
+                     spoken: spoken, highlightFraction: 0.6)
+            setPaused(true)
+
+        case "depth1":
+            // Exactly the ⌃⌃ path: the same announcement card, the rationale as
+            // the spoken text, karaoke highlight and all (main.swift wires it
+            // identically via showAnnouncement).
+            announce(project: callsign, topic: "Hero image binding fix",
+                     spoken: rationale, highlightFraction: 0.4)
+
+        case "listening", "handsfree":
+            adopt()
+            showListening(level: { 0.35 }, handsFree: name == "handsfree")
+            seedMeter()
+
+        case "transcribing":
+            adopt()
+            showTranscribing("Transcribing your reply…", onCancel: {}, onRetry: {})
+            stateLabel.stringValue = StateLegend.row(for: .workingFor(seconds: 3)).stateText
+
+        case "transcribing-slow":
+            adopt()
+            showTranscribing("Transcribing your reply…", onCancel: {}, onRetry: {})
+            stateLabel.stringValue = StateLegend.row(for: .workingFor(seconds: 25)).stateText
+            cancelTranscriptionButton.isHidden = false
+            retryTranscriptionButton.isHidden = false
+            note(StateLegend.slowTranscriptionNote)
+
+        case "readback":
+            adopt()
+            showPendingSend(
+                text: "Ship the Shopify-only filter and rerun the poller",
+                label: callsign, seconds: 8, send: {}, cancel: { _ in })
+            // Frozen mid-window: 40% elapsed, so ~60% of the bar remains.
+            progressBar.doubleValue = 40
+
+        case "sent":
+            showResult("Sent.", ok: true)
+
+        case "needsyou":
+            adopt()
+            showResult("promotions copy's tab is gone — copied your words to the clipboard.",
+                       ok: false)
+
+        case "settings":
+            showSettings(
+                voices: [Voice(id: "a", name: "Archer", category: "professional"),
+                         Voice(id: "b", name: "My Clone", category: "cloned"),
+                         Voice(id: "c", name: "Sarah", category: "premade"),
+                         Voice(id: "d", name: "River", category: "premade")],
+                selected: "c",
+                previewNote: "Pick a voice and it reads your most recent summary.")
+
+        default:
+            return false
+        }
+
+        // Freeze: a pose is a photograph, not a running instrument. Everything
+        // that would advance the picture dies here; the pixels it already
+        // painted stay. (The countdown's own pixels were re-set above.)
+        meterTimer?.invalidate(); meterTimer = nil
+        transcribingTimer?.invalidate(); transcribingTimer = nil
+        countdownTimer?.invalidate(); countdownTimer = nil
+        hideWorkItem?.cancel(); hideWorkItem = nil
+
+        // The capture harness reads this one line: the panel frame in AppKit's
+        // bottom-left origin, the full screen frame to convert with, and the
+        // window number (the CGWindowID `screencapture -l` takes — window-id
+        // capture is immune to overlays that pollute a region capture).
+        Permissions.log("pose: \(name) frame=\(panel?.frame ?? .zero) "
+                        + "screenFrame=\(NSScreen.main?.frame ?? .zero) "
+                        + "window=\(panel?.windowNumber ?? -1)")
+        return true
+    }
+
     /// Every widget's visibility in one line, so the selftest log IS the render
     /// contract: diff two runs and any residue names itself.
     private func widgetMatrix() -> String {
