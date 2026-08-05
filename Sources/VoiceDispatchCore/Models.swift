@@ -367,6 +367,13 @@ public struct WaitingSession: Codable, FetchableRecord, Sendable {
     /// for the session's lifetime ("promotions copy"). Nil until minted. Exposed
     /// for UI use; the spoken prefix itself is applied by the Coordinator.
     public var callsign: String?
+    /// The stored brief's composed topic for this latest event (the 3–6-word
+    /// label from the v6 `brief` table), joined in by the grid-feeding queries
+    /// (`waitingSessions`, `waitingSessionsIncludingHeard`). Nil when no brief
+    /// has been generated for the event yet, or on queries that do not join it.
+    /// The grid shows THIS, never a prose prefix of summaryText or the raw
+    /// assistant message — composed labels are single-line by construction.
+    public var briefTopic: String? = nil
 
     /// Same derivation the old QueuedEvent used, kept so the summarizer is unchanged.
     public var projectLabel: String {

@@ -442,16 +442,22 @@ public final class QueueStore: Sendable {
     /// independently by each short-lived hook process and is not monotonic — Kafka
     /// orders by offset for exactly this reason, and a clock step silently loses the
     /// newer write. rowids are assigned under the writer lock and cannot tie.
+    ///
+    /// Carries the stored brief's composed topic (v6 `brief`, joined on the
+    /// latest event's rowid) so the grid can label rows with the 3–6-word
+    /// composed field instead of a prose prefix. Per-event, not per-session:
+    /// a newer turn with no brief yet is nil, never last turn's label.
     public func waitingSessions(limit: Int = 200) throws -> [WaitingSession] {
         try dbQueue.read { db in
             try WaitingSession.fetchAll(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
                        l.notificationMatcher, l.summaryText, l.hookEvent,
-                       cs.callsign
+                       cs.callsign, b.topic AS briefTopic
                 FROM latest_per_session l
                 LEFT JOIN session_cursor c ON c.sessionId = l.sessionId
                 LEFT JOIN session_callsign cs ON cs.sessionId = l.sessionId
+                LEFT JOIN brief b ON b.eventRowid = l.latestId
                 WHERE l.hookEvent = ?
                   AND l.latestId > max(coalesce(c.heardThrough, 0),
                                        coalesce(c.dismissedThrough, 0))
@@ -519,9 +525,10 @@ public final class QueueStore: Sendable {
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
                        l.notificationMatcher, l.summaryText, l.hookEvent,
-                       cs.callsign
+                       cs.callsign, b.topic AS briefTopic
                 FROM latest_per_session l
                 LEFT JOIN session_callsign cs ON cs.sessionId = l.sessionId
+                LEFT JOIN brief b ON b.eventRowid = l.latestId
                 ORDER BY l.latestId DESC LIMIT ?
                 """, arguments: [limit])
         }

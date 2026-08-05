@@ -204,4 +204,42 @@ final class BriefStoreTests: XCTestCase {
         XCTAssertTrue(lexicon.allowlistTerms.contains("edit"),
                       "multi-word topics split for the sanitizer allowlist")
     }
+
+    // MARK: - The grid's topic source (visual port)
+
+    /// The grid never shows prose prefixes: the waiting queries carry the stored
+    /// brief's composed 3–6-word topic, joined on the latest event's rowid, and
+    /// nil before any brief exists so a row can fall back to callsign-only.
+    func testWaitingSessionsCarryTheStoredBriefTopic() throws {
+        try append()
+        let before = try XCTUnwrap(store.waitingSessions().first)
+        XCTAssertNil(before.briefTopic, "no brief yet — the row shows callsign only")
+
+        try store.saveBrief(
+            SessionBrief(topic: "Klaviyo export shipped", happened: "done"),
+            sessionId: "sess-1", eventRowid: before.latestId,
+            provider: "anthropic", callsign: nil)
+
+        XCTAssertEqual(try store.waitingSessions().first?.briefTopic,
+                       "Klaviyo export shipped")
+        XCTAssertEqual(try store.waitingSessionsIncludingHeard().first?.briefTopic,
+                       "Klaviyo export shipped",
+                       "quiet rows read the same joined topic")
+    }
+
+    /// Per-event, not per-session: a brief written for an older turn must not
+    /// label the newer one — a stale topic under a fresh green lamp would
+    /// describe work the session has already moved past.
+    func testBriefTopicIsPerEventNotPerSession() throws {
+        try append()
+        let first = try XCTUnwrap(store.waitingSessions().first)
+        try store.saveBrief(
+            SessionBrief(topic: "old turn topic", happened: "done"),
+            sessionId: "sess-1", eventRowid: first.latestId,
+            provider: "anthropic", callsign: nil)
+
+        try append(message: "A newer turn finished.")
+        XCTAssertNil(try store.waitingSessions().first?.briefTopic,
+                     "the newer turn has no brief yet — stale topics must not carry over")
+    }
 }
