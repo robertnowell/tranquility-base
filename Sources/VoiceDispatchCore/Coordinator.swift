@@ -248,14 +248,33 @@ public struct Coordinator: Sendable {
         return try await speak(summary, for: session, onWillSpeak: onWillSpeak, onWord: onWord)
     }
 
+    /// Robert's hand-picked character roster (05 Aug audition), plus Amelia —
+    /// the configured narrator voice he asked to keep in rotation. A fixed
+    /// list, not a catalog derivation: the cast of a radio drama does not
+    /// change because the agency signed someone new. Assignment order follows
+    /// the audition order.
+    public static let voiceRoster = [
+        "CwhRBWXzGAHq8TQ4Fs17",  // Roger — laid-back, resonant
+        "EXAVITQu4vr4xnSDxMaL",  // Sarah — mature, reassuring
+        "IKne3meq5aSn9XLyUdCD",  // Charlie — deep, energetic
+        "JBFqnCBsd6RMkjVDRZzb",  // George — warm storyteller
+        "N2lVS1w4EtoT3dr4eOWO",  // Callum — husky trickster
+        "SOYHLrjzK2X1ezoPC6cr",  // Harry — fierce warrior
+        "XrExE9yKIg1WjnnlVkGX",  // Matilda — knowledgeable, professional
+        "hpp4J3VqNfWAUOO0d1Us",  // Bella — professional, bright
+        "nPczCjzI2devNBz1zQrb",  // Brian — deep, comforting
+        "onwK4e9ZLuTAKqWW03F9",  // Daniel — steady broadcaster
+        "pqHfZKP75CvOlQylNhV4",  // Bill — wise, balanced
+        "mZ8K1MPRiT5wDQaasg3i",  // Alexander Kensington — studio quality
+        "NFG5qt843uXKj4pFvR7C",  // Adam Stone — smooth, deep
+        "ZF6FPAbjXT4488VcRRnw",  // Amelia — the narrator, by request
+    ]
+
     /// The session's durable voice, resolvable by anything that speaks on a
     /// session's behalf — the ⌃⌃ pull must sound like the announcement it
-    /// deepens, not like the narrator. One roster definition lives here: when
-    /// the hand-picked character list replaces first-ten-by-id, this is the
-    /// only line that changes.
+    /// deepens, not like the narrator.
     public func voiceId(for sessionId: String) -> String? {
-        let roster = Array(VoiceCatalog.cached().map(\.id).sorted().prefix(10))
-        return (try? store.voiceId(for: sessionId, roster: roster)) ?? nil
+        (try? store.voiceId(for: sessionId, roster: Self.voiceRoster)) ?? nil
     }
 
     private func summarize(_ event: WaitingSession) async -> Summary {
