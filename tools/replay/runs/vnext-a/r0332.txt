@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "voter: ranked 10 posts with mechanism-specificity rationales.",
+  "proposal": "Ranking complete: 10 posts ordered by working mechanism depth.",
+  "topic": "industry myths: mechanism-specificity ranking",
+  "goal": "Identify posts with deepest technical mechanisms and rationales",
+  "happened": "Agent ranked 10 posts by mechanism-specificity with detailed rationales",
+  "nextStep": null,
+  "question": null,
+  "risk": null
+}
+```

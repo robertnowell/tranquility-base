@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "promotions: Shopify queries take 67.6 seconds — exceed endpoint's 60-second timeout ceiling.",
+  "proposal": "Increase maxDuration to 300 seconds — ship alone, or bundle with caching?",
+  "topic": "Shopify endpoint timeout root cause",
+  "goal": "Fix 504 errors on /facts/days-of-cover endpoint",
+  "happened": "Identified Shopify API runtime (67.6s) exceeds endpoint timeout ceiling (60s)",
+  "nextStep": "Increase maxDuration 60 → 300 in route.ts line 30",
+  "question": "Ship alone, or bundle with caching?",
+  "risk": "Bundling risks delayed deployment past the midnight cron window."
+}
+```

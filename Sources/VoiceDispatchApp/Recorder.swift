@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import ObjCExceptionFirewall
 import VoiceDispatchCore
 
 /// Microphone capture for push-to-talk.
@@ -62,26 +63,46 @@ public final class Recorder: @unchecked Sendable {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
 
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] pcmBuffer, _ in
-            guard let self else { return }
-            if let converted = BuddyPCM16Converter.pcm16Data(
-                from: pcmBuffer, targetSampleRate: self.sampleRate) {
-                self.lock.lock()
-                self.buffer.append(converted)
-                self.lock.unlock()
-            }
-            let rms = Self.rms(of: pcmBuffer)
-            self.level = rms
-            if rms > self.peakLevel { self.peakLevel = rms }
+        // A route change (headphones renegotiating, the output device switching
+        // sample rates under active playback — i.e. exactly when a reply starts
+        // mid-announcement) can leave the input reporting 0 Hz / 0 channels.
+        // Feeding that to installTap throws an ObjC NSException, not a Swift
+        // error. Refuse it here, where it can be said out loud.
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            lock.lock(); running = false; lock.unlock()
+            throw RecorderError.engineFailed(
+                "input format invalid (rate=\(format.sampleRate), "
+                + "channels=\(format.channelCount)) — audio device mid route-change")
         }
 
-        do {
+        // Firewalled: any NSException AVFoundation still throws becomes a Swift
+        // error instead of unwinding through the caller's main-queue block. One
+        // such unwind wedged the main dispatch queue permanently — panel frozen,
+        // gestures dead, main thread sampling as idle (2026-08-05, 18:01:11Z).
+        var startError: Error?
+        let exception = VDCatchObjCException {
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] pcmBuffer, _ in
+                guard let self else { return }
+                if let converted = BuddyPCM16Converter.pcm16Data(
+                    from: pcmBuffer, targetSampleRate: self.sampleRate) {
+                    self.lock.lock()
+                    self.buffer.append(converted)
+                    self.lock.unlock()
+                }
+                let rms = Self.rms(of: pcmBuffer)
+                self.level = rms
+                if rms > self.peakLevel { self.peakLevel = rms }
+            }
             engine.prepare()
-            try engine.start()
-        } catch {
-            input.removeTap(onBus: 0)
+            do { try engine.start() } catch { startError = error }
+        }
+
+        if exception != nil || startError != nil {
+            _ = VDCatchObjCException { input.removeTap(onBus: 0); engine.stop() }
             lock.lock(); running = false; lock.unlock()
-            throw RecorderError.engineFailed("\(error)")
+            let reason = exception.map { "\($0.name.rawValue): \($0.reason ?? "no reason")" }
+                ?? "\(startError!)"
+            throw RecorderError.engineFailed(reason)
         }
     }
 
@@ -94,8 +115,10 @@ public final class Recorder: @unchecked Sendable {
         running = false
         lock.unlock()
 
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        _ = VDCatchObjCException {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
         level = 0
 
         lock.lock()
@@ -114,8 +137,10 @@ public final class Recorder: @unchecked Sendable {
         running = false
         buffer.removeAll(keepingCapacity: false)
         lock.unlock()
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        _ = VDCatchObjCException {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
         level = 0
     }
 

@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Promotions: endpoint timeout is the blocker, not cache. One-line fix urgent.",
+  "proposal": "Increase maxDuration to 300 now, cache optimization after. Ship it?",
+  "topic": "Endpoint timeout root cause",
+  "goal": "Unblock Shopify endpoint for 00:00 cron run",
+  "happened": "Shopify order queries take 67.6 seconds; endpoint ceiling is 60 seconds",
+  "nextStep": "Ship the one-line maxDuration change to production",
+  "question": "One-liner PR first, or combine with caching step?",
+  "risk": "Delaying the one-liner means the 00:00 cron fails again"
+}
+```

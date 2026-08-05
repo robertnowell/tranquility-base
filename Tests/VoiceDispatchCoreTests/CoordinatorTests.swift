@@ -469,6 +469,34 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertTrue(Readiness.waiting(nil).canDispatch)
     }
 
+    /// Back rooms don't get airtime. A `SubagentStop` is bookkeeping about a turn's
+    /// fan-out, never something to speak: the parent turn's own `Stop` is the
+    /// announcement. Two chokepoints enforce it — the hook drops SubagentStop at the
+    /// source (hooks/voice-dispatch-hook.sh), and every announcement selection
+    /// (`waitingSessions`, `latestStop`) filters on `hookEvent = 'Stop'` in SQL —
+    /// and this test pins the second so neither can be loosened silently. It matters
+    /// because the spool decoder DOES accept "SubagentStop" rows; if one ever gets
+    /// past the hook, the queries must still keep it off the air.
+    func testSubagentStopNeverSpeaksOnItsOwn() async throws {
+        let speech = SilentSpeech()
+        let coordinator = try makeCoordinator(speech: speech)
+        try append(.subagentStop, at: 1_000, message: "a subagent finished")
+
+        XCTAssertNil(try coordinator.nextToAnnounce(),
+                     "a SubagentStop must never be offered for announcement")
+        XCTAssertEqual(try coordinator.waitingCount(), 0, "and it never counts as waiting")
+        guard case .nothingWaiting = try await coordinator.announceNext() else {
+            return XCTFail("announcing with only a SubagentStop must find nothing")
+        }
+        XCTAssertTrue(speech.spoken.isEmpty, "back rooms don't get airtime")
+
+        // It may ENRICH: once the parent Stop lands, the session is announceable
+        // again — the subagent row changed nothing about what gets spoken.
+        try append(.stop, at: 2_000, message: "the parent turn finished")
+        XCTAssertEqual(try coordinator.nextToAnnounce()?.lastAssistantMessage,
+                       "the parent turn finished")
+    }
+
     func testReplyWithNoAnnouncementHasNowhereToGo() async throws {
         let coordinator = try makeCoordinator()
         guard case .noTarget = try await coordinator.submitReply(pcm16: silence()) else {

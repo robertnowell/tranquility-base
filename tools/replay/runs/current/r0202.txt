@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "The session traced three ways replies were reaching wrong sessions: the address was re-derived when audio arrived instead of captured when the mic opened. Fixed by capturing the target upfront.",
+  "proposal": "Test with a real follow-up: reply to a session, then press option again and confirm the second message lands in the same terminal. Risk: the test may reveal the fix isn't complete. Ready to test?",
+  "topic": "Reply targeting and session continuity fix",
+  "goal": "Ensure audio replies always target the correct session",
+  "happened": "identified and fixed a bug where reply addresses were derived at send-time; now captured when the microphone opens",
+  "nextStep": "perform a manual follow-up reply test to validate the fix",
+  "question": null,
+  "risk": "manual test may reveal the fix doesn't fully resolve the targeting issue"
+}
+```

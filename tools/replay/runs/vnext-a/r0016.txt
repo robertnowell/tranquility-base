@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "voice-dispatch: meter UI and recording controls fixed.",
+  "proposal": "Meter UI fixed, Option-key recording added, tests pass.",
+  "topic": "UI meter and recording gesture fixes",
+  "goal": "Improve voice recording UI responsiveness and visual consistency",
+  "happened": "Fixed meter width issues, label constraints, and Option-key redo recording",
+  "nextStep": null,
+  "question": null,
+  "risk": null
+}
+```

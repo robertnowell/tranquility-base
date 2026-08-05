@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "The dashboard's timeouts trace to one root cause: the data endpoint recomputes Shopify and Amazon pulls on every request, hitting Kopi's 60-second limit. The fix must be on Kopi's side, not the dashboard.",
+  "proposal": "Two decisions needed: scope-shift to add caching for data requests (full pipeline required), and whether to manually refresh production tomorrow. Risk: the midnight cron will likely fail again, leaving Andy with stale data.",
+  "topic": "Root cause identified; cache fix scope shift pending",
+  "goal": "Identify and resolve dashboard timeout issues and cron failures",
+  "happened": "Investigation traced dashboard timeouts to an endpoint that recomputes full data on every request, hitting Kopi's 60-second timeout ceiling",
+  "nextStep": "User decision on cache-fix scope shift and production refresh stopgap",
+  "question": "Should the session scope-shift to the cache fix, and/or manually warm production before the midnight cron runs?",
+  "risk": "Midnight cron will likely fail again; Andy reviewing tomorrow sees stale data unless production is refreshed beforehand"
+}
+```

@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "voice-dispatch: mic-target routing bug fixed, tests green, relaunched.",
+  "proposal": "Real voice follow-up test: record, reply again, verify same terminal. Go?",
+  "topic": "recording target routing fix",
+  "goal": "Ensure voice replies route correctly across multiple back-to-back messages",
+  "happened": "Recording target routing bug fixed, 63 tests pass, app relaunched",
+  "nextStep": "User manually tests multi-reply routing with live voice input",
+  "question": "Will you run the voice follow-up test now?",
+  "risk": null
+}
+```

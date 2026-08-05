@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "robertnowell: Apollo audio found — UT Dallas corpus, archive.org public domain, licensing noted.",
+  "proposal": "Three agents still running, will report as they finish. Continue?",
+  "topic": "Apollo audio transcripts corpus research",
+  "goal": null,
+  "happened": "First agent completed bulk-transcript research, identifying three Apollo audio sources and licensing constraints",
+  "nextStep": "Remaining three agents report findings on loop speech rules, governance architecture, controller structure",
+  "question": "Should we wait for the remaining agents to complete and report?",
+  "risk": "Corrected transcripts are copyrighted — use raw NASA sources only"
+}
+```

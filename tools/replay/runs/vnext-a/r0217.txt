@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "promotions: ready for stage two, Resend inbox and flow test.",
+  "proposal": "Set up Resend inbox and test the welcome flow on a test store. Proceed?",
+  "topic": "Lead welcome flow infrastructure setup",
+  "goal": "Capture inbound leads, qualify them, and schedule calls",
+  "happened": "the agent confirmed technical readiness to begin stage two implementation",
+  "nextStep": "Stand up Resend catch-all inbox and prove subscribe→welcome-flow against a throwaway store",
+  "question": "Should we proceed with Stage 2 infrastructure setup and testing?",
+  "risk": null
+}
+```

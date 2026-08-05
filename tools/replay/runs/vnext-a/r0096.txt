@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "voice-dispatch: voice picker panel complete, 65 tests pass.",
+  "proposal": "Copywriting attitude postponed per agreement. Session closed.",
+  "topic": "Voice picker UI, settings integration",
+  "goal": "Implement voice selection popup with live summary preview",
+  "happened": "Voice picker panel built as popup with 44 voices grouped by category (Cloned first). Renders most recent summary when voice selected. Settings button added. Validated with 9 picker entries visible, Sarah selected, panel at 159pt. All 65 tests pass, commit 2491a9d.",
+  "nextStep": null,
+  "question": null,
+  "risk": null
+}
+```

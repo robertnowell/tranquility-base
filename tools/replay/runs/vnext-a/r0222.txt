@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "voice-dispatch: dictation to clipboard live, 63 tests green.",
+  "proposal": "Test the feature: option-key double-tap, speak, tap, paste. Try it?",
+  "topic": "clipboard as dictation target",
+  "goal": "support clipboard output for voice input when no terminal target",
+  "happened": "dictation mode implemented, tests pass, app relaunched",
+  "nextStep": "manual test of dictation flow",
+  "question": "Should the feature be tested before shipping?",
+  "risk": null
+}
+```

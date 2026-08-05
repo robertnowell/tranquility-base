@@ -86,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "◌"
+        statusItem.button?.title = StateLegend.menuBarPlaceholder
         rebuildMenu()
 
         do {
@@ -231,7 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 self.dictationMode = true
                 self.hud.dictationDestination = FocusedInput.focusedEditableApp()
-                    .map { "→ \($0)" } ?? "→ clipboard"
+                    .map { StateLegend.destination($0) } ?? StateLegend.clipboardDestination
             }
             try? self.recorder.start()
             self.isBusy = true
@@ -412,8 +412,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                        ok: true)
                     }
                 case .sessionNotReady(let readiness):
+                    // Sanctioned change (b): the actual condition in plain words,
+                    // not the enum case's name. Mapping documented in
+                    // StateLegend.plainWords(for:).
                     hud.showResult(
-                        "\(label) isn't accepting input right now (\(readiness)). "
+                        "\(label) can't take this yet — \(StateLegend.plainWords(for: readiness)). "
                         + "Your words are kept. Try again in a moment.", ok: false)
                 case .dispatchFailed(.verificationTimedOut, _):
                     hud.showResult(
@@ -491,16 +494,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem.button else { return }
         button.title = ""
 
-        let symbol: String
-        if isBusy { symbol = "waveform.circle.fill" }
-        else if !micGranted || !hotkeyWorking { symbol = "exclamationmark.bubble" }
-        else { symbol = "waveform.circle" }
+        // Three states, mapped in the same legend the panel reads from.
+        let state: StateLegend.MenuBarState
+        if isBusy { state = .busy }
+        else if !micGranted || !hotkeyWorking { state = .permissionWarning }
+        else { state = .normal }
+        let appearance = StateLegend.menuBar(state)
 
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Voice Dispatch")
+        let image = NSImage(systemSymbolName: appearance.symbol,
+                            accessibilityDescription: "Voice Dispatch")
         image?.isTemplate = true
         button.image = image
         // Fall back to text if the symbol is unavailable, rather than showing nothing.
-        if button.image == nil { button.title = isBusy ? "VD●" : "VD" }
+        if button.image == nil { button.title = appearance.textFallback }
         button.toolTip = "Voice Dispatch. Tap ⌃⌥ to hear, hold ⌥ to reply"
     }
 
@@ -512,11 +518,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch transition {
         case .next, .pauseToggled, .replyBegan, .dismiss:
             hud.flashAcknowledge()
-        case .optionTapped, .replyEnded, .replyAborted:
+        case .optionTapped, .replyEnded, .replyAborted, .controlDoubleTapped:
             break  // optionTapped flashes only when it becomes an action, below
         }
         switch transition {
         case .next:
+            // Open issue #6, wired at last: ⌃⌥ while the microphone is open would
+            // start an announcement into a live mic — it would record itself.
+            // The question is answered by the state, in one place, for every path
+            // that opens the mic through `.listening`.
+            guard !hud.isCapturingAudio else {
+                Permissions.log("next: ignored, microphone is open")
+                return
+            }
             // During the undo window, moving on means "send it and move on": the
             // countdown fast-forwards instead of racing the next announcement.
             if hud.commitPendingSendNow() {
@@ -567,14 +581,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     dictationMode = true
                 hud.dictationDestination = FocusedInput.focusedEditableApp()
-                    .map { "→ \($0)" } ?? "→ clipboard"
+                    .map { StateLegend.destination($0) } ?? StateLegend.clipboardDestination
                 }
                 if let sessionId = hud.currentEventId,
                    let latest = try? coordinator?.waiting().first(where: { $0.sessionId == sessionId }) {
                     try? coordinator?.markHeard(sessionId: sessionId, through: latest.latestId)
                 }
                 coordinator?.speech.stop()
-                try? recorder.start()
+                do {
+                    try recorder.start()
+                } catch {
+                    Permissions.log("mic: start failed (hands-free): \(error)")
+                    handsFreeListening = false
+                    dictationMode = false
+                    recordingTarget = nil
+                    hud.showResult("Couldn't open the microphone — try again. (\(error))",
+                                   ok: false)
+                    return
+                }
                 isBusy = true
                 updateTitle()
                 hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 },
@@ -590,8 +614,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             speech.togglePause()
             hud.setPaused(speech.isPaused)
 
+        case .controlDoubleTapped:
+            // WS-A will pull one level deeper on this gesture. Plumbing only for now:
+            // no spoken behavior, no visual behavior, just the log line.
+            Permissions.log("depth-1 pull: not yet implemented — WS-A")
+
         case .replyBegan:
             guard micGranted, !recorder.isRecording else { return }
+            // Open issue #7 is NOT wired here, deliberately. `canStartReply` as a
+            // hard refusal would break three live behaviors: dictation-to-clipboard
+            // when nothing is waiting (which is how #7's "transcribe then fail" was
+            // actually fixed), replying from an idle/hidden panel inside the 15-min
+            // reply window, and re-recording during transcription (replyGeneration
+            // exists for exactly that). The predicate needs a rethink before it can
+            // gate anything. See docs/ws-c-changes.md.
             if let ctx = resolveReplyContext() {
                 hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
                                 label: ctx.label, cwd: ctx.cwd)
@@ -599,7 +635,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 dictationMode = true
                 hud.dictationDestination = FocusedInput.focusedEditableApp()
-                    .map { "→ \($0)" } ?? "→ clipboard"   // nothing to answer → transcript to clipboard
+                    .map { StateLegend.destination($0) } ?? StateLegend.clipboardDestination   // nothing to answer → transcript to clipboard
             }
             // Anything already in flight belongs to a reply you have just replaced.
             replyGeneration += 1
@@ -617,7 +653,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? coordinator?.markHeard(sessionId: sessionId, through: latest.latestId)
             }
             coordinator?.speech.stop()  // never record over playback
-            try? recorder.start()
+            do {
+                try recorder.start()
+            } catch {
+                // Route changes make this genuinely transient — say so and stop,
+                // rather than showing a Listening pill over a dead microphone.
+                Permissions.log("mic: start failed: \(error)")
+                dictationMode = false
+                recordingTarget = nil
+                hud.showResult("Couldn't open the microphone — try again. (\(error))",
+                               ok: false)
+                return
+            }
             isBusy = true
             updateTitle()
             hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
@@ -667,7 +714,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func announceNext(only eventId: String? = nil) {
         guard let coordinator else { return }
         let previous = announceTask
-        hud.isSpeakingNow = true
         // Summarizing and fetching the voice take several seconds. Without this the
         // app shows nothing at all for the whole of that and reads as broken.
         hud.showPreparing()
@@ -677,7 +723,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             previous?.cancel()
             _ = await previous?.value
 
-            defer { isAnnouncing = false; hud.isSpeakingNow = false }
+            defer { isAnnouncing = false }
             guard !Task.isCancelled else {
                 Permissions.log("announce: cancelled before starting")
                 return
@@ -740,7 +786,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         // reads as the app just sounding worse for no reason.
                         hud.note("Read in the system voice. \(degraded)")
                     }
-                    lastStatusLine = "◀ \(announcement.brief.topic)"
+                    lastStatusLine = "\(StateLegend.Glyph.speaking) \(announcement.brief.topic)"
                     hud.highlight(upTo: announcement.spoken.text.count)
                 case .interrupted(let failure):
                     // The announce task reverts an interrupted item to unread. If the
@@ -854,7 +900,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let mine = replyGeneration
         lastStatusLine = "transcribing…"
-        hud.showWorking("Transcribing your reply…")
+        // Sanctioned change (open issue #4): the transcribing panel shows elapsed
+        // seconds, and past 20s offers Cancel and Retry rather than looking hung.
+        hud.showTranscribing("Transcribing your reply…",
+                             onCancel: { [weak self] in self?.cancelTranscription() },
+                             onRetry: { [weak self] in self?.retryTranscriptionFromPanel() })
         rebuildMenu()
 
         Task { @MainActor in
@@ -867,10 +917,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if dictationMode {
                     // Dictation: transcribe, copy, done. No terminal is touched.
                     dictationMode = false
-                    hud.showWorking("Transcribing…")
+                    hud.showTranscribing("Transcribing…",
+                                         onCancel: { [weak self] in self?.cancelTranscription() },
+                                         onRetry: { [weak self] in self?.retryTranscriptionFromPanel() })
                     guard let store = self.store else { return }
                     let utterance = try await store.captureAndTranscribe(
                         pcm16: pcm, sampleRate: 16_000, chain: RecoveryChain(), eventId: nil)
+                    // Cancelled (or replaced) while transcribing: the words must not
+                    // be pasted anywhere. The audio row is durable and stays.
+                    guard mine == replyGeneration else {
+                        Permissions.log("dictation: superseded or cancelled mid-transcription; dropped")
+                        return
+                    }
                     guard let text = utterance.transcriptText, !text.isEmpty else {
                         hud.showResult("Couldn't transcribe that. Audio kept.", ok: false)
                         return
@@ -916,10 +974,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 switch outcome {
                 case .dispatched(let text, let ms, _):
-                    lastStatusLine = "▶ sent (\(ms)ms): \(text.prefix(48))"
+                    lastStatusLine = "\(StateLegend.Glyph.sent) sent (\(ms)ms): \(text.prefix(48))"
                     hud.showResult("Sent: \(text)", ok: true)
                 case .queued(let text, _):
-                    lastStatusLine = "▶ queued: \(text.prefix(48))"
+                    lastStatusLine = "\(StateLegend.Glyph.sent) queued: \(text.prefix(48))"
                     hud.showResult("Queued: \(text)", ok: true)
                 case .noTarget:
                     lastStatusLine = "nothing to reply to yet"
@@ -948,13 +1006,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             }
                         })
                 case .sessionNotReady(let readiness):
-                    lastStatusLine = "session busy or blocked (\(readiness)), audio kept"
-                    hud.showResult("Session isn't ready (\(readiness)). Recording kept. Try again shortly.", ok: false)
+                    // Sanctioned change (b): plain words for the actual condition.
+                    let why = StateLegend.plainWords(for: readiness)
+                    lastStatusLine = "can't send — \(why); audio kept"
+                    hud.showResult("Can't send yet — \(why). Recording kept. Try again shortly.", ok: false)
                 case .transcriptionFailed:
                     lastStatusLine = "couldn't transcribe, audio kept"
                     hud.showResult("Couldn't transcribe that. The audio is saved. Retry from the menu.", ok: false)
                 case .dispatchFailed(.verificationTimedOut, _):
-                    lastStatusLine = "⚠ unconfirmed. Check the tab before resending"
+                    lastStatusLine = "\(StateLegend.Glyph.needsYou) unconfirmed. Check the tab before resending"
                     hud.showResult(
                         "Sent, but never confirmed. It may or may not have landed. "
                         + "check the tab before resending.", ok: false)
@@ -1117,7 +1177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func permissionRow(title: String, granted: Bool, action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: "\(granted ? "✓" : "✗")  \(title)", action: granted ? nil : action,
+        let item = NSMenuItem(title: "\(granted ? StateLegend.Glyph.confirm : StateLegend.Glyph.denied)  \(title)", action: granted ? nil : action,
                               keyEquivalent: "")
         item.target = granted ? nil : self
         item.isEnabled = !granted
@@ -1154,6 +1214,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 : "recovered \(recovered.count) utterance(s)"
             rebuildMenu()
         }
+    }
+
+    // MARK: - Slow transcription (sanctioned change: open issue #4)
+
+    /// Cancel from the transcribing panel: discard the utterance and return to idle.
+    ///
+    /// The in-flight network call is not interruptible, so cancellation is the same
+    /// mechanism that guards against re-recording: bump the generation, and the
+    /// result is dropped (reply path) or its send cancelled (readyToSend) when it
+    /// finally lands. The audio row was durable before the network was touched, so
+    /// nothing is lost — `vdctl utterances` still has it.
+    private func cancelTranscription() {
+        replyGeneration += 1
+        recordingTarget = nil
+        dictationMode = false
+        lastStatusLine = "transcription cancelled, audio kept"
+        Permissions.log("transcription: cancelled from the panel; audio is kept")
+        hud.showIdle(waiting: waitingNow(),
+                     unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+        rebuildMenu()
+    }
+
+    /// Retry from the transcribing panel: the existing recovery path, exactly the
+    /// same as the "Retry failed transcriptions" menu item.
+    ///
+    /// Honest limitation, stated: the recovery sweep re-runs utterances whose
+    /// transcription has FAILED, from their audio on disk. It cannot preempt the
+    /// one still in flight — no provider in the chain supports that — so mid-flight
+    /// this recovers any earlier failures and otherwise waits the current attempt
+    /// out. The panel keeps its elapsed counter either way.
+    private func retryTranscriptionFromPanel() {
+        Permissions.log("transcription: retry requested from the panel")
+        retryFailed()
     }
 
     private func open(_ urlString: String) {

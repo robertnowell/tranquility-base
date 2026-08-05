@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Session awaiting agent message.",
+  "proposal": null,
+  "topic": "no update available",
+  "goal": null,
+  "happened": "no agent message received",
+  "nextStep": null,
+  "question": "agent message missing — session incomplete?",
+  "risk": null
+}
+```

@@ -1,0 +1,10 @@
+{
+  "recap": "voice-dispatch: sent-screen auto-plays next session, 61 tests green.",
+  "proposal": "Queue auto-play working end-to-end, fully tested and shipped.",
+  "topic": "Queue auto-play on successful send",
+  "goal": "Make send-then-play seamless for multi-session catch-up",
+  "happened": "Sent-screen fixed to auto-play next session, with safety guards, app shipped.",
+  "nextStep": null,
+  "question": null,
+  "risk": null
+}

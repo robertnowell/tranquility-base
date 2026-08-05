@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Promotions: template generating, awaiting artifact to run tests.",
+  "proposal": "Run the verification suite when artifact lands; critical to see dropped-image log. Go?",
+  "topic": "Email template image reuse verification",
+  "goal": "Verify the image reuse fix is working correctly",
+  "happened": "Template artifact generating; cleanup complete; ready for verification testing",
+  "nextStep": "Execute 5-step verification suite when artifact generates",
+  "question": "Proceed with tests when artifact lands?",
+  "risk": "Clean XML without dropped-image log evidence would be inconclusive"
+}
+```

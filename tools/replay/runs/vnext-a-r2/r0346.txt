@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "vd-state-legend-page: dispatch rules rewritten and deployed.",
+  "proposal": "Work's closed out.",
+  "topic": "Loop discipline specification",
+  "goal": "Refine dispatcher callout logic per session lifecycle patterns",
+  "happened": "Rewrote and deployed corrected dispatch-rule specification at same URL",
+  "nextStep": null,
+  "question": null,
+  "risk": null
+}
+```

@@ -31,13 +31,23 @@ final class StatusHUD: NSObject {
     /// the panel asked a question and offered no way to answer it.
     var onReply: (() -> Void)?
     var onStopReply: (() -> Void)?
+    /// KEPT deliberately (WS-C would otherwise delete it): a recording started from
+    /// the panel's Reply button does NOT enter `.listening` — the panel stays on the
+    /// announcement, only the button title and hint change — so the enum genuinely
+    /// lacks this fact. Folding button-recording into the state machine would change
+    /// what is on screen, which is out of bounds for a structure pass.
     private var isRecording = false
     private var hideWorkItem: DispatchWorkItem?
     private var showGeneration = 0
     private var contentStack: NSStackView?
     private var identity: String?
-    private var awaitingConfirm = false
-    private var isListening = false
+    /// Derived, not stored. True exactly while the undo countdown is live AND the
+    /// panel is in `.pendingSend` — the two facts the old boolean tracked by hand.
+    /// Entering any other state makes it false (the state entry points used to
+    /// clear the flag); the timer dying makes it false (commit, cancel, fire, or
+    /// Dismiss all invalidate it). The countdown itself may keep running across a
+    /// state change — that is open issue #8's undecided behavior, preserved as-is.
+    private var awaitingConfirm: Bool { countdownTimer != nil && state.isPendingSend }
     private var meterTimer: Timer?
     private var levelSource: (() -> Float)?
     private var listenStartedAt: Date?
@@ -82,11 +92,11 @@ final class StatusHUD: NSObject {
 
     func showListening(level: @escaping () -> Float, handsFree: Bool = false) {
         transition(to: .listening(eventId: currentEventId), because: "recording started")
-        awaitingConfirm = false
-        isListening = true
         levelSource = level
         listenStartedAt = Date()
-        show(state: "● \(currentTarget?.label ?? dictationDestination ?? "→ clipboard")",
+        let target = currentTarget?.label ?? dictationDestination
+            ?? StateLegend.clipboardDestination
+        show(state: StateLegend.row(for: .listening(target: target)).stateText,
              title: "", body: "", autoHideAfter: nil)
         // A pill: target name plus waveform, nothing else. Hands-free flanks the
         // waveform with ✕ and ✓, so the controls sit where your eyes already are.
@@ -104,7 +114,7 @@ final class StatusHUD: NSObject {
         meterTimer?.invalidate()
         // 20Hz: fast enough that the waveform tracks syllables rather than words.
         let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] timer in
-            guard let self, self.isListening else { return timer.invalidate() }
+            guard let self, self.state.isCapturingAudio else { return timer.invalidate() }
             self.meter.push(CGFloat(Self.meterFraction(self.levelSource?() ?? 0)))
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -124,7 +134,6 @@ final class StatusHUD: NSObject {
         topic: String, spoken: String, sessionId: String, pid: Int?, project: String,
         cwd: String?, eventId: String? = nil
     ) {
-        awaitingConfirm = false
         currentEventId = eventId
         currentTarget = (sessionId, pid, project)
         // Only prefix when the topic adds something. A topic equal to the project
@@ -134,7 +143,7 @@ final class StatusHUD: NSObject {
             ? project : "\(project): \(topic)"
         identity = Self.identify(pid: pid, cwd: cwd)
         transition(to: .speaking(eventId: eventId, catchUp: isCatchUp), because: "audio starting")
-        show(state: isCatchUp ? "↺ Catching up" : "◀ Speaking",
+        show(state: StateLegend.row(for: isCatchUp ? .catchingUp : .speaking).stateText,
              title: headline, body: spoken, autoHideAfter: nil)
     }
 
@@ -172,13 +181,13 @@ final class StatusHUD: NSObject {
         countdownTimer?.invalidate()
         onCancelSend = cancel
         onCommitSend = send
+        show(state: StateLegend.row(for: .sendingTo(label: label)).stateText,
+             title: "Your reply", body: "\u{201C}\(text)\u{201D}", autoHideAfter: nil)
+        // After show(), never before: `awaitingConfirm` derives from being IN
+        // .pendingSend, and entering the state before show() ran meant show()
+        // rendered the countdown chrome early — the same footgun the old stored
+        // flag had when it was set first.
         transition(to: .pendingSend(utteranceId: ""), because: "undo window open")
-        show(state: "→ Sending to \(label)", title: "Your reply",
-             body: "\u{201C}\(text)\u{201D}", autoHideAfter: nil)
-        // After show(), never before: the state entry points clear this flag, and
-        // setting it first meant the countdown was uncancellable from the moment it
-        // appeared.
-        awaitingConfirm = true
         replyButton.title = "Don't send"
         replyButton.isHidden = false
 
@@ -192,7 +201,6 @@ final class StatusHUD: NSObject {
             guard elapsed >= seconds else { return }
             timer.invalidate()
             self.countdownTimer = nil
-            self.awaitingConfirm = false
             self.progressBar.isHidden = true
             send()
         }
@@ -210,7 +218,6 @@ final class StatusHUD: NSObject {
         guard awaitingConfirm else { return false }
         countdownTimer?.invalidate()
         countdownTimer = nil
-        awaitingConfirm = false
         progressBar.isHidden = true
         let send = onCommitSend
         onCommitSend = nil
@@ -229,7 +236,6 @@ final class StatusHUD: NSObject {
         guard awaitingConfirm else { return false }
         countdownTimer?.invalidate()
         countdownTimer = nil
-        awaitingConfirm = false
         progressBar.isHidden = true
         let cancel = onCancelSend
         onCancelSend = nil
@@ -249,11 +255,11 @@ final class StatusHUD: NSObject {
     /// Reflect a pause without rebuilding the panel — the spoken text and its
     /// highlight must stay exactly where they are.
     func setPaused(_ paused: Bool) {
-        stateLabel.stringValue = paused ? "❙❙ Paused" : "◀ Speaking"
+        stateLabel.stringValue = StateLegend.row(for: paused ? .paused : .speaking).stateText
         hintLabel.stringValue = paused
-            ? "Tap ⇧ to carry on, or Dismiss to be done with it."
-            : (identity.map { "\($0)\nTap ⇧ to pause, hold ⌥ to reply." }
-                ?? "Tap ⇧ to pause, hold ⌥ to reply.")
+            ? StateLegend.pausedHint
+            : (identity.map { "\($0)\n\(StateLegend.speakingHint)" }
+                ?? StateLegend.speakingHint)
     }
 
     /// Append a line to the current panel without disturbing what it is showing.
@@ -270,13 +276,13 @@ final class StatusHUD: NSObject {
     var onChooseVoice: ((String) -> Void)?
 
     func showSettings(voices: [Voice], selected: String, previewNote: String) {
-        awaitingConfirm = false
         currentTarget = nil
         identity = nil
         settingsVoices = voices
         transition(to: .settings, because: "settings opened")
 
-        show(state: "Settings", title: "Voice", body: previewNote, autoHideAfter: nil)
+        show(state: StateLegend.row(for: .settings).stateText,
+             title: "Voice", body: previewNote, autoHideAfter: nil)
         backButton.isHidden = false
         gearButton.isHidden = true
         actionRow.isHidden = true
@@ -321,9 +327,76 @@ final class StatusHUD: NSObject {
 
     func showWorking(_ message: String) {
         transition(to: .transcribing(startedAt: Date()), because: "working")
-        awaitingConfirm = false
-        show(state: "◌ Working", title: currentTarget?.label ?? "Voice Dispatch",
+        show(state: StateLegend.row(for: .working).stateText,
+             title: currentTarget?.label ?? "Voice Dispatch",
              body: message, autoHideAfter: nil)
+    }
+
+    // MARK: - Transcription progress (sanctioned change: open issue #4)
+
+    private var transcribingTimer: Timer?
+    private var slowTranscriptionSurfaced = false
+    private var onCancelTranscription: (() -> Void)?
+    private var onRetryTranscription: (() -> Void)?
+    private var cancelTranscriptionButton: NSButton!
+    private var retryTranscriptionButton: NSButton!
+
+    /// Working, but with the clock visible. A 27-second transcription once sat on
+    /// "Transcribing your reply…" with no feedback at all and read as a hang
+    /// (open issue #4). The elapsed count proves the app is alive; past 20s it says
+    /// the one thing worth saying — the audio is already durable on disk, a promise
+    /// that was always true and just unstated — and offers Cancel and Retry.
+    func showTranscribing(_ message: String,
+                          onCancel: @escaping () -> Void,
+                          onRetry: @escaping () -> Void) {
+        transition(to: .transcribing(startedAt: Date()), because: "transcription started")
+        show(state: StateLegend.row(for: .working).stateText,
+             title: currentTarget?.label ?? "Voice Dispatch",
+             body: message, autoHideAfter: nil)
+        onCancelTranscription = onCancel
+        onRetryTranscription = onRetry
+        slowTranscriptionSurfaced = false
+        // The elapsed count reads from the state's own startedAt, so the pill can
+        // never disagree with the transition log about when this began.
+        // Same shape as the meter and countdown timers above: the block runs on the
+        // main run loop, and the state guard doubles as the kill switch.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] timer in
+            guard let self, case .transcribing(let startedAt) = self.state else {
+                return timer.invalidate()
+            }
+            let seconds = Int(Date().timeIntervalSince(startedAt))
+            self.stateLabel.stringValue =
+                StateLegend.row(for: .workingFor(seconds: seconds)).stateText
+            guard seconds >= Int(StateLegend.slowTranscriptionThreshold),
+                  !self.slowTranscriptionSurfaced else { return }
+            self.slowTranscriptionSurfaced = true
+            self.cancelTranscriptionButton.isHidden = false
+            self.retryTranscriptionButton.isHidden = false
+            self.note(StateLegend.slowTranscriptionNote)
+            Permissions.log("transcribing: slow (\(seconds)s), surfaced cancel/retry")
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        transcribingTimer = timer
+    }
+
+    /// Every state entry funnels through show()/hide(), which call this, so the
+    /// ticker and its buttons can never outlive the transcribing panel.
+    private func endTranscribingUI() {
+        transcribingTimer?.invalidate()
+        transcribingTimer = nil
+        slowTranscriptionSurfaced = false
+        cancelTranscriptionButton?.isHidden = true
+        retryTranscriptionButton?.isHidden = true
+        onCancelTranscription = nil
+        onRetryTranscription = nil
+    }
+
+    @objc nonisolated private func cancelTranscriptionTapped() {
+        MainActor.assumeIsolated { onCancelTranscription?() }
+    }
+
+    @objc nonisolated private func retryTranscriptionTapped() {
+        MainActor.assumeIsolated { onRetryTranscription?() }
     }
 
     /// A receipt, not a state you live in.
@@ -335,11 +408,10 @@ final class StatusHUD: NSObject {
     /// the opposite and stays until dismissed.
     func showResult(_ message: String, ok: Bool) {
         transition(to: .result(ok: ok), because: "reply resolved")
-        awaitingConfirm = false
         // Reply and Go to session are about the announcement, not the receipt, and
         // offering them here suggests the send is still in your hands. It is not.
         currentTarget = ok ? nil : currentTarget
-        show(state: ok ? "▶ Sent" : "⚠ Needs you",
+        show(state: StateLegend.row(for: ok ? .sent : .needsYou).stateText,
              title: ok ? "Voice Dispatch" : (currentTarget?.label ?? "Voice Dispatch"),
              body: message, autoHideAfter: ok ? 6 : nil)
     }
@@ -369,7 +441,11 @@ final class StatusHUD: NSObject {
     var isIdle: Bool { state.allowsAmbientSurface }
 
     func showIdle(note: String? = nil, waiting: Int, unsentReplies: Int = 0) {
-        awaitingConfirm = false
+        // Before show(), unlike the other entry points' historical order: the
+        // derived predicates (awaitingConfirm, isCapturingAudio) must read as idle
+        // while show() renders, exactly as the old stored booleans — cleared at the
+        // top of this method — used to.
+        transition(to: .idle(waiting: waiting), because: "idle repaint")
         currentTarget = nil
         identity = nil
         currentEventId = nil
@@ -384,13 +460,13 @@ final class StatusHUD: NSObject {
         _ = unsentReplies
         let body = [note, status].compactMap { $0 }.joined(separator: " ")
 
-        show(state: waiting > 0 ? "" : "◌ Ready",
+        show(state: waiting > 0 ? "" : StateLegend.row(for: .ready).stateText,
              title: "Voice Dispatch", body: body, autoHideAfter: nil)
         // Clickable when there is something behind it.
-        stateButton.title = waiting > 0 ? "◌ \(waiting) waiting  ›" : ""
+        stateButton.title = waiting > 0
+            ? StateLegend.row(for: .waitingCount(waiting)).stateText : ""
         stateButton.isHidden = waiting == 0
         stateLabel.isHidden = waiting > 0
-        transition(to: .idle(waiting: waiting), because: "idle repaint")
     }
 
     /// True when the panel is visible and doing something worth stopping. Escape is
@@ -404,14 +480,12 @@ final class StatusHUD: NSObject {
     var isCapturingAudio: Bool { state.isCapturingAudio }
     var canStartReply: Bool { state.canStartReply }
 
-    /// Set by the app; the HUD cannot see the speech chain itself.
-    var isSpeakingNow = false
-
     /// Same path as the Dismiss button, so both can never drift apart.
     func dismiss() { dismissTapped() }
 
     func hide() {
         hideWorkItem?.cancel()
+        endTranscribingUI()
         panel?.orderOut(nil)
         // Hidden still allows ambient surfacing, which is the property that broke
         // when this left a non-idle flag behind: after one Dismiss the app went
@@ -435,10 +509,14 @@ final class StatusHUD: NSObject {
 
     private func show(state: String, title: String, body: String, autoHideAfter: TimeInterval?) {
         Permissions.log("HUD.show state=\(state) title=\(title)")
+        // Whatever is arriving, the transcription ticker belongs to the panel that
+        // is leaving. (No-op everywhere except after showTranscribing, which
+        // re-arms it after this returns.)
+        endTranscribingUI()
         // Deliberately NOT inferred from the state text: it was, the text changed,
         // and the countdown silently stopped being cancellable. Each state that
         // should end a pending send now says so itself.
-        if voicePicker != nil, state != "Settings" {
+        if voicePicker != nil, state != StateLegend.row(for: .settings).stateText {
             voicePicker.isHidden = true
             titleLabel.isHidden = false
             discardButton?.isHidden = true
@@ -456,23 +534,11 @@ final class StatusHUD: NSObject {
         bodyLabel.stringValue = body
         goButton.isHidden = currentTarget?.pid == nil
         replyButton.title = awaitingConfirm ? "Don't send"
-            : (isRecording || isListening ? "Send now" : "Reply")
-        let action: String
-        if isListening {
-            action = "Let go of ⌥ to send, or Dismiss to throw it away."
-        } else if awaitingConfirm {
-            action = "Sending in a moment. Stop it if that isn't what you said."
-        } else {
-            if currentTarget == nil {
-                action = ""
-            } else if isRecording {
-                action = "Listening. Click Send, or let go of ⌥."
-            } else {
-                action = "Click Reply, or hold ⌥ to speak."
-            }
-        }
-        hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
+            : (isRecording || self.state.isCapturingAudio ? "Send now" : "Reply")
+        hintLabel.stringValue = currentActionHint()
         replyButton.isHidden = awaitingConfirm ? false : (currentTarget == nil)
+        // (The hint chain above lives once, in StateLegend.actionHint; it was
+        // previously duplicated verbatim here and in replyTapped.)
         // With no session in hand, Dismiss is the only honest control.
         if currentTarget == nil, !awaitingConfirm { goButton.isHidden = true }
         // Go to session stays available while listening — knowing which terminal
@@ -499,6 +565,18 @@ final class StatusHUD: NSObject {
             hideWorkItem = work
             DispatchQueue.main.asyncAfter(deadline: .now() + autoHideAfter, execute: work)
         }
+    }
+
+    /// The hint line for the current flags, identity-prefixed. One derivation over
+    /// StateLegend.actionHint, so show() and replyTapped() cannot drift apart —
+    /// the chain used to be pasted verbatim in both.
+    private func currentActionHint() -> String {
+        let action = StateLegend.actionHint(
+            isListening: state.isCapturingAudio,
+            awaitingConfirm: awaitingConfirm,
+            hasTarget: currentTarget != nil,
+            isRecording: isRecording)
+        return identity.map { "\($0)\n\(action)" } ?? action
     }
 
     /// Grow the window to whatever the content needs.
@@ -595,7 +673,7 @@ final class StatusHUD: NSObject {
 
     func showPreparing() {
         transition(to: .preparing, because: "announce requested")
-        show(state: "◌ Preparing", title: "Voice Dispatch",
+        show(state: StateLegend.row(for: .preparing).stateText, title: "Voice Dispatch",
              body: "Writing the summary and fetching the voice…", autoHideAfter: nil)
     }
 
@@ -716,7 +794,7 @@ final class StatusHUD: NSObject {
         stateButton.controlSize = .small
         stateButton.isHidden = true
         stateLabel.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
-        stateLabel.textColor = .secondaryLabelColor
+        stateLabel.textColor = StateLegend.Lens.chrome.color
 
         titleLabel = NSTextField(labelWithString: "")
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
@@ -724,7 +802,7 @@ final class StatusHUD: NSObject {
 
         bodyLabel = NSTextField(wrappingLabelWithString: "")
         bodyLabel.font = .systemFont(ofSize: 12)
-        bodyLabel.textColor = .labelColor
+        bodyLabel.textColor = StateLegend.Lens.content.color
         bodyLabel.maximumNumberOfLines = 0
         bodyLabel.isSelectable = true
 
@@ -747,18 +825,18 @@ final class StatusHUD: NSObject {
                                 .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))!,
                               target: self, action: #selector(gearTapped))
         gearButton.isBordered = false
-        gearButton.contentTintColor = .secondaryLabelColor
+        gearButton.contentTintColor = StateLegend.Lens.chrome.color
         gearButton.translatesAutoresizingMaskIntoConstraints = false
         gearButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
         gearButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
 
         // A breadcrumb, not a button in a row of actions: it says where you are and
         // the only way out is back the way you came.
-        backButton = NSButton(title: "‹ Back", target: self, action: #selector(backTapped))
+        backButton = NSButton(title: StateLegend.backTitle, target: self, action: #selector(backTapped))
         backButton.isBordered = false
         backButton.controlSize = .small
         backButton.font = .systemFont(ofSize: 11, weight: .medium)
-        backButton.contentTintColor = .secondaryLabelColor
+        backButton.contentTintColor = StateLegend.Lens.chrome.color
         backButton.isHidden = true
 
         let dismiss = NSButton(title: "Dismiss", target: self, action: #selector(dismissTapped))
@@ -766,11 +844,31 @@ final class StatusHUD: NSObject {
         dismiss.controlSize = .small
         dismiss.font = .systemFont(ofSize: 11)
 
+        // Hidden until a transcription has run long enough to deserve them
+        // (sanctioned change: open issue #4). Styled exactly like their row-mates.
+        cancelTranscriptionButton = NSButton(
+            title: StateLegend.cancelTranscriptionTitle,
+            target: self, action: #selector(cancelTranscriptionTapped))
+        cancelTranscriptionButton.bezelStyle = .rounded
+        cancelTranscriptionButton.controlSize = .small
+        cancelTranscriptionButton.font = .systemFont(ofSize: 11)
+        cancelTranscriptionButton.isHidden = true
+
+        retryTranscriptionButton = NSButton(
+            title: StateLegend.retryTranscriptionTitle,
+            target: self, action: #selector(retryTranscriptionTapped))
+        retryTranscriptionButton.bezelStyle = .rounded
+        retryTranscriptionButton.controlSize = .small
+        retryTranscriptionButton.font = .systemFont(ofSize: 11)
+        retryTranscriptionButton.isHidden = true
+
         hintLabel = NSTextField(labelWithString: "")
         hintLabel.font = .systemFont(ofSize: 10)
-        hintLabel.textColor = .tertiaryLabelColor
+        hintLabel.textColor = StateLegend.Lens.guidance.color
 
-        let buttons = NSStackView(views: [replyButton, goButton, dismiss])
+        let buttons = NSStackView(views: [replyButton, goButton,
+                                          cancelTranscriptionButton,
+                                          retryTranscriptionButton, dismiss])
         actionRow = buttons
         buttons.orientation = .horizontal
         buttons.spacing = 8
@@ -788,16 +886,16 @@ final class StatusHUD: NSObject {
         meter = LevelMeterView()
         meter.isHidden = true
 
-        discardButton = NSButton(title: "✕", target: self, action: #selector(dismissTapped))
+        discardButton = NSButton(title: StateLegend.Glyph.discard, target: self, action: #selector(dismissTapped))
         discardButton.isBordered = false
         discardButton.font = .systemFont(ofSize: 15, weight: .medium)
-        discardButton.contentTintColor = .secondaryLabelColor
+        discardButton.contentTintColor = StateLegend.Lens.chrome.color
         discardButton.isHidden = true
 
-        sendCheckButton = NSButton(title: "✓", target: self, action: #selector(checkTapped))
+        sendCheckButton = NSButton(title: StateLegend.Glyph.confirm, target: self, action: #selector(checkTapped))
         sendCheckButton.isBordered = false
         sendCheckButton.font = .systemFont(ofSize: 15, weight: .semibold)
-        sendCheckButton.contentTintColor = .controlAccentColor
+        sendCheckButton.contentTintColor = StateLegend.Lens.action.color
         sendCheckButton.isHidden = true
 
         voicePicker = NSPopUpButton()
@@ -941,28 +1039,13 @@ final class StatusHUD: NSObject {
             if isRecording { isRecording = false; onStopReply?() }
             else { isRecording = true; onReply?() }
             replyButton.title = isRecording ? "Send reply" : "Reply"
-            let action: String
-            if isListening {
-                action = "Let go of ⌥ to send, or Dismiss to throw it away."
-            } else if awaitingConfirm {
-                action = "Sending in a moment. Stop it if that isn't what you said."
-            } else {
-                if currentTarget == nil {
-                    action = ""
-                } else if isRecording {
-                    action = "Listening. Click Send, or let go of ⌥."
-                } else {
-                    action = "Click Reply, or hold ⌥ to speak."
-                }
-            }
-            hintLabel.stringValue = identity.map { "\($0)\n\(action)" } ?? action
+            hintLabel.stringValue = currentActionHint()
         }
     }
 
     func recordingEnded() {
         dictationDestination = nil
         isRecording = false
-        isListening = false
         meterTimer?.invalidate()
         meterTimer = nil
         meter?.isHidden = true
@@ -1042,7 +1125,6 @@ final class StatusHUD: NSObject {
         MainActor.assumeIsolated {
             countdownTimer?.invalidate()
             countdownTimer = nil
-            awaitingConfirm = false
             onDismiss?()
             hide()
         }

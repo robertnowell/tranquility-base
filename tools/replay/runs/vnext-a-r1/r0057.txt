@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "promotions: template artifact generating, validation script ready.",
+  "proposal": "Validate with five checks when artifact lands. Proceed?",
+  "topic": "Product image binding validation",
+  "goal": "Verify images bind per-product and eliminate Shopify CDN references.",
+  "happened": "Generated template artifact pending validation, checklist prepared.",
+  "nextStep": "Await artifact landing and run five validation checks, prioritizing log confirmation.",
+  "question": "Should validation proceed when artifact lands?",
+  "risk": "Validation could pass but remain inconclusive if image-refresh logs show nothing."
+}
+```

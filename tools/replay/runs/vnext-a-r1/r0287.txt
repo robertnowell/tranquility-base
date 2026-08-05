@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "promotions: inbound leads schema, filler, service, hook built, typechecks clean.",
+  "proposal": "Build leads dashboard or Gmail sender next? Which?",
+  "topic": "Inbound lead sequence",
+  "goal": "Capture, qualify, and contact inbound leads via email sequence and LinkedIn",
+  "happened": "Built schema, filler, service, hook wired; typechecks clean; migration prepared.",
+  "nextStep": "Apply migration to Neon, then build leads dashboard or Gmail sender based on direction",
+  "question": "Build leads dashboard or Gmail sender next?",
+  "risk": "Migration not yet applied to Neon—system no-ops until database tables exist."
+}
+```

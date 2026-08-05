@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Promotions: inbound-leads poller live, three alerts posted, background loop running.",
+  "proposal": "Archive #leads, install cron, verify alerts populate for 24h. Shopify-only filter or all? Proceed?",
+  "topic": "inbound lead poller and alerts",
+  "goal": "automate inbound lead detection and alerting",
+  "happened": "poller deployed with live alerts in #inbound-leads, data population verified",
+  "nextStep": "archive #leads channel, install cron for durability, verify signups populating for 24 hours, decide on Shopify filter",
+  "question": "add Shopify-only filter to poller or keep catching all candidates?",
+  "risk": "background loop dies on reboot—cron installation required for durability"
+}
+```

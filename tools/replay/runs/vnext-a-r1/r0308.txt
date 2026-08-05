@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "robertnowell: bulk-transcripts agent found three Apollo audio sources and one licensing caveat.",
+  "proposal": "Three more agents reporting on speech rules, governance, control structure. Proceed?",
+  "topic": "Apollo audio corpus research",
+  "goal": "Analyze Apollo communication structure and governance patterns",
+  "happened": "First of four agents completed bulk-transcripts research, identified three Apollo audio sources (archive.org, UT Dallas, Apollo-in-Real-Time repo) with licensing guidance",
+  "nextStep": "Remaining three agents report findings as they land",
+  "question": "Continue with parallel research, or redirect based on findings?",
+  "risk": "Annotated Apollo transcripts copyrighted; use only raw NASA public-domain sources"
+}
+```

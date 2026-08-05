@@ -1,0 +1,1 @@
+I need the agent's final message to generate the dispatch update. The section "The agent's final message this turn:" is empty — can you paste what the agent just reported?

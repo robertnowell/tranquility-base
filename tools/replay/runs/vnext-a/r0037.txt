@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Promotions: product image import already runs, diagnosis was wrong.",
+  "proposal": "Revert added import, find the real cause with logs. Proceed?",
+  "topic": "Email template product image bug root cause",
+  "goal": "Fix product grids showing wrong images in email templates.",
+  "happened": "Import already runs in two places; added code is redundant.",
+  "nextStep": "Revert prepare-generation-assets.ts import and investigate real cause via logs.",
+  "question": "Should agent revert and investigate the root cause?",
+  "risk": "Shipping duplicate import code leaves root cause undiagnosed."
+}
+```

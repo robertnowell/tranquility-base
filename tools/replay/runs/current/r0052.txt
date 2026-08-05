@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "The quota check shows your key is still capped at ten thousand, down to twenty-six credits. Three possible causes: the cap didn't save, you edited a different key, or workspace enforces it. Verify the key in the dashboard.",
+  "proposal": "Open the ElevenLabs API keys page to check your key's quota. If the workspace enforces a group limit, we'll generate a fresh unrestricted key instead. Proceed?",
+  "topic": "ElevenLabs API quota debugging",
+  "goal": "Resolve ElevenLabs quota blocking TTS",
+  "happened": "The agent confirmed the quota remains capped at ten thousand",
+  "nextStep": "Open ElevenLabs dashboard to verify jarvis key quota",
+  "question": "Should I open the API keys page?",
+  "risk": "Workspace-level quota limit may override individual key settings"
+}
+```

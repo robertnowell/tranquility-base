@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "voice-dispatch: listening panel redesigned with live meter, 58 tests green.",
+  "proposal": "Implement streaming transcription with AssemblyAI next. Proceed?",
+  "topic": "Listening panel and streaming transcription",
+  "goal": "Enhance voice reply UI with real-time feedback",
+  "happened": "Listening panel redesigned with live RMS meter and timer; all 58 tests passed",
+  "nextStep": "Implement streaming transcription using AssemblyAI",
+  "question": "Proceed with streaming transcription?",
+  "risk": "Adds socket and network complexity; local WAV remains authoritative; scope is bounded"
+}
+```

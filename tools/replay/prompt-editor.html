@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>prompt editor — voice-dispatch replay</title>
+<style>
+  :root{
+    --paper:#C4C3B7; --panel:#BDBCB0; --panel2:#B0AFA6; --ink:#23241F; --muted:#5F6055;
+    --go:#416B47; --warn:#8A5A14; --line:rgba(35,36,31,.28);
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:system-ui,-apple-system,sans-serif;font-size:14px;height:100vh;
+    display:flex;flex-direction:column}
+  header{display:flex;align-items:center;gap:14px;padding:10px 16px;
+    background:var(--go);color:#EAE6D8;flex:none}
+  header h1{font-family:var(--mono);font-size:13px;letter-spacing:.12em;
+    text-transform:uppercase;font-weight:600;margin:0;flex:1}
+  button{font-family:var(--mono);font-size:12px;letter-spacing:.04em;padding:6px 14px;
+    border:1px solid var(--line);background:var(--panel);color:var(--ink);
+    border-radius:2px;cursor:pointer}
+  button:hover{background:var(--panel2)}
+  button.primary{background:#EAE6D8;font-weight:600}
+  button:disabled{opacity:.4;cursor:default}
+  #status{font-family:var(--mono);font-size:11px;color:rgba(234,230,216,.75)}
+  nav{display:flex;gap:1px;background:var(--line);border-bottom:1px solid var(--line);flex:none}
+  nav .tab{font-family:var(--mono);font-size:12px;padding:8px 16px;background:var(--panel);
+    cursor:pointer;border:0;border-radius:0;position:relative}
+  nav .tab.active{background:var(--paper);font-weight:600}
+  nav .tab .dirty{color:var(--warn);margin-left:6px;font-weight:700}
+  main{flex:1;display:flex;min-height:0}
+  #editor{flex:1;min-width:0;padding:0;display:flex;flex-direction:column}
+  textarea{flex:1;width:100%;border:0;outline:none;resize:none;padding:18px 22px;
+    background:var(--paper);color:var(--ink);font-family:var(--mono);font-size:13px;
+    line-height:1.55;tab-size:2}
+  aside{width:240px;flex:none;border-left:1px solid var(--line);padding:14px 16px;
+    background:var(--panel);overflow-y:auto}
+  aside h2{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
+  aside h2:first-child{margin-top:0}
+  aside .slot{font-family:var(--mono);font-size:11px;background:var(--paper);
+    border:1px solid var(--line);border-radius:2px;padding:1px 6px;margin:2px 2px 2px 0;
+    display:inline-block}
+  aside .slot.missing{color:var(--warn);border-color:var(--warn)}
+  aside p{font-size:12px;color:var(--muted);margin:4px 0}
+  #fallback{padding:40px;max-width:60ch;line-height:1.6}
+  kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line);
+    border-radius:2px;padding:0 4px;background:var(--panel)}
+</style>
+</head>
+<body>
+<header>
+  <h1>voice-dispatch · prompt editor</h1>
+  <span id="status">no folder open</span>
+  <button id="open" class="primary">Open prompts folder…</button>
+  <button id="save" disabled>Save (⌘S)</button>
+  <button id="saveall" disabled>Save all</button>
+</header>
+<nav id="tabs"></nav>
+<main>
+  <div id="editor" hidden>
+    <textarea id="ta" spellcheck="false"></textarea>
+  </div>
+  <aside id="side" hidden>
+    <h2>Template slots found</h2>
+    <div id="slots"></div>
+    <h2>Known slots</h2>
+    <p id="known"></p>
+    <h2>Counts</h2>
+    <p id="counts"></p>
+    <h2>How this works</h2>
+    <p>You are editing the real files in <span class="slot">tools/replay/prompts/</span>. Save writes straight to disk — Claude picks changes up by reading the files, so every save is visible to the replay loop immediately. Add a new prompt by duplicating text into a new tab via Finder (new .txt in the folder, then reopen).</p>
+  </aside>
+  <div id="fallback" hidden>
+    <h2>Browser can't edit local files</h2>
+    <p>This page needs the File System Access API (Chrome/Edge/Arc on macOS). Open it in Chrome, or edit the files directly at <code>~/Projects/voice-dispatch/tools/replay/prompts/</code> — they're plain text and every save is picked up the same way.</p>
+  </div>
+</main>
+<script>
+const KNOWN_SLOTS = ["project_label","notification_block","branch_block","opening_block","last_assistant_message","branch","opening_ask"];
+let dirHandle=null, files=[], active=-1;
+const $=id=>document.getElementById(id);
+
+function setStatus(t){$("status").textContent=t}
+
+async function openFolder(){
+  if(!window.showDirectoryPicker){$("fallback").hidden=false;$("editor").hidden=true;$("side").hidden=true;return}
+  try{ dirHandle = await showDirectoryPicker({mode:"readwrite"}); }
+  catch(e){ return; }
+  files=[];
+  for await (const entry of dirHandle.values()){
+    if(entry.kind==="file" && entry.name.endsWith(".txt")){
+      const f = await entry.getFile();
+      files.push({name:entry.name, handle:entry, text:await f.text(), saved:true});
+    }
+  }
+  files.sort((a,b)=>a.name.localeCompare(b.name));
+  if(!files.length){setStatus("no .txt files in that folder");return}
+  $("editor").hidden=false;$("side").hidden=false;$("fallback").hidden=true;
+  $("save").disabled=false;$("saveall").disabled=false;
+  renderTabs(); selectTab(0);
+  setStatus(files.length+" prompt file(s) · "+new Date().toLocaleTimeString());
+}
+
+function renderTabs(){
+  const nav=$("tabs"); nav.innerHTML="";
+  files.forEach((f,i)=>{
+    const b=document.createElement("button");
+    b.className="tab"+(i===active?" active":"");
+    b.innerHTML=f.name.replace(".txt","")+(f.saved?"":'<span class="dirty">●</span>');
+    b.onclick=()=>selectTab(i);
+    nav.appendChild(b);
+  });
+}
+
+function selectTab(i){
+  if(active>=0) files[active].text=$("ta").value;
+  active=i; $("ta").value=files[i].text; renderTabs(); refreshSide();
+}
+
+function refreshSide(){
+  const text=$("ta").value;
+  const found=[...new Set([...text.matchAll(/\{([a-z_]+)\}/g)].map(m=>m[1]))];
+  $("slots").innerHTML = found.length
+    ? found.map(s=>`<span class="slot${KNOWN_SLOTS.includes(s)?"":" missing"}">{${s}}</span>`).join("")
+    : "<p>none — the replayer will send this verbatim with no per-record data</p>";
+  $("known").innerHTML = KNOWN_SLOTS.map(s=>`<span class="slot">{${s}}</span>`).join(" ");
+  const words=text.trim().split(/\s+/).length;
+  $("counts").textContent = text.length+" chars · "+words+" words";
+}
+
+async function saveOne(i){
+  const f=files[i];
+  if(i===active) f.text=$("ta").value;
+  const w=await f.handle.createWritable();
+  await w.write(f.text); await w.close();
+  f.saved=true;
+}
+
+async function save(){ if(active<0)return; await saveOne(active); renderTabs();
+  setStatus("saved "+files[active].name+" · "+new Date().toLocaleTimeString()); }
+async function saveAll(){ for(let i=0;i<files.length;i++) if(!files[i].saved||i===active) await saveOne(i);
+  renderTabs(); setStatus("all saved · "+new Date().toLocaleTimeString()); }
+
+$("open").onclick=openFolder;
+$("save").onclick=save;
+$("saveall").onclick=saveAll;
+$("ta").addEventListener("input",()=>{ if(active>=0){files[active].saved=false; renderTabs(); refreshSide();} });
+document.addEventListener("keydown",e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key==="s"){e.preventDefault();save();}
+});
+</script>
+</body>
+</html>

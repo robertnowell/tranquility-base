@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Promotions: four SKU questions answered, PR #10 ready.",
+  "proposal": "Merge PR #10? No behavior change, just cleanup.",
+  "topic": "Shopify SKU data audit",
+  "goal": "Resolve product data configuration questions",
+  "happened": "Investigated four SKU questions; all sourced from prior calls and catalog; PR #10 removes unused config",
+  "nextStep": "Merge PR #10; await cron verdict at 18:00 UTC",
+  "question": "Merge now?",
+  "risk": null
+}
+```

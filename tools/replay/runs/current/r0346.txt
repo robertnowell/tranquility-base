@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "The specification was re-ruled and redeployed with corrected decision-handling and request-mechanics guidance. Changes are live at the same URL.",
+  "proposal": "The work is complete and deployed. Does this align with what you needed, or is there anything to revise?",
+  "topic": "State legend spec corrections deployed",
+  "goal": "Deploy corrected guidance on agent responses",
+  "happened": "Specification was re-ruled and deployed with corrected decision-requirement and mechanics handling",
+  "nextStep": null,
+  "question": "Does the deployed correction meet your needs?",
+  "risk": null
+}
+```

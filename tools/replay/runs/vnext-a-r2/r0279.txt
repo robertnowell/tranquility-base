@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "agent-voice-hci-page: five research agents launched on NASA design direction.",
+  "proposal": "Let research agents complete, then depth pass and brief. Proceed?",
+  "topic": "NASA/Apollo design research grounding",
+  "goal": "Ground voice dispatch HCI in NASA authenticity and spec rigor",
+  "happened": "Launched five parallel research agents on NASA/Apollo design approach",
+  "nextStep": "Research agents complete, then depth pass and brief generation",
+  "question": "Proceed with research and planned follow-up work?",
+  "risk": null
+}
+```

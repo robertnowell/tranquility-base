@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "agent-voice-hci-page: five research agents launching on Apollo material, identity, authenticity, UI, specs",
+  "proposal": "Five agents researching: material, identity, authenticity, UI, specs. Depth pass and brief next. Go?",
+  "topic": "Apollo aesthetic research",
+  "goal": "Develop Apollo-themed voice agent browser interface",
+  "happened": "Five research agents launched to ground Apollo aesthetic direction with authentic material sources",
+  "nextStep": "Run research; depth pass and brief to follow",
+  "question": "Go?",
+  "risk": null
+}
+```

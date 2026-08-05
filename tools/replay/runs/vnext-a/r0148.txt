@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "content-engine: launchd moved to 22:30, needs wake schedule set.",
+  "proposal": "Set the Mac wake schedule to 22:28? Go?",
+  "topic": "Daily loop wake timing",
+  "goal": "Ensure nightly run completes before midnight by waking the Mac before 22:30.",
+  "happened": "launchd job moved to 22:30 fire time; Mac wake schedule still needs adjustment.",
+  "nextStep": "Run `! sudo pmset repeat wake MTWRFSU 22:28:00`",
+  "question": "Run the wake schedule command now?",
+  "risk": "Job may miss if Mac is asleep at 22:30."
+}
+```

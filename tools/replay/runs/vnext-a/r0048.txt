@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "product-image-binding-oracle: fix committed, build green, awaiting new build for email test.",
+  "proposal": "Test Monday email against new build once available. Proceed?",
+  "topic": "Email template image binding fix",
+  "goal": "Fix image-reuse bug in email templates and validate against production email",
+  "happened": "Image-reuse fix identified and implemented; build passing all tests",
+  "nextStep": "Test Monday email rendering against new build",
+  "question": "Proceed with testing once new build is ready?",
+  "risk": "Large PR could introduce regressions beyond the image fix"
+}
+```

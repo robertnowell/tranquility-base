@@ -1,0 +1,12 @@
+```json
+{
+  "recap":    "content-engine: deep research complete, report written.",
+  "proposal": null,
+  "topic":    "Agent S2 OSWorld benchmark framing",
+  "goal":     "Verify Agent S2 GUI-bypass claim",
+  "happened": "Deep research completed per scope; API-bypass claim doesn't apply to Agent S2 due to tool limitations",
+  "nextStep": null,
+  "question": null,
+  "risk":     null
+}
+```

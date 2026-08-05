@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "promotions: lead-flow setup ready, Stage 2 decision waiting",
+  "proposal": "Set up Resend inbox and test welcome flow with throwaway store. Go?",
+  "topic": "Lead qualification flow setup",
+  "goal": "Capture, qualify, and convert inbound leads to customer calls",
+  "happened": "Reached clean stopping point with Stage 2 decision waiting",
+  "nextStep": "Set up Resend catch-all inbox and test subscribe-to-welcome flow with throwaway store",
+  "question": "Ready to move to Stage 2?",
+  "risk": null
+}
+```

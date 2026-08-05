@@ -1,0 +1,12 @@
+```json
+{
+  "recap":    "voice-dispatch: cache bug fixed, app relaunched, sixty-two tests pass",
+  "proposal": null,
+  "topic":    "Voice synthesis cache defect fix",
+  "goal":     "Prevent permanent voice fallback on API errors",
+  "happened": "Bug caused cached failures to disable ElevenLabs retries permanently",
+  "nextStep": null,
+  "question": null,
+  "risk":     "401 errors' root cause unknown; retries will surface if recurring"
+}
+```

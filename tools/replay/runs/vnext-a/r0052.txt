@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "voice-dispatch: ElevenLabs quota still at 10,000; 26 credits, 217 needed.",
+  "proposal": "Open ElevenLabs dashboard to check the API key cap limit. Open?",
+  "topic": "ElevenLabs API quota cap",
+  "goal": "Fix ElevenLabs quota to enable announcements",
+  "happened": "Agent confirmed quota cap at 10,000 remains; insufficient credits for next announcement",
+  "nextStep": "Open ElevenLabs dashboard to verify the API key's quota setting",
+  "question": "Should we check the dashboard, or generate a fresh API key?",
+  "risk": null
+}
+```

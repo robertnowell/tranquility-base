@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "voice-dispatch: voice caching done, 65 tests green.",
+  "proposal": "Three items remain: eager surfacing, model-calls rotation, Clicky NOTICE. Pick one?",
+  "topic": "Voice synthesis caching",
+  "goal": "Complete voice system implementation",
+  "happened": "Voice caching verified end-to-end with 65 passing tests",
+  "nextStep": null,
+  "question": "Which of the three remaining items should we implement next?",
+  "risk": null
+}
+```

@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "vd-state-legend-page: dispatcher prompt corrected and redeployed with decision-always enforcement.",
+  "proposal": "Work's closed out.",
+  "topic": "Dispatcher prompt revalidation",
+  "goal": "Validate and correct dispatcher format rules",
+  "happened": "Dispatcher prompt re-ruled, decision-always principle confirmed, deployed to same URL.",
+  "nextStep": null,
+  "question": null,
+  "risk": null
+}
+```

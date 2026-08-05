@@ -1,0 +1,12 @@
+```json
+{
+  "recap":    "promotions: new-candidate alerts live in #inbound-leads, 3 real alerts posted",
+  "proposal": "Add Shopify-only filter, or keep catching all candidates? Filter?",
+  "topic":    "Automated inbound lead candidate alerts",
+  "goal":     "Automate lead capture, qualification, and sales outreach",
+  "happened": "New-candidate alerts and background poller went live with 3 real alerts posted",
+  "nextStep": "Decide on Shopify-only filter versus all-candidates approach",
+  "question": "Add the Shopify-only filter, or keep catching all candidates?",
+  "risk":     "Unfiltered alerts will include non-Shopify brands (potential noise)"
+}
+```

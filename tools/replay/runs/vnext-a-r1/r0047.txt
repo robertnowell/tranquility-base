@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "voice-dispatch: ElevenLabs key quota exhausted, not an auth failure.",
+  "proposal": "Raise the ElevenLabs key quota or issue a fresh key. Go?",
+  "topic": "ElevenLabs API quota resolution",
+  "goal": "Resolve ElevenLabs API quota issue",
+  "happened": "Identified root cause as per-key quota exhaustion, not auth failure",
+  "nextStep": "Raise the ElevenLabs key quota or issue a fresh key",
+  "question": "Raise the existing key's quota or issue a fresh one?",
+  "risk": null
+}
+```

@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Test script for the image-reuse bug fix is generating. When it lands, the session will validate whether the fix actually engaged by checking dropped-image logs and confirming no Shopify URLs remain.",
+  "proposal": "When the artifact arrives, run validation checks: grep for Shopify URLs (must be zero), check for dropped-image logs (proof fix engaged), verify bindings. Without dropped-image logs, results would be inconclusive. Proceed?",
+  "topic": "Image reuse fix validation checks",
+  "goal": "Validate promotional email image-reuse fix engagement",
+  "happened": "Script cleanup completed; validation awaiting artifact",
+  "nextStep": "Run validation checks when artifact lands",
+  "question": "Proceed with validation checks when artifact arrives?",
+  "risk": "Without dropped-image logs showing, clean results would be inconclusive—doesn't prove fix engaged"
+}
+```

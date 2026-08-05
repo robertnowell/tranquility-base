@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "voice-dispatch: listening panel live, meter and time shown, 58 tests green.",
+  "proposal": "Implement streaming transcription to preview words as you speak. Go?",
+  "topic": "Streaming transcription for live preview",
+  "goal": "Enable live transcription preview during voice capture",
+  "happened": "Listening panel redesigned with live meter and time counter; 58 tests passing",
+  "nextStep": "Implement streaming transcription using AssemblyAI with local WAV as source of truth",
+  "question": "Implement streaming transcription next?",
+  "risk": "Adds network socket during recording; local WAV remains only source of truth"
+}
+```

@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "promotions: image refresh bug found — appends instead of replaces product images.",
+  "proposal": "Validate downstream won't break from the refresh change, then implement. Proceed?",
+  "topic": "image refresh function bug fix",
+  "goal": "Fix mixed-namespace product images in Kopi email templates",
+  "happened": "Image refresh logic appends instead of replacing, plus has a faulty guard",
+  "nextStep": "Validate downstream doesn't depend on image ordering or selected flags surviving refresh",
+  "question": "Should agent validate dependencies then implement the fix?",
+  "risk": "Downstream may depend on image ordering or selected flags surviving the change"
+}
+```

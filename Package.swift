@@ -22,9 +22,12 @@ let package = Package(
             dependencies: ["VoiceDispatchCore"]
         ),
         .executableTarget(name: "dispatch-test-target"),
+        // ObjC because Swift cannot catch NSExceptions, and AVFoundation throws
+        // them. See the header for the incident this exists to prevent.
+        .target(name: "ObjCExceptionFirewall"),
         .executableTarget(
             name: "VoiceDispatchApp",
-            dependencies: ["VoiceDispatchCore"]
+            dependencies: ["VoiceDispatchCore", "ObjCExceptionFirewall"]
         ),
         .testTarget(
             name: "VoiceDispatchCoreTests",

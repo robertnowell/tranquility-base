@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Promotions: new-candidate alerts live, three leads posted.",
+  "proposal": "Archive leads, install cron, watch and verify, choose Shopify-only filter or all candidates. Go?",
+  "topic": "Inbound leads poller live",
+  "goal": "Launch live alerts for new inbound candidates",
+  "happened": "Poller deployed with three alerts posted live",
+  "nextStep": "Complete setup and decide on Shopify-only filter",
+  "risk": "Alerts include non-Shopify brands without the filter",
+  "question": "Add Shopify-only filter or monitor all candidates?"
+}
+```

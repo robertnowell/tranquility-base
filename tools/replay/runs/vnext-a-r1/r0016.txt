@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "voice-dispatch: progress meter fixed, UI labels constrained, reply gesture added.",
+  "proposal": "Work's closed out — 59 tests green, app relaunched.",
+  "topic": "HUD meter and gesture refinement",
+  "goal": "Polish dispatch recording HUD",
+  "happened": "Meter display fixed, label widths constrained, Option-key reply gesture added.",
+  "nextStep": null,
+  "question": null,
+  "risk": null
+}
+```

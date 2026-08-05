@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Promotions: plan updated to concurrency 3, dedup is atomic.",
+  "proposal": "Implement with concurrency 3 and revised rationale. Proceed?",
+  "topic": "Concurrency safety validated",
+  "goal": "Fix email image-reuse bug in template generation",
+  "happened": "Agent validated concurrency safety; dedup comparison is atomic.",
+  "nextStep": "Implement code with concurrency 3 plan",
+  "question": "Approve concurrency 3 plan and proceed?",
+  "risk": null
+}
+```

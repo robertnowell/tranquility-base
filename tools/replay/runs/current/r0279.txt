@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Five research tracks launched to ground the Apollo design system in authentic material—console finishes, NASA graphics history, authenticity rules, engineering UIs, and specifications. Running now.",
+  "proposal": "Research agents will deliver findings for a depth pass and design brief. Proceed with all five tracks, or adjust scope before they conclude?",
+  "topic": "NASA Apollo design system research",
+  "goal": "Ground voice agent HCI in authentic Apollo-era NASA design specs and aesthetics",
+  "happened": "Five parallel research agents launched against settled design direction",
+  "nextStep": "Complete research; deliver findings for depth pass and design brief",
+  "question": "Shall I proceed with all five research tracks, or adjust any?",
+  "risk": null
+}
+```

@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "promotions: Stage 1 complete, awaiting Stage 2 approval.",
+  "proposal": "Set up Resend inbox, test welcome-flow pipe against throwaway store. Go?",
+  "topic": "Lead qualification email flows",
+  "goal": "Qualify leads and book discovery calls via email sequences and LinkedIn",
+  "happened": "Stage 1 completed; Stage 2 decision point reached",
+  "nextStep": "Set up Resend catch-all inbox and test the welcome-flow pipe",
+  "question": "Proceed with Stage 2?",
+  "risk": null
+}
+```

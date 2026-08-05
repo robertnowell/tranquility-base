@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Promotions: verified no race condition, concurrency update ready.",
+  "proposal": "Update plan to concurrency 3, drop try/catch, keep caps. Go?",
+  "topic": "Concurrency safety analysis",
+  "goal": "Fix email templates' product images and pricing accuracy",
+  "happened": "Verified dedup code is thread-safe; no race window exists during concurrency 3",
+  "nextStep": "Update plan to concurrency 3, drop try/catch, keep capacity caps",
+  "question": "Approve updated plan with concurrency 3?",
+  "risk": "Agent has been overconfident about this codebase three times today."
+}
+```

@@ -1,0 +1,12 @@
+```json
+{
+  "recap": null,
+  "proposal": null,
+  "topic": "dispatcher input incomplete",
+  "goal": null,
+  "happened": "Agent's final message was not provided",
+  "nextStep": null,
+  "question": "Please provide the agent's final message for this session.",
+  "risk": null
+}
+```

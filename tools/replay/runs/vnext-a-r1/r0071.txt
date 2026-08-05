@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "promotions: root cause found — upstream Kopi too slow, cache invalidation flaw.",
+  "proposal": "Fix cache invalidation in refresh route: recompute before cache reset. Go?",
+  "topic": "Cache invalidation timing bug",
+  "goal": "Restore dashboard performance",
+  "happened": "Cache invalidation timing bug identified: revalidateTag called before getCachedPayload, leaves cache empty when Kopi timeouts occur.",
+  "nextStep": "Implement fix #1: swap recompute and invalidate operations in refresh route",
+  "question": "Go?",
+  "risk": null
+}
+```

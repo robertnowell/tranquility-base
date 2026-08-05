@@ -117,7 +117,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         row.spacing = 8
         row.alignment = .firstBaseline
 
-        let dot = NSTextField(labelWithString: "●")
+        let dot = NSTextField(labelWithString: StateLegend.Glyph.dot)
         dot.font = .systemFont(ofSize: 12)
         rows[kind] = dot
         row.addArrangedSubview(dot)

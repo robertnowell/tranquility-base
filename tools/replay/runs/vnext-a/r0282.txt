@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "agent-voice-hci-page: type stack settled, Routed Gothic picked.",
+  "proposal": "Research MOCR, authenticity accounts, and spec codes next. Go?",
+  "topic": "Design typeface and material research",
+  "goal": "Establish accurate Apollo-era design system",
+  "happened": "Type stack settled (Routed Gothic + IBM Plex Mono); design references found; remaining research items identified.",
+  "nextStep": "Research MOCR, authenticity accounts, FED-STD-595 codes",
+  "question": "Continue with remaining historical research?",
+  "risk": null
+}
+```

@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Product-image-binding-oracle: refactoring reviewed, cleaner but incomplete, image bug contained not closed.",
+  "proposal": "Proceed with the two final steps: delete the fallbacks and constrain the column?",
+  "topic": "Image reuse bug refactoring code review",
+  "goal": "Permanently fix the locked-layout image reuse bug",
+  "happened": "Agent completed refactoring code review; results mixed, image bug contained but not closed",
+  "nextStep": "Delete the guarded fallbacks and add CHECK constraint to CDN column",
+  "question": "Proceed with deletion and constraint steps?",
+  "risk": "Fallbacks can be re-enabled; constraint requires production backfill and DDL; no real-world testing yet"
+}
+```

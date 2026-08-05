@@ -1,0 +1,12 @@
+```json
+{
+  "recap":    "promotions: next steps identified. Resend inbox, then validate flow with test store.",
+  "proposal": "Proceed with Stage 2: Resend inbox, then test flow with throwaway store?",
+  "topic":    "Stage 2: Resend and flow test",
+  "goal":     "Create inbound lead qualification and outreach workflow",
+  "happened": "Two-stage approach designed for Resend and flow validation",
+  "nextStep": "Set up Resend catch-all inbox, then test subscribe-to-welcome flow against throwaway store",
+  "question": "Proceed with Stage 2?",
+  "risk":     null
+}
+```

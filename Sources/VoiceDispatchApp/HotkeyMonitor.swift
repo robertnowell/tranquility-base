@@ -31,6 +31,12 @@ public final class HotkeyMonitor: @unchecked Sendable {
         /// The monitor stays dumb about timing on purpose — double-tap windows are
         /// policy, and policy lives where it can be logged with the rest.
         case optionTapped
+        /// ⌃ tapped twice quickly, on its own. Unlike ⌥, a SINGLE bare-⌃ tap has no
+        /// meaning in the app and never will (it is the first key of two chords), so
+        /// there is no per-tap policy for the app to arbitrate and the pairing lives
+        /// here — a deliberate exception to the optionTapped rule above. Reserved
+        /// for WS-A's depth-1 pull; the handler today only logs.
+        case controlDoubleTapped
         /// Option, held past the threshold.
         case replyBegan
         case replyEnded
@@ -76,6 +82,9 @@ public final class HotkeyMonitor: @unchecked Sendable {
     private var sawOtherInput = false
     private var isReplying = false
     private var holdCheck: DispatchWorkItem?
+    /// When the last clean bare-⌃ tap ended. Same window as the app's ⌥⌥ detector.
+    private var lastControlTapAt: Date?
+    private let controlDoubleTapWindow: TimeInterval = 0.45
 
     /// Mutated only from the tap callback, which runs on the main run loop.
     public private(set) var isPressed = false
@@ -121,6 +130,20 @@ public final class HotkeyMonitor: @unchecked Sendable {
         case bindings.pause: onTransition(.pauseToggled)
         case bindings.dismiss: onTransition(.dismiss)
         case bindings.reply: onTransition(.optionTapped)
+        case CGEventFlags.maskControl:
+            // A bare ⌃ tap is unassigned on its own; two inside the window are the
+            // depth-1 pull gesture (WS-A). The chord guards are already behind us:
+            // an interfered press (⌃C, a click) never reached this switch, and a ⌃
+            // that grew into ⌃⌥ or ⌃⇧ arrived here as that chord's flags — the
+            // formUnion in handle() means it can never read as bare ⌃ — so a
+            // chord's ⌃ press cannot count as a tap.
+            if let last = lastControlTapAt,
+               Date().timeIntervalSince(last) < controlDoubleTapWindow {
+                lastControlTapAt = nil
+                onTransition(.controlDoubleTapped)
+            } else {
+                lastControlTapAt = Date()
+            }
         default: break  // an unassigned combination: no action.
         }
     }

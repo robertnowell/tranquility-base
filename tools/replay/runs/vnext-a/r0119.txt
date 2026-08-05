@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "promotions: root cause is Kopi timeout; 00:00 cron will likely fail.",
+  "proposal": "Warm production tomorrow for Andy, and start Kopi-side cache work. Proceed with both?",
+  "topic": "Kopi timeout: cache fix needed",
+  "goal": "Fix root cause of promotions dashboard timeout",
+  "happened": "Root cause traced to Kopi recomputing full pull on each call, exceeding 60s timeout.",
+  "nextStep": null,
+  "question": "Both, one, or neither?",
+  "risk": "Without cache fix: 00:00 cron fails, Andy sees Aug 3 17:30 data (stale). Cache work requires full Kopi pipeline."
+}
+```
