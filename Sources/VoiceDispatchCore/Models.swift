@@ -323,6 +323,8 @@ public struct StoredBrief: Codable, FetchableRecord, PersistableRecord, Sendable
     public var nextStep: String?
     public var question: String?
     public var risk: String?
+    /// The ⌃⌃ briefing (v7). Nil on rows written before the column existed.
+    public var rationale: String?
     public var recap: String?
     public var proposal: String?
     /// The minted callsign at generation time; nil when not yet minted.
@@ -337,7 +339,7 @@ public struct StoredBrief: Codable, FetchableRecord, PersistableRecord, Sendable
     public var brief: SessionBrief {
         SessionBrief(
             topic: topic, goal: goal, happened: happened, nextStep: nextStep,
-            question: question, risk: risk, branch: nil,
+            question: question, risk: risk, rationale: rationale, branch: nil,
             recap: recap, proposal: proposal)
     }
 }

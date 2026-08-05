@@ -13,7 +13,13 @@ public enum SpokenComposition {
     /// page: the budget is a target, and the clamp drops whole sentences (in
     /// question, risk, goal reverse-priority order, since the clamp trims from
     /// the tail) rather than ever cutting mid-clause.
-    public static let depthOneMaxWords = 25
+    /// Ruled 05 Aug: 40 hard. The prompt aims at ~30 (Haiku's verbosity floor
+    /// for this content is ~50 regardless of the stated number — measured across
+    /// three calibration rounds, see docs/prompt-rationale-spec.md), so THIS
+    /// clamp is the enforcement, cutting at a sentence boundary. The sacrifice
+    /// order is right by construction: the template puts "We propose X because
+    /// Y" first and "careful about Z" second, so trailing state goes first.
+    public static let depthOneMaxWords = 40
 
     /// The spoken depth-1 line for an announcement, callsign prefix applied
     /// exactly once via the same mechanical pass the announcement itself uses.
@@ -41,12 +47,22 @@ public enum SpokenComposition {
         sanitizer: SpokenTextSanitizer = SpokenTextSanitizer(),
         allowing allowlist: Set<String> = []
     ) -> SanitizedSpokenText {
-        // Spoken labels, not written ones: "Goal:" read aloud is a bare word and
-        // a click of silence — heard as a glitch, not a heading (user report,
-        // 05 Aug). Full clauses survive text-to-speech.
+        // The model-written briefing is the product: "We propose X because Y.
+        // We need to be careful about Z." — written at announce time in the same
+        // call as everything else, so the pull still costs zero calls.
+        if let rationale = brief.rationale, !rationale.isEmpty {
+            let sanitized = sanitizer.sanitize(
+                rationale, maxWords: depthOneMaxWords, allowing: allowlist)
+            return sanitizer.applyingCallsign(callsign, strippingLabels: labels, to: sanitized)
+        }
+
+        // Fallback for briefs generated before the rationale field existed: the
+        // card fields spoken as plain clauses. No "The goal is" glue — template
+        // scaffolding read aloud was the original complaint (user report,
+        // 05 Aug); plain content beats labeled content in the ear.
         var parts: [String] = []
-        if let goal = brief.goal, !goal.isEmpty { parts.append(sentence("The goal is " + goal)) }
-        if let risk = brief.risk, !risk.isEmpty { parts.append(sentence("The risk is " + risk)) }
+        if let goal = brief.goal, !goal.isEmpty { parts.append(sentence(goal)) }
+        if let risk = brief.risk, !risk.isEmpty { parts.append(sentence(risk)) }
         if let question = brief.question, !question.isEmpty { parts.append(sentence(question)) }
 
         // Null-safe: a floor brief may carry none of the card fields. Say so

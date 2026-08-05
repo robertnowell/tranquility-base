@@ -263,6 +263,15 @@ public final class QueueStore: Sendable {
             try db.create(index: "idx_brief_at", on: "brief", columns: ["atMs"])
         }
 
+        // The ⌃⌃ briefing joins the argument: model-written why-plus-risk,
+        // spoken only on request. Nullable by design — old rows fall back to
+        // the card fields at composition time.
+        m.registerMigration("v7_brief_rationale") { db in
+            try db.alter(table: "brief") { t in
+                t.add(column: "rationale", .text)
+            }
+        }
+
         return m
     }
 
@@ -590,6 +599,7 @@ public final class QueueStore: Sendable {
             atMs: Int64(at.timeIntervalSince1970 * 1000),
             topic: brief.topic, goal: brief.goal, happened: brief.happened,
             nextStep: brief.nextStep, question: brief.question, risk: brief.risk,
+            rationale: brief.rationale,
             recap: brief.recap, proposal: brief.proposal,
             callsign: callsign, provider: provider)
         try dbQueue.write { db in try row.save(db) }

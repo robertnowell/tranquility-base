@@ -181,9 +181,9 @@ final class BriefStoreTests: XCTestCase {
         let depthOne = SpokenComposition.depthOneSpokenText(
             for: announcement, allowing: ["Klaviyo"])
         XCTAssertEqual(after.calls, 0)
-        XCTAssertTrue(depthOne.text.contains("The goal is ship the Klaviyo export"),
+        XCTAssertTrue(depthOne.text.contains("ship the Klaviyo export"),
                       "card fields survive the restart: \(depthOne.text)")
-        XCTAssertTrue(depthOne.text.contains("The risk is"))
+        XCTAssertTrue(depthOne.text.contains("migration drops a legacy table"))
     }
 
     // MARK: - Harvest

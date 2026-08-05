@@ -39,7 +39,24 @@ final class SpokenCompositionTests: XCTestCase {
 
     // MARK: - A4: depth-1 composition
 
-    func testDepthOneComposesGoalRiskAndQuestion() {
+    func testDepthOnePrefersTheModelWrittenRationale() {
+        let brief = SessionBrief(
+            topic: "export", goal: "ship the promotions poller", happened: "done",
+            question: "Proceed?",
+            risk: "the filter may drop real alerts",
+            rationale: "We propose the filter because two thirds of alert volume is "
+                + "noise the team ignores. We need to be careful about over-filtering.")
+        let out = SpokenComposition.depthOneSpokenText(
+            for: announcement(callsign: "promotions copy", brief: brief))
+        XCTAssertTrue(out.text.hasPrefix("promotions copy: We propose the filter"),
+                      "the written briefing wins over the card fields: \(out.text)")
+        XCTAssertFalse(out.text.contains("Proceed?"),
+                       "card fields stay on the card when a rationale exists")
+    }
+
+    func testDepthOneFallbackSpeaksPlainClausesWithoutLabelGlue() {
+        // Pre-rationale briefs (old rows) still speak — but as content, not as
+        // "The goal is …" scaffolding, which read aloud was the original bug.
         let brief = SessionBrief(
             topic: "export", goal: "ship the promotions poller", happened: "done",
             question: "Proceed?",
@@ -48,22 +65,22 @@ final class SpokenCompositionTests: XCTestCase {
             for: announcement(callsign: "promotions copy", brief: brief))
         XCTAssertEqual(
             out.text,
-            "promotions copy: The goal is ship the promotions poller. "
-            + "The risk is the filter may drop real alerts. Proceed?")
+            "promotions copy: ship the promotions poller. "
+            + "the filter may drop real alerts. Proceed?")
     }
 
-    func testDepthOneWordBudgetDropsWholeSentencesFromTheTail() {
-        let brief = SessionBrief(
-            topic: "export",
-            goal: "migrate the promotions export pipeline to the new queue",
-            happened: "done",
-            question: "Should the migration run now against the production database?",
-            risk: "the legacy table is dropped irreversibly during the run")
+    func testDepthOneWordBudgetClampsTheRationaleAtASentenceBoundary() {
+        let long = "We propose running the full migration now because staging "
+            + "verified every row count and the legacy table blocks the new queue "
+            + "schema from serving reads. We need to be careful because the drop is "
+            + "in the same transaction and the only rollback is the nightly backup. "
+            + "The session also refreshed twelve fixtures and updated the runbook "
+            + "documentation pages afterward."
+        let brief = SessionBrief(topic: "export", happened: "done", rationale: long)
         let out = SpokenComposition.depthOneSpokenText(
             for: announcement(callsign: "promotions copy", brief: brief))
-
-        XCTAssertTrue(out.text.contains("The risk is"), "the risk is inside the budget")
-        XCTAssertFalse(out.text.contains("production database"),
+        XCTAssertTrue(out.text.contains("We propose"), "the why always survives the clamp")
+        XCTAssertFalse(out.text.contains("runbook"),
                        "over budget, the trailing sentence goes whole — never mid-clause")
         // Budget bounds the composed body; the mechanical callsign prefix (2
         // words) rides on top of it.
@@ -103,6 +120,6 @@ final class SpokenCompositionTests: XCTestCase {
         let brief = SessionBrief(topic: "export", happened: "done", risk: "tests are flaky")
         let out = SpokenComposition.depthOneSpokenText(
             for: announcement(callsign: nil, brief: brief))
-        XCTAssertEqual(out.text, "promotions: The risk is tests are flaky.")
+        XCTAssertEqual(out.text, "promotions: tests are flaky.")
     }
 }

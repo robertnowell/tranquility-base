@@ -161,6 +161,7 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         {
           "recap":    "spoken part one: callsign + what concluded, 12 words max",
           "proposal": "spoken part two: proposed next action + the question, under 15 words",
+          "rationale": "spoken only when the user asks for more: why this proposal, about 30 words, or null",
           "topic":    "3-6 words naming this work, for a list",
           "goal":     "what this session is trying to achieve, or null",
           "happened": "what just concluded, one clause",
@@ -202,7 +203,27 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         compressed to a clause. For ordinary actions, the risk lives in the "risk" \
         field, not in the spoken text; the user can pull it on demand.
 
-        ── BOTH SPOKEN SECTIONS ──
+        ── "rationale": 40 words MAX, spoken ONLY when the user asks for more ──
+
+        The user heard the recap and proposal and pressed for depth. Answer "why?":
+        - The shape is literally: "We propose X because Y. We need to be careful \
+        about Z."
+        - Y is the reason for THIS action now, taken from the agent's final message: \
+        what it found, what it tried, what constraint forces the choice.
+        - Z is the main risk and its blast radius — what actually breaks if it goes \
+        wrong. If there is no real risk, skip Z rather than hedging.
+        - About 30 words; never more than 40 — anything past that is cut mid-thought \
+        at a sentence boundary, so say less and land it. Spend the words on Y and Z; \
+        leftover state only if room remains.
+        - ALWAYS open with "We propose" — the shape is the contract, not a suggestion.
+        - Flowing speech, dense but plain. No lists, no labels, no headings. \
+        Speakability applies with full force: no paths, no symbols, no hashes — this \
+        is speech.
+        - Every sentence must add a fact the recap and proposal did not carry. \
+        Repeating them is the failure mode this field exists to fix.
+        - null only when the turn is trivial and closed, with nothing behind it.
+
+        ── ALL THREE SPOKEN FIELDS (recap, proposal, rationale) ──
 
         Spoken, not displayed. Never speak file paths, branch names, function or \
         variable names, hashes, or UUIDs; describe them ("the asset pool"). Product \
@@ -212,10 +233,10 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
         ── THE REMAINING FIELDS ──
 
-        Card fields: read on demand, never spoken unprompted. 12 words or fewer each; \
-        these MAY name symbols. "goal" and "risk" and "question" are also what the \
-        user hears if they ask for the rationale; write them to stand alone. Use null \
-        when a field genuinely does not apply. Never invent a question or a risk.
+        Card fields: displayed in lists and cards, NEVER spoken. 12 words or fewer \
+        each; these MAY name symbols and paths precisely because they are read, not \
+        heard. Use null when a field genuinely does not apply. Never invent a \
+        question or a risk.
 
         ── GROUNDING: overrides everything above ──
 
@@ -238,11 +259,17 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         Source says: poller deployed, three alerts posted to Slack, proposes adding a \
         Shopify-only filter.
         {"recap": "Promotions: poller live, three alerts posted.", "proposal": "Add \
-        the Shopify-only filter next. Go?", ...}
+        the Shopify-only filter next. Go?", "rationale": "We propose the filter \
+        because two thirds of alert volume is non-Shopify noise the team ignores; \
+        all three real breaches today were Shopify orders. We need to be careful \
+        about over-filtering, which would hide a breach until the daily digest.", ...}
 
         Source says: migration script ready, will DROP the legacy table when run.
         {"recap": "Kopi: migration script ready.", "proposal": "Running it drops the \
-        legacy table. Irreversible. Run it?", ...}
+        legacy table. Irreversible. Run it?", "rationale": "We propose running it \
+        because row counts verified clean on staging, and the legacy table blocks \
+        the new queue schema. We need to be careful: the only rollback is the \
+        nightly backup, restored successfully this morning as a rehearsal.", ...}
 
         """ }
 
@@ -363,6 +390,7 @@ public struct AnthropicSummaryProvider: SummaryProvider {
             nextStep: field("nextStep"),
             question: field("question"),
             risk: field("risk"),
+            rationale: field("rationale"),
             branch: request.gitBranch,
             recap: field("recap"),
             proposal: field("proposal"))

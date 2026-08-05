@@ -34,6 +34,11 @@ public struct SessionBrief: Codable, Sendable, Equatable {
     public var question: String?
     /// A risk or uncertainty worth knowing before you answer.
     public var risk: String?
+    /// The ⌃⌃ briefing, model-written: "We propose X because Y. We need to be
+    /// careful about Z." Spoken only on request; clamped to 40 words at
+    /// composition. Nil on briefs generated before the field existed — the
+    /// composition falls back to the card fields.
+    public var rationale: String?
 
     // Deterministic — never written by the model.
     public var branch: String?
@@ -54,8 +59,8 @@ public struct SessionBrief: Codable, Sendable, Equatable {
 
     public init(
         topic: String, goal: String? = nil, happened: String, nextStep: String? = nil,
-        question: String? = nil, risk: String? = nil, branch: String? = nil,
-        recap: String? = nil, proposal: String? = nil
+        question: String? = nil, risk: String? = nil, rationale: String? = nil,
+        branch: String? = nil, recap: String? = nil, proposal: String? = nil
     ) {
         self.recap = recap
         self.proposal = proposal
@@ -65,6 +70,7 @@ public struct SessionBrief: Codable, Sendable, Equatable {
         self.nextStep = nextStep
         self.question = question
         self.risk = risk
+        self.rationale = rationale
         self.branch = branch
     }
 
