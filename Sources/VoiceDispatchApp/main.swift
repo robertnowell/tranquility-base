@@ -68,6 +68,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// message to the same session was so hard. A conversation is an app-level
     /// fact about your attention, not a log-level fact.
     private var activeConversation: (sessionId: String, label: String, cwd: String?)?
+    /// The most recent announcement, kept whole so ⌃⌃ can speak its depth-1
+    /// (goal, risk, question) from the already-computed brief — no model call,
+    /// and the session itself is never woken.
+    private var lastAnnouncement: Coordinator.Announcement?
     /// Incremented every time a reply gesture starts.
     ///
     /// Cancelling the countdown only covers the four seconds it is on screen.
@@ -624,9 +628,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hud.setPaused(speech.isPaused)
 
         case .controlDoubleTapped:
-            // WS-A will pull one level deeper on this gesture. Plumbing only for now:
-            // no spoken behavior, no visual behavior, just the log line.
-            Permissions.log("depth-1 pull: not yet implemented — WS-A")
+            // ⌃⌃ = escalate the daemon's channel: speak the rationale and risk
+            // for the announcement on stage (or the last one spoken), composed
+            // from the brief's already-computed card fields — zero model calls,
+            // and the session itself is never woken. Wiring per docs/wiring-a4.md.
+            guard let coordinator else { return }
+            guard !hud.isCapturingAudio else {
+                Permissions.log("depth-1: ignored, microphone is open")
+                return
+            }
+            guard let announcement = lastAnnouncement else {
+                // Quiet, not spoken: nothing has been announced this launch, and
+                // the voice is the away-channel — it never narrates empty state.
+                Permissions.log("depth-1: nothing announced yet; staying quiet")
+                return
+            }
+            hud.flashAcknowledge()
+            let previous = announceTask
+            announceTask = Task { @MainActor in
+                coordinator.speech.stop()
+                previous?.cancel()
+                _ = await previous?.value
+                guard !Task.isCancelled else { return }
+                // Awaiting the interrupted announce may have repainted idle; put
+                // the card the voice is about to explain back on the walls. No
+                // word highlight — the voice speaks the rationale, not the card.
+                hud.showAnnouncement(
+                    topic: announcement.brief.topic,
+                    spoken: announcement.spoken.text,
+                    sessionId: announcement.event.sessionId,
+                    pid: nil,
+                    project: announcement.event.projectLabel,
+                    cwd: announcement.event.cwd,
+                    eventId: announcement.event.sessionId)
+                let line = SpokenComposition.depthOneSpokenText(for: announcement)
+                Permissions.log("depth-1: speaking for \(announcement.event.sessionId.prefix(8)) "
+                                + "(\(line.text.count) chars)")
+                try? store?.recordDogfood(.depthOnePulled,
+                                          sessionId: announcement.event.sessionId)
+                _ = await coordinator.speech.speak(line)
+                lastStatusLine = "rationale spoken"
+                rebuildMenu()
+            }
 
         case .replyBegan:
             guard micGranted else { return }
@@ -796,6 +839,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             announcement.event.sessionId,
                             announcement.event.projectLabel,
                             announcement.event.cwd)
+                        self.lastAnnouncement = announcement
                         self.hud.showAnnouncement(
                             topic: announcement.brief.topic,
                             spoken: announcement.spoken.text,

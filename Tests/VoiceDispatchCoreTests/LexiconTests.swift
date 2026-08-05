@@ -179,6 +179,51 @@ final class LexiconTests: XCTestCase {
                        "the default chain hands the lexicon to the on-device floor")
     }
 
+    // MARK: - Consumer 2b: the OpenAI Whisper prompt (the primary path today)
+
+    func testRecoveryChainPlumbsTheLexiconIntoOpenAI() {
+        let chain = RecoveryChain(lexicon: ["promotions copy", "Klaviyo"])
+        let openai = chain.providers.compactMap { $0 as? OpenAIRecovery }.first
+        XCTAssertEqual(openai?.lexicon, ["promotions copy", "Klaviyo"],
+                       "the default chain hands the lexicon to the primary provider too")
+    }
+
+    func testWhisperPromptIsACommaJoinedTermListInLexiconOrder() {
+        let prompt = OpenAIRecovery.lexiconPrompt(["promotions copy", "Klaviyo", "syndit"])
+        XCTAssertEqual(prompt, "The recording may mention: promotions copy, Klaviyo, syndit.")
+    }
+
+    func testWhisperPromptIsNilForAnEmptyLexicon() {
+        XCTAssertNil(OpenAIRecovery.lexiconPrompt([]),
+                     "no lexicon means no prompt field, not an empty scaffold")
+        XCTAssertNil(OpenAIRecovery.lexiconPrompt(["  ", ""]),
+                     "whitespace-only terms compose nothing")
+    }
+
+    func testWhisperPromptRespectsTheTokenCap() {
+        // 300 distinct names — far more than ~224 Whisper tokens can hold.
+        let flood = (0..<300).map { "VendorNumber\($0)" }
+        let prompt = try! XCTUnwrap(OpenAIRecovery.lexiconPrompt(flood))
+        XCTAssertLessThanOrEqual(
+            OpenAIRecovery.estimatedTokens(prompt), OpenAIRecovery.promptTokenBudget,
+            "the composed prompt stays under the conservative budget")
+        XCTAssertFalse(prompt.contains("VendorNumber299"),
+                       "the tail must have been dropped to fit")
+    }
+
+    /// The lexicon puts seeds — callsigns and project labels — at the head, and
+    /// the prompt truncates from the tail, so under pressure the words the user
+    /// says back at the app always survive.
+    func testWhisperPromptKeepsCallsignsAndLabelsWhenTruncating() {
+        let seeds = ["promotions copy", "voice-dispatch", "m3-tracker"]
+        let harvested = (0..<300).map { "HarvestedName\($0)" }
+        let prompt = try! XCTUnwrap(OpenAIRecovery.lexiconPrompt(seeds + harvested))
+        for seed in seeds {
+            XCTAssertTrue(prompt.contains(seed), "seed \"\(seed)\" must survive the cap")
+        }
+        XCTAssertFalse(prompt.contains("HarvestedName299"))
+    }
+
     // MARK: - Consumer 3: the sanitizer allowlist at announce time
 
     func testLexiconTermsSurviveSanitizationEvenWhenTheMessageDoesNotEstablishThem() async {

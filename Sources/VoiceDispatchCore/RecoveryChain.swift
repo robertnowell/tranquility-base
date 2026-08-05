@@ -27,9 +27,11 @@ public struct RecoveryChain: Sendable {
         lexicon: [String] = []
     ) {
         // Cloud first for quality, on-device last because it can never be unavailable.
-        // A7: the shared lexicon reaches the Apple floor as contextualStrings;
-        // ignored when explicit providers are passed, which own their own config.
-        self.providers = providers ?? [OpenAIRecovery(), AppleSpeechRecovery(lexicon: lexicon)]
+        // A7: the shared lexicon reaches BOTH default providers — OpenAI as the
+        // Whisper `prompt` field, the Apple floor as contextualStrings; ignored
+        // when explicit providers are passed, which own their own config.
+        self.providers = providers
+            ?? [OpenAIRecovery(lexicon: lexicon), AppleSpeechRecovery(lexicon: lexicon)]
         self.maxAttemptsPerProvider = maxAttemptsPerProvider
         self.backoff = backoff
     }

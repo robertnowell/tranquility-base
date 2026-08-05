@@ -173,9 +173,54 @@ public struct OpenAIRecovery: RecoveryTranscriptionProvider {
     public let name = "openai"
     public var model: String
 
-    public init(model: String = "whisper-1") { self.model = model }
+    /// A7: the shared lexicon, biased in via the transcription API's `prompt`
+    /// field — the same vocabulary the Apple floor gets as `contextualStrings`.
+    /// This provider is the PRIMARY transcription path today, so without this the
+    /// lexicon never reached the transcripts that matter most.
+    public var lexicon: [String]
+
+    public init(model: String = "whisper-1", lexicon: [String] = []) {
+        self.model = model
+        self.lexicon = lexicon
+    }
 
     public var isConfigured: Bool { Secrets.has(.openAIAPIKey) }
+
+    /// Whisper treats the prompt as preceding context and biases vocabulary and
+    /// spelling toward it, but only reads the FINAL ~224 tokens — anything beyond
+    /// that silently falls off the front. So the budget is enforced here, well
+    /// under the limit, rather than trusting the model to truncate kindly.
+    static let promptTokenBudget = 180
+
+    /// Conservative overestimate (~3 bytes/token instead of the usual ~4), so a
+    /// term-list that passes this check can never blow the real tokenizer's cap.
+    static func estimatedTokens(_ text: String) -> Int {
+        max(1, (text.utf8.count + 2) / 3)
+    }
+
+    private static let promptScaffold = "The recording may mention: "
+
+    /// Compose the `prompt` field from the lexicon: a natural-ish comma-joined
+    /// term list. The lexicon is already priority-ordered — seeds first
+    /// (callsigns, project labels, live session names: the words the user says
+    /// back at the app), then harvested terms by recency-weighted score — so
+    /// truncating from the tail drops the least valuable terms.
+    static func lexiconPrompt(
+        _ terms: [String], tokenBudget: Int = promptTokenBudget
+    ) -> String? {
+        var included: [String] = []
+        var spent = estimatedTokens(promptScaffold)
+        for raw in terms {
+            let term = raw.trimmingCharacters(in: .whitespaces)
+            guard !term.isEmpty else { continue }
+            let cost = estimatedTokens(term) + 1  // + ", " separator
+            guard spent + cost <= tokenBudget else { break }
+            included.append(term)
+            spent += cost
+        }
+        guard !included.isEmpty else { return nil }
+        return promptScaffold + included.joined(separator: ", ") + "."
+    }
 
     public func transcribe(fileAt url: URL) async throws -> TranscriptionResult {
         guard let key = Secrets.read(.openAIAPIKey) else { throw TranscriptionFailure.notConfigured }
@@ -188,6 +233,7 @@ public struct OpenAIRecovery: RecoveryTranscriptionProvider {
             body.append(Data("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8))
         }
         field("model", model)
+        if let prompt = Self.lexiconPrompt(lexicon) { field("prompt", prompt) }
         body.append(Data("--\(boundary)\r\n".utf8))
         body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"utterance.wav\"\r\n".utf8))
         body.append(Data("Content-Type: audio/wav\r\n\r\n".utf8))
