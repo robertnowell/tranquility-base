@@ -1,0 +1,13 @@
+```json
+{
+  "recap": "video-essays: episode 028 NASA, stage 2 launched, four angles-research agents running.",
+  "proposal": "Await angles-research reports, then synthesize and pick three angles. Proceed?",
+  "rationale": "The session launched four parallel agents (surprising facts, counterintuitive claims, unresolved debates, real-world anchors) scoped to NASA identity history with the content engine's MOCR research seed as additional context. When they report, the dispatcher will synthesize their findings into research_angles.md, pick the three strongest angles, and write packages.md, which auto-advances to stage 3. No blocking risks; the research scope is bounded and the handoff is deterministic.",
+  "topic": "video-essays episode 028 angles research",
+  "goal": "Route to stage-specific sub-skills; currently in stage 2 (angles research) of the 5-stage short-form-to-long-form pipeline.",
+  "happened": "four angles-research agents launched in parallel for NASA identity-history story",
+  "nextStep": "synthesize research_angles.md from agent reports, pick 3 angles, write packages.md",
+  "question": "Proceed when reports arrive?",
+  "risk": null
+}
+```

@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "video-essays: first facet complete, three facets still running.",
+  "proposal": "Wait for all four facets, then synthesize research_angles.md. Proceed?",
+  "topic": "video-essays research synthesis",
+  "goal": "Complete Stage 3: research all angles, pick three, write packages.md",
+  "happened": "first facet agent reported strong material; three remaining facet agents still executing",
+  "nextStep": "synthesize research_angles.md once all four facet agents report",
+  "question": "Proceed with synthesis when all facets are in?",
+  "risk": "if any facet stalls or times out, synthesis may block; no timeout stated"
+}
+```

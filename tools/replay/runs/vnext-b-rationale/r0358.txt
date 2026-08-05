@@ -1,0 +1,13 @@
+```json
+{
+  "recap": "vd-state-legend-page: two builders running parallel. WS-C structure pass and enum migration in progress. A5 replay harness discovering schema and extracting historical calls.",
+  "proposal": "Let both agents continue to completion, report when each lands. Proceed?",
+  "rationale": "We propose letting both run because they're on disjoint code paths with no blocking dependencies — WS-C owns the structure definition and gesture logic in Sources/, while A5 is building isolated tooling under tools/replay/. The WS-C agent is holding tight constraints: pixel-identical rendering, no commits until review, and swift build passing, which keeps the risk of collision low. A5's smoke test at the end will verify the loop runs before the dedicated prompt turn. We need to be careful that WS-C's enum wiring for isCapturingAudio and canStartReply aligns with the gesture handler's actual expectations — the agent noted open-issues #6/#7, so those are tracked. The change summary going to docs/ gives you visibility without commits.",
+  "topic": "Parallel structure and replay tooling build",
+  "goal": "Introduce StateLegend definition site, complete enum migration, and build replay harness for prompt tuning validation.",
+  "happened": "WS-C and A5 agents began parallel work on disjoint repository sections with constraints and intermediate reporting in place.",
+  "nextStep": "Both agents continue to completion; WS-C writes change summary to docs/ws-c-changes.md; A5 completes smoke test and reports.",
+  "question": "Proceed?",
+  "risk": "WS-C enum wiring for gesture handler expectations (issues #6/#7) must align; A5's schema discovery could surface incompatibility with current prompt baseline if GRDB tables have drifted."
+}
+```

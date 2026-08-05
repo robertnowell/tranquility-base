@@ -1,0 +1,7 @@
+```json
+{
+  "recap": "video-essays: three of four facets complete, one agent still running.",
+  "proposal": "Await the final agent. Proceed when all four facets land?",
+  "topic": "Fact synthesis and source verification"
+}
+```

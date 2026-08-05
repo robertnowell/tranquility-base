@@ -1,0 +1,7 @@
+```json
+{
+  "recap": "vd-state-legend-page: two builders running parallel. WS-C introducing StateLegend, completing enum migration, wiring gesture handler per issues. A5 extracting historical calls, building replay and compare tooling.",
+  "proposal": "WS-C will write change summary to docs when landing; A5 will smoke-test the loop end to end. Review before any commits?",
+  "topic": "StateLegend refactor, replay harness build"
+}
+```

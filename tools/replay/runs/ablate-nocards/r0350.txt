@@ -1,0 +1,7 @@
+```json
+{
+  "recap": "video-essays: Episode 028 Stage 2 launched, four angles-research agents live.",
+  "proposal": "Await angles-research reports, synthesize and pick three. Proceed?",
+  "topic": "NASA identity angles research launched"
+}
+```

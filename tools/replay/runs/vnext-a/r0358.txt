@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "vd-state-legend-page: two builders running parallel on structure pass and replay harness.",
+  "proposal": "Report progress as each lands, review summary in docs before commit. Proceed?",
+  "topic": "StateLegend refactor, replay test harness",
+  "goal": "Consolidate state definitions and validate summarizer calls via replay.",
+  "happened": "WS-C and A5 agents began parallel work on disjoint repo sections with defined constraints.",
+  "nextStep": "WS-C completes structure pass; A5 completes replay harness; each reports completion.",
+  "question": "Proceed with both in parallel?",
+  "risk": "Two agents on same repo; coordinate to avoid merge conflicts at commit time."
+}
+```

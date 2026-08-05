@@ -1,0 +1,7 @@
+```json
+{
+  "recap": "video-essays: angles research in progress, two of four facets complete.",
+  "proposal": "Await the two running agents on counterintuitive claims and real-world anchors. Proceed?",
+  "topic": "NASA logo redesign angles research"
+}
+```

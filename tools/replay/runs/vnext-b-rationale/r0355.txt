@@ -1,0 +1,13 @@
+```json
+{
+  "recap": "video-essays: three of four facets complete, one agent still running.",
+  "proposal": "Wait for the final agent, then proceed to synthesis. Continue?",
+  "rationale": "The session has completed most of the research work across three facets and identified a critical source attribution issue—the vivid \"enshrined\" line is a 2020 gloss, not period language. The real anti-1960s evidence comes from the manual's own foreword and historian Bill Barry's work. One agent is still gathering real-world anchors, which the synthesis will need. We should let it finish rather than synthesize incomplete data. Once all four facets land, the next step is to weave them into a coherent narrative that respects the actual primary sources.",
+  "topic": "video-essays research synthesis in progress",
+  "goal": "Complete research across four facets and synthesize into a coherent narrative arc for the episode",
+  "happened": "Three of four research facets completed; source attribution error caught; one real-world anchors agent still running",
+  "nextStep": "Await final agent completion, then synthesize across all four facets",
+  "question": "Continue and wait for the last agent?",
+  "risk": "If synthesis begins before real-world anchors land, the narrative may lack grounding or require rework."
+}
+```
