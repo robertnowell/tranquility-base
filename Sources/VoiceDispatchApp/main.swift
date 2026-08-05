@@ -87,6 +87,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// identical, and a summary arriving changes a row's topic with no count
     /// change at all.
     private var lastShownRows: [StateLegend.SessionRow]?
+    /// The last turn the hail sounded for, as "sessionId:latestId". One hail per
+    /// arrival: a tick that re-surfaces the same turn stays quiet — silence after
+    /// a hail is "standby", not a request to be hailed again — while a
+    /// superseding turn from the same session is a NEW turn and hails anew.
+    private var lastHailedTurn: String?
     /// The annunciator's last title, so the count logs on change, not per tick.
     private var lastMenuBarCount: String?
     /// Consulted only for unprompted surfacing. A keypress is never gated: you
@@ -1253,16 +1258,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.log("ambient: held (\(decision.reason))")
             return
         }
-        if let front = frontmostSessionTty(), let target = try? coordinator?.nextToAnnounce(),
+        let target = try? coordinator?.nextToAnnounce()
+        if let front = frontmostSessionTty(), let target,
            let pid = (ClaudeAgentsCLI().sessions() ?? []).first(where: { $0.sessionId == target.sessionId })?.pid,
            ProcessProbe.tty(of: pid) == front {
             // You are looking straight at the tab that just finished. Announcing it
-            // is telling you something you can already see.
+            // is telling you something you can already see — no panel, no hail:
+            // showing up is enough, and here you are already there.
             Permissions.log("ambient: skipped, that session is the frontmost tab")
             return
         }
         Permissions.log("ambient: surfaced for \(waiting) waiting")
         hud.showIdle(rows: rows)
+        // A2 — the hail: a quiet chime and the callsign, nothing else. The summary
+        // plays only when you say "go ahead" (⌃⌥).
+        if let target { speakHail(for: target) }
+    }
+
+    /// A2 — the hail. A turn arrived and the panel surfaced for it; say WHO and
+    /// stop: a minor chime, then just the callsign through the normal speech
+    /// chain. The content waits for ⌃⌥ ("go ahead"). Nothing is marked heard and
+    /// no cursor moves, so standby — saying nothing — loses nothing: the grid row
+    /// stays lit and ⌃⌥ later plays the full summary exactly as before.
+    ///
+    /// The voice is the away-channel, and this is its ONLY unprompted use in the
+    /// app. It never interrupts: if anything is already speaking (or the
+    /// microphone is open), the surfaced panel and the lit lamp ARE the hail and
+    /// the audio is skipped — a hail that talks over another utterance would be
+    /// the app interrupting itself to say less.
+    private func speakHail(for target: WaitingSession) {
+        guard let coordinator else { return }
+        let turn = "\(target.sessionId):\(target.latestId)"
+        guard turn != lastHailedTurn else { return }
+        // Marked hailed even when the audio is skipped below: the panel surface
+        // carried the news, and this exact turn must never chime twice.
+        lastHailedTurn = turn
+        guard !isAnnouncing, !coordinator.speech.isSpeaking, !coordinator.speech.isPaused,
+              !recorder.isRecording, !hud.isCapturingAudio else {
+            Permissions.log("hail: silent (audio busy) — the surfaced panel is the hail")
+            return
+        }
+        // The spoken half of Announcement.hailText (Core, dormant by design),
+        // computed from the same WaitingSession fields so no announcement is
+        // fetched and nothing advances: the callsign, else the directory word
+        // for a session not yet minted.
+        let text = target.callsign ?? Callsign.directoryWord(cwd: target.cwd)
+        let previous = announceTask
+        announceTask = Task { @MainActor in
+            // Take the announce slot WITHOUT stopping anything — the guard above
+            // means whatever held it is already finished; awaiting is just the
+            // structural no-overlap guarantee every utterance in this app obeys.
+            _ = await previous?.value
+            guard !Task.isCancelled else { return }
+            Permissions.log("hail: \(text) for \(target.sessionId.prefix(8)) turn \(target.latestId)")
+            // Deliberate, not an alarm: Tink at half volume, then a beat of air
+            // before the name so the two read as one gesture, not a collision.
+            if let chime = NSSound(named: "Tink") {
+                chime.volume = 0.5
+                chime.play()
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            // The session's durable voice (ruled 05 Aug, f6d3de0): the hail IS a
+            // session utterance — the whole point of voice identity is that the
+            // ear knows WHO before the name even registers, and the hail is the
+            // first sound a turn makes. Same roster derivation as the
+            // Coordinator's announce path; nil falls back to the narrator.
+            let roster = VoiceCatalog.cached().map(\.id).sorted().prefix(10)
+            let voice = (try? self.store?.voiceId(for: target.sessionId, roster: Array(roster))) ?? nil
+            _ = await coordinator.speech.speak(SpokenTextSanitizer().sanitize(text), voice: voice)
+        }
     }
 
     /// The tty of the frontmost Terminal tab, or nil if Terminal is not in front.
