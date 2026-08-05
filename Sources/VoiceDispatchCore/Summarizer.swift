@@ -216,6 +216,10 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         at a sentence boundary, so say less and land it. Spend the words on Y and Z; \
         leftover state only if room remains.
         - ALWAYS open with "We propose" — the shape is the contract, not a suggestion.
+        - Name X concretely. "We propose addressing this" is a failure: the listener \
+        cannot resolve "this", and the rationale must stand alone. The action and its \
+        object are named IN THIS FIELD — never a pronoun whose referent lives in the \
+        recap, the proposal, or the source message.
         - Flowing speech, dense but plain. No lists, no labels, no headings. \
         Speakability applies with full force: no paths, no symbols, no hashes — this \
         is speech.
