@@ -342,26 +342,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func announceLaunch() {
         let missing = [micGranted ? nil : "microphone",
                        hotkeyWorking ? nil : "input monitoring"].compactMap { $0 }
-        let line = missing.isEmpty
-            ? "Voice dispatch is running. Tap control option to hear what's waiting."
-            : "Voice dispatch is running. Setting up permissions now."
+        _ = missing  // still logged below; the panel and menu carry the status
 
+        // No spoken greeting. Launch is a state the user caused, watching the
+        // screen — the away-channel law at its purest: if it can be communicated
+        // visually, it is not spoken. Apps also relaunch mid-work (rebuilds,
+        // updates), and announcing yourself each time is noise from the exact
+        // product that promised calm. The idle card appearing IS the greeting.
         Task { @MainActor in
-            // The good voice or none at all.
-            //
-            // This used the system voice deliberately, because the network provider
-            // once read the keychain and would prompt for a password before the user
-            // had granted anything. Secrets moved to a file months of debugging ago,
-            // so that reason is gone — but the robot voice stayed, and it was the
-            // first thing you heard every launch.
-            //
-            // A greeting is not worth a bad impression. If the good voice is
-            // unavailable the app simply starts quietly; the panel still appears,
-            // which is the part that matters.
-            // Cached per voice: the same sentence every launch is not worth
-            // re-synthesizing, or worth a network round trip in front of the first
-            // thing the app does.
-            await GreetingCache.speak(line)
             if !Permissions.allGranted {
                 onboarding.show { [weak self] in self?.refresh() }
             }
