@@ -12,6 +12,10 @@ public struct SummaryRequest: Sendable {
     public var cwd: String?
     public var hookEvent: HookEventKind
     public var notificationMatcher: String?
+    /// Appended to the user message on a digit-grounding retry (open issue #9):
+    /// names the ungrounded number(s) so the model can remove or correct them.
+    /// Never set on a first attempt.
+    public var correctiveNote: String?
 
     public init(
         lastAssistantMessage: String,
@@ -20,7 +24,8 @@ public struct SummaryRequest: Sendable {
         gitBranch: String? = nil,
         cwd: String? = nil,
         hookEvent: HookEventKind = .stop,
-        notificationMatcher: String? = nil
+        notificationMatcher: String? = nil,
+        correctiveNote: String? = nil
     ) {
         self.lastAssistantMessage = lastAssistantMessage
         self.projectLabel = projectLabel
@@ -29,6 +34,7 @@ public struct SummaryRequest: Sendable {
         self.cwd = cwd
         self.hookEvent = hookEvent
         self.notificationMatcher = notificationMatcher
+        self.correctiveNote = correctiveNote
     }
 }
 
@@ -133,89 +139,112 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
     public var isConfigured: Bool { Secrets.has(.anthropicAPIKey) }
 
-    static let systemPrompt = """
+    // The tuned prompt, ported verbatim from tools/replay/prompts/vnext-a.txt
+    // (three replay rounds plus a 50-record generalization pass against real
+    // history). The pre-tuning baseline is preserved at
+    // tools/replay/prompts/current.txt — every wording difference between the two
+    // is a measured decision, not style.
+    //
+    // The template's slots map to the user message built in `brief(for:)`:
+    // {project_label} {notification_block} {branch_block} {opening_block}
+    // {last_assistant_message} correspond one-to-one to the string interpolations
+    // there; the system prompt is everything above the "Project:" line. The one
+    // slot the system prompt itself uses — {project_label} in the recap rule — is
+    // substituted here, exactly as the replay harness rendered it.
+    static func systemPrompt(projectLabel: String) -> String { """
         You are the dispatcher for a developer running many coding-agent sessions at \
-        once. One just finished a turn.
+        once. One just finished a turn. You write the ONE spoken update they will hear \
+        about it, in loop discipline: callsign first, short, exact, one decision.
 
         Reply with ONLY a JSON object, no prose and no code fence:
 
         {
-          "recap":    "spoken section one — under 40 words",
-          "proposal": "spoken section two — under 40 words",
+          "recap":    "spoken part one: callsign + what concluded, 12 words max",
+          "proposal": "spoken part two: proposed next action + the question, under 15 words",
           "topic":    "3-6 words naming this work, for a list",
           "goal":     "what this session is trying to achieve, or null",
           "happened": "what just concluded, one clause",
           "nextStep": "the proposed next action, or null",
-          "question": "a real question being put to the user, or null",
+          "question": "the decision being put to the user, or null",
           "risk":     "a risk worth knowing before deciding, or null"
         }
 
-        ── SECTION ONE: "recap" ──  where things stand. Under 40 words.
 
-        Use this instruction exactly as written:
+        ── "recap": 12 words max, one sentence ──
 
-          The user stepped away and is coming back. Recap in under 40 words, 1-2 plain \
-          sentences, no markdown. Lead with the overall goal and current task, then the \
-          one next action. Skip root-cause narrative, fix internals, secondary to-dos, \
-          and em-dash tangents.
+        - The user stepped away and is coming back; they'll hear only this. Lead with \
+        the one thing that changed.
+        — skip root-cause narrative, fix internals, and secondary to-dos.
+        - MUST open with the project label spoken verbatim: "\(projectLabel):" the \
+        listener is tracking many sessions; the name is how they know which one this is.
+        - Then what concluded, with its exact parameters. Numbers and specifics beat \
+        adjectives: "three alerts posted", not "some alerts".
+        - NEVER speak a number that is not in the source message. If the source has no \
+        number, use none.
 
-        ── SECTION TWO: "proposal" ──  what happens next. Under 40 words.
+        ── "proposal": under 15 words ──
 
-        This section exists so the user can answer without opening the tab. Write it so \
-        that "yes, go ahead" is a complete and safe reply:
-
-        - State the proposed action plainly. Not "continue with the plan" — say what \
-          will actually be done, specifically enough that "yes" is a safe answer.
-        - If you filled the "risk" field, the risk MUST also appear here, in the \
-          spoken text. Not on the card alone. A proposal heard without its risk is \
-          exactly how someone approves something they later regret, and that is the \
-          specific failure this section exists to prevent. Compress it to a clause if \
-          you must, but say it.
-        - End on the decision as a direct question when there is one.
-        - If nothing needs deciding, say what will happen next and that no input is needed.
-        - Never let the risk be the thing that runs out of room. If you are close to \
-          the limit, cut detail from the action, not from the warning.
+        The user answers without opening the tab. "Yes" must be a complete and safe reply:
+        - The proposed action, specific and parameterized, taken ONLY from the agent's \
+        final message.
+        - ONE action per proposal. If the source offers alternatives, name the agent's \
+        preferred one and ask. Never invent durations, thresholds, or schedules ("for \
+        24 hours") the source does not state.
+        - End with the decision as a question answerable in one word: "Go?", \
+        "Proceed?", "Ship it?"
+        - EXCEPTION of closed-out work: only when the source proposes nothing, asks \
+        nothing, and does not end on a discussion point may you state the closure \
+        plainly with NO question and set "question" to null. "Shipped and tests green" \
+        is not enough; if the message ends on an observation, an open thread, or \
+        anything inviting a reaction, the thread is alive: ask. When in doubt, ask.
+        - If the action is destructive or hard to reverse (deletes, force-pushes, \
+        sends to real people, spends money), the risk MUST be spoken in this section, \
+        compressed to a clause. For ordinary actions, the risk lives in the "risk" \
+        field, not in the spoken text; the user can pull it on demand.
 
         ── BOTH SPOKEN SECTIONS ──
 
-        This text is SPOKEN, not displayed. Never say a function name, variable name, \
-        file, branch or identifier out loud — describe it instead ("the asset pool", \
-        not the symbol). A reader can skim a symbol; a listener cannot.
+        Spoken, not displayed. Never speak file paths, branch names, function or \
+        variable names, hashes, or UUIDs; describe them ("the asset pool"). Product \
+        names, project names, service names, and ordinary proper nouns ARE speakable; \
+        say "Klaviyo", not "an email platform"; vague paraphrase of a known name is \
+        worse than the name.
 
         ── THE REMAINING FIELDS ──
 
-        Card only, never spoken. Background context the user reads if they want more \
-        than they heard. 12 words or fewer each; these MAY name symbols, since they are \
-        read rather than heard. Use null when a field genuinely does not apply — never \
-        invent a question or a risk.
-        
-        GROUNDING — this overrides everything above.
-        Every fact, and especially the proposed next step, must come from the
-        agent's final message. If that message does not say what comes next, say
-        what it says happened and stop; do not invent a plausible next task, and
-        never take one from how the session opened. Naming work the session is not
-        doing is the worst failure available to you: it is confident, specific, and
-        wrong, and it is indistinguishable from a correct summary when heard aloud.
-        
-        Attribution: the work described in the final message was done by the
-        agent, not by the user. Say "the session validated…", "it found…", never
-        "you validated…" — second person for agent work makes the summary sound
-        like a recap of something the user said, which reads as the app parroting
-        them. Reserve "you" for what the user asked for and what they must decide.
+        Card fields: read on demand, never spoken unprompted. 12 words or fewer each; \
+        these MAY name symbols. "goal" and "risk" and "question" are also what the \
+        user hears if they ask for the rationale; write them to stand alone. Use null \
+        when a field genuinely does not apply. Never invent a question or a risk.
 
-        Never say that no input is needed, and never imply the user can ignore this.
-        You are writing the only thing they will hear about this session; if it
-        genuinely needed nothing from them, it should not have been read out at all,
-        so a line saying so is self-defeating. There is always a decision, even when
-        the agent has stated what it intends to do: the decision is whether to let it
-        proceed or to redirect it. End on that decision, phrased so it can be
-        answered out loud in a word — "Shall I go ahead?", "Proceed?", "Anything to
-        change first?"
+        ── GROUNDING: overrides everything above ──
 
-        And "no input needed" was not in the source message the one time it appeared.
-        It was inferred. Do not add it, or anything like it, ever.
+        Every fact, and especially the proposed next step, must come from the agent's \
+        final message. If that message does not say what comes next, say what it says \
+        happened and stop; do not invent a plausible next task, and never take one \
+        from how the session opened. Naming work the session is not doing is the \
+        worst failure available to you.
 
-"""
+        Attribution: the work was done by the agent, not the user. "The session \
+        validated…", never "you validated…". Reserve "you" for what the user asked \
+        for and must decide.
+
+        There is always a decision when a next step exists: whether to let the agent \
+        proceed or redirect it. Never say "no input is needed"; for a session with a \
+        next step, that sentence is false; the thread will not continue without a reply.
+
+        ── EXAMPLES (loop discipline: real shape, invented content) ──
+
+        Source says: poller deployed, three alerts posted to Slack, proposes adding a \
+        Shopify-only filter.
+        {"recap": "Promotions: poller live, three alerts posted.", "proposal": "Add \
+        the Shopify-only filter next. Go?", ...}
+
+        Source says: migration script ready, will DROP the legacy table when run.
+        {"recap": "Kopi: migration script ready.", "proposal": "Running it drops the \
+        legacy table. Irreversible. Run it?", ...}
+
+        """ }
 
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
         guard let key = Secrets.read(.anthropicAPIKey) else { throw SummaryError.notConfigured }
@@ -257,17 +286,21 @@ public struct AnthropicSummaryProvider: SummaryProvider {
                 """
         }
 
-        let user = """
+        var user = """
             \(context)
 
             The agent's final message this turn:
             \(request.lastAssistantMessage)
             """
+        if let note = request.correctiveNote {
+            user += "\n\n\(note)"
+        }
 
+        let system = Self.systemPrompt(projectLabel: request.projectLabel)
         let body: [String: Any] = [
             "model": model,
             "max_tokens": 400,
-            "system": Self.systemPrompt,
+            "system": system,
             "messages": [["role": "user", "content": user]],
         ]
 
@@ -286,7 +319,7 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
         ModelCallLog.record(
             model: model, status: http.statusCode, elapsedMs: elapsedMs,
-            system: Self.systemPrompt, user: user,
+            system: system, user: user,
             response: String(data: data, encoding: .utf8) ?? "<undecodable>")
         guard http.statusCode == 200 else {
             throw SummaryError.http(http.statusCode, String(String(data: data, encoding: .utf8)?.prefix(200) ?? ""))
@@ -350,14 +383,35 @@ public struct SummarizerChain: Sendable {
         self.providers = providers ?? [AnthropicSummaryProvider(), DeterministicSummarizer()]
     }
 
+    /// Set by the app so grounding retries and empty-source skips explain themselves.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
     public func summarize(_ request: SummaryRequest) async -> Summary {
         let start = Date()
         var produced: (SessionBrief, String)?
 
-        for provider in providers where provider.isConfigured {
-            if let brief = try? await provider.brief(for: request) {
-                produced = (brief, provider.name)
-                break
+        // An empty final message never reaches a model. The model correctly refuses
+        // to summarize nothing, which burns a call to learn what we already know —
+        // so the deterministic floor answers directly and the provider name records
+        // why. (The event `status` column was dropped in v3, so "summaryFailed" is
+        // no longer a writable state; this tag plus the trace line is the closest
+        // surviving failure path.)
+        let emptySource = request.lastAssistantMessage
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if emptySource {
+            SummarizerChain.trace?(
+                "summarize: empty source for \(request.projectLabel); model not called")
+            if let floor = try? await DeterministicSummarizer().brief(for: request) {
+                produced = (floor, "empty-source")
+            }
+        } else {
+            for provider in providers where provider.isConfigured {
+                if let brief = try? await provider.brief(for: request) {
+                    let grounded = await groundDigits(brief, request: request, provider: provider)
+                    produced = (grounded.brief,
+                                provider.name + (grounded.scrubbed ? "+digit-scrubbed" : ""))
+                    break
+                }
             }
         }
         if produced == nil,
@@ -368,19 +422,56 @@ public struct SummarizerChain: Sendable {
         var (brief, providerName) = produced
             ?? (SessionBrief(topic: request.projectLabel, happened: "finished a turn"), "none")
 
+        // Names the source itself used are speakable ("say Klaviyo, not 'an email
+        // platform'"); everything identifier-shaped is still stripped.
+        let speakable = SpokenTextSanitizer.speakableTerms(in: request.lastAssistantMessage)
+
         // Each section is clamped against its own budget before composing, so a long
         // recap can never eat the proposal — the half that carries the decision.
         if let recap = brief.recap {
-            brief.recap = sanitizer.sanitize(recap, maxWords: SpokenTextSanitizer.recapWords).text
+            brief.recap = sanitizer.sanitize(
+                recap, maxWords: SpokenTextSanitizer.recapWords, allowing: speakable).text
         }
         if let proposal = brief.proposal {
-            brief.proposal = sanitizer.sanitize(proposal, maxWords: SpokenTextSanitizer.proposalWords).text
+            brief.proposal = sanitizer.sanitize(
+                proposal, maxWords: SpokenTextSanitizer.proposalWords, allowing: speakable).text
         }
 
         return Summary(
-            spoken: sanitizer.sanitize(brief.spokenText()),
+            spoken: sanitizer.sanitize(brief.spokenText(), allowing: speakable),
             brief: brief,
             provider: providerName,
             latencyMs: Int(Date().timeIntervalSince(start) * 1000))
+    }
+
+    /// Digit grounding (open issue #9): a number the source never said must not be
+    /// spoken. One corrective retry; if the retry still invents numbers, the
+    /// offending clauses are scrubbed rather than spoken — a summary missing a
+    /// clause beats a confident wrong number, and this path must never crash.
+    private func groundDigits(
+        _ brief: SessionBrief, request: SummaryRequest, provider: any SummaryProvider
+    ) async -> (brief: SessionBrief, scrubbed: Bool) {
+        let pool = DigitGrounding.sourcePool(for: request)
+        let offending = DigitGrounding.ungroundedTokens(in: brief, pool: pool)
+        guard !offending.isEmpty else { return (brief, false) }
+
+        var retryRequest = request
+        retryRequest.correctiveNote =
+            "Your previous reply spoke the number(s) \(offending.joined(separator: ", ")) "
+            + "not present in the source. Remove or correct them."
+        SummarizerChain.trace?(
+            "digit grounding: ungrounded \(offending.joined(separator: ",")) "
+            + "in \(request.projectLabel); retrying once")
+
+        if let retried = try? await provider.brief(for: retryRequest) {
+            let still = DigitGrounding.ungroundedTokens(in: retried, pool: pool)
+            guard !still.isEmpty else { return (retried, false) }
+            SummarizerChain.trace?(
+                "digit grounding: retry still ungrounded (\(still.joined(separator: ","))); "
+                + "scrubbing")
+            return (DigitGrounding.scrub(retried, tokens: Set(still)), true)
+        }
+        SummarizerChain.trace?("digit grounding: retry failed; scrubbing first attempt")
+        return (DigitGrounding.scrub(brief, tokens: Set(offending)), true)
     }
 }

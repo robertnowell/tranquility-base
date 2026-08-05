@@ -233,7 +233,7 @@ public struct Coordinator: Sendable {
             : (event.transcriptPath
                 .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
 
-        return await summarizer.summarize(SummaryRequest(
+        let summary = await summarizer.summarize(SummaryRequest(
             lastAssistantMessage: lastMessage,
             projectLabel: event.projectLabel,
             firstUserMessage: context?.firstUserMessage,
@@ -241,6 +241,58 @@ public struct Coordinator: Sendable {
             cwd: event.cwd,
             hookEvent: event.hookEvent,
             notificationMatcher: event.notificationMatcher))
+
+        if summary.provider == "empty-source" {
+            Coordinator.trace?("summary skipped for empty source: event \(event.latestId) "
+                + "session \(event.sessionId.prefix(8))")
+        }
+        if summary.provider.hasSuffix("+digit-scrubbed") {
+            Coordinator.trace?("digit grounding scrubbed ungrounded number(s): "
+                + "event \(event.latestId) session \(event.sessionId.prefix(8))")
+        }
+        return withCallsign(summary, for: event)
+    }
+
+    // MARK: - Callsign
+
+    /// Spoken attribution is 100% by construction, never by model compliance.
+    ///
+    /// The tuned prompt asks the model to open with the project label and it
+    /// complies 65/71 — the miss is brand-substitution ("Kopi:" from a promotions
+    /// session whose CONTENT was about Kopi). So whatever label-like prefix the
+    /// model wrote is stripped, and the minted callsign is prepended mechanically.
+    /// Minting happens here — at the session's first successful summary — and the
+    /// stored value is frozen thereafter.
+    private func withCallsign(_ summary: Summary, for event: WaitingSession) -> Summary {
+        var callsign = event.callsign ?? ((try? store.callsign(for: event.sessionId)) ?? nil)
+
+        // "First successful summary": the failure paths never mint, so a transient
+        // outage cannot freeze a floor-quality name for the session's lifetime.
+        let failedProviders: Set<String> = ["deterministic-fallback", "empty-source", "none"]
+        if callsign == nil, !failedProviders.contains(summary.provider) {
+            let directory = Callsign.directoryWord(cwd: event.cwd)
+            let existing = (try? store.activeCallsigns(excluding: event.sessionId)) ?? []
+            if let minted = Callsign.mint(
+                directoryWord: directory, topic: summary.brief.topic,
+                existingCallsigns: existing) {
+                // The store enforces the freeze: if another announcer minted first,
+                // its value comes back and ours is discarded.
+                callsign = (try? store.mintCallsign(minted, for: event.sessionId)) ?? minted
+                Coordinator.trace?("callsign minted \"\(callsign ?? minted)\" "
+                    + "for session \(event.sessionId.prefix(8))")
+            }
+        }
+
+        // Not yet mintable (no usable topic word) — attribute with the directory
+        // word alone rather than skipping attribution; minting retries next turn.
+        let prefix = callsign ?? Callsign.directoryWord(cwd: event.cwd)
+        let liveName = agents.sessions()?
+            .first(where: { $0.sessionId == event.sessionId })?.name
+        let labels = [event.projectLabel, liveName].compactMap { $0 }
+        let spoken = summarizer.sanitizer.applyingCallsign(
+            prefix, strippingLabels: labels, to: summary.spoken)
+        return Summary(spoken: spoken, brief: summary.brief,
+                       provider: summary.provider, latencyMs: summary.latencyMs)
     }
 
     private func speak(

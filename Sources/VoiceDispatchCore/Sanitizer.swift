@@ -87,13 +87,38 @@ public struct SpokenTextSanitizer: Sendable {
         .init(pattern: "\\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,}\\b", replacement: "a variable", label: "symbol"),
     ]
 
-    public func sanitize(_ raw: String, maxWords: Int = SpokenTextSanitizer.maxWords) -> SanitizedSpokenText {
+    /// Rules that genericize identifier-shaped tokens and may therefore consult
+    /// the allowlist. Structural rules (paths, hashes, UUIDs, URLs, filenames,
+    /// markdown) never do: a path is a path even when the source names it.
+    private static let allowlistAwareLabels: Set<String> = ["symbol", "opaque-token"]
+
+    /// `allowing` is the speakable-names allowlist (see `speakableTerms(in:)`):
+    /// tokens the SOURCE itself used as names — "say Klaviyo, not 'an email
+    /// platform'". Only the identifier-genericizing rules consult it; when a
+    /// token is not on the list, the existing stripping behavior stands.
+    public func sanitize(
+        _ raw: String, maxWords: Int = SpokenTextSanitizer.maxWords,
+        allowing allowlist: Set<String> = []
+    ) -> SanitizedSpokenText {
         var working = raw.replacingOccurrences(of: "\n", with: " ")
         var redactions: [String] = []
 
         for rule in Self.rules {
             guard let regex = try? NSRegularExpression(pattern: rule.pattern) else { continue }
             let range = NSRange(working.startIndex..., in: working)
+            if !allowlist.isEmpty, Self.allowlistAwareLabels.contains(rule.label) {
+                // Match-by-match, in reverse so earlier ranges stay valid, skipping
+                // any token the source established as a speakable name. These
+                // rules' replacements are literal — no capture templates.
+                for match in regex.matches(in: working, range: range).reversed() {
+                    guard let matchRange = Range(match.range, in: working) else { continue }
+                    let token = String(working[matchRange])
+                    guard !allowlist.contains(token) else { continue }
+                    redactions.append(rule.label)
+                    working.replaceSubrange(matchRange, with: rule.replacement)
+                }
+                continue
+            }
             let hits = regex.numberOfMatches(in: working, range: range)
             if hits > 0 {
                 redactions.append(contentsOf: Array(repeating: rule.label, count: hits))
@@ -146,6 +171,62 @@ public struct SpokenTextSanitizer: Sendable {
             if total >= maxWords { break }
         }
         return kept.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Speakable names (the allowlist)
+
+    /// Product tokens whose casing makes them look like camelCase identifiers to
+    /// the symbol rule. Deliberately tiny: a name earns a place here by being a
+    /// word a person says aloud, and anything ambiguous stays OFF the list —
+    /// when unsure whether a token is an identifier, the stripping behavior wins.
+    static let knownProductTokens: Set<String> = [
+        "iPhone", "iPad", "iMac", "iPod", "iOS", "iPadOS", "macOS", "watchOS",
+        "tvOS", "visionOS", "iCloud", "iMessage", "iTerm", "iTerm2", "eBay",
+        "jQuery", "npm",
+    ]
+
+    /// Names the SOURCE message itself used, and which are therefore speakable:
+    /// capitalized simple words ("Klaviyo", "Slack") and known product tokens
+    /// ("iPhone"). A capitalized word with interior capitals ("GitHubActions",
+    /// "BuildLockedLayoutAssets") is identifier-shaped and stays out; so does
+    /// anything with underscores, digits-only content, or opaque length. The
+    /// list only ever EXEMPTS a token from the identifier rules — it never makes
+    /// a path, hash, or filename speakable.
+    public static func speakableTerms(in source: String) -> Set<String> {
+        var out = Set<String>()
+        let tokens = source.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        for raw in tokens {
+            let word = String(raw)
+            guard word.count >= 2, word.count <= 20 else { continue }
+            if knownProductTokens.contains(word) {
+                out.insert(word)
+                continue
+            }
+            guard let first = word.first, first.isUppercase else { continue }
+            // One initial capital and nothing else uppercase: "Klaviyo" yes,
+            // "GitHub"/"BuildLocked" no — conservative by design.
+            guard word.dropFirst().allSatisfy({ !$0.isUppercase }) else { continue }
+            out.insert(word)
+        }
+        return out
+    }
+
+    // MARK: - Mechanical callsign prefix
+
+    /// Attribution is never delegated to the model (measured compliance 65/71,
+    /// and the miss is brand-substitution — a promotions session opening
+    /// "Kopi:"). Strip whatever label-like prefix the model wrote — the project
+    /// label, the live session name, or the callsign itself — then prepend the
+    /// minted callsign exactly once. "promotions: promotions:" is impossible by
+    /// construction. Lives here because only this file can mint a
+    /// `SanitizedSpokenText`, which is the type's whole point.
+    public func applyingCallsign(
+        _ callsign: String, strippingLabels labels: [String], to spoken: SanitizedSpokenText
+    ) -> SanitizedSpokenText {
+        let stripped = Callsign.strippingLabelPrefixes(
+            spoken.text, labels: labels + [callsign])
+        let text = stripped.isEmpty ? "\(callsign):" : "\(callsign): \(stripped)"
+        return SanitizedSpokenText(text: text, redactions: spoken.redactions)
     }
 
     /// Split on sentence-ending punctuation followed by whitespace, keeping the

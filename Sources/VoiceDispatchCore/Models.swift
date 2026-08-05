@@ -321,6 +321,10 @@ public struct WaitingSession: Codable, FetchableRecord, Sendable {
     /// The kind of the latest event. `stop` is the only one that waits, but the
     /// summarizer needs to know when it is describing a permission prompt.
     public var hookEvent: HookEventKind
+    /// The spoken two-word name minted at the first successful summary and frozen
+    /// for the session's lifetime ("promotions copy"). Nil until minted. Exposed
+    /// for UI use; the spoken prefix itself is applied by the Coordinator.
+    public var callsign: String?
 
     /// Same derivation the old QueuedEvent used, kept so the summarizer is unchanged.
     public var projectLabel: String {

@@ -201,6 +201,19 @@ public final class QueueStore: Sendable {
             try db.alter(table: "events") { $0.drop(column: "status") }
         }
 
+        // Phase 1b: the spoken callsign ("promotions copy"), minted once at the
+        // session's first successful summary and FROZEN for the session's
+        // lifetime. Its own table rather than a column on events, because it is a
+        // fact about the session, not about any one turn — and events are
+        // append-only facts that never change.
+        m.registerMigration("v4_session_callsign") { db in
+            try db.create(table: "session_callsign") { t in
+                t.column("sessionId", .text).primaryKey()
+                t.column("callsign", .text).notNull()
+                t.column("mintedAtMs", .integer).notNull()
+            }
+        }
+
         return m
     }
 
@@ -364,9 +377,11 @@ public final class QueueStore: Sendable {
             try WaitingSession.fetchAll(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
-                       l.notificationMatcher, l.summaryText, l.hookEvent
+                       l.notificationMatcher, l.summaryText, l.hookEvent,
+                       cs.callsign
                 FROM latest_per_session l
                 LEFT JOIN session_cursor c ON c.sessionId = l.sessionId
+                LEFT JOIN session_callsign cs ON cs.sessionId = l.sessionId
                 WHERE l.hookEvent = ?
                   AND l.latestId > max(coalesce(c.heardThrough, 0),
                                        coalesce(c.dismissedThrough, 0))
@@ -411,9 +426,11 @@ public final class QueueStore: Sendable {
             try WaitingSession.fetchOne(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
-                       l.notificationMatcher, l.summaryText, l.hookEvent
+                       l.notificationMatcher, l.summaryText, l.hookEvent,
+                       cs.callsign
                 FROM session_cursor c
                 JOIN latest_per_session l ON l.sessionId = c.sessionId
+                LEFT JOIN session_callsign cs ON cs.sessionId = l.sessionId
                 WHERE c.heardThrough IS NOT NULL
                   AND c.heardThrough = l.latestId
                   AND c.heardAtMs >= ?
@@ -429,10 +446,13 @@ public final class QueueStore: Sendable {
     public func waitingSessionsIncludingHeard(limit: Int = 500) throws -> [WaitingSession] {
         try dbQueue.read { db in
             try WaitingSession.fetchAll(db, sql: """
-                SELECT sessionId, latestId, createdAtMs, cwd, tty, promptId,
-                       transcriptPath, lastAssistantMessage, notificationMatcher,
-                       summaryText, hookEvent
-                FROM latest_per_session ORDER BY latestId DESC LIMIT ?
+                SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
+                       l.promptId, l.transcriptPath, l.lastAssistantMessage,
+                       l.notificationMatcher, l.summaryText, l.hookEvent,
+                       cs.callsign
+                FROM latest_per_session l
+                LEFT JOIN session_callsign cs ON cs.sessionId = l.sessionId
+                ORDER BY l.latestId DESC LIMIT ?
                 """, arguments: [limit])
         }
     }
@@ -447,17 +467,63 @@ public final class QueueStore: Sendable {
     public func latestStop(for sessionId: String) throws -> WaitingSession? {
         try dbQueue.read { db in
             try WaitingSession.fetchOne(db, sql: """
-                SELECT sessionId, max(rowid) AS latestId, createdAtMs, cwd, tty,
-                       promptId, transcriptPath, lastAssistantMessage,
-                       notificationMatcher, summaryText, hookEvent
-                FROM events
-                WHERE sessionId = ? AND hookEvent = ?
+                SELECT e.sessionId, max(e.rowid) AS latestId, e.createdAtMs, e.cwd,
+                       e.tty, e.promptId, e.transcriptPath, e.lastAssistantMessage,
+                       e.notificationMatcher, e.summaryText, e.hookEvent,
+                       cs.callsign
+                FROM events e
+                LEFT JOIN session_callsign cs ON cs.sessionId = e.sessionId
+                WHERE e.sessionId = ? AND e.hookEvent = ?
                 """, arguments: [sessionId, HookEventKind.stop.rawValue])
         }
     }
 
     public func cursor(for sessionId: String) throws -> SessionCursor? {
         try dbQueue.read { db in try SessionCursor.fetchOne(db, key: sessionId) }
+    }
+
+    // MARK: - Callsigns
+
+    public func callsign(for sessionId: String) throws -> String? {
+        try dbQueue.read { db in
+            try String.fetchOne(
+                db, sql: "SELECT callsign FROM session_callsign WHERE sessionId = ?",
+                arguments: [sessionId])
+        }
+    }
+
+    /// Mint a callsign. FROZEN: the first write wins for the session's lifetime —
+    /// a concurrent mint loses silently and the stored value is returned, so two
+    /// racing announcers can never speak two different names for one session.
+    @discardableResult
+    public func mintCallsign(_ callsign: String, for sessionId: String) throws -> String {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO session_callsign (sessionId, callsign, mintedAtMs)
+                VALUES (?, ?, ?) ON CONFLICT(sessionId) DO NOTHING
+                """, arguments: [sessionId, callsign,
+                                  Int64(Date().timeIntervalSince1970 * 1000)])
+            return try String.fetchOne(
+                db, sql: "SELECT callsign FROM session_callsign WHERE sessionId = ?",
+                arguments: [sessionId]) ?? callsign
+        }
+    }
+
+    /// The mint-time collision set: callsigns of OTHER sessions with recent
+    /// activity. Bounded by recency rather than by the agents API so minting is
+    /// deterministic and testable — a session that last spoke two days ago no
+    /// longer competes for names.
+    public func activeCallsigns(
+        excluding sessionId: String, activeWithin: TimeInterval = 48 * 3600
+    ) throws -> [String] {
+        let cutoff = Int64((Date().timeIntervalSince1970 - activeWithin) * 1000)
+        return try dbQueue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT c.callsign FROM session_callsign c
+                JOIN latest_per_session l ON l.sessionId = c.sessionId
+                WHERE c.sessionId != ? AND l.createdAtMs >= ?
+                """, arguments: [sessionId, cutoff])
+        }
     }
 
 

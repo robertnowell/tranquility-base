@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "vd-state-legend-page: v0.4 live, annunciator stack is idle face.",
+  "proposal": "Proceed with Phase 1a/1b implementation?",
+  "topic": "Annunciator stack redesign shipped",
+  "goal": "Visual queue manager for voice dispatch sessions",
+  "happened": "Deployed v0.4 with annunciator stack as idle interface, queue is user-driven",
+  "nextStep": "Implement Phase 1a/1b",
+  "question": "Start Phase 1a/1b implementation next?",
+  "risk": null
+}
+```

@@ -81,7 +81,12 @@ def main():
     ap.add_argument("--timeout", type=int, default=240,
                     help="per-call timeout seconds (default 240)")
     ap.add_argument("--workers", type=int, default=4,
-                    help="concurrent claude calls (default 4)")
+                    help="concurrent claude calls (default 4; api engine tolerates 8+)")
+    ap.add_argument("--engine", choices=["cli", "api"], default="cli",
+                    help="cli = claude -p (subscription credits, slow: full harness boot "
+                         "per call). api = raw Anthropic API (fast, faithful to how the "
+                         "app itself calls the model; needs ANTHROPIC_API_KEY — launch via "
+                         "claude-secrets run --inject mirai_anthropic_api_key=ANTHROPIC_API_KEY -- ...)")
     ap.add_argument("--ids", nargs="*", default=None,
                     help="explicit record ids, e.g. r0001 r0042")
     args = ap.parse_args()
@@ -108,15 +113,51 @@ def main():
     print("replaying %d record(s) with prompt=%s model=%s -> %s"
           % (len(records), name, args.model, outdir))
 
+    API_MODELS = {"haiku": "claude-haiku-4-5-20251001", "sonnet": "claude-sonnet-5"}
+
+    def call_api(prompt):
+        import urllib.request
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise RuntimeError("--engine api needs ANTHROPIC_API_KEY; launch via "
+                               "claude-secrets run --inject mirai_anthropic_api_key=ANTHROPIC_API_KEY -- ...")
+        body = json.dumps({
+            "model": API_MODELS.get(args.model, args.model),
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": prompt}],
+        }).encode()
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages", data=body,
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=args.timeout) as resp:
+            data = json.loads(resp.read())
+        return "".join(b.get("text", "") for b in data.get("content", []))
+
     def run_one(rec):
         out_path = os.path.join(outdir, rec["id"] + ".txt")
         if os.path.exists(out_path):
             return (rec["id"], "skipped", 0.0)
         prompt = fill(template, rec)
+        t0 = time.time()
+        if args.engine == "api":
+            try:
+                text = call_api(prompt)
+            except Exception as e:
+                with open(os.path.join(outdir, rec["id"] + ".error"), "w") as f:
+                    f.write("api error: %s\n" % e)
+                return (rec["id"], "failed", time.time() - t0)
+            elapsed = time.time() - t0
+            if not text.strip():
+                with open(os.path.join(outdir, rec["id"] + ".error"), "w") as f:
+                    f.write("api returned empty content\n")
+                return (rec["id"], "failed", elapsed)
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(text.strip() + "\n")
+            return (rec["id"], "ok", elapsed)
         cmd = ["claude", "-p", "--model", args.model,
                "--dangerously-skip-permissions",
                "--strict-mcp-config", "--mcp-config", EMPTY_MCP]
-        t0 = time.time()
         try:
             proc = subprocess.run(
                 cmd, input=prompt, capture_output=True, text=True,

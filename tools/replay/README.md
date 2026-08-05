@@ -123,3 +123,15 @@ times out at the limit. `replay.py` scrubs these unconditionally (`child_env()`)
 and pins `--strict-mcp-config --mcp-config .empty-mcp.json` so startup is
 seconds, not minutes. Real calls run ~45–80s on haiku with full-size inputs;
 use `--timeout 240` for safety. Comparator usage: `python3 compare.py actual current`.
+
+## Fast engine (recommended)
+
+`--engine api` calls the Anthropic API directly — 2-4s/record vs 35-160s via the
+CLI harness, and MORE production-faithful (the app itself calls the model directly,
+not through `claude -p`). Launch with the key injected from the keychain:
+
+    claude-secrets run --inject mirai_anthropic_api_key=ANTHROPIC_API_KEY -- \
+      python3 replay.py --prompt prompts/vnext-a.txt --sample 50 --engine api --workers 8
+
+A full 360-record sweep costs roughly a dollar or two in haiku tokens. The cli
+engine remains the default for zero-setup/subscription-credit runs.
