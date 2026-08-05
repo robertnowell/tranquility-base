@@ -413,8 +413,9 @@ final class StatusHUD: NSObject {
                         body: [note, "Nothing waiting. Sessions appear here as they finish."]
                             .compactMap { $0 }.joined(separator: " "))
         } else {
-            face = Face(title: waiting > 0 ? "\(waiting) waiting" : "",
-                        body: note ?? "", sessionRows: rows)
+            // No "N waiting" headline (ruled): the strip says SESSIONS, the lamps
+            // say who is waiting, and the count lives in the menu bar.
+            face = Face(body: note ?? "", sessionRows: rows)
         }
         render()
     }
@@ -534,6 +535,9 @@ final class StatusHUD: NSObject {
         discardButton.isHidden = true; sendCheckButton.isHidden = true
         voicePicker.isHidden = true; waitingRows.isHidden = true
         gearButton.isHidden = false; backButton.isHidden = true
+        // Part of the baseline so the grid's monospaced key line can never leak
+        // into another state's hint — a font no arm mentions is at its baseline.
+        hintLabel.font = .systemFont(ofSize: 10)
         // Unhidden only by the slow-transcription tick, never by a state's arm.
         cancelTranscriptionButton.isHidden = true; retryTranscriptionButton.isHidden = true
         var autoHide: TimeInterval?
@@ -544,8 +548,16 @@ final class StatusHUD: NSObject {
 
         case .idle where !face.sessionRows.isEmpty:
             // The grid: the idle face IS one row per live session (WS-B, ruled).
-            // The rows carry the identity and state; the hint text is dead here.
-            hintLabel.stringValue = ""
+            // Ruled strip: a small letterspaced SESSIONS placard where the Ready
+            // pill would be — no "Ready", no "N waiting" (the count lives in the
+            // menu bar) — and the key line where the Dismiss button was: every
+            // gesture the grid answers to, in the panel's monospaced small type.
+            stateLabel.attributedStringValue = letterspaced(
+                StateLegend.gridStripTitle, size: 10, tracking: 1.6,
+                color: StateLegend.Lens.chrome.color)
+            hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
+            hintLabel.stringValue = StateLegend.gridHint
+            actionRow.isHidden = true
             waitingRows.isHidden = false
             rebuildSessionRows()
 
@@ -667,51 +679,61 @@ final class StatusHUD: NSObject {
         }
     }
 
-    /// One grid row: lamp glyph in its flat state color, the callsign, then the
-    /// topic in chrome. Tap = invite that session. Capped at 8 rows.
+    /// The grid's content width: the 380 panel minus the stack's 14pt insets.
+    private static let gridWidth: CGFloat = 352
+
+    /// The ruled grid (mock variant A): strict three-column rows — 26px lamp /
+    /// 148px callsign / remaining topic — at a fixed 31px height, a hairline
+    /// rule between rows (none after the last), capped at 8. Below the rows: a
+    /// quiet "+ NEW SESSION" placard, then the strong rule above the key line.
+    /// Tap = invite that session. Fixed height plus single-line topics is what
+    /// kills the orphan fragments and ragged gaps the old free-height
+    /// attributed-title rows produced.
     private func rebuildSessionRows() {
         waitingRows.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .left
-        paragraph.lineBreakMode = .byTruncatingTail
-        for item in face.sessionRows.prefix(8) {
-            let title = NSMutableAttributedString(
-                string: "\(StateLegend.Glyph.dot) ",
-                attributes: [.foregroundColor: item.lamp.color,
-                             .font: NSFont.systemFont(ofSize: 12),
-                             .paragraphStyle: paragraph])
-            title.append(NSAttributedString(
-                string: item.name,
-                attributes: [.foregroundColor: StateLegend.Lens.content.color,
-                             .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
-                             .paragraphStyle: paragraph]))
-            if !item.topic.isEmpty {
-                title.append(NSAttributedString(
-                    string: "  \(item.topic)",
-                    attributes: [.foregroundColor: StateLegend.Lens.chrome.color,
-                                 .font: NSFont.systemFont(ofSize: 12),
-                                 .paragraphStyle: paragraph]))
-            }
-            let row = NSButton(title: "", target: self, action: #selector(sessionRowTapped(_:)))
-            row.attributedTitle = title
-            row.isBordered = false
-            row.alignment = .left
-            row.identifier = NSUserInterfaceItemIdentifier(item.id)
-            waitingRows.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalToConstant: 348).isActive = true
+        waitingRows.spacing = 0
+
+        func hairline(_ color: NSColor) -> NSView {
+            let line = NSView()
+            line.wantsLayer = true
+            line.layer?.backgroundColor = color.cgColor
+            line.translatesAutoresizingMaskIntoConstraints = false
+            line.heightAnchor.constraint(equalToConstant: 1).isActive = true
+            line.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+            return line
         }
-        // The proactive half (ruled 05 Aug addendum): a "+" row at the bottom of
-        // the grid kicks off a fresh session — same code path as the menu item.
-        let newRow = NSButton(title: "+ New session", target: self,
-                              action: #selector(newSessionRowTapped))
-        newRow.isBordered = false
-        newRow.alignment = .left
-        newRow.font = .systemFont(ofSize: 12)
-        newRow.contentTintColor = StateLegend.Lens.chrome.color
+
+        // The strip's bottom rule, under "SESSIONS ⚙".
+        waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
+        let shown = Array(face.sessionRows.prefix(8))
+        for (index, item) in shown.enumerated() {
+            let row = GridRowView(item: item, target: self,
+                                  action: #selector(sessionRowTapped(_:)))
+            waitingRows.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+            if index < shown.count - 1 {
+                waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+            }
+        }
+        // The proactive half (ruled 05 Aug addendum): the "+" placard kicks off
+        // a fresh session — same code path as the menu item.
+        waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+        let newRow = PlacardRowView(target: self, action: #selector(newSessionRowTapped))
         waitingRows.addArrangedSubview(newRow)
-        newRow.widthAnchor.constraint(equalToConstant: 348).isActive = true
-        let ready = face.sessionRows.filter { $0.lamp == .ready }.count
-        Permissions.log("grid: \(min(face.sessionRows.count, 8)) rows (\(ready) ready)")
+        newRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+        // The key line's top rule; the hint label follows in the outer stack.
+        waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
+
+        // The layout self-check: geometry is ruled, so the log states it — and
+        // singleLine proves the sanitized topics can never recreate the orphan
+        // fragments ("**Voices for lif") between rows.
+        let ready = shown.filter { $0.lamp == .ready }.count
+        let singleLine = shown.allSatisfy { !$0.topic.contains("\n") }
+        Permissions.log("grid: \(shown.count) rows (\(ready) ready) "
+            + "rowH=\(Int(GridRowView.height)) "
+            + "cols=\(Int(GridRowView.lampColumn))/\(Int(GridRowView.callsignColumn))"
+            + "/\(Int(Self.gridWidth - GridRowView.lampColumn - GridRowView.callsignColumn)) "
+            + "lamps=circular singleLine=\(singleLine)")
     }
 
     /// Wired by the app onto SessionLauncher.launch().
@@ -828,7 +850,9 @@ final class StatusHUD: NSObject {
             layer = existing
         } else {
             layer = CALayer()
-            layer.borderColor = NSColor.controlAccentColor.cgColor
+            // Palette, not controlAccentColor: accent = state, not user
+            // preference (ruled) — the pulse is the same green as the go lamp.
+            layer.borderColor = StateLegend.Palette.ready.cgColor
             layer.borderWidth = 3
             layer.cornerRadius = 12
             layer.opacity = 0
@@ -901,6 +925,12 @@ final class StatusHUD: NSObject {
                       topic: "Hero image validated across the stack", lamp: .ready),
                 .init(id: "b", name: "syndit", topic: long, lamp: .running),
                 .init(id: "c", name: "voice dispatch", topic: "", lamp: .ready),
+                // The live bug, proven dead in the matrix log: a markdown
+                // fragment with a newline sanitizes to one clean line —
+                // never "**Voices for lif" orphaned between rows.
+                .init(id: "d", name: "robertnowell-83",
+                      topic: StateLegend.gridTopic("**Voices for life**\ncampaign shipped"),
+                      lamp: .running),
             ]) }),
             ("preparing", { _ = self.showPreparing() }),
             ("announcement", { self.showAnnouncement(
@@ -1010,13 +1040,19 @@ final class StatusHUD: NSObject {
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        // The surface is an opaque light console on every face (ruled): AppKit's
+        // own chrome — bezels, the picker, the progress bar — must render for a
+        // light surface even when the system is in dark mode, or a dark-mode
+        // bezel sits on light putty looking like a hole.
+        panel.appearance = NSAppearance(named: .aqua)
 
-        let background = NSVisualEffectView(frame: panel.contentView!.bounds)
+        // Opaque light console surface, panel-wide (ruled — the blur is dead: an
+        // instrument guarantees its own contrast, a blur borrowed the desktop's).
+        // Same corner radius, shadow, and non-activating behavior as before.
+        let background = NSView(frame: panel.contentView!.bounds)
         background.autoresizingMask = [.width, .height]
-        background.material = .hudWindow
-        background.blendingMode = .behindWindow
-        background.state = .active
         background.wantsLayer = true
+        background.layer?.backgroundColor = StateLegend.Palette.surface.cgColor
         background.layer?.cornerRadius = 12
         background.layer?.masksToBounds = true
 
@@ -1029,6 +1065,7 @@ final class StatusHUD: NSObject {
 
         titleLabel = NSTextField(labelWithString: "")
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = StateLegend.Lens.content.color
         titleLabel.lineBreakMode = .byTruncatingTail
 
         bodyLabel = NSTextField(wrappingLabelWithString: "")
@@ -1219,9 +1256,11 @@ final class StatusHUD: NSObject {
         let attributed = NSMutableAttributedString(string: body)
         let full = NSRange(location: 0, length: (body as NSString).length)
         attributed.addAttribute(
-            .foregroundColor, value: NSColor.labelColor.withAlphaComponent(0.35), range: full)
+            .foregroundColor,
+            value: StateLegend.Palette.ink.withAlphaComponent(0.35), range: full)
         let spokenRange = NSRange(location: 0, length: min(clamped, full.length))
-        attributed.addAttribute(.foregroundColor, value: NSColor.labelColor, range: spokenRange)
+        attributed.addAttribute(.foregroundColor, value: StateLegend.Palette.ink,
+                                range: spokenRange)
         attributed.addAttribute(Self.spokenMark, value: true, range: spokenRange)
         attributed.addAttribute(
             .font, value: NSFont.systemFont(ofSize: 12), range: full)
@@ -1280,7 +1319,7 @@ final class StatusHUD: NSObject {
     // so showWaitingList/onOpenWaitingList and the clickable count pill went
     // with it — one face, not two near-identical lists.
 
-    @objc nonisolated private func sessionRowTapped(_ sender: NSButton) {
+    @objc nonisolated private func sessionRowTapped(_ sender: NSControl) {
         MainActor.assumeIsolated {
             guard let id = sender.identifier?.rawValue else { return }
             onPickWaiting?(id)
@@ -1308,5 +1347,160 @@ final class StatusHUD: NSObject {
             onDismiss?()
             hide()
         }
+    }
+}
+
+/// Small uppercase letterspaced type — the SESSIONS strip (10px, +0.16em) and
+/// the NEW SESSION placard (9.5px, +0.14em) share it.
+@MainActor
+private func letterspaced(_ text: String, size: CGFloat, tracking: CGFloat,
+                          color: NSColor) -> NSAttributedString {
+    NSAttributedString(string: text, attributes: [
+        .font: NSFont.systemFont(ofSize: size),
+        .kern: tracking,
+        .foregroundColor: color,
+    ])
+}
+
+/// One grid row, in the ruled three-column geometry: a 26px lamp column, a
+/// 148px callsign column, and the topic in whatever remains — at a fixed 31px
+/// height with single-line tail-truncating labels, so a row can never be taller
+/// or shorter than its neighbors and no text fragment can wrap between rows.
+///
+/// A control with real frames, not a bezel-less NSButton: an attributed title
+/// can only flow its runs inline, and columns need columns. Hover paints the
+/// row in the palette's hover putty, exactly like the mock.
+private final class GridRowView: NSControl {
+    static let height: CGFloat = 31
+    static let lampColumn: CGFloat = 26
+    static let callsignColumn: CGFloat = 148
+
+    init(item: StateLegend.SessionRow, target: AnyObject, action: Selector) {
+        super.init(frame: .zero)
+        self.target = target
+        self.action = action
+        identifier = NSUserInterfaceItemIdentifier(item.id)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+
+        let ready = item.lamp == .ready
+
+        // The lamp: a 9px CIRCLE (ruled — squares read as checkboxes), flat
+        // fill, no gradients or shadows. Quiet lamps get the hairline ring.
+        let lamp = NSView()
+        lamp.translatesAutoresizingMaskIntoConstraints = false
+        lamp.wantsLayer = true
+        lamp.layer?.backgroundColor = item.lamp.fill.cgColor
+        lamp.layer?.cornerRadius = StateLegend.Lamp.diameter / 2
+        if let ring = item.lamp.ring {
+            lamp.layer?.borderWidth = 1
+            lamp.layer?.borderColor = ring.cgColor
+        }
+
+        // This pass's type ramp (ruled): monospaced callsign, semibold only
+        // when the row is ready; the topic in the small sans, one weight.
+        let callsign = NSTextField(labelWithString: item.name)
+        callsign.font = .monospacedSystemFont(ofSize: 12, weight: ready ? .semibold : .medium)
+        callsign.textColor = StateLegend.Palette.ink
+        callsign.lineBreakMode = .byTruncatingTail
+        callsign.translatesAutoresizingMaskIntoConstraints = false
+
+        let topic = NSTextField(labelWithString: item.topic)
+        topic.font = .systemFont(ofSize: 11.5)
+        topic.textColor = ready ? StateLegend.Palette.secondary : StateLegend.Palette.muted
+        topic.lineBreakMode = .byTruncatingTail
+        topic.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(lamp); addSubview(callsign); addSubview(topic)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: Self.height),
+            lamp.widthAnchor.constraint(equalToConstant: StateLegend.Lamp.diameter),
+            lamp.heightAnchor.constraint(equalToConstant: StateLegend.Lamp.diameter),
+            lamp.leadingAnchor.constraint(equalTo: leadingAnchor),
+            lamp.centerYAnchor.constraint(equalTo: centerYAnchor),
+            callsign.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                              constant: Self.lampColumn),
+            callsign.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // The callsign stays inside its column, 10pt short of the topic's.
+            callsign.trailingAnchor.constraint(
+                lessThanOrEqualTo: leadingAnchor,
+                constant: Self.lampColumn + Self.callsignColumn - 10),
+            topic.leadingAnchor.constraint(
+                equalTo: leadingAnchor, constant: Self.lampColumn + Self.callsignColumn),
+            topic.trailingAnchor.constraint(equalTo: trailingAnchor),
+            topic.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        layer?.backgroundColor = StateLegend.Palette.hover.cgColor
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        layer?.backgroundColor = nil
+    }
+
+    // A cell-less NSControl tracks nothing by default; the whole row is the
+    // hit target, and the tap lands on mouse-up like any button's would.
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseUp(with event: NSEvent) {
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        sendAction(action, to: target)
+    }
+}
+
+/// The "+ NEW SESSION" placard: a quiet 28px row — the plus glyph in the lamp
+/// column, the label letterspaced and faint. A placard, not a bordered button:
+/// it invites without competing with the lamps for attention.
+private final class PlacardRowView: NSControl {
+    init(target: AnyObject, action: Selector) {
+        super.init(frame: .zero)
+        self.target = target
+        self.action = action
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+
+        let plus = NSTextField(labelWithString: "+")
+        plus.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        plus.textColor = StateLegend.Palette.faint
+        plus.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = NSTextField(labelWithString: "")
+        label.attributedStringValue = letterspaced(
+            StateLegend.newSessionTitle, size: 9.5, tracking: 1.33,
+            color: StateLegend.Palette.faint)
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(plus); addSubview(label)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 28),
+            plus.leadingAnchor.constraint(equalTo: leadingAnchor),
+            plus.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                           constant: GridRowView.lampColumn),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseUp(with event: NSEvent) {
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        sendAction(action, to: target)
     }
 }

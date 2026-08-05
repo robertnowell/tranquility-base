@@ -76,7 +76,9 @@ final class LevelMeterView: NSView {
             let taper = 1 - CGFloat(distance) / CGFloat(middle + 1) * 0.45
             let height = max(3, sample * bounds.height * taper)
             let rect = NSRect(x: x, y: midY - height / 2, width: barWidth, height: height)
-            NSColor.labelColor.withAlphaComponent(0.9 - CGFloat(distance) * 0.05).setFill()
+            // Palette ink, not labelColor: the surface is the opaque light
+            // console on every face, so the bars must not flip white in dark mode.
+            StateLegend.Palette.ink.withAlphaComponent(0.9 - CGFloat(distance) * 0.05).setFill()
             NSBezierPath(roundedRect: rect, xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
             x += barWidth + gap
         }
@@ -96,7 +98,7 @@ final class LevelMeterView: NSView {
 
             // Older samples fade, which gives the scroll a direction without motion.
             let age = CGFloat(samples.count - index) / CGFloat(max(1, capacity))
-            NSColor.labelColor.withAlphaComponent(0.85 - age * 0.5).setFill()
+            StateLegend.Palette.ink.withAlphaComponent(0.85 - age * 0.5).setFill()
             NSBezierPath(roundedRect: rect, xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
         }
     }

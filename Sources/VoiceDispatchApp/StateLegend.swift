@@ -39,10 +39,52 @@ enum StateLegend {
         static let denied = "✗"
     }
 
+    // MARK: - Palette (the ruled design: light console, MOCR identity v0)
+
+    /// The panel's entire palette, defined once. FED-STD-595-derived tokens from
+    /// the vd-grid-mock research record (2026-08-04, variant A ruled). Semantic
+    /// NSColor is dead in the panel: the surface is an opaque light console on
+    /// EVERY face, so system dark mode must never flip a text color against it —
+    /// every color the panel paints comes from here, in absolute sRGB.
+    enum Palette {
+        private static func hex(_ v: UInt32, alpha: CGFloat = 1) -> NSColor {
+            NSColor(srgbRed: CGFloat((v >> 16) & 0xFF) / 255,
+                    green: CGFloat((v >> 8) & 0xFF) / 255,
+                    blue: CGFloat(v & 0xFF) / 255, alpha: alpha)
+        }
+
+        /// The console surface — light putty (FED-STD-595 36440 family,
+        /// light gull gray). Opaque, panel-wide: an instrument guarantees its
+        /// own contrast; blur borrowed the desktop's and couldn't.
+        static let surface = hex(0xC4C3B7)
+        /// Text ink — off-black console lettering (FS 37031/37038 black family,
+        /// warmed). Also the base every hairline derives from.
+        static let ink = hex(0x23241F)
+        /// Secondary ink: strip labels, ready-row topics.
+        static let secondary = hex(0x4A4B43)
+        /// Muted: quiet-row topics.
+        static let muted = hex(0x5F6055)
+        /// Faint: hints, placards, the gear at rest.
+        static let faint = hex(0x83847A)
+        /// Hairline — ink at 25%: the strip border and the hint's top rule.
+        static let hairline = hex(0x23241F, alpha: 0.25)
+        /// Soft hairline — ink at 12%: the rule between grid rows.
+        static let hairlineSoft = hex(0x23241F, alpha: 0.12)
+        /// Hover row, and the quiet lamp's fill — surface, one step down.
+        static let hover = hex(0xBDBCB0)
+        /// Ready green — the console "go" lamp (FS 34128 green family). Accent
+        /// = state, not user preference: this replaces controlAccentColor for
+        /// the ✓ send button and the ack pulse.
+        static let ready = hex(0x416B47)
+        /// Fault amber (FS 33538 amber family; the mock's `--warn` token).
+        static let fault = hex(0xC8862A)
+    }
+
     // MARK: - Lenses
 
-    /// A semantic role, not a color. Today each lens maps to the NSColor the panel
-    /// already uses; a future theme changes the mapping here and nowhere else.
+    /// A semantic role, not a color. Each lens maps into the Palette — the one
+    /// place the mapping can change. No lens reaches for a semantic NSColor:
+    /// the opaque light surface must read identically in light and dark mode.
     enum Lens {
         /// Chrome: the state pill and secondary controls.
         case chrome
@@ -50,15 +92,15 @@ enum StateLegend {
         case content
         /// De-emphasized guidance: the hint line.
         case guidance
-        /// Calls to action: accent-tinted controls.
+        /// Calls to action: state-green controls (accent = state, ruled).
         case action
 
         var color: NSColor {
             switch self {
-            case .chrome: return .secondaryLabelColor
-            case .content: return .labelColor
-            case .guidance: return .tertiaryLabelColor
-            case .action: return .controlAccentColor
+            case .chrome: return Palette.secondary
+            case .content: return Palette.ink
+            case .guidance: return Palette.faint
+            case .action: return Palette.ready
             }
         }
     }
@@ -89,8 +131,10 @@ enum StateLegend {
 
     // MARK: - Session grid (WS-B)
 
-    /// The state lamp on a grid row. Flat state color, no skeuomorphism (ruled);
-    /// the MOCR palette arrives through this seam in a later item.
+    /// The state lamp on a grid row: a 9px CIRCLE (ruled — squares read as
+    /// checkboxes), flat fill, no gradients or shadows. Ready is filled console
+    /// green; quiet is the hover putty with a hairline ring so it reads as a
+    /// socket, not an absence.
     ///
     /// Mapping is limited to what is derivable today: a session in the waiting set
     /// is `.ready`; any other live session is `.running`. `.fault` is defined so
@@ -104,11 +148,22 @@ enum StateLegend {
         /// Amber: fault. Defined for the seam; unproduced today.
         case fault
 
-        var color: NSColor {
+        /// Lamp diameter — 9px circle, ruled.
+        static let diameter: CGFloat = 9
+
+        var fill: NSColor {
             switch self {
-            case .ready: return .systemGreen
-            case .running: return Lens.chrome.color
-            case .fault: return .systemOrange
+            case .ready: return Palette.ready
+            case .running: return Palette.hover
+            case .fault: return Palette.fault
+            }
+        }
+
+        /// The hairline ring; nil when the fill carries the lamp alone.
+        var ring: NSColor? {
+            switch self {
+            case .ready, .fault: return nil
+            case .running: return Palette.hairline
             }
         }
     }
@@ -132,15 +187,21 @@ enum StateLegend {
         return fallback
     }
 
-    /// The short topic for a session: first sentence of the summary, else the
-    /// first 60 characters of the last assistant message. ONE derivation — the
-    /// grid and every other consumer share it, so they cannot drift apart.
-    static func topic(summary: String?, lastAssistantMessage: String?) -> String {
-        if let first = summary?.split(separator: ".").first.map(String.init),
-           !first.isEmpty {
-            return first
-        }
-        return lastAssistantMessage.map { String($0.prefix(60)) } ?? ""
+    /// The grid topic: the stored brief's composed 3–6-word label (the durable
+    /// v6 field), sanitized to one line. NEVER a prose prefix of summaryText or
+    /// the raw assistant message — that derivation is dead (ruled): truncating
+    /// markdown prose mid-word is exactly where the orphan fragments came from
+    /// ("**Voices for lif" between rows). Sanitizing is defensive regardless of
+    /// source: newlines collapse to spaces, markdown asterisks are stripped,
+    /// whitespace runs collapse. A session with no stored brief returns "" and
+    /// its row shows the callsign alone.
+    static func gridTopic(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return "" }
+        return raw
+            .replacingOccurrences(of: "*", with: "")
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     /// Display situations. Mostly 1:1 with PanelState; the extras (catch-up, the
@@ -228,6 +289,18 @@ enum StateLegend {
     static let pausedHint = "Tap ⇧ to carry on, or Dismiss to be done with it."
     /// Shown while playback is running.
     static let speakingHint = "Tap ⇧ to pause, hold ⌥ to reply."
+
+    // MARK: - The grid strip and key line (ruled design)
+
+    /// The grid's top-strip label — small caps, letterspaced. There is no
+    /// "Ready" pill and no "N waiting" headline on the grid face: the grid IS
+    /// the status, and the count lives in the menu bar.
+    static let gridStripTitle = "SESSIONS"
+    /// The grid's bottom key line, in the hint slot. Replaces the Dismiss
+    /// button on the idle face — every gesture the grid answers to, in order.
+    static let gridHint = "⌃⌥ hear · hold ⌥ reply · ⌃⌃ why · ⌃⇧ dismiss"
+    /// The quiet placard row above the hint.
+    static let newSessionTitle = "NEW SESSION"
 
     // MARK: - Controls
 

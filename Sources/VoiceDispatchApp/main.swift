@@ -512,12 +512,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func sessionRowsNow() -> [StateLegend.SessionRow] {
         guard let coordinator else { return [] }
         let waiting = (try? coordinator.waiting()) ?? []
+        // The topic is the stored brief's composed 3–6-word label, carried by
+        // the waiting query's brief join — NEVER a prose prefix of summaryText
+        // or the raw assistant message (ruled: that derivation produced orphan
+        // fragments like "**Voices for lif"). No brief yet = callsign only.
         var rows = waiting.map {
             StateLegend.SessionRow(
                 id: $0.sessionId,
                 name: StateLegend.displayName(callsign: $0.callsign, fallback: $0.projectLabel),
-                topic: StateLegend.topic(summary: $0.summaryText,
-                                         lastAssistantMessage: $0.lastAssistantMessage),
+                topic: StateLegend.gridTopic($0.briefTopic),
                 lamp: .ready)
         }
         // Live sessions with nothing waiting: quiet rows, so a skipped or heard
@@ -532,10 +535,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 name: StateLegend.displayName(
                     callsign: stored?.callsign,
                     fallback: live.name ?? stored?.projectLabel ?? "session"),
-                topic: stored.map {
-                    StateLegend.topic(summary: $0.summaryText,
-                                      lastAssistantMessage: $0.lastAssistantMessage)
-                } ?? "",
+                topic: StateLegend.gridTopic(stored?.briefTopic),
                 lamp: .running))
         }
         return rows
