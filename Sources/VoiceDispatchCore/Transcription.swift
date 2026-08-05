@@ -52,6 +52,32 @@ public protocol LiveTranscriptionProvider: Sendable {
         onFinal: @escaping @Sendable (TranscriptionResult) -> Void,
         onFailure: @escaping @Sendable (TranscriptionFailure) -> Void
     ) async throws -> any LiveTranscriptionSession
+
+    /// A7: open a session with the shared lexicon as the provider's boost
+    /// vocabulary. For AssemblyAI this is `word_boost` on the realtime
+    /// handshake (`keyterms_prompt` on the v3 streaming API); either way the
+    /// vocabulary is fixed at session open — streaming handshakes take it once
+    /// — so callers compute `Lexicon.harvest` immediately before opening.
+    /// Providers that support boosting implement this; the default forwards to
+    /// the plain `startSession`, so a provider without vocabulary support keeps
+    /// working unmodified.
+    func startSession(
+        boosting vocabulary: [String],
+        onPartial: @escaping @Sendable (String) -> Void,
+        onFinal: @escaping @Sendable (TranscriptionResult) -> Void,
+        onFailure: @escaping @Sendable (TranscriptionFailure) -> Void
+    ) async throws -> any LiveTranscriptionSession
+}
+
+extension LiveTranscriptionProvider {
+    public func startSession(
+        boosting vocabulary: [String],
+        onPartial: @escaping @Sendable (String) -> Void,
+        onFinal: @escaping @Sendable (TranscriptionResult) -> Void,
+        onFailure: @escaping @Sendable (TranscriptionFailure) -> Void
+    ) async throws -> any LiveTranscriptionSession {
+        try await startSession(onPartial: onPartial, onFinal: onFinal, onFailure: onFailure)
+    }
 }
 
 public protocol LiveTranscriptionSession: AnyObject, Sendable {
@@ -76,7 +102,15 @@ public protocol RecoveryTranscriptionProvider: Sendable {
 /// why it sits at the end of the recovery chain rather than being relied on.
 public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
     public let name = "apple-speech"
-    public init() {}
+
+    /// A7: the shared lexicon, applied as `contextualStrings` so the recognizer
+    /// biases toward the proper nouns recent sessions actually used ("Klaviyo",
+    /// "promotions copy") instead of their dictionary near-neighbours.
+    public var lexicon: [String]
+
+    public init(lexicon: [String] = []) {
+        self.lexicon = lexicon
+    }
 
     public var isConfigured: Bool {
         SFSpeechRecognizer(locale: Locale(identifier: "en-US"))?.isAvailable ?? false
@@ -93,6 +127,7 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
         let request = SFSpeechURLRecognitionRequest(url: url)
         request.shouldReportPartialResults = false
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+        if !lexicon.isEmpty { request.contextualStrings = lexicon }
 
         return try await withCheckedThrowingContinuation { continuation in
             let resumed = Resumed()

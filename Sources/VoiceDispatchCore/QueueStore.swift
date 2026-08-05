@@ -214,6 +214,20 @@ public final class QueueStore: Sendable {
             }
         }
 
+        // WS-E groundwork: dogfood counters (attribution errors, terminal
+        // drop-backs, spoken-update actionability). Append-only like events;
+        // counters are computed by query (`dogfoodCounts`), never stored.
+        m.registerMigration("v5_dogfood_event") { db in
+            try db.create(table: "dogfood_event") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("atMs", .integer).notNull()
+                t.column("kind", .text).notNull()
+                t.column("sessionId", .text)
+                t.column("note", .text)
+            }
+            try db.create(index: "idx_dogfood_at", on: "dogfood_event", columns: ["atMs"])
+        }
+
         return m
     }
 

@@ -20,6 +20,9 @@ func usage() -> Never {
       vdctl secrets             which credentials are readable, and from where
       vdctl cursors             how far you have got with each session
       vdctl calls [n]           full input and output of the last n model calls
+      vdctl dogfood [days]      WS-E counters summary (default 7 days)
+      vdctl dogfood record <kind> [note...]
+                                append a dogfood event by hand (e.g. attribution_error)
 
     dispatch:
       vdctl targets                       live sessions, with tty and enrolment
@@ -187,6 +190,33 @@ case "calls":
         print("\n--- SYSTEM ---\n\(entry["system"] as? String ?? "")")
         print("\n--- USER ---\n\(entry["user"] as? String ?? "")")
         print("\n--- RESPONSE ---\n\(entry["response"] as? String ?? "")")
+    }
+
+case "dogfood":
+    // WS-E counters. Counts are computed by query over the append-only
+    // dogfood_event log; `record` exists for the kinds a human reports
+    // (attribution errors above all) before the app wires its own calls.
+    if args.count > 1, args[1] == "record" {
+        guard args.count > 2, let kind = DogfoodEventKind(rawValue: args[2]) else {
+            print("usage: vdctl dogfood record <kind> [note...]")
+            print("kinds: \(DogfoodEventKind.allCases.map(\.rawValue).joined(separator: ", "))")
+            exit(1)
+        }
+        let note = args.count > 3 ? args.dropFirst(3).joined(separator: " ") : nil
+        try store.recordDogfood(kind, note: note)
+        print("recorded \(kind.rawValue)")
+        break
+    }
+    let days = args.count > 1 ? Int(args[1]) ?? 7 : 7
+    let summary = try store.dogfoodSummary(days: days)
+    print("dogfood counters, last \(days) day(s):")
+    for kind in DogfoodEventKind.allCases {
+        print("  \(pad(kind.rawValue, 24)) \(summary.counts[kind] ?? 0)")
+    }
+    if let rate = summary.actionability {
+        print("  \(pad("actionability", 24)) \(String(format: "%.0f%%", rate * 100))  (acted-on / spoken)")
+    } else {
+        print("  \(pad("actionability", 24)) —  (nothing spoken in the window)")
     }
 
 case "reconcile":

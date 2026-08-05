@@ -172,6 +172,16 @@ public struct Coordinator: Sendable {
         /// carrying the reason. A downgrade the user cannot see is a downgrade they
         /// will assume is just how the app sounds now.
         public var degraded: String?
+
+        /// A2 hail, Core half. DORMANT: `announceNext` does not speak this —
+        /// the app wires the hail (minor chime + spoken callsign; content waits
+        /// for ⌃⌥) after the stage arbiter lands. The chime is the app's job;
+        /// this is the spoken part: just the callsign, nothing else. Falls back
+        /// to the directory word for a session not yet minted, mirroring the
+        /// prefix rule in `withCallsign`.
+        public var hailText: String {
+            event.callsign ?? Callsign.directoryWord(cwd: event.cwd)
+        }
     }
 
     public enum AnnounceOutcome: Sendable {
@@ -233,6 +243,17 @@ public struct Coordinator: Sendable {
             : (event.transcriptPath
                 .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
 
+        // One agents probe serves both the lexicon's live names and the prefix
+        // stripping in `withCallsign` — summarizing must not double the
+        // subprocess cost it already pays.
+        let liveSessions = agents.sessions()
+
+        // A7: the rolling lexicon joins the per-message allowlist, so a name
+        // recent sessions established survives speech even when this one
+        // message did not capitalize it.
+        let lexicon = Lexicon.harvest(
+            store: store, liveSessionNames: liveSessions?.compactMap(\.name) ?? [])
+
         let summary = await summarizer.summarize(SummaryRequest(
             lastAssistantMessage: lastMessage,
             projectLabel: event.projectLabel,
@@ -240,7 +261,8 @@ public struct Coordinator: Sendable {
             gitBranch: context?.gitBranch,
             cwd: event.cwd,
             hookEvent: event.hookEvent,
-            notificationMatcher: event.notificationMatcher))
+            notificationMatcher: event.notificationMatcher),
+            lexicon: lexicon.allowlistTerms)
 
         if summary.provider == "empty-source" {
             Coordinator.trace?("summary skipped for empty source: event \(event.latestId) "
@@ -250,7 +272,7 @@ public struct Coordinator: Sendable {
             Coordinator.trace?("digit grounding scrubbed ungrounded number(s): "
                 + "event \(event.latestId) session \(event.sessionId.prefix(8))")
         }
-        return withCallsign(summary, for: event)
+        return withCallsign(summary, for: event, liveSessions: liveSessions)
     }
 
     // MARK: - Callsign
@@ -263,7 +285,9 @@ public struct Coordinator: Sendable {
     /// model wrote is stripped, and the minted callsign is prepended mechanically.
     /// Minting happens here — at the session's first successful summary — and the
     /// stored value is frozen thereafter.
-    private func withCallsign(_ summary: Summary, for event: WaitingSession) -> Summary {
+    private func withCallsign(
+        _ summary: Summary, for event: WaitingSession, liveSessions: [LiveSession]?
+    ) -> Summary {
         var callsign = event.callsign ?? ((try? store.callsign(for: event.sessionId)) ?? nil)
 
         // "First successful summary": the failure paths never mint, so a transient
@@ -286,7 +310,7 @@ public struct Coordinator: Sendable {
         // Not yet mintable (no usable topic word) — attribute with the directory
         // word alone rather than skipping attribution; minting retries next turn.
         let prefix = callsign ?? Callsign.directoryWord(cwd: event.cwd)
-        let liveName = agents.sessions()?
+        let liveName = liveSessions?
             .first(where: { $0.sessionId == event.sessionId })?.name
         let labels = [event.projectLabel, liveName].compactMap { $0 }
         let spoken = summarizer.sanitizer.applyingCallsign(

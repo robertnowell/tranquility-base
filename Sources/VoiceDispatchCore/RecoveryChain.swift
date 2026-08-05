@@ -23,10 +23,13 @@ public struct RecoveryChain: Sendable {
     public init(
         providers: [any RecoveryTranscriptionProvider]? = nil,
         maxAttemptsPerProvider: Int = 2,
-        backoff: [TimeInterval] = [2, 8, 20]
+        backoff: [TimeInterval] = [2, 8, 20],
+        lexicon: [String] = []
     ) {
         // Cloud first for quality, on-device last because it can never be unavailable.
-        self.providers = providers ?? [OpenAIRecovery(), AppleSpeechRecovery()]
+        // A7: the shared lexicon reaches the Apple floor as contextualStrings;
+        // ignored when explicit providers are passed, which own their own config.
+        self.providers = providers ?? [OpenAIRecovery(), AppleSpeechRecovery(lexicon: lexicon)]
         self.maxAttemptsPerProvider = maxAttemptsPerProvider
         self.backoff = backoff
     }

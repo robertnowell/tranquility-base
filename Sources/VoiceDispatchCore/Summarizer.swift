@@ -386,7 +386,11 @@ public struct SummarizerChain: Sendable {
     /// Set by the app so grounding retries and empty-source skips explain themselves.
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 
-    public func summarize(_ request: SummaryRequest) async -> Summary {
+    /// `lexicon` (A7) joins the per-message allowlist: names established by
+    /// RECENT sessions stay speakable even when this one message did not
+    /// capitalize them. Like the per-message set, it can only exempt tokens
+    /// from the identifier rules — paths and hashes are stripped regardless.
+    public func summarize(_ request: SummaryRequest, lexicon: Set<String> = []) async -> Summary {
         let start = Date()
         var produced: (SessionBrief, String)?
 
@@ -425,6 +429,7 @@ public struct SummarizerChain: Sendable {
         // Names the source itself used are speakable ("say Klaviyo, not 'an email
         // platform'"); everything identifier-shaped is still stripped.
         let speakable = SpokenTextSanitizer.speakableTerms(in: request.lastAssistantMessage)
+            .union(lexicon)
 
         // Each section is clamped against its own budget before composing, so a long
         // recap can never eat the proposal — the half that carries the decision.
