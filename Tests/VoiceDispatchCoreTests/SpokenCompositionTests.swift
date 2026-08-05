@@ -48,8 +48,8 @@ final class SpokenCompositionTests: XCTestCase {
             for: announcement(callsign: "promotions copy", brief: brief))
         XCTAssertEqual(
             out.text,
-            "promotions copy: Goal: ship the promotions poller. "
-            + "Risk: the filter may drop real alerts. Proceed?")
+            "promotions copy: The goal is ship the promotions poller. "
+            + "The risk is the filter may drop real alerts. Proceed?")
     }
 
     func testDepthOneWordBudgetDropsWholeSentencesFromTheTail() {
@@ -62,7 +62,7 @@ final class SpokenCompositionTests: XCTestCase {
         let out = SpokenComposition.depthOneSpokenText(
             for: announcement(callsign: "promotions copy", brief: brief))
 
-        XCTAssertTrue(out.text.contains("Risk:"), "the risk is inside the budget")
+        XCTAssertTrue(out.text.contains("The risk is"), "the risk is inside the budget")
         XCTAssertFalse(out.text.contains("production database"),
                        "over budget, the trailing sentence goes whole — never mid-clause")
         // Budget bounds the composed body; the mechanical callsign prefix (2
@@ -103,6 +103,6 @@ final class SpokenCompositionTests: XCTestCase {
         let brief = SessionBrief(topic: "export", happened: "done", risk: "tests are flaky")
         let out = SpokenComposition.depthOneSpokenText(
             for: announcement(callsign: nil, brief: brief))
-        XCTAssertEqual(out.text, "promotions: Risk: tests are flaky.")
+        XCTAssertEqual(out.text, "promotions: The risk is tests are flaky.")
     }
 }

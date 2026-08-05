@@ -205,6 +205,10 @@ final class StatusHUD: NSObject {
             timer.invalidate()
             self.countdownTimer = nil
             self.progressBar.isHidden = true
+            // The bar running out IS the confirmation — the contract completed
+            // exactly as displayed, so the stage is yielded before the dispatch
+            // work begins. The caller repaints ready; only a failure comes back.
+            self.forceTransition(to: .idle(waiting: 0), because: "countdown completed")
             send()
         }
         // .common so the countdown keeps running while a menu or drag is tracking —

@@ -41,9 +41,12 @@ public enum SpokenComposition {
         sanitizer: SpokenTextSanitizer = SpokenTextSanitizer(),
         allowing allowlist: Set<String> = []
     ) -> SanitizedSpokenText {
+        // Spoken labels, not written ones: "Goal:" read aloud is a bare word and
+        // a click of silence — heard as a glitch, not a heading (user report,
+        // 05 Aug). Full clauses survive text-to-speech.
         var parts: [String] = []
-        if let goal = brief.goal, !goal.isEmpty { parts.append(sentence("Goal: " + goal)) }
-        if let risk = brief.risk, !risk.isEmpty { parts.append(sentence("Risk: " + risk)) }
+        if let goal = brief.goal, !goal.isEmpty { parts.append(sentence("The goal is " + goal)) }
+        if let risk = brief.risk, !risk.isEmpty { parts.append(sentence("The risk is " + risk)) }
         if let question = brief.question, !question.isEmpty { parts.append(sentence(question)) }
 
         // Null-safe: a floor brief may carry none of the card fields. Say so

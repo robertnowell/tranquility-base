@@ -392,7 +392,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? coordinator.cancelSend(utteranceId: utteranceId)
                 return
             }
-            hud.showWorking("Sending to \(label)…")
+            // The countdown completing was the confirmation; a "Sending…" card
+            // after it is a second wait the user already served. Ready comes back
+            // immediately — you can talk again or move on while the dispatch and
+            // its read-back verification run behind the scenes. Only repaint if
+            // the stage is actually free: on a ⌃⌥ commit-and-advance the next
+            // announcement is already preparing, and this must not stomp it.
+            lastStatusLine = "sending to \(label)…"
+            if hud.canSurfaceAmbiently {
+                hud.showIdle(waiting: waitingNow(),
+                             unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+            }
             do {
                 let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
                 Permissions.log("confirmAndSend -> \(outcome)")
@@ -403,15 +413,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // showResult, and the REFUSED transition log is its receipt.
                 // Failures always surface: they are the case with work left to do.
                 switch outcome {
+                // Success says nothing: the countdown already confirmed, the
+                // status line and log carry the receipt, and a third card for a
+                // thing that went right was indistinguishable noise (user report,
+                // 05 Aug — "two further states, all saying different things").
                 case .queued:
-                    lastStatusLine = "queued in \(label)"
-                    hud.showResult(
-                        "In \(label), sends when its turn finishes. ⌥ again to follow up.",
-                        ok: true)
+                    lastStatusLine = "queued in \(label) — sends when its turn finishes"
+                    Permissions.log("send: queued in \(label)")
                 case .dispatched:
                     lastStatusLine = "sent to \(label)"
-                    hud.showResult("Sent to \(label). ⌥ again to follow up, ⌃⌥ for the next.",
-                                   ok: true)
+                    Permissions.log("send: confirmed to \(label)")
                 case .sessionNotReady(let readiness):
                     // Sanctioned change (b): the actual condition in plain words,
                     // not the enum case's name. Mapping documented in
@@ -650,23 +661,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 previous?.cancel()
                 _ = await previous?.value
                 guard !Task.isCancelled else { return }
-                // Awaiting the interrupted announce may have repainted idle; put
-                // the card the voice is about to explain back on the walls. No
-                // word highlight — the voice speaks the rationale, not the card.
+                // Audio ⊂ visual: the card shows the words actually being spoken
+                // (the rationale), with the same karaoke highlight as any other
+                // utterance — "it said something but the UI didn't show it" is a
+                // residue bug in the audio channel.
+                let line = SpokenComposition.depthOneSpokenText(for: announcement)
                 hud.showAnnouncement(
                     topic: announcement.brief.topic,
-                    spoken: announcement.spoken.text,
+                    spoken: line.text,
                     sessionId: announcement.event.sessionId,
                     pid: nil,
                     project: announcement.event.projectLabel,
                     cwd: announcement.event.cwd,
                     eventId: announcement.event.sessionId)
-                let line = SpokenComposition.depthOneSpokenText(for: announcement)
                 Permissions.log("depth-1: speaking for \(announcement.event.sessionId.prefix(8)) "
                                 + "(\(line.text.count) chars)")
                 try? store?.recordDogfood(.depthOnePulled,
                                           sessionId: announcement.event.sessionId)
-                _ = await coordinator.speech.speak(line)
+                _ = await coordinator.speech.speak(line, onWord: { [weak self] range in
+                    Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
+                })
+                hud.highlight(upTo: line.text.count)
                 lastStatusLine = "rationale spoken"
                 rebuildMenu()
             }
