@@ -38,7 +38,6 @@ final class StatusHUD: NSObject {
     /// what is on screen, which is out of bounds for a structure pass.
     private var isRecording = false
     private var hideWorkItem: DispatchWorkItem?
-    private var showGeneration = 0
     private var contentStack: NSStackView?
     private var identity: String?
     /// Derived, not stored. True exactly while the undo countdown is live AND the
@@ -91,7 +90,8 @@ final class StatusHUD: NSObject {
     }
 
     func showListening(level: @escaping () -> Float, handsFree: Bool = false) {
-        transition(to: .listening(eventId: currentEventId), because: "recording started")
+        guard transition(to: .listening(eventId: currentEventId), because: "recording started")
+        else { return }
         levelSource = level
         listenStartedAt = Date()
         let target = currentTarget?.label ?? dictationDestination
@@ -142,7 +142,9 @@ final class StatusHUD: NSObject {
         let headline = topic.caseInsensitiveCompare(project) == .orderedSame || topic.isEmpty
             ? project : "\(project): \(topic)"
         identity = Self.identify(pid: pid, cwd: cwd)
-        transition(to: .speaking(eventId: eventId, catchUp: isCatchUp), because: "audio starting")
+        guard transition(to: .speaking(eventId: eventId, catchUp: isCatchUp),
+                         because: "audio starting")
+        else { return }
         show(state: StateLegend.row(for: isCatchUp ? .catchingUp : .speaking).stateText,
              title: headline, body: spoken, autoHideAfter: nil)
     }
@@ -179,15 +181,16 @@ final class StatusHUD: NSObject {
         send: @escaping () -> Void, cancel: @escaping (_ restartListening: Bool) -> Void
     ) {
         countdownTimer?.invalidate()
+        // Transition first so a refused stage never arms the countdown. Safe for
+        // `awaitingConfirm` (the old reason for the reversed order): it derives
+        // from the countdown timer, which is invalidated above, so show() still
+        // renders without the countdown chrome either way.
+        guard transition(to: .pendingSend(utteranceId: ""), because: "undo window open")
+        else { return }
         onCancelSend = cancel
         onCommitSend = send
         show(state: StateLegend.row(for: .sendingTo(label: label)).stateText,
              title: "Your reply", body: "\u{201C}\(text)\u{201D}", autoHideAfter: nil)
-        // After show(), never before: `awaitingConfirm` derives from being IN
-        // .pendingSend, and entering the state before show() ran meant show()
-        // rendered the countdown chrome early — the same footgun the old stored
-        // flag had when it was set first.
-        transition(to: .pendingSend(utteranceId: ""), because: "undo window open")
         replyButton.title = "Don't send"
         replyButton.isHidden = false
 
@@ -222,6 +225,10 @@ final class StatusHUD: NSObject {
         let send = onCommitSend
         onCommitSend = nil
         onCancelSend = nil
+        // Committing is an explicit act: the send is out of your hands, so the
+        // stage is yielded — the advance that follows may paint immediately
+        // instead of being refused by a pendingSend that is already over.
+        forceTransition(to: .idle(waiting: 0), because: "send committed")
         send?()
         return true
     }
@@ -276,10 +283,10 @@ final class StatusHUD: NSObject {
     var onChooseVoice: ((String) -> Void)?
 
     func showSettings(voices: [Voice], selected: String, previewNote: String) {
+        guard transition(to: .settings, because: "settings opened") else { return }
         currentTarget = nil
         identity = nil
         settingsVoices = voices
-        transition(to: .settings, because: "settings opened")
 
         show(state: StateLegend.row(for: .settings).stateText,
              title: "Voice", body: previewNote, autoHideAfter: nil)
@@ -326,7 +333,8 @@ final class StatusHUD: NSObject {
     }
 
     func showWorking(_ message: String) {
-        transition(to: .transcribing(startedAt: Date()), because: "working")
+        guard transition(to: .transcribing(startedAt: Date()), because: "working")
+        else { return }
         show(state: StateLegend.row(for: .working).stateText,
              title: currentTarget?.label ?? "Voice Dispatch",
              body: message, autoHideAfter: nil)
@@ -349,7 +357,9 @@ final class StatusHUD: NSObject {
     func showTranscribing(_ message: String,
                           onCancel: @escaping () -> Void,
                           onRetry: @escaping () -> Void) {
-        transition(to: .transcribing(startedAt: Date()), because: "transcription started")
+        guard transition(to: .transcribing(startedAt: Date()),
+                         because: "transcription started")
+        else { return }
         show(state: StateLegend.row(for: .working).stateText,
              title: currentTarget?.label ?? "Voice Dispatch",
              body: message, autoHideAfter: nil)
@@ -407,7 +417,10 @@ final class StatusHUD: NSObject {
     /// on screen with buttons implies there is something left to do. A failure is
     /// the opposite and stays until dismissed.
     func showResult(_ message: String, ok: Bool) {
-        transition(to: .result(ok: ok), because: "reply resolved")
+        // A refused success receipt is the quiet-success path: the stage is busy
+        // with something newer, the send still happened, and the log carries the
+        // REFUSED line as its receipt.
+        guard transition(to: .result(ok: ok), because: "reply resolved") else { return }
         // Reply and Go to session are about the announcement, not the receipt, and
         // offering them here suggests the send is still in your hands. It is not.
         currentTarget = ok ? nil : currentTarget
@@ -428,24 +441,69 @@ final class StatusHUD: NSObject {
     /// one is worse than a stale count.
     private(set) var state: PanelState = .hidden
 
-    /// The only way state changes. Every transition is logged, which is the whole
-    /// point: when the panel gets stuck, the log says exactly which state it is in
-    /// and what put it there, instead of leaving five booleans to be inferred.
-    private func transition(to next: PanelState, because reason: String) {
+    /// The only way state changes — and now the only place legality is decided.
+    /// Every transition is logged, which is the whole point: when the panel gets
+    /// stuck, the log says exactly which state it is in and what put it there.
+    ///
+    /// A refused transition returns false and the caller must not paint: a stale
+    /// async resume (an interrupted announce waking after the gesture that killed
+    /// it) used to repaint idle over a live microphone, and every guard written
+    /// against that at a call site was one more place to be wrong. The legality
+    /// lives in `PanelState.admits`, in one table.
+    @discardableResult
+    private func transition(to next: PanelState, because reason: String) -> Bool {
+        guard state.admits(next) else {
+            Permissions.log("state: REFUSED \(state.name) -> \(next.name)  (\(reason))")
+            return false
+        }
+        if next != state {
+            Permissions.log("state: \(state.name) -> \(next.name)  (\(reason))")
+            state = next
+        }
+        return true
+    }
+
+    /// The user's door. Explicit actions (Dismiss, hiding the panel, committing a
+    /// send) are never stale, so they bypass the table — but they announce it.
+    private func forceTransition(to next: PanelState, because reason: String) {
         guard next != state else { return }
-        Permissions.log("state: \(state.name) -> \(next.name)  (\(reason))")
+        Permissions.log("state: \(state.name) -> \(next.name)  (\(reason), user door)")
         state = next
+    }
+
+    /// Tear down a capture state for real before leaving it. The legality table
+    /// refuses stale repaints over listening/transcribing/pendingSend; a person
+    /// dismissing is not stale — but leaving without this is how a reply got lost:
+    /// the panel hid mid-countdown and the send was never cancelled on the record
+    /// (app.log 2026-08-05T18:27:59Z).
+    func endCapture(because reason: String) {
+        guard state.ownsStage else { return }
+        if awaitingConfirm {
+            cancelPendingSend(restartListening: false)
+        } else {
+            countdownTimer?.invalidate()
+            countdownTimer = nil
+            onCommitSend = nil
+            onCancelSend = nil
+        }
+        meterTimer?.invalidate()
+        meterTimer = nil
+        endTranscribingUI()
+        // Yield the stage so whatever the caller paints next is admitted; the
+        // state value is interim and the caller's repaint replaces it at once.
+        forceTransition(to: .idle(waiting: 0), because: reason)
+        Permissions.log("capture: ended (\(reason))")
     }
 
     /// Kept as a computed view over the state so existing call sites keep working.
     var isIdle: Bool { state.allowsAmbientSurface }
 
     func showIdle(note: String? = nil, waiting: Int, unsentReplies: Int = 0) {
-        // Before show(), unlike the other entry points' historical order: the
-        // derived predicates (awaitingConfirm, isCapturingAudio) must read as idle
-        // while show() renders, exactly as the old stored booleans — cleared at the
-        // top of this method — used to.
-        transition(to: .idle(waiting: waiting), because: "idle repaint")
+        // The transition that used to stomp a live listening pill (an interrupted
+        // announce resuming after the gesture that killed it). Now the table
+        // refuses it and this returns without painting.
+        guard transition(to: .idle(waiting: waiting), because: "idle repaint")
+        else { return }
         currentTarget = nil
         identity = nil
         currentEventId = nil
@@ -486,11 +544,15 @@ final class StatusHUD: NSObject {
     func hide() {
         hideWorkItem?.cancel()
         endTranscribingUI()
+        meterTimer?.invalidate()
+        meterTimer = nil
         panel?.orderOut(nil)
         // Hidden still allows ambient surfacing, which is the property that broke
         // when this left a non-idle flag behind: after one Dismiss the app went
         // silent for the rest of the session.
-        transition(to: .hidden, because: "panel hidden")
+        // The user door: hiding is always an explicit act (Dismiss, the result
+        // auto-hide, quit), never a stale resume — so it bypasses the table.
+        forceTransition(to: .hidden, because: "panel hidden")
         currentTarget = nil
         currentEventId = nil
         identity = nil
@@ -513,9 +575,18 @@ final class StatusHUD: NSObject {
         // is leaving. (No-op everywhere except after showTranscribing, which
         // re-arms it after this returns.)
         endTranscribingUI()
-        // Deliberately NOT inferred from the state text: it was, the text changed,
-        // and the countdown silently stopped being cancellable. Each state that
-        // should end a pending send now says so itself.
+        // The base pass resets EVERY widget; the entry point that follows unhides
+        // what its state owns. The two below sat outside this reset and became the
+        // residue bugs — a countdown bar on the Speaking card, meter dots on Ready.
+        // The countdown TIMER is deliberately not touched here (open issue #8:
+        // states that should end a pending send say so themselves); only the bar's
+        // pixels are, and .pendingSend's entry unhides it again.
+        progressBar?.isHidden = true
+        if meter != nil, !self.state.isCapturingAudio {
+            meterTimer?.invalidate()
+            meterTimer = nil
+            meter.isHidden = true
+        }
         if voicePicker != nil, state != StateLegend.row(for: .settings).stateText {
             voicePicker.isHidden = true
             titleLabel.isHidden = false
@@ -550,16 +621,15 @@ final class StatusHUD: NSObject {
         Permissions.log("HUD frame=\(panel.frame) visible=\(panel.isVisible) screen=\(NSScreen.main?.visibleFrame.debugDescription ?? "nil")")
 
         hideWorkItem?.cancel()
-        showGeneration += 1
         if let autoHideAfter {
-            // The hide belongs to THIS show. Cancellation should make that true on
-            // its own, but a receipt once repainted over a live announcement and its
-            // timer took the window down mid-speech — so the guard is a generation
-            // check, not trust in cancel ordering. Same rule as every fix this
-            // weekend: identity travels with the action.
-            let generation = showGeneration
+            // The hide belongs to THIS show. The old guard was a generation
+            // counter; now that every paint funnels through here and cancels the
+            // previous work item, the only identity that matters is the state
+            // itself — if the panel has moved on, the hide is stale and does
+            // nothing. Checking the real fact beats counting.
+            let scheduledFor = self.state
             let work = DispatchWorkItem { [weak self] in
-                guard let self, self.showGeneration == generation else { return }
+                guard let self, self.state == scheduledFor else { return }
                 self.hide()
             }
             hideWorkItem = work
@@ -671,10 +741,15 @@ final class StatusHUD: NSObject {
         Permissions.log("ack: pulsed (visible=\(panel?.isVisible == true))")
     }
 
-    func showPreparing() {
-        transition(to: .preparing, because: "announce requested")
+    /// Returns false when the stage refused (a reply flow is live) — the caller
+    /// must not announce, or the audio would play against a panel that never
+    /// changed. Pixels and voice obey the same table.
+    @discardableResult
+    func showPreparing() -> Bool {
+        guard transition(to: .preparing, because: "announce requested") else { return false }
         show(state: StateLegend.row(for: .preparing).stateText, title: "Voice Dispatch",
              body: "Writing the summary and fetching the voice…", autoHideAfter: nil)
+        return true
     }
 
     /// Prove a pending send can be stopped for its whole life.
@@ -744,7 +819,37 @@ final class StatusHUD: NSObject {
         ] as [(String, () -> Void)] {
             Permissions.log("selftest state=\(label)")
             block()
+            Permissions.log("selftest matrix \(label): \(widgetMatrix())")
         }
+
+        // The stomp that froze the app (2026-08-05): a stale idle repaint against a
+        // live capture. Must be REFUSED, and the pill must still be on the walls.
+        showListening(level: { 0.4 })
+        showIdle(waiting: 2)
+        let survived = state.isCapturingAudio && !meter.isHidden
+        Permissions.log("selftest legality: idle-over-listening refused=\(survived) "
+                        + "state=\(state.name)")
+        recordingEnded()
+        // Through the user door, exactly as a real abort must go — showIdle alone
+        // is (correctly) refused from a capture state.
+        endCapture(because: "selftest cleanup")
+        showIdle(waiting: 0)
+    }
+
+    /// Every widget's visibility in one line, so the selftest log IS the render
+    /// contract: diff two runs and any residue names itself.
+    private func widgetMatrix() -> String {
+        let widgets: [(String, NSView?)] = [
+            ("title", titleLabel), ("body", bodyLabel), ("state", stateLabel),
+            ("hint", hintLabel), ("bar", progressBar), ("meter", meter),
+            ("actions", actionRow), ("reply", replyButton), ("go", goButton),
+            ("discard", discardButton), ("check", sendCheckButton),
+            ("picker", voicePicker), ("gear", gearButton), ("back", backButton),
+            ("rows", waitingRows), ("count", stateButton),
+            ("cancelTx", cancelTranscriptionButton), ("retryTx", retryTranscriptionButton),
+        ]
+        return widgets.map { "\($0.0)=\($0.1?.isHidden == false ? "1" : "0")" }
+            .joined(separator: " ")
     }
 
     private func position(_ panel: NSPanel) {
@@ -1074,7 +1179,7 @@ final class StatusHUD: NSObject {
 
     /// A list of what is waiting, so the count can be opened rather than believed.
     func showWaitingList(_ items: [(id: String, label: String, topic: String)]) {
-        transition(to: .settings, because: "waiting list opened")
+        guard transition(to: .settings, because: "waiting list opened") else { return }
         show(state: "", title: "\(items.count) waiting", body: "", autoHideAfter: nil)
         stateLabel.stringValue = ""
         backButton.isHidden = false
@@ -1123,8 +1228,9 @@ final class StatusHUD: NSObject {
     // plus assumeIsolated keeps the isolation guarantee without the check.
     @objc nonisolated private func dismissTapped() {
         MainActor.assumeIsolated {
-            countdownTimer?.invalidate()
-            countdownTimer = nil
+            // Through the capture teardown, not around it: raw timer invalidation
+            // here once dropped a mid-countdown send with no record of the cancel.
+            endCapture(because: "dismissed")
             onDismiss?()
             hide()
         }

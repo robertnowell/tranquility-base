@@ -78,4 +78,54 @@ enum PanelState: Equatable {
         if case .pendingSend = self { return true }
         return false
     }
+
+    /// The reply flow owns the stage from mic-open to resolution. These are the
+    /// states a stale repaint must never replace.
+    var ownsStage: Bool {
+        switch self {
+        case .listening, .transcribing, .pendingSend: return true
+        default: return false
+        }
+    }
+
+    /// Which arrivals may replace this state.
+    ///
+    /// Capture states (listening, transcribing, pendingSend) own the stage: only
+    /// their own flow, a failure, or an explicit user teardown (`StatusHUD.endCapture`)
+    /// may follow them. The incident this encodes: a gesture opened the mic, the
+    /// gesture's own `speech.stop()` woke the interrupted announce task, and its
+    /// idle repaint painted "Ready" over a live microphone — after which every
+    /// reply gesture silently refused because the recorder never stopped
+    /// (app.log 2026-08-05T18:30:30Z). That repaint is now refused here, by type,
+    /// instead of being guarded against at each of its call sites.
+    func admits(_ next: PanelState) -> Bool {
+        switch self {
+        case .listening:
+            switch next {
+            case .transcribing, .listening, .result(ok: false): return true
+            default: return false
+            }
+        case .transcribing:
+            switch next {
+            // result (both kinds) is the normal send-receipt path: the countdown
+            // expiring shows "Sending to…" (transcribing) and the receipt follows.
+            case .pendingSend, .listening, .transcribing, .result: return true
+            default: return false
+            }
+        case .pendingSend:
+            switch next {
+            case .result(ok: false), .transcribing, .listening: return true
+            default: return false
+            }
+        // A late success receipt must not repaint over live or preparing speech —
+        // this absorbs the send-path "somethingElseOnStage" guard. Failures always
+        // surface: they are the case with work left to do.
+        case .preparing, .speaking, .paused:
+            if case .result(ok: true) = next { return false }
+            return true
+        // Everything else admits everything — exactly today's behavior.
+        case .hidden, .idle, .result, .settings:
+            return true
+        }
+    }
 }

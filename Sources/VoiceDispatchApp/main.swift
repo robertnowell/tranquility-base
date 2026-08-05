@@ -223,7 +223,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         hud.onReply = { [weak self] in
-            guard let self, self.micGranted, !self.recorder.isRecording else { return }
+            guard let self, self.micGranted else { return }
+            if self.recorder.isRecording {
+                Permissions.log("reply button: refused, mic already live")
+                self.lastStatusLine = "mic already live — tap ⌥ to send"
+                return
+            }
             if let ctx = self.resolveReplyContext() {
                 self.hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
                                      label: ctx.label, cwd: ctx.cwd)
@@ -241,6 +246,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.handsFreeListening = false
             guard let self, let captured = try? self.recorder.stop() else {
                 self?.hud.recordingEnded()
+                self?.hud.endCapture(because: "nothing recorded")
+                if let self {
+                    self.hud.showIdle(waiting: self.waitingNow(),
+                                      unsentReplies: (try? self.store?.unsentReplyCount()) ?? 0)
+                }
                 return
             }
             self.isBusy = false
@@ -383,34 +393,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
                 Permissions.log("confirmAndSend -> \(outcome)")
                 // The confirm round-trip can outlive the user's attention: they may
-                // already be listening to the NEXT session when this lands. A
-                // success receipt must not stomp the live panel — that is exactly
-                // how a stale 6s auto-hide took the window down mid-speech.
+                // already be listening to the NEXT session when this lands. The
+                // stage arbiter handles that now — a success receipt asking to
+                // paint over live speech or a capture is refused inside
+                // showResult, and the REFUSED transition log is its receipt.
                 // Failures always surface: they are the case with work left to do.
-                let somethingElseOnStage: Bool = {
-                    switch hud.state {
-                    case .speaking, .preparing, .listening, .pendingSend, .paused: return true
-                    default: return false
-                    }
-                }()
                 switch outcome {
                 case .queued:
                     lastStatusLine = "queued in \(label)"
-                    if somethingElseOnStage {
-                        Permissions.log("send: queued in \(label) (quiet; stage busy)")
-                    } else {
-                        hud.showResult(
-                            "In \(label), sends when its turn finishes. ⌥ again to follow up.",
-                            ok: true)
-                    }
+                    hud.showResult(
+                        "In \(label), sends when its turn finishes. ⌥ again to follow up.",
+                        ok: true)
                 case .dispatched:
                     lastStatusLine = "sent to \(label)"
-                    if somethingElseOnStage {
-                        Permissions.log("send: confirmed to \(label) (quiet; stage busy)")
-                    } else {
-                        hud.showResult("Sent to \(label). ⌥ again to follow up, ⌃⌥ for the next.",
-                                       ok: true)
-                    }
+                    hud.showResult("Sent to \(label). ⌥ again to follow up, ⌃⌥ for the next.",
+                                   ok: true)
                 case .sessionNotReady(let readiness):
                     // Sanctioned change (b): the actual condition in plain words,
                     // not the enum case's name. Mapping documented in
@@ -531,6 +528,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("next: ignored, microphone is open")
                 return
             }
+            // Advancing mid-transcription would announce against a panel the
+            // arbiter refuses to repaint; the pendingSend arrives in seconds and
+            // the press works then. Same law as the microphone guard above.
+            if case .transcribing = hud.state {
+                Permissions.log("next: ignored, transcription in flight")
+                return
+            }
             // During the undo window, moving on means "send it and move on": the
             // countdown fast-forwards instead of racing the next announcement.
             if hud.commitPendingSendNow() {
@@ -571,7 +575,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // ordinary reply path — same meter, same undo window, same routing.
             if let last = lastOptionTapAt, Date().timeIntervalSince(last) < 0.45 {
                 lastOptionTapAt = nil
-                guard micGranted, !recorder.isRecording else { return }
+                guard micGranted else { return }
+                if recorder.isRecording {
+                    Permissions.log("hands-free: refused, mic already live")
+                    lastStatusLine = "mic already live — tap ⌥ to send"
+                    return
+                }
                 hud.flashAcknowledge()
                 handsFreeListening = true
                 if let ctx = resolveReplyContext() {
@@ -620,7 +629,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.log("depth-1 pull: not yet implemented — WS-A")
 
         case .replyBegan:
-            guard micGranted, !recorder.isRecording else { return }
+            guard micGranted else { return }
+            if recorder.isRecording {
+                // Refusing silently is how "app seems dead" reports start — the
+                // stomped-pill incident left the recorder live behind an idle
+                // facade and every press landed here, invisibly.
+                Permissions.log("reply: refused, mic already live")
+                lastStatusLine = "mic already live — tap ⌥ to send"
+                hud.flashAcknowledge()
+                return
+            }
             // Open issue #7 is NOT wired here, deliberately. `canStartReply` as a
             // hard refusal would break three live behaviors: dictation-to-clipboard
             // when nothing is waiting (which is how #7's "transcribe then fail" was
@@ -675,6 +693,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let captured = try? recorder.stop() else {
                 updateTitle()
                 lastStatusLine = "nothing recorded"
+                // Leave the capture state honestly — the pill used to linger here
+                // with a dead meter, and now the arbiter would (rightly) block
+                // anything else from painting over it.
+                hud.endCapture(because: "nothing recorded")
+                hud.showIdle(note: "Nothing recorded.", waiting: waitingNow(),
+                             unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
                 rebuildMenu()
                 return
             }
@@ -695,6 +719,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recordingTarget = nil
             dictationMode = false
             updateTitle()
+            hud.endCapture(because: "reply aborted")
             hud.showIdle(waiting: waitingNow(),
                          unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
         }
@@ -716,7 +741,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let previous = announceTask
         // Summarizing and fetching the voice take several seconds. Without this the
         // app shows nothing at all for the whole of that and reads as broken.
-        hud.showPreparing()
+        // A refusal means a reply flow owns the stage — and the voice obeys the
+        // same table as the pixels, so nothing is announced either.
+        guard hud.showPreparing() else {
+            Permissions.log("announce: refused, reply flow on stage")
+            return
+        }
         announceTask = Task { @MainActor in
             // Silence the old one first, then wait for it to actually be over.
             coordinator.speech.stop()
@@ -1231,6 +1261,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dictationMode = false
         lastStatusLine = "transcription cancelled, audio kept"
         Permissions.log("transcription: cancelled from the panel; audio is kept")
+        // The user door out of the capture state — without it the arbiter would
+        // refuse the idle repaint below and strand the panel.
+        hud.endCapture(because: "transcription cancelled")
         hud.showIdle(waiting: waitingNow(),
                      unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
         rebuildMenu()
