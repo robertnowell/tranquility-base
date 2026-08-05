@@ -235,6 +235,21 @@ case "reconcile":
         let n = try store.reapAudio(olderThan: hours * 3600)
         print("deleted \(n) audio file(s) older than \(Int(hours))h (confirmed/discarded only)")
 
+    case "new":
+        // Kick off an investigation instead of reacting to one (ruled 05 Aug).
+        // Optional argument overrides the directory; the command is fixed in v1.
+        SessionLauncher.trace = { print($0) }
+        let dir = args.count > 1 ? (args[1] as NSString).expandingTildeInPath
+                                 : SessionLauncher.defaultDirectory
+        switch SessionLauncher.launch(directory: dir) {
+        case .success:
+            print("new Terminal window: `\(SessionLauncher.defaultCommand)` in \(dir)")
+            print("its turns enter the loop as soon as the session first stops")
+        case .failure(let error):
+            print("couldn't launch: \(error.message)")
+            print("(Terminal automation permission is the usual suspect)")
+        }
+
     case "install-hooks":
     // One command instead of JSON surgery. Merges the three hook entries into
     // ~/.claude/settings.json, backing it up first; already-installed is a no-op.
