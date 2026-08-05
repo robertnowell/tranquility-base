@@ -751,9 +751,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 + "(\(line.text.count) chars)")
                 try? store?.recordDogfood(.depthOnePulled,
                                           sessionId: announcement.event.sessionId)
-                _ = await coordinator.speech.speak(line, onWord: { [weak self] range in
-                    Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
-                })
+                // In the session's voice (ruled 05 Aug, a559f29): the pull deepens
+                // that session's announcement, so it must sound like it.
+                _ = await coordinator.speech.speak(
+                    line,
+                    voice: coordinator.voiceId(for: announcement.event.sessionId),
+                    onWord: { [weak self] range in
+                        Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
+                    })
                 hud.highlight(upTo: line.text.count)
                 lastStatusLine = "rationale spoken"
                 rebuildMenu()
@@ -1322,11 +1327,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The session's durable voice (ruled 05 Aug, f6d3de0): the hail IS a
             // session utterance — the whole point of voice identity is that the
             // ear knows WHO before the name even registers, and the hail is the
-            // first sound a turn makes. Same roster derivation as the
-            // Coordinator's announce path; nil falls back to the narrator.
-            let roster = VoiceCatalog.cached().map(\.id).sorted().prefix(10)
-            let voice = (try? self.store?.voiceId(for: target.sessionId, roster: Array(roster))) ?? nil
-            _ = await coordinator.speech.speak(SpokenTextSanitizer().sanitize(text), voice: voice)
+            // first sound a turn makes. One roster definition (a559f29): the
+            // Coordinator's accessor, never a local derivation.
+            _ = await coordinator.speech.speak(
+                SpokenTextSanitizer().sanitize(text),
+                voice: coordinator.voiceId(for: target.sessionId))
         }
     }
 
