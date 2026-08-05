@@ -69,3 +69,14 @@ want to be reactive, but sometimes I want to kick off an investigation."
   (vd-voice-roster-page) and will supply ten voice ids. They replace the
   first-ten-by-id placeholder in exactly one place: `Coordinator.voiceId(for:)`.
   Existing assignments are durable and unaffected by the roster change.
+- **Hail voice — RULED 05 Aug: the session's voice, "for sure."** The hail is
+  the session bidding for attention; hearing WHO before the name is the whole
+  point of durable voices. Wire the hail's speak through
+  `coordinator.voiceId(for:)` exactly like the announcement.
+- **Lists sort newest-first by default** (grid rows, waiting list): recency is
+  the resting order; anything else is an explicit view.
+- Voice-assignment hygiene: two placeholder-era assignments (Kyle South Park
+  on the intranet session — explicitly disapproved — and Cassidy) predated the
+  hand-picked cast and were purged 05 Aug; those sessions redraw from the
+  approved fourteen at next announce. Durability binds cast assignments;
+  pre-cast leftovers were data, not contract.
