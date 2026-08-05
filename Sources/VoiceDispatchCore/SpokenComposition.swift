@@ -53,7 +53,10 @@ public enum SpokenComposition {
         if let rationale = brief.rationale, !rationale.isEmpty {
             let sanitized = sanitizer.sanitize(
                 rationale, maxWords: depthOneMaxWords, allowing: allowlist)
-            return sanitizer.applyingCallsign(callsign, strippingLabels: labels, to: sanitized)
+            // No callsign prefix on depth-1: the pull answers the agent that just
+            // spoke, so naming it again is redundancy, not attribution (ruled
+            // 05 Aug). Any echo the model wrote is still stripped.
+            return sanitizer.strippingLeadingLabels(labels + [callsign], from: sanitized)
         }
 
         // Fallback for briefs generated before the rationale field existed: the
@@ -74,7 +77,7 @@ public enum SpokenComposition {
 
         let sanitized = sanitizer.sanitize(
             composed, maxWords: depthOneMaxWords, allowing: allowlist)
-        return sanitizer.applyingCallsign(callsign, strippingLabels: labels, to: sanitized)
+        return sanitizer.strippingLeadingLabels(labels + [callsign], from: sanitized)
     }
 
     /// Card fields are clauses, not sentences. Terminal punctuation makes each

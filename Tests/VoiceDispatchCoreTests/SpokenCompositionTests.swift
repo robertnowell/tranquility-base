@@ -48,8 +48,10 @@ final class SpokenCompositionTests: XCTestCase {
                 + "noise the team ignores. We need to be careful about over-filtering.")
         let out = SpokenComposition.depthOneSpokenText(
             for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertTrue(out.text.hasPrefix("promotions copy: We propose the filter"),
+        XCTAssertTrue(out.text.hasPrefix("We propose the filter"),
                       "the written briefing wins over the card fields: \(out.text)")
+        XCTAssertFalse(out.text.contains("promotions copy"),
+                       "no callsign on depth-1: the same agent just spoke (ruled 05 Aug)")
         XCTAssertFalse(out.text.contains("Proceed?"),
                        "card fields stay on the card when a rationale exists")
     }
@@ -65,8 +67,7 @@ final class SpokenCompositionTests: XCTestCase {
             for: announcement(callsign: "promotions copy", brief: brief))
         XCTAssertEqual(
             out.text,
-            "promotions copy: ship the promotions poller. "
-            + "the filter may drop real alerts. Proceed?")
+            "ship the promotions poller. the filter may drop real alerts. Proceed?")
     }
 
     func testDepthOneWordBudgetClampsTheRationaleAtASentenceBoundary() {
@@ -82,9 +83,8 @@ final class SpokenCompositionTests: XCTestCase {
         XCTAssertTrue(out.text.contains("We propose"), "the why always survives the clamp")
         XCTAssertFalse(out.text.contains("runbook"),
                        "over budget, the trailing sentence goes whole — never mid-clause")
-        // Budget bounds the composed body; the mechanical callsign prefix (2
-        // words) rides on top of it.
-        XCTAssertLessThanOrEqual(out.wordCount, SpokenComposition.depthOneMaxWords + 2)
+        // Budget bounds the whole utterance now — no prefix rides on top.
+        XCTAssertLessThanOrEqual(out.wordCount, SpokenComposition.depthOneMaxWords)
     }
 
     func testDepthOneSanitizesIdentifiersAndPaths() {
@@ -102,24 +102,25 @@ final class SpokenCompositionTests: XCTestCase {
         let brief = SessionBrief(topic: "export", happened: "done")
         let out = SpokenComposition.depthOneSpokenText(
             for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertEqual(out.text, "promotions copy: No further rationale recorded.")
+        XCTAssertEqual(out.text, "No further rationale recorded.")
     }
 
-    func testDepthOneCallsignPrefixAppearsExactlyOnce() {
+    func testDepthOneNeverPrependsAndStripsTheModelsCallsignEcho() {
         // The nastiest case: a field that itself opens with the callsign. The
         // mechanical pass strips it before the single prepend.
         let brief = SessionBrief(
             topic: "export", happened: "done", question: "promotions copy: proceed?")
         let out = SpokenComposition.depthOneSpokenText(
             for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertEqual(out.text, "promotions copy: proceed?")
-        XCTAssertEqual(out.text.components(separatedBy: "promotions copy").count - 1, 1)
+        XCTAssertEqual(out.text, "proceed?")
+        XCTAssertEqual(out.text.components(separatedBy: "promotions copy").count - 1, 0,
+                       "the echo is stripped and nothing is prepended")
     }
 
-    func testDepthOneUnmintedSessionUsesTheDirectoryWordPrefix() {
+    func testDepthOneUnmintedSessionAlsoGetsNoPrefix() {
         let brief = SessionBrief(topic: "export", happened: "done", risk: "tests are flaky")
         let out = SpokenComposition.depthOneSpokenText(
             for: announcement(callsign: nil, brief: brief))
-        XCTAssertEqual(out.text, "promotions: tests are flaky.")
+        XCTAssertEqual(out.text, "tests are flaky.")
     }
 }

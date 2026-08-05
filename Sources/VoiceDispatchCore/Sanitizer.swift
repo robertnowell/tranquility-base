@@ -229,6 +229,20 @@ public struct SpokenTextSanitizer: Sendable {
         return SanitizedSpokenText(text: text, redactions: spoken.redactions)
     }
 
+    /// Strip a leading callsign/label echo WITHOUT prepending one.
+    ///
+    /// Depth-1 speaks inside an established exchange — the same agent that just
+    /// finished talking — so a callsign there is redundancy, not attribution
+    /// (ruled 05 Aug). The strip still matters: the model sometimes opens the
+    /// field with the callsign anyway, and hearing it once is the contract.
+    public func strippingLeadingLabels(
+        _ labels: [String], from spoken: SanitizedSpokenText
+    ) -> SanitizedSpokenText {
+        let stripped = Callsign.strippingLabelPrefixes(spoken.text, labels: labels)
+        guard !stripped.isEmpty else { return spoken }
+        return SanitizedSpokenText(text: stripped, redactions: spoken.redactions)
+    }
+
     /// Split on sentence-ending punctuation followed by whitespace, keeping the
     /// punctuation attached.
     static func sentences(in text: String) -> [String] {
