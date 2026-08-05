@@ -81,9 +81,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// future one, because it asks "is this still the reply the user wants" rather
     /// than "is a particular UI state showing".
     private var replyGeneration = 0
-    /// What the idle panel is currently displaying, so it is redrawn on change
-    /// rather than on every poll.
-    private var lastShownCounts: (Int, Int) = (-1, -1)
+    /// What the idle grid is currently displaying — row DATA, not counts — so it
+    /// is redrawn on content change rather than on every poll. Counts alone
+    /// missed real changes: a newer turn replacing an older one leaves the count
+    /// identical, and a summary arriving changes a row's topic with no count
+    /// change at all.
+    private var lastShownRows: [StateLegend.SessionRow]?
+    /// The annunciator's last title, so the count logs on change, not per tick.
+    private var lastMenuBarCount: String?
     /// Consulted only for unprompted surfacing. A keypress is never gated: you
     /// cannot interrupt someone who has just asked for something.
     private let gate = InterruptGate(minimumIdleSeconds: 0)
@@ -91,6 +96,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = StateLegend.menuBarPlaceholder
+        // Click → the grid (WS-B, ruled). The menu still exists — permissions,
+        // voice, quit — behind a right-click, so the item is never assigned a
+        // permanent menu (that would swallow the primary click).
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(statusItemClicked)
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         rebuildMenu()
 
         do {
@@ -144,22 +155,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // straight at it changed nothing and the count went stale. Only
                 // while idle: speech, a recording, a countdown or a failure notice
                 // are conversations in progress and must not be redrawn under.
-                let waiting = self.waitingNow()
-                let unsent = (try? self.store?.unsentReplyCount()) ?? 0
-                // Only on a change. Redrawing every tick repositions the panel and
-                // resets its layout for no reason, which reads as flicker on a
-                // window that is meant to sit still.
+                let rows = self.sessionRowsNow()
+                let waiting = rows.filter { $0.lamp == .ready }.count
+                // The menu-bar annunciator refreshes every tick, so its count can
+                // never go stale even while the panel stays hidden.
+                self.updateTitle()
+                // Only on a content change. Redrawing every tick repositions the
+                // panel and resets its layout for no reason, which reads as
+                // flicker on a window that is meant to sit still. The guard is
+                // the row DATA (callsign/topic/lamp), not counts: a topic
+                // changing is a change worth painting.
                 let arrived = turnArrived && waiting > 0
                 if self.hud.canSurfaceAmbiently,
-                   arrived || (waiting, unsent) != self.lastShownCounts {
-                    self.lastShownCounts = (waiting, unsent)
+                   arrived || rows != self.lastShownRows {
+                    self.lastShownRows = rows
                     if arrived {
-                        self.surfaceArrival(waiting: waiting, unsent: unsent)
+                        self.surfaceArrival(rows: rows, waiting: waiting)
                     } else if self.hud.isOnScreen {
                         // Count fell (something was heard or dismissed). Keep the
                         // panel truthful, but never raise it for a decrease: a
                         // window appearing to tell you there is less to do is noise.
-                        self.hud.showIdle(waiting: waiting, unsentReplies: unsent)
+                        self.hud.showIdle(rows: rows)
                     }
                 }
             }
@@ -183,20 +199,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The panel can drive a recording itself, so answering never depends on
         // knowing a hotkey that is invisible in the UI.
         hud.onOpenSettings = { [weak self] in self?.openSettings() }
-        hud.onOpenWaitingList = { [weak self] in
-            guard let self, let waiting = try? self.coordinator?.waiting() else { return }
-            self.hud.showWaitingList((waiting ?? []).map {
-                (id: $0.sessionId, label: $0.projectLabel,
-                 topic: $0.summaryText?.split(separator: ".").first.map(String.init)
-                     ?? $0.lastAssistantMessage?.prefix(60).description ?? "waiting")
-            })
-        }
+        // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
+        hud.onNewSession = { [weak self] in self?.newSession() }
         hud.onLeaveSettings = { [weak self] in
             guard let self else { return }
             self.coordinator?.speech.stop()
-            self.hud.showIdle(waiting: self.waitingNow(),
-                              unsentReplies: (try? self.store?.unsentReplyCount()) ?? 0)
+            self.showIdleGrid()
         }
 
         hud.onChooseVoice = { [weak self] id in
@@ -259,10 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, let captured = try? self.recorder.stop() else {
                 self?.hud.recordingEnded()
                 self?.hud.endCapture(because: "nothing recorded")
-                if let self {
-                    self.hud.showIdle(waiting: self.waitingNow(),
-                                      unsentReplies: (try? self.store?.unsentReplyCount()) ?? 0)
-                }
+                self?.showIdleGrid()
                 return
             }
             self.isBusy = false
@@ -284,6 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Coordinator.trace = { Permissions.log("routing: \($0)") }
         ClaudeAgentsCLI.trace = { Permissions.log("liveness: \($0)") }
+        SessionLauncher.trace = { Permissions.log("launcher: \($0)") }
         Secrets.trace = { Permissions.log("secrets: \($0)") }
         QueueStore.trace = { Permissions.log("queue: \($0)") }
         Permissions.log("args=\(CommandLine.arguments)")
@@ -328,8 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             announceLaunch()
             // Visible proof of life. A menu-bar-only app with a full menu bar is
             // indistinguishable from a broken one; this makes launch observable.
-            hud.showIdle(waiting: waitingNow(),
-                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+            showIdleGrid()
         }
     }
 
@@ -396,8 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // announcement is already preparing, and this must not stomp it.
             lastStatusLine = "sending to \(label)…"
             if hud.canSurfaceAmbiently {
-                hud.showIdle(waiting: waitingNow(),
-                             unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+                showIdleGrid()
             }
             do {
                 let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
@@ -472,25 +477,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Second, if there is no target, the honest move is refusing to record, not
     /// transcribing a reply in order to discover it has nowhere to go.
     private func resolveReplyContext() -> (sessionId: String, pid: Int?, label: String, cwd: String?)? {
-        var resolved: (sessionId: String, label: String, cwd: String?)?
         if let conversation = activeConversation {
             // The session on screen or just replied to — your attention, which
-            // outranks anything derived from cursors.
-            resolved = conversation
-        } else if let target = try? coordinator?.replyTarget() ?? nil {
-            resolved = (target.sessionId, target.projectLabel, target.cwd)
+            // outranks anything derived from cursors. Its label is already the
+            // one identity (callsign-resolved when the announcement painted).
+            let live = (ClaudeAgentsCLI().sessions() ?? [])
+                .first(where: { $0.sessionId == conversation.sessionId })
+            return (conversation.sessionId, live?.pid, conversation.label, conversation.cwd)
         }
-        guard let resolved else { return nil }
+        guard let target = try? coordinator?.replyTarget() ?? nil else { return nil }
         let live = (ClaudeAgentsCLI().sessions() ?? [])
-            .first(where: { $0.sessionId == resolved.sessionId })
-        // Prefer the live session name ("promotions-49") over the bare project
-        // label ("promotions"): several sessions share a label, and the name is
-        // the same string Claude Code shows, so it is checkable against the tab.
-        return (resolved.sessionId, live?.pid, live?.name ?? resolved.label, resolved.cwd)
+            .first(where: { $0.sessionId == target.sessionId })
+        // One identity: the minted callsign wins. Until minted, prefer the live
+        // session name ("promotions-49") over the bare project label — several
+        // sessions share a label, and the name is the same string Claude Code
+        // shows, so it is checkable against the tab.
+        let name = target.callsign ?? live?.name ?? target.projectLabel
+        return (target.sessionId, live?.pid, name, target.cwd)
     }
 
     /// The badge, from the same predicate a keypress uses.
     private func waitingNow() -> Int { (try? coordinator?.waitingCount()) ?? 0 }
+
+    /// The grid's rows: every LIVE session is a row (ruled, docs/ws-b-ruling.md —
+    /// a turn skipped by ⌃⌥ is a visible row, not an absence). Green when the
+    /// session is waiting on you; quiet when it is merely alive. Dead sessions
+    /// appear nowhere. Identity is the minted callsign with the project label
+    /// (or live session name) as fallback until minted.
+    private func sessionRowsNow() -> [StateLegend.SessionRow] {
+        guard let coordinator else { return [] }
+        let waiting = (try? coordinator.waiting()) ?? []
+        var rows = waiting.map {
+            StateLegend.SessionRow(
+                id: $0.sessionId,
+                name: StateLegend.displayName(callsign: $0.callsign, fallback: $0.projectLabel),
+                topic: StateLegend.topic(summary: $0.summaryText,
+                                         lastAssistantMessage: $0.lastAssistantMessage),
+                lamp: .ready)
+        }
+        // Live sessions with nothing waiting: quiet rows, so a skipped or heard
+        // session stays findable. Their latest stop (if any) supplies callsign
+        // and topic; a session that has never finished a turn shows its live name.
+        let waitingIds = Set(waiting.map(\.sessionId))
+        let known = (try? store?.waitingSessionsIncludingHeard()) ?? []
+        for live in ClaudeAgentsCLI().sessions() ?? [] where !waitingIds.contains(live.sessionId) {
+            let stored = known.first { $0.sessionId == live.sessionId }
+            rows.append(StateLegend.SessionRow(
+                id: live.sessionId,
+                name: StateLegend.displayName(
+                    callsign: stored?.callsign,
+                    fallback: live.name ?? stored?.projectLabel ?? "session"),
+                topic: stored.map {
+                    StateLegend.topic(summary: $0.summaryText,
+                                      lastAssistantMessage: $0.lastAssistantMessage)
+                } ?? "",
+                lamp: .running))
+        }
+        return rows
+    }
+
+    /// The one route to the idle face: assemble the grid and show it.
+    private func showIdleGrid(note: String? = nil) {
+        hud.showIdle(note: note, rows: sessionRowsNow())
+    }
 
     private func refresh() {
         if !hotkey.isRunning { _ = hotkey.start() }
@@ -509,7 +558,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// entirely. A template image renders at the right weight and is findable.
     private func updateTitle() {
         guard let button = statusItem.button else { return }
-        button.title = ""
 
         // Three states, mapped in the same legend the panel reads from.
         let state: StateLegend.MenuBarState
@@ -522,9 +570,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             accessibilityDescription: "Voice Dispatch")
         image?.isTemplate = true
         button.image = image
-        // Fall back to text if the symbol is unavailable, rather than showing nothing.
-        if button.image == nil { button.title = appearance.textFallback }
-        button.toolTip = "Voice Dispatch. Tap ⌃⌥ to hear, hold ⌥ to reply"
+        // The annunciator at rest (WS-B, ruled): the waiting count rides next to
+        // the symbol, quiet when nothing is. The liveness-filtered count — the
+        // same predicate a keypress uses — so a dead session is never counted.
+        let count = StateLegend.menuBarCount(waitingNow())
+        button.title = button.image == nil
+            // Fall back to text if the symbol is unavailable, rather than nothing.
+            ? appearance.textFallback + count
+            : count
+        button.imagePosition = count.isEmpty ? .imageOnly : .imageLeft
+        // Logged on change only, so the annunciator is checkable from the log
+        // without a per-tick line.
+        if count != lastMenuBarCount {
+            lastMenuBarCount = count
+            Permissions.log("menubar: count=\(count.isEmpty ? "0 (quiet)" : count)")
+        }
+        button.toolTip = "Voice Dispatch. Click for the grid. Tap ⌃⌥ to hear, hold ⌥ to reply"
     }
 
     // MARK: - Push to talk
@@ -676,7 +737,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     spoken: line.text,
                     sessionId: announcement.event.sessionId,
                     pid: nil,
-                    project: announcement.event.projectLabel,
+                    project: StateLegend.displayName(
+                        callsign: announcement.event.callsign,
+                        fallback: announcement.event.projectLabel),
                     cwd: announcement.event.cwd,
                     eventId: announcement.event.sessionId)
                 Permissions.log("depth-1: speaking for \(announcement.event.sessionId.prefix(8)) "
@@ -760,8 +823,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // with a dead meter, and now the arbiter would (rightly) block
                 // anything else from painting over it.
                 hud.endCapture(because: "nothing recorded")
-                hud.showIdle(note: "Nothing recorded.", waiting: waitingNow(),
-                             unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+                showIdleGrid(note: "Nothing recorded.")
                 rebuildMenu()
                 return
             }
@@ -783,8 +845,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             dictationMode = false
             updateTitle()
             hud.endCapture(because: "reply aborted")
-            hud.showIdle(waiting: waitingNow(),
-                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+            showIdleGrid()
         }
     }
 
@@ -837,8 +898,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // registered press looked exactly like a missed one.
             await Task.detached { _ = ClaudeAgentsCLI().sessions() }.value
             if eventId == nil, (try? coordinator.nextToAnnounce()) == nil {
-                hud.showIdle(waiting: 0,
-                             unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+                showIdleGrid()
                 return
             }
             Permissions.log("announce: starting")
@@ -855,9 +915,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         guard let self else { return }
                         let live = (ClaudeAgentsCLI().sessions() ?? [])
                             .first { $0.sessionId == announcement.event.sessionId }
+                        // One identity: the card is titled by the callsign the
+                        // voice is already speaking — the visual side catching up.
+                        let name = StateLegend.displayName(
+                            callsign: announcement.event.callsign,
+                            fallback: announcement.event.projectLabel)
                         self.activeConversation = (
                             announcement.event.sessionId,
-                            announcement.event.projectLabel,
+                            name,
                             announcement.event.cwd)
                         self.lastAnnouncement = announcement
                         self.hud.showAnnouncement(
@@ -865,7 +930,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             spoken: announcement.spoken.text,
                             sessionId: announcement.event.sessionId,
                             pid: live?.pid,
-                            project: announcement.event.projectLabel,
+                            project: name,
                             cwd: announcement.event.cwd,
                             eventId: announcement.event.sessionId)
                     },
@@ -895,20 +960,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             + "tap ⌃⌥ to hear it again.", ok: false)
                     } else {
                         lastStatusLine = "stopped, still unread"
-                        hud.showIdle(note: "Stopped, still unread.",
-                                     waiting: waitingNow(),
-                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+                        showIdleGrid(note: "Stopped, still unread.")
                     }
                 case .held(let reason):
                     lastStatusLine = "held: \(reason)"
-                    hud.showIdle(note: "Holding. \(reason).",
-                                 waiting: waitingNow(),
-                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+                    showIdleGrid(note: "Holding. \(reason).")
                 case .nothingWaiting:
                     Permissions.log("announce: nothingWaiting")
                     lastStatusLine = "nothing waiting"
-                    hud.showIdle(waiting: waitingNow(),
-                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+                    showIdleGrid()
                 }
             } catch {
                 Permissions.log("announce: threw \(error)")
@@ -954,10 +1014,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 let pid = (ClaudeAgentsCLI().sessions() ?? [])
                     .first(where: { $0.sessionId == session })?.pid
+                let name = StateLegend.displayName(callsign: target.callsign,
+                                                   fallback: target.projectLabel)
                 hud.adoptTarget(sessionId: session, pid: pid,
-                                label: target.projectLabel, cwd: target.cwd)
+                                label: name, cwd: target.cwd)
                 recordingTarget = session
-                activeConversation = (session, target.projectLabel, target.cwd)
+                activeConversation = (session, name, target.cwd)
                 // Hands-free, because no key is held: a single ⌥ tap or the Send
                 // button ends it. Without this the recording had no clean ending.
                 handsFreeListening = true
@@ -1083,7 +1145,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .noTarget:
                     lastStatusLine = "nothing to reply to yet"
                     hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.", ok: false)
-                case .readyToSend(let utteranceId, let text, let label, _):
+                case .readyToSend(let utteranceId, let text, let coreLabel, let sessionId):
+                    // One identity: Core's outcome still carries the project
+                    // label; the visual "Sending to X" upgrades it to the minted
+                    // callsign when one exists.
+                    let label = (try? store?.callsign(for: sessionId)).flatMap { $0 } ?? coreLabel
                     // Sending is the default. The window exists to stop it, not to
                     // permit it: approving every correct transcript is a toll.
                     lastStatusLine = "sending to \(label)…"
@@ -1166,8 +1232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.coordinator?.speech.stop()
             guard let chain = self.coordinator?.speech else { return }
             _ = await chain.speak(SpokenTextSanitizer().sanitize(self.previewText()))
-            hud.showIdle(waiting: waitingNow(),
-                         unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+            showIdleGrid()
         }
     }
 
@@ -1180,7 +1245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// a keypress, which is backwards — you cannot interrupt someone who just asked
     /// for something. Interrupting is exactly what this does, so this is where a
     /// veto belongs.
-    private func surfaceArrival(waiting: Int, unsent: Int) {
+    private func surfaceArrival(rows: [StateLegend.SessionRow], waiting: Int) {
         let decision = gate.evaluate()
         guard decision.allowed else {
             // Held, not dropped. The count is still right the moment the panel is
@@ -1197,7 +1262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         Permissions.log("ambient: surfaced for \(waiting) waiting")
-        hud.showIdle(waiting: waiting, unsentReplies: unsent)
+        hud.showIdle(rows: rows)
     }
 
     /// The tty of the frontmost Terminal tab, or nil if Terminal is not in front.
@@ -1227,11 +1292,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showPanel() {
-        hud.showIdle(waiting: waitingNow(),
-                     unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+        showIdleGrid()
     }
 
+    /// Start a fresh Claude session in a new Terminal window (v1 is choiceless:
+    /// home directory, `claude --dangerously-skip-permissions`). Its turns
+    /// enter the loop — and the grid — as soon as the session first stops.
+    private func newSession() {
+        let dir = SessionLauncher.defaultDirectory
+        let before = Set((ClaudeAgentsCLI().sessions() ?? [])
+            .filter { $0.cwd == dir }.map(\.sessionId))
+        switch SessionLauncher.launch() {
+        case .success:
+            lastStatusLine = "new session launched"
+            rebuildMenu()
+            // First-run reality (ruled, docs/ws-b-ruling.md): the directory-trust
+            // prompt is a security consent and is NEVER auto-answered. If no new
+            // session registers in the launched cwd within ~30s, say so with a
+            // quiet visual note — a walked-away launch must not be a silently
+            // stillborn investigation.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+                guard let self else { return }
+                Task { @MainActor in
+                    let after = await Task.detached { ClaudeAgentsCLI().sessions() }.value
+                    let registered = (after ?? []).contains {
+                        $0.cwd == dir && !before.contains($0.sessionId)
+                    }
+                    guard !registered else { return }
+                    Permissions.log("launcher: no session registered in \(dir) after 30s")
+                    if self.hud.canSurfaceAmbiently {
+                        self.showIdleGrid(
+                            note: "New session is waiting on a prompt in Terminal.")
+                    }
+                }
+            }
+        case .failure(let error):
+            hud.showResult("Couldn't start a session: \(error.message). "
+                           + "Terminal automation permission is the usual suspect.",
+                           ok: false)
+        }
+    }
+
+    @objc private func newSessionTapped() { newSession() }
+
     // MARK: - Menu
+
+    /// The status-item menu, held here rather than assigned to the item: an
+    /// assigned menu intercepts every click, and the primary click's job is the
+    /// grid. Right-click pops this up.
+    private var statusMenu: NSMenu?
+
+    /// Left-click opens the grid; right-click opens the menu. The grid is the
+    /// interface, the menu is the toolbox.
+    @objc private func statusItemClicked() {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            statusItem.menu = statusMenu
+            statusItem.button?.performClick(nil)
+            statusItem.menu = nil
+        } else {
+            showPanel()
+        }
+    }
 
     private func rebuildMenu() {
         let menu = NSMenu()
@@ -1244,6 +1365,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let show = NSMenuItem(title: "Show panel", action: #selector(showPanel), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
+
+        // The proactive half (ruled 05 Aug addendum): kick off an investigation
+        // instead of reacting to one. Same code path as `vdctl new` and the
+        // grid's "+" row. Deliberately no gesture binding — a mis-hold that
+        // spawns terminals is worse than a click.
+        let newSession = NSMenuItem(title: "New session",
+                                    action: #selector(newSessionTapped), keyEquivalent: "")
+        newSession.target = self
+        menu.addItem(newSession)
 
         // Picking a voice plays it immediately. A name in a list tells you nothing
         // about what it sounds like, and the whole point of choosing is hearing.
@@ -1282,9 +1412,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action: #selector(openInputMonitoringSettings)))
         menu.addItem(.separator())
 
-        if let store, let pending = try? store.pendingCount(), pending > 0 {
-            menu.addItem(disabled("\(pending) waiting"))
-        }
+        // No "N waiting" row here. It read from the unfiltered store count and
+        // disagreed with every other surface (dead sessions counted); the count
+        // lives in the menu-bar title now, liveness-filtered like everything else.
         let retry = NSMenuItem(title: "Retry failed transcriptions",
                                action: #selector(retryFailed), keyEquivalent: "")
         retry.target = self
@@ -1293,7 +1423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
-        statusItem.menu = menu
+        statusMenu = menu
     }
 
     private func disabled(_ title: String) -> NSMenuItem {
@@ -1360,8 +1490,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The user door out of the capture state — without it the arbiter would
         // refuse the idle repaint below and strand the panel.
         hud.endCapture(because: "transcription cancelled")
-        hud.showIdle(waiting: waitingNow(),
-                     unsentReplies: (try? store?.unsentReplyCount()) ?? 0)
+        showIdleGrid()
         rebuildMenu()
     }
 

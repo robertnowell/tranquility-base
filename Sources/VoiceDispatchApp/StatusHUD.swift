@@ -64,7 +64,6 @@ final class StatusHUD: NSObject {
     private var voicePicker: NSPopUpButton!
     private var gearButton: NSButton!
     private var backButton: NSButton!
-    private var stateButton: NSButton!
     private var waitingRows: NSStackView!
     var onPickWaiting: ((String) -> Void)?
     private var actionRow: NSStackView!
@@ -264,7 +263,9 @@ final class StatusHUD: NSObject {
     func showWorking(_ message: String) {
         guard transition(to: .transcribing(startedAt: Date()), because: "working")
         else { return }
-        face = Face(title: currentTarget?.label ?? "Voice Dispatch", body: message)
+        // One identity: the callsign-carrying target label, or no title at all.
+        // The app's own name belongs only to the true empty state.
+        face = Face(title: currentTarget?.label ?? "", body: message)
         render()
     }
 
@@ -285,7 +286,7 @@ final class StatusHUD: NSObject {
         guard transition(to: .transcribing(startedAt: Date()),
                          because: "transcription started")
         else { return }
-        face = Face(title: currentTarget?.label ?? "Voice Dispatch", body: message,
+        face = Face(title: currentTarget?.label ?? "", body: message,
                     transcription: (cancel: onCancel, retry: onRetry))
         render()
     }
@@ -323,8 +324,9 @@ final class StatusHUD: NSObject {
         // Reply and Go to session are about the announcement, not the receipt, and
         // offering them here suggests the send is still in your hands. It is not.
         currentTarget = ok ? nil : currentTarget
-        face = Face(title: ok ? "Voice Dispatch" : (currentTarget?.label ?? "Voice Dispatch"),
-                    body: message)
+        // One identity: a success receipt needs no title (the pill and body say
+        // it); a failure is titled by the session it is about, in its callsign.
+        face = Face(title: ok ? "" : (currentTarget?.label ?? ""), body: message)
         render()
     }
 
@@ -391,24 +393,29 @@ final class StatusHUD: NSObject {
         Permissions.log("capture: ended (\(reason))")
     }
 
-    func showIdle(note: String? = nil, waiting: Int, unsentReplies: Int = 0) {
+    /// The idle face IS the grid (WS-B, ruled): one row per live session,
+    /// callsign + lamp + short topic. Row tap invites that session. The old
+    /// count-pill and hint text are gone as the default face; the app's own name
+    /// and a one-line hint survive only in the true empty state (no sessions).
+    func showIdle(note: String? = nil, rows: [StateLegend.SessionRow]) {
         // The transition that used to stomp a live listening pill (an interrupted
         // announce resuming after the gesture that killed it). Now the table
         // refuses it and this returns without painting.
+        let waiting = rows.filter { $0.lamp == .ready }.count
         guard transition(to: .idle(waiting: waiting), because: "idle repaint")
         else { return }
         currentTarget = nil; currentEventId = nil; identity = nil
 
-        let status = waiting > 0
-            ? "Tap ⌃⌥ for the most recent, hold ⌥ to reply."
-            : "Nothing waiting. Sessions appear here as they finish."
-        // Unconfirmed replies are deliberately NOT shown here. A count you cannot
-        // act on is clutter, and naming a CLI command from a floating panel asks
-        // you to go somewhere else to do something you did not ask to do. They are
-        // still recorded, and `vdctl utterances` still lists them.
-        _ = unsentReplies
-        face = Face(title: "Voice Dispatch",
-                    body: [note, status].compactMap { $0 }.joined(separator: " "))
+        if rows.isEmpty {
+            // The true empty state — the ONLY surface where the literal app name
+            // appears, with the one-line hint.
+            face = Face(title: "Voice Dispatch",
+                        body: [note, "Nothing waiting. Sessions appear here as they finish."]
+                            .compactMap { $0 }.joined(separator: " "))
+        } else {
+            face = Face(title: waiting > 0 ? "\(waiting) waiting" : "",
+                        body: note ?? "", sessionRows: rows)
+        }
         render()
     }
 
@@ -456,7 +463,7 @@ final class StatusHUD: NSObject {
         var handsFree = false
         var sendingLabel = ""
         var countdownSeconds: TimeInterval = 0
-        var waitingItems: [(id: String, label: String, topic: String)] = []
+        var sessionRows: [StateLegend.SessionRow] = []
         var voices: [Voice] = []
         var selectedVoice = ""
         var transcription: (cancel: () -> Void, retry: () -> Void)?
@@ -470,8 +477,10 @@ final class StatusHUD: NSObject {
     private func situation() -> StateLegend.Situation? {
         switch state {
         case .hidden: return nil
-        case .idle(let n):
-            return face.waitingItems.isEmpty ? (n > 0 ? .waitingCount(n) : .ready) : nil
+        // Idle is Ready whether or not the grid has rows: the pill states the
+        // APP's condition; each session's condition is its row's lamp. The old
+        // clickable count pill is dead — the grid is already open.
+        case .idle: return .ready
         case .preparing: return .preparing
         case .speaking(_, let catchUp): return catchUp ? .catchingUp : .speaking
         case .paused: return .paused
@@ -511,8 +520,9 @@ final class StatusHUD: NSObject {
         // in is exactly when you want to check.
         let row = situation().map { StateLegend.row(for: $0) }
         stateLabel.stringValue = row?.stateText ?? ""; stateLabel.isHidden = false
-        stateButton.title = ""; stateButton.isHidden = true
-        titleLabel.stringValue = face.title; titleLabel.isHidden = false
+        // A title exists exactly when the face carries one; an empty label still
+        // reserves a line's height, which reads as a hole.
+        titleLabel.stringValue = face.title; titleLabel.isHidden = face.title.isEmpty
         bodyLabel.stringValue = face.body
         hintLabel.stringValue = currentActionHint()
         actionRow.isHidden = !(row?.showsControls ?? false)
@@ -532,22 +542,17 @@ final class StatusHUD: NSObject {
         case .hidden, .preparing, .speaking, .transcribing:
             break
 
-        case .idle(let waiting) where face.waitingItems.isEmpty:
-            // The count is clickable when there is something behind it; the pill
-            // is a plain "Ready" when not. The pill arrives holding the row text.
-            stateButton.title = waiting > 0 ? stateLabel.stringValue : ""
-            stateButton.isHidden = waiting == 0
-            stateLabel.isHidden = waiting > 0
-            if waiting > 0 { stateLabel.stringValue = "" }
+        case .idle where !face.sessionRows.isEmpty:
+            // The grid: the idle face IS one row per live session (WS-B, ruled).
+            // The rows carry the identity and state; the hint text is dead here.
+            hintLabel.stringValue = ""
+            waitingRows.isHidden = false
+            rebuildSessionRows()
 
         case .idle:
-            // The waiting list: the idle face opened up — what is waiting IS the
-            // idle state's content — not a settings screen borrowing the panel.
-            titleLabel.stringValue = "\(face.waitingItems.count) waiting"
-            hintLabel.stringValue = ""
-            gearButton.isHidden = true; backButton.isHidden = false
-            waitingRows.isHidden = false
-            rebuildWaitingRows()
+            // True empty state: the baseline already says everything — the app
+            // name as title and the one-line hint as body.
+            break
 
         case .paused:
             // Never entered today — setPaused() patches the speaking face in
@@ -662,19 +667,58 @@ final class StatusHUD: NSObject {
         }
     }
 
-    private func rebuildWaitingRows() {
+    /// One grid row: lamp glyph in its flat state color, the callsign, then the
+    /// topic in chrome. Tap = invite that session. Capped at 8 rows.
+    private func rebuildSessionRows() {
         waitingRows.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for item in face.waitingItems.prefix(8) {
-            let row = NSButton(title: "\(item.label): \(item.topic)",
-                               target: self, action: #selector(waitingRowTapped(_:)))
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .left
+        paragraph.lineBreakMode = .byTruncatingTail
+        for item in face.sessionRows.prefix(8) {
+            let title = NSMutableAttributedString(
+                string: "\(StateLegend.Glyph.dot) ",
+                attributes: [.foregroundColor: item.lamp.color,
+                             .font: NSFont.systemFont(ofSize: 12),
+                             .paragraphStyle: paragraph])
+            title.append(NSAttributedString(
+                string: item.name,
+                attributes: [.foregroundColor: StateLegend.Lens.content.color,
+                             .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                             .paragraphStyle: paragraph]))
+            if !item.topic.isEmpty {
+                title.append(NSAttributedString(
+                    string: "  \(item.topic)",
+                    attributes: [.foregroundColor: StateLegend.Lens.chrome.color,
+                                 .font: NSFont.systemFont(ofSize: 12),
+                                 .paragraphStyle: paragraph]))
+            }
+            let row = NSButton(title: "", target: self, action: #selector(sessionRowTapped(_:)))
+            row.attributedTitle = title
             row.isBordered = false
             row.alignment = .left
-            row.font = .systemFont(ofSize: 12)
-            row.lineBreakMode = .byTruncatingTail
             row.identifier = NSUserInterfaceItemIdentifier(item.id)
             waitingRows.addArrangedSubview(row)
             row.widthAnchor.constraint(equalToConstant: 348).isActive = true
         }
+        // The proactive half (ruled 05 Aug addendum): a "+" row at the bottom of
+        // the grid kicks off a fresh session — same code path as the menu item.
+        let newRow = NSButton(title: "+ New session", target: self,
+                              action: #selector(newSessionRowTapped))
+        newRow.isBordered = false
+        newRow.alignment = .left
+        newRow.font = .systemFont(ofSize: 12)
+        newRow.contentTintColor = StateLegend.Lens.chrome.color
+        waitingRows.addArrangedSubview(newRow)
+        newRow.widthAnchor.constraint(equalToConstant: 348).isActive = true
+        let ready = face.sessionRows.filter { $0.lamp == .ready }.count
+        Permissions.log("grid: \(min(face.sessionRows.count, 8)) rows (\(ready) ready)")
+    }
+
+    /// Wired by the app onto SessionLauncher.launch().
+    var onNewSession: (() -> Void)?
+
+    @objc nonisolated private func newSessionRowTapped() {
+        MainActor.assumeIsolated { onNewSession?() }
     }
 
     private func populateVoicePicker() {
@@ -809,8 +853,9 @@ final class StatusHUD: NSObject {
     @discardableResult
     func showPreparing() -> Bool {
         guard transition(to: .preparing, because: "announce requested") else { return false }
-        face = Face(title: "Voice Dispatch",
-                    body: "Writing the summary and fetching the voice…")
+        // One identity: no app-name masthead — the Preparing pill and the body
+        // carry it. The callsign arrives with the announcement itself.
+        face = Face(body: "Writing the summary and fetching the voice…")
         render()
         return true
     }
@@ -849,7 +894,14 @@ final class StatusHUD: NSObject {
                 + "product-image-binding-oracle/promotions")
         Permissions.log("selftest identity=\(identity ?? "nil")")
         for (label, block) in [
-            ("idle", { self.showIdle(note: long, waiting: 3) }),
+            ("idle", { self.showIdle(note: long, rows: []) }),
+            // The idle grid: mixed lamps, a worst-case topic, and an empty one.
+            ("idleGrid", { self.showIdle(rows: [
+                .init(id: "a", name: "promotions copy",
+                      topic: "Hero image validated across the stack", lamp: .ready),
+                .init(id: "b", name: "syndit", topic: long, lamp: .running),
+                .init(id: "c", name: "voice dispatch", topic: "", lamp: .ready),
+            ]) }),
             ("preparing", { _ = self.showPreparing() }),
             ("announcement", { self.showAnnouncement(
                 topic: "Product image binding fix validation", spoken: long,
@@ -890,10 +942,6 @@ final class StatusHUD: NSObject {
                                 + "actions=\(!self.actionRowHidden) "
                                 + "selected=\(self.voicePickerSelection ?? "nil")")
             }),
-            ("waitingList", { self.showWaitingList([
-                (id: "a", label: "promotions", topic: "Hero image validated"),
-                (id: "b", label: "syndit", topic: "Nightly round complete"),
-            ]) }),
         ] as [(String, () -> Void)] {
             Permissions.log("selftest state=\(label)")
             block()
@@ -903,7 +951,8 @@ final class StatusHUD: NSObject {
         // The stomp that froze the app (2026-08-05): a stale idle repaint against a
         // live capture. Must be REFUSED, and the pill must still be on the walls.
         showListening(level: { 0.4 })
-        showIdle(waiting: 2)
+        showIdle(rows: [.init(id: "a", name: "promotions copy", topic: "", lamp: .ready),
+                        .init(id: "b", name: "syndit", topic: "", lamp: .ready)])
         let survived = state.isCapturingAudio && !meter.isHidden
         Permissions.log("selftest legality: idle-over-listening refused=\(survived) "
                         + "state=\(state.name)")
@@ -911,7 +960,7 @@ final class StatusHUD: NSObject {
         // Through the user door, exactly as a real abort must go — showIdle alone
         // is (correctly) refused from a capture state.
         endCapture(because: "selftest cleanup")
-        showIdle(waiting: 0)
+        showIdle(rows: [])
     }
 
     /// Every widget's visibility in one line, so the selftest log IS the render
@@ -923,7 +972,7 @@ final class StatusHUD: NSObject {
             ("actions", actionRow), ("reply", replyButton), ("go", goButton),
             ("discard", discardButton), ("check", sendCheckButton), ("picker", voicePicker),
             ("gear", gearButton), ("back", backButton), ("rows", waitingRows),
-            ("count", stateButton), ("cancelTx", cancelTranscriptionButton),
+            ("cancelTx", cancelTranscriptionButton),
             ("retryTx", retryTranscriptionButton),
         ]
         return widgets.map { "\($0.0)=\($0.1?.isHidden == false ? "1" : "0")" }
@@ -975,9 +1024,6 @@ final class StatusHUD: NSObject {
         // render(), which writes every widget's visibility before the panel is
         // ever ordered front.
         stateLabel = NSTextField(labelWithString: "")
-        stateButton = NSButton(title: "", target: self, action: #selector(stateTapped))
-        stateButton.isBordered = false
-        stateButton.controlSize = .small
         stateLabel.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
         stateLabel.textColor = StateLegend.Lens.chrome.color
 
@@ -1075,7 +1121,7 @@ final class StatusHUD: NSObject {
         waitingRows.alignment = .leading
         waitingRows.spacing = 2
 
-        let stack = NSStackView(views: [backButton, stateButton, stateLabel, titleLabel,
+        let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
                                         waitingRows, bodyLabel,
                                         progressBar, meter, voicePicker, hintLabel, buttons])
         stack.orientation = .vertical
@@ -1230,28 +1276,16 @@ final class StatusHUD: NSObject {
         MainActor.assumeIsolated { onOpenSettings?() }
     }
 
-    @objc nonisolated private func stateTapped() {
-        MainActor.assumeIsolated { onOpenWaitingList?() }
-    }
+    // The separate waiting-list face is gone (WS-B): the idle grid IS the list,
+    // so showWaitingList/onOpenWaitingList and the clickable count pill went
+    // with it — one face, not two near-identical lists.
 
-    /// A list of what is waiting, so the count can be opened rather than believed.
-    /// Renders in `.idle` — the list is the idle face opened up, not a settings
-    /// screen that happens to show sessions.
-    func showWaitingList(_ items: [(id: String, label: String, topic: String)]) {
-        guard transition(to: .idle(waiting: items.count), because: "waiting list opened")
-        else { return }
-        face = Face(waitingItems: items)
-        render()
-    }
-
-    @objc nonisolated private func waitingRowTapped(_ sender: NSButton) {
+    @objc nonisolated private func sessionRowTapped(_ sender: NSButton) {
         MainActor.assumeIsolated {
             guard let id = sender.identifier?.rawValue else { return }
             onPickWaiting?(id)
         }
     }
-
-    var onOpenWaitingList: (() -> Void)?
 
     @objc nonisolated private func backTapped() {
         MainActor.assumeIsolated {

@@ -87,12 +87,67 @@ enum StateLegend {
         let showsControls: Bool
     }
 
-    /// Display situations. Mostly 1:1 with PanelState; the extras (the waiting
-    /// count, catch-up, the two result flavors, the elapsed-seconds working pill)
-    /// are display distinctions the enum folds into associated values.
+    // MARK: - Session grid (WS-B)
+
+    /// The state lamp on a grid row. Flat state color, no skeuomorphism (ruled);
+    /// the MOCR palette arrives through this seam in a later item.
+    ///
+    /// Mapping is limited to what is derivable today: a session in the waiting set
+    /// is `.ready`; any other live session is `.running`. `.fault` is defined so
+    /// the seam is complete, but nothing observable emits it yet — inventing a
+    /// fault state the app cannot actually see is worse than omitting the color.
+    enum Lamp: Equatable {
+        /// Green: waiting on you.
+        case ready
+        /// Quiet: alive, nothing waiting.
+        case running
+        /// Amber: fault. Defined for the seam; unproduced today.
+        case fault
+
+        var color: NSColor {
+            switch self {
+            case .ready: return .systemGreen
+            case .running: return Lens.chrome.color
+            case .fault: return .systemOrange
+            }
+        }
+    }
+
+    /// One row of the idle grid: a session, its lamp, and a short topic.
+    /// Equatable so the intake timer can refresh the grid only when content
+    /// actually changed, not on every poll.
+    struct SessionRow: Equatable {
+        let id: String
+        /// The one identity: the minted callsign, else the fallback label.
+        let name: String
+        /// Short derived topic; may be empty.
+        let topic: String
+        let lamp: Lamp
+    }
+
+    /// The one identity, resolved once: the minted callsign wins everywhere;
+    /// the fallback (project label or live session name) covers unminted sessions.
+    static func displayName(callsign: String?, fallback: String) -> String {
+        if let callsign, !callsign.isEmpty { return callsign }
+        return fallback
+    }
+
+    /// The short topic for a session: first sentence of the summary, else the
+    /// first 60 characters of the last assistant message. ONE derivation — the
+    /// grid and every other consumer share it, so they cannot drift apart.
+    static func topic(summary: String?, lastAssistantMessage: String?) -> String {
+        if let first = summary?.split(separator: ".").first.map(String.init),
+           !first.isEmpty {
+            return first
+        }
+        return lastAssistantMessage.map { String($0.prefix(60)) } ?? ""
+    }
+
+    /// Display situations. Mostly 1:1 with PanelState; the extras (catch-up, the
+    /// two result flavors, the elapsed-seconds working pill) are display
+    /// distinctions the enum folds into associated values.
     enum Situation {
         case ready
-        case waitingCount(Int)
         case preparing
         case working
         /// Sanctioned change (open issue #4): transcription with visible elapsed time.
@@ -112,11 +167,6 @@ enum StateLegend {
         case .ready:
             return Row(stateText: "\(Glyph.quiet) Ready", glyph: Glyph.quiet,
                        lens: .chrome, speakTier: .silent, showsControls: true)
-        case .waitingCount(let n):
-            // Two spaces before the chevron, verbatim from the original literal.
-            return Row(stateText: "\(Glyph.quiet) \(n) waiting  \(Glyph.forward)",
-                       glyph: Glyph.quiet, lens: .chrome, speakTier: .silent,
-                       showsControls: true)
         case .preparing:
             return Row(stateText: "\(Glyph.quiet) Preparing", glyph: Glyph.quiet,
                        lens: .chrome, speakTier: .silent, showsControls: true)
@@ -222,6 +272,14 @@ enum StateLegend {
 
     /// Shown in the instant before the first SF Symbol is set.
     static let menuBarPlaceholder = Glyph.quiet
+
+    /// The annunciator at rest (ruled): the menu-bar item carries the waiting
+    /// count as its title next to the symbol; quiet (image only) when nothing is.
+    /// The count is always the liveness-filtered one — dead sessions are not
+    /// counted anywhere.
+    static func menuBarCount(_ waiting: Int) -> String {
+        waiting > 0 ? " \(waiting)" : ""
+    }
 
     // MARK: - Readiness, in plain words (sanctioned change b)
 
