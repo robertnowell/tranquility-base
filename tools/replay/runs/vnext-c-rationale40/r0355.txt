@@ -1,0 +1,13 @@
+```json
+{
+  "recap": "video-essays: three of four facets complete, one agent still running.",
+  "proposal": "Wait for the real-world anchors agent to finish, then review synthesis?",
+  "rationale": "The session found that a key line attributed to period language is actually a 2020 critic's gloss; the real primary evidence is the manual's foreword and historian Bill Barry's account. We need the anchors agent to complete before deciding whether to revise the packages or move to production.",
+  "topic": "video-essay intake, fact-checking synthesis",
+  "goal": "Complete stage 3 (angles research and packages.md) for the video-essay pipeline",
+  "happened": "three of four research facets completed; one agent still gathering real-world anchors",
+  "nextStep": "wait for anchors agent to finish",
+  "question": "Review synthesis once anchors arrive?",
+  "risk": "If anchors contradict the current synthesis, packages.md may need revision before moving to production."
+}
+```

@@ -21,22 +21,30 @@ handoff, mirror of `docs/wiring-a4.md` in the other direction.
 
 ## Validated prompt
 
-`tools/replay/prompts/vnext-b-rationale.txt` — vnext-a plus the rationale slot,
+`tools/replay/prompts/vnext-d-target30.txt` (lineage: vnext-b → c → d) — vnext-a plus the rationale slot,
 section, resolved card-field wording, and two examples with rationales.
 Run: `tools/replay/runs/vnext-b-rationale/` (r0350–r0359).
 
-Measured on those 10:
-- rationale present 10/10, template shape held, why-content genuinely deepens
-  (see r0354, r0359 — good), depth-0 discipline held (recap ≤12w maintained).
-- **Defect 1 — length**: avg 83 words vs the 40–70 spec; r0358 hit 113.
-  Fix in prompt (harder cap phrasing) AND enforce in composition:
-  `SpokenComposition` clamps rationale via the sanitizer's `maxWords` exactly
-  as depth-1 does today (~70, sentence-boundary drop).
-- **Defect 2 — symbol leakage**: r0358 spoke `isCapturingAudio`, `Sources/`.
-  Add one reinforcement line inside the rationale section ("speakability rules
-  apply here with full force: no paths, no symbols, no hashes") — the
-  sanitizer remains the backstop, but "a symbol" mid-briefing is mangling,
-  not sanitizing.
+RE-RULED 05 Aug: **budget is 40 words, hard.** Three calibration rounds on
+the same 10 records (prompt-stated budget → measured average):
+
+| prompt says      | avg | max | template "We propose" |
+|------------------|-----|-----|-----------------------|
+| 40–70 (vnext-b)  | 83  | 113 | mostly                |
+| 40 max (vnext-c) | 52  | 72  | slipped (r0354)       |
+| ~30 (vnext-d)    | 50  | 62  | **10/10**             |
+
+Haiku's verbosity floor for this content is ~50 words regardless of the
+stated number — the prompt AIMS, it cannot enforce. Therefore:
+- Port **vnext-d-target30.txt** (its rationale section pins the template:
+  "ALWAYS open with 'We propose'").
+- **The clamp is the enforcement**: `SpokenComposition` cuts the rationale at
+  40 words on a sentence boundary. The sacrifice order is automatically
+  right — "We propose X because Y" is always the first sentence, "careful
+  about Z" second, leftovers last.
+- **Symbol leakage recurs stochastically** (r0358 spoke `Sources/` in one
+  round, clean the next): the sanitizer backstop on the rationale is
+  MANDATORY, not defense-in-depth. Same pass the spoken sections get.
 
 ## Ablation: are the card fields superfluous? No — measured
 

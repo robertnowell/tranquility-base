@@ -1,0 +1,13 @@
+```json
+{
+  "recap": "vd-state-legend-page: two builders running parallel. WS-C structure pass and A5 replay harness both in flight.",
+  "proposal": "Let both agents continue. WS-C writes change summary to docs; A5 finishes smoke test. Proceed?",
+  "rationale": "We propose letting both run because they are disjoint (Sources/ and tools/replay/) and neither blocks the other; the WS-C summary and A5 smoke test are the natural stopping points to review before commit. We need to be careful about the WS-C constraint: pixel-identical rendering outside sanctioned items, and the A5 comparator already validates the dispatch discipline rules we care about.",
+  "topic": "State legend refactor and replay harness",
+  "goal": "Replace scattered state literals with unified StateLegend; build replay tooling for prompt tuning validation",
+  "happened": "WS-C structure pass and A5 replay harness both started in parallel on disjoint parts of the repo",
+  "nextStep": "Both agents continue to natural stopping points: WS-C writes change summary; A5 completes smoke test",
+  "question": "Proceed?",
+  "risk": "WS-C must preserve pixel-identical rendering outside sanctioned behavior items or the visual pass fails; A5 depends on discovering model-calls.jsonl schema correctly or corpus extraction is wrong."
+}
+```

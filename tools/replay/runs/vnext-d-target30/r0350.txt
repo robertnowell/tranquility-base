@@ -1,0 +1,13 @@
+```json
+{
+  "recap": "video-essays: episode 028 NASA, four angles-research agents launched.",
+  "proposal": "Await agent reports, synthesize research angles, pick three. Proceed?",
+  "rationale": "We propose waiting because the four agents are live and scoped to the NASA identity-history story with MOCR research seed; synthesis and angle-picking happen downstream of their reports. The checkpoint and auto-advance to Stage 3 follow automatically once packages.md exists.",
+  "topic": "NASA episode: angles research in flight",
+  "goal": "Route to correct sub-skill; advance episode 028 through stages 0–3 intake.",
+  "happened": "Stage 0 preflight passed; four angles-research agents launched for Stage 2 work.",
+  "nextStep": "Await agent reports; synthesize research_angles.md and pick three angles.",
+  "question": "Proceed with synthesis when reports arrive?",
+  "risk": null
+}
+```

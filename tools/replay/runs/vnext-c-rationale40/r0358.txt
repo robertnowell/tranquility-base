@@ -1,0 +1,13 @@
+```json
+{
+  "recap": "vd-state-legend-page: two builders running in parallel on disjoint parts.",
+  "proposal": "WS-C finishes structure pass, A5 finishes replay harness. Report as each lands?",
+  "rationale": "We propose running both in parallel because they touch separate directories and have no blocking dependencies; the structure pass consolidates twelve scattered state definitions into one site, and the replay harness builds extraction and comparison tooling for the summarizer baseline. We need to be careful: WS-C must preserve pixel-identical rendering and pass swift build without commits; A5's comparator is checked only by a three-record smoke test before the dedicated prompt tuning turn.",
+  "topic": "parallel structure and replay harness builds",
+  "goal": "Consolidate state definitions and build summarizer replay tooling",
+  "happened": "two agents started running in parallel on disjoint repo sections with clear constraints and handoff points",
+  "nextStep": "each agent reports as its work lands; WS-C summary written to docs/ws-c-changes.md",
+  "question": "Proceed with both in parallel and report as each lands?",
+  "risk": "WS-C must not break pixel-identical rendering or swift build; A5's smoke test covers only three records before full tuning turn"
+}
+```

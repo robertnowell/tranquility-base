@@ -1,0 +1,13 @@
+```json
+{
+  "recap": "video-essays: three of four facets complete, period-language issue flagged.",
+  "proposal": "Hold for real-world anchors agent to finish, then resume synthesis. Wait?",
+  "rationale": "We propose waiting because the session found a citation error—the 'enshrined' gloss is 1960s-era criticism, not period language—and corrected the evidentiary base to the manual's foreword and Bill Barry's account. One agent is still running; resuming before it finishes will leave synthesis incomplete and force rework.",
+  "topic": "video-essays research synthesis, facets and sources",
+  "goal": "Complete four-facet synthesis for episode with corrected period-language foundation",
+  "happened": "three facets synthesized, one citation error caught and corrected, one agent still running",
+  "nextStep": "wait for real-world anchors agent, then resume synthesis",
+  "question": "Wait for the anchors agent to finish?",
+  "risk": "resuming now will force rework of synthesis once anchors arrive"
+}
+```

@@ -1,0 +1,13 @@
+```json
+{
+  "recap": "video-essays: Angle C research saved, two verifications pending.",
+  "proposal": "Wait for both verification agents to finish, then proceed to scripts. Wait?",
+  "rationale": "We propose waiting because the do-not-use list is locked but the Barry quote and Kickstarter cross-check are still running; appending their results before script writing prevents rework. The risk is a long tail if either verification stalls, but the agent said they are running, not that they have a timeout.",
+  "topic": "Angle C research and verification",
+  "goal": "Complete stage 3 (pick 3 angles) before moving to stage 4 (hook research and production)",
+  "happened": "Angle C research was saved with a do-not-use list; two verification agents are still executing",
+  "nextStep": "Wait for both verification agents (Barry quote/manual foreword and Kickstarter/1992-dates) to complete and append results",
+  "question": "Wait for verifications to finish before scripts?",
+  "risk": "Verification agents may stall or timeout; no stated deadline for completion."
+}
+```
