@@ -248,6 +248,16 @@ public struct Coordinator: Sendable {
         return try await speak(summary, for: session, onWillSpeak: onWillSpeak, onWord: onWord)
     }
 
+    /// The session's durable voice, resolvable by anything that speaks on a
+    /// session's behalf — the ⌃⌃ pull must sound like the announcement it
+    /// deepens, not like the narrator. One roster definition lives here: when
+    /// the hand-picked character list replaces first-ten-by-id, this is the
+    /// only line that changes.
+    public func voiceId(for sessionId: String) -> String? {
+        let roster = Array(VoiceCatalog.cached().map(\.id).sorted().prefix(10))
+        return (try? store.voiceId(for: sessionId, roster: roster)) ?? nil
+    }
+
     private func summarize(_ event: WaitingSession) async -> Summary {
         let context = event.transcriptPath.map {
             TranscriptArchive.sessionContext(in: URL(fileURLWithPath: $0))
@@ -393,15 +403,11 @@ public struct Coordinator: Sendable {
         await onWillSpeak?(announcement)
 
         // The session's durable voice (ruled 05 Aug): assigned round-robin from
-        // the catalog on first announce, then identical for the session's life
+        // the roster on first announce, then identical for the session's life
         // across runs — the ear binds a voice to a stream of work faster than a
         // name, and two sessions on the same subject stop being confusable.
-        // Sorted for a stable roster; the stored assignment is what makes voice
-        // identity durable even if the catalog later changes shape.
-        let roster = VoiceCatalog.cached().map(\.id).sorted().prefix(10)
-        let voice = (try? store.voiceId(for: session.sessionId, roster: Array(roster))) ?? nil
-
-        let spoken = await speech.speak(summary.spoken, voice: voice, onWord: onWord)
+        let spoken = await speech.speak(
+            summary.spoken, voice: voiceId(for: session.sessionId), onWord: onWord)
 
         // Hearing it through is the only thing that advances the cursor. Anything
         // short of that leaves the session waiting, because it still is: half an

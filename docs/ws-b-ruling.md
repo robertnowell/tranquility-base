@@ -60,3 +60,12 @@ want to be reactive, but sometimes I want to kick off an investigation."
   bare-Return the dispatcher uses. The dispatcher's never-type-into-
   unregistered-sessions rule is untouched everywhere else. Consent lives at
   the button press, not at Anthropic's re-ask.
+- **⌃⌃ must speak in the session's voice** (observed 05 Aug: depth-1 fell back
+  to the narrator). Core accessor exists: `coordinator.voiceId(for:)`. The
+  one-line wiring, for whoever holds main.swift when this lands — in the
+  `.controlDoubleTapped` handler's speak call:
+  `speech.speak(line, voice: coordinator.voiceId(for: announcement.event.sessionId), onWord: …)`.
+- **Roster becomes hand-picked:** Robert is auditioning the catalog
+  (vd-voice-roster-page) and will supply ten voice ids. They replace the
+  first-ten-by-id placeholder in exactly one place: `Coordinator.voiceId(for:)`.
+  Existing assignments are durable and unaffected by the roster change.
