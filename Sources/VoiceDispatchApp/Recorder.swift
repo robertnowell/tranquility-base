@@ -60,50 +60,61 @@ public final class Recorder: @unchecked Sendable {
         running = true
         lock.unlock()
 
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-
-        // A route change (headphones renegotiating, the output device switching
-        // sample rates under active playback — i.e. exactly when a reply starts
-        // mid-announcement) can leave the input reporting 0 Hz / 0 channels.
-        // Feeding that to installTap throws an ObjC NSException, not a Swift
-        // error. Refuse it here, where it can be said out loud.
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            lock.lock(); running = false; lock.unlock()
-            throw RecorderError.engineFailed(
-                "input format invalid (rate=\(format.sampleRate), "
-                + "channels=\(format.channelCount)) — audio device mid route-change")
-        }
-
-        // Firewalled: any NSException AVFoundation still throws becomes a Swift
-        // error instead of unwinding through the caller's main-queue block. One
-        // such unwind wedged the main dispatch queue permanently — panel frozen,
-        // gestures dead, main thread sampling as idle (2026-08-05, 18:01:11Z).
-        var startError: Error?
-        let exception = VDCatchObjCException {
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] pcmBuffer, _ in
-                guard let self else { return }
-                if let converted = BuddyPCM16Converter.pcm16Data(
-                    from: pcmBuffer, targetSampleRate: self.sampleRate) {
-                    self.lock.lock()
-                    self.buffer.append(converted)
-                    self.lock.unlock()
-                }
-                let rms = Self.rms(of: pcmBuffer)
-                self.level = rms
-                if rms > self.peakLevel { self.peakLevel = rms }
+        // Replying while the announcement is still playing is the normal case,
+        // and it is exactly when the audio device is mid route-change: the input
+        // briefly reports 0 Hz / 0 channels, and installTap on that format
+        // throws an ObjC NSException rather than a Swift error. The change
+        // settles in tens of milliseconds, so ride through it — a press during
+        // playback must open the mic, not report an error about audio plumbing.
+        // Worst case here is ~480ms before giving up, well under the event-tap
+        // watchdog.
+        var lastReason = "unknown"
+        for attempt in 0..<6 {
+            if attempt > 0 { usleep(80_000) }
+            let input = engine.inputNode
+            let format = input.outputFormat(forBus: 0)
+            guard format.sampleRate > 0, format.channelCount > 0 else {
+                lastReason = "input format invalid (rate=\(format.sampleRate), "
+                    + "channels=\(format.channelCount)) — audio device mid route-change"
+                continue
             }
-            engine.prepare()
-            do { try engine.start() } catch { startError = error }
+
+            // Firewalled: any NSException AVFoundation still throws becomes a
+            // Swift error instead of unwinding through the caller's main-queue
+            // block. One such unwind wedged the main dispatch queue permanently —
+            // panel frozen, gestures dead, main thread sampling as idle
+            // (2026-08-05, 18:01:11Z).
+            var startError: Error?
+            let exception = VDCatchObjCException {
+                input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] pcmBuffer, _ in
+                    guard let self else { return }
+                    if let converted = BuddyPCM16Converter.pcm16Data(
+                        from: pcmBuffer, targetSampleRate: self.sampleRate) {
+                        self.lock.lock()
+                        self.buffer.append(converted)
+                        self.lock.unlock()
+                    }
+                    let rms = Self.rms(of: pcmBuffer)
+                    self.level = rms
+                    if rms > self.peakLevel { self.peakLevel = rms }
+                }
+                engine.prepare()
+                do { try engine.start() } catch { startError = error }
+            }
+
+            if exception == nil && startError == nil {
+                if attempt > 0 {
+                    Permissions.log("mic: opened on attempt \(attempt + 1) after: \(lastReason)")
+                }
+                return
+            }
+            _ = VDCatchObjCException { input.removeTap(onBus: 0); engine.stop() }
+            lastReason = exception.map { "\($0.name.rawValue): \($0.reason ?? "no reason")" }
+                ?? "\(startError!)"
         }
 
-        if exception != nil || startError != nil {
-            _ = VDCatchObjCException { input.removeTap(onBus: 0); engine.stop() }
-            lock.lock(); running = false; lock.unlock()
-            let reason = exception.map { "\($0.name.rawValue): \($0.reason ?? "no reason")" }
-                ?? "\(startError!)"
-            throw RecorderError.engineFailed(reason)
-        }
+        lock.lock(); running = false; lock.unlock()
+        throw RecorderError.engineFailed(lastReason)
     }
 
     /// Stop capturing and hand back everything recorded. The caller persists it

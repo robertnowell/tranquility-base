@@ -1,0 +1,12 @@
+```json
+{
+  "recap":    "Promotions: first slice built, typechecking clean, migration ready.",
+  "proposal": "Build the live dashboard or Gmail sender next, which?",
+  "topic":    "Inbound lead sequence first slice",
+  "goal":     "Qualify and nurture inbound leads to drive calls",
+  "happened": "First slice of inbound lead sequence built and typechecking clean in worktree",
+  "nextStep": null,
+  "question": "Build the live dashboard or Gmail sender next?",
+  "risk":     "Neon migration still pending; feature won't send until deployed."
+}
+```

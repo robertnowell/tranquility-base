@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Input incomplete: agent final message not provided.",
+  "proposal": null,
+  "topic": "industry_myths session",
+  "goal": "Unknown without agent message",
+  "happened": "Session round initiated but final message missing from dispatch input.",
+  "nextStep": null,
+  "question": "Please provide the agent's final message from this round.",
+  "risk": null
+}
+```

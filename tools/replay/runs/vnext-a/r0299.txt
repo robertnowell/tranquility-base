@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "agent-voice-hci-page: chief-of-staff voice default, per-class variant test recommended.",
+  "proposal": "Test chief-of-staff for a week, then per-class, measure and compare. Proceed?",
+  "topic": "Voice identity for voice-dispatch UI",
+  "goal": "Resolve multi-voice design through empirical testing.",
+  "happened": "Agent synthesized voice research and recommended chief-of-staff default, per-class first experiment.",
+  "nextStep": "Test chief-of-staff voice for a week, measuring attribution errors and drop-backs.",
+  "question": "Proceed with the testing plan?",
+  "risk": null
+}
+```

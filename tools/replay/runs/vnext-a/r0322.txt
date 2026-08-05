@@ -1,0 +1,3 @@
+I need the agent's final message to generate this dispatch update. The line "The agent's final message this turn:" has no content after it.
+
+Please provide what the agent just concluded, and I'll return the loop-discipline JSON with the recap, proposal, and supporting fields.

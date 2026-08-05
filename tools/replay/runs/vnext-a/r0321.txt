@@ -1,0 +1,3 @@
+I need the agent's final message to generate this dispatch. The message field is empty after "The agent's final message this turn:"
+
+Please paste what the agent concluded, and I'll format the dispatch update.

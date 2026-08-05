@@ -1,0 +1,12 @@
+```json
+{
+  "recap": "Promotions: inbound lead first slice built, typechecking clean, migration ready.",
+  "proposal": "Build the lead review page next, or Gmail sender? Which?",
+  "topic": "inbound lead sequence launch",
+  "goal": "Capture and qualify inbound leads for sales outreach",
+  "happened": "First slice built: schema, filler logic, service layer, and brand-detection hook wired.",
+  "nextStep": "Apply migration to Neon, then build chosen feature.",
+  "question": "Which feature to build next: lead review page or Gmail sender with reply detection?",
+  "risk": "Migration is DDL on shared prod — coordinate timing before applying."
+}
+```
