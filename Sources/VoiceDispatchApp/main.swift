@@ -442,6 +442,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     hud.showResult(
                         "Typed it into \(label), but couldn't confirm it landed. "
                         + "Check the tab before repeating yourself.", ok: false)
+                case .dispatchFailed(.tabNotFound, let utteranceId),
+                     .dispatchFailed(.targetGone, let utteranceId):
+                    // The destination no longer exists — "kept" must mean usable,
+                    // not archived. The words go to the clipboard, plainly said.
+                    let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
+                    hud.showResult(copied
+                        ? "\(label)'s tab is gone — copied your words to the clipboard."
+                        : "\(label)'s tab is gone. Your words are kept in the log.",
+                        ok: false)
                 case .dispatchFailed(let failure, _):
                     hud.showResult("Couldn't type into \(label): \(failure). "
                                    + "Your words are kept.", ok: false)
@@ -1122,6 +1131,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     hud.showResult(
                         "Sent, but never confirmed. It may or may not have landed. "
                         + "check the tab before resending.", ok: false)
+                case .dispatchFailed(.tabNotFound, let utteranceId),
+                     .dispatchFailed(.targetGone, let utteranceId):
+                    // This path painted nothing at all before — a silently lost
+                    // reply. Same rescue as the confirm path: clipboard + card.
+                    let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
+                    lastStatusLine = copied ? "tab gone — words on the clipboard"
+                                            : "tab gone — words kept in the log"
+                    hud.showResult(copied
+                        ? "That tab is gone — copied your words to the clipboard."
+                        : "That tab is gone. Your words are kept in the log.",
+                        ok: false)
                 case .dispatchFailed(let failure, _):
                     lastStatusLine = "send failed: \(failure), audio kept"
                 }
@@ -1130,6 +1150,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             rebuildMenu()
         }
+    }
+
+    /// A reply that cannot be delivered goes to the clipboard — the one place the
+    /// user can immediately use it. Deliberately NOT FocusedInput.paste (which
+    /// restores the previous clipboard after 0.7s); this is a handoff, not a paste.
+    private func copyTranscriptToClipboard(utteranceId: String) -> Bool {
+        guard let text = (try? store?.utterances(limit: 500))?
+                .first(where: { $0.id == utteranceId })?.transcriptText,
+              !text.isEmpty else { return false }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        Permissions.log("dispatch rescue: copied \(text.count) chars to clipboard")
+        return true
     }
 
     @objc private func chooseVoice(_ sender: NSMenuItem) {
