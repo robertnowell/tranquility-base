@@ -392,7 +392,16 @@ public struct Coordinator: Sendable {
             via: speech.fallback.name)
         await onWillSpeak?(announcement)
 
-        let spoken = await speech.speak(summary.spoken, onWord: onWord)
+        // The session's durable voice (ruled 05 Aug): assigned round-robin from
+        // the catalog on first announce, then identical for the session's life
+        // across runs — the ear binds a voice to a stream of work faster than a
+        // name, and two sessions on the same subject stop being confusable.
+        // Sorted for a stable roster; the stored assignment is what makes voice
+        // identity durable even if the catalog later changes shape.
+        let roster = VoiceCatalog.cached().map(\.id).sorted().prefix(10)
+        let voice = (try? store.voiceId(for: session.sessionId, roster: Array(roster))) ?? nil
+
+        let spoken = await speech.speak(summary.spoken, voice: voice, onWord: onWord)
 
         // Hearing it through is the only thing that advances the cursor. Anything
         // short of that leaves the session waiting, because it still is: half an

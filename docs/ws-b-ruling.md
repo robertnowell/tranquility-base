@@ -52,14 +52,11 @@ want to be reactive, but sometimes I want to kick off an investigation."
   wired at app init — and, when the grid lands, a "+" row at the bottom of
   the grid doing the same. No gesture binding: ⌥ variants are spoken-reply
   space, and a mis-hold that spawns terminals is worse than a click.
-- **First-run reality (observed 05 Aug):** a fresh directory (and sometimes a
-  fresh window) hits Claude's own trust prompt — "Do you trust this
-  directory?" — which `--dangerously-skip-permissions` does NOT suppress
-  (that flag governs tool permissions, not folder trust). NEVER auto-answer
-  it: it is a security consent, and dispatch's own rule (no typing into
-  unregistered sessions) exists for exactly this. Instead: after launch,
-  poll `claude agents --json` for a session in the launched cwd; if none
-  registers within ~30s, show a quiet visual note — "new session is waiting
-  on a prompt in Terminal" — so a walked-away launch is never a silently
-  stillborn investigation. Launch already fronts the window, which covers
-  the at-screen case.
+- **First-run trust prompt — OVERRULED 05 Aug, same day:** Robert: "I
+  authorize you to click through and start this. I told you to start the
+  session. Start the session." The launcher now answers the trust prompt
+  itself — scoped to ONLY the tab it just created (by tty), ONLY the known
+  prompt text, ONLY within 30s of a user-commanded launch, via the same
+  bare-Return the dispatcher uses. The dispatcher's never-type-into-
+  unregistered-sessions rule is untouched everywhere else. Consent lives at
+  the button press, not at Anthropic's re-ask.

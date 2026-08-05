@@ -272,6 +272,18 @@ public final class QueueStore: Sendable {
             }
         }
 
+        // Each session keeps one voice for life (ruled 05 Aug): the same session
+        // always sounds the same across runs, so the ear links a voice to a
+        // stream of work before the callsign even lands — and disambiguates two
+        // sessions on the same subject, which names alone cannot.
+        m.registerMigration("v8_session_voice") { db in
+            try db.create(table: "session_voice") { t in
+                t.column("sessionId", .text).primaryKey()
+                t.column("voiceId", .text).notNull()
+                t.column("assignedAtMs", .integer).notNull()
+            }
+        }
+
         return m
     }
 
@@ -620,6 +632,34 @@ public final class QueueStore: Sendable {
     public func recentBriefs(limit: Int = 400) throws -> [StoredBrief] {
         try dbQueue.read { db in
             try StoredBrief.order(Column("atMs").desc).limit(limit).fetchAll(db)
+        }
+    }
+
+    // MARK: - Session voices (v8)
+
+    /// The session's durable voice, assigning one round-robin on first ask.
+    ///
+    /// Stored, never derived from the roster's current shape: the roster can
+    /// grow or reorder without reshuffling anyone's voice — an assignment is a
+    /// fact about the session, exactly like its callsign. Returns nil only when
+    /// the roster is empty (no catalog yet), which callers treat as "the
+    /// default voice".
+    public func voiceId(for sessionId: String, roster: [String]) throws -> String? {
+        guard !roster.isEmpty else { return nil }
+        return try dbQueue.write { db in
+            if let existing = try String.fetchOne(
+                db, sql: "SELECT voiceId FROM session_voice WHERE sessionId = ?",
+                arguments: [sessionId]) {
+                return existing
+            }
+            let count = try Int.fetchOne(db, sql: "SELECT count(*) FROM session_voice") ?? 0
+            let assigned = roster[count % roster.count]
+            try db.execute(
+                sql: "INSERT INTO session_voice (sessionId, voiceId, assignedAtMs) VALUES (?, ?, ?)",
+                arguments: [sessionId, assigned,
+                            Int64(Date().timeIntervalSince1970 * 1000)])
+            Self.trace?("voice: assigned \(assigned) to \(sessionId.prefix(8)) (assignment #\(count + 1))")
+            return assigned
         }
     }
 

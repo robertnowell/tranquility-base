@@ -216,4 +216,27 @@ final class QueueStoreTests: XCTestCase {
         let result = try SpoolDrainer(store: store, spoolURL: tmpDir.appendingPathComponent("nope.jsonl")).drain()
         XCTAssertEqual(result.inserted, 0)
     }
+
+    // MARK: - Session voices (v8)
+
+    /// A session's voice is a durable fact, like its callsign: assigned once,
+    /// identical across runs, unmoved by roster growth or reordering.
+    func testSessionVoiceIsDurableAndRotates() throws {
+        let roster = ["voice-a", "voice-b", "voice-c"]
+        XCTAssertEqual(try store.voiceId(for: "s1", roster: roster), "voice-a")
+        XCTAssertEqual(try store.voiceId(for: "s2", roster: roster), "voice-b")
+        XCTAssertEqual(try store.voiceId(for: "s3", roster: roster), "voice-c")
+        XCTAssertEqual(try store.voiceId(for: "s4", roster: roster), "voice-a",
+                       "rotation wraps")
+
+        // Asking again changes nothing — including with a different roster:
+        // the assignment is stored, not derived.
+        XCTAssertEqual(try store.voiceId(for: "s2", roster: roster), "voice-b")
+        XCTAssertEqual(try store.voiceId(for: "s2", roster: ["voice-z"]), "voice-b",
+                       "a reshaped catalog never reshuffles an existing voice")
+
+        // Empty roster = no assignment, callers use the default voice.
+        XCTAssertNil(try store.voiceId(for: "s9", roster: []))
+    }
+
 }

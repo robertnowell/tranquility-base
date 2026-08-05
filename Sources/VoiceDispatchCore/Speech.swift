@@ -136,6 +136,11 @@ extension SystemSpeechProvider: AVSpeechSynthesizerDelegate {
 public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecked Sendable {
     public let name = "elevenlabs"
     public var voiceId: String
+    /// Per-utterance voice, set by the chain just before speaking. Sessions keep
+    /// a durable voice of their own (ruled 05 Aug: ambient identity — the same
+    /// session always sounds the same, which disambiguates two sessions on the
+    /// same subject faster than any name). Nil = the user's selected voice.
+    public nonisolated(unsafe) var voiceOverride: String?
     public var model: String
     /// Voice UX cares about sub-second starts, so this is far tighter than a normal
     /// network timeout — past this we are better off speaking in a plainer voice.
@@ -183,7 +188,7 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         // audio, which is the only way to follow along with a pre-rendered clip.
         var request = URLRequest(
             url: URL(string: "https://api.elevenlabs.io/v1/text-to-speech/"
-                     + "\(VoiceCatalog.selectedVoiceId)/with-timestamps")!)
+                     + "\(voiceOverride ?? VoiceCatalog.selectedVoiceId)/with-timestamps")!)
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.setValue(key, forHTTPHeaderField: "xi-api-key")
@@ -367,8 +372,14 @@ public struct SpeechChain: Sendable {
 
     @discardableResult
     public func speak(
-        _ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)? = nil
+        _ text: SanitizedSpokenText, voice: String? = nil,
+        onWord: (@Sendable (Range<Int>) -> Void)? = nil
     ) async -> Spoken {
+        // Set every call, never conditionally: staleness is impossible when the
+        // override's whole lifetime is one utterance. The system fallback has one
+        // voice and ignores this — a degraded read loses the session's voice
+        // along with the nice one, which is honest.
+        (preferred as? ElevenLabsSpeechProvider)?.voiceOverride = voice
         var degraded: String?
         var heardAny = false
         // Anything that happens after a stop belongs to an announcement the user
