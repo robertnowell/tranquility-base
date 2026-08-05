@@ -82,8 +82,8 @@ enum StateLegend {
         let lens: Lens
         let speakTier: SpeakTier
         /// Whether the Reply / Go to session / Dismiss row belongs on screen.
-        /// Descriptive today: visibility is still set imperatively by the show*
-        /// methods, exactly as before; a later pass may derive it from here.
+        /// Load-bearing: StatusHUD.render() derives the action row's visibility
+        /// from this, for every state that has a Row.
         let showsControls: Bool
     }
 
@@ -151,24 +151,6 @@ enum StateLegend {
         case .settings:
             return Row(stateText: "Settings", glyph: "",
                        lens: .chrome, speakTier: .silent, showsControls: false)
-        }
-    }
-
-    /// PanelState → Situation, for the states the enum fully describes on its own.
-    /// `hidden` draws nothing; `listening` and `pendingSend` need a label the state
-    /// does not carry, so their call sites pass it to `row(for:)` directly.
-    static func situation(for state: PanelState) -> Situation? {
-        switch state {
-        case .hidden: return nil
-        case .idle(let waiting): return waiting > 0 ? .waitingCount(waiting) : .ready
-        case .preparing: return .preparing
-        case .speaking(_, let catchUp): return catchUp ? .catchingUp : .speaking
-        case .paused: return .paused
-        case .listening: return nil
-        case .transcribing: return .working
-        case .pendingSend: return nil
-        case .result(let ok): return ok ? .sent : .needsYou
-        case .settings: return .settings
         }
     }
 
