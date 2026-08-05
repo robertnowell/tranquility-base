@@ -21,6 +21,13 @@ public final class Recorder: @unchecked Sendable {
     private let sampleRate: Double
     private var buffer = Data()
     private let lock = NSLock()
+
+    /// Optional live-transcription stream, one per utterance. Set once at app
+    /// init; the Recorder creates a stream at every mic-open and feeds it from
+    /// the tap. The stream can only ever ADD speed — the durable buffer and the
+    /// file-based recovery path are untouched whatever the stream does.
+    public var streamFactory: (@Sendable () -> StreamedUtterance?)?
+    private var stream: StreamedUtterance?
     private var running = false
 
     /// Live input level, for a waveform or an orb pulse.
@@ -58,6 +65,12 @@ public final class Recorder: @unchecked Sendable {
         buffer.removeAll(keepingCapacity: true)
         peakLevel = 0
         running = true
+        if let stale = stream {
+            // An aborted utterance never took its stream; close it quietly.
+            Task { _ = await stale.finish(timeout: 0) }
+        }
+        stream = streamFactory?()
+        if let s = stream { Task { await s.start() } }
         lock.unlock()
 
         // Replying while the announcement is still playing is the normal case,
@@ -92,7 +105,9 @@ public final class Recorder: @unchecked Sendable {
                         from: pcmBuffer, targetSampleRate: self.sampleRate) {
                         self.lock.lock()
                         self.buffer.append(converted)
+                        let liveStream = self.stream
                         self.lock.unlock()
+                        liveStream?.feed(pcm16: converted)
                     }
                     let rms = Self.rms(of: pcmBuffer)
                     self.level = rms
@@ -115,6 +130,16 @@ public final class Recorder: @unchecked Sendable {
 
         lock.lock(); running = false; lock.unlock()
         throw RecorderError.engineFailed(lastReason)
+    }
+
+    /// Take ownership of this utterance's live stream (nil if none was created
+    /// or it was already taken). Callers `await finish()` it — which returns nil
+    /// on ANY stream problem, in which case the file path recovers as always.
+    public func takeStream() -> StreamedUtterance? {
+        lock.lock(); defer { lock.unlock() }
+        let s = stream
+        stream = nil
+        return s
     }
 
     /// Stop capturing and hand back everything recorded. The caller persists it

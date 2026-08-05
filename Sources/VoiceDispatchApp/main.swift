@@ -96,6 +96,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let store = try QueueStore()
             self.store = store
+            // Live transcription: one stream per utterance, keyterms from the
+            // shared lexicon. Any stream failure returns nil at finish() and the
+            // saved file recovers exactly as before — speed only, never risk.
+            recorder.streamFactory = { [weak self] in
+                guard let store = self?.store else { return nil }
+                let terms = (try? Lexicon.harvest(store: store).terms) ?? []
+                return StreamedUtterance(provider: AssemblyAIStreaming(), lexicon: terms)
+            }
             self.coordinator = Coordinator(store: store)
             let report = try store.reconcileOnBoot()
             lastStatusLine = report.needsDeliveryCheck.isEmpty
@@ -972,6 +980,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func sendReply(_ pcm: Data) {
         guard let coordinator else { return }
+        // This utterance's live stream, if one opened. finish() is nil on any
+        // stream trouble, and the file path below recovers exactly as before.
+        let liveStream = recorder.takeStream()
         // Silence gate. Whisper transcribes near-empty audio into training-data
         // boilerplate — a 765ms accidental capture became "MBC 뉴스 이덕영입니다."
         // and was SENT. A recording that is too short or never rose above the
@@ -1010,8 +1021,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                          onCancel: { [weak self] in self?.cancelTranscription() },
                                          onRetry: { [weak self] in self?.retryTranscriptionFromPanel() })
                     guard let store = self.store else { return }
+                    let streamed = await liveStream?.finish()
                     let utterance = try await store.captureAndTranscribe(
-                        pcm16: pcm, sampleRate: 16_000, chain: RecoveryChain(), eventId: nil)
+                        pcm16: pcm, sampleRate: 16_000, chain: RecoveryChain(), eventId: nil,
+                        streamed: streamed)
                     // Cancelled (or replaced) while transcribing: the words must not
                     // be pasted anywhere. The audio row is durable and stays.
                     guard mine == replyGeneration else {
@@ -1047,7 +1060,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 recordingTarget = nil
-                let outcome = try await coordinator.submitReply(pcm16: pcm, to: spokenTo)
+                let streamed = await liveStream?.finish()
+                let outcome = try await coordinator.submitReply(
+                    pcm16: pcm, to: spokenTo, streamed: streamed)
 
                 // You started saying it again while this was still transcribing.
                 // Drop it rather than offering it: the words you replaced must never
