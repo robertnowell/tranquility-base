@@ -228,6 +228,41 @@ public final class QueueStore: Sendable {
             try db.create(index: "idx_dogfood_at", on: "dogfood_event", columns: ["atMs"])
         }
 
+        // The store's first summary table. Briefs lived only in the in-memory
+        // PreparedSummaries, so a restart lost every card field (depth-1 amnesia)
+        // and the v1 events.summaryText column was never written. A brief is a
+        // fact ABOUT one event, so it keys on the event's rowid — the same
+        // (session, latestId) identity PreparedSummaries enforces — and one row
+        // per event means the table accumulates history as events do.
+        //
+        // Deliberately the seed schema of the product's retention layer (the
+        // argument IR): topic / goal / happened / nextStep / question / risk are
+        // the argument's fields, recap / proposal its spoken projection, and
+        // callsign / provider / atMs its provenance. Future retention features
+        // read THIS table; name new columns in those terms.
+        m.registerMigration("v6_briefs") { db in
+            try db.create(table: "brief") { t in
+                // The events rowid this brief summarizes. INTEGER PRIMARY KEY,
+                // so re-generating for the same event replaces (last write wins,
+                // exactly as PreparedSummaries.put does in memory).
+                t.column("eventRowid", .integer).primaryKey()
+                t.column("sessionId", .text).notNull()
+                t.column("atMs", .integer).notNull()
+                t.column("topic", .text).notNull()
+                t.column("goal", .text)
+                t.column("happened", .text).notNull()
+                t.column("nextStep", .text)
+                t.column("question", .text)
+                t.column("risk", .text)
+                t.column("recap", .text)
+                t.column("proposal", .text)
+                t.column("callsign", .text)
+                t.column("provider", .text).notNull()
+            }
+            try db.create(index: "idx_brief_session", on: "brief", columns: ["sessionId"])
+            try db.create(index: "idx_brief_at", on: "brief", columns: ["atMs"])
+        }
+
         return m
     }
 
@@ -540,6 +575,43 @@ public final class QueueStore: Sendable {
         }
     }
 
+
+    // MARK: - Briefs (v6 — the retention layer's seed table)
+
+    /// Persist a generated brief for one event. Last write wins for the same
+    /// event, mirroring `PreparedSummaries.put` — a re-prepare after an
+    /// interrupted announcement replaces rather than duplicates.
+    public func saveBrief(
+        _ brief: SessionBrief, sessionId: String, eventRowid: Int64,
+        provider: String, callsign: String?, at: Date = Date()
+    ) throws {
+        let row = StoredBrief(
+            eventRowid: eventRowid, sessionId: sessionId,
+            atMs: Int64(at.timeIntervalSince1970 * 1000),
+            topic: brief.topic, goal: brief.goal, happened: brief.happened,
+            nextStep: brief.nextStep, question: brief.question, risk: brief.risk,
+            recap: brief.recap, proposal: brief.proposal,
+            callsign: callsign, provider: provider)
+        try dbQueue.write { db in try row.save(db) }
+    }
+
+    /// The brief for one specific event — the read-through the in-memory
+    /// PreparedSummaries falls back to after a restart.
+    public func storedBrief(sessionId: String, eventRowid: Int64) throws -> StoredBrief? {
+        try dbQueue.read { db in
+            try StoredBrief
+                .filter(Column("eventRowid") == eventRowid)
+                .filter(Column("sessionId") == sessionId)
+                .fetchOne(db)
+        }
+    }
+
+    /// Newest first, for the lexicon harvest and future retention reads.
+    public func recentBriefs(limit: Int = 400) throws -> [StoredBrief] {
+        try dbQueue.read { db in
+            try StoredBrief.order(Column("atMs").desc).limit(limit).fetchAll(db)
+        }
+    }
 
     // MARK: - Boot reconciliation
     //

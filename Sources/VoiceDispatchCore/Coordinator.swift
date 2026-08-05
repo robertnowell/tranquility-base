@@ -93,8 +93,16 @@ public struct Coordinator: Sendable {
     public func prepareNext() async throws {
         guard let session = try nextToAnnounce() else { return }
         guard await !prepared.has(session.sessionId, latest: session.latestId) else { return }
-        await prepared.put(await summarize(session), for: session.sessionId,
-                           latest: session.latestId)
+        // A stored brief for this exact event (written before a restart) is the
+        // same summary this call would regenerate — load it instead of paying
+        // for a model call twice.
+        let summary: Summary
+        if let restored = restoredSummary(for: session) {
+            summary = restored
+        } else {
+            summary = await summarize(session)
+        }
+        await prepared.put(summary, for: session.sessionId, latest: session.latestId)
     }
 
     /// The newest session waiting on you.
@@ -230,6 +238,12 @@ public struct Coordinator: Sendable {
         if let ready = await prepared.take(session.sessionId, latest: session.latestId) {
             return try await speak(ready, for: session, onWillSpeak: onWillSpeak, onWord: onWord)
         }
+        // Prepared miss — usually a restart. The brief for this exact event may
+        // be durable (v6), in which case catch-up needs no model call and the
+        // card fields survive. Only a genuine store miss re-summarizes.
+        if let restored = restoredSummary(for: session) {
+            return try await speak(restored, for: session, onWillSpeak: onWillSpeak, onWord: onWord)
+        }
         let summary = await summarize(session)
         return try await speak(summary, for: session, onWillSpeak: onWillSpeak, onWord: onWord)
     }
@@ -272,7 +286,53 @@ public struct Coordinator: Sendable {
             Coordinator.trace?("digit grounding scrubbed ungrounded number(s): "
                 + "event \(event.latestId) session \(event.sessionId.prefix(8))")
         }
-        return withCallsign(summary, for: event, liveSessions: liveSessions)
+        let composed = withCallsign(summary, for: event, liveSessions: liveSessions)
+        persistBrief(composed, for: event)
+        return composed
+    }
+
+    /// Write the generated brief to the store (v6 `brief` table) so a restart
+    /// no longer loses the card fields. Same "successful summary" rule as
+    /// callsign minting: the failure floors are not worth remembering — a
+    /// restart re-summarizes those exactly as before. Persisting best-effort;
+    /// a failed write degrades restart catch-up, never the announcement.
+    private func persistBrief(_ summary: Summary, for event: WaitingSession) {
+        let failedProviders: Set<String> = ["deterministic-fallback", "empty-source", "none"]
+        guard !failedProviders.contains(summary.provider) else { return }
+        do {
+            try store.saveBrief(
+                summary.brief, sessionId: event.sessionId, eventRowid: event.latestId,
+                provider: summary.provider,
+                callsign: event.callsign ?? ((try? store.callsign(for: event.sessionId)) ?? nil))
+        } catch {
+            Coordinator.trace?("brief persist failed for event \(event.latestId): \(error)")
+        }
+    }
+
+    /// The read-through behind `PreparedSummaries`: after a restart the memory
+    /// is gone, but the brief for this exact event may be in the store. Rebuild
+    /// the Summary from it — same mechanical callsign pass, same sanitizer,
+    /// zero model calls — and tag the provider `+stored` so a restored
+    /// announcement is distinguishable from a fresh one. Nil when the store has
+    /// nothing for this event, in which case the caller summarizes as before.
+    private func restoredSummary(for event: WaitingSession) -> Summary? {
+        guard let stored = try? store.storedBrief(
+            sessionId: event.sessionId, eventRowid: event.latestId) else { return nil }
+        let brief = stored.brief
+
+        // Same allowlist recipe as a fresh summarize, so a lexicon-established
+        // name that survived generation is not re-redacted on restore.
+        let lexicon = Lexicon.harvest(store: store)
+        let speakable = SpokenTextSanitizer
+            .speakableTerms(in: event.lastAssistantMessage ?? "")
+            .union(lexicon.allowlistTerms)
+
+        let prefix = stored.callsign ?? event.callsign ?? Callsign.directoryWord(cwd: event.cwd)
+        let spoken = summarizer.sanitizer.applyingCallsign(
+            prefix, strippingLabels: [event.projectLabel],
+            to: summarizer.sanitizer.sanitize(brief.spokenText(), allowing: speakable))
+        return Summary(spoken: spoken, brief: brief,
+                       provider: stored.provider + "+stored", latencyMs: 0)
     }
 
     // MARK: - Callsign

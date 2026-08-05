@@ -302,6 +302,46 @@ public struct SessionCursor: Codable, FetchableRecord, PersistableRecord, Sendab
     public var seenThrough: Int64 { max(heardThrough ?? 0, dismissedThrough ?? 0) }
 }
 
+/// One persisted brief — a fact about one event, durable across restarts.
+///
+/// This is the seed row of the product's retention layer: the argument fields
+/// (topic, goal, happened, nextStep, question, risk), their spoken projection
+/// (recap, proposal), and provenance (callsign, provider, atMs). The in-memory
+/// `PreparedSummaries` remains the fast path; this is what it reads through to
+/// when the process is new and the memory is gone.
+public struct StoredBrief: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "brief"
+
+    /// The events rowid this brief summarizes — the same identity
+    /// `PreparedSummaries` keys on (a brief is a brief OF an event).
+    public var eventRowid: Int64
+    public var sessionId: String
+    public var atMs: Int64
+    public var topic: String
+    public var goal: String?
+    public var happened: String
+    public var nextStep: String?
+    public var question: String?
+    public var risk: String?
+    public var recap: String?
+    public var proposal: String?
+    /// The minted callsign at generation time; nil when not yet minted.
+    public var callsign: String?
+    /// Which provider generated it ("anthropic", "anthropic+digit-scrubbed", …)
+    /// so a restored brief carries its provenance.
+    public var provider: String
+
+    /// The brief as the rest of the pipeline consumes it. `branch` is not
+    /// persisted — it is deterministic card metadata re-derivable from the
+    /// transcript, not part of the argument.
+    public var brief: SessionBrief {
+        SessionBrief(
+            topic: topic, goal: goal, happened: happened, nextStep: nextStep,
+            question: question, risk: risk, branch: nil,
+            recap: recap, proposal: proposal)
+    }
+}
+
 /// A session with something to say, as returned by the derived query.
 ///
 /// Deliberately not a `QueuedEvent`: it is the answer to a question about a session,

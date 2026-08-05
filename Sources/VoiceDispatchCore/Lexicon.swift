@@ -88,15 +88,40 @@ public struct Lexicon: Sendable, Equatable {
         // weighted by the recency of each mention and summed across mentions.
         var score: [String: Double] = [:]
         var casing: [String: String] = [:]
+        func credit(_ term: String, weight: Double) {
+            let key = term.lowercased()
+            guard !seen.contains(key) else { return }
+            score[key, default: 0] += weight
+            if casing[key] == nil { casing[key] = term }
+        }
+        func recencyWeight(atMs: Int64) -> Double {
+            let ageSeconds = now.timeIntervalSince1970 - Double(atMs) / 1000
+            return max(0.05, 1.0 - ageSeconds / window)
+        }
         for event in events {
-            let ageSeconds = now.timeIntervalSince1970 - Double(event.createdAtMs) / 1000
-            let weight = max(0.05, 1.0 - ageSeconds / window)
+            let weight = recencyWeight(atMs: event.createdAtMs)
             for source in [event.lastAssistantMessage, event.summaryText].compactMap({ $0 }) {
                 for term in SpokenTextSanitizer.speakableTerms(in: source) {
-                    let key = term.lowercased()
-                    guard !seen.contains(key) else { continue }
-                    score[key, default: 0] += weight
-                    if casing[key] == nil { casing[key] = term }
+                    credit(term, weight: weight)
+                }
+            }
+        }
+
+        // Stored briefs (v6): topics and goals are durable now. A topic is the
+        // distilled 3-6 word name of the work — exactly the vocabulary the user
+        // says back at the app — so it joins verbatim (allowlistTerms splits
+        // multi-word terms for the sanitizer; providers boost the phrase whole).
+        // Goals contribute their proper nouns through the same extraction as
+        // messages. Weighted like any other mention, not seeded: a brief is one
+        // more mention of the name, not a routing word like a callsign.
+        let cutoffMsBriefs = cutoffMs
+        for stored in ((try? store.recentBriefs(limit: 400)) ?? [])
+            where stored.atMs >= cutoffMsBriefs {
+            let weight = recencyWeight(atMs: stored.atMs)
+            credit(stored.topic, weight: weight)
+            if let goal = stored.goal {
+                for term in SpokenTextSanitizer.speakableTerms(in: goal) {
+                    credit(term, weight: weight)
                 }
             }
         }
