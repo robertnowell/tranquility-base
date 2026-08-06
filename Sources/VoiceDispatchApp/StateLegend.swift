@@ -168,46 +168,36 @@ enum StateLegend {
         }
     }
 
-    /// One row of the idle grid: a session, its lamp, and a short topic.
+    /// One row of the idle grid: a session, its lamp, and its callsign.
     /// Equatable so the intake timer can refresh the grid only when content
     /// actually changed, not on every poll.
     struct SessionRow: Equatable {
         let id: String
-        /// The one identity: the minted callsign, else the fallback label.
+        /// The displayed identity: the tab's string (see displayName).
         let name: String
-        /// Short derived topic; may be empty.
-        let topic: String
+        /// The minted callsign — the word the voice speaks. RE-RULED 05 Aug
+        /// (variant C draft): the right column is the callsign, so eye and ear
+        /// share one identity — hear "home sessions", find "home sessions".
+        /// The brief topic is dead here (it told you nothing the name doesn't);
+        /// ⌃⌃ why still carries it. Empty until minted.
+        let callsign: String
         let lamp: Lamp
     }
 
-    /// The one DISPLAYED identity — RE-RULED 05 Aug: Claude's own session name
-    /// wins wherever we have it. "Yes, that name sucks, but at least it is
-    /// consistent": the string on screen is the string in the terminal tab,
-    /// checkable at a glance, maintained by nobody. The minted callsign is the
-    /// fallback for display, and remains the SPOKEN identity outright — a
-    /// hyphenated slug is unspeakable, and spoken attribution now also rides
-    /// the session's durable voice.
+    /// The one DISPLAYED identity — RE-RULED 05 Aug (twice): the terminal
+    /// tab's string wins wherever we have it. The constraint is literal — the
+    /// string on screen is the string in the tab, checkable at a glance,
+    /// maintained by nobody. `liveName` is therefore the transcript's last
+    /// ai-title (TranscriptTitles), NOT `agents --json`'s name: that field is
+    /// a derived slug ("robertnowell-90") for unnamed sessions, and the tab
+    /// never shows it. The minted callsign is the fallback for display, and
+    /// remains the SPOKEN identity outright — a hyphenated slug is
+    /// unspeakable, and spoken attribution now also rides the session's
+    /// durable voice.
     static func displayName(liveName: String? = nil, callsign: String?, fallback: String) -> String {
         if let liveName, !liveName.isEmpty { return liveName }
         if let callsign, !callsign.isEmpty { return callsign }
         return fallback
-    }
-
-    /// The grid topic: the stored brief's composed 3–6-word label (the durable
-    /// v6 field), sanitized to one line. NEVER a prose prefix of summaryText or
-    /// the raw assistant message — that derivation is dead (ruled): truncating
-    /// markdown prose mid-word is exactly where the orphan fragments came from
-    /// ("**Voices for lif" between rows). Sanitizing is defensive regardless of
-    /// source: newlines collapse to spaces, markdown asterisks are stripped,
-    /// whitespace runs collapse. A session with no stored brief returns "" and
-    /// its row shows the callsign alone.
-    static func gridTopic(_ raw: String?) -> String {
-        guard let raw, !raw.isEmpty else { return "" }
-        return raw
-            .replacingOccurrences(of: "*", with: "")
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
     }
 
     /// Display situations. Mostly 1:1 with PanelState; the extras (catch-up, the
@@ -301,7 +291,7 @@ enum StateLegend {
     /// The grid's top-strip label — small caps, letterspaced. There is no
     /// "Ready" pill and no "N waiting" headline on the grid face: the grid IS
     /// the status, and the count lives in the menu bar.
-    static let gridStripTitle = "SESSIONS"
+    static let gridStripTitle = "AGENTS"
     /// The grid's bottom key line, in the hint slot. Replaces the Dismiss
     /// button on the idle face — every gesture the grid answers to, in order.
     static let gridHint = "⌃⌥ hear · hold ⌥ reply · ⌃⌃ why · ⌃⇧ dismiss"

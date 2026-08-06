@@ -111,7 +111,8 @@ final class StatusHUD: NSObject {
     func showAnnouncement(
         isCatchUp: Bool = false,
         topic: String, spoken: String, sessionId: String, pid: Int?, project: String,
-        cwd: String?, eventId: String? = nil
+        cwd: String?, eventId: String? = nil,
+        placard: String? = nil
     ) {
         currentEventId = eventId
         currentTarget = (sessionId, pid, project)
@@ -124,7 +125,9 @@ final class StatusHUD: NSObject {
         guard transition(to: .speaking(eventId: eventId, catchUp: isCatchUp),
                          because: "audio starting")
         else { return }
-        face = Face(title: headline, body: spoken)
+        // Into the fresh Face, never before it: the wholesale rebuild is what
+        // clears a previous pull's placard on ordinary announcements.
+        face = Face(title: headline, body: spoken, placardOverride: placard ?? "")
         render()
     }
 
@@ -461,6 +464,10 @@ final class StatusHUD: NSObject {
     /// state + face is render()'s entire input.
     private struct Face {
         var title = "", body = "", listeningTarget = ""
+        /// Names the ladder rung on the state pill ("◀ FINDINGS") while a ⌃⌃
+        /// pull speaks — the visual identifier for what KIND of thing is being
+        /// said. Empty = the state's own placard.
+        var placardOverride = ""
         var handsFree = false
         var sendingLabel = ""
         var countdownSeconds: TimeInterval = 0
@@ -520,7 +527,9 @@ final class StatusHUD: NSObject {
         // while listening — knowing which terminal your words are about to land
         // in is exactly when you want to check.
         let row = situation().map { StateLegend.row(for: $0) }
-        stateLabel.stringValue = row?.stateText ?? ""; stateLabel.isHidden = false
+        stateLabel.stringValue = face.placardOverride.isEmpty
+            ? (row?.stateText ?? "") : face.placardOverride
+        stateLabel.isHidden = false
         // A title exists exactly when the face carries one; an empty label still
         // reserves a line's height, which reads as a hole.
         titleLabel.stringValue = face.title; titleLabel.isHidden = face.title.isEmpty
@@ -552,8 +561,10 @@ final class StatusHUD: NSObject {
             // pill would be — no "Ready", no "N waiting" (the count lives in the
             // menu bar) — and the key line where the Dismiss button was: every
             // gesture the grid answers to, in the panel's monospaced small type.
+            // Tracking 3.2 (was 1.6): the accepted draft's strip is airier —
+            // "A G E N T S" — and the title got shorter, so it can afford it.
             stateLabel.attributedStringValue = letterspaced(
-                StateLegend.gridStripTitle, size: 10, tracking: 1.6,
+                StateLegend.gridStripTitle, size: 10, tracking: 3.2,
                 color: StateLegend.Lens.chrome.color)
             hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
             hintLabel.stringValue = StateLegend.gridHint
@@ -686,13 +697,14 @@ final class StatusHUD: NSObject {
     /// The grid's content width: the 380 panel minus the stack's 14pt insets.
     private static let gridWidth: CGFloat = 352
 
-    /// The ruled grid (mock variant A): strict three-column rows — 26px lamp /
-    /// 148px callsign / remaining topic — at a fixed 31px height, a hairline
-    /// rule between rows (none after the last), capped at 8. Below the rows: a
-    /// quiet "+ NEW SESSION" placard, then the strong rule above the key line.
-    /// Tap = invite that session. Fixed height plus single-line topics is what
-    /// kills the orphan fragments and ragged gaps the old free-height
-    /// attributed-title rows produced.
+    /// The ruled grid (draft variant C, ruled 05 Aug): 26px lamp, then the
+    /// session NAME (the tab's string) owning the row, the minted callsign
+    /// right-aligned in the remaining ≤38% — at a fixed 40px height, a
+    /// hairline rule between rows (none after the last), capped at 8. Below
+    /// the rows: a quiet "+ NEW SESSION" placard, then the strong rule above
+    /// the key line. Tap = invite that session. Fixed height plus single-line
+    /// labels is what kills the orphan fragments and ragged gaps the old
+    /// free-height attributed-title rows produced.
     private func rebuildSessionRows() {
         waitingRows.arrangedSubviews.forEach { $0.removeFromSuperview() }
         waitingRows.spacing = 0
@@ -707,11 +719,22 @@ final class StatusHUD: NSObject {
             return line
         }
 
-        // The strip's bottom rule, under "SESSIONS ⚙".
+        // The strip's bottom rule, under "AGENTS ⚙".
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
         let shown = Array(face.sessionRows.prefix(8))
+        // ONE callsign column (ruled 05 Aug): sized to the widest callsign on
+        // show, capped at 38% of the grid. Per-row widths made every name
+        // truncate at its own x and the right side read as a rag, not a
+        // column; a shared width gives one vertical boundary, callsigns
+        // right-aligned into it, names truncating against it.
+        let auxWidth = min(
+            Self.gridWidth * GridRowView.auxFraction,
+            shown.map {
+                ceil(($0.callsign as NSString)
+                    .size(withAttributes: [.font: GridRowView.auxFont]).width)
+            }.max() ?? 0)
         for (index, item) in shown.enumerated() {
-            let row = GridRowView(item: item, target: self,
+            let row = GridRowView(item: item, auxWidth: auxWidth, target: self,
                                   action: #selector(sessionRowTapped(_:)))
             waitingRows.addArrangedSubview(row)
             row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
@@ -729,14 +752,15 @@ final class StatusHUD: NSObject {
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
 
         // The layout self-check: geometry is ruled, so the log states it — and
-        // singleLine proves the sanitized topics can never recreate the orphan
-        // fragments ("**Voices for lif") between rows.
+        // singleLine proves the labels can never recreate the orphan fragments
+        // ("**Voices for lif") between rows.
         let ready = shown.filter { $0.lamp == .ready }.count
-        let singleLine = shown.allSatisfy { !$0.topic.contains("\n") }
+        let singleLine = shown.allSatisfy {
+            !$0.name.contains("\n") && !$0.callsign.contains("\n")
+        }
         Permissions.log("grid: \(shown.count) rows (\(ready) ready) "
             + "rowH=\(Int(GridRowView.height)) "
-            + "cols=\(Int(GridRowView.lampColumn))/\(Int(GridRowView.callsignColumn))"
-            + "/\(Int(Self.gridWidth - GridRowView.lampColumn - GridRowView.callsignColumn)) "
+            + "cols=\(Int(GridRowView.lampColumn))/flex/aux\(Int(auxWidth)) "
             + "lamps=circular singleLine=\(singleLine)")
     }
 
@@ -923,17 +947,15 @@ final class StatusHUD: NSObject {
         Permissions.log("selftest identity=\(identity ?? "nil")")
         for (label, block) in [
             ("idle", { self.showIdle(note: long, rows: []) }),
-            // The idle grid: mixed lamps, a worst-case topic, and an empty one.
+            // The idle grid: mixed lamps, a long name, a worst-case callsign,
+            // and rows not yet minted (empty right column).
             ("idleGrid", { self.showIdle(rows: [
-                .init(id: "a", name: "promotions copy",
-                      topic: "Hero image validated across the stack", lamp: .ready),
-                .init(id: "b", name: "syndit", topic: long, lamp: .running),
-                .init(id: "c", name: "voice dispatch", topic: "", lamp: .ready),
-                // The live bug, proven dead in the matrix log: a markdown
-                // fragment with a newline sanitizes to one clean line —
-                // never "**Voices for lif" orphaned between rows.
+                .init(id: "a", name: "Fix hero image binding across the stack",
+                      callsign: "promotions copy", lamp: .ready),
+                .init(id: "b", name: long, callsign: "syndit citation", lamp: .running),
+                .init(id: "c", name: "voice dispatch", callsign: "", lamp: .ready),
                 .init(id: "d", name: "robertnowell-83",
-                      topic: StateLegend.gridTopic("**Voices for life**\ncampaign shipped"),
+                      callsign: "voice-dispatch synchronization",
                       lamp: .running),
             ]) }),
             ("preparing", { _ = self.showPreparing() }),
@@ -985,8 +1007,8 @@ final class StatusHUD: NSObject {
         // The stomp that froze the app (2026-08-05): a stale idle repaint against a
         // live capture. Must be REFUSED, and the pill must still be on the walls.
         showListening(level: { 0.4 })
-        showIdle(rows: [.init(id: "a", name: "promotions copy", topic: "", lamp: .ready),
-                        .init(id: "b", name: "syndit", topic: "", lamp: .ready)])
+        showIdle(rows: [.init(id: "a", name: "promotions copy", callsign: "", lamp: .ready),
+                        .init(id: "b", name: "syndit", callsign: "", lamp: .ready)])
         let survived = state.isCapturingAudio && !meter.isHidden
         Permissions.log("selftest legality: idle-over-listening refused=\(survived) "
                         + "state=\(state.name)")
@@ -1046,22 +1068,22 @@ final class StatusHUD: NSObject {
         switch name {
         case "grid":
             showIdle(rows: [
-                .init(id: "s1", name: "promotions copy",
-                      topic: "Hero image binding validated", lamp: .ready),
-                .init(id: "s2", name: "voice-dispatch recording",
-                      topic: "Pose driver renders every state", lamp: .ready),
-                .init(id: "s3", name: "syndit citation",
-                      topic: "Daily thread cites featured report", lamp: .running),
-                .init(id: "s4", name: "recall dense",
-                      topic: "Hybrid retrieval eval green", lamp: .running),
-                .init(id: "s5", name: "bookmarks provenance",
-                      topic: "Track A provenance fix live", lamp: .running),
-                .init(id: "s6", name: "kopi footer",
-                      topic: "Footer flag migration staged", lamp: .running),
-                .init(id: "s7", name: "m3-tracker poller",
-                      topic: "Shopify-only filter shipped", lamp: .running),
-                .init(id: "s8", name: "live-hud director",
-                      topic: "Personality prompt criteria drafted", lamp: .running),
+                .init(id: "s1", name: "Validate hero image binding",
+                      callsign: "promotions copy", lamp: .ready),
+                .init(id: "s2", name: "Render pose driver states",
+                      callsign: "voice-dispatch recording", lamp: .ready),
+                .init(id: "s3", name: "Cite featured report in daily thread",
+                      callsign: "syndit citation", lamp: .running),
+                .init(id: "s4", name: "Green the hybrid retrieval eval",
+                      callsign: "recall dense", lamp: .running),
+                .init(id: "s5", name: "Ship Track A provenance fix",
+                      callsign: "bookmarks provenance", lamp: .running),
+                .init(id: "s6", name: "Stage footer flag migration",
+                      callsign: "kopi footer", lamp: .running),
+                .init(id: "s7", name: "Ship Shopify-only filter",
+                      callsign: "m3-tracker poller", lamp: .running),
+                .init(id: "s8", name: "Draft personality prompt criteria",
+                      callsign: "live-hud director", lamp: .running),
             ])
 
         case "empty":
@@ -1535,11 +1557,23 @@ private func letterspaced(_ text: String, size: CGFloat, tracking: CGFloat,
 /// can only flow its runs inline, and columns need columns. Hover paints the
 /// row in the palette's hover putty, exactly like the mock.
 private final class GridRowView: NSControl {
-    static let height: CGFloat = 31
-    static let lampColumn: CGFloat = 26
-    static let callsignColumn: CGFloat = 148
+    // Variant C metrics (ruled 05 Aug, from the accepted draft render, scaled
+    // from its 640px frame to the panel's 352): taller rows, the name in the
+    // larger mono with NO added tracking, the callsign right-aligned and
+    // muted. The fixed 148px name column is dead — the name owns the row up
+    // to the shared callsign column (`auxWidth`, measured by the grid over
+    // every shown row, capped at `auxFraction`), so all names truncate at ONE
+    // vertical boundary instead of each row's own rag.
+    static let height: CGFloat = 40
+    // 26 → 20 (ruled 05 Aug): the 17pt lamp-to-name gap read as dead air at
+    // the new row height; 11pt keeps the lamp clear of the type and hands the
+    // difference to the name column.
+    static let lampColumn: CGFloat = 20
+    static let auxFraction: CGFloat = 0.38
+    static let auxFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
 
-    init(item: StateLegend.SessionRow, target: AnyObject, action: Selector) {
+    init(item: StateLegend.SessionRow, auxWidth: CGFloat,
+         target: AnyObject, action: Selector) {
         super.init(frame: .zero)
         self.target = target
         self.action = action
@@ -1561,38 +1595,40 @@ private final class GridRowView: NSControl {
             lamp.layer?.borderColor = ring.cgColor
         }
 
-        // This pass's type ramp (ruled): monospaced callsign, semibold only
-        // when the row is ready; the topic in the small sans, one weight.
-        let callsign = NSTextField(labelWithString: item.name)
-        callsign.font = .monospacedSystemFont(ofSize: 12, weight: ready ? .semibold : .medium)
-        callsign.textColor = StateLegend.Palette.ink
+        // The type ramp: both columns monospaced (one family, two sizes — the
+        // callsign is an identity, not prose), semibold name only when ready.
+        let name = NSTextField(labelWithString: item.name)
+        name.font = .monospacedSystemFont(ofSize: 13, weight: ready ? .semibold : .medium)
+        name.textColor = StateLegend.Palette.ink
+        name.lineBreakMode = .byTruncatingTail
+        name.translatesAutoresizingMaskIntoConstraints = false
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let callsign = NSTextField(labelWithString: item.callsign)
+        callsign.font = Self.auxFont
+        callsign.textColor = ready ? StateLegend.Palette.secondary : StateLegend.Palette.muted
         callsign.lineBreakMode = .byTruncatingTail
+        callsign.alignment = .right
         callsign.translatesAutoresizingMaskIntoConstraints = false
 
-        let topic = NSTextField(labelWithString: item.topic)
-        topic.font = .systemFont(ofSize: 11.5)
-        topic.textColor = ready ? StateLegend.Palette.secondary : StateLegend.Palette.muted
-        topic.lineBreakMode = .byTruncatingTail
-        topic.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(lamp); addSubview(callsign); addSubview(topic)
+        addSubview(lamp); addSubview(name); addSubview(callsign)
+        // A grid with no minted callsigns collapses the column entirely —
+        // no phantom 12pt gutter on the right.
+        let gutter: CGFloat = auxWidth > 0 ? 12 : 0
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.height),
             lamp.widthAnchor.constraint(equalToConstant: StateLegend.Lamp.diameter),
             lamp.heightAnchor.constraint(equalToConstant: StateLegend.Lamp.diameter),
             lamp.leadingAnchor.constraint(equalTo: leadingAnchor),
             lamp.centerYAnchor.constraint(equalTo: centerYAnchor),
-            callsign.leadingAnchor.constraint(equalTo: leadingAnchor,
-                                              constant: Self.lampColumn),
+            name.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                          constant: Self.lampColumn),
+            name.centerYAnchor.constraint(equalTo: centerYAnchor),
+            name.trailingAnchor.constraint(lessThanOrEqualTo: callsign.leadingAnchor,
+                                           constant: -gutter),
+            callsign.trailingAnchor.constraint(equalTo: trailingAnchor),
             callsign.centerYAnchor.constraint(equalTo: centerYAnchor),
-            // The callsign stays inside its column, 10pt short of the topic's.
-            callsign.trailingAnchor.constraint(
-                lessThanOrEqualTo: leadingAnchor,
-                constant: Self.lampColumn + Self.callsignColumn - 10),
-            topic.leadingAnchor.constraint(
-                equalTo: leadingAnchor, constant: Self.lampColumn + Self.callsignColumn),
-            topic.trailingAnchor.constraint(equalTo: trailingAnchor),
-            topic.centerYAnchor.constraint(equalTo: centerYAnchor),
+            callsign.widthAnchor.constraint(equalToConstant: auxWidth),
         ])
     }
 

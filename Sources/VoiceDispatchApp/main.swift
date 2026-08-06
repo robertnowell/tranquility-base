@@ -72,6 +72,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (goal, risk, question) from the already-computed brief — no model call,
     /// and the session itself is never woken.
     private var lastAnnouncement: Coordinator.Announcement?
+    /// The ⌃⌃ ladder walk: which announcement it belongs to, and the next rung.
+    /// A new announcement resets the walk; wrapping past the end is "say again".
+    private var ladderKey: String?
+    private var ladderIndex = 0
     /// Incremented every time a reply gesture starts.
     ///
     /// Cancelling the countdown only covers the four seconds it is on screen.
@@ -520,9 +524,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let target = try? coordinator?.replyTarget() ?? nil else { return nil }
         let live = (ClaudeAgentsCLI().sessions() ?? [])
             .first(where: { $0.sessionId == target.sessionId })
-        // One displayed identity (re-ruled 05 Aug): Claude's own name first —
-        // the same string as the terminal tab, checkable at a glance.
-        let name = live?.name ?? target.callsign ?? target.projectLabel
+        // One displayed identity (re-ruled 05 Aug): the tab's string,
+        // checkable at a glance — see tabDisplayName.
+        let name = tabDisplayName(for: target, live: live)
         return (target.sessionId, live?.pid, name, target.cwd)
     }
 
@@ -548,28 +552,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var rows = waiting.map {
             StateLegend.SessionRow(
                 id: $0.sessionId,
-                name: StateLegend.displayName(
-                    liveName: liveById[$0.sessionId]?.name,
-                    callsign: $0.callsign, fallback: $0.projectLabel),
-                topic: StateLegend.gridTopic($0.briefTopic),
+                name: tabDisplayName(for: $0, live: liveById[$0.sessionId]),
+                callsign: $0.callsign ?? "",
                 lamp: .ready)
         }
         // Live sessions with nothing waiting: quiet rows, so a skipped or heard
-        // session stays findable.
+        // session stays findable. Walked via `known` — already latestId DESC —
+        // so the band is recency-ordered like the waiting band above it, never
+        // Dictionary.values hash order (which reshuffled between refreshes).
         let waitingIds = Set(waiting.map(\.sessionId))
         let known = (try? store?.waitingSessionsIncludingHeard()) ?? []
-        for live in liveById.values where !waitingIds.contains(live.sessionId) {
-            let stored = known.first { $0.sessionId == live.sessionId }
+        var placed = waitingIds
+        for stored in known where !placed.contains(stored.sessionId) {
+            guard let live = liveById[stored.sessionId] else { continue }
+            placed.insert(stored.sessionId)
+            rows.append(StateLegend.SessionRow(
+                id: stored.sessionId,
+                name: tabDisplayName(for: stored, live: live),
+                callsign: stored.callsign ?? "",
+                lamp: .running))
+        }
+        // Live sessions with no stored events yet: nothing to rank them by,
+        // so they close the grid.
+        for live in liveById.values where !placed.contains(live.sessionId) {
             rows.append(StateLegend.SessionRow(
                 id: live.sessionId,
                 name: StateLegend.displayName(
-                    liveName: live.name,
-                    callsign: stored?.callsign,
-                    fallback: stored?.projectLabel ?? "session"),
-                topic: StateLegend.gridTopic(stored?.briefTopic),
+                    liveName: Self.tabTitle(transcriptPath: nil, live: live),
+                    callsign: nil, fallback: "session"),
+                callsign: "",
                 lamp: .running))
         }
         return rows
+    }
+
+    /// The tab's string for a session, or nil while it has none: the
+    /// transcript's last ai-title (TranscriptTitles), else the CLI name.
+    /// `agents --json`'s name alone is NOT the tab for unnamed sessions —
+    /// it is a derived slug ("robertnowell-90") the tab never displays.
+    private static func tabTitle(transcriptPath: String?, live: LiveSession?) -> String? {
+        let path = transcriptPath ?? live.flatMap { session in
+            session.cwd.map {
+                TranscriptTitles.defaultPath(cwd: $0, sessionId: session.sessionId)
+            }
+        }
+        let title = path.flatMap { TranscriptTitles.shared.latestTitle(transcriptPath: $0) }
+        return title ?? live?.name
+    }
+
+    /// EVERY displayed identity for a stored event resolves through here — the
+    /// grid rows, the speaking card, the depth-1 why card, the reply target —
+    /// so no surface can drift back to the derived slug on its own.
+    private func tabDisplayName(for event: WaitingSession, live: LiveSession?) -> String {
+        StateLegend.displayName(
+            liveName: Self.tabTitle(transcriptPath: event.transcriptPath, live: live),
+            callsign: event.callsign, fallback: event.projectLabel)
     }
 
     /// The one route to the idle face: assemble the grid and show it.
@@ -757,43 +794,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             hud.flashAcknowledge()
+            // The ladder (ruled: findings → solution → why, the order of the
+            // stack). Each ⌃⌃ takes the next rung; a new announcement resets the
+            // walk; past the last rung it wraps, so repeated pressing is also
+            // "say again". Empty rungs never made it into the array.
+            let key = "\(announcement.event.sessionId):\(announcement.event.latestId)"
+            if ladderKey != key { ladderKey = key; ladderIndex = 0 }
+            let rungs = SpokenComposition.ladderRungs(for: announcement)
+            let rung = rungs[ladderIndex % rungs.count]
+            ladderIndex += 1
             let previous = announceTask
             announceTask = Task { @MainActor in
                 coordinator.speech.stop()
                 previous?.cancel()
                 _ = await previous?.value
                 guard !Task.isCancelled else { return }
-                // Audio ⊂ visual: the card shows the words actually being spoken
-                // (the rationale), with the same karaoke highlight as any other
-                // utterance — "it said something but the UI didn't show it" is a
-                // residue bug in the audio channel.
-                let line = SpokenComposition.depthOneSpokenText(for: announcement)
+                // Audio ⊂ visual, and the pill NAMES the rung ("◀ FINDINGS") so
+                // you always know what kind of thing you are hearing.
                 hud.showAnnouncement(
                     topic: announcement.brief.topic,
-                    spoken: line.text,
+                    spoken: rung.spoken.text,
                     sessionId: announcement.event.sessionId,
                     pid: nil,
-                    project: StateLegend.displayName(
-                        liveName: (ClaudeAgentsCLI().sessions() ?? [])
-                            .first { $0.sessionId == announcement.event.sessionId }?.name,
-                        callsign: announcement.event.callsign,
-                        fallback: announcement.event.projectLabel),
+                    project: tabDisplayName(
+                        for: announcement.event,
+                        live: (ClaudeAgentsCLI().sessions() ?? [])
+                            .first { $0.sessionId == announcement.event.sessionId }),
                     cwd: announcement.event.cwd,
-                    eventId: announcement.event.sessionId)
-                Permissions.log("depth-1: speaking for \(announcement.event.sessionId.prefix(8)) "
-                                + "(\(line.text.count) chars)")
+                    eventId: announcement.event.sessionId,
+                    placard: "\(StateLegend.Glyph.speaking) \(rung.kind.rawValue)")
+                Permissions.log("ladder: \(rung.kind.rawValue) "
+                                + "(\(ladderIndex)/\(rungs.count)) for "
+                                + "\(announcement.event.sessionId.prefix(8))")
                 try? store?.recordDogfood(.depthOnePulled,
                                           sessionId: announcement.event.sessionId)
                 // In the session's voice (ruled 05 Aug, a559f29): the pull deepens
                 // that session's announcement, so it must sound like it.
                 _ = await coordinator.speech.speak(
-                    line,
+                    rung.spoken,
                     voice: coordinator.voiceId(for: announcement.event.sessionId),
                     onWord: { [weak self] range in
                         Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
                     })
-                hud.highlight(upTo: line.text.count)
-                lastStatusLine = "rationale spoken"
+                hud.highlight(upTo: rung.spoken.text.count)
+                lastStatusLine = "\(rung.kind.rawValue.lowercased()) spoken"
                 rebuildMenu()
             }
 
@@ -960,10 +1004,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             .first { $0.sessionId == announcement.event.sessionId }
                         // One displayed identity (re-ruled 05 Aug): the terminal
                         // tab's own string; the voice still speaks the callsign.
-                        let name = StateLegend.displayName(
-                            liveName: live?.name,
-                            callsign: announcement.event.callsign,
-                            fallback: announcement.event.projectLabel)
+                        let name = self.tabDisplayName(for: announcement.event, live: live)
                         self.activeConversation = (
                             announcement.event.sessionId,
                             name,
@@ -1059,9 +1100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let live = (ClaudeAgentsCLI().sessions() ?? [])
                     .first(where: { $0.sessionId == session })
                 let pid = live?.pid
-                let name = StateLegend.displayName(liveName: live?.name,
-                                                   callsign: target.callsign,
-                                                   fallback: target.projectLabel)
+                let name = tabDisplayName(for: target, live: live)
                 hud.adoptTarget(sessionId: session, pid: pid,
                                 label: name, cwd: target.cwd)
                 recordingTarget = session
