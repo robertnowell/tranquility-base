@@ -1,0 +1,15 @@
+```json
+{
+  "recap": "content-engine: email generation stuck at generating past 28 minutes.",
+  "proposal": "Check the URL manually later when it completes. Resume polling then?",
+  "rationale": "We propose deferring because Kopi is not erroring—it is simply slow, past our poll threshold. The email exists at a stable URL and will finish rendering without intervention. We need to be careful not to block on slow external services; resuming polling later costs nothing and preserves the work.",
+  "findings": "Email zJiRue8hTV queued at 07:07:49 UTC, still generating after 28+ minutes with no error state reported. The URL is live and accessible.",
+  "solution": "Check https://www.trykopi.ai/p/zJiRue8hTV manually when ready. If status is success, resume the poll loop to export and write the HTML file to brief-2026-08-04.kopi.html.",
+  "topic": "content-engine email render timeout",
+  "goal": "Export finished on-brand email HTML to runtime directory.",
+  "happened": "Kopi email generation exceeded 28-minute poll window without completing or erroring.",
+  "nextStep": "Check email status manually at the provided URL when convenient; resume polling if complete.",
+  "question": "Resume polling later, or check manually?",
+  "risk": "If Kopi fails silently after the poll stops, the incomplete render will not be detected until manual check."
+}
+```

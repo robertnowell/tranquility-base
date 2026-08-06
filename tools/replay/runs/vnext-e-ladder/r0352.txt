@@ -1,0 +1,15 @@
+```json
+{
+  "recap": "video-essays: first facet complete, three facets still running.",
+  "proposal": "Wait for all four facets to report, then synthesize research_angles.md. Proceed?",
+  "rationale": "We propose waiting because the synthesis depends on all four facet reports; proceeding now would create incomplete angles. The first facet surfaced strong retronym and historical claims that anchor the competing narratives; the other three will fill the landscape.",
+  "findings": "First facet uncovered material: meatball is a 1975 retronym; worm debuted after final Moon landing; 1992 rescission invoked Apollo nostalgia against a modernist logo design.",
+  "solution": "Await counterintuitive claims, unresolved debates, and real-world anchors facets. Merge all four into research_angles.md once complete.",
+  "topic": "video-essay research facets synthesis",
+  "goal": "Route to ve-intake to complete stages 0–3: preflight through packages.md.",
+  "happened": "first facet agent returned strong historical and retronym material",
+  "nextStep": "synthesize research_angles.md when all four facet agents report",
+  "question": "Hold for all four facets before synthesizing?",
+  "risk": "Waiting extends the intake timeline; if facets run in parallel, hold time is bounded by the slowest one."
+}
+```

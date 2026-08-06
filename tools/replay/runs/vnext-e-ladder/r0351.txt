@@ -1,0 +1,15 @@
+```json
+{
+  "recap": "vd-state-legend-page: callsign mint rule deployed, Phase 1b work list complete.",
+  "proposal": "Legend v0.4 spec is build-complete. Move from spec to code?",
+  "rationale": "We propose moving to code because the audio identity chain is now fully specified end to end—mint, hail, stack, depth-0, rationale pull, and hop—with every rung bound to the modifier grammar and every rule traced to source or your ruling. Nothing remains ambiguous. We need to be careful: Phase 1a and 1b together are a single coherent unit; splitting them mid-code creates reconciliation risk.",
+  "findings": "The mint rule binds callsign generation into the summarizer layer, freezing identity at first summary and storing it on the session object. The complete chain now covers minting through the voiced dispatch loop, with typed exemplars grounding every utterance.",
+  "solution": "Phase 1a: StateLegend component in the UI, zero behavior change. Phase 1b: one prompt rewrite with mint rule, typing, grounding, and exemplars. Both phases are fully specified; code implementation can proceed in either order.",
+  "topic": "Audio identity chain specification complete",
+  "goal": "Ship the legend UI with complete spec-to-code clarity",
+  "happened": "the agent deployed the callsign mint rule and closed the last unspecified piece of the voice model",
+  "nextStep": "Begin coding Phase 1a and Phase 1b against the completed specification",
+  "question": "Move to code?",
+  "risk": "Splitting Phase 1a and 1b mid-implementation could require reconciliation work; code them as one unit."
+}
+```

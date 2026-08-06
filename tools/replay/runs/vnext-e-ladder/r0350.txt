@@ -1,0 +1,15 @@
+```json
+{
+  "recap": "video-essays: episode 028 NASA preflight passed, four angles research agents launched.",
+  "proposal": "Await angles-research agents; synthesize and pick three angles. Ready?",
+  "rationale": "We propose waiting because the four agents are now running in parallel on the NASA identity-history story with MOCR research as seed input. Once they report, synthesis is deterministic and stage 3 is autopilot. No decision needed until their findings arrive.",
+  "findings": null,
+  "solution": "Four parallel agents querying surprising facts, counterintuitive claims, unresolved debates, real-world anchors scoped to NASA identity history. On return: synthesize research_angles.md, pick top three angles, write packages.md, checkpoint auto-posts and advances.",
+  "topic": "video-essays episode 028 angles research",
+  "goal": "Produce three short-form video packages from NASA identity-history topic before long-form commit.",
+  "happened": "Four angles-research agents launched in parallel with MOCR seed input.",
+  "nextStep": "Await agent reports; synthesize angles and pick three.",
+  "question": null,
+  "risk": null
+}
+```
