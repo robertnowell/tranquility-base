@@ -256,8 +256,10 @@ case "reconcile":
     // A botched settings file silently disables everything in it, which is why
     // this exists.
     let hookPath = FileManager.default.currentDirectoryPath + "/hooks/voice-dispatch-hook.sh"
-    guard FileManager.default.isExecutableFile(atPath: hookPath) else {
-        print("run from the repo root: hooks/voice-dispatch-hook.sh not found"); exit(1)
+    let visualPath = FileManager.default.currentDirectoryPath + "/hooks/visual-output-hook.sh"
+    guard FileManager.default.isExecutableFile(atPath: hookPath),
+          FileManager.default.isExecutableFile(atPath: visualPath) else {
+        print("run from the repo root: hooks/*.sh not found or not executable"); exit(1)
     }
     let settingsURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".claude/settings.json")
@@ -272,15 +274,24 @@ case "reconcile":
     }
     var hooks = root["hooks"] as? [String: Any] ?? [:]
     var changed = 0
-    for event in ["Stop", "Notification", "UserPromptSubmit"] {
-        var entries = hooks[event] as? [[String: Any]] ?? []
+    // (event, script marker, script path): the spool hook feeds the loop; the
+    // visual-output hook teaches sessions the browser-not-terminal rule for
+    // anything the user must SEE (they hear turns by voice, away from the tab).
+    let wiring: [(event: String, marker: String, path: String)] = [
+        ("Stop", "voice-dispatch-hook", hookPath),
+        ("Notification", "voice-dispatch-hook", hookPath),
+        ("UserPromptSubmit", "voice-dispatch-hook", hookPath),
+        ("SessionStart", "visual-output-hook", visualPath),
+    ]
+    for wire in wiring {
+        var entries = hooks[wire.event] as? [[String: Any]] ?? []
         let present = entries.contains { entry in
             ((entry["hooks"] as? [[String: Any]]) ?? [])
-                .contains { ($0["command"] as? String)?.contains("voice-dispatch-hook") == true }
+                .contains { ($0["command"] as? String)?.contains(wire.marker) == true }
         }
         if !present {
-            entries.append(["hooks": [["type": "command", "command": hookPath, "timeout": 5]]])
-            hooks[event] = entries
+            entries.append(["hooks": [["type": "command", "command": wire.path, "timeout": 5]]])
+            hooks[wire.event] = entries
             changed += 1
         }
     }
@@ -293,11 +304,14 @@ case "reconcile":
 
 case "hook-config":
         let hookPath = FileManager.default.currentDirectoryPath + "/hooks/voice-dispatch-hook.sh"
+        let visualPath = FileManager.default.currentDirectoryPath + "/hooks/visual-output-hook.sh"
         print("""
         Add to ~/.claude/settings.json (merge with existing hooks):
 
         "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "\(hookPath)"}]}],
-        "Notification": [{"matcher": "", "hooks": [{"type": "command", "command": "\(hookPath)"}]}]
+        "Notification": [{"matcher": "", "hooks": [{"type": "command", "command": "\(hookPath)"}]}],
+        "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": "\(hookPath)"}]}],
+        "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "\(visualPath)"}]}]
         """)
 
     // MARK: dispatch
