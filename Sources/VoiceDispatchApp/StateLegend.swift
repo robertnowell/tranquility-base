@@ -77,6 +77,13 @@ enum StateLegend {
         static let ready = hex(0x416B47)
         /// Fault amber (FS 33538 amber family; the mock's `--warn` token).
         static let fault = hex(0xC8862A)
+        /// Advisory blue (MS25041 blue-lens class: "any color except red or
+        /// green" for advisory). Ruled 05 Aug for optional affordances like
+        /// GO TO AGENT — green read as "the thing to click," but navigation
+        /// you MAY take is advisory, not go. (Klein blue was considered and
+        /// declined: attention-seizing, and it's the user's house brand, not
+        /// this product's.)
+        static let advisory = hex(0x3E5A75)
     }
 
     // MARK: - Lenses

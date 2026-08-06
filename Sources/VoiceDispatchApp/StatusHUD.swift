@@ -1311,7 +1311,7 @@ final class StatusHUD: NSObject {
         goButton.isBordered = false
         goButton.attributedTitle = letterspaced(
             "GO TO AGENT \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
-            color: StateLegend.Palette.ready)
+            color: StateLegend.Palette.advisory)
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
 
         // A real symbol at a real size. The text glyph was 12pt — visually timid
