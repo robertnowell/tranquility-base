@@ -772,12 +772,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("next: ignored, transcription in flight")
                 return
             }
-            // During the undo window, moving on means "send it and move on": the
-            // countdown fast-forwards instead of racing the next announcement
-            // (ruled unchanged by ui-pass-7: readback's ⌃⌥ stays
-            // commit-and-advance — the press is momentum, not doubt).
+            // During the undo window, ⌃⌥ commits the send and goes HOME
+            // (re-ruled 06 Aug, superseding ui-pass-7's commit-and-advance:
+            // "it should go to the home screen first" — the readback is not
+            // an exception to home-first, and advancing straight into the
+            // next agent's voice was the surprise, not the momentum). The
+            // countdown fast-forwards, then the grid; a second press invites
+            // the next agent from there, same as every other altitude.
             if hud.commitPendingSendNow() {
-                Permissions.log("next: committed the pending send before advancing")
+                Permissions.log("next: committed the pending send, going home")
+                showIdleGrid()
+                return
             } else if case .speaking = hud.state {
                 // ⌃⌥ = home first (ui-pass-7, ruling 7). From any card on
                 // stage — the announcement or any ⌃⌃ ladder rung, both of
