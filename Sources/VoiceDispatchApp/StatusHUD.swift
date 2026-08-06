@@ -550,8 +550,9 @@ final class StatusHUD: NSObject {
         // check. No hint line on any card (ruled): the grid's key line is the
         // only hint left, set by its own arm.
         let row = situation().map { StateLegend.row(for: $0) }
-        stateLabel.stringValue = face.placardOverride.isEmpty
-            ? (row?.stateText ?? "") : face.placardOverride
+        stateLabel.attributedStringValue = placardText(
+            face.placardOverride.isEmpty
+                ? (row?.stateText ?? "") : face.placardOverride)
         stateLabel.isHidden = false
         stateLabel.textColor = StateLegend.Lens.chrome.color
         // A title exists exactly when the face carries one; an empty label still
@@ -629,7 +630,12 @@ final class StatusHUD: NSObject {
         case .result:
             // A failure stays until dismissed. Amber presence beyond the glyph
             // (ruled): the placard text itself in amber ink — flat, calm.
+            // Re-rendered attributed rather than via textColor, which attributed
+            // runs ignore.
             stateLabel.textColor = StateLegend.Palette.fault
+            stateLabel.attributedStringValue = placardText(
+                stateLabel.attributedStringValue.string,
+                color: StateLegend.Palette.fault)
 
         case .settings:
             stateLabel.stringValue = ""
@@ -1694,6 +1700,42 @@ final class StatusHUD: NSObject {
 /// Small uppercase letterspaced type — the SESSIONS strip (10px, +0.16em) and
 /// the NEW SESSION placard (9.5px, +0.14em) share it.
 @MainActor
+/// The placard string with symbol glyphs optically corrected. ◀/▶ are not in
+/// SF Mono; the fallback font's triangle renders larger and off-baseline
+/// against the placard's 10pt mono caps (Robert's screenshot, 06 Aug — the
+/// "◀ SOLUTION" rung pill). The glyph run is drawn smaller with a baseline
+/// nudge so both fonts share one optical center; letter runs keep the
+/// placard's own font. Color is explicit because attributed runs ignore the
+/// field's textColor.
+private func placardText(
+    _ text: String, color: NSColor = StateLegend.Lens.chrome.color
+) -> NSAttributedString {
+    let placardFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
+    let out = NSMutableAttributedString()
+    var letters = ""
+    func flushLetters() {
+        guard !letters.isEmpty else { return }
+        out.append(NSAttributedString(string: letters, attributes: [
+            .font: placardFont, .foregroundColor: color,
+        ]))
+        letters = ""
+    }
+    for ch in text {
+        if ch == "◀" || ch == "▶" {
+            flushLetters()
+            out.append(NSAttributedString(string: String(ch), attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .medium),
+                .baselineOffset: 0.8,
+                .foregroundColor: color,
+            ]))
+        } else {
+            letters.append(ch)
+        }
+    }
+    flushLetters()
+    return out
+}
+
 private func letterspaced(_ text: String, size: CGFloat, tracking: CGFloat,
                           color: NSColor) -> NSAttributedString {
     NSAttributedString(string: text, attributes: [
