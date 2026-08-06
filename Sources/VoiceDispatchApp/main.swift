@@ -173,14 +173,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let arrived = turnArrived && waiting > 0
                 if self.hud.canSurfaceAmbiently,
                    arrived || rows != self.lastShownRows {
-                    self.lastShownRows = rows
                     if arrived {
                         self.surfaceArrival(rows: rows, waiting: waiting)
-                    } else if self.hud.isOnScreen {
-                        // Count fell (something was heard or dismissed). Keep the
-                        // panel truthful, but never raise it for a decrease: a
-                        // window appearing to tell you there is less to do is noise.
+                    }
+                    // Currency is not attention. Whatever the attention gates
+                    // decided (held, frontmost-skip), lamps that are on screen
+                    // must be true — a stale green is the instrument lying. And
+                    // the guard records PAINTS, not computations: a skipped
+                    // paint retries next tick instead of certifying itself
+                    // (the 23:39 lock-in: frontmost-skip threw the rows away
+                    // AFTER the guard had already recorded them). Never raises
+                    // the panel: visible-and-idle only; a decrease stays quiet.
+                    if self.hud.isOnScreen, self.hud.canSurfaceAmbiently {
                         self.hud.showIdle(rows: rows)
+                        self.lastShownRows = rows
                     }
                 }
             }
