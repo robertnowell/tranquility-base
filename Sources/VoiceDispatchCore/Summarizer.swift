@@ -349,7 +349,13 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         let system = Self.systemPrompt(projectLabel: request.projectLabel)
         let body: [String: Any] = [
             "model": model,
-            "max_tokens": 400,
+            // Sized for the FIVE-spoken-field brief plus cards with 2x headroom.
+            // At 400, the ladder prompt's response truncated mid-JSON
+            // (stop_reason max_tokens, the required "happened" cut off), parse
+            // failed, and every announcement fell to the deterministic floor —
+            // long raw-ish spoken text and an empty ladder (observed 06 Aug,
+            // 01:07Z). Truncation costs the whole brief; tokens cost nothing.
+            "max_tokens": 1024,
             "system": system,
             "messages": [["role": "user", "content": user]],
         ]
