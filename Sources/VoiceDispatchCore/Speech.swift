@@ -221,6 +221,13 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
 
         guard mine == currentGeneration() else { throw SpeechError.interrupted }
 
+        // Keep the last N spoken files on disk (Robert, 06 Aug: the first
+        // syllable of hails sounds clipped, and with playback running straight
+        // from memory there was nothing to listen to after the fact — no way
+        // to tell generated-clipped from playback-clipped). Same 0700 boundary
+        // as everything else; pruned, so it can never become model-calls.
+        SpokenAudioArchive.keep(audioData, label: text.text)
+
         let audio = try AVAudioPlayer(data: audioData)
         player = audio
         audio.prepareToPlay()

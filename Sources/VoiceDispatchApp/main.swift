@@ -256,6 +256,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
+        hud.onBreadcrumbHome = { [weak self] in self?.goHomeFromCard(via: "breadcrumb") }
+        hud.onClearLamp = { [weak self] id in
+            guard let self, let coordinator = self.coordinator else { return }
+            // "Mischief managed" (ruled 06 Aug): the lamp click means "I don't
+            // care about this one" — heard, not announced, not invited. Same
+            // cursor write a played announcement lands on, so nothing new to
+            // reconcile.
+            if let target = try? coordinator.waiting().first(where: { $0.sessionId == id }) {
+                try? coordinator.markHeard(sessionId: id, through: target.latestId)
+                Permissions.log("lamp: cleared \(target.callsign ?? id.prefix(8).description) by click")
+            }
+            self.showIdleGrid()
+        }
         hud.onLeaveSettings = { [weak self] in
             guard let self else { return }
             self.coordinator?.speech.stop()
@@ -797,13 +810,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // rather than advancing it. A rapid double-press composes
                 // into "next agent": the first press lands on the grid, and
                 // from the grid the second press invites the next agent below.
-                Permissions.log("⌃⌥: home")
-                coordinator?.speech.stop()
-                GreetingCache.stop()
-                // A mid-speech stop also wakes the announce task, whose
-                // `.interrupted` arm repaints the grid with its own note;
-                // painting it now covers the already-finished card too.
-                showIdleGrid()
+                goHomeFromCard(via: "⌃⌥")
                 return
             }
             // From hidden, ⌃⌥ surfaces the grid and stops (ruled 05 Aug):
@@ -881,6 +888,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("hands-free: listening locked")
             } else {
                 lastOptionTapAt = Date()
+                // Observability for the dead band (06 Aug incident: thirteen
+                // ~200ms presses during an announcement, every one armed,
+                // reverted, and MEANT nothing — the log showed the machinery
+                // but never the intent). A lone tap outside every claiming
+                // state is currently a no-op; when the next storm of these
+                // appears in the log, that is the user pressing the mic key
+                // and being ignored.
+                Permissions.log("⌥ tap: no meaning in \(hud.state) — armed presses "
+                    + "under the 0.35s hold threshold do nothing here")
             }
 
         case .pauseToggled:
@@ -1603,6 +1619,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// microphone is open), the surfaced panel and the lit lamp ARE the hail and
     /// the audio is skipped — a hail that talks over another utterance would be
     /// the app interrupting itself to say less.
+    /// Home from a card, by any door — ⌃⌥ or the clicked breadcrumb (ruled
+    /// 06 Aug: voiced first, but the pointer works too). Stops the voice and
+    /// returns to the grid, advancing NOTHING: no dismissal, no markHeard, no
+    /// next announcement. A mid-speech stop also wakes the announce task,
+    /// whose `.interrupted` arm repaints the grid with its own note; painting
+    /// it now covers the already-finished card too.
+    private func goHomeFromCard(via door: String) {
+        Permissions.log("\(door): home")
+        coordinator?.speech.stop()
+        GreetingCache.stop()
+        showIdleGrid()
+    }
+
     private func speakHail(for target: WaitingSession) {
         guard let coordinator else { return }
         let turn = "\(target.sessionId):\(target.latestId)"

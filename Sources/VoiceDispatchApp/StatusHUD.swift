@@ -56,6 +56,17 @@ final class StatusHUD: NSObject {
     private var backButton: NSButton!
     private var waitingRows: NSStackView!
     var onPickWaiting: ((String) -> Void)?
+
+    /// Clicking the ◀ breadcrumb goes home (ruled 06 Aug: "there's no reason
+    /// it shouldn't be clickable — voiced first while allowing a keyboard
+    /// tap"). Only wired for the card states whose ⌃⌥ already means home;
+    /// the guard lives in the click handler, the meaning in main.swift.
+    var onBreadcrumbHome: (() -> Void)?
+
+    /// Clicking a lit lamp marks that session heard without inviting it
+    /// (ruled 06 Aug: "mischief managed" — switch the light off). The host
+    /// owns the store write; the grid repaints through the ordinary path.
+    var onClearLamp: ((String) -> Void)?
     private var actionRow: NSStackView!
     private static let spokenMark = NSAttributedString.Key("vdSpoken")
 
@@ -229,6 +240,16 @@ final class StatusHUD: NSObject {
     // plus assumeIsolated keeps the isolation guarantee without the check.
     @objc nonisolated private func cancelPendingSendTapped() {
         MainActor.assumeIsolated { cancelPendingSend(restartListening: true) }
+    }
+
+    @objc nonisolated private func breadcrumbClicked() {
+        MainActor.assumeIsolated {
+            // Same altitude rule as ⌃⌥: home from a card. Speaking covers the
+            // announcement and every ⌃⌃ rung — the states whose breadcrumb
+            // says "back the way you came".
+            guard case .speaking = state else { return }
+            onBreadcrumbHome?()
+        }
     }
 
     // setPaused is dead (simplification pass, ruled): ⇧ pause is an AUDIO
@@ -836,6 +857,9 @@ final class StatusHUD: NSObject {
         for (index, item) in shown.enumerated() {
             let row = GridRowView(item: item, auxWidth: auxWidth, target: self,
                                   action: #selector(sessionRowTapped(_:)))
+            if item.lamp == .ready {
+                row.onLampTap = { [weak self] in self?.onClearLamp?(item.id) }
+            }
             waitingRows.addArrangedSubview(row)
             row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
             if index < shown.count - 1 {
@@ -934,7 +958,17 @@ final class StatusHUD: NSObject {
         let needed = stack.fittingSize
         let height = max(needed.height, 90)
         if abs(panel.frame.height - height) > 1 {
-            panel.setContentSize(NSSize(width: 380, height: height))
+            // The top edge holds still and the panel grows downward: origin is
+            // bottom-left, so the height delta comes out of origin.y. Animated
+            // when already on screen (ruled 06 Aug — the snap between
+            // different-sized faces was the jarring half of the border bug);
+            // the first paint still snaps, a hidden panel has nothing to ease.
+            var frame = panel.frame
+            let delta = height - frame.height
+            frame.origin.y -= delta
+            frame.size.height = height
+            frame.size.width = 380
+            panel.setFrame(frame, display: true, animate: panel.isVisible)
         }
         // Assert the actions are actually on screen. "Buttons cut off" is a bug the
         // code can check for itself; it should never reach a person's eyes.
@@ -978,41 +1012,47 @@ final class StatusHUD: NSObject {
     /// press and a missed press look identical, so you press again — which is how
     /// every double-trigger bug this weekend started. The pulse says "heard you"
     /// before any work begins.
-    /// Our own overlay layer, not the NSVisualEffectView's.
+    /// A bar along the top edge, not a border around the whole panel.
     ///
-    /// The first version set a border on the effect view's backing layer and
-    /// nothing appeared: that layer is privately managed and does not render
-    /// externally-set borders reliably. A plain CALayer we own, sitting above the
-    /// content, has no such opinions.
-    private var ackLayer: CALayer?
+    /// The full border was sized to the panel at flash time, and states have
+    /// different heights — the pulse regularly outlived a resize and its lower
+    /// edge cut across the middle of the new face (Robert's report, 06 Aug;
+    /// his fix). A bar glued to the top edge has no lower edge to strand, and
+    /// it is an NSView with an autoresizing mask rather than a CALayer so the
+    /// window's own resize keeps it glued mid-animation for free.
+    private var ackBar: NSView?
 
     func flashAcknowledge() {
-        guard let host = panel?.contentView, let hostLayer = host.layer else { return }
+        guard let host = panel?.contentView else { return }
         if panel?.isVisible != true { panel?.orderFrontRegardless() }
 
-        let layer: CALayer
-        if let existing = ackLayer {
-            layer = existing
+        let bar: NSView
+        if let existing = ackBar {
+            bar = existing
         } else {
-            layer = CALayer()
+            bar = NSView(frame: .zero)
+            bar.wantsLayer = true
             // Palette, not controlAccentColor: accent = state, not user
             // preference (ruled) — the pulse is the same green as the go lamp.
-            layer.borderColor = StateLegend.Palette.ready.cgColor
-            layer.borderWidth = 3
-            layer.cornerRadius = 12
-            layer.opacity = 0
-            hostLayer.addSublayer(layer)
-            ackLayer = layer
+            bar.layer?.backgroundColor = StateLegend.Palette.ready.cgColor
+            bar.layer?.cornerRadius = 1.5
+            // Flexible bottom margin = pinned to the top edge; flexible width
+            // = pinned to both sides. The bar tracks every frame change.
+            bar.autoresizingMask = [.width, .minYMargin]
+            bar.alphaValue = 0
+            host.addSubview(bar)
+            ackBar = bar
         }
-        layer.frame = host.bounds
-
-        let pulse = CABasicAnimation(keyPath: "opacity")
-        pulse.fromValue = 1.0
-        pulse.toValue = 0.0
-        pulse.duration = 0.4
-        pulse.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        layer.removeAnimation(forKey: "ack")
-        layer.add(pulse, forKey: "ack")
+        // Inset past the panel's 12pt corner radius so the bar never pokes
+        // outside the rounded silhouette.
+        bar.frame = CGRect(x: 12, y: host.bounds.height - 3,
+                           width: host.bounds.width - 24, height: 3)
+        bar.alphaValue = 1
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.4
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            bar.animator().alphaValue = 0
+        }
         Permissions.log("ack: pulsed (visible=\(panel?.isVisible == true))")
     }
 
@@ -1406,6 +1446,12 @@ final class StatusHUD: NSObject {
         stateLabel = NSTextField(labelWithString: "")
         stateLabel.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
         stateLabel.textColor = StateLegend.Lens.chrome.color
+        // The ◀ breadcrumb is clickable (ruled 06 Aug): voiced first, but a
+        // pointer tap goes home too. The gesture is on the label always; the
+        // handler lets only card states through, so the AGENTS strip and the
+        // pills never react.
+        stateLabel.addGestureRecognizer(NSClickGestureRecognizer(
+            target: self, action: #selector(breadcrumbClicked)))
 
         titleLabel = NSTextField(labelWithString: "")
         // The identity face: mono, matching the grid rows (ruled). renderTitle
@@ -1848,12 +1894,25 @@ private final class GridRowView: NSControl {
         layer?.backgroundColor = nil
     }
 
+    /// "Mischief managed" (ruled 06 Aug): clicking a lit lamp switches it off —
+    /// marks the turn heard without inviting the session. Set only on rows
+    /// whose lamp is lit; nil means the lamp column is just part of the row.
+    var onLampTap: (() -> Void)?
+
     // A cell-less NSControl tracks nothing by default; the whole row is the
     // hit target, and the tap lands on mouse-up like any button's would.
     override func mouseDown(with event: NSEvent) {}
 
     override func mouseUp(with event: NSEvent) {
-        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(point) else { return }
+        // The lamp column is its own target when the lamp is live: the whole
+        // 20pt column at full row height, not the 9px dot — a click target
+        // the size of the glyph would be a trap.
+        if let onLampTap, point.x <= Self.lampColumn {
+            onLampTap()
+            return
+        }
         sendAction(action, to: target)
     }
 }
