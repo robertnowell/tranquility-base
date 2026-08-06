@@ -11,16 +11,21 @@ import Foundation
 ///
 /// One case per state makes that class of bug unrepresentable: a question like "can
 /// Escape act here" is answered once, in one place, for every state at once.
+/// Enum hygiene (simplification pass, ruled): `.paused` is deleted — ⇧ pause is
+/// an AUDIO behavior; the visual is the frozen speaking card, so there was no
+/// panel state to represent (no transition ever entered it). `.speaking`'s
+/// catchUp flag is deleted — nothing in production ever set it (only the pose
+/// driver did). `.result`'s ok flag is deleted — the Sent face is dead, so a
+/// result on screen is always a failure.
 enum PanelState: Equatable {
     case hidden
     case idle(waiting: Int)
     case preparing
-    case speaking(eventId: String?, catchUp: Bool)
-    case paused(eventId: String?)
+    case speaking(eventId: String?)
     case listening(eventId: String?)
     case transcribing(startedAt: Date)
     case pendingSend(utteranceId: String)
-    case result(ok: Bool)
+    case result
     case settings
 
     /// Short, stable name for logs. Deliberately excludes ids so a transition line
@@ -30,12 +35,11 @@ enum PanelState: Equatable {
         case .hidden: return "hidden"
         case .idle: return "idle"
         case .preparing: return "preparing"
-        case .speaking(_, let catchUp): return catchUp ? "catchingUp" : "speaking"
-        case .paused: return "paused"
+        case .speaking: return "speaking"
         case .listening: return "listening"
         case .transcribing: return "transcribing"
         case .pendingSend: return "pendingSend"
-        case .result(let ok): return ok ? "result.ok" : "result.failed"
+        case .result: return "result.failed"
         case .settings: return "settings"
         }
     }
@@ -61,7 +65,7 @@ enum PanelState: Equatable {
     /// transcription to discover it had nowhere to go.
     var canStartReply: Bool {
         switch self {
-        case .speaking, .paused, .pendingSend, .result: return true
+        case .speaking, .pendingSend, .result: return true
         case .hidden, .idle, .preparing, .listening, .transcribing, .settings: return false
         }
     }
@@ -102,29 +106,25 @@ enum PanelState: Equatable {
         switch self {
         case .listening:
             switch next {
-            case .transcribing, .listening, .result(ok: false): return true
+            case .transcribing, .listening, .result: return true
             default: return false
             }
         case .transcribing:
             switch next {
-            // result (both kinds) is the normal send-receipt path: the countdown
-            // expiring shows "Sending to…" (transcribing) and the receipt follows.
+            // result is the failure-receipt path: successes never paint a card
+            // (the Sent face is dead), so nothing success-shaped arrives here.
             case .pendingSend, .listening, .transcribing, .result: return true
             default: return false
             }
         case .pendingSend:
             switch next {
-            case .result(ok: false), .transcribing, .listening: return true
+            case .result, .transcribing, .listening: return true
             default: return false
             }
-        // A late success receipt must not repaint over live or preparing speech —
-        // this absorbs the send-path "somethingElseOnStage" guard. Failures always
-        // surface: they are the case with work left to do.
-        case .preparing, .speaking, .paused:
-            if case .result(ok: true) = next { return false }
-            return true
-        // Everything else admits everything — exactly today's behavior.
-        case .hidden, .idle, .result, .settings:
+        // Everything else admits everything. The old "refuse a late success
+        // receipt over live speech" guard died with the Sent face: there is no
+        // success receipt left to refuse.
+        case .hidden, .idle, .preparing, .speaking, .result, .settings:
             return true
         }
     }

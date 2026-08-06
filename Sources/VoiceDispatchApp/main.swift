@@ -76,6 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A new announcement resets the walk; wrapping past the end is "say again".
     private var ladderKey: String?
     private var ladderIndex = 0
+    /// Ruling 14: an announcement or ⌃⌃ pull that finishes speaking and draws
+    /// no gesture within ~4s returns the panel to the idle grid — the card has
+    /// said its piece; the grid is the resting face. Cancelled by ANY gesture
+    /// (handle()'s first line) and by every new announcement, so mid-speech and
+    /// mid-conversation remain chord-driven.
+    private var returnToGridWork: DispatchWorkItem?
+    private static let returnToGridDelay: TimeInterval = 4
     /// Incremented every time a reply gesture starts.
     ///
     /// Cancelling the countdown only covers the four seconds it is on screen.
@@ -202,11 +209,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotkey = HotkeyMonitor { [weak self] transition in
             if case .pauseToggled = transition {
+                // Pause is an AUDIO behavior (simplification pass, ruled): the
+                // visual stays the frozen speaking card — the highlight stopped
+                // mid-word IS the pause indication. No pill switch, no hint.
                 Task { @MainActor in
                     guard let self, let speech = self.coordinator?.speech,
                           speech.isSpeaking || speech.isPaused else { return }
                     speech.togglePause()
-                    self.hud.setPaused(speech.isPaused)
                 }
                 return
             }
@@ -262,39 +271,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.rebuildMenu()
         }
 
-        hud.onReply = { [weak self] in
-            guard let self, self.micGranted else { return }
-            if self.recorder.isRecording {
-                Permissions.log("reply button: refused, mic already live")
-                self.lastStatusLine = "mic already live — tap ⌥ to send"
-                return
-            }
-            if let ctx = self.resolveReplyContext() {
-                self.hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
-                                     label: ctx.label, cwd: ctx.cwd)
-                self.recordingTarget = ctx.sessionId
-            } else {
-                self.dictationMode = true
-                self.hud.dictationDestination = FocusedInput.focusedEditableApp()
-                    .map { StateLegend.destination($0) } ?? StateLegend.clipboardDestination
-            }
-            try? self.recorder.start()
-            self.isBusy = true
-            self.updateTitle()
-        }
-        hud.onStopReply = { [weak self] in
-            self?.handsFreeListening = false
-            guard let self, let captured = try? self.recorder.stop() else {
-                self?.hud.recordingEnded()
-                self?.hud.endCapture(because: "nothing recorded")
-                self?.showIdleGrid()
-                return
-            }
-            self.isBusy = false
-            self.updateTitle()
-            self.hud.recordingEnded()
-            self.sendReply(captured)
-        }
+        // hud.onReply / hud.onStopReply are dead (simplification pass): they
+        // existed for the panel's Reply button, and the button rows are gone —
+        // chords are the interface (hold ⌥ / ⌥⌥ hands-free / deep links).
 
         // Existing installations were created before storage was private by
         // default, so their modes are only fixed by doing it explicitly at startup.
@@ -466,11 +445,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // StateLegend.plainWords(for:).
                     hud.showResult(
                         "\(label) can't take this yet — \(StateLegend.plainWords(for: readiness)). "
-                        + "Your words are kept. Try again in a moment.", ok: false)
+                        + "Your words are kept. Try again in a moment.")
                 case .dispatchFailed(.verificationTimedOut, _):
                     hud.showResult(
                         "Typed it into \(label), but couldn't confirm it landed. "
-                        + "Check the tab before repeating yourself.", ok: false)
+                        + "Check the tab before repeating yourself.")
                 case .dispatchFailed(.tabNotFound, let utteranceId),
                      .dispatchFailed(.targetGone, let utteranceId):
                     // The destination no longer exists — "kept" must mean usable,
@@ -478,19 +457,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
                     hud.showResult(copied
                         ? "\(label)'s tab is gone — copied your words to the clipboard."
-                        : "\(label)'s tab is gone. Your words are kept in the log.",
-                        ok: false)
+                        : "\(label)'s tab is gone. Your words are kept in the log.")
                 case .dispatchFailed(let failure, _):
                     hud.showResult("Couldn't type into \(label): \(failure). "
-                                   + "Your words are kept.", ok: false)
+                                   + "Your words are kept.")
                 case .noTarget:
-                    hud.showResult("That reply lost its session. Your words are kept.", ok: false)
+                    hud.showResult("That reply lost its session. Your words are kept.")
                 default:
-                    hud.showResult("Unexpected result: \(outcome). Your words are kept.", ok: false)
+                    hud.showResult("Unexpected result: \(outcome). Your words are kept.")
                 }
             } catch {
                 Permissions.log("confirmAndSend threw: \(error)")
-                hud.showResult("Send failed: \(error). Your words are kept.", ok: false)
+                hud.showResult("Send failed: \(error). Your words are kept.")
             }
             rebuildMenu()
         }
@@ -614,6 +592,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.showIdle(note: note, rows: sessionRowsNow())
     }
 
+    /// Arm ruling 14's return: speech is over, the card holds for the delay,
+    /// and if the panel is still on that speaking card — no gesture moved it —
+    /// the grid comes back. The state check is the guard: any gesture either
+    /// cancels this work item outright or moves the panel off `.speaking`.
+    private func scheduleReturnToGrid() {
+        returnToGridWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, case .speaking = self.hud.state else { return }
+            Permissions.log("return-to-grid: speech over, "
+                + "no gesture for \(Int(Self.returnToGridDelay))s")
+            self.showIdleGrid()
+        }
+        returnToGridWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.returnToGridDelay,
+                                      execute: work)
+    }
+
     private func refresh() {
         if !hotkey.isRunning { _ = hotkey.start() }
         rebuildMenu()
@@ -664,12 +659,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Push to talk
 
     private func handle(_ transition: HotkeyMonitor.Transition) {
+        // Any gesture is attention: the panel must not yank itself back to the
+        // grid underneath it (ruling 14's timer dies on contact).
+        returnToGridWork?.cancel()
         // Acknowledge before acting. Every recognized gesture pulses the panel
         // border, so a registered press is visibly different from a missed one.
         switch transition {
-        case .next, .pauseToggled, .replyBegan, .dismiss:
+        case .next, .replyBegan, .dismiss:
             hud.flashAcknowledge()
-        case .optionTapped, .replyEnded, .replyAborted, .controlDoubleTapped:
+        case .optionTapped, .pauseToggled, .replyEnded, .replyAborted, .controlDoubleTapped:
             break  // optionTapped flashes only when it becomes an action, below
         }
         switch transition {
@@ -705,7 +703,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Next means done with this one. Dismissal is a watermark, so a later
             // turn from the same session revives it without anything being undone.
             switch hud.state {
-            case .speaking, .paused:
+            case .speaking:
                 if let sessionId = hud.currentEventId { dismissCurrent(sessionId) }
             default: break
             }
@@ -758,24 +756,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     handsFreeListening = false
                     dictationMode = false
                     recordingTarget = nil
-                    hud.showResult("Couldn't open the microphone — try again. (\(error))",
-                                   ok: false)
+                    hud.showResult("Couldn't open the microphone — try again. (\(error))")
                     return
                 }
                 isBusy = true
                 updateTitle()
-                hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 },
-                                  handsFree: true)
+                hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
                 Permissions.log("hands-free: listening locked")
             } else {
                 lastOptionTapAt = Date()
             }
 
         case .pauseToggled:
-            guard let speech = coordinator?.speech, speech.isSpeaking || speech.isPaused
-            else { return }
-            speech.togglePause()
-            hud.setPaused(speech.isPaused)
+            // Handled in the hotkey tap closure (audio-only, ruled); the case
+            // exists so the switch stays exhaustive.
+            break
 
         case .controlDoubleTapped:
             // ⌃⌃ = escalate the daemon's channel: speak the rationale and risk
@@ -838,6 +833,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     })
                 hud.highlight(upTo: rung.spoken.text.count)
                 lastStatusLine = "\(rung.kind.rawValue.lowercased()) spoken"
+                // Ruling 14: the pull said its piece; with no gesture in 4s the
+                // grid comes back. Guarded against a superseding gesture — its
+                // cancel of THIS task must not be undone by a late schedule.
+                if !Task.isCancelled { scheduleReturnToGrid() }
                 rebuildMenu()
             }
 
@@ -892,8 +891,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("mic: start failed: \(error)")
                 dictationMode = false
                 recordingTarget = nil
-                hud.showResult("Couldn't open the microphone — try again. (\(error))",
-                               ok: false)
+                hud.showResult("Couldn't open the microphone — try again. (\(error))")
                 return
             }
             isBusy = true
@@ -949,6 +947,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Nothing about timing or ordering is then left to chance.
     private func announceNext(only eventId: String? = nil) {
         guard let coordinator else { return }
+        // A new announcement supersedes any armed return-to-grid: the old
+        // card's timer must never yank the fresh one off the stage.
+        returnToGridWork?.cancel()
         let previous = announceTask
         // Summarizing and fetching the voice take several seconds. Without this the
         // app shows nothing at all for the whole of that and reads as broken.
@@ -1032,6 +1033,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     lastStatusLine = "\(StateLegend.Glyph.speaking) \(announcement.brief.topic)"
                     hud.highlight(upTo: announcement.spoken.text.count)
+                    // Ruling 14: fully spoken, no gesture in 4s → the grid.
+                    if !Task.isCancelled { scheduleReturnToGrid() }
                 case .interrupted(let failure):
                     // The announce task reverts an interrupted item to unread. If the
                     // interruption WAS the reply, re-apply the mark — this runs after
@@ -1042,7 +1045,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         lastStatusLine = "playback failed, still unread"
                         hud.showResult(
                             "Playback failed (\(failure)). It's still waiting. "
-                            + "tap ⌃⌥ to hear it again.", ok: false)
+                            + "tap ⌃⌥ to hear it again.")
                     } else {
                         lastStatusLine = "stopped, still unread"
                         showIdleGrid(note: "Stopped, still unread.")
@@ -1093,8 +1096,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let session,
                       let target = try? store?.waitingSessionsIncludingHeard()
                           .first(where: { $0.sessionId == session }) else {
-                    hud.showResult("That page's session isn't in the log. Nothing recorded.",
-                                   ok: false)
+                    hud.showResult("That page's session isn't in the log. Nothing recorded.")
                     break
                 }
                 let live = (ClaudeAgentsCLI().sessions() ?? [])
@@ -1112,8 +1114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? recorder.start()
                 isBusy = true
                 updateTitle()
-                hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 },
-                                  handsFree: true)
+                hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
             case "show":
                 showPanel()
             default:
@@ -1137,8 +1138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.log(String(format:
                 "send: refused, silence gate (%.2fs, peak %.4f)", seconds, recorder.peakLevel))
             recordingTarget = nil
-            hud.showResult("Didn't catch that — too short or too quiet. Nothing sent.",
-                           ok: false)
+            hud.showResult("Didn't catch that — too short or too quiet. Nothing sent.")
             rebuildMenu()
             return
         }
@@ -1176,30 +1176,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         return
                     }
                     guard let text = utterance.transcriptText, !text.isEmpty else {
-                        hud.showResult("Couldn't transcribe that. Audio kept.", ok: false)
+                        hud.showResult("Couldn't transcribe that. Audio kept.")
                         return
                     }
                     // Wispr's rule: a focused text field wins; clipboard otherwise.
+                    // Success says nothing on the panel (ruled — the Sent face
+                    // is dead): status line + log, straight back to the grid.
                     if let app = FocusedInput.focusedEditableApp() {
                         FocusedInput.paste(text)
                         Permissions.log("dictation: typed \(text.count) chars into \(app)")
-                        hud.showResult("Typed into \(app).", ok: true)
+                        lastStatusLine = "typed into \(app)"
                     } else {
                         if !FocusedInput.trusted { FocusedInput.requestTrustOnce() }
                         let pasteboard = NSPasteboard.general
                         pasteboard.clearContents()
                         pasteboard.setString(text, forType: .string)
                         Permissions.log("dictation: copied \(text.count) chars to clipboard")
-                        hud.showResult("Copied to clipboard: \u{201C}\(text.prefix(80))\u{201D}",
-                                       ok: true)
+                        lastStatusLine = "copied to clipboard"
                     }
+                    hud.endCapture(because: "dictation delivered")
+                    showIdleGrid()
                     rebuildMenu()
                     return
                 }
                 guard let spokenTo = recordingTarget else {
                     Permissions.log("send: recording has no captured address; refusing")
-                    hud.showResult("This recording lost its address. Audio kept; nothing sent.",
-                                   ok: false)
+                    hud.showResult("This recording lost its address. Audio kept; nothing sent.")
                     rebuildMenu()
                     return
                 }
@@ -1221,15 +1223,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
 
                 switch outcome {
+                // Success says nothing on the panel (ruled — the Sent face is
+                // dead): status line + log, straight back to the grid.
                 case .dispatched(let text, let ms, _):
                     lastStatusLine = "\(StateLegend.Glyph.sent) sent (\(ms)ms): \(text.prefix(48))"
-                    hud.showResult("Sent: \(text)", ok: true)
+                    hud.endCapture(because: "sent")
+                    showIdleGrid()
                 case .queued(let text, _):
                     lastStatusLine = "\(StateLegend.Glyph.sent) queued: \(text.prefix(48))"
-                    hud.showResult("Queued: \(text)", ok: true)
+                    hud.endCapture(because: "queued")
+                    showIdleGrid()
                 case .noTarget:
                     lastStatusLine = "nothing to reply to yet"
-                    hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.", ok: false)
+                    hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.")
                 case .readyToSend(let utteranceId, let text, let coreLabel, let sessionId):
                     // One identity: Core's outcome still carries the project
                     // label; the visual "Sending to X" upgrades it to the minted
@@ -1261,15 +1267,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // Sanctioned change (b): plain words for the actual condition.
                     let why = StateLegend.plainWords(for: readiness)
                     lastStatusLine = "can't send — \(why); audio kept"
-                    hud.showResult("Can't send yet — \(why). Recording kept. Try again shortly.", ok: false)
+                    hud.showResult("Can't send yet — \(why). Recording kept. Try again shortly.")
                 case .transcriptionFailed:
                     lastStatusLine = "couldn't transcribe, audio kept"
-                    hud.showResult("Couldn't transcribe that. The audio is saved. Retry from the menu.", ok: false)
+                    hud.showResult("Couldn't transcribe that. The audio is saved. Retry from the menu.")
                 case .dispatchFailed(.verificationTimedOut, _):
                     lastStatusLine = "\(StateLegend.Glyph.needsYou) unconfirmed. Check the tab before resending"
                     hud.showResult(
                         "Sent, but never confirmed. It may or may not have landed. "
-                        + "check the tab before resending.", ok: false)
+                        + "check the tab before resending.")
                 case .dispatchFailed(.tabNotFound, let utteranceId),
                      .dispatchFailed(.targetGone, let utteranceId):
                     // This path painted nothing at all before — a silently lost
@@ -1279,8 +1285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                             : "tab gone — words kept in the log"
                     hud.showResult(copied
                         ? "That tab is gone — copied your words to the clipboard."
-                        : "That tab is gone. Your words are kept in the log.",
-                        ok: false)
+                        : "That tab is gone. Your words are kept in the log.")
                 case .dispatchFailed(let failure, _):
                     lastStatusLine = "send failed: \(failure), audio kept"
                 }
@@ -1473,8 +1478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         case .failure(let error):
             hud.showResult("Couldn't start a session: \(error.message). "
-                           + "Terminal automation permission is the usual suspect.",
-                           ok: false)
+                           + "Terminal automation permission is the usual suspect.")
         }
     }
 

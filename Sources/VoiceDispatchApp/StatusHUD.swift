@@ -24,22 +24,12 @@ final class StatusHUD: NSObject {
     private var bodyLabel: NSTextField!
     private var stateLabel: NSTextField!
     private var goButton: NSButton!
-    private var replyButton: NSButton!
+    /// The readback face's ONE negative (simplification pass, ruled): a quiet
+    /// text action, not a lozenge. The Reply/Dismiss buttons are dead — chords
+    /// are the interface.
+    private var dontSendButton: NSButton!
     private var hintLabel: NSTextField!
-    /// Set by the app so the panel can start and stop a recording itself. Without
-    /// this the only way to answer was a hotkey that appears nowhere in the UI —
-    /// the panel asked a question and offered no way to answer it.
-    var onReply: (() -> Void)?
-    var onStopReply: (() -> Void)?
-    /// KEPT deliberately (WS-C would otherwise delete it): a recording started from
-    /// the panel's Reply button does NOT enter `.listening` — the panel stays on the
-    /// announcement, only the button title and hint change — so the enum genuinely
-    /// lacks this fact. Folding button-recording into the state machine would change
-    /// what is on screen, which is out of bounds for a structure pass.
-    private var isRecording = false
-    private var hideWorkItem: DispatchWorkItem?
     private var contentStack: NSStackView?
-    private var identity: String?
     /// Derived, not stored. True exactly while the undo countdown is live AND the
     /// panel is in `.pendingSend` — the two facts the old boolean tracked by hand.
     /// Entering any other state makes it false (the state entry points used to
@@ -57,10 +47,8 @@ final class StatusHUD: NSObject {
     private var countdownTimer: Timer?
     private var onCancelSend: ((_ restartListening: Bool) -> Void)?
     private var onCommitSend: (() -> Void)?
-    private var progressBar: NSProgressIndicator!
+    private var countdownBar: CountdownBarView!
     private var meter: LevelMeterView!
-    private var discardButton: NSButton!
-    private var sendCheckButton: NSButton!
     private var voicePicker: NSPopUpButton!
     private var gearButton: NSButton!
     private var backButton: NSButton!
@@ -83,20 +71,19 @@ final class StatusHUD: NSObject {
     func adoptTarget(sessionId: String, pid: Int?, label: String, cwd: String?) {
         currentTarget = (sessionId, pid, label)
         currentEventId = sessionId
-        identity = Self.identify(pid: pid, cwd: cwd)
     }
 
-    func showListening(level: @escaping () -> Float, handsFree: Bool = false) {
+    func showListening(level: @escaping () -> Float) {
         guard transition(to: .listening(eventId: currentEventId), because: "recording started")
         else { return }
         levelSource = level
-        // A pill: target name plus waveform, nothing else. Hands-free flanks the
-        // waveform with ✕ and ✓, so the controls sit where your eyes already are.
-        // The name stays (unlike Wispr) because our destination is a terminal
-        // somewhere else, not the focused field on this screen.
+        // A pill: target name plus waveform, nothing else. The name stays
+        // (unlike Wispr) because our destination is a terminal somewhere else,
+        // not the focused field on this screen. The hands-free ✕/✓ buttons are
+        // dead code deleted (simplification pass): they were never attached to
+        // any view hierarchy, and the chords cover both actions.
         face = Face(listeningTarget: currentTarget?.label ?? dictationDestination
-                        ?? StateLegend.clipboardDestination,
-                    handsFree: handsFree)
+                        ?? StateLegend.clipboardDestination)
         render()
     }
 
@@ -109,42 +96,23 @@ final class StatusHUD: NSObject {
     }
 
     func showAnnouncement(
-        isCatchUp: Bool = false,
         topic: String, spoken: String, sessionId: String, pid: Int?, project: String,
         cwd: String?, eventId: String? = nil,
         placard: String? = nil
     ) {
         currentEventId = eventId
         currentTarget = (sessionId, pid, project)
-        // Only prefix when the topic adds something. A topic equal to the project
-        // rendered as "promotions — promotions", which names the folder twice and
-        // tells you nothing.
-        let headline = topic.caseInsensitiveCompare(project) == .orderedSame || topic.isEmpty
-            ? project : "\(project): \(topic)"
-        identity = Self.identify(pid: pid, cwd: cwd)
-        guard transition(to: .speaking(eventId: eventId, catchUp: isCatchUp),
-                         because: "audio starting")
+        guard transition(to: .speaking(eventId: eventId), because: "audio starting")
         else { return }
         // Into the fresh Face, never before it: the wholesale rebuild is what
-        // clears a previous pull's placard on ordinary announcements.
-        face = Face(title: headline, body: spoken, placardOverride: placard ?? "")
+        // clears a previous pull's placard on ordinary announcements. The topic
+        // rides separately from the identity (ruled: identity in mono, topic in
+        // the regular face) and is dropped when it adds nothing — a topic equal
+        // to the project rendered as "promotions — promotions".
+        let extra = topic.caseInsensitiveCompare(project) == .orderedSame ? "" : topic
+        face = Face(title: project, topic: extra, body: spoken,
+                    placardOverride: placard ?? "")
         render()
-    }
-
-    /// The concrete tab this is about: working directory and tty. Without it you
-    /// cannot tell whether "Go to session" opened the right one — a project name is
-    /// not an address, and several tabs share it.
-    private static func identify(pid: Int?, cwd: String?) -> String? {
-        guard let cwd, !cwd.isEmpty else { return nil }
-        let parts = URL(fileURLWithPath: cwd).pathComponents.filter { $0 != "/" }
-
-        // Worktrees nest the real name under .claude/worktrees/<name>/<project>, so
-        // the last component alone is ambiguous — every one of them ends in the same
-        // project directory. The component before the plumbing is the one you named.
-        if let marker = parts.firstIndex(of: "worktrees"), marker + 1 < parts.count {
-            return "worktree: \(parts[marker + 1])"
-        }
-        return parts.suffix(2).joined(separator: "/")
     }
 
     /// The first reply to a session asks once, showing the words that are about to
@@ -171,8 +139,11 @@ final class StatusHUD: NSObject {
         else { return }
         onCancelSend = cancel
         onCommitSend = send
-        face = Face(title: "Your reply", body: "\u{201C}\(text)\u{201D}",
-                    sendingLabel: label, countdownSeconds: seconds)
+        // READBACK placard via the same placardOverride the ladder pills use;
+        // the identity (mono) titles the card, the words being sent are the body.
+        face = Face(title: label, body: "\u{201C}\(text)\u{201D}",
+                    placardOverride: StateLegend.readbackPlacard,
+                    countdownSeconds: seconds)
         render()
     }
 
@@ -183,7 +154,7 @@ final class StatusHUD: NSObject {
     func commitPendingSendNow() -> Bool {
         guard awaitingConfirm else { return false }
         countdownTimer?.invalidate(); countdownTimer = nil
-        progressBar.isHidden = true
+        countdownBar.isHidden = true
         let send = onCommitSend
         onCommitSend = nil; onCancelSend = nil
         // Committing is an explicit act: the send is out of your hands, so the
@@ -203,7 +174,7 @@ final class StatusHUD: NSObject {
     func cancelPendingSend(restartListening: Bool = true) -> Bool {
         guard awaitingConfirm else { return false }
         countdownTimer?.invalidate(); countdownTimer = nil
-        progressBar.isHidden = true
+        countdownBar.isHidden = true
         let cancel = onCancelSend
         onCancelSend = nil
         cancel?(restartListening)
@@ -219,15 +190,9 @@ final class StatusHUD: NSObject {
         MainActor.assumeIsolated { cancelPendingSend(restartListening: true) }
     }
 
-    /// Reflect a pause without rebuilding the panel — the spoken text and its
-    /// highlight must stay exactly where they are.
-    func setPaused(_ paused: Bool) {
-        stateLabel.stringValue = StateLegend.row(for: paused ? .paused : .speaking).stateText
-        hintLabel.stringValue = paused
-            ? StateLegend.pausedHint
-            : (identity.map { "\($0)\n\(StateLegend.speakingHint)" }
-                ?? StateLegend.speakingHint)
-    }
+    // setPaused is dead (simplification pass, ruled): ⇧ pause is an AUDIO
+    // behavior; the frozen speaking card — highlight stopped mid-word — IS the
+    // pause indication. No pill switch, no hint.
 
     /// Append a line to the current panel without disturbing what it is showing.
     func note(_ message: String) {
@@ -244,7 +209,7 @@ final class StatusHUD: NSObject {
 
     func showSettings(voices: [Voice], selected: String, previewNote: String) {
         guard transition(to: .settings, because: "settings opened") else { return }
-        currentTarget = nil; identity = nil
+        currentTarget = nil
         face = Face(title: "Voice", body: previewNote,
                     voices: voices, selectedVoice: selected)
         render()
@@ -312,24 +277,14 @@ final class StatusHUD: NSObject {
         MainActor.assumeIsolated { face.transcription?.retry() }
     }
 
-    /// A receipt, not a state you live in.
-    ///
-    /// A success needs nothing from you, so it says what happened and gets out of
-    /// the way. "It's mid-turn, so it sends when that finishes" is worth a few
-    /// seconds because it is not something you could otherwise know, but leaving it
-    /// on screen with buttons implies there is something left to do. A failure is
-    /// the opposite and stays until dismissed.
-    func showResult(_ message: String, ok: Bool) {
-        // A refused success receipt is the quiet-success path: the stage is busy
-        // with something newer, the send still happened, and the log carries the
-        // REFUSED line as its receipt.
-        guard transition(to: .result(ok: ok), because: "reply resolved") else { return }
-        // Reply and Go to session are about the announcement, not the receipt, and
-        // offering them here suggests the send is still in your hands. It is not.
-        currentTarget = ok ? nil : currentTarget
-        // One identity: a success receipt needs no title (the pill and body say
-        // it); a failure is titled by the session it is about, in its callsign.
-        face = Face(title: ok ? "" : (currentTarget?.label ?? ""), body: message)
+    /// A failure receipt — the ONLY receipt (simplification pass, ruled): the
+    /// Sent face is dead, success says nothing on the panel (status line + log
+    /// only, immediate return to the grid). A failure is the case with work
+    /// left to do, so it stays until dismissed, titled by the session it is
+    /// about — the one displayed identity, in mono.
+    func showResult(_ message: String) {
+        guard transition(to: .result, because: "reply failed") else { return }
+        face = Face(title: currentTarget?.label ?? "", body: message)
         render()
     }
 
@@ -407,7 +362,7 @@ final class StatusHUD: NSObject {
         let waiting = rows.filter { $0.lamp == .ready }.count
         guard transition(to: .idle(waiting: waiting), because: "idle repaint")
         else { return }
-        currentTarget = nil; currentEventId = nil; identity = nil
+        currentTarget = nil; currentEventId = nil
 
         if rows.isEmpty {
             // The true empty state — the ONLY surface where the literal app name
@@ -441,10 +396,10 @@ final class StatusHUD: NSObject {
         // Hidden still allows ambient surfacing, which is the property that broke
         // when this left a non-idle flag behind: after one Dismiss the app went
         // silent for the rest of the session.
-        // The user door: hiding is always an explicit act (Dismiss, the result
-        // auto-hide, quit), never a stale resume — so it bypasses the table.
+        // The user door: hiding is always an explicit act (Dismiss, quit),
+        // never a stale resume — so it bypasses the table.
         forceTransition(to: .hidden, because: "panel hidden")
-        currentTarget = nil; currentEventId = nil; identity = nil
+        currentTarget = nil; currentEventId = nil
         render()
     }
 
@@ -463,13 +418,17 @@ final class StatusHUD: NSObject {
     /// deliberately does not carry. Stashed whole by each show* entry point;
     /// state + face is render()'s entire input.
     private struct Face {
-        var title = "", body = "", listeningTarget = ""
-        /// Names the ladder rung on the state pill ("◀ FINDINGS") while a ⌃⌃
-        /// pull speaks — the visual identifier for what KIND of thing is being
-        /// said. Empty = the state's own placard.
+        /// The displayed identity (the tab's string) — rendered in MONO on
+        /// every face, matching the grid rows (ruled). The app name on the true
+        /// empty state rides the same slot: it is the app's own identity.
+        var title = ""
+        /// The composed topic, in the REGULAR face beside the mono identity;
+        /// empty when it adds nothing the identity doesn't.
+        var topic = ""
+        var body = "", listeningTarget = ""
+        /// Names the pill when a face needs its own placard — the ⌃⌃ ladder
+        /// rungs ("◀ FINDINGS") and READBACK. Empty = the state's own placard.
         var placardOverride = ""
-        var handsFree = false
-        var sendingLabel = ""
         var countdownSeconds: TimeInterval = 0
         var sessionRows: [StateLegend.SessionRow] = []
         var voices: [Voice] = []
@@ -490,12 +449,12 @@ final class StatusHUD: NSObject {
         // clickable count pill is dead — the grid is already open.
         case .idle: return .ready
         case .preparing: return .preparing
-        case .speaking(_, let catchUp): return catchUp ? .catchingUp : .speaking
-        case .paused: return .paused
+        case .speaking: return .speaking
         case .listening: return .listening(target: face.listeningTarget)
         case .transcribing: return .working
-        case .pendingSend: return .sendingTo(label: face.sendingLabel)
-        case .result(let ok): return ok ? .sent : .needsYou
+        // The READBACK placard (face.placardOverride) carries this face's pill.
+        case .pendingSend: return nil
+        case .result: return .needsYou
         case .settings: return .settings
         }
     }
@@ -510,38 +469,36 @@ final class StatusHUD: NSObject {
     /// Speaking card, meter dots on Ready) is unrepresentable, because a widget
     /// no arm mentions is at its baseline, not left over.
     private func render() {
-        // The leaving state's machinery dies here, in one place: the auto-hide,
-        // the transcription ticker, and (outside a live capture) the meter.
+        // The leaving state's machinery dies here, in one place: the
+        // transcription ticker, and (outside a live capture) the meter.
         // The countdown TIMER is deliberately not stopped here (open issue #8:
         // the paths that end a pending send — commit, cancel, endCapture, its own
         // expiry — say so themselves); only its pixels are, in the baseline.
-        hideWorkItem?.cancel()
         endTranscribingUI()
         if !state.isCapturingAudio { meterTimer?.invalidate(); meterTimer = nil }
         if case .hidden = state { panel?.orderOut(nil); return }
         let panel = panel ?? build()
 
-        // Baseline: pill and action row from the state's legend row, title and
-        // body from the stash, Reply / Go to session from who the panel is
-        // addressing, everything stateful off. Go to session stays available
-        // while listening — knowing which terminal your words are about to land
-        // in is exactly when you want to check.
+        // Baseline: pill from the state's legend row (or the face's own
+        // placard), title and body from the stash, every quiet action off.
+        // Go to session stays available while listening — knowing which
+        // terminal your words are about to land in is exactly when you want to
+        // check. No hint line on any card (ruled): the grid's key line is the
+        // only hint left, set by its own arm.
         let row = situation().map { StateLegend.row(for: $0) }
         stateLabel.stringValue = face.placardOverride.isEmpty
             ? (row?.stateText ?? "") : face.placardOverride
         stateLabel.isHidden = false
+        stateLabel.textColor = StateLegend.Lens.chrome.color
         // A title exists exactly when the face carries one; an empty label still
-        // reserves a line's height, which reads as a hole.
-        titleLabel.stringValue = face.title; titleLabel.isHidden = face.title.isEmpty
+        // reserves a line's height, which reads as a hole. The identity renders
+        // in MONO, matching the grid rows; the topic joins in the regular face.
+        renderTitle()
         bodyLabel.stringValue = face.body
-        hintLabel.stringValue = currentActionHint()
-        actionRow.isHidden = !(row?.showsControls ?? false)
-        replyButton.title = awaitingConfirm ? "Don't send"
-            : (isRecording || state.isCapturingAudio ? "Send now" : "Reply")
-        replyButton.isHidden = !awaitingConfirm && currentTarget == nil
+        hintLabel.stringValue = ""
         goButton.isHidden = currentTarget?.pid == nil
-        progressBar.isHidden = true; meter.isHidden = true
-        discardButton.isHidden = true; sendCheckButton.isHidden = true
+        dontSendButton.isHidden = true
+        countdownBar.isHidden = true; meter.isHidden = true
         voicePicker.isHidden = true; waitingRows.isHidden = true
         gearButton.isHidden = false; backButton.isHidden = true
         // Part of the baseline so the grid's monospaced key line can never leak
@@ -549,7 +506,6 @@ final class StatusHUD: NSObject {
         hintLabel.font = .systemFont(ofSize: 10)
         // Unhidden only by the slow-transcription tick, never by a state's arm.
         cancelTranscriptionButton.isHidden = true; retryTranscriptionButton.isHidden = true
-        var autoHide: TimeInterval?
 
         switch state {
         case .hidden, .preparing, .speaking, .transcribing:
@@ -557,10 +513,10 @@ final class StatusHUD: NSObject {
 
         case .idle where !face.sessionRows.isEmpty:
             // The grid: the idle face IS one row per live session (WS-B, ruled).
-            // Ruled strip: a small letterspaced SESSIONS placard where the Ready
+            // Ruled strip: a small letterspaced AGENTS placard where the Ready
             // pill would be — no "Ready", no "N waiting" (the count lives in the
-            // menu bar) — and the key line where the Dismiss button was: every
-            // gesture the grid answers to, in the panel's monospaced small type.
+            // menu bar) — and the key line at the bottom: every gesture the grid
+            // answers to, in the panel's monospaced small type.
             // Tracking 3.2 (was 1.6): the accepted draft's strip is airier —
             // "A G E N T S" — and the title got shorter, so it can afford it.
             stateLabel.attributedStringValue = letterspaced(
@@ -568,49 +524,41 @@ final class StatusHUD: NSObject {
                 color: StateLegend.Lens.chrome.color)
             hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
             hintLabel.stringValue = StateLegend.gridHint
-            actionRow.isHidden = true
             waitingRows.isHidden = false
             rebuildSessionRows()
 
         case .idle:
             // True empty state: the baseline already says everything — the app
-            // name as title and the one-line hint as body.
+            // name as title and the one-line note as body.
             break
-
-        case .paused:
-            // Never entered today — setPaused() patches the speaking face in
-            // place so the highlight cannot move. Rendered honestly for the day
-            // a transition lands here.
-            hintLabel.stringValue = identity.map { "\($0)\n\(StateLegend.pausedHint)" }
-                ?? StateLegend.pausedHint
 
         case .listening:
             titleLabel.isHidden = true
-            hintLabel.stringValue = ""
-            // ✕ is ALWAYS visible while the mic is open (re-ruled 06 Aug): a
-            // recording escapable only by keyboard trapped the user for minutes
-            // when the event tap died — an open microphone must carry its own
-            // off-switch. ✓ stays hands-free-only; push-to-talk sends on release.
-            discardButton.isHidden = false
-            sendCheckButton.isHidden = !face.handsFree
+            // The pill's dot in channel green (ruled): mic open = go.
+            stateLabel.attributedStringValue = listeningPill()
             meter.isHidden = false
 
         case .pendingSend:
-            replyButton.title = "Don't send"; replyButton.isHidden = false
-            progressBar.isHidden = false
+            // Exactly ONE negative (ruled), as a quiet text action.
+            dontSendButton.isHidden = false
+            countdownBar.isHidden = false
 
-        case .result(let ok):
-            // A success needs nothing from you, so it says what happened and gets
-            // out of the way. A failure stays until dismissed.
-            autoHide = ok ? 6 : nil
+        case .result:
+            // A failure stays until dismissed. Amber presence beyond the glyph
+            // (ruled): the placard text itself in amber ink — flat, calm.
+            stateLabel.textColor = StateLegend.Palette.fault
 
         case .settings:
             stateLabel.stringValue = ""
-            hintLabel.stringValue = ""
             gearButton.isHidden = true; backButton.isHidden = false
             voicePicker.isHidden = false
             populateVoicePicker()
         }
+
+        // The action row exists exactly when a quiet action is visible. (The
+        // slow-transcription tick unhides its own actions later and re-runs
+        // this.)
+        updateActionRowVisibility()
 
         Permissions.log("HUD.render state=\(state.name) title=\(titleLabel.stringValue)")
         resizeToFit(panel)
@@ -649,22 +597,24 @@ final class StatusHUD: NSObject {
                       self.cancelTranscriptionButton.isHidden else { return }
                 self.cancelTranscriptionButton.isHidden = false
                 self.retryTranscriptionButton.isHidden = false
+                self.updateActionRowVisibility()
                 self.note(StateLegend.slowTranscriptionNote)
                 Permissions.log("transcribing: slow (\(seconds)s), surfaced cancel/retry")
             }
             RunLoop.main.add(timer, forMode: .common); transcribingTimer = timer
 
         case .pendingSend:
-            progressBar.doubleValue = 0
-            let (seconds, send, started) = (face.countdownSeconds, onCommitSend, Date())
-            let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] timer in
+            // The bar animates CONTINUOUSLY across the window (ruled — tick
+            // steps read as a stutter), filling go-green; one one-shot timer
+            // fires the send when the window closes. Layout has already run, so
+            // the bar's bounds are real when the animation starts.
+            countdownBar.begin(seconds: face.countdownSeconds)
+            let send = onCommitSend
+            let timer = Timer(timeInterval: face.countdownSeconds, repeats: false) {
+                [weak self] timer in
                 guard let self else { return timer.invalidate() }
-                let elapsed = Date().timeIntervalSince(started)
-                self.progressBar.doubleValue = min(elapsed / seconds, 1) * 100
-                guard elapsed >= seconds else { return }
-                timer.invalidate()
                 self.countdownTimer = nil
-                self.progressBar.isHidden = true
+                self.countdownBar.isHidden = true
                 // The bar running out IS the confirmation — the contract completed
                 // exactly as displayed, so the stage is yielded before the dispatch
                 // work begins. The caller repaints ready; only a failure comes back.
@@ -678,20 +628,51 @@ final class StatusHUD: NSObject {
         default:
             break
         }
+    }
 
-        if let autoHide {
-            // The hide belongs to THIS render: the only identity that matters is
-            // the state itself — if the panel has moved on by the time it fires,
-            // the hide is stale and does nothing. Checking the real fact beats
-            // counting generations.
-            let scheduledFor = state
-            let work = DispatchWorkItem { [weak self] in
-                guard let self, self.state == scheduledFor else { return }
-                self.hide()
-            }
-            hideWorkItem = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + autoHide, execute: work)
+    /// The identity in MONO (matching the grid rows), the topic joining in the
+    /// regular face — one attributed string so the pair truncates as one line.
+    private func renderTitle() {
+        titleLabel.isHidden = face.title.isEmpty
+        guard !face.title.isEmpty else { titleLabel.stringValue = ""; return }
+        let line = NSMutableAttributedString(
+            string: face.title, attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold),
+                .foregroundColor: StateLegend.Palette.ink,
+            ])
+        if !face.topic.isEmpty {
+            line.append(NSAttributedString(
+                string: "  \(face.topic)", attributes: [
+                    .font: NSFont.systemFont(ofSize: 12),
+                    .foregroundColor: StateLegend.Palette.secondary,
+                ]))
         }
+        titleLabel.attributedStringValue = line
+    }
+
+    /// The listening pill: the live dot in channel green (mic open = go), the
+    /// target in the pill's usual chrome mono.
+    private func listeningPill() -> NSAttributedString {
+        let font = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
+        let pill = NSMutableAttributedString(
+            string: StateLegend.Glyph.dot, attributes: [
+                .font: font, .foregroundColor: StateLegend.Palette.ready,
+            ])
+        pill.append(NSAttributedString(
+            string: " \(face.listeningTarget)", attributes: [
+                .font: font, .foregroundColor: StateLegend.Lens.chrome.color,
+            ]))
+        return pill
+    }
+
+    /// The action row exists exactly when one of its quiet actions is visible —
+    /// the row of lozenge buttons is dead (ruled); this is what replaced its
+    /// per-state visibility flag.
+    private func updateActionRowVisibility() {
+        actionRow.isHidden = [goButton, dontSendButton,
+                              cancelTranscriptionButton, retryTranscriptionButton]
+            .allSatisfy { $0?.isHidden ?? true }
+        if let panel { resizeToFit(panel); position(panel) }
     }
 
     /// The grid's content width: the 380 panel minus the stack's 14pt insets.
@@ -791,18 +772,6 @@ final class StatusHUD: NSObject {
         }) {
             voicePicker.select(match)
         }
-    }
-
-    /// The hint line for the current flags, identity-prefixed. One derivation over
-    /// StateLegend.actionHint, so show() and replyTapped() cannot drift apart —
-    /// the chain used to be pasted verbatim in both.
-    private func currentActionHint() -> String {
-        let action = StateLegend.actionHint(
-            isListening: state.isCapturingAudio,
-            awaitingConfirm: awaitingConfirm,
-            hasTarget: currentTarget != nil,
-            isRecording: isRecording)
-        return identity.map { "\($0)\n\(action)" } ?? action
     }
 
     /// Grow the window to whatever the content needs.
@@ -938,13 +907,6 @@ final class StatusHUD: NSObject {
     func selfTest() {
         let long = String(repeating: "Product image binding is fixed across the stack. ", count: 8)
         currentTarget = ("selftest", 1, "promotions")
-        // The exact path that drew past the panel edge.
-        identity = Self.identify(
-            pid: 1,
-            cwd: NSHomeDirectory()
-                + "/Projects/kopi/promotions/.claude/worktrees/"
-                + "product-image-binding-oracle/promotions")
-        Permissions.log("selftest identity=\(identity ?? "nil")")
         for (label, block) in [
             ("idle", { self.showIdle(note: long, rows: []) }),
             // The idle grid: mixed lamps, a long name, a worst-case callsign,
@@ -975,16 +937,15 @@ final class StatusHUD: NSObject {
                     "meter frame=\(self.meter.frame) hidden=\(self.meter.isHidden) style=centred")
             }),
             // The full reply flow, in its real order, so every capture state's
-            // matrix is on the record: transcribing, the undo window, then both
-            // receipt flavors.
+            // matrix is on the record: transcribing, the undo window, then the
+            // one receipt left (failure — the Sent face is dead, ruled).
             ("working", { self.showTranscribing("Transcribing your reply…",
                                                 onCancel: {}, onRetry: {}) }),
             ("pendingSend", { self.showPendingSend(
                 text: "words that should never be sent", label: "promotions",
                 seconds: 60, send: {}, cancel: { _ in }) }),
             ("result", { _ = self.cancelPendingSend(restartListening: false)
-                         self.showResult(long, ok: false) }),
-            ("resultOk", { self.showResult("Sent.", ok: true) }),
+                         self.showResult(long) }),
             ("settings", {
                 self.showSettings(
                     voices: [Voice(id: "a", name: "Archer", category: "professional"),
@@ -1038,9 +999,6 @@ final class StatusHUD: NSObject {
         let spoken = "Promotions copy. Hero image binding is fixed across the "
             + "stack, and every composed variant passes validation. Rerun the "
             + "backfill now?"
-        let catchUpSpoken = "Syndit citation. While you were away, the daily "
-            + "thread posted with the featured report cited in every reply. "
-            + "Queue tomorrow's rotation?"
         // The depth-1 rationale, in the brief's own composition: "We propose X
         // because Y. The risk is Z." — ~40 words, no callsign prefix (ruled).
         let rationale = "We propose rerunning the hero backfill only for emails "
@@ -1053,11 +1011,13 @@ final class StatusHUD: NSObject {
             adoptTarget(sessionId: "pose", pid: nil, label: callsign,
                         cwd: NSHomeDirectory() + "/Projects/kopi/promotions")
         }
-        func announce(catchUp: Bool = false, project: String, topic: String,
+        func announce(project: String, topic: String,
                       spoken text: String, highlightFraction: Double,
+                      placard: String? = nil,
                       cwd: String = NSHomeDirectory() + "/Projects/kopi/promotions") {
-            showAnnouncement(isCatchUp: catchUp, topic: topic, spoken: text,
-                             sessionId: "pose", pid: 1, project: project, cwd: cwd)
+            showAnnouncement(topic: topic, spoken: text,
+                             sessionId: "pose", pid: 1, project: project, cwd: cwd,
+                             placard: placard)
             highlight(upTo: Int(Double(text.count) * highlightFraction))
         }
         // A mid-level frozen waveform: speech-shaped, never pinned at full.
@@ -1096,27 +1056,18 @@ final class StatusHUD: NSObject {
             announce(project: callsign, topic: "Hero image binding fix",
                      spoken: spoken, highlightFraction: 0.6)
 
-        case "catchup":
-            announce(catchUp: true, project: "syndit citation",
-                     topic: "Daily thread citations",
-                     spoken: catchUpSpoken, highlightFraction: 0.6,
-                     cwd: NSHomeDirectory() + "/Projects/syndit")
-
-        case "paused":
-            announce(project: callsign, topic: "Hero image binding fix",
-                     spoken: spoken, highlightFraction: 0.6)
-            setPaused(true)
-
         case "depth1":
             // Exactly the ⌃⌃ path: the same announcement card, the rationale as
-            // the spoken text, karaoke highlight and all (main.swift wires it
-            // identically via showAnnouncement).
+            // the spoken text, karaoke highlight and all — with the rung-naming
+            // pill main.swift sends ("◀ WHY", the ladder's own convention).
             announce(project: callsign, topic: "Hero image binding fix",
-                     spoken: rationale, highlightFraction: 0.4)
+                     spoken: rationale, highlightFraction: 0.4,
+                     placard: "\(StateLegend.Glyph.speaking) "
+                        + SpokenComposition.RungKind.why.rawValue)
 
-        case "listening", "handsfree":
+        case "listening":
             adopt()
-            showListening(level: { 0.35 }, handsFree: name == "handsfree")
+            showListening(level: { 0.35 })
             seedMeter()
 
         case "transcribing":
@@ -1130,6 +1081,7 @@ final class StatusHUD: NSObject {
             stateLabel.stringValue = StateLegend.row(for: .workingFor(seconds: 25)).stateText
             cancelTranscriptionButton.isHidden = false
             retryTranscriptionButton.isHidden = false
+            updateActionRowVisibility()
             note(StateLegend.slowTranscriptionNote)
 
         case "readback":
@@ -1137,16 +1089,14 @@ final class StatusHUD: NSObject {
             showPendingSend(
                 text: "Ship the Shopify-only filter and rerun the poller",
                 label: callsign, seconds: 8, send: {}, cancel: { _ in })
-            // Frozen mid-window: 40% elapsed, so ~60% of the bar remains.
-            progressBar.doubleValue = 40
-
-        case "sent":
-            showResult("Sent.", ok: true)
+            // Frozen mid-window: 40% elapsed. The freeze below kills the timer;
+            // this pins the bar's fill so the photograph shows a real mid-state.
+            panel?.contentView?.layoutSubtreeIfNeeded()
+            countdownBar.freeze(fraction: 0.4)
 
         case "needsyou":
             adopt()
-            showResult("promotions copy's tab is gone — copied your words to the clipboard.",
-                       ok: false)
+            showResult("promotions copy's tab is gone — copied your words to the clipboard.")
 
         case "settings":
             showSettings(
@@ -1167,7 +1117,6 @@ final class StatusHUD: NSObject {
         meterTimer?.invalidate(); meterTimer = nil
         transcribingTimer?.invalidate(); transcribingTimer = nil
         countdownTimer?.invalidate(); countdownTimer = nil
-        hideWorkItem?.cancel(); hideWorkItem = nil
 
         // The capture harness reads this one line: the panel frame in AppKit's
         // bottom-left origin, the full screen frame to convert with, and the
@@ -1184,9 +1133,9 @@ final class StatusHUD: NSObject {
     private func widgetMatrix() -> String {
         let widgets: [(String, NSView?)] = [
             ("title", titleLabel), ("body", bodyLabel), ("state", stateLabel),
-            ("hint", hintLabel), ("bar", progressBar), ("meter", meter),
-            ("actions", actionRow), ("reply", replyButton), ("go", goButton),
-            ("discard", discardButton), ("check", sendCheckButton), ("picker", voicePicker),
+            ("hint", hintLabel), ("bar", countdownBar), ("meter", meter),
+            ("actions", actionRow), ("go", goButton),
+            ("dontSend", dontSendButton), ("picker", voicePicker),
             ("gear", gearButton), ("back", backButton), ("rows", waitingRows),
             ("cancelTx", cancelTranscriptionButton),
             ("retryTx", retryTranscriptionButton),
@@ -1250,7 +1199,9 @@ final class StatusHUD: NSObject {
         stateLabel.textColor = StateLegend.Lens.chrome.color
 
         titleLabel = NSTextField(labelWithString: "")
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        // The identity face: mono, matching the grid rows (ruled). renderTitle
+        // sets the attributed pair; this is the fallback style.
+        titleLabel.font = .monospacedSystemFont(ofSize: 13, weight: .semibold)
         titleLabel.textColor = StateLegend.Lens.content.color
         titleLabel.lineBreakMode = .byTruncatingTail
 
@@ -1260,17 +1211,19 @@ final class StatusHUD: NSObject {
         bodyLabel.maximumNumberOfLines = 0
         bodyLabel.isSelectable = true
 
-        // The action row's five buttons share one style.
-        func rounded(_ title: String, _ action: Selector) -> NSButton {
+        // Every surviving action is a QUIET text action (ruled): borderless,
+        // palette ink, no lozenge. The button rows are dead — chords are the
+        // interface; these are the few context actions a face still owns.
+        func quietAction(_ title: String, _ action: Selector) -> NSButton {
             let button = NSButton(title: title, target: self, action: action)
-            button.bezelStyle = .rounded
+            button.isBordered = false
             button.controlSize = .small
-            button.font = .systemFont(ofSize: 11)
+            button.font = .systemFont(ofSize: 11, weight: .medium)
+            button.contentTintColor = StateLegend.Palette.ink
             return button
         }
-        goButton = rounded("Go to session", #selector(goToSession))
-        replyButton = rounded("Reply", #selector(replyTapped))
-        replyButton.keyEquivalent = "\r"
+        goButton = quietAction("Go to session", #selector(goToSession))
+        dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
 
         // A real symbol at a real size. The text glyph was 12pt — visually timid
         // and, worse, a hit target well under the ~24pt a fingertip-sized control
@@ -1293,45 +1246,29 @@ final class StatusHUD: NSObject {
         backButton.font = .systemFont(ofSize: 11, weight: .medium)
         backButton.contentTintColor = StateLegend.Lens.chrome.color
 
-        let dismiss = rounded("Dismiss", #selector(dismissTapped))
         // Surfaced only once a transcription has run long enough to deserve them
-        // (sanctioned change: open issue #4). Styled exactly like their row-mates.
-        cancelTranscriptionButton = rounded(StateLegend.cancelTranscriptionTitle,
-                                            #selector(cancelTranscriptionTapped))
-        retryTranscriptionButton = rounded(StateLegend.retryTranscriptionTitle,
-                                           #selector(retryTranscriptionTapped))
+        // (sanctioned change: open issue #4). Quiet text, like their row-mates.
+        cancelTranscriptionButton = quietAction(StateLegend.cancelTranscriptionTitle,
+                                                #selector(cancelTranscriptionTapped))
+        retryTranscriptionButton = quietAction(StateLegend.retryTranscriptionTitle,
+                                               #selector(retryTranscriptionTapped))
 
         hintLabel = NSTextField(labelWithString: "")
         hintLabel.font = .systemFont(ofSize: 10)
         hintLabel.textColor = StateLegend.Lens.guidance.color
 
-        let buttons = NSStackView(views: [replyButton, goButton,
+        let buttons = NSStackView(views: [goButton, dontSendButton,
                                           cancelTranscriptionButton,
-                                          retryTranscriptionButton, dismiss])
+                                          retryTranscriptionButton])
         actionRow = buttons
         buttons.orientation = .horizontal
-        buttons.spacing = 8
+        buttons.spacing = 12
 
         hintLabel.maximumNumberOfLines = 0
         hintLabel.lineBreakMode = .byTruncatingMiddle
-        progressBar = NSProgressIndicator()
-        progressBar.isIndeterminate = false
-        progressBar.style = .bar
-        progressBar.minValue = 0
-        progressBar.maxValue = 100
-        progressBar.controlSize = .small
+        countdownBar = CountdownBarView()
 
         meter = LevelMeterView()
-
-        discardButton = NSButton(title: StateLegend.Glyph.discard, target: self, action: #selector(dismissTapped))
-        discardButton.isBordered = false
-        discardButton.font = .systemFont(ofSize: 15, weight: .medium)
-        discardButton.contentTintColor = StateLegend.Lens.chrome.color
-
-        sendCheckButton = NSButton(title: StateLegend.Glyph.confirm, target: self, action: #selector(checkTapped))
-        sendCheckButton.isBordered = false
-        sendCheckButton.font = .systemFont(ofSize: 15, weight: .semibold)
-        sendCheckButton.contentTintColor = StateLegend.Lens.action.color
 
         voicePicker = NSPopUpButton()
         voicePicker.controlSize = .small
@@ -1346,7 +1283,7 @@ final class StatusHUD: NSObject {
 
         let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
                                         waitingRows, bodyLabel,
-                                        progressBar, meter, voicePicker, hintLabel, buttons])
+                                        countdownBar, meter, voicePicker, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
@@ -1369,6 +1306,8 @@ final class StatusHUD: NSObject {
             gearButton.centerYAnchor.constraint(equalTo: stateLabel.centerYAnchor),
             meter.widthAnchor.constraint(equalToConstant: 348),
             meter.heightAnchor.constraint(equalToConstant: 28),
+            countdownBar.widthAnchor.constraint(equalToConstant: 348),
+            countdownBar.heightAnchor.constraint(equalToConstant: 4),
         ])
         self.contentStack = stack
 
@@ -1459,43 +1398,16 @@ final class StatusHUD: NSObject {
         Permissions.log("highlight rendered bright=\(bright)/\(full.length)")
     }
 
-    // AppKit guarantees target/action runs on the main thread. The implicit
-    // executor check that Swift emits for an @objc method on a @MainActor class is
-    // therefore redundant, and it was not free: it crashed in swift_getObjectType
-    // on a bad executor pointer, killing the app on a button press. `nonisolated`
-    // plus assumeIsolated keeps the isolation guarantee without the check.
-    @objc nonisolated private func replyTapped() {
-        MainActor.assumeIsolated {
-            if awaitingConfirm {
-                cancelPendingSendTapped()
-                return
-            }
-            if isRecording { isRecording = false; onStopReply?() }
-            else { isRecording = true; onReply?() }
-            replyButton.title = isRecording ? "Send reply" : "Reply"
-            hintLabel.stringValue = currentActionHint()
-        }
-    }
-
     func recordingEnded() {
         dictationDestination = nil
-        isRecording = false
         meterTimer?.invalidate(); meterTimer = nil
         meter?.isHidden = true
-        replyButton?.title = "Reply"
     }
 
     /// Set by the app so Dismiss can silence the voice, not just hide the panel.
     var onDismiss: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     var onLeaveSettings: (() -> Void)?
-
-    @objc nonisolated private func checkTapped() {
-        MainActor.assumeIsolated {
-            if isRecording { isRecording = false }
-            onStopReply?()
-        }
-    }
 
     @objc nonisolated private func gearTapped() {
         MainActor.assumeIsolated { onOpenSettings?() }
@@ -1702,5 +1614,49 @@ private final class PlacardRowView: NSControl {
     override func mouseUp(with event: NSEvent) {
         guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
         sendAction(action, to: target)
+    }
+}
+
+/// The readback countdown, drawn by Core Animation instead of a ticking
+/// NSProgressIndicator: one linear animation across the whole window (ruled —
+/// tick steps read as a stutter), the fill in the palette's go green. The send
+/// itself is fired by a one-shot timer in render(); this view is pixels only.
+private final class CountdownBarView: NSView {
+    private let fill = CALayer()
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.backgroundColor = StateLegend.Palette.hairlineSoft.cgColor
+        layer?.cornerRadius = 2
+        layer?.masksToBounds = true
+        fill.backgroundColor = StateLegend.Palette.ready.cgColor
+        fill.anchorPoint = CGPoint(x: 0, y: 0)
+        layer?.addSublayer(fill)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Fill from empty to full over the window, continuously. Called after
+    /// layout, so bounds are real.
+    func begin(seconds: TimeInterval) {
+        fill.removeAllAnimations()
+        fill.frame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
+        let sweep = CABasicAnimation(keyPath: "bounds.size.width")
+        sweep.fromValue = 0
+        sweep.toValue = bounds.width
+        sweep.duration = seconds
+        sweep.timingFunction = CAMediaTimingFunction(name: .linear)
+        fill.add(sweep, forKey: "sweep")
+    }
+
+    /// Pin the fill at a fraction with no animation — the pose driver's frozen
+    /// mid-window photograph.
+    func freeze(fraction: CGFloat) {
+        fill.removeAllAnimations()
+        fill.frame = CGRect(x: 0, y: 0,
+                            width: bounds.width * fraction, height: bounds.height)
     }
 }

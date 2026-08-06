@@ -9,7 +9,7 @@ import VoiceDispatchCore
 /// glyph, label, hint and color below is EXACTLY what the panel rendered before the
 /// file existed. A later work stream may retune them; this one must not.
 ///
-/// Grep contract: the state glyph characters (◌ ◀ ↺ ❙❙ ▶ ⚠ → ● ‹ › ✕ ✓ ✗) are
+/// Grep contract: the state glyph characters (◌ ◀ ▶ ⚠ → ● ‹ › ✓ ✗) are
 /// defined here and nowhere else in this module.
 @MainActor
 enum StateLegend {
@@ -22,8 +22,7 @@ enum StateLegend {
         /// the menu-bar placeholder before the SF Symbol loads.
         static let quiet = "◌"
         static let speaking = "◀"
-        static let catchingUp = "↺"
-        static let paused = "❙❙"
+        /// Menu status lines only; the Sent face is dead (simplification pass).
         static let sent = "▶"
         static let needsYou = "⚠"
         /// Direction of travel: pending sends and dictation destinations.
@@ -33,7 +32,6 @@ enum StateLegend {
         static let dot = "●"
         static let back = "‹"
         static let forward = "›"
-        static let discard = "✕"
         /// Also the "granted" mark in the menu's permission rows.
         static let confirm = "✓"
         static let denied = "✗"
@@ -117,16 +115,15 @@ enum StateLegend {
     // MARK: - Rows
 
     /// One row of the legend: how a display situation presents itself.
+    /// `showsControls` is dead (simplification pass): the button row died with
+    /// it — the action row's visibility now derives from whether any quiet
+    /// action is actually visible, in render().
     struct Row {
         /// Full state-pill text, glyph included, verbatim.
         let stateText: String
         let glyph: String
         let lens: Lens
         let speakTier: SpeakTier
-        /// Whether the Reply / Go to session / Dismiss row belongs on screen.
-        /// Load-bearing: StatusHUD.render() derives the action row's visibility
-        /// from this, for every state that has a Row.
-        let showsControls: Bool
     }
 
     // MARK: - Session grid (WS-B)
@@ -200,9 +197,12 @@ enum StateLegend {
         return fallback
     }
 
-    /// Display situations. Mostly 1:1 with PanelState; the extras (catch-up, the
-    /// two result flavors, the elapsed-seconds working pill) are display
-    /// distinctions the enum folds into associated values.
+    /// Display situations. Mostly 1:1 with PanelState; the elapsed-seconds
+    /// working pill is a display distinction the enum folds into an associated
+    /// value. Dead this pass (simplification, ruled): catch-up (never produced
+    /// outside the pose driver), paused (⇧ is an audio behavior; the frozen
+    /// speaking card IS the pause indication), sent (success says nothing),
+    /// and sendingTo (the READBACK placard carries that face's pill).
     enum Situation {
         case ready
         case preparing
@@ -210,11 +210,7 @@ enum StateLegend {
         /// Sanctioned change (open issue #4): transcription with visible elapsed time.
         case workingFor(seconds: Int)
         case speaking
-        case catchingUp
-        case paused
         case listening(target: String)
-        case sendingTo(label: String)
-        case sent
         case needsYou
         case settings
     }
@@ -223,68 +219,37 @@ enum StateLegend {
         switch situation {
         case .ready:
             return Row(stateText: "\(Glyph.quiet) Ready", glyph: Glyph.quiet,
-                       lens: .chrome, speakTier: .silent, showsControls: true)
+                       lens: .chrome, speakTier: .silent)
         case .preparing:
             return Row(stateText: "\(Glyph.quiet) Preparing", glyph: Glyph.quiet,
-                       lens: .chrome, speakTier: .silent, showsControls: true)
+                       lens: .chrome, speakTier: .silent)
         case .working:
             return Row(stateText: "\(Glyph.quiet) Working", glyph: Glyph.quiet,
-                       lens: .chrome, speakTier: .silent, showsControls: true)
+                       lens: .chrome, speakTier: .silent)
         case .workingFor(let seconds):
             return Row(stateText: "\(Glyph.quiet) Working · \(seconds)s",
-                       glyph: Glyph.quiet, lens: .chrome, speakTier: .silent,
-                       showsControls: true)
+                       glyph: Glyph.quiet, lens: .chrome, speakTier: .silent)
         case .speaking:
             return Row(stateText: "\(Glyph.speaking) Speaking", glyph: Glyph.speaking,
-                       lens: .chrome, speakTier: .speaks, showsControls: true)
-        case .catchingUp:
-            return Row(stateText: "\(Glyph.catchingUp) Catching up", glyph: Glyph.catchingUp,
-                       lens: .chrome, speakTier: .speaks, showsControls: true)
-        case .paused:
-            return Row(stateText: "\(Glyph.paused) Paused", glyph: Glyph.paused,
-                       lens: .chrome, speakTier: .silent, showsControls: true)
+                       lens: .chrome, speakTier: .speaks)
         case .listening(let target):
             return Row(stateText: "\(Glyph.dot) \(target)", glyph: Glyph.dot,
-                       lens: .chrome, speakTier: .silent, showsControls: false)
-        case .sendingTo(let label):
-            return Row(stateText: "\(Glyph.routing) Sending to \(label)", glyph: Glyph.routing,
-                       lens: .chrome, speakTier: .silent, showsControls: true)
-        case .sent:
-            return Row(stateText: "\(Glyph.sent) Sent", glyph: Glyph.sent,
-                       lens: .chrome, speakTier: .silent, showsControls: true)
+                       lens: .chrome, speakTier: .silent)
         case .needsYou:
             return Row(stateText: "\(Glyph.needsYou) Needs you", glyph: Glyph.needsYou,
-                       lens: .chrome, speakTier: .silent, showsControls: true)
+                       lens: .chrome, speakTier: .silent)
         case .settings:
             return Row(stateText: "Settings", glyph: "",
-                       lens: .chrome, speakTier: .silent, showsControls: false)
+                       lens: .chrome, speakTier: .silent)
         }
     }
 
-    // MARK: - Hint text
+    // MARK: - Placards (simplification pass)
 
-    /// The action line under the panel. One definition; it was previously pasted
-    /// verbatim in two places (show() and replyTapped()) that could drift apart.
-    /// Order matters and is preserved exactly: listening beats the countdown beats
-    /// having no target beats the button-recording flag.
-    static func actionHint(isListening: Bool, awaitingConfirm: Bool,
-                           hasTarget: Bool, isRecording: Bool) -> String {
-        if isListening {
-            return "Let go of ⌥ to send, or Dismiss to throw it away."
-        }
-        if awaitingConfirm {
-            return "Sending in a moment. Stop it if that isn't what you said."
-        }
-        guard hasTarget else { return "" }
-        return isRecording
-            ? "Listening. Click Send, or let go of ⌥."
-            : "Click Reply, or hold ⌥ to speak."
-    }
-
-    /// Shown while playback is paused.
-    static let pausedHint = "Tap ⇧ to carry on, or Dismiss to be done with it."
-    /// Shown while playback is running.
-    static let speakingHint = "Tap ⇧ to pause, hold ⌥ to reply."
+    /// The readback face's pill, via the Face placardOverride — same mechanism
+    /// as the ⌃⌃ ladder-rung pills ("◀ FINDINGS"). Routing glyph because the
+    /// words are about to travel.
+    static let readbackPlacard = "\(Glyph.routing) READBACK"
 
     // MARK: - The grid strip and key line (ruled design)
 
@@ -292,8 +257,10 @@ enum StateLegend {
     /// "Ready" pill and no "N waiting" headline on the grid face: the grid IS
     /// the status, and the count lives in the menu bar.
     static let gridStripTitle = "AGENTS"
-    /// The grid's bottom key line, in the hint slot. Replaces the Dismiss
-    /// button on the idle face — every gesture the grid answers to, in order.
+    /// The grid's bottom key line, in the hint slot — every gesture the grid
+    /// answers to, in order. ON PROBATION (simplification pass): the only hint
+    /// line left anywhere; the per-card chord hints are dead with no
+    /// replacement. See docs/simplification-pass.md.
     static let gridHint = "⌃⌥ hear · hold ⌥ reply · ⌃⌃ why · ⌃⇧ dismiss"
     /// The quiet placard row above the hint.
     static let newSessionTitle = "NEW SESSION"
