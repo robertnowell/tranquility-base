@@ -966,6 +966,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // to the liveness probe and stays where it always was, at
             // hold-resolution.
             armedVisually = hud.showArming(target: activeConversation?.label)
+            // The green ack pulses at the press, not at hold-resolution (ruled
+            // 06 Aug) — the pulse is the "heard you", and it fires even when a
+            // capture state refuses the arming face: the mic is arming either
+            // way, and the press deserves its acknowledgment.
+            hud.flashAcknowledge()
             let visibleMs = Int(Date().timeIntervalSince(pressedAt) * 1000)
             // Audio second: optimistic capture, NO StreamedUtterance — the
             // stream (a network session) is created at hold-resolution as

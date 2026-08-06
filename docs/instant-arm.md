@@ -27,6 +27,10 @@ of ms, so typing NEVER flashes the panel):
    only if already in hand — the active conversation's label; nothing is
    probed). This is a REAL `PanelState` case, `.arming`, with its own
    legality rows and its own `render()` arm — not a hack around the funnel.
+   The green ack border (`flashAcknowledge`, the same pulse every other
+   gesture gets) fires here too (ruled 06 Aug) — at the press, not at
+   hold-resolution — and it fires even on an audio-only arm where a capture
+   state refused the face.
 2. **Audio** — the Recorder starts capturing optimistically at the same
    moment, via `recorder.start(openingStream: false)`. The
    `StreamedUtterance` is NOT created at arm — no network session for audio
