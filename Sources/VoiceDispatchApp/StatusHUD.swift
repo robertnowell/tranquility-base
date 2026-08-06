@@ -780,10 +780,21 @@ final class StatusHUD: NSObject {
                 .font: font, .foregroundColor: StateLegend.Palette.ready,
             ])
         pill.append(NSAttributedString(
-            string: " \(face.listeningTarget)", attributes: [
+            string: " \(Self.pillTarget(face.listeningTarget))", attributes: [
                 .font: font, .foregroundColor: StateLegend.Lens.chrome.color,
             ]))
         return pill
+    }
+
+    /// The pill shares its row with the gear, and a target can be a whole
+    /// terminal title — an untruncated one runs clean under the gear glyph
+    /// (caught in the 06 Aug ack-bar capture). The placard row is 348pt wide
+    /// and the gear owns the last ~34 of it; at 10pt mono that leaves 30
+    /// characters, glyph and space included.
+    private static func pillTarget(_ target: String) -> String {
+        let cap = 28
+        guard target.count > cap else { return target }
+        return target.prefix(cap - 1).trimmingCharacters(in: .whitespaces) + "…"
     }
 
     /// The arming pill: the listening pill's geometry with the whole thing in
@@ -798,7 +809,7 @@ final class StatusHUD: NSObject {
             ])
         if !face.listeningTarget.isEmpty {
             pill.append(NSAttributedString(
-                string: " \(face.listeningTarget)", attributes: [
+                string: " \(Self.pillTarget(face.listeningTarget))", attributes: [
                     .font: font, .foregroundColor: StateLegend.Palette.faint,
                 ]))
         }
