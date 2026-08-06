@@ -112,6 +112,20 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
         self.lexicon = lexicon
     }
 
+    /// Per-callback visibility into the recogniser, transcript text included.
+    ///
+    /// A transcript that is quietly a fraction of what was said is indistinguishable
+    /// from one that is simply wrong — unless you can see how many utterances arrived,
+    /// what span each covered, and **what each one said**. The recogniser was the one
+    /// unobservable stage in the chain, which is how a bug that kept only the last
+    /// utterance of every paused recording survived (harvested from PR #1).
+    ///
+    /// Logging your words is consistent with where this project already draws the
+    /// line: the same 0700 directory holds the recordings, `utterances.transcriptText`,
+    /// and `model-calls.jsonl` with full session content. README says plainly that
+    /// `app.log` contains what you dictated — it is the file you'd attach to an issue.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
     public var isConfigured: Bool {
         SFSpeechRecognizer(locale: Locale(identifier: "en-US"))?.isAvailable ?? false
     }
@@ -131,6 +145,15 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
 
         return try await withCheckedThrowingContinuation { continuation in
             let resumed = Resumed()
+            // Accumulated per utterance, keyed by the start time of the utterance.
+            //
+            // This is the fix for the bug that made a 22-second paragraph transcribe
+            // as one clause: `SFSpeechRecognizer` splits audio at pauses, emits one
+            // settled result per utterance, and marks ONLY the last one `isFinal`.
+            // The old code was `guard result.isFinal` — nineteen seconds discarded
+            // to keep two. Measured on the offending file: one non-final callback
+            // spanning 0.87–18.81s with 29 segments, then the final one with 6.
+            let collected = Utterances()
             recognizer.recognitionTask(with: request) { result, error in
                 if let error {
                     if resumed.claim() {
@@ -138,18 +161,68 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
                     }
                     return
                 }
-                guard let result, result.isFinal else { return }
+                guard let result else { return }
+
+                let segments = result.bestTranscription.segments
+                let text = result.bestTranscription.formattedString
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let start = segments.first?.timestamp ?? 0
+                let end = segments.last.map { $0.timestamp + $0.duration } ?? 0
+                // A zero span means untimed partial text that cannot be attributed
+                // to an utterance. Recording it would double-count the utterance
+                // the settled callback reports properly.
+                let settled = end > 0
+                AppleSpeechRecovery.trace?(
+                    "\(settled ? "utterance" : "partial") isFinal=\(result.isFinal) "
+                    + "segments=\(segments.count) "
+                    + "span=\(String(format: "%.2f", start))–\(String(format: "%.2f", end))s "
+                    + "chars=\(text.count)"
+                    // Only settled utterances carry their text: partials are
+                    // cumulative re-reports of the same words.
+                    + (settled ? " | \(text)" : ""))
+                if !text.isEmpty, settled { collected.record(start: start, text: text) }
+
+                guard result.isFinal else { return }
                 if resumed.claim() {
-                    let text = result.bestTranscription.formattedString
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    if text.isEmpty {
+                    let joined = collected.joined()
+                    AppleSpeechRecovery.trace?(
+                        "final: \(collected.count) utterance(s), \(joined.count) chars")
+                    if joined.isEmpty {
                         continuation.resume(throwing: TranscriptionFailure.noSpeechDetected)
                     } else {
                         continuation.resume(returning: TranscriptionResult(
-                            text: text, finality: .recoveryForcedFinal, provider: name))
+                            text: joined, finality: .recoveryForcedFinal, provider: name))
                     }
                 }
             }
+        }
+    }
+
+    /// Utterance texts in spoken order, deduplicated by start time.
+    ///
+    /// A dictionary rather than an array because callbacks for one utterance arrive
+    /// repeatedly as the recogniser refines it; the newest text for a given start
+    /// time supersedes the older one instead of being appended twice. Internal, not
+    /// private, so the accumulation rules are unit-testable without SFSpeech.
+    final class Utterances: @unchecked Sendable {
+        private var byStart: [Double: String] = [:]
+        private let lock = NSLock()
+
+        func record(start: Double, text: String) {
+            lock.lock(); defer { lock.unlock() }
+            // Rounded so floating-point jitter in a re-reported timestamp cannot
+            // register the same utterance twice under two nearly-equal keys.
+            byStart[(start * 100).rounded() / 100] = text
+        }
+
+        var count: Int { lock.lock(); defer { lock.unlock() }; return byStart.count }
+
+        func joined() -> String {
+            lock.lock(); defer { lock.unlock() }
+            return byStart.keys.sorted()
+                .compactMap { byStart[$0] }
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
 

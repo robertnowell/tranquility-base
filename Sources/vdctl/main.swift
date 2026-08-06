@@ -579,6 +579,7 @@ case "hook-config":
     case "transcribe":
         guard args.count > 1 else { usage() }
         let url = URL(fileURLWithPath: args[1])
+        AppleSpeechRecovery.trace = { print("  apple-speech: \($0)") }
         let chain = RecoveryChain()
         print("providers: " + chain.providers
             .map { "\($0.name)\($0.isConfigured ? "" : " (unconfigured)")" }

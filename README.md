@@ -114,6 +114,10 @@ are the point.
 - **Terminal.app only** for reply routing; other terminals get announcements.
 - `model-calls.jsonl` retains full model inputs/outputs (your session content)
   for debugging, unbounded — delete or truncate freely.
+- `app.log` records **what you dictated** whenever the on-device Apple engine
+  runs (the last-resort fallback): one line per recognised utterance, text
+  included. Same 0700 boundary as the recordings; it's the file you'd attach
+  to an issue, so know what's in it.
 - Long-running headless `claude -p` jobs can be announced while still executing.
 
 ## License

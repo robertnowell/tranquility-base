@@ -135,6 +135,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         rebuildMenu()
 
+        // The recogniser was the one unobservable stage — a fallback transcript
+        // quietly missing its first nineteen seconds looked identical to a short
+        // reply (PR #1 harvest). app.log therefore contains what you dictated
+        // when the Apple floor runs; README discloses this beside model-calls.
+        AppleSpeechRecovery.trace = { Permissions.log("apple-speech: \($0)") }
+
         do {
             let store = try QueueStore()
             self.store = store
