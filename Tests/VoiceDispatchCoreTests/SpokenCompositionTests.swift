@@ -124,7 +124,7 @@ final class SpokenCompositionTests: XCTestCase {
         XCTAssertEqual(out.text, "tests are flaky.")
     }
 
-    // MARK: - The ⌃⌃ ladder (ruled order: findings → solution → why)
+    // MARK: - The ⌃⌃ ladder (ruled order: findings → solution → why → message)
 
     func testLadderRungsFollowTheRuledOrder() {
         let brief = SessionBrief(
@@ -134,23 +134,34 @@ final class SpokenCompositionTests: XCTestCase {
             solution: "Seven fixes ranked; the top three: scope, snapshots, metrics.")
         let rungs = SpokenComposition.ladderRungs(
             for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertEqual(rungs.count, 3)
-        XCTAssertEqual(rungs.map(\.kind), [.findings, .solution, .why], "the ruled order")
+        XCTAssertEqual(rungs.count, 4)
+        XCTAssertEqual(rungs.map(\.kind), [.findings, .solution, .why, .message],
+                       "the ruled order, ending on the original message")
         XCTAssertTrue(rungs[0].spoken.text.contains("misfiled"), "findings first")
         XCTAssertTrue(rungs[1].spoken.text.contains("Seven fixes"), "solution second")
-        XCTAssertTrue(rungs[2].spoken.text.contains("We propose shipping"), "why last")
-        XCTAssertFalse(rungs.contains { $0.spoken.text.contains("promotions copy") },
-                       "no callsign anywhere on the ladder")
+        XCTAssertTrue(rungs[2].spoken.text.contains("We propose shipping"), "why third")
+        XCTAssertFalse(rungs.dropLast().contains { $0.spoken.text.contains("promotions copy") },
+                       "no callsign anywhere on the explanation rungs")
+    }
+
+    func testLadderEndsOnTheOriginalMessageVerbatim() {
+        // The rung after WHY is the announcement re-heard, exactly as spoken —
+        // never re-sanitized or re-clamped.
+        let brief = SessionBrief(topic: "export", happened: "done")
+        let ann = announcement(callsign: "promotions copy", brief: brief)
+        let rungs = SpokenComposition.ladderRungs(for: ann)
+        XCTAssertEqual(rungs.last?.kind, .message)
+        XCTAssertEqual(rungs.last?.spoken.text, ann.spoken.text)
     }
 
     func testLadderSkipsEmptyRungsAndAlwaysHasTheWhy() {
         // A trivial turn: no findings, nothing proposed, no rationale — the
-        // ladder is exactly one rung, and it says so instead of going silent.
+        // ladder is the why (which says so instead of going silent) plus the
+        // original message.
         let brief = SessionBrief(topic: "export", happened: "done")
         let rungs = SpokenComposition.ladderRungs(
             for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertEqual(rungs.count, 1)
-        XCTAssertEqual(rungs[0].kind, .why)
+        XCTAssertEqual(rungs.map(\.kind), [.why, .message])
         XCTAssertEqual(rungs[0].spoken.text, "No further rationale recorded.")
     }
 

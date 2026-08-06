@@ -43,6 +43,11 @@ public enum SpokenComposition {
         case findings = "FINDINGS"
         case solution = "SOLUTION"
         case why = "WHY"
+        /// The original announcement, re-heard. RULED 05 Aug: the rung after
+        /// WHY — the walk ends where it began, because the proposal you only
+        /// half-followed the first time lands differently once findings,
+        /// solution and rationale have each had their turn.
+        case message = "MESSAGE"
     }
 
     public struct LadderRung: Sendable {
@@ -79,6 +84,9 @@ public enum SpokenComposition {
         }
         rungs.append(LadderRung(kind: .why, spoken: depthOneSpokenText(
             for: announcement, sanitizer: sanitizer, allowing: allowlist)))
+        // Already sanitized at announce time — replayed verbatim, never
+        // re-clamped, so the rotation's "message" is exactly what was said.
+        rungs.append(LadderRung(kind: .message, spoken: announcement.spoken))
         return rungs
     }
 
