@@ -37,6 +37,19 @@ public enum SpokenComposition {
             allowing: allowlist)
     }
 
+    /// Which rung of the ⌃⌃ ladder a pull is — carried alongside the text so
+    /// the panel can NAME what is being spoken ("◀ FINDINGS"), not just say it.
+    public enum RungKind: String, Sendable {
+        case findings = "FINDINGS"
+        case solution = "SOLUTION"
+        case why = "WHY"
+    }
+
+    public struct LadderRung: Sendable {
+        public let kind: RungKind
+        public let spoken: SanitizedSpokenText
+    }
+
     /// The ⌃⌃ ladder, in the ruled order of the stack: FINDINGS (what the work
     /// turned up), SOLUTION (the shape of what is proposed), then WHY (the
     /// rationale — which alone falls back to the card fields for pre-rationale
@@ -49,7 +62,7 @@ public enum SpokenComposition {
         for announcement: Coordinator.Announcement,
         sanitizer: SpokenTextSanitizer = SpokenTextSanitizer(),
         allowing allowlist: Set<String> = []
-    ) -> [SanitizedSpokenText] {
+    ) -> [LadderRung] {
         let labels = [announcement.event.projectLabel, announcement.hailText]
         func rung(_ text: String?) -> SanitizedSpokenText? {
             guard let text, !text.isEmpty else { return nil }
@@ -57,11 +70,15 @@ public enum SpokenComposition {
                 text, maxWords: depthOneMaxWords, allowing: allowlist)
             return sanitizer.strippingLeadingLabels(labels, from: sanitized)
         }
-        var rungs: [SanitizedSpokenText] = []
-        if let findings = rung(announcement.brief.findings) { rungs.append(findings) }
-        if let solution = rung(announcement.brief.solution) { rungs.append(solution) }
-        rungs.append(depthOneSpokenText(
-            for: announcement, sanitizer: sanitizer, allowing: allowlist))
+        var rungs: [LadderRung] = []
+        if let findings = rung(announcement.brief.findings) {
+            rungs.append(LadderRung(kind: .findings, spoken: findings))
+        }
+        if let solution = rung(announcement.brief.solution) {
+            rungs.append(LadderRung(kind: .solution, spoken: solution))
+        }
+        rungs.append(LadderRung(kind: .why, spoken: depthOneSpokenText(
+            for: announcement, sanitizer: sanitizer, allowing: allowlist)))
         return rungs
     }
 

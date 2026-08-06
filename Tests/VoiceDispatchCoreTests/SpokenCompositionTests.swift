@@ -135,10 +135,11 @@ final class SpokenCompositionTests: XCTestCase {
         let rungs = SpokenComposition.ladderRungs(
             for: announcement(callsign: "promotions copy", brief: brief))
         XCTAssertEqual(rungs.count, 3)
-        XCTAssertTrue(rungs[0].text.contains("misfiled"), "findings first: \(rungs[0].text)")
-        XCTAssertTrue(rungs[1].text.contains("Seven fixes"), "solution second")
-        XCTAssertTrue(rungs[2].text.contains("We propose shipping"), "why last")
-        XCTAssertFalse(rungs.contains { $0.text.contains("promotions copy") },
+        XCTAssertEqual(rungs.map(\.kind), [.findings, .solution, .why], "the ruled order")
+        XCTAssertTrue(rungs[0].spoken.text.contains("misfiled"), "findings first")
+        XCTAssertTrue(rungs[1].spoken.text.contains("Seven fixes"), "solution second")
+        XCTAssertTrue(rungs[2].spoken.text.contains("We propose shipping"), "why last")
+        XCTAssertFalse(rungs.contains { $0.spoken.text.contains("promotions copy") },
                        "no callsign anywhere on the ladder")
     }
 
@@ -149,7 +150,8 @@ final class SpokenCompositionTests: XCTestCase {
         let rungs = SpokenComposition.ladderRungs(
             for: announcement(callsign: "promotions copy", brief: brief))
         XCTAssertEqual(rungs.count, 1)
-        XCTAssertEqual(rungs[0].text, "No further rationale recorded.")
+        XCTAssertEqual(rungs[0].kind, .why)
+        XCTAssertEqual(rungs[0].spoken.text, "No further rationale recorded.")
     }
 
     func testLadderRungsAreClampedAndSanitized() {
@@ -159,8 +161,8 @@ final class SpokenCompositionTests: XCTestCase {
                 + String(repeating: "A further sentence of trailing detail follows here. ", count: 8))
         let rungs = SpokenComposition.ladderRungs(
             for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertFalse(rungs[0].text.contains("buildLockedLayoutAssets"))
-        XCTAssertLessThanOrEqual(rungs[0].wordCount, SpokenComposition.depthOneMaxWords)
+        XCTAssertFalse(rungs[0].spoken.text.contains("buildLockedLayoutAssets"))
+        XCTAssertLessThanOrEqual(rungs[0].spoken.wordCount, SpokenComposition.depthOneMaxWords)
     }
 
 }
