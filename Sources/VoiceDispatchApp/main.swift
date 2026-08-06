@@ -767,7 +767,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 showIdleGrid()
                 return
             }
-            // From the grid, the empty state, hidden, or a receipt/failure
+            // From hidden, ⌃⌥ surfaces the grid and stops (ruled 05 Aug):
+            // the queue appears before anyone speaks, so you always see where
+            // you are before choosing to listen. The hail is unaffected — a
+            // hail has already surfaced the grid, so the go-ahead press finds
+            // the panel visible and plays immediately, exactly as before.
+            guard hud.isOnScreen else {
+                Permissions.log("⌃⌥: surface")
+                showIdleGrid()
+                return
+            }
+            // From the visible grid, the empty state, or a receipt/failure
             // card: ⌃⌥ invites the next agent — and this is how a hail's
             // "go ahead" resolves, since the hail surfaces the grid. The old
             // dismiss-on-advance died with home-first: advancing can no
