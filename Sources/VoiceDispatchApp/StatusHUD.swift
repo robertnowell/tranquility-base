@@ -968,7 +968,19 @@ final class StatusHUD: NSObject {
             frame.origin.y -= delta
             frame.size.height = height
             frame.size.width = 380
-            panel.setFrame(frame, display: true, animate: panel.isVisible)
+            if panel.isVisible {
+                // Through the animator, NOT setFrame(animate:) — that call
+                // blocks the main thread for the whole animation, which delays
+                // every gesture landing behind it (the ack arriving late was
+                // the symptom). This one returns immediately.
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.12
+                    ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    panel.animator().setFrame(frame, display: true)
+                }
+            } else {
+                panel.setFrame(frame, display: true)
+            }
         }
         // Assert the actions are actually on screen. "Buttons cut off" is a bug the
         // code can check for itself; it should never reach a person's eyes.
@@ -1017,14 +1029,24 @@ final class StatusHUD: NSObject {
     /// The full border was sized to the panel at flash time, and states have
     /// different heights — the pulse regularly outlived a resize and its lower
     /// edge cut across the middle of the new face (Robert's report, 06 Aug;
-    /// his fix). A bar glued to the top edge has no lower edge to strand, and
-    /// it is an NSView with an autoresizing mask rather than a CALayer so the
-    /// window's own resize keeps it glued mid-animation for free.
+    /// his fix). A bar glued to the top edge has no lower edge to strand.
+    ///
+    /// It is a subview of the rounded SURFACE, not the content view: the
+    /// surface clips, so the bar's ends taper into the corner curve instead of
+    /// being "cut off at the start of the corner round". The autoresizing mask
+    /// keeps it glued through every resize, and the fade runs as an explicit
+    /// CABasicAnimation rather than through the animator proxy — the proxy
+    /// silently drops the animation when another one is mid-flight on the same
+    /// property, which is exactly what a rapid second gesture produces.
     private var ackBar: NSView?
+    private var surfaceView: NSView?
 
     func flashAcknowledge() {
-        guard let host = panel?.contentView else { return }
-        if panel?.isVisible != true { panel?.orderFrontRegardless() }
+        // The panel may never have been built (a gesture before the first
+        // paint). Build it rather than dropping the acknowledgment: "I should
+        // never question whether my control is having an impact" (ruled).
+        let host = surfaceView ?? { _ = build(); return surfaceView }()
+        guard let host else { return }
 
         let bar: NSView
         if let existing = ackBar {
@@ -1035,24 +1057,26 @@ final class StatusHUD: NSObject {
             // Palette, not controlAccentColor: accent = state, not user
             // preference (ruled) — the pulse is the same green as the go lamp.
             bar.layer?.backgroundColor = StateLegend.Palette.ready.cgColor
-            bar.layer?.cornerRadius = 1.5
             // Flexible bottom margin = pinned to the top edge; flexible width
             // = pinned to both sides. The bar tracks every frame change.
             bar.autoresizingMask = [.width, .minYMargin]
-            bar.alphaValue = 0
             host.addSubview(bar)
             ackBar = bar
         }
-        // Inset past the panel's 12pt corner radius so the bar never pokes
-        // outside the rounded silhouette.
-        bar.frame = CGRect(x: 12, y: host.bounds.height - 3,
-                           width: host.bounds.width - 24, height: 3)
-        bar.alphaValue = 1
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.4
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            bar.animator().alphaValue = 0
-        }
+        // Full width: the surface's own mask decides where it ends.
+        bar.frame = CGRect(x: 0, y: host.bounds.height - 3,
+                           width: host.bounds.width, height: 3)
+        host.addSubview(bar, positioned: .above, relativeTo: nil)
+
+        guard let layer = bar.layer else { return }
+        layer.removeAnimation(forKey: "ack")
+        layer.opacity = 0
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1.0
+        pulse.toValue = 0.0
+        pulse.duration = 0.5
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(pulse, forKey: "ack")
         Permissions.log("ack: pulsed (visible=\(panel?.isVisible == true))")
     }
 
@@ -1437,8 +1461,16 @@ final class StatusHUD: NSObject {
         background.autoresizingMask = [.width, .height]
         background.wantsLayer = true
         background.layer?.backgroundColor = StateLegend.Palette.surface.cgColor
-        background.layer?.cornerRadius = 12
+        // 12 → 8 (ruled 06 Aug: "do we want this strong of corner rounding? It
+        // seems very default"). 8 is the instrument radius — a milled panel
+        // edge, not a system alert.
+        background.layer?.cornerRadius = 8
         background.layer?.masksToBounds = true
+        // The ack bar lives INSIDE the clipping surface (06 Aug: "it gets cut
+        // off at the start of the corner round"). Full width, clipped by the
+        // same rounded mask as the console itself, so its ends taper with the
+        // corner instead of colliding with it.
+        surfaceView = background
 
         // Widgets carry no initial visibility: build() is only reached from
         // render(), which writes every widget's visibility before the panel is

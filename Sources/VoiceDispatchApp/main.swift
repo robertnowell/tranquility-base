@@ -758,16 +758,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .armWindowOpened, .armAborted: break
         default: returnToGridWork?.cancel()
         }
-        // Acknowledge before acting. Every recognized gesture pulses the panel
-        // border, so a registered press is visibly different from a missed one.
-        switch transition {
-        case .next, .replyBegan, .dismiss:
-            hud.flashAcknowledge()
-        case .optionTapped, .pauseToggled, .replyEnded, .replyAborted,
-             .controlDoubleTapped, .armWindowOpened, .armAborted:
-            break  // optionTapped flashes only when it becomes an action, below
-                   // — and arming is its own acknowledgment.
-        }
+        // Acknowledge before acting — EVERY gesture, no exceptions (ruled
+        // 06 Aug: "anytime a chord or command is heard from the user, light up
+        // that top bar, and it should be super reliable. I should never
+        // question whether my control is having an impact on the system").
+        //
+        // Unconditional on purpose. The previous version pulsed for three
+        // transitions and left the rest to downstream call sites that sat
+        // BEHIND their guards, so exactly the presses that did nothing —
+        // ⌃⌃ with nothing announced, ⌥ taps outside hands-free, a gesture
+        // arriving before the first paint — were the ones that also looked
+        // unheard. Acknowledgment is not a reward for a press that worked; it
+        // is the receipt for a press that was received.
+        hud.flashAcknowledge()
         switch transition {
         case .next:
             // Open issue #6, wired at last: ⌃⌥ while the microphone is open would
@@ -840,7 +843,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .optionTapped:
             // While locked, one tap sends — the mirror of releasing the held key.
             if handsFreeListening {
-                hud.flashAcknowledge()
                 handsFreeListening = false
                 handle(.replyEnded)
                 return
@@ -856,7 +858,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     lastStatusLine = "mic already live — tap ⌥ to send"
                     return
                 }
-                hud.flashAcknowledge()
                 handsFreeListening = true
                 if let ctx = resolveReplyContext() {
                     hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
@@ -920,7 +921,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("depth-1: nothing announced yet; staying quiet")
                 return
             }
-            hud.flashAcknowledge()
             // The ladder (ruled: findings → solution → why → message, the
             // order of the stack). Each ⌃⌃ takes the next rung; a new
             // announcement resets the walk. After WHY comes the original
@@ -993,11 +993,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // to the liveness probe and stays where it always was, at
             // hold-resolution.
             armedVisually = hud.showArming(target: activeConversation?.label)
-            // The green ack pulses at the press, not at hold-resolution (ruled
-            // 06 Aug) — the pulse is the "heard you", and it fires even when a
-            // capture state refuses the arming face: the mic is arming either
-            // way, and the press deserves its acknowledgment.
-            hud.flashAcknowledge()
             let visibleMs = Int(Date().timeIntervalSince(pressedAt) * 1000)
             // Audio second: optimistic capture, NO StreamedUtterance — the
             // stream (a network session) is created at hold-resolution as
@@ -1076,7 +1071,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // facade and every press landed here, invisibly.
                 Permissions.log("reply: refused, mic already live")
                 lastStatusLine = "mic already live — tap ⌥ to send"
-                hud.flashAcknowledge()
                 return
             }
             // Open issue #7 is NOT wired here, deliberately. `canStartReply` as a
