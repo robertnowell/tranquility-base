@@ -9,9 +9,22 @@ final class Phase1bTests: XCTestCase {
     // MARK: - Callsign directory word
 
     func testDirectoryWordUsesTheWorktreeName() {
+        // Split into plain words for the voice (ruled 06 Aug — TTS mangles
+        // joined compounds), keeping the last two: the tail of a kebab-case
+        // name is where the specific part lives.
         let cwd = NSHomeDirectory()
             + "/Projects/kopi/promotions/.claude/worktrees/product-image-binding/promotions"
-        XCTAssertEqual(Callsign.directoryWord(cwd: cwd), "product-image-binding")
+        XCTAssertEqual(Callsign.directoryWord(cwd: cwd), "image binding")
+    }
+
+    func testDirectoryWordSplitsJoinedCompoundsForTheVoice() {
+        // The bug that forced the ruling: "facts-cache" garbled on every
+        // announcement. Underscores are the same disease.
+        let cwd = NSHomeDirectory()
+            + "/Projects/kopi/promotions/.claude/worktrees/facts-cache/promotions"
+        XCTAssertEqual(Callsign.directoryWord(cwd: cwd), "facts cache")
+        XCTAssertEqual(Callsign.directoryWord(cwd: "/Users/x/Projects/voice_dispatch"),
+                       "voice dispatch")
     }
 
     func testDirectoryWordMapsHomeToHome() {
@@ -61,6 +74,32 @@ final class Phase1bTests: XCTestCase {
             directoryWord: "promotions", topic: "copy edit",
             existingCallsigns: ["kopi copy", "syndit edit"])
         XCTAssertEqual(callsign, "promotions copy edit")
+    }
+
+    func testTwoWordDirectoryMintsAtMostThreeSpokenWords() {
+        // Ordinary path: two dir words + one topic word = the three-word
+        // ceiling exactly.
+        let callsign = Callsign.mint(
+            directoryWord: "facts cache", topic: "inventory sweep",
+            existingCallsigns: [])
+        XCTAssertEqual(callsign, "facts cache inventory")
+
+        // Exhaustion path: the two-word prefix gives up its first word so the
+        // distinguishing word never pushes the sign past three.
+        let exhausted = Callsign.mint(
+            directoryWord: "facts cache", topic: "inventory sweep",
+            existingCallsigns: ["kopi inventory", "syndit sweep"])
+        XCTAssertEqual(exhausted, "cache inventory sweep")
+        XCTAssertLessThanOrEqual(exhausted!.split(separator: " ").count, 3)
+    }
+
+    func testTopicWordMatchingAnyDirectoryComponentIsSkipped() {
+        // "cache" repeats a directory component — "facts cache cache" is not a
+        // name; the next candidate wins.
+        let callsign = Callsign.mint(
+            directoryWord: "facts cache", topic: "cache timeout",
+            existingCallsigns: [])
+        XCTAssertEqual(callsign, "facts cache timeout")
     }
 
     func testMintReturnsNilWhenTheTopicOffersNoWord() {

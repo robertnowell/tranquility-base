@@ -1,6 +1,9 @@
 import Foundation
 
-/// Two spoken words that name a session for its whole life: "promotions copy".
+/// Two — at worst three — plain spoken words that name a session for its whole
+/// life: "promotions copy". Never hyphenated (ruled 06 Aug): callsigns exist to
+/// be SAID, and TTS mangles joined compounds ("facts-cache" garbled on every
+/// announcement) while plain dictionary words survive.
 ///
 /// The tuned prompt asks the model to open the recap with the project label, and
 /// it complies 65/71 — but the failure class is brand-substitution: a promotions
@@ -15,10 +18,18 @@ public enum Callsign {
 
     // MARK: - Directory word
 
-    /// The first word: where the session lives. Mirrors `StatusHUD.identify`'s
+    /// The leading word(s): where the session lives. Mirrors `StatusHUD.identify`'s
     /// worktree handling — worktrees nest the real name under
     /// `.claude/worktrees/<name>/<project>`, so the last component alone is
     /// ambiguous; the component after the plumbing is the one the user named.
+    ///
+    /// Folder names are written for filesystems; callsigns are written for a
+    /// voice. TTS mangles joined compounds — "facts-cache" came out garbled on
+    /// every announcement (ruled 06 Aug; the research classes that fail are
+    /// coined compounds, cluster-final words, homographs — plain dictionary
+    /// words survive). So the folder name is split into its plain words, and a
+    /// long name keeps its last two — the tail of a kebab-case name is where
+    /// the specific part lives ("agent-interface-layer" → "interface layer").
     public static func directoryWord(cwd: String?) -> String {
         guard let cwd, !cwd.isEmpty else { return "session" }
         let home = NSHomeDirectory()
@@ -26,10 +37,17 @@ public enum Callsign {
         if trimmed == home || trimmed == "~" { return "home" }
 
         let parts = URL(fileURLWithPath: cwd).pathComponents.filter { $0 != "/" }
+        let raw: String
         if let marker = parts.firstIndex(of: "worktrees"), marker + 1 < parts.count {
-            return parts[marker + 1].lowercased()
+            raw = parts[marker + 1]
+        } else {
+            raw = parts.last ?? "session"
         }
-        return (parts.last ?? "session").lowercased()
+        let words = raw.lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+        guard !words.isEmpty else { return "session" }
+        return words.suffix(2).joined(separator: " ")
     }
 
     // MARK: - Topic word
@@ -50,13 +68,15 @@ public enum Callsign {
     /// words in a 3-6 word topic tend to carry the subject). Skips stopwords,
     /// the directory word itself, bare numbers, and anything under 3 letters.
     static func candidateTopicWords(topic: String, directoryWord: String) -> [String] {
-        let dir = directoryWord.lowercased()
+        // The directory prefix may itself be several plain words now; a topic
+        // word matching ANY of them adds nothing ("facts cache cache").
+        let dirWords = Set(directoryWord.lowercased().split(separator: " ").map(String.init))
         var seen = Set<String>()
         let filtered = topic.lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
             .map(String.init)
             .filter { word in
-                word.count >= 3 && !stopwords.contains(word) && word != dir
+                word.count >= 3 && !stopwords.contains(word) && !dirWords.contains(word)
                     && !word.allSatisfy(\.isNumber) && seen.insert(word).inserted
             }
         return filtered.enumerated().sorted { a, b in
@@ -87,12 +107,17 @@ public enum Callsign {
 
         // Every candidate collides with an active callsign: append a
         // distinguishing word from the topic to the most distinctive one.
+        // Three words is the ceiling (ruled 06 Aug — a callsign is spoken, and
+        // two words ideally, three at worst is what a voice can carry), so a
+        // two-word directory prefix gives up its first word to make room.
         let first = candidates[0]
+        let dirTail = directoryWord.split(separator: " ").last.map(String.init)
+            ?? directoryWord
         let rawWords = topic.lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
         for extra in (candidates.dropFirst() + rawWords)
-        where extra != first && extra != directoryWord.lowercased() {
-            let candidate = "\(directoryWord) \(first) \(extra)"
+        where extra != first && extra != dirTail {
+            let candidate = "\(dirTail) \(first) \(extra)"
             if !existingCallsigns.contains(where: {
                 $0.caseInsensitiveCompare(candidate) == .orderedSame
             }) {

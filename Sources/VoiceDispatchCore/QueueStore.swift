@@ -293,6 +293,19 @@ public final class QueueStore: Sendable {
             }
         }
 
+        // Callsigns are spoken names, and TTS mangles joined compounds — the
+        // frozen "facts-cache inventory" came out garbled every announcement
+        // (ruled 06 Aug: plain words, no hyphens, three words at worst). This
+        // normalizes separators in already-minted signs; the words themselves
+        // are unchanged, so the name has not drifted — it is finally being
+        // said correctly.
+        m.registerMigration("v10_speakable_callsigns") { db in
+            try db.execute(sql: """
+                UPDATE session_callsign
+                SET callsign = TRIM(REPLACE(REPLACE(callsign, '-', ' '), '_', ' '))
+                """)
+        }
+
         return m
     }
 
