@@ -284,6 +284,15 @@ public final class QueueStore: Sendable {
             }
         }
 
+        // The ⌃⌃ ladder's remaining rungs (ruled 05 Aug: findings → solution →
+        // why). Nullable like rationale: older rows simply have shorter ladders.
+        m.registerMigration("v9_brief_ladder") { db in
+            try db.alter(table: "brief") { t in
+                t.add(column: "findings", .text)
+                t.add(column: "solution", .text)
+            }
+        }
+
         return m
     }
 
@@ -619,6 +628,7 @@ public final class QueueStore: Sendable {
             topic: brief.topic, goal: brief.goal, happened: brief.happened,
             nextStep: brief.nextStep, question: brief.question, risk: brief.risk,
             rationale: brief.rationale,
+            findings: brief.findings, solution: brief.solution,
             recap: brief.recap, proposal: brief.proposal,
             callsign: callsign, provider: provider)
         try dbQueue.write { db in try row.save(db) }

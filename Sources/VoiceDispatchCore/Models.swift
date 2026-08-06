@@ -325,6 +325,9 @@ public struct StoredBrief: Codable, FetchableRecord, PersistableRecord, Sendable
     public var risk: String?
     /// The ⌃⌃ briefing (v7). Nil on rows written before the column existed.
     public var rationale: String?
+    /// Ladder rungs one and two (v9). Nil on older rows; the rung is skipped.
+    public var findings: String?
+    public var solution: String?
     public var recap: String?
     public var proposal: String?
     /// The minted callsign at generation time; nil when not yet minted.
@@ -339,7 +342,8 @@ public struct StoredBrief: Codable, FetchableRecord, PersistableRecord, Sendable
     public var brief: SessionBrief {
         SessionBrief(
             topic: topic, goal: goal, happened: happened, nextStep: nextStep,
-            question: question, risk: risk, rationale: rationale, branch: nil,
+            question: question, risk: risk, rationale: rationale,
+            findings: findings, solution: solution, branch: nil,
             recap: recap, proposal: proposal)
     }
 }

@@ -39,6 +39,14 @@ public struct SessionBrief: Codable, Sendable, Equatable {
     /// composition. Nil on briefs generated before the field existed — the
     /// composition falls back to the card fields.
     public var rationale: String?
+    /// The ⌃⌃ ladder's first rung (ruled 05 Aug: findings → solution → why):
+    /// what the work TURNED UP — results, numbers, surprises. Nil when the turn
+    /// genuinely produced none; the rung is skipped, never padded.
+    public var findings: String?
+    /// The ladder's second rung: the concrete shape of the proposed work — the
+    /// pieces, their order, "seven ranked; the top three…". Nil when nothing is
+    /// proposed.
+    public var solution: String?
 
     // Deterministic — never written by the model.
     public var branch: String?
@@ -60,6 +68,7 @@ public struct SessionBrief: Codable, Sendable, Equatable {
     public init(
         topic: String, goal: String? = nil, happened: String, nextStep: String? = nil,
         question: String? = nil, risk: String? = nil, rationale: String? = nil,
+        findings: String? = nil, solution: String? = nil,
         branch: String? = nil, recap: String? = nil, proposal: String? = nil
     ) {
         self.recap = recap
@@ -71,6 +80,8 @@ public struct SessionBrief: Codable, Sendable, Equatable {
         self.question = question
         self.risk = risk
         self.rationale = rationale
+        self.findings = findings
+        self.solution = solution
         self.branch = branch
     }
 

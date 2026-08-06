@@ -37,6 +37,34 @@ public enum SpokenComposition {
             allowing: allowlist)
     }
 
+    /// The ⌃⌃ ladder, in the ruled order of the stack: FINDINGS (what the work
+    /// turned up), SOLUTION (the shape of what is proposed), then WHY (the
+    /// rationale — which alone falls back to the card fields for pre-rationale
+    /// rows). Empty rungs are skipped, never padded: a trivial turn's ladder is
+    /// one rung. Every rung is sanitized, clamped at the same 40, and speaks
+    /// without a callsign — the pull answers the agent that just spoke.
+    /// Guaranteed non-empty: the why rung's fallback bottoms out at
+    /// "No further rationale recorded."
+    public static func ladderRungs(
+        for announcement: Coordinator.Announcement,
+        sanitizer: SpokenTextSanitizer = SpokenTextSanitizer(),
+        allowing allowlist: Set<String> = []
+    ) -> [SanitizedSpokenText] {
+        let labels = [announcement.event.projectLabel, announcement.hailText]
+        func rung(_ text: String?) -> SanitizedSpokenText? {
+            guard let text, !text.isEmpty else { return nil }
+            let sanitized = sanitizer.sanitize(
+                text, maxWords: depthOneMaxWords, allowing: allowlist)
+            return sanitizer.strippingLeadingLabels(labels, from: sanitized)
+        }
+        var rungs: [SanitizedSpokenText] = []
+        if let findings = rung(announcement.brief.findings) { rungs.append(findings) }
+        if let solution = rung(announcement.brief.solution) { rungs.append(solution) }
+        rungs.append(depthOneSpokenText(
+            for: announcement, sanitizer: sanitizer, allowing: allowlist))
+        return rungs
+    }
+
     /// Composition order is goal, then risk, then question: the clamp keeps
     /// leading sentences, and the question was already spoken at announce time
     /// (it ends the proposal), so it is the first thing sacrificed here.

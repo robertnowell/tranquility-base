@@ -123,4 +123,44 @@ final class SpokenCompositionTests: XCTestCase {
             for: announcement(callsign: nil, brief: brief))
         XCTAssertEqual(out.text, "tests are flaky.")
     }
+
+    // MARK: - The ⌃⌃ ladder (ruled order: findings → solution → why)
+
+    func testLadderRungsFollowTheRuledOrder() {
+        let brief = SessionBrief(
+            topic: "export", happened: "done",
+            rationale: "We propose shipping because staging verified clean.",
+            findings: "Three misfiled pieces recovered; the scanner missed one class.",
+            solution: "Seven fixes ranked; the top three: scope, snapshots, metrics.")
+        let rungs = SpokenComposition.ladderRungs(
+            for: announcement(callsign: "promotions copy", brief: brief))
+        XCTAssertEqual(rungs.count, 3)
+        XCTAssertTrue(rungs[0].text.contains("misfiled"), "findings first: \(rungs[0].text)")
+        XCTAssertTrue(rungs[1].text.contains("Seven fixes"), "solution second")
+        XCTAssertTrue(rungs[2].text.contains("We propose shipping"), "why last")
+        XCTAssertFalse(rungs.contains { $0.text.contains("promotions copy") },
+                       "no callsign anywhere on the ladder")
+    }
+
+    func testLadderSkipsEmptyRungsAndAlwaysHasTheWhy() {
+        // A trivial turn: no findings, nothing proposed, no rationale — the
+        // ladder is exactly one rung, and it says so instead of going silent.
+        let brief = SessionBrief(topic: "export", happened: "done")
+        let rungs = SpokenComposition.ladderRungs(
+            for: announcement(callsign: "promotions copy", brief: brief))
+        XCTAssertEqual(rungs.count, 1)
+        XCTAssertEqual(rungs[0].text, "No further rationale recorded.")
+    }
+
+    func testLadderRungsAreClampedAndSanitized() {
+        let brief = SessionBrief(
+            topic: "export", happened: "done",
+            findings: "The probe found that buildLockedLayoutAssets regressed. "
+                + String(repeating: "A further sentence of trailing detail follows here. ", count: 8))
+        let rungs = SpokenComposition.ladderRungs(
+            for: announcement(callsign: "promotions copy", brief: brief))
+        XCTAssertFalse(rungs[0].text.contains("buildLockedLayoutAssets"))
+        XCTAssertLessThanOrEqual(rungs[0].wordCount, SpokenComposition.depthOneMaxWords)
+    }
+
 }

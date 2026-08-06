@@ -161,7 +161,9 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         {
           "recap":    "spoken part one: callsign + what concluded, 12 words max",
           "proposal": "spoken part two: proposed next action + the question, under 15 words",
-          "rationale": "spoken only when the user asks for more: why this proposal, about 30 words, or null",
+          "rationale": "spoken on the WHY pull: why this proposal, about 30 words, or null",
+          "findings": "spoken on the FINDINGS pull: what the work TURNED UP, about 30 words, or null",
+          "solution": "spoken on the SOLUTION pull: the concrete shape of what is proposed, about 30 words, or null",
           "topic":    "3-6 words naming this work, for a list",
           "goal":     "what this session is trying to achieve, or null",
           "happened": "what just concluded, one clause",
@@ -227,7 +229,24 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         Repeating them is the failure mode this field exists to fix.
         - null only when the turn is trivial and closed, with nothing behind it.
 
-        ── ALL THREE SPOKEN FIELDS (recap, proposal, rationale) ──
+        ── "findings": 40 words MAX, spoken only on request ──
+
+        What the work TURNED UP, not what was done: results, numbers, discoveries, \
+        surprises, failures. "Recovered three misfiled pieces; the scanner missed \
+        one class entirely" is findings; "audited the directory" is not. Dense, \
+        plain, and speakable — no paths, no symbols, no URLs. null when the turn \
+        genuinely produced no findings — a pure plumbing turn has none, and \
+        inventing some is the worst failure available.
+
+        ── "solution": 40 words MAX, spoken only on request ──
+
+        The concrete shape of the proposed work: the pieces, their order, what \
+        each does. If the source ranks items (P1..P7), speak the count and the top \
+        items: "Seven fixes ranked; the top three: X, then Y, then Z." Name real \
+        things the source names — products and projects, never paths, symbols, or \
+        URLs; describe a link as where it leads. null when nothing is proposed.
+
+        ── ALL FIVE SPOKEN FIELDS (recap, proposal, rationale, findings, solution) ──
 
         Spoken, not displayed. Never speak file paths, branch names, function or \
         variable names, hashes, or UUIDs; describe them ("the asset pool"). Product \
@@ -395,6 +414,8 @@ public struct AnthropicSummaryProvider: SummaryProvider {
             question: field("question"),
             risk: field("risk"),
             rationale: field("rationale"),
+            findings: field("findings"),
+            solution: field("solution"),
             branch: request.gitBranch,
             recap: field("recap"),
             proposal: field("proposal"))
