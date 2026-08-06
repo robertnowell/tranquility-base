@@ -75,9 +75,48 @@ final class StatusHUD: NSObject {
         currentEventId = sessionId
     }
 
+    /// What arming replaced, kept whole so the abort path can restore the
+    /// EXACT prior face — state, strings, rows, closures — including hidden:
+    /// arming surfaces the panel, so an abort from hidden re-hides it.
+    /// Consumed by revertArming; invalidated by any entry into listening
+    /// (the upgrade path no longer needs it).
+    private var stashBeforeArming: (state: PanelState, face: Face)?
+
+    /// The arming face (instant-arm, docs/instant-arm.md): the listening
+    /// pill's geometry in the faint treatment — flat meter, faint dot,
+    /// identity only if already in hand. A real PanelState case run through
+    /// the same transition funnel as every face; returns false when the
+    /// legality table refuses (a capture state owns the stage), in which
+    /// case the caller arms audio only and paints nothing.
+    @discardableResult
+    func showArming(target: String?) -> Bool {
+        let prior = (state: state, face: face)
+        guard transition(to: .arming, because: "arm window opened") else { return false }
+        stashBeforeArming = prior
+        face = Face(listeningTarget: target ?? "")
+        render()
+        return true
+    }
+
+    /// Restore exactly the face arming replaced. No-op unless the panel is
+    /// still arming — an upgrade or an explicit dismiss has already moved it
+    /// on, and the stash dies with it.
+    func revertArming(because reason: String) {
+        guard case .arming = state, let stash = stashBeforeArming else {
+            stashBeforeArming = nil
+            return
+        }
+        stashBeforeArming = nil
+        forceTransition(to: stash.state, because: "arm reverted: \(reason)")
+        face = stash.face
+        render()
+    }
+
     func showListening(level: @escaping () -> Float) {
         guard transition(to: .listening(eventId: currentEventId), because: "recording started")
         else { return }
+        // An armed face that upgraded no longer has anything to revert to.
+        stashBeforeArming = nil
         levelSource = level
         // A pill: target name plus waveform, nothing else. The name stays
         // (unlike Wispr) because our destination is a terminal somewhere else,
@@ -357,6 +396,8 @@ final class StatusHUD: NSObject {
     /// (app.log 2026-08-05T18:27:59Z).
     func endCapture(because reason: String) {
         guard state.ownsStage else { return }
+        // A dismissed arm has nothing left to revert to.
+        stashBeforeArming = nil
         if awaitingConfirm {
             cancelPendingSend(restartListening: false)
         } else {
@@ -470,6 +511,8 @@ final class StatusHUD: NSObject {
         case .idle: return .ready
         case .preparing: return .preparing
         case .speaking: return .speaking
+        // The faint pill (armingPill) carries this face; no legend row.
+        case .arming: return nil
         case .listening: return .listening(target: face.listeningTarget)
         case .transcribing: return .working
         // The READBACK placard (face.placardOverride) carries this face's pill.
@@ -560,6 +603,17 @@ final class StatusHUD: NSObject {
             // True empty state: the baseline already says everything — the app
             // name as title and the one-line note as body.
             break
+
+        case .arming:
+            // The listening pill's geometry, grayed: faint dot, faint target
+            // (or none), the meter visible but FLAT — no timer feeds it, so
+            // it draws its resting floor. Same widgets as .listening; the
+            // upgrade at hold-resolution is an alpha/content change, not a
+            // relayout.
+            titleLabel.isHidden = true
+            stateLabel.attributedStringValue = armingPill()
+            meter.isHidden = false
+            meter.reset()
 
         case .listening:
             titleLabel.isHidden = true
@@ -702,6 +756,25 @@ final class StatusHUD: NSObject {
             string: " \(face.listeningTarget)", attributes: [
                 .font: font, .foregroundColor: StateLegend.Lens.chrome.color,
             ]))
+        return pill
+    }
+
+    /// The arming pill: the listening pill's geometry with the whole thing in
+    /// the faint treatment — the dot is not yet "go", it is "maybe". The
+    /// target rides along only when it was already in hand (the active
+    /// conversation); the arm path never probes for one.
+    private func armingPill() -> NSAttributedString {
+        let font = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
+        let pill = NSMutableAttributedString(
+            string: StateLegend.Glyph.dot, attributes: [
+                .font: font, .foregroundColor: StateLegend.Palette.faint,
+            ])
+        if !face.listeningTarget.isEmpty {
+            pill.append(NSAttributedString(
+                string: " \(face.listeningTarget)", attributes: [
+                    .font: font, .foregroundColor: StateLegend.Palette.faint,
+                ]))
+        }
         return pill
     }
 
@@ -1037,6 +1110,51 @@ final class StatusHUD: NSObject {
             Permissions.log("selftest matrix \(label): \(widgetMatrix())")
         }
 
+        // Instant-arm (E3, docs/instant-arm.md): from each prior face, arming
+        // must restore the EXACT widget matrix on abort — including hidden,
+        // where arming surfaces the panel and the revert re-hides it. This
+        // whole block runs synchronously on the main actor, so no timer can
+        // interleave between the before and after readings.
+        let armPriors: [(String, () -> Void)] = [
+            ("grid", { self.showIdle(rows: [
+                .init(id: "a", name: "Fix hero image binding",
+                      callsign: "promotions copy", lamp: .ready),
+                .init(id: "b", name: "voice dispatch", callsign: "", lamp: .running),
+            ]) }),
+            ("speaking", { self.showAnnouncement(
+                topic: "Hero image binding fix", spoken: long,
+                sessionId: "s", pid: 1, project: "promotions", cwd: "/tmp/promotions") }),
+            ("hidden", { self.hide() }),
+        ]
+        for (label, paint) in armPriors {
+            paint()
+            let before = "\(widgetMatrix()) state=\(state.name) visible=\(isOnScreen)"
+            let armed = showArming(target: "promotions copy")
+            let armingMatrix = "\(widgetMatrix()) state=\(state.name) visible=\(isOnScreen)"
+            revertArming(because: "selftest")
+            let after = "\(widgetMatrix()) state=\(state.name) visible=\(isOnScreen)"
+            // Hidden's observable contract is state + visibility: render()
+            // short-circuits before the widget baseline while hidden (the
+            // panel may not even be built yet), so the widget matrix under
+            // hidden is unobservable residue by design — the next surface
+            // rebaselines every widget before the panel is ordered front.
+            let restored = label == "hidden"
+                ? state.name == "hidden" && !isOnScreen
+                : before == after
+            Permissions.log("selftest arm[\(label)]: armed=\(armed) "
+                            + "restored=\(restored)")
+            Permissions.log("selftest arm[\(label)] before:  \(before)")
+            Permissions.log("selftest arm[\(label)] arming:  \(armingMatrix)")
+            Permissions.log("selftest arm[\(label)] after:   \(after)")
+        }
+        // And the upgrade path: arming admits exactly one successor, listening.
+        showArming(target: "promotions copy")
+        showListening(level: { 0.3 })
+        Permissions.log("selftest arm[upgrade]: state=\(state.name) "
+                        + "(want listening) meterShown=\(!meter.isHidden)")
+        recordingEnded()
+        endCapture(because: "selftest arm cleanup")
+
         // The stomp that froze the app (2026-08-05): a stale idle repaint against a
         // live capture. Must be REFUSED, and the pill must still be on the walls.
         showListening(level: { 0.4 })
@@ -1136,6 +1254,12 @@ final class StatusHUD: NSObject {
                      spoken: rationale, highlightFraction: 0.4,
                      placard: "\(StateLegend.Glyph.speaking) "
                         + SpokenComposition.RungKind.why.rawValue)
+
+        case "arming":
+            // Instant-arm: the grayed listening pill, meter flat by design —
+            // nothing seeds it; the resting floor IS the arming look.
+            adopt()
+            showArming(target: callsign)
 
         case "listening":
             adopt()

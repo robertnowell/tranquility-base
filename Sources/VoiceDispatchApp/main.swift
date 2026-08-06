@@ -30,6 +30,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let tapThreshold: TimeInterval = 0.35
     private var pressStartedAt: Date?
     private var listeningIndicator: DispatchWorkItem?
+    /// Instant-arm (docs/instant-arm.md): when the arm window opened and the
+    /// recorder started capturing optimistically. nil = no optimistic capture
+    /// live. Consumed at resolution — cleared by the upgrade (replyBegan) and
+    /// by the abort (armAborted), never left set across gestures.
+    private var armedAt: Date?
+    /// Whether the arming FACE painted (the legality table refuses it over
+    /// capture states; audio can arm without pixels).
+    private var armedVisually = false
     /// Guards against overlapping announcements. `speech.isSpeaking` is false while
     /// the audio is still being fetched, so two quick taps used to start two
     /// announcements that then talked over each other.
@@ -327,6 +335,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--selftest-hud") {
             hud.selfTest()
             hud.selfTestPendingSend()
+        }
+
+        // Instant-arm evals E2/E4/E5 (docs/instant-arm.md), driven through the
+        // real handler with the real recorder and store. Needs the microphone
+        // grant; logs SKIPPED honestly when it is absent.
+        if CommandLine.arguments.contains("--selftest-arm") {
+            Task { @MainActor in
+                // Let launch settle: first idle paint, permission poll.
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                self.runArmSelftest()
+            }
         }
 
         // Drive the real speech chain end to end so the highlight can be checked
@@ -711,15 +730,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handle(_ transition: HotkeyMonitor.Transition) {
         // Any gesture is attention: the panel must not yank itself back to the
-        // grid underneath it (ruling 14's timer dies on contact).
-        returnToGridWork?.cancel()
+        // grid underneath it (ruling 14's timer dies on contact). The arm
+        // window is the one exception — arming is SPECULATION about a hold
+        // that may turn out to be a tap or a typing chord, so it must not
+        // consume ruling 14's clock; the abort path restarts the clock when
+        // its revert lands back on a dwelling card.
+        switch transition {
+        case .armWindowOpened, .armAborted: break
+        default: returnToGridWork?.cancel()
+        }
         // Acknowledge before acting. Every recognized gesture pulses the panel
         // border, so a registered press is visibly different from a missed one.
         switch transition {
         case .next, .replyBegan, .dismiss:
             hud.flashAcknowledge()
-        case .optionTapped, .pauseToggled, .replyEnded, .replyAborted, .controlDoubleTapped:
+        case .optionTapped, .pauseToggled, .replyEnded, .replyAborted,
+             .controlDoubleTapped, .armWindowOpened, .armAborted:
             break  // optionTapped flashes only when it becomes an action, below
+                   // — and arming is its own acknowledgment.
         }
         switch transition {
         case .next:
@@ -922,6 +950,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 rebuildMenu()
             }
 
+        case .armWindowOpened(let pressedAt):
+            // Instant-arm (docs/instant-arm.md): bare ⌥ survived the grace.
+            // Speculative on purpose — a tap or a chord fully unwinds it.
+            guard micGranted else { return }
+            guard armedAt == nil, !recorder.isRecording else {
+                // Hands-free is live (a ⌥ tap will SEND) or a capture is
+                // already running: nothing to arm.
+                Permissions.log("arm: skipped, mic already live")
+                return
+            }
+            // Visual FIRST (eval E5): between the grace timer firing and this
+            // render sit only in-memory stash writes — no probes, no engine.
+            // Identity only if already in hand: resolveReplyContext shells out
+            // to the liveness probe and stays where it always was, at
+            // hold-resolution.
+            armedVisually = hud.showArming(target: activeConversation?.label)
+            let visibleMs = Int(Date().timeIntervalSince(pressedAt) * 1000)
+            // Audio second: optimistic capture, NO StreamedUtterance — the
+            // stream (a network session) is created at hold-resolution as
+            // always, and openStream() feeds it this backlog.
+            do {
+                try recorder.start(openingStream: false)
+            } catch {
+                // Transient route-change territory; the hold, if it resolves,
+                // retries through the ordinary path and reports for real.
+                Permissions.log("arm: optimistic mic open failed (\(error)); reverting")
+                if armedVisually { hud.revertArming(because: "mic failed") }
+                armedVisually = false
+                return
+            }
+            armedAt = Date()
+            isBusy = true
+            updateTitle()
+            let faceNote = armedVisually ? "shown" : "refused, audio-only arm"
+            Permissions.log("latency: key-down→arming-visible \(visibleMs)ms"
+                + " (face \(faceNote));"
+                + " mic open +\(Int(Date().timeIntervalSince(pressedAt) * 1000))ms"
+                + " after key-down")
+
+        case .armAborted:
+            // The press turned out to be a tap or a real shortcut. Unwind
+            // everything the arm did: stop and DISCARD the capture — no
+            // utterance row, no file write, no transcription — and restore
+            // the exact face the panel wore before. Any tap meaning
+            // (optionTapped etc.) arrives after this and acts as it always
+            // has.
+            let armedDuration = armedAt.map { Date().timeIntervalSince($0) }
+            armedAt = nil
+            let hadFace = armedVisually
+            armedVisually = false
+            if armedDuration != nil {
+                // Same exception-firewalled teardown as every capture stop
+                // (eval E4); abandon returns no audio and writes nothing.
+                recorder.abandon()
+                isBusy = false
+                updateTitle()
+            }
+            if hadFace { hud.revertArming(because: "tap or chord") }
+            if let armedDuration {
+                Permissions.log("arm: discarded, \(Int(armedDuration * 1000))ms audio")
+            }
+            // Ruling 14: if the revert landed back on a dwelling card, its
+            // clock — which this gesture deliberately never cancelled, but
+            // whose work item may have fired into the arming window and
+            // consumed itself — restarts.
+            switch hud.state {
+            case .speaking, .receipt: scheduleReturnToGrid()
+            default: break
+            }
+
         case .replyBegan:
             // Latency instrumentation (ruled 05 Aug: measure before rewiring).
             // t0 is the moment the gesture RESOLVED — the ~0.35s tap-vs-hold
@@ -934,7 +1032,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("latency: \(stage) +\(ms)ms after hold resolved")
             }
             guard micGranted else { return }
-            if recorder.isRecording {
+            // Instant-arm: the mic may already be OURS, opened at the arm
+            // window. Consume the arm — from here on this is an ordinary
+            // reply that simply started capturing ~270ms early.
+            let armed = armedAt
+            armedAt = nil
+            armedVisually = false
+            if recorder.isRecording, armed == nil {
                 // Refusing silently is how "app seems dead" reports start — the
                 // stomped-pill incident left the recorder live behind an idle
                 // facade and every press landed here, invisibly.
@@ -976,17 +1080,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             coordinator?.speech.stop()  // never record over playback
             lat("teardown done, opening mic")
-            do {
-                try recorder.start()
-                lat("mic open")
-            } catch {
-                // Route changes make this genuinely transient — say so and stop,
-                // rather than showing a Listening pill over a dead microphone.
-                Permissions.log("mic: start failed: \(error)")
-                dictationMode = false
-                recordingTarget = nil
-                hud.showResult("Couldn't open the microphone — try again. (\(error))")
-                return
+            if armed != nil, recorder.isRecording {
+                // The mic has been open since the arm window (eval E6: the
+                // arm-window audio is already in the durable buffer, so
+                // nothing said since the press can be lost). Attach the live
+                // stream now — hold-resolution, exactly where it was created
+                // before instant-arm — and it is fed the whole backlog.
+                recorder.openStream()
+                lat("stream opened over armed mic — "
+                    + "\(Int(recorder.bufferedSeconds * 1000))ms already buffered, "
+                    + "zero-loss window")
+            } else {
+                do {
+                    try recorder.start()
+                    lat("mic open")
+                } catch {
+                    // Route changes make this genuinely transient — say so and stop,
+                    // rather than showing a Listening pill over a dead microphone.
+                    Permissions.log("mic: start failed: \(error)")
+                    dictationMode = false
+                    recordingTarget = nil
+                    hud.showResult("Couldn't open the microphone — try again. (\(error))")
+                    return
+                }
             }
             isBusy = true
             updateTitle()
@@ -1768,6 +1884,109 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let url = URL(string: urlString) else { return }
         NSWorkspace.shared.open(url)
     }
+
+    // MARK: - Instant-arm selftest (docs/instant-arm.md, evals E2/E4/E5)
+
+    /// Drives the arm window through the REAL handler — real recorder, real
+    /// store — and asserts what the unit tests cannot: a tap after arming
+    /// leaves zero durable residue (E2: no utterance row, no audio file, no
+    /// stream session), the recorder is closed after every abort path (E4),
+    /// and the grace-fire→render path stays within the latency budget (E5).
+    private func runArmSelftest() {
+        guard micGranted else {
+            Permissions.log("selftest-arm: SKIPPED — microphone not granted")
+            return
+        }
+        guard let store else {
+            Permissions.log("selftest-arm: SKIPPED — no store")
+            return
+        }
+        func utteranceCount() -> Int { (try? store.utterances(limit: 10_000).count) ?? -1 }
+        func audioFileCount() -> Int {
+            (try? FileManager.default.contentsOfDirectory(
+                at: QueueStore.audioDirectory, includingPropertiesForKeys: nil).count) ?? -1
+        }
+        // Stream sessions are counted, not opened: a nil-returning factory
+        // proves WHEN the app asks for a stream without touching the network.
+        let originalFactory = recorder.streamFactory
+        defer { recorder.streamFactory = originalFactory }
+        let streamAsks = Counter()
+        recorder.streamFactory = { streamAsks.increment(); return nil }
+
+        let rowsBefore = utteranceCount()
+        let filesBefore = audioFileCount()
+
+        // A clean stage first: --selftest-hud's pendingSend drill leaves the
+        // panel owning the stage, which would (correctly) refuse both the
+        // idle repaint and the arming face and turn this into a test of the
+        // wrong thing.
+        hud.endCapture(because: "selftest-arm setup")
+
+        // E5: the grace-fire→render path, timed directly. The handler's own
+        // ordering (render BEFORE recorder.start) is the review-level half,
+        // documented in docs/instant-arm.md.
+        showIdleGrid()
+        let renderStart = Date()
+        hud.showArming(target: "selftest")
+        let renderMs = Date().timeIntervalSince(renderStart) * 1000
+        hud.revertArming(because: "selftest E5 timing")
+        Permissions.log(String(format:
+            "selftest-arm E5: grace-fire→render %.1fms (budget 30ms) %@",
+            renderMs, renderMs <= 30 ? "PASS" : "FAIL"))
+
+        // E2 + E4, abort from the visible grid: arm, then tap-abort.
+        handle(.armWindowOpened(pressedAt: Date()))
+        let armedOk = recorder.isRecording && hud.state.name == "arming"
+        handle(.armAborted)
+        let gridAbort = !recorder.isRecording && streamAsks.value == 0
+        Permissions.log("selftest-arm abort[grid]: armed=\(armedOk) "
+            + "micClosed=\(!recorder.isRecording) streams=\(streamAsks.value) "
+            + "state=\(hud.state.name) \(armedOk && gridAbort ? "PASS" : "FAIL")")
+
+        // Abort from hidden: arming surfaced the panel; the revert re-hides.
+        hud.hide()
+        handle(.armWindowOpened(pressedAt: Date()))
+        let surfaced = hud.isOnScreen && hud.state.name == "arming"
+        handle(.armAborted)
+        let rehidden = !hud.isOnScreen && hud.state.name == "hidden"
+            && !recorder.isRecording
+        Permissions.log("selftest-arm abort[hidden]: surfaced=\(surfaced) "
+            + "rehidden=\(rehidden) \(surfaced && rehidden ? "PASS" : "FAIL")")
+
+        // E4's other abort leg: arm → hold resolves (upgrade) → replyAborted.
+        // The stream ask here is EXPECTED — hold-resolution is where streams
+        // have always been created; the abort still leaves no residue. The
+        // reply is addressed to a synthetic conversation so the selftest can
+        // never markHeard a REAL waiting session (prod-data guard).
+        showIdleGrid()
+        activeConversation = ("selftest-arm", "selftest-arm", nil)
+        defer { activeConversation = nil }
+        handle(.armWindowOpened(pressedAt: Date()))
+        handle(.replyBegan)
+        let upgraded = recorder.isRecording && streamAsks.value == 1
+        handle(.replyAborted)
+        let replyAbortClean = !recorder.isRecording
+        Permissions.log("selftest-arm abort[upgrade]: upgraded=\(upgraded) "
+            + "micClosed=\(replyAbortClean) "
+            + "\(upgraded && replyAbortClean ? "PASS" : "FAIL")")
+
+        // E2's ledger: nothing durable moved across any of the above.
+        let rowsAfter = utteranceCount()
+        let filesAfter = audioFileCount()
+        let clean = rowsAfter == rowsBefore && filesAfter == filesBefore
+        Permissions.log("selftest-arm E2: utteranceRows \(rowsBefore)→\(rowsAfter) "
+            + "audioFiles \(filesBefore)→\(filesAfter) "
+            + "\(clean ? "PASS" : "FAIL")")
+        showIdleGrid()
+    }
+}
+
+/// A tiny thread-safe counter for the selftest's stream-ask ledger.
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() { lock.lock(); count += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
 }
 
 import AVFoundation

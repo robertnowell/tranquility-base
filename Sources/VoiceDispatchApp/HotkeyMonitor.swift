@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import VoiceDispatchCore
 
 /// System-wide push-to-talk, via a listen-only `CGEvent` tap.
 ///
@@ -42,6 +43,18 @@ public final class HotkeyMonitor: @unchecked Sendable {
         case replyEnded
         /// The hold turned out to be part of a real shortcut. Throw the audio away.
         case replyAborted
+        /// Bare ⌥ survived the arm grace (~80ms) with no other input: the
+        /// instant-arm window opened (docs/instant-arm.md). The app shows the
+        /// arming face and opens the microphone optimistically. `pressedAt`
+        /// is the key-down moment, carried for the latency log. The grace
+        /// exists because bare ⌥ is also how every ⌥-chord special character
+        /// starts while typing — typing must never flash the panel.
+        case armWindowOpened(pressedAt: Date)
+        /// The arm window closed without becoming a reply — a tap, a chord,
+        /// or other input. The app reverts the arming face and discards the
+        /// optimistic capture. Always precedes any tap-meaning transition
+        /// (`optionTapped` etc.) from the same release.
+        case armAborted
     }
 
     /// One gesture per action, told apart by which modifiers were held and for how
@@ -90,14 +103,24 @@ public final class HotkeyMonitor: @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     private let bindings = Bindings()
     private let holdThreshold: TimeInterval
+    /// Instant-arm grace: bare ⌥ must be down alone this long before the arm
+    /// window opens. Long enough that ⌥-chord typing (both keys land within a
+    /// few tens of ms) never shows anything; short enough that the mic opens
+    /// ~270ms before the hold resolves.
+    private let armGrace: TimeInterval
     private let onTransition: @Sendable (Transition) -> Void
 
     /// State of the modifier press currently in progress.
     private var seenFlags: CGEventFlags = []
     private var pressStartedAt: Date?
     private var sawOtherInput = false
-    private var isReplying = false
+    /// The arm/hold decisions, delegated whole (docs/instant-arm.md, eval
+    /// E1): the monitor schedules timers and feeds events; what they MEAN is
+    /// answered by the machine, which is unit-tested with synthetic
+    /// timelines in VoiceDispatchCore.
+    private var machine = ReplyGestureMachine()
     private var holdCheck: DispatchWorkItem?
+    private var armCheck: DispatchWorkItem?
     /// When the last clean bare-⌃ tap ended. Same window as the app's ⌥⌥ detector.
     private var lastControlTapAt: Date?
     private let controlDoubleTapWindow: TimeInterval = 0.45
@@ -105,20 +128,51 @@ public final class HotkeyMonitor: @unchecked Sendable {
     /// Mutated only from the tap callback, which runs on the main run loop.
     public private(set) var isPressed = false
 
+    /// Translate the machine's effects into transitions, in order. Runs on
+    /// the main run loop (tap callback or a main-queue timer), like every
+    /// other mutation here.
+    private func perform(_ effects: [ReplyGestureMachine.Effect]) {
+        for effect in effects {
+            switch effect {
+            case .openArmWindow:
+                onTransition(.armWindowOpened(pressedAt: pressStartedAt ?? Date()))
+            case .abortArm:
+                onTransition(.armAborted)
+            case .beginReply:
+                isPressed = true
+                onTransition(.replyBegan)
+            case .endReply:
+                onTransition(.replyEnded)
+            case .abortReply:
+                onTransition(.replyAborted)
+            }
+        }
+    }
+
     private func beginGesture(with flags: CGEventFlags) {
         seenFlags = flags
         pressStartedAt = Date()
         sawOtherInput = false
-        isReplying = false
+        perform(machine.apply(.began(isReply: flags == bindings.reply)))
 
-        // Recording starts only once the hold outlives the threshold, so a tap never
-        // opens the microphone.
+        // The arm window (instant-arm): scheduled only for the reply chord —
+        // the machine's guard is authoritative, this just avoids timer churn
+        // on every ⇧/⌃ press. Cancelled on release; disqualification is the
+        // machine's to decide at fire time.
+        if flags == bindings.reply {
+            let arm = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.perform(self.machine.apply(.graceElapsed))
+            }
+            armCheck = arm
+            DispatchQueue.main.asyncAfter(deadline: .now() + armGrace, execute: arm)
+        }
+
+        // Recording COMMITS only once the hold outlives the threshold; the
+        // arm window before it is optimistic and fully discarded on a tap.
         let check = DispatchWorkItem { [weak self] in
-            guard let self, self.pressStartedAt != nil, !self.sawOtherInput,
-                  self.seenFlags == self.bindings.reply else { return }
-            self.isReplying = true
-            self.isPressed = true
-            self.onTransition(.replyBegan)
+            guard let self else { return }
+            self.perform(self.machine.apply(.holdElapsed))
         }
         holdCheck = check
         DispatchQueue.main.asyncAfter(deadline: .now() + holdThreshold, execute: check)
@@ -127,6 +181,8 @@ public final class HotkeyMonitor: @unchecked Sendable {
     private func endGesture() {
         holdCheck?.cancel()
         holdCheck = nil
+        armCheck?.cancel()
+        armCheck = nil
         guard let started = pressStartedAt else { return }
         let duration = Date().timeIntervalSince(started)
         let flags = seenFlags
@@ -135,11 +191,11 @@ public final class HotkeyMonitor: @unchecked Sendable {
         seenFlags = []
         isPressed = false
 
-        if isReplying {
-            isReplying = false
-            onTransition(interfered ? .replyAborted : .replyEnded)
-            return
-        }
+        let effects = machine.apply(.released)
+        perform(effects)
+        // A concluded reply (ended or aborted) was the gesture's whole
+        // meaning; the tap classification below must not also run.
+        if effects.contains(.endReply) || effects.contains(.abortReply) { return }
         guard !interfered, duration < holdThreshold else { return }
         switch flags {
         case bindings.next: onTransition(.next)
@@ -166,9 +222,11 @@ public final class HotkeyMonitor: @unchecked Sendable {
 
     public init(
         holdThreshold: TimeInterval = 0.35,
+        armGrace: TimeInterval = 0.08,
         onTransition: @escaping @Sendable (Transition) -> Void
     ) {
         self.holdThreshold = holdThreshold
+        self.armGrace = armGrace
         self.onTransition = onTransition
     }
 
@@ -213,6 +271,13 @@ public final class HotkeyMonitor: @unchecked Sendable {
 
     public func stop() {
         isPressed = false
+        // Silent reset, no effects: stop() runs from deinit and app teardown,
+        // where emitting transitions would call into a dying delegate. A
+        // mid-gesture arm left behind is cleaned up by the app's own
+        // teardown (applicationWillTerminate abandons the recorder).
+        machine = ReplyGestureMachine()
+        holdCheck?.cancel(); holdCheck = nil
+        armCheck?.cancel(); armCheck = nil
         if let runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
             self.runLoopSource = nil
@@ -233,9 +298,14 @@ public final class HotkeyMonitor: @unchecked Sendable {
         }
 
         // Any other key or a click while a modifier is down means this is a real
-        // shortcut — Shift-A, Control-C, Option-drag — not one of ours.
+        // shortcut — Shift-A, Control-C, Option-drag — not one of ours. If the
+        // arm window was open, the machine aborts it HERE, immediately: the
+        // user is typing and must not stare at an arming face until key-up.
         if type == .keyDown || type == .leftMouseDown || type == .rightMouseDown {
-            if pressStartedAt != nil { sawOtherInput = true }
+            if pressStartedAt != nil {
+                sawOtherInput = true
+                perform(machine.apply(.sawOtherInput))
+            }
             return Unmanaged.passUnretained(event)
         }
 
@@ -248,8 +318,10 @@ public final class HotkeyMonitor: @unchecked Sendable {
             beginGesture(with: held)
         } else {
             // Adding a second modifier disqualifies the gesture: one modifier each
-            // is the whole point, and ⌃⌥ must not be mistaken for either.
+            // is the whole point, and ⌃⌥ must not be mistaken for either. An
+            // open arm window aborts immediately (a hold growing into ⌃⌥).
             seenFlags.formUnion(held)
+            perform(machine.apply(.flagsChanged(isReply: seenFlags == bindings.reply)))
         }
 
         return Unmanaged.passUnretained(event)

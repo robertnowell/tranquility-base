@@ -22,6 +22,15 @@ enum PanelState: Equatable {
     case idle(waiting: Int)
     case preparing
     case speaking(eventId: String?)
+    /// The instant-arm window (docs/instant-arm.md): bare ⌥ survived the
+    /// ~80ms grace and the microphone is capturing optimistically, but the
+    /// hold has not yet resolved. The face is the listening pill's geometry
+    /// in the faint treatment. A REAL state with its own legality rows, not
+    /// a hack around the funnel: it upgrades to `.listening` at
+    /// hold-resolution, or reverts to the exact stashed prior face
+    /// (StatusHUD.revertArming) when the press turns out to be a tap or a
+    /// typing chord.
+    case arming
     case listening(eventId: String?)
     case transcribing(startedAt: Date)
     case pendingSend(utteranceId: String)
@@ -42,6 +51,7 @@ enum PanelState: Equatable {
         case .idle: return "idle"
         case .preparing: return "preparing"
         case .speaking: return "speaking"
+        case .arming: return "arming"
         case .listening: return "listening"
         case .transcribing: return "transcribing"
         case .pendingSend: return "pendingSend"
@@ -63,9 +73,12 @@ enum PanelState: Equatable {
     }
 
     /// The microphone is open. Announcing into this would record itself.
+    /// `.arming` counts: the optimistic capture is genuinely live.
     var isCapturingAudio: Bool {
-        if case .listening = self { return true }
-        return false
+        switch self {
+        case .listening, .arming: return true
+        default: return false
+        }
     }
 
     /// A reply can be started. Recording with nothing to answer spends a
@@ -73,7 +86,8 @@ enum PanelState: Equatable {
     var canStartReply: Bool {
         switch self {
         case .speaking, .pendingSend, .result, .receipt: return true
-        case .hidden, .idle, .preparing, .listening, .transcribing, .settings: return false
+        case .hidden, .idle, .preparing, .arming, .listening, .transcribing,
+             .settings: return false
         }
     }
 
@@ -91,10 +105,12 @@ enum PanelState: Equatable {
     }
 
     /// The reply flow owns the stage from mic-open to resolution. These are the
-    /// states a stale repaint must never replace.
+    /// states a stale repaint must never replace. `.arming` owns it too — the
+    /// mic is open — so an explicit dismiss tears it down honestly through
+    /// `endCapture` like every other capture state.
     var ownsStage: Bool {
         switch self {
-        case .listening, .transcribing, .pendingSend: return true
+        case .arming, .listening, .transcribing, .pendingSend: return true
         default: return false
         }
     }
@@ -111,6 +127,17 @@ enum PanelState: Equatable {
     /// instead of being guarded against at each of its call sites.
     func admits(_ next: PanelState) -> Bool {
         switch self {
+        case .arming:
+            switch next {
+            // The hold resolved: the arming face upgrades to the live pill.
+            case .listening: return true
+            // Everything else is refused — an ambient repaint must never
+            // stomp the arm window. The abort path does not travel this
+            // table at all: revertArming restores the stashed prior state
+            // through the restore door, and an explicit dismiss goes
+            // through endCapture's user door.
+            default: return false
+            }
         case .listening:
             switch next {
             case .transcribing, .listening, .result: return true

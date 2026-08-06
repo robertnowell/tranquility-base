@@ -58,7 +58,12 @@ public final class Recorder: @unchecked Sendable {
         }
     }
 
-    public func start() throws {
+    /// `openingStream: false` is the instant-arm path (docs/instant-arm.md):
+    /// capture begins optimistically at the arm window WITHOUT creating a
+    /// StreamedUtterance — no network session for audio that a tap will
+    /// discard. The stream attaches at hold-resolution via `openStream()`,
+    /// which feeds it everything buffered since this call.
+    public func start(openingStream: Bool = true) throws {
         guard Self.microphoneAuthorized() else { throw RecorderError.microphoneDenied }
         lock.lock()
         guard !running else { lock.unlock(); return }
@@ -67,10 +72,13 @@ public final class Recorder: @unchecked Sendable {
         running = true
         if let stale = stream {
             // An aborted utterance never took its stream; close it quietly.
+            stream = nil
             Task { _ = await stale.finish(timeout: 0) }
         }
-        stream = streamFactory?()
-        if let s = stream { Task { await s.start() } }
+        if openingStream {
+            stream = streamFactory?()
+            if let s = stream { Task { await s.start() } }
+        }
         lock.unlock()
 
         // Replying while the announcement is still playing is the normal case,
@@ -130,6 +138,32 @@ public final class Recorder: @unchecked Sendable {
 
         lock.lock(); running = false; lock.unlock()
         throw RecorderError.engineFailed(lastReason)
+    }
+
+    /// Attach the live stream to a capture that is already running — the
+    /// instant-arm upgrade (docs/instant-arm.md). Everything buffered since
+    /// the mic opened is fed FIRST, under the same lock the tap uses to
+    /// publish the stream, so no live chunk can jump ahead of the backlog:
+    /// the tap reads `stream` under this lock, and any chunk that read nil
+    /// is already in the backlog being fed here. Pre-socket delivery rides
+    /// StreamedUtterance's own pre-open buffer (the buffer-then-flush design
+    /// documented in AssemblyAIStreaming.swift), so the transcript covers
+    /// the arm window even though the socket opens after this returns.
+    public func openStream() {
+        lock.lock()
+        guard running, stream == nil else { lock.unlock(); return }
+        let s = streamFactory?()
+        if let s, !buffer.isEmpty { s.feed(pcm16: buffer) }
+        stream = s
+        lock.unlock()
+        if let s { Task { await s.start() } }
+    }
+
+    /// Seconds of audio captured so far (PCM16 mono at `sampleRate`) — the
+    /// arm-window accounting the latency log reports at upgrade.
+    public var bufferedSeconds: Double {
+        lock.lock(); defer { lock.unlock() }
+        return Double(buffer.count) / 2.0 / sampleRate
     }
 
     /// Take ownership of this utterance's live stream (nil if none was created
