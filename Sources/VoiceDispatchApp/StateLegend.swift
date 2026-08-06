@@ -148,9 +148,16 @@ enum StateLegend {
     enum Lamp: Equatable {
         /// Green: waiting on you.
         case ready
-        /// Quiet: alive, nothing waiting.
+        /// Advisory blue: the agent has work in hand right now (ruled 06 Aug —
+        /// "we have no indicator if the agent is actually working or idle").
+        /// Blue because MIL-STD-411's advisory channel is exactly this: news,
+        /// nothing for you to do. Solid, never blinking — a room full of
+        /// blinking lamps is the opposite of calm.
+        case working
+        /// Quiet: alive, turn complete, nothing in flight.
         case running
-        /// Amber: fault. Defined for the seam; unproduced today.
+        /// Amber: stopped on something it cannot pass on its own — a usage
+        /// limit, a dead API. Amber is the needs-you channel.
         case fault
 
         /// Lamp diameter — 9px circle, ruled.
@@ -159,6 +166,7 @@ enum StateLegend {
         var fill: NSColor {
             switch self {
             case .ready: return Palette.ready
+            case .working: return Palette.advisory
             case .running: return Palette.hover
             case .fault: return Palette.fault
             }
@@ -167,7 +175,7 @@ enum StateLegend {
         /// The hairline ring; nil when the fill carries the lamp alone.
         var ring: NSColor? {
             switch self {
-            case .ready, .fault: return nil
+            case .ready, .fault, .working: return nil
             case .running: return Palette.hairline
             }
         }

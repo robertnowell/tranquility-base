@@ -627,24 +627,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for stored in known where !placed.contains(stored.sessionId) {
             guard let live = liveById[stored.sessionId] else { continue }
             placed.insert(stored.sessionId)
+            let activity = stored.transcriptPath.flatMap {
+                SessionActivity.read(transcriptPath: $0)
+            }
             rows.append(StateLegend.SessionRow(
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
-                callsign: stored.callsign ?? "",
-                lamp: .running))
+                callsign: activity?.shortReason ?? (stored.callsign ?? ""),
+                lamp: lamp(for: activity)))
         }
         // Live sessions with no stored events yet: nothing to rank them by,
         // so they close the grid.
         for live in liveById.values where !placed.contains(live.sessionId) {
+            let path = live.cwd.map {
+                TranscriptTitles.defaultPath(cwd: $0, sessionId: live.sessionId)
+            }
+            let activity = path.flatMap { SessionActivity.read(transcriptPath: $0) }
             rows.append(StateLegend.SessionRow(
                 id: live.sessionId,
                 name: StateLegend.displayName(
                     liveName: Self.tabTitle(transcriptPath: nil, live: live),
                     callsign: nil, fallback: "session"),
-                callsign: "",
-                lamp: .running))
+                callsign: activity?.shortReason ?? "",
+                lamp: lamp(for: activity)))
         }
         return rows
+    }
+
+    /// The lamp a non-waiting session shows. A waiting session is green by
+    /// definition (it has something unread for you) and never reaches here;
+    /// this answers the question the grid could not: working, stuck, or just
+    /// sitting there. Unreadable transcript = the old quiet lamp, never a
+    /// guess.
+    private func lamp(for activity: SessionActivity?) -> StateLegend.Lamp {
+        switch activity {
+        case .working: return .working
+        case .blocked: return .fault
+        case .idle, nil: return .running
+        }
     }
 
     /// The tab's string for a session, or nil while it has none: the
