@@ -1576,6 +1576,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem.menu = statusMenu
             statusItem.button?.performClick(nil)
             statusItem.menu = nil
+        } else if hud.isOnScreen {
+            // Toggle (ruled 05 Aug): the click that opens the panel also hides
+            // it. From the resting grid that is a plain hide — nothing on stage
+            // to retire. From any active state it is the full dismiss, because
+            // hiding a panel must never strand a live microphone or mark an
+            // announcement heard-by-accident: dismiss is the honest teardown.
+            if hud.canSurfaceAmbiently { hud.hide() } else { hud.dismiss() }
         } else {
             showPanel()
         }
