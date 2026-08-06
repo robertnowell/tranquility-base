@@ -180,9 +180,15 @@ enum StateLegend {
         let lamp: Lamp
     }
 
-    /// The one identity, resolved once: the minted callsign wins everywhere;
-    /// the fallback (project label or live session name) covers unminted sessions.
-    static func displayName(callsign: String?, fallback: String) -> String {
+    /// The one DISPLAYED identity — RE-RULED 05 Aug: Claude's own session name
+    /// wins wherever we have it. "Yes, that name sucks, but at least it is
+    /// consistent": the string on screen is the string in the terminal tab,
+    /// checkable at a glance, maintained by nobody. The minted callsign is the
+    /// fallback for display, and remains the SPOKEN identity outright — a
+    /// hyphenated slug is unspeakable, and spoken attribution now also rides
+    /// the session's durable voice.
+    static func displayName(liveName: String? = nil, callsign: String?, fallback: String) -> String {
+        if let liveName, !liveName.isEmpty { return liveName }
         if let callsign, !callsign.isEmpty { return callsign }
         return fallback
     }

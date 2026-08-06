@@ -516,11 +516,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let target = try? coordinator?.replyTarget() ?? nil else { return nil }
         let live = (ClaudeAgentsCLI().sessions() ?? [])
             .first(where: { $0.sessionId == target.sessionId })
-        // One identity: the minted callsign wins. Until minted, prefer the live
-        // session name ("promotions-49") over the bare project label — several
-        // sessions share a label, and the name is the same string Claude Code
-        // shows, so it is checkable against the tab.
-        let name = target.callsign ?? live?.name ?? target.projectLabel
+        // One displayed identity (re-ruled 05 Aug): Claude's own name first —
+        // the same string as the terminal tab, checkable at a glance.
+        let name = live?.name ?? target.callsign ?? target.projectLabel
         return (target.sessionId, live?.pid, name, target.cwd)
     }
 
@@ -535,29 +533,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func sessionRowsNow() -> [StateLegend.SessionRow] {
         guard let coordinator else { return [] }
         let waiting = (try? coordinator.waiting()) ?? []
+        // One probe serves every row; the name shown is Claude's own (re-ruled
+        // 05 Aug — the terminal tab's string, verbatim), callsign as fallback.
+        let liveById = Dictionary(
+            uniqueKeysWithValues: (ClaudeAgentsCLI().sessions() ?? []).map { ($0.sessionId, $0) })
         // The topic is the stored brief's composed 3–6-word label, carried by
         // the waiting query's brief join — NEVER a prose prefix of summaryText
         // or the raw assistant message (ruled: that derivation produced orphan
-        // fragments like "**Voices for lif"). No brief yet = callsign only.
+        // fragments like "**Voices for lif"). No brief yet = name only.
         var rows = waiting.map {
             StateLegend.SessionRow(
                 id: $0.sessionId,
-                name: StateLegend.displayName(callsign: $0.callsign, fallback: $0.projectLabel),
+                name: StateLegend.displayName(
+                    liveName: liveById[$0.sessionId]?.name,
+                    callsign: $0.callsign, fallback: $0.projectLabel),
                 topic: StateLegend.gridTopic($0.briefTopic),
                 lamp: .ready)
         }
         // Live sessions with nothing waiting: quiet rows, so a skipped or heard
-        // session stays findable. Their latest stop (if any) supplies callsign
-        // and topic; a session that has never finished a turn shows its live name.
+        // session stays findable.
         let waitingIds = Set(waiting.map(\.sessionId))
         let known = (try? store?.waitingSessionsIncludingHeard()) ?? []
-        for live in ClaudeAgentsCLI().sessions() ?? [] where !waitingIds.contains(live.sessionId) {
+        for live in liveById.values where !waitingIds.contains(live.sessionId) {
             let stored = known.first { $0.sessionId == live.sessionId }
             rows.append(StateLegend.SessionRow(
                 id: live.sessionId,
                 name: StateLegend.displayName(
+                    liveName: live.name,
                     callsign: stored?.callsign,
-                    fallback: live.name ?? stored?.projectLabel ?? "session"),
+                    fallback: stored?.projectLabel ?? "session"),
                 topic: StateLegend.gridTopic(stored?.briefTopic),
                 lamp: .running))
         }
@@ -766,6 +770,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     sessionId: announcement.event.sessionId,
                     pid: nil,
                     project: StateLegend.displayName(
+                        liveName: (ClaudeAgentsCLI().sessions() ?? [])
+                            .first { $0.sessionId == announcement.event.sessionId }?.name,
                         callsign: announcement.event.callsign,
                         fallback: announcement.event.projectLabel),
                     cwd: announcement.event.cwd,
@@ -948,9 +954,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         guard let self else { return }
                         let live = (ClaudeAgentsCLI().sessions() ?? [])
                             .first { $0.sessionId == announcement.event.sessionId }
-                        // One identity: the card is titled by the callsign the
-                        // voice is already speaking — the visual side catching up.
+                        // One displayed identity (re-ruled 05 Aug): the terminal
+                        // tab's own string; the voice still speaks the callsign.
                         let name = StateLegend.displayName(
+                            liveName: live?.name,
                             callsign: announcement.event.callsign,
                             fallback: announcement.event.projectLabel)
                         self.activeConversation = (
@@ -1045,9 +1052,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                    ok: false)
                     break
                 }
-                let pid = (ClaudeAgentsCLI().sessions() ?? [])
-                    .first(where: { $0.sessionId == session })?.pid
-                let name = StateLegend.displayName(callsign: target.callsign,
+                let live = (ClaudeAgentsCLI().sessions() ?? [])
+                    .first(where: { $0.sessionId == session })
+                let pid = live?.pid
+                let name = StateLegend.displayName(liveName: live?.name,
+                                                   callsign: target.callsign,
                                                    fallback: target.projectLabel)
                 hud.adoptTarget(sessionId: session, pid: pid,
                                 label: name, cwd: target.cwd)
