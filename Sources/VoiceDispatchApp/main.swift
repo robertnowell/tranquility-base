@@ -134,6 +134,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         intakeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let coordinator = self.coordinator else { return }
+                // A dead tap is a mic that cannot be closed and gestures that
+                // vanish without a log line. Five seconds is the longest that
+                // state gets to exist.
+                self.hotkey?.reviveTapIfDead()
                 var turnArrived = false
                 if let result = try? coordinator.intake(), result.inserted > 0 {
                     // Rows were inserted: a turn came back. This is the honest

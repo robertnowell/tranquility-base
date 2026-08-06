@@ -576,7 +576,11 @@ final class StatusHUD: NSObject {
         case .listening:
             titleLabel.isHidden = true
             hintLabel.stringValue = ""
-            discardButton.isHidden = !face.handsFree
+            // ✕ is ALWAYS visible while the mic is open (re-ruled 06 Aug): a
+            // recording escapable only by keyboard trapped the user for minutes
+            // when the event tap died — an open microphone must carry its own
+            // off-switch. ✓ stays hands-free-only; push-to-talk sends on release.
+            discardButton.isHidden = false
             sendCheckButton.isHidden = !face.handsFree
             meter.isHidden = false
 

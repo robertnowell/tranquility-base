@@ -71,6 +71,22 @@ public final class HotkeyMonitor: @unchecked Sendable {
     }
 
     private var tap: CFMachPort?
+
+    /// Watchdog, called from the app's tick. A tap can die without any callback
+    /// firing — TCC re-evaluates after binary changes and disables silently
+    /// (observed 06 Aug: mic stuck open, every gesture unheard, zero log lines,
+    /// preflight still claiming granted). tapDisabledByTimeout has an in-callback
+    /// re-enable, but a FULLY dead tap never calls back — only an outside check
+    /// can notice. Re-enabling is free when healthy.
+    func reviveTapIfDead() {
+        guard let tap else { return }
+        if !CGEvent.tapIsEnabled(tap: tap) {
+            CGEvent.tapEnable(tap: tap, enable: true)
+            Permissions.log(CGEvent.tapIsEnabled(tap: tap)
+                ? "hotkey: tap was DEAD; revived by watchdog"
+                : "hotkey: tap dead and revive REFUSED — Input Monitoring likely revoked")
+        }
+    }
     private var runLoopSource: CFRunLoopSource?
     private let bindings = Bindings()
     private let holdThreshold: TimeInterval
