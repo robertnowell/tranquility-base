@@ -20,8 +20,10 @@ CONFIG="${1:-debug}"
 IDENTITY="${VOICE_DISPATCH_SIGN_IDENTITY:-}"
 
 if [ -z "$IDENTITY" ]; then
+  # See bundle.sh: without `|| true`, a machine with no certificate exits here
+  # under `set -e` instead of reaching the ad-hoc warning below.
   IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
-    | grep "Apple Development" | head -1 | sed -E 's/.*"(.*)"/\1/')
+    | grep "Apple Development" | head -1 | sed -E 's/.*"(.*)"/\1/' || true)
 fi
 
 swift build ${CONFIG:+--configuration "$CONFIG"}
