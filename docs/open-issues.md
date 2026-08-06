@@ -50,6 +50,14 @@ at `/tmp/probe-hook.sh` but never fired, because project-level `.claude/settings
 was not picked up for `-p`. Install the probe in user settings and read one real
 value from each path before choosing the signal. Do not ship a third guess.
 
+**Lead from PR #1 (head a05f253, closed):** `kind` from `claude agents --json` is a
+first-party discriminator — `"background"` sessions are hosted by
+`claude --bg-pty-host` with no tab and no supported IPC, exact correlation across 11
+live sessions in that branch's testing. `targetKind` already flows through dispatch
+(Coordinator.swift:575). The PR also confirmed the `tty` column records `??` for
+*every* session now, so a filter keyed on it would drop real turns: the tty approach
+is dead, `kind` is the fourth guess that finally has evidence behind it.
+
 ---
 
 ## 2. Ambient surfacing did not fire for a superseding turn — FIXED
@@ -75,58 +83,61 @@ means. Re-run against a settled baseline: a superseding turn surfaces.
 
 ## 3. Repeated ⌃⌥ replays the item you are listening to
 
-**Status:** open.
+**Status:** mostly dissolved by redesign; residual behaviour is deliberate.
 
-Stopping an announcement reverts it to unread (correct — half an announcement is not
-read). It is also the newest, so the stack hands it straight back. With one item
-waiting, the result is a loop with no way past it.
-
-**The fix:** remember the event stopped by the most recent press and exclude it from
-the *next* selection only. If there is nothing else, say so rather than replaying.
-Not a status change: it must stay unread.
+The loop existed because ⌃⌥ went straight from item to item. Under home-first
+(ui-pass-7 ruling 7, `main.swift` next-handler): ⌃⌥ mid-speech stops the voice and
+returns to the *grid* — the stopped item stays unread and its row lit, and the way
+past it is now on screen: tap any other row. A second ⌃⌥ from the grid does play the
+top of the stack again, but that is the stack being honest, not a trap. Close for
+good when dogfood confirms nobody hits it in anger.
 
 ---
 
 ## 4. Slow transcription looks like a hang
 
-**Status:** open.
+**Status:** open, exposure much reduced.
 
 A 27-second recording took long enough that the panel sat on "Transcribing your
 reply…" with no feedback. It completed — 401 characters — so nothing was lost, but
 there was no way to know that.
 
-**The fix (Wispr's, and it is the right one):** after ~20s say "taking longer than
-usual, your audio is safe", with retry and cancel. The audio is already durable on
-disk before any network call, so that promise is true today and just unstated.
+Streaming transcription (AssemblyAI, WS-C) now carries the common case: text is
+already transcribed when you release the key. The wait only survives on the recovery
+path (stream failed, file re-transcribed). The fix there is unchanged (Wispr's):
+after ~20s say "taking longer than usual, your audio is safe", with retry and
+cancel. The audio is durable on disk before any network call, so that promise is
+true today and just unstated.
 
 ---
 
-## 5. Escape is dead in three states
+## 5. Escape is dead in three states — CLOSED BY REDESIGN
 
-**Status:** fixed by the state machine below, needs verifying in use.
-
-`isBusyOnScreen` tested `isRecording` (the Reply-button flag) and never `isListening`
-(the hold-gesture flag), so Escape did nothing during the most common interaction in
-the app. Also dead in settings and while idle.
-
----
-
-## 6. ⌃⌥ while the microphone is open
-
-**Status:** open.
-
-Starts an announcement into a live mic — it would record itself. Should be ignored
-while capturing. `PanelState.isCapturingAudio` now exists to express this; the guard
-is not wired in yet.
+**Status:** closed. Escape is no longer a control at all: dismiss is the ⌃⇧ chord
+(`main.swift:824` — "a chord because Escape leaks ESC" into the focused app), and
+every guard that made Escape unreliable now derives from `PanelState` instead of
+the five booleans. The bug was real; the key it lived on was removed.
 
 ---
 
-## 7. ⌥ with nothing to reply to
+## 6. ⌃⌥ while the microphone is open — FIXED
 
-**Status:** open.
+**Status:** fixed, wired, guarded in two places. `guard !hud.isCapturingAudio`
+in the announce handler and the next-handler (`main.swift:764`, `:892`), and the
+stage arbiter refuses any paint over a capture state as a second line of defence
+(capture states own the stage — `PanelState.admits()`).
 
-Records and transcribes a reply that has nowhere to go, then fails. Refuse at the
-gesture. `PanelState.canStartReply` exists; not wired in yet.
+---
+
+## 7. ⌥ with nothing to reply to — CLOSED BY REDEFINITION
+
+**Status:** closed. "Refuse at the gesture" was the wrong fix and is deliberately
+not wired (`main.swift` reply-handler comment): with nothing to answer, ⌥ is
+**dictation** — the transcript goes to the focused input or the clipboard, and the
+listening placard says which. Refusing would have broken dictation-to-clipboard,
+reply-window replies from an idle panel, and re-recording during transcription.
+The router that names the destination up front is A6 (`micDestination`), still on
+the program board.
 
 ---
 
@@ -140,39 +151,78 @@ tap cancels the send. No obviously correct answer.
 
 ---
 
-## 9. Summaries invent numbers
+## 9. Summaries invent numbers — FIXED
 
-**Status:** open.
-
-A summary read "ninety-nine rendering tests pass" when there were 65. The model was
-told to ground everything in the final message; numbers are the worst thing for it to
-embellish because they sound exactly like the detail you would trust.
-
-**The fix:** the sanitizer is the right layer — strip or flag digits that do not
-appear in the source message, the same way it already strips identifiers.
+**Status:** fixed exactly as prescribed. `DigitGrounding.swift`: no spoken number
+that does not appear in the source, applied in `Summarizer` and pinned by tests
+(`Phase1bTests`). The "ninety-nine tests" class of embellishment cannot reach the
+voice.
 
 ---
 
-## 10. Before pushing
+## 10. Housekeeping (repo is public now)
 
 - `model-calls.jsonl` grows without bound and holds full session content. Needs
-  rotation and a cap.
-- Clicky's MIT copyright belongs in a NOTICE: the hotkey monitor and the PCM
-  converter are adapted from it. Licence obligation, not courtesy.
+  rotation and a cap. Same now applies to `app.log`, which records dictated text
+  when the Apple recovery engine runs (disclosed in README).
+- ~~Clicky's MIT copyright belongs in a NOTICE~~ — done, `NOTICE` exists at root.
 
 ---
 
-## In progress: the state machine
+## 11. Gestures should accept Accessibility OR Input Monitoring (from PR #1)
 
-Five independent booleans (`isRecording`, `isListening`, `isSpeakingNow`,
-`awaitingConfirm`, `isIdle`) replaced by one `PanelState` with one case per state.
-Every guard derives from it and every transition is logged as
-`state: speaking -> listening  (recording started)`.
+**Status:** open, design ready — app-layer onboarding pass.
 
-This is what makes issues 5, 6 and 7 answerable in one place instead of three, and it
-is why they were invisible: nothing in the code said those flags were describing the
-same idea.
+A listen-only `CGEvent` tap is authorised by **either** permission, but onboarding
+requires Input Monitoring and calls Accessibility optional. That is backwards in
+the way that matters: on a normal Mac nothing requests Input Monitoring — Wispr
+Flow, Raycast and every comparable tool appear under Accessibility and that pane
+sits empty — so the checklist can report a permission missing while the tap it
+gates is working, and demand one the user has no way to grant.
 
-Done: the enum, the logged transition, guards for Escape, ambient surfacing, audio
-capture and reply-eligibility. Remaining: wire 6 and 7 into the gesture handler, and
-delete the last of the booleans.
+PR #1's design (head a05f253, `Permissions.swift` diff): `gesturesGranted =
+isGranted(.accessibility) || isGranted(.inputMonitoring)`; neither gesture
+permission independently required; Accessibility is the one to *ask* for (it also
+gives dictation-at-cursor). Granting Accessibility flips
+`CGPreflightListenEventAccess()` true, so it is a strict superset. Port deserves a
+live permissions test on a real grant state, not a drive-by.
+
+---
+
+## 12. Signing scripts for machines without a dev cert (from PR #1)
+
+**Status:** open, nice-to-have until the repo has outside users.
+
+`bundle.sh` uses an Apple Development identity when one exists (why grants survive
+rebuilds on this machine) but falls back to ad-hoc with a warning. Ad-hoc means the
+designated requirement is the binary's own cdhash: every rebuild is an app macOS
+has never seen, and every TCC grant silently dies — while the Privacy pane still
+shows the switch ON. Near-undiagnosable; full analysis preserved in
+`docs/pr1-harvest.md`. PR #1 shipped `make-signing-identity.sh` (create a stable
+local cert, no Xcode) and `reset-permissions.sh` (recover when an identity does
+change); `bundle.sh` *created* the identity rather than warning. Port both scripts
+before any release.
+
+---
+
+## 13. Sending gives no visible receipt (ruled 06 Aug)
+
+**Status:** ruled, to build.
+
+On success the only feedback is `lastStatusLine` — rendered as a disabled item
+inside the menu-bar dropdown, i.e. invisible. Failures do surface as cards, but a
+user who has never seen one has no reason to trust that. Robert's ruling: a small
+non-blocking acknowledgment at the top — "sending to ⟨callsign⟩ → sent ✓" — not a
+dedicated card, not a stage owner; errors keep their cards. Supersedes the earlier
+"kill the Sent face" ruling in its spirit: that killed a *blocking* card, this is
+a whisper. Design goes through the render funnel as a transient overlay (like
+`flashAcknowledge`), never a `PanelState`.
+
+---
+
+## Landed: the state machine
+
+The five independent booleans became `PanelState` + the stage arbiter
+(`admits()` legality table), then the eleven painters became one `render()` funnel.
+Issues 5, 6 and 7 above were closed by exactly the mechanism this section promised.
+History: `docs/state-architecture.html`, `docs/3a-collapse.md`.
