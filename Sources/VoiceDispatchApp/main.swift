@@ -923,6 +923,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
         case .replyBegan:
+            // Latency instrumentation (ruled 05 Aug: measure before rewiring).
+            // t0 is the moment the gesture RESOLVED — the ~0.35s tap-vs-hold
+            // threshold has already been paid before this line; HotkeyMonitor
+            // owns that constant. What we measure here is everything the app
+            // adds on top: teardown, mic engine start, first pill paint.
+            let gestureResolvedAt = Date()
+            func lat(_ stage: String) {
+                let ms = Int(Date().timeIntervalSince(gestureResolvedAt) * 1000)
+                Permissions.log("latency: \(stage) +\(ms)ms after hold resolved")
+            }
             guard micGranted else { return }
             if recorder.isRecording {
                 // Refusing silently is how "app seems dead" reports start — the
@@ -965,8 +975,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? coordinator?.markHeard(sessionId: sessionId, through: latest.latestId)
             }
             coordinator?.speech.stop()  // never record over playback
+            lat("teardown done, opening mic")
             do {
                 try recorder.start()
+                lat("mic open")
             } catch {
                 // Route changes make this genuinely transient — say so and stop,
                 // rather than showing a Listening pill over a dead microphone.
@@ -979,6 +991,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isBusy = true
             updateTitle()
             hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
+            lat("pill rendered")
 
         case .replyEnded:
             isBusy = false
