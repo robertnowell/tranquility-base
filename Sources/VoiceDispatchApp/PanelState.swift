@@ -26,6 +26,12 @@ enum PanelState: Equatable {
     case transcribing(startedAt: Date)
     case pendingSend(utteranceId: String)
     case result
+    /// The dictation receipt (ui-pass-7, ruling 5): dictation success shows its
+    /// card again — "Copied to clipboard: …" / "Typed into X." — because it
+    /// tells you where the words went. Distinct from `.result` so the log never
+    /// calls a success `result.failed`, and distinct from the dead Sent face:
+    /// reply-send success stays silent as ruled; ONLY dictation gets a receipt.
+    case receipt
     case settings
 
     /// Short, stable name for logs. Deliberately excludes ids so a transition line
@@ -40,6 +46,7 @@ enum PanelState: Equatable {
         case .transcribing: return "transcribing"
         case .pendingSend: return "pendingSend"
         case .result: return "result.failed"
+        case .receipt: return "receipt"
         case .settings: return "settings"
         }
     }
@@ -65,7 +72,7 @@ enum PanelState: Equatable {
     /// transcription to discover it had nowhere to go.
     var canStartReply: Bool {
         switch self {
-        case .speaking, .pendingSend, .result: return true
+        case .speaking, .pendingSend, .result, .receipt: return true
         case .hidden, .idle, .preparing, .listening, .transcribing, .settings: return false
         }
     }
@@ -111,9 +118,10 @@ enum PanelState: Equatable {
             }
         case .transcribing:
             switch next {
-            // result is the failure-receipt path: successes never paint a card
-            // (the Sent face is dead), so nothing success-shaped arrives here.
-            case .pendingSend, .listening, .transcribing, .result: return true
+            // result is the failure path; receipt is the ONE success-shaped
+            // card left (ui-pass-7, ruling 5): a delivered dictation says
+            // where the words went. Reply-send success still paints nothing.
+            case .pendingSend, .listening, .transcribing, .result, .receipt: return true
             default: return false
             }
         case .pendingSend:
@@ -122,9 +130,10 @@ enum PanelState: Equatable {
             default: return false
             }
         // Everything else admits everything. The old "refuse a late success
-        // receipt over live speech" guard died with the Sent face: there is no
-        // success receipt left to refuse.
-        case .hidden, .idle, .preparing, .speaking, .result, .settings:
+        // receipt over live speech" guard died with the Sent face: the
+        // dictation receipt can only arrive out of `.transcribing`, its own
+        // flow's stage, so it can never paint over live speech.
+        case .hidden, .idle, .preparing, .speaking, .result, .receipt, .settings:
             return true
         }
     }

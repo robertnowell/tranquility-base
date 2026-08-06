@@ -296,6 +296,18 @@ final class StatusHUD: NSObject {
         render()
     }
 
+    /// The dictation receipt (ui-pass-7, ruling 5): dictation success shows its
+    /// card again, because it tells you where the words went — which app was
+    /// typed into, or what is now on the clipboard, is invisible otherwise.
+    /// Reply-send success stays silent as ruled; this is the only
+    /// success-shaped card in the app. No title: dictation is exactly the path
+    /// with no agent, so the Delivered pill and the body carry the whole story.
+    func showDictationReceipt(_ message: String) {
+        guard transition(to: .receipt, because: "dictation delivered") else { return }
+        face = Face(body: message)
+        render()
+    }
+
     /// `note` is a prefix about what just happened ("Stopped."). The sentence about
     /// what is waiting is always derived from `waiting`, never passed in — the two
     /// were computed at different call sites and drifted, so the panel showed
@@ -376,7 +388,7 @@ final class StatusHUD: NSObject {
             // The true empty state — the ONLY surface where the literal app name
             // appears, with the one-line hint.
             face = Face(title: "Voice Dispatch",
-                        body: [note, "Nothing waiting. Sessions appear here as they finish."]
+                        body: [note, "Nothing waiting. Agents appear here as they finish."]
                             .compactMap { $0 }.joined(separator: " "))
         } else {
             // No "N waiting" headline (ruled): the strip says SESSIONS, the lamps
@@ -463,6 +475,7 @@ final class StatusHUD: NSObject {
         // The READBACK placard (face.placardOverride) carries this face's pill.
         case .pendingSend: return nil
         case .result: return .needsYou
+        case .receipt: return .delivered
         case .settings: return .settings
         }
     }
@@ -489,7 +502,7 @@ final class StatusHUD: NSObject {
 
         // Baseline: pill from the state's legend row (or the face's own
         // placard), title and body from the stash, every quiet action off.
-        // Go to session stays available while listening — knowing which
+        // Go to agent stays available while listening — knowing which
         // terminal your words are about to land in is exactly when you want to
         // check. No hint line on any card (ruled): the grid's key line is the
         // only hint left, set by its own arm.
@@ -516,8 +529,16 @@ final class StatusHUD: NSObject {
         cancelTranscriptionButton.isHidden = true; retryTranscriptionButton.isHidden = true
 
         switch state {
-        case .hidden, .preparing, .speaking, .transcribing:
+        case .hidden, .preparing, .transcribing, .receipt:
             break
+
+        case .speaking:
+            // Karaoke starts unspoken (ui-pass-7, ruling 6): the card's text
+            // first paints entirely in the faint treatment; ink arrives only
+            // word-by-word with the voice. highlight(upTo: 0) IS the initial
+            // attribution — without it the baseline's plain stringValue showed
+            // every word full-dark until the first word event repainted it.
+            highlight(upTo: 0)
 
         case .idle where !face.sessionRows.isEmpty:
             // The grid: the idle face IS one row per live session (WS-B, ruled).
@@ -642,21 +663,28 @@ final class StatusHUD: NSObject {
         }
     }
 
-    /// The identity in MONO (matching the grid rows), the topic joining in the
-    /// regular face — one attributed string so the pair truncates as one line.
+    /// The identity in MONO (matching the grid rows) on line one; the topic in
+    /// the regular face starting on line TWO (ui-pass-7, ruling 4) — always its
+    /// own line, never a same-line continuation. Still one attributed string in
+    /// one label, so the pair stays a single layout unit; each line truncates
+    /// against the panel edge by itself.
     private func renderTitle() {
         titleLabel.isHidden = face.title.isEmpty
         guard !face.title.isEmpty else { titleLabel.stringValue = ""; return }
+        let truncating = NSMutableParagraphStyle()
+        truncating.lineBreakMode = .byTruncatingTail
         let line = NSMutableAttributedString(
             string: face.title, attributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold),
                 .foregroundColor: StateLegend.Palette.ink,
+                .paragraphStyle: truncating,
             ])
         if !face.topic.isEmpty {
             line.append(NSAttributedString(
-                string: "  \(face.topic)", attributes: [
+                string: "\n\(face.topic)", attributes: [
                     .font: NSFont.systemFont(ofSize: 12),
                     .foregroundColor: StateLegend.Palette.secondary,
+                    .paragraphStyle: truncating,
                 ]))
         }
         titleLabel.attributedStringValue = line
@@ -987,13 +1015,17 @@ final class StatusHUD: NSObject {
                 seconds: 60, send: {}, cancel: { _ in }) }),
             ("result", { _ = self.cancelPendingSend(restartListening: false)
                          self.showResult(long) }),
+            // The one success-shaped card (ui-pass-7, ruling 5): a delivered
+            // dictation names where the words went.
+            ("receipt", { self.showDictationReceipt(
+                "Copied to clipboard: \u{201C}\(long)\u{201D}") }),
             ("settings", {
                 self.showSettings(
                     voices: [Voice(id: "a", name: "Archer", category: "professional"),
                              Voice(id: "b", name: "My Clone", category: "cloned"),
                              Voice(id: "c", name: "Sarah", category: "premade")],
                     roster: ["c"],
-                    note: "Checked voices are the cast sessions speak with.")
+                    note: "Checked voices are the cast agents speak with.")
                 self.panel?.contentView?.layoutSubtreeIfNeeded()
                 Permissions.log("settings chrome: rows=\(self.voiceRowCount) "
                                 + "back=\(!self.backButtonHidden) gear=\(!self.gearHidden) "
@@ -1138,6 +1170,13 @@ final class StatusHUD: NSObject {
             adopt()
             showResult("promotions copy's tab is gone — copied your words to the clipboard.")
 
+        case "receipt":
+            // The dictation receipt (ui-pass-7, ruling 5). No adopted target:
+            // dictation is exactly the path with no agent, so the Delivered
+            // pill and the body carry the whole story.
+            showDictationReceipt("Copied to clipboard: \u{201C}Ship the "
+                + "Shopify-only filter and rerun the poller\u{201D}")
+
         case "settings":
             showSettings(
                 voices: [Voice(id: "a", name: "Archer", category: "professional"),
@@ -1145,7 +1184,7 @@ final class StatusHUD: NSObject {
                          Voice(id: "c", name: "Sarah", category: "premade"),
                          Voice(id: "d", name: "River", category: "premade")],
                 roster: ["c", "a"],
-                note: "Checked voices are the cast sessions speak with.")
+                note: "Checked voices are the cast agents speak with.")
 
         default:
             return false
@@ -1240,10 +1279,12 @@ final class StatusHUD: NSObject {
 
         titleLabel = NSTextField(labelWithString: "")
         // The identity face: mono, matching the grid rows (ruled). renderTitle
-        // sets the attributed pair; this is the fallback style.
+        // sets the attributed pair; this is the fallback style. Two lines
+        // (ui-pass-7, ruling 4): identity on line one, topic on line two.
         titleLabel.font = .monospacedSystemFont(ofSize: 13, weight: .semibold)
         titleLabel.textColor = StateLegend.Lens.content.color
         titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.maximumNumberOfLines = 2
 
         bodyLabel = NSTextField(wrappingLabelWithString: "")
         bodyLabel.font = .systemFont(ofSize: 12)
@@ -1262,7 +1303,15 @@ final class StatusHUD: NSObject {
             button.contentTintColor = StateLegend.Palette.ink
             return button
         }
-        goButton = quietAction("Go to session", #selector(goToSession))
+        // "Go to agent" (ui-pass-7, rulings 1 + 3): the one navigation the
+        // panel owns gets presence — go-green palette ink, letterspaced caps
+        // like the grid placards, and the action row's right edge to itself.
+        // Still flat, no lozenge: promotion by ink and placement, not chrome.
+        goButton = NSButton(title: "Go to agent", target: self, action: #selector(goToSession))
+        goButton.isBordered = false
+        goButton.attributedTitle = letterspaced(
+            "GO TO AGENT \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
+            color: StateLegend.Palette.ready)
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
 
         // A real symbol at a real size. The text glyph was 12pt — visually timid
@@ -1297,12 +1346,17 @@ final class StatusHUD: NSObject {
         hintLabel.font = .systemFont(ofSize: 10)
         hintLabel.textColor = StateLegend.Lens.guidance.color
 
-        let buttons = NSStackView(views: [goButton, dontSendButton,
-                                          cancelTranscriptionButton,
-                                          retryTranscriptionButton])
+        // Quiet context actions keep the left edge; GO TO AGENT holds the
+        // right edge alone (ui-pass-7, ruling 3). The row spans the content
+        // column below, so the trailing gravity is a real edge.
+        let buttons = NSStackView()
         actionRow = buttons
         buttons.orientation = .horizontal
         buttons.spacing = 12
+        buttons.addView(dontSendButton, in: .leading)
+        buttons.addView(cancelTranscriptionButton, in: .leading)
+        buttons.addView(retryTranscriptionButton, in: .leading)
+        buttons.addView(goButton, in: .trailing)
 
         hintLabel.maximumNumberOfLines = 0
         hintLabel.lineBreakMode = .byTruncatingMiddle
@@ -1370,6 +1424,9 @@ final class StatusHUD: NSObject {
             meter.heightAnchor.constraint(equalToConstant: 28),
             countdownBar.widthAnchor.constraint(equalToConstant: 348),
             countdownBar.heightAnchor.constraint(equalToConstant: 4),
+            // The action row spans the content column so GO TO AGENT's
+            // trailing gravity right-aligns against a real edge (ruling 3).
+            buttons.widthAnchor.constraint(equalToConstant: 348),
         ])
         self.contentStack = stack
 
@@ -1393,7 +1450,7 @@ final class StatusHUD: NSObject {
     @objc nonisolated private func goToSession() {
         MainActor.assumeIsolated {
             guard let pid = currentTarget?.pid else {
-                bodyLabel.stringValue = "That session is no longer running, so there's no tab to open."
+                bodyLabel.stringValue = "That agent is no longer running, so there's no tab to open."
                 return
             }
             guard let tty = ProcessProbe.tty(of: pid) else {
@@ -1418,7 +1475,7 @@ final class StatusHUD: NSObject {
                 """
             switch AppleScript.run(script: script) {
             case .success(let out) where out.contains("notfound"):
-                bodyLabel.stringValue = "That session's tab isn't open in Terminal any more (\(tty))."
+                bodyLabel.stringValue = "That agent's tab isn't open in Terminal any more (\(tty))."
                 Permissions.log("goToSession: tab not found for \(tty)")
             case .success:
                 Permissions.log("goToSession: focused \(tty)")
@@ -1653,7 +1710,7 @@ private final class PlacardRowView: NSControl {
 
         let label = NSTextField(labelWithString: "")
         label.attributedStringValue = letterspaced(
-            StateLegend.newSessionTitle, size: 9.5, tracking: 1.33,
+            StateLegend.newAgentTitle, size: 9.5, tracking: 1.33,
             color: StateLegend.Palette.faint)
         label.translatesAutoresizingMaskIntoConstraints = false
 

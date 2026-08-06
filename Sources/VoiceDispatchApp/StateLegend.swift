@@ -22,7 +22,8 @@ enum StateLegend {
         /// the menu-bar placeholder before the SF Symbol loads.
         static let quiet = "◌"
         static let speaking = "◀"
-        /// Menu status lines only; the Sent face is dead (simplification pass).
+        /// Menu status lines and the dictation-receipt pill (ui-pass-7,
+        /// ruling 5). The reply-send Sent face stays dead.
         static let sent = "▶"
         static let needsYou = "⚠"
         /// Direction of travel: pending sends and dictation destinations.
@@ -199,10 +200,12 @@ enum StateLegend {
 
     /// Display situations. Mostly 1:1 with PanelState; the elapsed-seconds
     /// working pill is a display distinction the enum folds into an associated
-    /// value. Dead this pass (simplification, ruled): catch-up (never produced
+    /// value. Dead (simplification, ruled): catch-up (never produced
     /// outside the pose driver), paused (⇧ is an audio behavior; the frozen
-    /// speaking card IS the pause indication), sent (success says nothing),
-    /// and sendingTo (the READBACK placard carries that face's pill).
+    /// speaking card IS the pause indication), sent for REPLIES (send success
+    /// says nothing), and sendingTo (the READBACK placard carries that face's
+    /// pill). `delivered` is the dictation receipt (ui-pass-7, ruling 5): the
+    /// one success card left, because it names where the words went.
     enum Situation {
         case ready
         case preparing
@@ -211,6 +214,7 @@ enum StateLegend {
         case workingFor(seconds: Int)
         case speaking
         case listening(target: String)
+        case delivered
         case needsYou
         case settings
     }
@@ -234,6 +238,9 @@ enum StateLegend {
                        lens: .chrome, speakTier: .speaks)
         case .listening(let target):
             return Row(stateText: "\(Glyph.dot) \(target)", glyph: Glyph.dot,
+                       lens: .chrome, speakTier: .silent)
+        case .delivered:
+            return Row(stateText: "\(Glyph.sent) Delivered", glyph: Glyph.sent,
                        lens: .chrome, speakTier: .silent)
         case .needsYou:
             return Row(stateText: "\(Glyph.needsYou) Needs you", glyph: Glyph.needsYou,
@@ -262,8 +269,9 @@ enum StateLegend {
     /// line left anywhere; the per-card chord hints are dead with no
     /// replacement. See docs/simplification-pass.md.
     static let gridHint = "⌃⌥ hear · hold ⌥ reply · ⌃⌃ why · ⌃⇧ dismiss"
-    /// The quiet placard row above the hint.
-    static let newSessionTitle = "NEW SESSION"
+    /// The quiet placard row above the hint. "AGENT", not "SESSION" (ui-pass-7,
+    /// ruling 1): every user-facing noun on the panel says agent.
+    static let newAgentTitle = "NEW AGENT"
 
     // MARK: - Controls
 

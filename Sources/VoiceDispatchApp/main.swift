@@ -490,7 +490,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     hud.showResult("Couldn't type into \(label): \(failure). "
                                    + "Your words are kept.")
                 case .noTarget:
-                    hud.showResult("That reply lost its session. Your words are kept.")
+                    hud.showResult("That reply lost its agent. Your words are kept.")
                 default:
                     hud.showResult("Unexpected result: \(outcome). Your words are kept.")
                 }
@@ -637,15 +637,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.showIdle(note: note, rows: sessionRowsNow())
     }
 
-    /// Arm ruling 14's return: speech is over, the card holds for the delay,
-    /// and if the panel is still on that speaking card — no gesture moved it —
-    /// the grid comes back. The state check is the guard: any gesture either
-    /// cancels this work item outright or moves the panel off `.speaking`.
+    /// Arm ruling 14's return: the card has said its piece, it holds for the
+    /// delay, and if the panel is still on that card — no gesture moved it —
+    /// the grid comes back. Two card states dwell this way: the spoken card
+    /// (ruling 14) and the dictation receipt (ui-pass-7, ruling 5). The state
+    /// check is the guard: any gesture either cancels this work item outright
+    /// or moves the panel off the dwelling state.
     private func scheduleReturnToGrid() {
         returnToGridWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, case .speaking = self.hud.state else { return }
-            Permissions.log("return-to-grid: speech over, "
+            guard let self else { return }
+            switch self.hud.state {
+            case .speaking, .receipt: break
+            default: return
+            }
+            Permissions.log("return-to-grid: card done, "
                 + "no gesture for \(Int(Self.returnToGridDelay))s")
             self.showIdleGrid()
         }
@@ -733,25 +739,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             // During the undo window, moving on means "send it and move on": the
-            // countdown fast-forwards instead of racing the next announcement.
+            // countdown fast-forwards instead of racing the next announcement
+            // (ruled unchanged by ui-pass-7: readback's ⌃⌥ stays
+            // commit-and-advance — the press is momentum, not doubt).
             if hud.commitPendingSendNow() {
                 Permissions.log("next: committed the pending send before advancing")
+            } else if case .speaking = hud.state {
+                // ⌃⌥ = home first (ui-pass-7, ruling 7). From any card on
+                // stage — the announcement or any ⌃⌃ ladder rung, both of
+                // which live in `.speaking` — ⌃⌥ stops the voice and returns
+                // to the grid, advancing NOTHING: no dismissal, no markHeard,
+                // no next announcement. The cursor stays exactly where the
+                // announce machinery already put it (Core writes nothing
+                // before the audio, so a mid-speech stop leaves the item
+                // unread and its row lit; a fully-heard card stays heard).
+                // This is also how the ladder cycle (8fecb52) is EXITED: ⌃⌥
+                // leaves the walk standing where it is — ⌃⌃ resumes it —
+                // rather than advancing it. A rapid double-press composes
+                // into "next agent": the first press lands on the grid, and
+                // from the grid the second press invites the next agent below.
+                Permissions.log("⌃⌥: home")
+                coordinator?.speech.stop()
+                GreetingCache.stop()
+                // A mid-speech stop also wakes the announce task, whose
+                // `.interrupted` arm repaints the grid with its own note;
+                // painting it now covers the already-finished card too.
+                showIdleGrid()
+                return
             }
+            // From the grid, the empty state, hidden, or a receipt/failure
+            // card: ⌃⌥ invites the next agent — and this is how a hail's
+            // "go ahead" resolves, since the hail surfaces the grid. The old
+            // dismiss-on-advance died with home-first: advancing can no
+            // longer happen FROM the speaking card at all.
+            Permissions.log("⌃⌥: next")
             activeConversation = nil   // moving on is the explicit end of a conversation
-            // Next means done with this one. Stopping used to revert the item to
-            // unread, and being the newest it was handed straight back, so pressing
-            // again replayed what you had just skipped and there was no way past it.
-            //
-            // The trade, stated plainly: a stray press now retires a summary you had
-            // not finished. Nothing is deleted, so it survives in the data, and a
-            // queue you cannot drain is the worse problem of the two.
-            // Next means done with this one. Dismissal is a watermark, so a later
-            // turn from the same session revives it without anything being undone.
-            switch hud.state {
-            case .speaking:
-                if let sessionId = hud.currentEventId { dismissCurrent(sessionId) }
-            default: break
-            }
             announceNext()
 
         case .dismiss:
@@ -852,16 +874,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 _ = await previous?.value
                 guard !Task.isCancelled else { return }
                 // Audio ⊂ visual, and the pill NAMES the rung ("◀ FINDINGS") so
-                // you always know what kind of thing you are hearing.
+                // you always know what kind of thing you are hearing. The live
+                // probe resolves the agent's pid exactly as the base
+                // announcement does (ui-pass-7, ruling 2): the rung path used
+                // to pass nil, which hid "Go to agent" the moment the walk
+                // began — the button persists through the entire ladder.
+                let live = (ClaudeAgentsCLI().sessions() ?? [])
+                    .first { $0.sessionId == announcement.event.sessionId }
                 hud.showAnnouncement(
                     topic: announcement.brief.topic,
                     spoken: rung.spoken.text,
                     sessionId: announcement.event.sessionId,
-                    pid: nil,
-                    project: tabDisplayName(
-                        for: announcement.event,
-                        live: (ClaudeAgentsCLI().sessions() ?? [])
-                            .first { $0.sessionId == announcement.event.sessionId }),
+                    pid: live?.pid,
+                    project: tabDisplayName(for: announcement.event, live: live),
                     cwd: announcement.event.cwd,
                     eventId: announcement.event.sessionId,
                     placard: "\(StateLegend.Glyph.speaking) \(rung.kind.rawValue)")
@@ -1143,7 +1168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let session,
                       let target = try? store?.waitingSessionsIncludingHeard()
                           .first(where: { $0.sessionId == session }) else {
-                    hud.showResult("That page's session isn't in the log. Nothing recorded.")
+                    hud.showResult("That page's agent isn't in the log. Nothing recorded.")
                     break
                 }
                 let live = (ClaudeAgentsCLI().sessions() ?? [])
@@ -1227,12 +1252,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         return
                     }
                     // Wispr's rule: a focused text field wins; clipboard otherwise.
-                    // Success says nothing on the panel (ruled — the Sent face
-                    // is dead): status line + log, straight back to the grid.
+                    // Dictation success shows its RECEIPT (ui-pass-7, ruling 5
+                    // — re-ruled from the blanket Sent-face deletion): the card
+                    // tells you where the words went, which nothing else does.
+                    // Reply-send success stays silent as ruled. The receipt
+                    // dwells, then the grid returns on ruling 14's clock.
                     if let app = FocusedInput.focusedEditableApp() {
                         FocusedInput.paste(text)
                         Permissions.log("dictation: typed \(text.count) chars into \(app)")
                         lastStatusLine = "typed into \(app)"
+                        hud.showDictationReceipt("Typed into \(app).")
                     } else {
                         if !FocusedInput.trusted { FocusedInput.requestTrustOnce() }
                         let pasteboard = NSPasteboard.general
@@ -1240,9 +1269,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         pasteboard.setString(text, forType: .string)
                         Permissions.log("dictation: copied \(text.count) chars to clipboard")
                         lastStatusLine = "copied to clipboard"
+                        hud.showDictationReceipt(
+                            "Copied to clipboard: \u{201C}\(text.prefix(80))\u{201D}")
                     }
-                    hud.endCapture(because: "dictation delivered")
-                    showIdleGrid()
+                    scheduleReturnToGrid()
                     rebuildMenu()
                     return
                 }
@@ -1485,7 +1515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.showSettings(
             voices: VoiceCatalog.cached(),
             roster: VoiceRoster.load(),
-            note: "Checked voices are the cast; sessions draw a durable voice "
+            note: "Checked voices are the cast; agents draw a durable voice "
                 + "in roster order.")
     }
 
@@ -1520,12 +1550,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Permissions.log("launcher: no session registered in \(dir) after 30s")
                     if self.hud.canSurfaceAmbiently {
                         self.showIdleGrid(
-                            note: "New session is waiting on a prompt in Terminal.")
+                            note: "New agent is waiting on a prompt in Terminal.")
                     }
                 }
             }
         case .failure(let error):
-            hud.showResult("Couldn't start a session: \(error.message). "
+            hud.showResult("Couldn't start an agent: \(error.message). "
                            + "Terminal automation permission is the usual suspect.")
         }
     }
