@@ -221,7 +221,16 @@ public final class HotkeyMonitor: @unchecked Sendable {
     }
 
     public init(
-        holdThreshold: TimeInterval = 0.35,
+        // 0.35 → 0.20 (ruled 06 Aug, from measurement). The log of a
+        // frustrated session shows the failure exactly: press after press
+        // arming and reverting with "arm: discarded, 35ms audio" — real
+        // presses landing around 225ms, every one of them under the old
+        // threshold and therefore meaning nothing. A press-to-talk key that
+        // ignores a quarter-second press is not trustworthy. 200ms still
+        // leaves the ⌥⌥ hands-free double-tap intact (those taps run
+        // 50–100ms) and costs nothing in audio: capture has been running
+        // since the 80ms arm either way.
+        holdThreshold: TimeInterval = 0.20,
         armGrace: TimeInterval = 0.08,
         onTransition: @escaping @Sendable (Transition) -> Void
     ) {

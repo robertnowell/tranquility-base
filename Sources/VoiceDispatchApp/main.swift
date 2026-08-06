@@ -770,7 +770,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // arriving before the first paint — were the ones that also looked
         // unheard. Acknowledgment is not a reward for a press that worked; it
         // is the receipt for a press that was received.
-        hud.flashAcknowledge()
+        switch transition {
+        case .armWindowOpened:
+            // The light comes on with the key and STAYS on until it lifts
+            // (ruled 06 Aug) — one press, one light. Everything the hold
+            // becomes downstream (the mic opening, the pill upgrading) must
+            // NOT re-light it; that second flash was the stutter.
+            hud.holdAcknowledge()
+        case .armAborted, .replyEnded, .replyAborted:
+            hud.releaseAcknowledge()
+        case .replyBegan:
+            break  // already lit by the arm that preceded it
+        case .next, .dismiss, .optionTapped, .pauseToggled, .controlDoubleTapped:
+            hud.flashAcknowledge()
+        }
         switch transition {
         case .next:
             // Open issue #6, wired at last: ⌃⌥ while the microphone is open would
@@ -799,7 +812,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("next: committed the pending send, going home")
                 showIdleGrid()
                 return
-            } else if case .speaking = hud.state {
+            } else if hud.state.isCardOnStage {
                 // ⌃⌥ = home first (ui-pass-7, ruling 7). From any card on
                 // stage — the announcement or any ⌃⌃ ladder rung, both of
                 // which live in `.speaking` — ⌃⌥ stops the voice and returns
@@ -838,12 +851,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .dismiss:
             // Same action as the Dismiss button; a chord because Escape leaks ESC
             // into the focused terminal and interrupts the Claude session there.
+            //
+            // It is also the recourse out of a transcription (06 Aug: "I cannot
+            // cancel transcriptions with a command or anything else"). The
+            // cancel button only appears after ~20s of waiting; the chord works
+            // from the first second. The audio is already durable on disk, so
+            // cancelling costs the transcript, never the recording.
+            if case .transcribing = hud.state {
+                replyGeneration += 1        // orphans whatever is in flight
+                Permissions.log("⌃⇧: cancelled the transcription in flight")
+                lastStatusLine = "transcription cancelled — audio kept"
+                hud.endCapture(because: "transcription cancelled by chord")
+                showIdleGrid(note: "Transcription cancelled. Audio kept.")
+                return
+            }
             if hud.isBusyOnScreen || hud.isOnScreen { hud.dismiss() }
 
         case .optionTapped:
-            // While locked, one tap sends — the mirror of releasing the held key.
-            if handsFreeListening {
-                handsFreeListening = false
+            // One tap ends ANY live capture — the mirror of releasing the held
+            // key, and the escape hatch from a capture whose release was lost.
+            //
+            // 06 Aug, from the log: the app sat in `listening` with the mic
+            // open and no key held, and every press logged "no meaning in
+            // listening" because a tap only meant something in hands-free.
+            // A capture with no way out is the trust-killer — "you have to
+            // know that when you need to talk, you can talk", and equally
+            // that you can stop. Hands-free is now just the case that also
+            // clears its latch.
+            if recorder.isRecording, armedAt == nil {
+                if handsFreeListening { handsFreeListening = false }
+                else { Permissions.log("⌥ tap: ending a capture with no key held") }
                 handle(.replyEnded)
                 return
             }
@@ -889,15 +926,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("hands-free: listening locked")
             } else {
                 lastOptionTapAt = Date()
-                // Observability for the dead band (06 Aug incident: thirteen
-                // ~200ms presses during an announcement, every one armed,
-                // reverted, and MEANT nothing — the log showed the machinery
-                // but never the intent). A lone tap outside every claiming
-                // state is currently a no-op; when the next storm of these
-                // appears in the log, that is the user pressing the mic key
+                // Observability for the dead band (06 Aug incident: press
+                // after press arming, reverting, and MEANING nothing — the log
+                // showed the machinery but never the intent). The threshold
+                // that produced those is now 0.20s, and a tap during a live
+                // capture ends it, so this line should be rare. When a storm
+                // of them appears again, that is the user pressing the mic key
                 // and being ignored.
-                Permissions.log("⌥ tap: no meaning in \(hud.state) — armed presses "
-                    + "under the 0.35s hold threshold do nothing here")
+                Permissions.log("⌥ tap: no meaning in \(hud.state)")
             }
 
         case .pauseToggled:

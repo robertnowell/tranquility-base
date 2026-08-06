@@ -74,6 +74,17 @@ enum PanelState: Equatable {
 
     /// The microphone is open. Announcing into this would record itself.
     /// `.arming` counts: the optimistic capture is genuinely live.
+    /// A card is on stage: an announcement, a ⌃⌃ rung, a failure, a receipt.
+    /// ⌃⌥ from any of them means HOME first, never straight to the next agent
+    /// (ruled 06 Aug — the error card was still advancing: "it should always
+    /// go back to home before it goes to the next agent update").
+    var isCardOnStage: Bool {
+        switch self {
+        case .speaking, .result, .receipt: return true
+        default: return false
+        }
+    }
+
     var isCapturingAudio: Bool {
         switch self {
         case .listening, .arming: return true

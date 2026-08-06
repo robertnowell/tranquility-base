@@ -968,7 +968,14 @@ final class StatusHUD: NSObject {
         panel.contentView?.layoutSubtreeIfNeeded()
         let needed = stack.fittingSize
         let height = max(needed.height, 90)
-        if abs(panel.frame.height - height) > 1 {
+        // Against the height we last ASKED for, never the live frame: with an
+        // animated resize in flight, `panel.frame.height` is a transient, and
+        // comparing to it let a render skip its resize because the panel
+        // happened to be passing through the target height at that instant.
+        // That is why two identical faces settled 12pt apart (Robert's two
+        // screenshots of the same card, 06 Aug).
+        if abs((intendedHeight ?? panel.frame.height) - height) > 1 {
+            intendedHeight = height
             // The top edge holds still and the panel grows downward: origin is
             // bottom-left, so the height delta comes out of origin.y. Animated
             // when already on screen (ruled 06 Aug — the snap between
@@ -1050,15 +1057,18 @@ final class StatusHUD: NSObject {
     /// silently drops the animation when another one is mid-flight on the same
     /// property, which is exactly what a rapid second gesture produces.
     private var ackBar: NSView?
+    private var ackHeld = false
+    /// The height last requested of the panel — the resize's own memory, so an
+    /// in-flight animation cannot be mistaken for a settled size.
+    private var intendedHeight: CGFloat?
     private var surfaceView: NSView?
 
-    func flashAcknowledge() {
-        // The panel may never have been built (a gesture before the first
-        // paint). Build it rather than dropping the acknowledgment: "I should
-        // never question whether my control is having an impact" (ruled).
+    /// The bar, positioned and ready. Builds the panel if a gesture arrives
+    /// before the first paint — "I should never question whether my control
+    /// is having an impact" (ruled) — and returns nil only if even that fails.
+    private func ackBarLayer() -> CALayer? {
         let host = surfaceView ?? { _ = build(); return surfaceView }()
-        guard let host else { return }
-
+        guard let host else { return nil }
         let bar: NSView
         if let existing = ackBar {
             bar = existing
@@ -1066,20 +1076,58 @@ final class StatusHUD: NSObject {
             bar = NSView(frame: .zero)
             bar.wantsLayer = true
             // Palette, not controlAccentColor: accent = state, not user
-            // preference (ruled) — the pulse is the same green as the go lamp.
+            // preference (ruled) — the light is the same green as the go lamp.
             bar.layer?.backgroundColor = StateLegend.Palette.ready.cgColor
             // Flexible bottom margin = pinned to the top edge; flexible width
             // = pinned to both sides. The bar tracks every frame change.
             bar.autoresizingMask = [.width, .minYMargin]
-            host.addSubview(bar)
             ackBar = bar
         }
         // Full width: the surface's own mask decides where it ends.
         bar.frame = CGRect(x: 0, y: host.bounds.height - 3,
                            width: host.bounds.width, height: 3)
         host.addSubview(bar, positioned: .above, relativeTo: nil)
+        return bar.layer
+    }
 
-        guard let layer = bar.layer else { return }
+    /// Hold the light on for as long as the key is down.
+    ///
+    /// Ruled 06 Aug: "it should just be a reflection that your keystroke is
+    /// recognized as a valid command-related key, and it should just be green
+    /// while that key is pressed." The previous design pulsed once per
+    /// transition, which meant a single hold flashed twice — once at the arm,
+    /// again when the microphone opened — and read as a stutter rather than
+    /// an acknowledgment. One light, one press.
+    func holdAcknowledge() {
+        guard let layer = ackBarLayer() else { return }
+        layer.removeAnimation(forKey: "ack")
+        layer.opacity = 1
+        ackHeld = true
+        Permissions.log("ack: held on")
+    }
+
+    /// Release the held light. No-op when nothing is holding it, so a stray
+    /// release cannot erase a pulse that is mid-fade.
+    func releaseAcknowledge() {
+        guard ackHeld, let layer = ackBar?.layer else { return }
+        ackHeld = false
+        layer.removeAnimation(forKey: "ack")
+        layer.opacity = 0
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1.0
+        fade.toValue = 0.0
+        fade.duration = 0.25
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(fade, forKey: "ack")
+        Permissions.log("ack: released")
+    }
+
+    /// One flash, for gestures that are instantaneous by nature (a ⌃⌥ tap,
+    /// ⌃⌃, dismiss) and have no key-down/key-up span to hold a light through.
+    func flashAcknowledge() {
+        // A held light outranks a flash: a chord arriving mid-hold must not
+        // cut the hold's own light short.
+        guard !ackHeld, let layer = ackBarLayer() else { return }
         layer.removeAnimation(forKey: "ack")
         layer.opacity = 0
         let pulse = CABasicAnimation(keyPath: "opacity")
