@@ -49,7 +49,9 @@ final class StatusHUD: NSObject {
     private var onCommitSend: (() -> Void)?
     private var countdownBar: CountdownBarView!
     private var meter: LevelMeterView!
-    private var voicePicker: NSPopUpButton!
+    private var voiceList: NSScrollView!
+    private var voiceStack: NSStackView!
+    private var voiceListHeight: NSLayoutConstraint!
     private var gearButton: NSButton!
     private var backButton: NSButton!
     private var waitingRows: NSStackView!
@@ -201,32 +203,38 @@ final class StatusHUD: NSObject {
         if let panel { resizeToFit(panel); position(panel) }
     }
 
-    /// Settings, in the same panel rather than a second window.
-    ///
-    /// One setting today. It lives here because the panel is already the place you
-    /// look, and a preferences window for a single dropdown is furniture.
-    var onChooseVoice: ((String) -> Void)?
+    /// Settings, in the same panel rather than a second window: the voice
+    /// ROSTER pane (draft render ruled 05 Aug — the single narrator dropdown
+    /// is dead). Every cached voice is a row: square check = on the roster
+    /// (the cast sessions draw durable voices from, in roster order), ▶ =
+    /// preview, ≡ in the left gutter drags a roster row to a new assignment
+    /// position.
+    var onPreviewVoice: ((String) -> Void)?
+    /// (voiceId, nowOnRoster) after a check toggle. The host persists and
+    /// calls updateSettings — the pane never mutates the roster itself.
+    var onToggleVoice: ((String, Bool) -> Void)?
+    /// The full roster order after a ≡ drag lands.
+    var onRosterReordered: (([String]) -> Void)?
 
-    func showSettings(voices: [Voice], selected: String, previewNote: String) {
+    func showSettings(voices: [Voice], roster: [String], note: String) {
         guard transition(to: .settings, because: "settings opened") else { return }
         currentTarget = nil
-        face = Face(title: "Voice", body: previewNote,
-                    voices: voices, selectedVoice: selected)
+        face = Face(title: "Voices", body: note, voices: voices, roster: roster)
         render()
     }
 
-    var voicePickerItemCount: Int { voicePicker.numberOfItems }
+    /// Re-render the pane with a new roster without re-entering the state —
+    /// the toggle round-trips through the host's persistence and back here.
+    func updateSettings(roster: [String]) {
+        guard case .settings = state else { return }
+        face.roster = roster
+        render()
+    }
+
     var backButtonHidden: Bool { backButton.isHidden }
     var gearHidden: Bool { gearButton.isHidden }
     var actionRowHidden: Bool { actionRow.isHidden }
-    var voicePickerSelection: String? { voicePicker.selectedItem?.title }
-
-    @objc nonisolated private func voicePicked() {
-        MainActor.assumeIsolated {
-            guard let id = voicePicker.selectedItem?.representedObject as? String else { return }
-            onChooseVoice?(id)
-        }
-    }
+    var voiceRowCount: Int { voiceStack.arrangedSubviews.count }
 
     func showWorking(_ message: String) {
         guard transition(to: .transcribing(startedAt: Date()), because: "working")
@@ -432,7 +440,7 @@ final class StatusHUD: NSObject {
         var countdownSeconds: TimeInterval = 0
         var sessionRows: [StateLegend.SessionRow] = []
         var voices: [Voice] = []
-        var selectedVoice = ""
+        var roster: [String] = []
         var transcription: (cancel: () -> Void, retry: () -> Void)?
     }
     private var face = Face()
@@ -499,7 +507,7 @@ final class StatusHUD: NSObject {
         goButton.isHidden = currentTarget?.pid == nil
         dontSendButton.isHidden = true
         countdownBar.isHidden = true; meter.isHidden = true
-        voicePicker.isHidden = true; waitingRows.isHidden = true
+        voiceList.isHidden = true; waitingRows.isHidden = true
         gearButton.isHidden = false; backButton.isHidden = true
         // Part of the baseline so the grid's monospaced key line can never leak
         // into another state's hint — a font no arm mentions is at its baseline.
@@ -551,8 +559,12 @@ final class StatusHUD: NSObject {
         case .settings:
             stateLabel.stringValue = ""
             gearButton.isHidden = true; backButton.isHidden = false
-            voicePicker.isHidden = false
-            populateVoicePicker()
+            voiceList.isHidden = false
+            bodyLabel.stringValue =
+                "\(face.roster.count) of \(face.voices.count) on roster. \(face.body)"
+            hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
+            hintLabel.stringValue = "check = on roster · ▶ preview · drag ≡ to reorder"
+            rebuildVoiceRows()
         }
 
         // The action row exists exactly when a quiet action is visible. (The
@@ -752,26 +764,55 @@ final class StatusHUD: NSObject {
         MainActor.assumeIsolated { onNewSession?() }
     }
 
-    private func populateVoicePicker() {
-        voicePicker.removeAllItems()
-        for group in ["cloned", "generated", "professional", "premade"] {
-            let inGroup = face.voices.filter { $0.category == group }.sorted { $0.name < $1.name }
-            guard !inGroup.isEmpty else { continue }
-            voicePicker.menu?.addItem(.separator())
-            let header = NSMenuItem(title: group.capitalized, action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            voicePicker.menu?.addItem(header)
-            for voice in inGroup {
-                let item = NSMenuItem(title: voice.name, action: nil, keyEquivalent: "")
-                item.representedObject = voice.id
-                voicePicker.menu?.addItem(item)
-            }
+    /// The roster pane's rows: roster members first, in assignment order, then
+    /// the rest grouped by category. Rows draw their own bottom hairline (no
+    /// interleaved rule views), so an arranged index IS a row index — the ≡
+    /// drag's arithmetic depends on that.
+    private func rebuildVoiceRows() {
+        voiceStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let byId = Dictionary(uniqueKeysWithValues: face.voices.map { ($0.id, $0) })
+        // A roster id the catalog no longer lists has no row (nothing to play,
+        // nothing to name); it stays in the persisted roster untouched until
+        // the user next reorders, which saves exactly what is on screen.
+        let cast = face.roster.compactMap { byId[$0] }
+        let bench = face.voices
+            .filter { !face.roster.contains($0.id) }
+            .sorted { ($0.category, $0.name) < ($1.category, $1.name) }
+        for voice in cast + bench {
+            let onRoster = face.roster.contains(voice.id)
+            let row = VoiceRowView(
+                voice: voice, onRoster: onRoster,
+                onPlay: { [weak self] in self?.onPreviewVoice?(voice.id) },
+                onToggle: { [weak self] in self?.onToggleVoice?(voice.id, !onRoster) },
+                onDragStep: { [weak self] row, step in self?.dragRosterRow(row, by: step) },
+                onDragEnd: { [weak self] in self?.commitRosterOrder() })
+            voiceStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
         }
-        if let match = voicePicker.menu?.items.first(where: {
-            ($0.representedObject as? String) == face.selectedVoice
-        }) {
-            voicePicker.select(match)
-        }
+        voiceListHeight.constant = min(
+            CGFloat(voiceStack.arrangedSubviews.count) * VoiceRowView.height, 340)
+        Permissions.log("roster pane: \(cast.count) cast + \(bench.count) bench rows")
+    }
+
+    /// Move a roster row by whole-row steps during a ≡ drag, clamped inside
+    /// the roster segment (the bench below is sorted, not ordered — nothing
+    /// can be dragged into it).
+    private func dragRosterRow(_ row: VoiceRowView, by steps: Int) {
+        let rows = voiceStack.arrangedSubviews.compactMap { $0 as? VoiceRowView }
+        guard steps != 0, let current = rows.firstIndex(where: { $0 === row }) else { return }
+        let rosterCount = rows.filter(\.isOnRoster).count
+        let target = max(0, min(rosterCount - 1, current + steps))
+        guard target != current else { return }
+        voiceStack.removeArrangedSubview(row)
+        voiceStack.insertArrangedSubview(row, at: target)
+    }
+
+    private func commitRosterOrder() {
+        let order = voiceStack.arrangedSubviews
+            .compactMap { $0 as? VoiceRowView }
+            .filter(\.isOnRoster)
+            .map(\.voiceId)
+        onRosterReordered?(order)
     }
 
     /// Grow the window to whatever the content needs.
@@ -951,13 +992,12 @@ final class StatusHUD: NSObject {
                     voices: [Voice(id: "a", name: "Archer", category: "professional"),
                              Voice(id: "b", name: "My Clone", category: "cloned"),
                              Voice(id: "c", name: "Sarah", category: "premade")],
-                    selected: "c",
-                    previewNote: "Pick a voice and it reads your most recent summary.")
+                    roster: ["c"],
+                    note: "Checked voices are the cast sessions speak with.")
                 self.panel?.contentView?.layoutSubtreeIfNeeded()
-                Permissions.log("settings chrome: picker=\(self.voicePickerItemCount) "
+                Permissions.log("settings chrome: rows=\(self.voiceRowCount) "
                                 + "back=\(!self.backButtonHidden) gear=\(!self.gearHidden) "
-                                + "actions=\(!self.actionRowHidden) "
-                                + "selected=\(self.voicePickerSelection ?? "nil")")
+                                + "actions=\(!self.actionRowHidden)")
             }),
         ] as [(String, () -> Void)] {
             Permissions.log("selftest state=\(label)")
@@ -1104,8 +1144,8 @@ final class StatusHUD: NSObject {
                          Voice(id: "b", name: "My Clone", category: "cloned"),
                          Voice(id: "c", name: "Sarah", category: "premade"),
                          Voice(id: "d", name: "River", category: "premade")],
-                selected: "c",
-                previewNote: "Pick a voice and it reads your most recent summary.")
+                roster: ["c", "a"],
+                note: "Checked voices are the cast sessions speak with.")
 
         default:
             return false
@@ -1135,7 +1175,7 @@ final class StatusHUD: NSObject {
             ("title", titleLabel), ("body", bodyLabel), ("state", stateLabel),
             ("hint", hintLabel), ("bar", countdownBar), ("meter", meter),
             ("actions", actionRow), ("go", goButton),
-            ("dontSend", dontSendButton), ("picker", voicePicker),
+            ("dontSend", dontSendButton), ("voices", voiceList),
             ("gear", gearButton), ("back", backButton), ("rows", waitingRows),
             ("cancelTx", cancelTranscriptionButton),
             ("retryTx", retryTranscriptionButton),
@@ -1270,11 +1310,33 @@ final class StatusHUD: NSObject {
 
         meter = LevelMeterView()
 
-        voicePicker = NSPopUpButton()
-        voicePicker.controlSize = .small
-        voicePicker.font = .systemFont(ofSize: 11)
-        voicePicker.target = self
-        voicePicker.action = #selector(voicePicked)
+        // The roster list: a flipped document so content hangs from the top,
+        // the stack of VoiceRowViews inside, overlay scroller, no chrome.
+        voiceStack = NSStackView()
+        voiceStack.orientation = .vertical
+        voiceStack.alignment = .leading
+        voiceStack.spacing = 0
+        voiceStack.translatesAutoresizingMaskIntoConstraints = false
+        let voiceDoc = FlippedDocumentView()
+        voiceDoc.translatesAutoresizingMaskIntoConstraints = false
+        voiceDoc.addSubview(voiceStack)
+        voiceList = NSScrollView()
+        voiceList.drawsBackground = false
+        voiceList.hasVerticalScroller = true
+        voiceList.scrollerStyle = .overlay
+        voiceList.translatesAutoresizingMaskIntoConstraints = false
+        voiceList.documentView = voiceDoc
+        voiceListHeight = voiceList.heightAnchor.constraint(equalToConstant: 340)
+        NSLayoutConstraint.activate([
+            voiceStack.topAnchor.constraint(equalTo: voiceDoc.topAnchor),
+            voiceStack.leadingAnchor.constraint(equalTo: voiceDoc.leadingAnchor),
+            voiceStack.trailingAnchor.constraint(equalTo: voiceDoc.trailingAnchor),
+            voiceStack.bottomAnchor.constraint(equalTo: voiceDoc.bottomAnchor),
+            voiceDoc.leadingAnchor.constraint(equalTo: voiceList.contentView.leadingAnchor),
+            voiceDoc.topAnchor.constraint(equalTo: voiceList.contentView.topAnchor),
+            voiceDoc.widthAnchor.constraint(equalTo: voiceList.contentView.widthAnchor),
+            voiceListHeight,
+        ])
 
         waitingRows = NSStackView()
         waitingRows.orientation = .vertical
@@ -1283,7 +1345,7 @@ final class StatusHUD: NSObject {
 
         let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
                                         waitingRows, bodyLabel,
-                                        countdownBar, meter, voicePicker, hintLabel, buttons])
+                                        countdownBar, meter, voiceList, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
@@ -1658,5 +1720,183 @@ private final class CountdownBarView: NSView {
         fill.removeAllAnimations()
         fill.frame = CGRect(x: 0, y: 0,
                             width: bounds.width * fraction, height: bounds.height)
+    }
+}
+
+/// A scroll document that hangs content from the top; without it a stack in an
+/// NSScrollView anchors to the bottom and short lists float mid-air.
+private final class FlippedDocumentView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+/// One row of the voice roster pane (draft render ruled 05 Aug):
+/// [≡ grip 16][square check 14][11][▶][11][name — flexible][category, faint].
+/// The check is SQUARE — it is a checkbox; circles are the grid's session
+/// lamps and the two must not read as the same species. The grip lives in the
+/// left gutter so the check column is the pane's left alignment line, and it
+/// exists only on roster rows: the bench below is sorted, not ordered.
+private final class VoiceRowView: NSControl {
+    static let height: CGFloat = 34
+    static let gripWidth: CGFloat = 16
+
+    let voiceId: String
+    let isOnRoster: Bool
+    private let onPlay: () -> Void
+    private let onToggle: () -> Void
+    private let onDragStep: (VoiceRowView, Int) -> Void
+    private let onDragEnd: () -> Void
+    private let hairline = CALayer()
+    private var dragging = false
+    private var dragAccum: CGFloat = 0
+    private var lastStep = 0
+
+    init(voice: Voice, onRoster: Bool,
+         onPlay: @escaping () -> Void,
+         onToggle: @escaping () -> Void,
+         onDragStep: @escaping (VoiceRowView, Int) -> Void,
+         onDragEnd: @escaping () -> Void) {
+        self.voiceId = voice.id
+        self.isOnRoster = onRoster
+        self.onPlay = onPlay
+        self.onToggle = onToggle
+        self.onDragStep = onDragStep
+        self.onDragEnd = onDragEnd
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        hairline.backgroundColor = StateLegend.Palette.hairlineSoft.cgColor
+        layer?.addSublayer(hairline)
+
+        let grip = NSTextField(labelWithString: onRoster ? "≡" : "")
+        grip.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        grip.textColor = StateLegend.Palette.faint
+        grip.translatesAutoresizingMaskIntoConstraints = false
+
+        let check = CheckView(on: onRoster) { [weak self] in self?.onToggle() }
+
+        let play = NSButton(title: "▶", target: self, action: #selector(playTapped))
+        play.isBordered = false
+        play.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+        play.contentTintColor = StateLegend.Palette.secondary
+        play.translatesAutoresizingMaskIntoConstraints = false
+
+        let name = NSTextField(labelWithString: Self.concise(voice.name))
+        name.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        name.textColor = StateLegend.Palette.ink
+        name.lineBreakMode = .byTruncatingTail
+        name.translatesAutoresizingMaskIntoConstraints = false
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let category = NSTextField(labelWithString: voice.category)
+        category.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
+        category.textColor = StateLegend.Palette.faint
+        category.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(grip); addSubview(check); addSubview(play)
+        addSubview(name); addSubview(category)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: Self.height),
+            grip.leadingAnchor.constraint(equalTo: leadingAnchor),
+            grip.centerYAnchor.constraint(equalTo: centerYAnchor),
+            check.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                           constant: Self.gripWidth),
+            check.centerYAnchor.constraint(equalTo: centerYAnchor),
+            play.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 11),
+            play.centerYAnchor.constraint(equalTo: centerYAnchor),
+            name.leadingAnchor.constraint(equalTo: play.trailingAnchor, constant: 11),
+            name.centerYAnchor.constraint(equalTo: centerYAnchor),
+            name.trailingAnchor.constraint(lessThanOrEqualTo: category.leadingAnchor,
+                                           constant: -10),
+            category.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            category.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layout() {
+        super.layout()
+        hairline.frame = CGRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1)
+    }
+
+    /// "Brittney - Social Media Voice - Fun, Youthful…" → "Brittney". The row
+    /// names a voice; the sales copy stays in the catalog.
+    static func concise(_ name: String) -> String {
+        let head = name
+            .components(separatedBy: CharacterSet(charactersIn: "-–—™"))
+            .first?.trimmingCharacters(in: .whitespaces) ?? name
+        return head.isEmpty ? name : head
+    }
+
+    @objc private func playTapped() { onPlay() }
+
+    // ≡ drag: whole-row steps from accumulated deltaY (positive = down =
+    // later index; the flipped document keeps visual and index order equal).
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard isOnRoster, point.x < Self.gripWidth else { return }
+        dragging = true; dragAccum = 0; lastStep = 0
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard dragging else { return }
+        dragAccum += event.deltaY
+        let step = Int((dragAccum / Self.height).rounded())
+        if step != lastStep {
+            onDragStep(self, step - lastStep)
+            lastStep = step
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard dragging else { return }
+        dragging = false
+        onDragEnd()
+    }
+}
+
+/// The square roster checkbox: filled console green with a ✓ when on, the
+/// hover putty with a hairline ring when off. Same materials as the lamps,
+/// different shape — shape is what says "you can set this".
+private final class CheckView: NSControl {
+    private let onToggle: () -> Void
+
+    init(on: Bool, onToggle: @escaping () -> Void) {
+        self.onToggle = onToggle
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 2.5
+        layer?.backgroundColor = (on ? StateLegend.Palette.ready
+                                     : StateLegend.Palette.hover).cgColor
+        if !on {
+            layer?.borderWidth = 1
+            layer?.borderColor = StateLegend.Palette.hairline.cgColor
+        }
+        if on {
+            let mark = NSTextField(labelWithString: StateLegend.Glyph.confirm)
+            mark.font = .monospacedSystemFont(ofSize: 9, weight: .bold)
+            mark.textColor = NSColor(srgbRed: 0.93, green: 0.93, blue: 0.89, alpha: 1)
+            mark.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(mark)
+            NSLayoutConstraint.activate([
+                mark.centerXAnchor.constraint(equalTo: centerXAnchor),
+                mark.centerYAnchor.constraint(equalTo: centerYAnchor),
+            ])
+        }
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: 14),
+            heightAnchor.constraint(equalToConstant: 14),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func mouseDown(with event: NSEvent) {}
+    override func mouseUp(with event: NSEvent) {
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        onToggle()
     }
 }

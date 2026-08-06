@@ -111,6 +111,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // Position is a durable fact. Without an autosave name, every relaunch —
+        // and this app relaunches dozens of times a day — re-adds the item at
+        // the default slot, which on a full menu bar is exactly where macOS
+        // hides items first. With it, one ⌘-drag toward the clock survives
+        // every relaunch, which is the only real lever against space-droppage
+        // (observed 06 Aug: item silently absent, toggles ON in Settings).
+        statusItem.autosaveName = "vd-annunciator"
         statusItem.button?.title = StateLegend.menuBarPlaceholder
         // Click → the grid (WS-B, ruled). The menu still exists — permissions,
         // voice, quit — behind a right-click, so the item is never assigned a
@@ -149,6 +156,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // vanish without a log line. Five seconds is the longest that
                 // state gets to exist.
                 self.hotkey?.reviveTapIfDead()
+                // The annunciator must not vanish silently: macOS drops status
+                // items for space with no callback. Detect and say so, once per
+                // change — the user can ⌘-drag the item toward the clock (the
+                // autosaved position survives relaunches).
+                self.checkMenuBarPresence()
                 var turnArrived = false
                 if let result = try? coordinator.intake(), result.inserted > 0 {
                     // Rows were inserted: a turn came back. This is the honest
@@ -236,10 +248,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.showIdleGrid()
         }
 
-        hud.onChooseVoice = { [weak self] id in
+        hud.onPreviewVoice = { [weak self] id in
             guard let self else { return }
-            VoiceCatalog.selectedVoiceId = id
-            self.rebuildMenu()
             // Silence the last preview first. Auditioning voices means switching
             // fast, and without this each pick layered onto the one before it,
             // which is the one thing this app must never do.
@@ -247,10 +257,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Play the real thing. A stock sample tells you how a voice handles a
             // stock sentence; what you actually want to know is how it handles YOUR
             // summaries, which are dense, full of proper nouns, and end in a question.
+            // Preview only — the narrator (VoiceCatalog.selectedVoiceId) is not
+            // touched; the roster check is what changes who speaks for sessions.
             Task { @MainActor in
                 guard let chain = self.coordinator?.speech else { return }
-                _ = await chain.speak(SpokenTextSanitizer().sanitize(self.previewText()))
+                _ = await chain.speak(
+                    SpokenTextSanitizer().sanitize(self.previewText()), voice: id)
             }
+        }
+
+        hud.onToggleVoice = { [weak self] id, nowOn in
+            guard let self else { return }
+            var roster = VoiceRoster.load().filter { $0 != id }
+            if nowOn { roster.append(id) }
+            VoiceRoster.save(roster)
+            self.hud.updateSettings(roster: roster)
+            Permissions.log("roster: \(nowOn ? "added" : "dropped") \(id) "
+                            + "(\(roster.count) on roster)")
+        }
+
+        hud.onRosterReordered = { ids in
+            VoiceRoster.save(ids)
+            Permissions.log("roster: reordered to \(ids.count) entries")
         }
 
         hud.onDismiss = { [weak self] in
@@ -510,6 +538,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The badge, from the same predicate a keypress uses.
     private func waitingNow() -> Int { (try? coordinator?.waitingCount()) ?? 0 }
+
+    /// Whether the status item actually made it onto the bar. A dropped item's
+    /// button window sits off-screen or nowhere; log only on change so the tick
+    /// stays quiet.
+    private var menuBarWasPresent: Bool?
+    private func checkMenuBarPresence() {
+        let present: Bool = {
+            guard let window = statusItem.button?.window else { return false }
+            return window.screen != nil && window.frame.minX >= 0
+        }()
+        if present != menuBarWasPresent {
+            menuBarWasPresent = present
+            Permissions.log(present
+                ? "menubar: item is on the bar"
+                : "menubar: item DROPPED for space — bar is full; ⌘-drag it toward the clock once (position autosaves)")
+        }
+    }
 
     /// The grid's rows: every LIVE session is a row (ruled, docs/ws-b-ruling.md —
     /// a turn skipped by ⌃⌥ is a visible row, not an absence). Green when the
@@ -789,10 +834,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             hud.flashAcknowledge()
-            // The ladder (ruled: findings → solution → why, the order of the
-            // stack). Each ⌃⌃ takes the next rung; a new announcement resets the
-            // walk; past the last rung it wraps, so repeated pressing is also
-            // "say again". Empty rungs never made it into the array.
+            // The ladder (ruled: findings → solution → why → message, the
+            // order of the stack). Each ⌃⌃ takes the next rung; a new
+            // announcement resets the walk. After WHY comes the original
+            // MESSAGE re-heard — it lands differently once it has been
+            // explained three ways — then the cycle repeats. Empty rungs
+            // never made it into the array.
             let key = "\(announcement.event.sessionId):\(announcement.event.latestId)"
             if ladderKey != key { ladderKey = key; ladderIndex = 0 }
             let rungs = SpokenComposition.ladderRungs(for: announcement)
@@ -1437,8 +1484,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func openSettings() {
         hud.showSettings(
             voices: VoiceCatalog.cached(),
-            selected: VoiceCatalog.selectedVoiceId,
-            previewNote: "Pick a voice and it reads your most recent summary.")
+            roster: VoiceRoster.load(),
+            note: "Checked voices are the cast; sessions draw a durable voice "
+                + "in roster order.")
     }
 
     @objc private func showPanel() {
