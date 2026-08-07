@@ -31,18 +31,55 @@ public enum SessionActivity: Equatable, Sendable {
     /// a session nobody will ever come back to.
     static let freshness: TimeInterval = 15 * 60
 
-    /// Classify a session from its transcript. Returns nil when the file
-    /// cannot be read at all — the caller keeps whatever it had rather than
-    /// inventing a state from an absent file.
-    public static func read(transcriptPath: String, now: Date = Date()) -> SessionActivity? {
+    /// The last turn boundary the hooks recorded for a session.
+    ///
+    /// `UserPromptSubmit` and `Stop` ARE the turn's edges — that is what those
+    /// hooks mean, not an inference from something else. This is the only
+    /// authoritative statement of "the agent has work and has not finished",
+    /// and it is what the transcript alone cannot supply (see `classify`).
+    public struct TurnBoundary: Equatable, Sendable {
+        public let kind: HookEventKind
+        public let at: Date
+        public init(kind: HookEventKind, at: Date) {
+            self.kind = kind
+            self.at = at
+        }
+    }
+
+    /// Classify a session from its transcript, with the hooks resolving the
+    /// one verdict the transcript cannot settle on its own. Returns nil when
+    /// the file cannot be read at all — the caller keeps whatever it had
+    /// rather than inventing a state from an absent file.
+    public static func read(
+        transcriptPath: String, boundary: TurnBoundary? = nil, now: Date = Date()
+    ) -> SessionActivity? {
         guard let tail = tail(of: transcriptPath) else { return nil }
         let modified = (try? FileManager.default.attributesOfItem(atPath: transcriptPath))?[.modificationDate] as? Date
-        return classify(tail: tail, modified: modified, now: now)
+        return classify(tail: tail, modified: modified, boundary: boundary, now: now)
     }
 
     /// The decision itself, taking lines rather than a path so every rule
     /// below is testable without a filesystem.
-    static func classify(tail: [String], modified: Date?, now: Date = Date()) -> SessionActivity {
+    /// Precedence, stated once because two sources of truth is exactly how a
+    /// lamp starts lying:
+    ///
+    /// 1. A transcript error wins outright. The hooks are measurably blind to
+    ///    it — a turn that dies on a usage limit fires no Stop in 9 of 10
+    ///    cases on this machine's archive.
+    /// 2. A positive transcript observation (a tool call in flight, a prompt
+    ///    with no answer under it) wins next. The hooks cannot see inside a
+    ///    turn, so they have nothing to add and must not contradict it.
+    /// 3. Only `idle` is genuinely ambiguous — a finished turn and a mid-turn
+    ///    pause after prose are the same shape in the file — and that is the
+    ///    case the boundary settles. Measured across 238 turns: the transcript
+    ///    alone reads idle for 9.8% of the time an agent is actually working,
+    ///    in 69 windows long enough for a poll to land inside one.
+    ///
+    /// The freshness gate applies either way: a prompt with no Stop after it
+    /// would otherwise hold a lamp blue forever on a session that crashed.
+    static func classify(
+        tail: [String], modified: Date?, boundary: TurnBoundary? = nil, now: Date = Date()
+    ) -> SessionActivity {
         // Walk backwards to the first entry that says anything about the
         // conversation. system/attachment/summary lines are bookkeeping —
         // Claude Code writes several of them AFTER an error, which is why
@@ -58,9 +95,13 @@ public enum SessionActivity: Equatable, Sendable {
             }
             switch type {
             case "assistant":
-                // A turn that ends in a tool call is still running; one that
-                // ends in prose has said its piece.
-                return hasToolUse(entry) ? working(since: modified, now: now) : .idle
+                // A turn that ends in a tool call is still running. One that
+                // ends in prose LOOKS finished — but mid-turn prose is the
+                // same shape, so that verdict is the ambiguous one and the
+                // hooks get the final word on it.
+                return hasToolUse(entry)
+                    ? working(since: modified, now: now)
+                    : resolveIdle(boundary: boundary, modified: modified, now: now)
             case "user":
                 // Either a real prompt (the agent owes an answer) or a tool
                 // result (the agent is mid-loop). Both mean working.
@@ -69,10 +110,23 @@ public enum SessionActivity: Equatable, Sendable {
                 continue  // system, attachment, summary, ai-title…
             }
         }
-        return .idle
+        return resolveIdle(boundary: boundary, modified: modified, now: now)
     }
 
-    /// `working` only while the file is still warm — see `freshness`.
+    /// The transcript said "idle". Ask the hooks whether that is a finished
+    /// turn or a turn still in flight.
+    private static func resolveIdle(
+        boundary: TurnBoundary?, modified: Date?, now: Date
+    ) -> SessionActivity {
+        guard let boundary, boundary.kind == .userPromptSubmit else { return .idle }
+        // Warmth from whichever source spoke last: the hook row is written at
+        // submit and never touched again, so a long turn's only fresh evidence
+        // is the transcript's own mtime.
+        let warmest = [modified, boundary.at].compactMap { $0 }.max()
+        return working(since: warmest, now: now)
+    }
+
+    /// `working` only while the evidence is still warm — see `freshness`.
     private static func working(since modified: Date?, now: Date) -> SessionActivity {
         guard let modified, now.timeIntervalSince(modified) <= freshness else { return .idle }
         return .working

@@ -586,6 +586,33 @@ public final class QueueStore: Sendable {
         }
     }
 
+    /// The newest turn boundary each session recorded — one query for the
+    /// whole grid rather than one per row. `UserPromptSubmit` means the agent
+    /// was handed work; `Stop` means it finished. Whichever is newer is the
+    /// session's current edge. Subagent stops are deliberately excluded: a
+    /// sub-agent finishing says nothing about the parent turn.
+    public func latestTurnBoundaries() throws -> [String: SessionActivity.TurnBoundary] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT sessionId, hookEvent, MAX(createdAtMs) AS atMs
+                FROM events
+                WHERE hookEvent IN (?, ?)
+                GROUP BY sessionId
+                """, arguments: [
+                HookEventKind.userPromptSubmit.rawValue, HookEventKind.stop.rawValue])
+            var out: [String: SessionActivity.TurnBoundary] = [:]
+            for row in rows {
+                guard let id: String = row["sessionId"],
+                      let raw: String = row["hookEvent"],
+                      let kind = HookEventKind(rawValue: raw),
+                      let atMs: Int64 = row["atMs"] else { continue }
+                out[id] = SessionActivity.TurnBoundary(
+                    kind: kind, at: Date(timeIntervalSince1970: Double(atMs) / 1000))
+            }
+            return out
+        }
+    }
+
     public func cursor(for sessionId: String) throws -> SessionCursor? {
         try dbQueue.read { db in try SessionCursor.fetchOne(db, key: sessionId) }
     }
