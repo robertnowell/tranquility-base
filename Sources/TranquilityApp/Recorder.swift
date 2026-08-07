@@ -156,6 +156,23 @@ public final class Recorder: @unchecked Sendable {
         throw RecorderError.engineFailed(lastReason)
     }
 
+    /// Bind to the preferred input NOW, at launch, instead of on the first press.
+    ///
+    /// At launch the engine is always on the wrong device: AVAudioEngine comes up
+    /// bound to the system default, which is precisely the device the preference
+    /// exists to avoid. So `rebindEngine` was guaranteed to rebuild — and left to
+    /// `start()`, that rebuild landed on the first arm gesture of every launch.
+    /// Measured on this hardware: 42.3 / 46.3 / 85.6 ms (min/median/max) against
+    /// instant-arm's ~80ms grace, so the slowest press blew the window that the
+    /// whole optimistic-capture design is built on.
+    ///
+    /// Paid here it is invisible, and every press afterwards finds the engine
+    /// already bound and reuses it. The cost did not go away; it moved off the
+    /// only path where it was ever visible.
+    public func warmUp() {
+        _ = rebindEngine(rebuilding: false)
+    }
+
     /// Point the engine at the preferred input, rebuilding it when that cannot be
     /// done in place, and hand back the node to install a tap on.
     ///

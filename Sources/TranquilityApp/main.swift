@@ -135,6 +135,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         rebuildMenu()
 
+        // Bind the microphone before anyone can press anything. The first press
+        // would otherwise pay for the device bind on the arm path, where ~46ms
+        // median (85ms at worst) does not fit the instant-arm grace. Here it is
+        // one more thing that happens during launch.
+        recorder.warmUp()
+
         // The recogniser was the one unobservable stage — a fallback transcript
         // quietly missing its first nineteen seconds looked identical to a short
         // reply (PR #1 harvest). app.log therefore contains what you dictated
@@ -1644,10 +1650,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lastStatusLine = "mic: \(resolved?.name ?? preference.title)"
         Permissions.log("mic: preference \(preference.rawValue) "
             + "→ \(resolved?.name ?? "engine default")")
-        // Nothing to reconfigure here: the next press re-resolves the device and
-        // rebuilds the engine if it moved (Recorder.rebindEngine). Touching the
-        // engine from a menu handler would be a second place to be wrong about
+        // Rebind now rather than on the next press, for the same reason launch
+        // does: the rebuild a preference change forces costs ~46ms, and a gesture
+        // is the one place that cannot absorb it. Still the single code path —
+        // warmUp defers to rebindEngine, which stays the only thing that decides
         // which device is live.
+        recorder.warmUp()
         rebuildMenu()
     }
 
