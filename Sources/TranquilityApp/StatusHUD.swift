@@ -219,10 +219,18 @@ final class StatusHUD: NSObject {
         countdownBar.isHidden = true
         let send = onCommitSend
         onCommitSend = nil; onCancelSend = nil
+        // Ruled 07 Aug: "when I hit ⌃⌥ from the confirmation readback it should
+        // IMMEDIATELY show Sending, and then Sent." The receipt was living
+        // inside the dispatch task, so it appeared once the send was already
+        // under way rather than the instant the press committed it. The label
+        // is the readback's own title — the identity the card was showing when
+        // you pressed.
+        let target = face.title
         // Committing is an explicit act: the send is out of your hands, so the
         // stage is yielded — the advance that follows may paint immediately
         // instead of being refused by a pendingSend that is already over.
         forceTransition(to: .idle(waiting: 0), because: "send committed")
+        if !target.isEmpty { showReceipt(.sending(target)) }
         send?()
         return true
     }
@@ -1166,9 +1174,10 @@ final class StatusHUD: NSObject {
             chip.wantsLayer = true
             chip.layer?.cornerRadius = 3
             chip.drawsBackground = false
-            // Centred in the top band: the placard owns the left, the gear
-            // the right, and the receipt takes the air between them.
-            chip.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin]
+            // Ruled 07 Aug: not centred — tucked against the gear on the
+            // right, which is the clean space. Pinned to that corner so a
+            // resize keeps it there.
+            chip.autoresizingMask = [.minXMargin, .minYMargin]
             host.addSubview(chip)
             receiptChip = chip
         }
@@ -1178,7 +1187,12 @@ final class StatusHUD: NSObject {
             receipt.text, size: 9, tracking: 1.4,
             color: sent ? StateLegend.Palette.ready : StateLegend.Palette.secondary)
         chip.sizeToFit()
-        chip.frame = CGRect(x: (host.bounds.width - chip.bounds.width) / 2,
+        // Right edge measured from the gear itself rather than a guessed
+        // margin, so the two never collide whatever the panel width.
+        let gearLeft = gearButton.superview.map { view in
+            view.convert(gearButton.frame, to: host).minX
+        } ?? host.bounds.width - 34
+        chip.frame = CGRect(x: gearLeft - chip.bounds.width - 10,
                             y: host.bounds.height - 22,
                             width: chip.bounds.width, height: chip.bounds.height)
         host.addSubview(chip, positioned: .above, relativeTo: nil)
@@ -1186,7 +1200,11 @@ final class StatusHUD: NSObject {
         chip.alphaValue = 1
 
         receiptFade?.cancel()
-        Permissions.log("receipt: \(receipt.text)")
+        Permissions.log("receipt: \(receipt.text) "
+            + "[pid \(ProcessInfo.processInfo.processIdentifier) "
+            + "chip \(UInt(bitPattern: ObjectIdentifier(chip).hashValue) % 100000) "
+            + "alpha \(chip.alphaValue) frame \(Int(chip.frame.minX)),\(Int(chip.frame.minY)) "
+            + "host \(Int(host.bounds.height)) siblings \(host.subviews.count)]")
 
         // Two clocks, because a send is slower than it feels. Measured on a
         // real dispatch: commit at 16:06:28, confirmed at 16:06:35 — SEVEN
@@ -1574,6 +1592,15 @@ final class StatusHUD: NSObject {
             retryTranscriptionButton.isHidden = false
             updateActionRowVisibility()
             note(StateLegend.slowTranscriptionNote)
+
+        case "receipt-card":
+            // The receipt over a CARD, not the grid — the state a real send
+            // actually resolves under when ⌃⌃ or an announcement is on stage.
+            _ = pose("speaking")
+            panel?.orderFrontRegardless()
+            showReceipt(.sent)
+            receiptFade?.cancel(); receiptFade = nil
+            return true
 
         case "receipt-sent", "receipt-sending":
             // The send receipt over the grid it lands on — the ordinary case,
