@@ -140,30 +140,118 @@ public struct Coordinator: Sendable {
         // unlike the tty filter this replaces, which hid real conversations.
         let live = Set(sessions.map(\.sessionId))
         let all = try store.waitingSessions()
-        Coordinator.reportNewlyGone(all.filter { !live.contains($0.sessionId) })
+        Coordinator.sweep(all, live: live)
         return all.filter { live.contains($0.sessionId) }
     }
 
-    /// Skips are logged on the TRANSITION to gone, never on the state.
-    ///
-    /// The badge polls `waiting()` continuously and dead sessions accumulate, so
-    /// logging the state wrote one line per dead session per tick — measured at
-    /// ~250 lines/second, 38.5M lines and 2.3 GB in five days. A log that large
-    /// buries the diagnostics it exists to provide and quietly eats the disk, and
-    /// the signal was never in the repetition: it is in the moment a session goes
-    /// away. Revival is handled by construction — a session that comes back live
-    /// leaves the set, so if it dies again that is a new transition and logs again.
-    private nonisolated(unsafe) static var goneReported = Set<String>()
-    private static let goneLock = NSLock()
+    // MARK: - The sweep
 
-    private static func reportNewlyGone(_ gone: [WaitingSession]) {
-        goneLock.lock()
-        defer { goneLock.unlock() }
-        let ids = Set(gone.map(\.sessionId))
-        for session in gone where !goneReported.contains(session.sessionId) {
-            trace?("skipping \(session.projectLabel): session is gone")
+    /// What is gone, what is retired, and what is worth saying about it.
+    ///
+    /// Dead sessions accumulate forever — 200 here, 157 of them from a single
+    /// afternoon of prompt-replay runs — and the sweep touched every one on every
+    /// poll, writing a line each time: ~250 lines/second, 38.5M lines, 2.3 GB in
+    /// five days. A log that large buries the diagnostics it exists to provide.
+    ///
+    /// Four rules, in the order they matter:
+    ///
+    /// 1. **Liveness governs.** A session is retired only while the agents API says
+    ///    it is gone, and the instant it reappears it is un-retired and said out
+    ///    loud. Nothing else may retire a session — not age, not silence, not event
+    ///    count — because nothing else is evidence that no one is there to answer.
+    ///    This is the rule that keeps the tty filter's failure from repeating: that
+    ///    one inferred "nobody is here" from a proxy, and hid real conversations.
+    /// 2. **Retirement is timed, not counted.** The liveness probe is cached for six
+    ///    seconds, so consecutive polls can be the same observation; counting them
+    ///    would retire a session on one probe wearing three hats. Absence has to
+    ///    persist for `retirementDelay` of wall clock.
+    /// 3. **A failed probe is not evidence.** `waiting()` returns before reaching
+    ///    here when the probe fails, so an outage can never age a session into
+    ///    retirement — it simply produces no new evidence either way.
+    /// 4. **State is in memory, so a restart forgets.** Deliberate: the worst case
+    ///    is re-observing sessions already known dead, which is the same fail-open
+    ///    posture as the probe itself. Persisting it would mean a bug in this file
+    ///    could bury a live session across restarts.
+    ///
+    /// What it says, and nothing else: each session's arrival at gone, its
+    /// retirement, its return — plus one state line every `heartbeatInterval`, so a
+    /// log that rolled ten minutes ago still answers "what is it doing" without the
+    /// history that rolled away.
+    private struct Absence { var since: Date; var announced: Bool }
+    private nonisolated(unsafe) static var absent: [String: Absence] = [:]
+    private nonisolated(unsafe) static var retired: Set<String> = []
+    private nonisolated(unsafe) static var lastHeartbeat = Date.distantPast
+    private static let sweepLock = NSLock()
+
+    /// Long enough that a slow probe or a tab being cycled cannot retire a session
+    /// someone is using; short enough that a finished batch run stops being swept
+    /// while you are still in the same coffee.
+    private static let retirementDelay: TimeInterval = 120
+    /// 288 lines a day. The transitions say what changed; this says what IS.
+    private static let heartbeatInterval: TimeInterval = 300
+
+    /// Tests share this process, and the sweep's memory is static — without a reset
+    /// one test's retirements would leak into the next and the failure would look
+    /// like a logic bug rather than a fixture one.
+    static func resetSweepStateForTesting() {
+        sweepLock.lock()
+        defer { sweepLock.unlock() }
+        absent = [:]
+        retired = []
+        lastHeartbeat = .distantPast
+    }
+
+    /// Retired right now, for assertions. Not used in production.
+    static func retiredSessionsForTesting() -> Set<String> {
+        sweepLock.lock()
+        defer { sweepLock.unlock() }
+        return retired
+    }
+
+    /// `now` is injected so the timing rules above are testable without sleeping;
+    /// production always passes the real clock.
+    static func sweep(_ all: [WaitingSession], live: Set<String>, now: Date = Date()) {
+        sweepLock.lock()
+        defer { sweepLock.unlock() }
+
+        for session in all {
+            let id = session.sessionId
+            guard !live.contains(id) else {
+                // Answerable now, whatever it was a moment ago.
+                if retired.remove(id) != nil {
+                    trace?("\(session.projectLabel) is live again; un-retired")
+                }
+                absent[id] = nil
+                continue
+            }
+            guard !retired.contains(id) else { continue }   // accounted for; say nothing
+            var record = absent[id] ?? Absence(since: now, announced: false)
+            if !record.announced {
+                trace?("skipping \(session.projectLabel): session is gone")
+                record.announced = true
+            }
+            if now.timeIntervalSince(record.since) >= retirementDelay {
+                retired.insert(id)
+                absent[id] = nil
+                trace?("retired \(session.projectLabel) after "
+                     + "\(Int(now.timeIntervalSince(record.since)))s gone")
+            } else {
+                absent[id] = record
+            }
         }
-        goneReported = ids
+
+        // Neither map may outlive the queue it describes: a session that leaves the
+        // waiting set is forgotten, so if it ever returns it is observed fresh.
+        let present = Set(all.map(\.sessionId))
+        absent = absent.filter { present.contains($0.key) }
+        retired = retired.intersection(present)
+
+        if now.timeIntervalSince(lastHeartbeat) >= heartbeatInterval {
+            lastHeartbeat = now
+            let liveCount = all.count { live.contains($0.sessionId) }
+            trace?("sweep: \(liveCount) live, \(retired.count) retired, "
+                 + "\(absent.count) going, \(all.count) queued")
+        }
     }
 
     /// The badge. Shares the predicate with what a keypress will play, so the two
