@@ -482,6 +482,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // the stage is actually free: on a ⌃⌥ commit-and-advance the next
             // announcement is already preparing, and this must not stomp it.
             lastStatusLine = "sending to \(label)…"
+            // The whisper (ruled 06 Aug): the words are on their way, said
+            // without taking the stage from whatever is on it.
+            hud.showReceipt(.sending(label))
             if hud.canSurfaceAmbiently {
                 showIdleGrid()
             }
@@ -500,9 +503,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // thing that went right was indistinguishable noise (user report,
                 // 05 Aug — "two further states, all saying different things").
                 case .queued:
+                    hud.showReceipt(.queued)
                     lastStatusLine = "queued in \(label) — sends when its turn finishes"
                     Permissions.log("send: queued in \(label)")
                 case .dispatched:
+                    hud.showReceipt(.sent)
                     lastStatusLine = "sent to \(label)"
                     Permissions.log("send: confirmed to \(label)")
                 case .sessionNotReady(let readiness):

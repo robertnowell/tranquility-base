@@ -26,6 +26,43 @@ public enum SessionActivity: Equatable, Sendable {
     /// 64KB comfortably holds them even when one entry is a large tool result.
     static let tailBytes = 64 * 1024
 
+    /// How long a self-healing error gets to heal before it lights the lamp.
+    /// One poll interval plus headroom: long enough that an automatic retry
+    /// finishes first, short enough that a real outage is not hidden.
+    static let transientGrace: TimeInterval = 25
+
+    /// The error classes Claude Code retries by itself. Matched on the text
+    /// because that is what the transcript carries — and deliberately a
+    /// closed list: anything unrecognised is treated as needing a human,
+    /// because failing toward "tell him" is the safe direction.
+    static func isTransient(_ reason: String) -> Bool {
+        let text = reason.lowercased()
+        // A usage or session limit is never transient, whatever else the
+        // sentence says ("…resets 8pm. Try again later." contains transient
+        // copy) — so the blocking phrases are checked first. They are PHRASES,
+        // not words: a first version matched bare "limit", which swallowed
+        // "temporarily limiting requests" — the commonest transient error of
+        // all — and would have lit amber for it every time.
+        for blocking in ["session limit", "reached your", "hit your",
+                         "usage-credits", "quota", "switch models"]
+        where text.contains(blocking) { return false }
+        for transient in ["overloaded", "529", "temporarily", "connection closed",
+                          "socket", "enotfound", "econnreset", "etimedout",
+                          "unable to connect", "rate limiting", "try again"]
+        where text.contains(transient) { return true }
+        return false
+    }
+
+    /// Transcript timestamps carry fractional seconds ("…T16:40:28.887Z").
+    /// Parsed with a formatter built per call rather than a shared static —
+    /// ISO8601DateFormatter is not Sendable, and this runs off the poller.
+    static func timestamp(of entry: [String: Any]) -> Date? {
+        guard let raw = entry["timestamp"] as? String else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
+    }
+
     /// A `working` verdict older than this is not believable — the process is
     /// gone, or a tool call hung days ago. Prevents a lamp stuck on blue for
     /// a session nobody will ever come back to.
@@ -91,7 +128,21 @@ public enum SessionActivity: Equatable, Sendable {
             let type = entry["type"] as? String
 
             if entry["isApiErrorMessage"] as? Bool == true {
-                return .blocked(reason: text(of: entry))
+                let reason = text(of: entry)
+                // Not every error needs you. Measured on this machine's
+                // archive: 110 of 286 are the self-healing kind (529
+                // overloaded, ENOTFOUND, a socket closed mid-response) that
+                // Claude Code retries on its own, against 176 that genuinely
+                // sit until a human acts. Lighting amber for the first kind
+                // would teach the eye to ignore amber, which costs more than
+                // the lamp is worth. So a transient error must SURVIVE a
+                // grace period as the tail before it earns the lamp — if the
+                // retry works, the tail moves on and it never lights at all.
+                if isTransient(reason), let at = timestamp(of: entry),
+                   now.timeIntervalSince(at) < transientGrace {
+                    return .idle
+                }
+                return .blocked(reason: reason)
             }
             switch type {
             case "assistant":
