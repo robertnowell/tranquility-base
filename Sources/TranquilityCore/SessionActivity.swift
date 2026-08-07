@@ -48,7 +48,16 @@ public enum SessionActivity: Equatable, Sendable {
         where text.contains(blocking) { return false }
         for transient in ["overloaded", "529", "temporarily", "connection closed",
                           "socket", "enotfound", "econnreset", "etimedout",
-                          "unable to connect", "rate limiting", "try again"]
+                          "unable to connect", "rate limiting", "try again",
+                          // Added after running the classifier over the real
+                          // archive: 31 of 288 errors matched nothing and so
+                          // lit amber at once. These are the stream-level
+                          // hiccups among them. The rest of that tail —
+                          // invalid API key, login expired, prompt too long —
+                          // stays unrecognised ON PURPOSE: every one of them
+                          // does need a human.
+                          "mid-response", "mid-stream", "idle timeout",
+                          "could not be processed"]
         where text.contains(transient) { return true }
         return false
     }

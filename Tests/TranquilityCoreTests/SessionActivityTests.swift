@@ -248,6 +248,81 @@ final class SessionActivityTests: XCTestCase {
             .working)
     }
 
+    // MARK: - Characterization against the real archive
+    //
+    // The unit tests above use fixtures I wrote, which means they can only
+    // confirm what I already believed. This one runs the real classifier over
+    // every API error on this machine and asserts the split matches what was
+    // measured (176 needing a human vs 110 self-healing, of 286). It skips
+    // when the archive is absent so CI on another machine stays green.
+
+    func testTransientSplitAgainstTheRealArchive() throws {
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/projects")
+        // Opt-in: the full corpus takes ~200s to scan, which is a tax on
+        // every future run and exactly the kind of slow test that gets
+        // deleted rather than fixed. Run it deliberately after touching the
+        // classifier:  TB_ARCHIVE_EVAL=1 swift test --filter Archive
+        guard ProcessInfo.processInfo.environment["TB_ARCHIVE_EVAL"] == "1" else {
+            throw XCTSkip("set TB_ARCHIVE_EVAL=1 to scan the real transcript archive")
+        }
+        guard FileManager.default.fileExists(atPath: root.path) else {
+            throw XCTSkip("no local transcript archive")
+        }
+        var blocking = 0, transient = 0, samples: [String] = []
+        // Every transcript, not a prefix: the first version capped at 400
+        // enumerated URLs and reached only 14 errors out of ~288, which made
+        // its verdict noise. Huge files are skipped instead — a few sessions
+        // run to hundreds of megabytes and would dominate the runtime without
+        // changing the ratio.
+        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.fileSizeKey])?
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "jsonl" } ?? []
+        var skipped = 0
+        for file in files {
+            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            if size > 64 * 1024 * 1024 { skipped += 1; continue }
+            guard let handle = try? FileHandle(forReadingFrom: file) else { continue }
+            defer { try? handle.close() }
+            guard let data = try? handle.readToEnd(),
+                  let text = String(data: data, encoding: .utf8) else { continue }
+            for line in text.split(separator: "\n") where line.contains("isApiErrorMessage") {
+                guard let d = line.data(using: .utf8),
+                      let entry = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                      entry["isApiErrorMessage"] as? Bool == true,
+                      let message = entry["message"] as? [String: Any],
+                      let content = message["content"] as? [[String: Any]],
+                      let reason = content.first?["text"] as? String
+                else { continue }
+                if SessionActivity.isTransient(reason) { transient += 1 }
+                else {
+                    blocking += 1
+                    if samples.count < 3 { samples.append(String(reason.prefix(50))) }
+                }
+            }
+        }
+        let total = blocking + transient
+        try XCTSkipIf(total == 0, "archive holds no API errors")
+        print("real archive: \(total) errors — \(blocking) blocking, \(transient) transient"
+              + " (\(skipped) oversized files skipped)")
+        print("blocking samples: \(samples)")
+        XCTAssertGreaterThan(total, 100, "the archive scan is not reaching the corpus")
+        // Both classes must be represented: a classifier that called
+        // everything one thing would pass every fixture test above and still
+        // be useless in the field.
+        XCTAssertGreaterThan(blocking, 0, "nothing classified as needing a human")
+        XCTAssertGreaterThan(transient, 0, "nothing classified as self-healing")
+        // Measured over the whole corpus: ~40% genuinely need a human (session
+        // and usage limits dominate), ~50% self-heal, and a ~10% tail that
+        // matches nothing and therefore lights amber by design. The bounds are
+        // wide because the ratio tracks how the day went — a limit-heavy
+        // afternoon shifts it hard — and narrow enough to catch the two
+        // failures that matter: a list that swallows real blocks, and one that
+        // has drifted back to lighting amber for everything.
+        let blockingShare = Double(blocking) / Double(total)
+        XCTAssertGreaterThan(blockingShare, 0.25, "transient is swallowing real blocks")
+        XCTAssertLessThan(blockingShare, 0.75, "everything is lighting amber again")
+    }
+
     func testMissingFileIsNilNotAGuess() {
         XCTAssertNil(SessionActivity.read(transcriptPath: "/nope/does-not-exist.jsonl"))
     }
