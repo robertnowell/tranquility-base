@@ -621,6 +621,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // session stays findable. Walked via `known` — already latestId DESC —
         // so the band is recency-ordered like the waiting band above it, never
         // Dictionary.values hash order (which reshuffled between refreshes).
+        // One query for every row's turn edge (see SessionActivity.classify's
+        // precedence note): the hooks settle working-vs-idle, which the
+        // transcript alone gets wrong 9.8% of the time an agent is working.
+        let boundaries = (try? store?.latestTurnBoundaries()) ?? [:]
         let waitingIds = Set(waiting.map(\.sessionId))
         let known = (try? store?.waitingSessionsIncludingHeard()) ?? []
         var placed = waitingIds
@@ -628,7 +632,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let live = liveById[stored.sessionId] else { continue }
             placed.insert(stored.sessionId)
             let activity = stored.transcriptPath.flatMap {
-                SessionActivity.read(transcriptPath: $0)
+                SessionActivity.read(transcriptPath: $0,
+                                     boundary: boundaries[stored.sessionId])
             }
             rows.append(StateLegend.SessionRow(
                 id: stored.sessionId,
@@ -642,7 +647,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let path = live.cwd.map {
                 TranscriptTitles.defaultPath(cwd: $0, sessionId: live.sessionId)
             }
-            let activity = path.flatMap { SessionActivity.read(transcriptPath: $0) }
+            let activity = path.flatMap {
+                SessionActivity.read(transcriptPath: $0,
+                                     boundary: boundaries[live.sessionId])
+            }
             rows.append(StateLegend.SessionRow(
                 id: live.sessionId,
                 name: StateLegend.displayName(

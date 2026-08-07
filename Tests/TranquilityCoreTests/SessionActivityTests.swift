@@ -103,6 +103,83 @@ final class SessionActivityTests: XCTestCase {
         }
     }
 
+    // MARK: - Turn boundaries (the hook cross-check)
+    //
+    // Measured before building: across 238 real turns the transcript alone
+    // reads "idle" for 9.8% of the time an agent is working — 69 windows of
+    // 15s or more, which is the grid's poll interval. These pin the precedence
+    // that fixes it without letting a second source of truth start lying.
+
+    private func boundary(_ kind: HookEventKind, agoSeconds: TimeInterval = 5)
+        -> SessionActivity.TurnBoundary {
+        .init(kind: kind, at: Date().addingTimeInterval(-agoSeconds))
+    }
+
+    func testMidTurnProseReadsWorkingWhenTheTurnIsStillOpen() {
+        // THE case this feature exists for: the model wrote prose and will
+        // call a tool next. The tail is indistinguishable from a finished
+        // turn; the unanswered prompt boundary settles it.
+        let tail = [userPrompt(), assistant(text: "Let me look at that.")]
+        XCTAssertEqual(
+            SessionActivity.classify(tail: tail, modified: warm,
+                                     boundary: boundary(.userPromptSubmit)),
+            .working)
+    }
+
+    func testFinishedTurnStaysIdleWhenTheStopIsTheNewerEdge() {
+        let tail = [userPrompt(), assistant(text: "Done.")]
+        XCTAssertEqual(
+            SessionActivity.classify(tail: tail, modified: warm, boundary: boundary(.stop)),
+            .idle)
+    }
+
+    func testNoBoundaryFallsBackToTheTranscriptAlone() {
+        let tail = [userPrompt(), assistant(text: "Done.")]
+        XCTAssertEqual(
+            SessionActivity.classify(tail: tail, modified: warm, boundary: nil), .idle)
+    }
+
+    func testErrorBeatsAnOpenPrompt() {
+        // The hooks are blind to errors — no Stop fires in 9 of 10 cases — so
+        // an open prompt must never paint over a blocked session.
+        let tail = [userPrompt(), apiError("You've reached your Fable 5 limit")]
+        guard case .blocked = SessionActivity.classify(
+            tail: tail, modified: warm, boundary: boundary(.userPromptSubmit))
+        else { return XCTFail("a transcript error outranks any boundary") }
+    }
+
+    func testPositiveTranscriptObservationBeatsAStaleStop() {
+        // A tool call in flight is something the hooks cannot see inside a
+        // turn; a Stop from the previous turn must not silence it.
+        let tail = [userPrompt(), assistantToolUse()]
+        XCTAssertEqual(
+            SessionActivity.classify(tail: tail, modified: warm, boundary: boundary(.stop)),
+            .working)
+    }
+
+    func testAnOpenPromptOnAColdSessionDecaysToIdle() {
+        // A session that crashed mid-turn leaves a prompt with no Stop
+        // forever. Without this the lamp would sit blue for all time.
+        let cold = Date().addingTimeInterval(-SessionActivity.freshness - 60)
+        XCTAssertEqual(
+            SessionActivity.classify(
+                tail: [assistant(text: "Done.")], modified: cold,
+                boundary: boundary(.userPromptSubmit, agoSeconds: SessionActivity.freshness + 60)),
+            .idle)
+    }
+
+    func testALongTurnStaysWorkingOnTranscriptWarmthAlone() {
+        // The boundary row is written at submit and never touched again, so a
+        // turn running longer than the freshness window must keep its lamp
+        // from the transcript's own mtime.
+        let oldPrompt = SessionActivity.freshness + 600
+        XCTAssertEqual(
+            SessionActivity.classify(
+                tail: [assistant(text: "Still going.")], modified: warm,
+                boundary: boundary(.userPromptSubmit, agoSeconds: oldPrompt)),
+            .working)
+    }
+
     func testMissingFileIsNilNotAGuess() {
         XCTAssertNil(SessionActivity.read(transcriptPath: "/nope/does-not-exist.jsonl"))
     }
