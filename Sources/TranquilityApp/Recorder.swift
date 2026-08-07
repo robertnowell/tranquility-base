@@ -17,7 +17,16 @@ public final class Recorder: @unchecked Sendable {
         case nothingRecorded
     }
 
-    private let engine = AVAudioEngine()
+    /// Rebuilt, never merely restarted. `AVAudioEngine.inputNode` caches its
+    /// stream description and does NOT renegotiate when the hardware re-rates
+    /// underneath it, so an engine that outlives a device change reports a
+    /// format that no longer exists — and `installTap` refuses it. Only a fresh
+    /// engine re-reads the hardware. See `rebindEngine`.
+    ///
+    /// `var`, but not shared state: it is touched only in `start`/`stop`/
+    /// `abandon`, which the `running` guard serializes. The tap callback never
+    /// reads it.
+    private var engine = AVAudioEngine()
     private let sampleRate: Double
     private var buffer = Data()
     private let lock = NSLock()
@@ -91,8 +100,15 @@ public final class Recorder: @unchecked Sendable {
         // watchdog.
         var lastReason = "unknown"
         for attempt in 0..<6 {
+            // A retry that re-asks the same cached question is not a retry. Every
+            // attempt past the first gets a NEW engine, because the failure this
+            // loop rides through can be a stale format rather than a transient
+            // one — and from in here those are indistinguishable. The stale case
+            // used to burn all six attempts in 480ms on six byte-identical
+            // mismatch errors and then give up (app.log 07 Aug, 15:12:19–15:13:04:
+            // a cached 48000 against AirPods that had re-rated to 24000).
             if attempt > 0 { usleep(80_000) }
-            let input = engine.inputNode
+            let input = rebindEngine(rebuilding: attempt > 0)
             let format = input.outputFormat(forBus: 0)
             guard format.sampleRate > 0, format.channelCount > 0 else {
                 lastReason = "input format invalid (rate=\(format.sampleRate), "
@@ -138,6 +154,38 @@ public final class Recorder: @unchecked Sendable {
 
         lock.lock(); running = false; lock.unlock()
         throw RecorderError.engineFailed(lastReason)
+    }
+
+    /// Point the engine at the preferred input, rebuilding it when that cannot be
+    /// done in place, and hand back the node to install a tap on.
+    ///
+    /// A device change is ALWAYS a rebuild. Binding a device invalidates the input
+    /// node's cached stream description and `outputFormat(forBus:)` does not
+    /// renegotiate to match — the documented trap behind "0 channels after
+    /// changing deviceID". A fresh engine reads the hardware once, correctly,
+    /// rather than being asked to correct itself.
+    ///
+    /// Steady state costs nothing: the engine is reused whenever it is already on
+    /// the right device, which is every press except the first and the ones where
+    /// the hardware genuinely moved.
+    private func rebindEngine(rebuilding: Bool) -> AVAudioInputNode {
+        let desired = AudioInputDevice.resolve()
+        let mismatched = desired.map { engine.inputNode.auAudioUnit.deviceID != $0.id } ?? false
+        guard rebuilding || mismatched else { return engine.inputNode }
+
+        _ = VDCatchObjCException { engine.stop() }
+        engine = AVAudioEngine()
+        if let desired {
+            do { try engine.inputNode.auAudioUnit.setDeviceID(desired.id) }
+            catch {
+                // Not fatal. An unbindable device means capture falls back to
+                // whatever the engine picks, which still records — but it is the
+                // difference between "on AirPods anyway" and a broken preference,
+                // so it does not get to fail quietly.
+                Permissions.log("mic: could not bind \(desired.name): \(error)")
+            }
+        }
+        return engine.inputNode
     }
 
     /// Attach the live stream to a capture that is already running — the
