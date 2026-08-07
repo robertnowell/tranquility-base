@@ -1167,18 +1167,39 @@ final class StatusHUD: NSObject {
         chip.alphaValue = 1
 
         receiptFade?.cancel()
-        // "Sending" holds until its outcome replaces it; an outcome fades.
-        guard sent else { return }
-        let fade = DispatchWorkItem { [weak chip] in
+        Permissions.log("receipt: \(receipt.text)")
+
+        // Two clocks, because a send is slower than it feels. Measured on a
+        // real dispatch: commit at 16:06:28, confirmed at 16:06:35 — SEVEN
+        // seconds of "SENDING", and then the outcome flashed past in two.
+        // Robert saw the first and not the second and reported no
+        // confirmation at all, which is the correct reading of what was on
+        // screen.
+        //
+        // So an outcome lingers long enough to be caught by someone who
+        // looked away (4s), and "sending" gets a CEILING: if no outcome
+        // arrives, the chip stops claiming a send is in progress rather than
+        // sitting there indefinitely asserting something it no longer knows.
+        // A dispatch that has neither landed nor failed by then has a bigger
+        // problem than its receipt, and the failure card owns that.
+        let linger: TimeInterval = sent ? 4.0 : 12.0
+        let fade = DispatchWorkItem { [weak self, weak chip] in
             guard let chip else { return }
+            if !sent { Permissions.log("receipt: sending timed out on screen") }
+            self?.receiptFade = nil
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.5
                 chip.animator().alphaValue = 0
             }
         }
         receiptFade = fade
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: fade)
+        DispatchQueue.main.asyncAfter(deadline: .now() + linger, execute: fade)
     }
+
+    /// Whether a receipt is currently claiming the top band. The selftest
+    /// asserts this returns to false — a chip outside the render funnel has
+    /// to prove it cleans up, since no arm of render() will do it for it.
+    var receiptIsShowing: Bool { (receiptChip?.alphaValue ?? 0) > 0 }
 
     /// Clear a receipt outright — the panel is going away under it.
     func clearReceipt() {
@@ -1380,6 +1401,35 @@ final class StatusHUD: NSObject {
                         + "(want listening) meterShown=\(!meter.isHidden)")
         recordingEnded()
         endCapture(because: "selftest arm cleanup")
+
+        // The receipt drill. A chip outside the render funnel has to prove it
+        // cleans up after itself, because no arm of render() will do it: this
+        // is the residue class the arbiter exists to make impossible, and the
+        // receipt is the one widget deliberately outside that guarantee.
+        showIdle(note: nil, rows: [])
+        let matrixBefore = widgetMatrix()
+        showReceipt(.sending("promotions copy"))
+        let shownWhileVisible = receiptIsShowing
+        // The chip shares the top band with the placard and the gear, so a
+        // long callsign must truncate rather than run under either. The log
+        // line above carries the rendered text for inspection.
+        showReceipt(.sending("bookmarks provenance track a rebuild"))
+        showReceipt(.sent)
+        // A state change must not be disturbed BY the receipt, nor clear it:
+        // it floats over the top band and owns no layout.
+        showResult("A failure card, arriving under a live receipt.")
+        let matrixUnderReceipt = widgetMatrix()
+        dismiss()
+        let clearedByDismiss = !receiptIsShowing
+        // And a receipt must never surface a hidden panel — a send landing is
+        // not a summons.
+        hide()
+        showReceipt(.sent)
+        let refusedWhileHidden = !receiptIsShowing
+        Permissions.log("selftest receipt: shown=\(shownWhileVisible) "
+                        + "clearedByDismiss=\(clearedByDismiss) "
+                        + "refusedWhileHidden=\(refusedWhileHidden) "
+                        + "layoutUndisturbed=\(matrixBefore != matrixUnderReceipt ? "n/a (state changed)" : "yes")")
 
         // The stomp that froze the app (2026-08-05): a stale idle repaint against a
         // live capture. Must be REFUSED, and the pill must still be on the walls.
