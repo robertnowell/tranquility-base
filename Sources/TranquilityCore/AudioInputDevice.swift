@@ -25,13 +25,13 @@ import Foundation
 /// the system default becomes a CHOICE, which is also what the one shipping
 /// competitor in this category concluded: Wispr Flow marks the built-in mic
 /// "recommended" and warns on both AirPods and auto-detect.
-enum AudioInputPreference: String, CaseIterable {
+public enum AudioInputPreference: String, CaseIterable {
     /// The machine's own microphone. Default, and the recommendation.
     case builtIn
     /// Follow System Settings › Sound › Input, whatever it happens to be.
     case systemDefault
 
-    var title: String {
+    public var title: String {
         switch self {
         case .builtIn: return "Built-in mic (recommended)"
         case .systemDefault: return "System default"
@@ -42,7 +42,7 @@ enum AudioInputPreference: String, CaseIterable {
 
     /// Built-in unless the user has said otherwise. A stored value that no
     /// longer parses falls back to the recommendation rather than to nothing.
-    static var current: AudioInputPreference {
+    public static var current: AudioInputPreference {
         get {
             UserDefaults.standard.string(forKey: key)
                 .flatMap(AudioInputPreference.init(rawValue:)) ?? .builtIn
@@ -54,17 +54,17 @@ enum AudioInputPreference: String, CaseIterable {
 /// Thin CoreAudio reads. AVAudioEngine has no device vocabulary on macOS — it
 /// binds one device for input and output and offers no way to ask what that is —
 /// so device identity has to come from the HAL directly.
-enum AudioInputDevice {
-    struct Device {
-        var id: AudioDeviceID
-        var name: String
-        var isBuiltIn: Bool
-        var isBluetooth: Bool
+public enum AudioInputDevice {
+    public struct Device {
+        public var id: AudioDeviceID
+        public var name: String
+        public var isBuiltIn: Bool
+        public var isBluetooth: Bool
     }
 
     /// Every device with at least one input channel. Output-only devices are
     /// excluded here rather than at each call site.
-    static func allInputs() -> [Device] {
+    public static func allInputs() -> [Device] {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -91,7 +91,7 @@ enum AudioInputDevice {
         }
     }
 
-    static var systemDefault: Device? {
+    public static var systemDefault: Device? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -104,7 +104,7 @@ enum AudioInputDevice {
         return allInputs().first { $0.id == id }
     }
 
-    static var builtIn: Device? { allInputs().first(where: \.isBuiltIn) }
+    public static var builtIn: Device? { allInputs().first(where: \.isBuiltIn) }
 
     /// The device capture should bind to, or nil to let AVAudioEngine pick.
     ///
@@ -113,7 +113,7 @@ enum AudioInputDevice {
     /// falling through to the engine's own choice is better than refusing to
     /// record. The mismatch defence does not depend on this — a fresh engine
     /// re-reads the hardware whatever device it lands on.
-    static func resolve(_ preference: AudioInputPreference = .current) -> Device? {
+    public static func resolve(_ preference: AudioInputPreference = .current) -> Device? {
         switch preference {
         case .builtIn: return builtIn ?? systemDefault
         case .systemDefault: return systemDefault
