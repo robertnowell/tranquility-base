@@ -710,8 +710,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// The one route to the idle face: assemble the grid and show it.
-    private func showIdleGrid(note: String? = nil) {
-        hud.showIdle(note: note, rows: sessionRowsNow())
+    /// The provenance comes from the compiler, not from each caller remembering
+    /// to pass one. Twenty-five call sites reach the grid; asking each to label
+    /// itself is twenty-five chances to paste the neighbour's string, which is
+    /// how they all ended up saying "idle repaint" in the first place.
+    private func showIdleGrid(note: String? = nil,
+                              caller: String = #function, line: Int = #line) {
+        hud.showIdle(note: note, rows: sessionRowsNow(),
+                     because: "grid from \(caller):\(line)")
     }
 
     /// Arm ruling 14's return: the card has said its piece, it holds for the
@@ -1312,18 +1318,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     onWillSpeak: { [weak self] announcement in
                         // Render BEFORE the audio starts. Showing it afterwards is
                         // useless — you have already heard the whole thing by then.
-                        guard let self else { return }
+                        guard let self else { return false }
                         let live = (ClaudeAgentsCLI().sessions() ?? [])
                             .first { $0.sessionId == announcement.event.sessionId }
                         // One displayed identity (re-ruled 05 Aug): the terminal
                         // tab's own string; the voice still speaks the callsign.
                         let name = self.tabDisplayName(for: announcement.event, live: live)
-                        self.activeConversation = (
-                            announcement.event.sessionId,
-                            name,
-                            announcement.event.cwd)
-                        self.lastAnnouncement = announcement
-                        self.hud.showAnnouncement(
+                        // The stage is claimed FIRST. Everything below records
+                        // "this is the conversation you are in", and a refused
+                        // announcement is not one — recording it anyway is how a
+                        // turn nobody heard became the reply target.
+                        guard self.hud.showAnnouncement(
                             topic: announcement.brief.topic,
                             spoken: announcement.spoken.text,
                             sessionId: announcement.event.sessionId,
@@ -1331,6 +1336,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             project: name,
                             cwd: announcement.event.cwd,
                             eventId: announcement.event.sessionId)
+                        else {
+                            Permissions.log("announce: stage refused, not speaking")
+                            return false
+                        }
+                        self.activeConversation = (
+                            announcement.event.sessionId,
+                            name,
+                            announcement.event.cwd)
+                        self.lastAnnouncement = announcement
+                        return true
                     },
                     onWord: { [weak self] range in
                         Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
