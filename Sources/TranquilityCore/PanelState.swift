@@ -17,7 +17,7 @@ import Foundation
 /// catchUp flag is deleted — nothing in production ever set it (only the pose
 /// driver did). `.result`'s ok flag is deleted — the Sent face is dead, so a
 /// result on screen is always a failure.
-enum PanelState: Equatable {
+public enum PanelState: Equatable {
     case hidden
     case idle(waiting: Int)
     case preparing
@@ -45,7 +45,7 @@ enum PanelState: Equatable {
 
     /// Short, stable name for logs. Deliberately excludes ids so a transition line
     /// reads as a state change rather than a data dump.
-    var name: String {
+    public var name: String {
         switch self {
         case .hidden: return "hidden"
         case .idle: return "idle"
@@ -64,7 +64,7 @@ enum PanelState: Equatable {
     /// Escape means "stop what is happening here". It is live wherever something is
     /// happening, which now includes listening and settings — the two states where
     /// it silently did nothing.
-    var acceptsEscape: Bool {
+    public var acceptsEscape: Bool {
         switch self {
         case .hidden: return false
         case .idle, .result: return true          // hide the panel
@@ -78,14 +78,14 @@ enum PanelState: Equatable {
     /// ⌃⌥ from any of them means HOME first, never straight to the next agent
     /// (ruled 06 Aug — the error card was still advancing: "it should always
     /// go back to home before it goes to the next agent update").
-    var isCardOnStage: Bool {
+    public var isCardOnStage: Bool {
         switch self {
         case .speaking, .result, .receipt: return true
         default: return false
         }
     }
 
-    var isCapturingAudio: Bool {
+    public var isCapturingAudio: Bool {
         switch self {
         case .listening, .arming: return true
         default: return false
@@ -94,7 +94,7 @@ enum PanelState: Equatable {
 
     /// A reply can be started. Recording with nothing to answer spends a
     /// transcription to discover it had nowhere to go.
-    var canStartReply: Bool {
+    public var canStartReply: Bool {
         switch self {
         case .speaking, .pendingSend, .result, .receipt: return true
         case .hidden, .idle, .preparing, .arming, .listening, .transcribing,
@@ -103,14 +103,14 @@ enum PanelState: Equatable {
     }
 
     /// A turn arriving may raise the panel. Anything mid-conversation says no.
-    var allowsAmbientSurface: Bool {
+    public var allowsAmbientSurface: Bool {
         switch self {
         case .hidden, .idle: return true
         default: return false
         }
     }
 
-    var isPendingSend: Bool {
+    public var isPendingSend: Bool {
         if case .pendingSend = self { return true }
         return false
     }
@@ -119,7 +119,7 @@ enum PanelState: Equatable {
     /// states a stale repaint must never replace. `.arming` owns it too — the
     /// mic is open — so an explicit dismiss tears it down honestly through
     /// `endCapture` like every other capture state.
-    var ownsStage: Bool {
+    public var ownsStage: Bool {
         switch self {
         case .arming, .listening, .transcribing, .pendingSend: return true
         default: return false
@@ -136,7 +136,7 @@ enum PanelState: Equatable {
     /// reply gesture silently refused because the recorder never stopped
     /// (app.log 2026-08-05T18:30:30Z). That repaint is now refused here, by type,
     /// instead of being guarded against at each of its call sites.
-    func admits(_ next: PanelState) -> Bool {
+    public func admits(_ next: PanelState) -> Bool {
         switch self {
         case .arming:
             switch next {

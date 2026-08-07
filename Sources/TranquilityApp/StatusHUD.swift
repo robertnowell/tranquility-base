@@ -147,15 +147,24 @@ final class StatusHUD: NSObject {
         min(1, sqrt(max(0, Double(level))) * 2.0)
     }
 
+    /// Returns whether the stage was actually taken. The caller must not speak
+    /// when it was not: this returned Void, so a refusal reached nobody and the
+    /// audio played into a live microphone anyway (Coordinator.speak).
+    @discardableResult
     func showAnnouncement(
         topic: String, spoken: String, sessionId: String, pid: Int?, project: String,
         cwd: String?, eventId: String? = nil,
         placard: String? = nil
-    ) {
+    ) -> Bool {
+        // Take the stage BEFORE recording who owns it. These two assignments used
+        // to run above the guard, so a refused announcement still repointed
+        // `currentTarget` — the routing that decides which terminal your next
+        // dictation is typed into. A refusal that paints nothing but silently
+        // moves the reply target is worse than one that paints.
+        guard transition(to: .speaking(eventId: eventId), because: "audio starting")
+        else { return false }
         currentEventId = eventId
         currentTarget = (sessionId, pid, project)
-        guard transition(to: .speaking(eventId: eventId), because: "audio starting")
-        else { return }
         // Into the fresh Face, never before it: the wholesale rebuild is what
         // clears a previous pull's placard on ordinary announcements. The topic
         // rides separately from the identity (ruled: identity in mono, topic in
@@ -165,6 +174,7 @@ final class StatusHUD: NSObject {
         face = Face(title: project, topic: extra, body: spoken,
                     placardOverride: placard ?? "")
         render()
+        return true
     }
 
     /// The first reply to a session asks once, showing the words that are about to
@@ -437,12 +447,21 @@ final class StatusHUD: NSObject {
     /// callsign + lamp + short topic. Row tap invites that session. The old
     /// count-pill and hint text are gone as the default face; the app's own name
     /// and a one-line hint survive only in the true empty state (no sessions).
-    func showIdle(note: String? = nil, rows: [StateLegend.SessionRow]) {
+    func showIdle(note: String? = nil, rows: [StateLegend.SessionRow],
+                  because reason: String = "idle repaint") {
         // The transition that used to stomp a live listening pill (an interrupted
         // announce resuming after the gesture that killed it). Now the table
         // refuses it and this returns without painting.
+        //
+        // `reason` is caller-supplied because it used to be the literal string
+        // "idle repaint" for all twenty-five callers, and that made the log lie
+        // about provenance: a deliberate return-to-grid and the five-second
+        // ambient tick were indistinguishable in app.log. A whole incident was
+        // misattributed to ambient churn on the strength of that string, when the
+        // ambient path cannot reach a card state at all — `canSurfaceAmbiently`
+        // gates it on `allowsAmbientSurface`, which is `.hidden`/`.idle` only.
         let waiting = rows.filter { $0.lamp == .ready }.count
-        guard transition(to: .idle(waiting: waiting), because: "idle repaint")
+        guard transition(to: .idle(waiting: waiting), because: reason)
         else { return }
         currentTarget = nil; currentEventId = nil
 

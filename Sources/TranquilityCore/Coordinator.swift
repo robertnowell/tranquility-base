@@ -228,7 +228,7 @@ public struct Coordinator: Sendable {
     public func announceNext(
         only sessionId: String? = nil,
         ignoringGate: Bool = false,
-        onWillSpeak: (@MainActor (Announcement) -> Void)? = nil,
+        onWillSpeak: (@MainActor (Announcement) -> Bool)? = nil,
         onWord: (@Sendable (Range<Int>) -> Void)? = nil
     ) async throws -> AnnounceOutcome {
         let candidate: WaitingSession?
@@ -408,7 +408,7 @@ public struct Coordinator: Sendable {
 
     private func speak(
         _ summary: Summary, for session: WaitingSession,
-        onWillSpeak: (@MainActor (Announcement) -> Void)?,
+        onWillSpeak: (@MainActor (Announcement) -> Bool)?,
         onWord: (@Sendable (Range<Int>) -> Void)?
     ) async throws -> AnnounceOutcome {
         // Nothing is written before the audio. Marking it announced up front is what
@@ -417,7 +417,22 @@ public struct Coordinator: Sendable {
         let announcement = Announcement(
             event: session, brief: summary.brief, spoken: summary.spoken,
             via: speech.fallback.name)
-        await onWillSpeak?(announcement)
+        // The stage has to be TAKEN before anything is spoken into it.
+        //
+        // This callback used to return Void, so a refusal was invisible from here
+        // and the announcement played anyway — for ten seconds, into an open
+        // microphone, and then advanced the heard cursor because the audio had
+        // "completed" (app.log 07 Aug 23:03:48: REFUSED listening -> speaking,
+        // then twenty-one highlight callbacks and a cursor write). The panel was
+        // authoritative for the pixels and for nothing behind them.
+        //
+        // Refusal is the same outcome as an interruption, and deliberately so:
+        // the summary goes back to `prepared` and the cursor does not move, so
+        // the session stays waiting, because it is.
+        if let onWillSpeak, await onWillSpeak(announcement) == false {
+            await prepared.put(summary, for: session.sessionId, latest: session.latestId)
+            return .interrupted(failure: nil)
+        }
 
         // The session's durable voice (ruled 05 Aug): assigned round-robin from
         // the roster on first announce, then identical for the session's life
