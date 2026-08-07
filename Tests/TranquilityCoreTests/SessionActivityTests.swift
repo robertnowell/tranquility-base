@@ -103,6 +103,74 @@ final class SessionActivityTests: XCTestCase {
         }
     }
 
+    // MARK: - Transient vs blocking errors
+    //
+    // 110 of the 286 errors in this machine's archive are the self-healing
+    // kind. Lighting amber for those would teach the eye to ignore amber.
+
+    private func apiErrorAt(_ text: String, agoSeconds: TimeInterval) -> String {
+        let stamp = ISO8601DateFormatter.string(
+            from: Date().addingTimeInterval(-agoSeconds),
+            timeZone: TimeZone(identifier: "UTC")!,
+            formatOptions: [.withInternetDateTime, .withFractionalSeconds])
+        return #"{"type":"assistant","isApiErrorMessage":true,"timestamp":"\#(stamp)","message":{"role":"assistant","content":[{"type":"text","text":"\#(text)"}]}}"#
+    }
+
+    func testFreshTransientErrorDoesNotLightTheLamp() {
+        // A 529 that Claude Code is already retrying. If the retry works the
+        // tail moves on and this never lights at all.
+        let tail = [userPrompt(), apiErrorAt("API Error: 529 Overloaded", agoSeconds: 3)]
+        XCTAssertEqual(SessionActivity.classify(tail: tail, modified: warm), .idle)
+    }
+
+    func testTransientErrorThatSurvivesTheGraceEarnsAmber() {
+        let tail = [userPrompt(),
+                    apiErrorAt("API Error: 529 Overloaded",
+                               agoSeconds: SessionActivity.transientGrace + 10)]
+        guard case .blocked = SessionActivity.classify(tail: tail, modified: warm) else {
+            return XCTFail("an error that outlives the grace is a real block")
+        }
+    }
+
+    func testUsageLimitLightsImmediately() {
+        // Needs a human on the first poll — there is nothing to wait for.
+        let tail = [userPrompt(),
+                    apiErrorAt("You've reached your Fable 5 limit. Run /usage-credits to continue.",
+                               agoSeconds: 1)]
+        guard case .blocked = SessionActivity.classify(tail: tail, modified: warm) else {
+            return XCTFail("a usage limit must not be graced")
+        }
+    }
+
+    func testSessionLimitIsNeverTransientEvenWhenPhrasedLikeOne() {
+        // "try again" appears in transient copy; a session limit that also
+        // says it must still count as blocking. Blocking words are checked
+        // first for exactly this reason.
+        XCTAssertFalse(SessionActivity.isTransient(
+            "You've hit your session limit · resets 8pm. Try again later."))
+        XCTAssertTrue(SessionActivity.isTransient("API Error: Unable to connect to API (ENOTFOUND)"))
+        XCTAssertTrue(SessionActivity.isTransient(
+            "API Error: Server is temporarily limiting requests (not your fault)"))
+    }
+
+    func testUnrecognisedErrorFailsTowardTellingYou() {
+        // The closed list is deliberate: anything we do not recognise gets
+        // the lamp, because failing toward "tell him" is the safe direction.
+        XCTAssertFalse(SessionActivity.isTransient("API Error: something nobody has seen before"))
+        let tail = [userPrompt(), apiErrorAt("API Error: something new", agoSeconds: 1)]
+        guard case .blocked = SessionActivity.classify(tail: tail, modified: warm) else {
+            return XCTFail("unknown errors light immediately")
+        }
+    }
+
+    func testUndatedTransientErrorStillLights() {
+        // No timestamp means no way to run the clock; the lamp wins.
+        let tail = [userPrompt(), apiError("API Error: 529 Overloaded")]
+        guard case .blocked = SessionActivity.classify(tail: tail, modified: warm) else {
+            return XCTFail("without a timestamp the grace cannot apply")
+        }
+    }
+
     // MARK: - Turn boundaries (the hook cross-check)
     //
     // Measured before building: across 238 real turns the transcript alone

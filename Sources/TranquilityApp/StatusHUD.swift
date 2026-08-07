@@ -472,9 +472,10 @@ final class StatusHUD: NSObject {
     var canStartReply: Bool { state.canStartReply }
 
     /// Same path as the Dismiss button, so both can never drift apart.
-    func dismiss() { dismissTapped() }
+    func dismiss() { clearReceipt(); dismissTapped() }
 
     func hide() {
+        clearReceipt()
         // Hidden still allows ambient surfacing, which is the property that broke
         // when this left a non-idle flag behind: after one Dismiss the app went
         // silent for the rest of the session.
@@ -1090,6 +1091,102 @@ final class StatusHUD: NSObject {
         return bar.layer
     }
 
+    /// The send receipt: a small chip at the top edge that says the words
+    /// left, and then that they landed.
+    ///
+    /// Ruled 06 Aug: "once it's been sent, give me a little awareness… a
+    /// little reassurance at the top of, like, sending, and then sent." The
+    /// send ceremony was collapsed months ago for good reason — a card for a
+    /// thing that went right is noise — but collapsing it left success
+    /// SILENT, and silence is indistinguishable from failure to anyone who
+    /// has not yet learned to trust the app. This is the middle ground: a
+    /// whisper, not a card.
+    ///
+    /// Deliberately OUTSIDE the render funnel, and that deserves defending,
+    /// because "one more painter" is how this panel got sick the first time.
+    /// The justification is that a receipt is not state — it is an event,
+    /// with a life of its own measured in seconds. It owns exactly one widget
+    /// that no arm of render() touches, it never affects layout (it floats
+    /// over the top band), it cannot own the stage or block a transition, and
+    /// it always ends by fading itself out. The two places that must clear it
+    /// early — dismiss and hide — do so explicitly.
+    enum Receipt {
+        case sending(String)
+        case sent
+        case queued
+
+        var text: String {
+            switch self {
+            case .sending(let target):
+                // The chip shares the top band with the placard and the gear;
+                // a long callsign would run into both.
+                let name = target.count > 20
+                    ? target.prefix(19).trimmingCharacters(in: .whitespaces) + "…"
+                    : target
+                return "→ \(name.uppercased()) · SENDING"
+            case .sent: return "✓ SENT"
+            case .queued: return "✓ QUEUED · SENDS AFTER THIS TURN"
+            }
+        }
+    }
+
+    private var receiptChip: NSTextField?
+    private var receiptFade: DispatchWorkItem?
+
+    /// Never surfaces a hidden panel (recommended and ruled): success is not
+    /// a summons. If you dismissed the panel, a send landing does not bring
+    /// it back — the menu bar and the log carry it.
+    func showReceipt(_ receipt: Receipt) {
+        guard panel?.isVisible == true, let host = surfaceView else { return }
+        let chip: NSTextField
+        if let existing = receiptChip {
+            chip = existing
+        } else {
+            chip = NSTextField(labelWithString: "")
+            chip.alignment = .center
+            chip.wantsLayer = true
+            chip.layer?.cornerRadius = 3
+            chip.drawsBackground = false
+            // Centred in the top band: the placard owns the left, the gear
+            // the right, and the receipt takes the air between them.
+            chip.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin]
+            host.addSubview(chip)
+            receiptChip = chip
+        }
+        let sent: Bool
+        if case .sending = receipt { sent = false } else { sent = true }
+        chip.attributedStringValue = letterspaced(
+            receipt.text, size: 9, tracking: 1.4,
+            color: sent ? StateLegend.Palette.ready : StateLegend.Palette.secondary)
+        chip.sizeToFit()
+        chip.frame = CGRect(x: (host.bounds.width - chip.bounds.width) / 2,
+                            y: host.bounds.height - 22,
+                            width: chip.bounds.width, height: chip.bounds.height)
+        host.addSubview(chip, positioned: .above, relativeTo: nil)
+        chip.layer?.removeAnimation(forKey: "receipt")
+        chip.alphaValue = 1
+
+        receiptFade?.cancel()
+        // "Sending" holds until its outcome replaces it; an outcome fades.
+        guard sent else { return }
+        let fade = DispatchWorkItem { [weak chip] in
+            guard let chip else { return }
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.5
+                chip.animator().alphaValue = 0
+            }
+        }
+        receiptFade = fade
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: fade)
+    }
+
+    /// Clear a receipt outright — the panel is going away under it.
+    func clearReceipt() {
+        receiptFade?.cancel()
+        receiptFade = nil
+        receiptChip?.alphaValue = 0
+    }
+
     /// Hold the light on for as long as the key is down.
     ///
     /// Ruled 06 Aug: "it should just be a reflection that your keystroke is
@@ -1408,6 +1505,16 @@ final class StatusHUD: NSObject {
             retryTranscriptionButton.isHidden = false
             updateActionRowVisibility()
             note(StateLegend.slowTranscriptionNote)
+
+        case "receipt-sent", "receipt-sending":
+            // The send receipt over the grid it lands on — the ordinary case,
+            // since a send resolves after the panel has returned home. The
+            // panel is ordered front first because showReceipt refuses a
+            // hidden panel (a send is not a summons).
+            _ = pose("grid")
+            panel?.orderFrontRegardless()
+            showReceipt(name == "receipt-sent" ? .sent : .sending("home summarizer"))
+            return true
 
         case "readback":
             adopt()
