@@ -950,7 +950,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     handsFreeListening = false
                     dictationMode = false
                     recordingTarget = nil
-                    hud.showResult("Couldn't open the microphone — try again. (\(error))")
+                    hud.showResult(micFailureMessage(error))
                     return
                 }
                 isBusy = true
@@ -1195,7 +1195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Permissions.log("mic: start failed: \(error)")
                     dictationMode = false
                     recordingTarget = nil
-                    hud.showResult("Couldn't open the microphone — try again. (\(error))")
+                    hud.showResult(micFailureMessage(error))
                     return
                 }
             }
@@ -1621,6 +1621,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    /// Say what to do, not just that something broke.
+    ///
+    /// "Try again" is false comfort when the input is Bluetooth: those devices
+    /// re-rate themselves the moment the mic opens, so the next press fails
+    /// identically, and what the user learns is that the app is unreliable rather
+    /// than that the earbuds are. Name the device, name the fix.
+    private func micFailureMessage(_ error: Error) -> String {
+        if let device = AudioInputDevice.resolve(), device.isBluetooth {
+            return "Couldn't open \(device.name). Bluetooth mics change their own "
+                + "sample rate when they open — switch to the built-in mic under "
+                + "Microphone in the menu bar."
+        }
+        return "Couldn't open the microphone — try again. (\(error))"
+    }
+
+    @objc private func chooseInput(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let preference = AudioInputPreference(rawValue: raw) else { return }
+        AudioInputPreference.current = preference
+        let resolved = AudioInputDevice.resolve(preference)
+        lastStatusLine = "mic: \(resolved?.name ?? preference.title)"
+        Permissions.log("mic: preference \(preference.rawValue) "
+            + "→ \(resolved?.name ?? "engine default")")
+        // Nothing to reconfigure here: the next press re-resolves the device and
+        // rebuilds the engine if it moved (Recorder.rebindEngine). Touching the
+        // engine from a menu handler would be a second place to be wrong about
+        // which device is live.
+        rebuildMenu()
+    }
+
     @objc private func chooseVoice(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
         VoiceCatalog.selectedVoiceId = id
@@ -1880,6 +1910,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.submenu = submenu
             menu.addItem(item)
         }
+
+        // Microphone, here rather than in the settings pane, for the same reason
+        // the voice picker is here: it is a one-click choice, not an editor. The
+        // pane is a roster editor with its own drag-ordering face; a two-item
+        // radio group does not belong in it.
+        //
+        // The entries name the resolved DEVICE, not the policy. "System default"
+        // tells you nothing about whether you are about to record through the
+        // earbuds that will fail — which is why the warning marks auto-detect and
+        // not just the Bluetooth entry.
+        let micItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+        let micMenu = NSMenu()
+        let preference = AudioInputPreference.current
+        for option in AudioInputPreference.allCases {
+            let resolved = AudioInputDevice.resolve(option)
+            let named = option == .systemDefault
+                ? resolved.map { " (\($0.name))" } ?? "" : ""
+            let warning = (resolved?.isBluetooth ?? false) ? "  ⚠︎" : ""
+            let entry = NSMenuItem(title: option.title + named + warning,
+                                   action: #selector(chooseInput(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = option.rawValue
+            entry.state = option == preference ? .on : .off
+            micMenu.addItem(entry)
+        }
+        micItem.submenu = micMenu
+        menu.addItem(micItem)
+
         menu.addItem(.separator())
 
         menu.addItem(disabled("⌃⌥ hear · hold ⌥ reply · ⌥⌥ hands-free · ⇧ pause · ⌃⇧ dismiss"))
