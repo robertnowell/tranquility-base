@@ -171,6 +171,15 @@ public final class Recorder: @unchecked Sendable {
     /// only path where it was ever visible.
     public func warmUp() {
         _ = rebindEngine(rebuilding: false)
+        // Say which device won, POSITIVELY. Only the failure path logged before,
+        // so a successful bind was indistinguishable from a bind that never ran —
+        // and confirming the fix meant reasoning from the absence of an error
+        // line, which is not evidence. The one thing this whole change turns on
+        // is which microphone is live; the log should simply say so.
+        let bound = AudioInputDevice.allInputs()
+            .first { $0.id == engine.inputNode.auAudioUnit.deviceID }
+        Permissions.log("mic: bound to \(bound?.name ?? "engine default") "
+            + "(preference: \(AudioInputPreference.current.rawValue))")
     }
 
     /// Point the engine at the preferred input, rebuilding it when that cannot be

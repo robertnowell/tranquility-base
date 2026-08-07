@@ -20,3 +20,10 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    before acting on a ruling that touches the same surface.
 5. **One session in the app layer at a time** (Sources/TranquilityApp/). Core
    and tools/ parallelize safely; the panel does not.
+6. **Every merge to main is followed by `scripts/relaunch.sh`.** Merging is not
+   deploying: the app is built locally into /private/tmp/tb-clean, so main can be
+   correct while the thing in the menu bar is several merges behind. That gap is
+   how a merged microphone fix sat unrunning while the microphone kept failing
+   (07 Aug). The script is the only relaunch path — it resolves against
+   origin/main, refuses a dirty worktree, and stops the old instance before
+   building, because two instances race for one global hotkey.
