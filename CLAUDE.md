@@ -13,7 +13,7 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    author's behalf (verbatim, attributed in the message). If it does not compile,
    stash it with a "salvageable" message and proceed.
 3. **Never launch the app from a dirty tree.** Relaunches build committed HEAD in
-   a clean worktree (`git worktree add /tmp/vd-clean HEAD`). A dirty-tree binary
+   a clean worktree (`git worktree add /tmp/tb-clean HEAD`). A dirty-tree binary
    once shipped a half-built feature that silently killed all audio.
 4. **Newest ruling wins.** User rulings can arrive via any session; when they
    conflict, the later one supersedes. Check recent commit messages and docs/
