@@ -1564,6 +1564,11 @@ final class StatusHUD: NSObject {
             _ = pose("grid")
             panel?.orderFrontRegardless()
             showReceipt(name == "receipt-sent" ? .sent : .sending("home summarizer"))
+            // Pin it for the photograph, the same way the readback pose
+            // freezes its countdown: a pose is a still, and an outcome that
+            // fades on its own timer cannot be photographed reliably.
+            receiptFade?.cancel()
+            receiptFade = nil
             return true
 
         case "readback":
