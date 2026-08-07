@@ -72,6 +72,16 @@ struct Permissions {
     /// executors. `Permissions` is `@MainActor`, so an isolated `log` traps under
     /// Swift 6's executor check — a diagnostic that kills the process the moment
     /// it is called from the code you most need to diagnose.
+    /// Disk ceiling for the log: this file plus one rolled predecessor, so the
+    /// worst case on disk is twice this. Unbounded, it reached 2.3 GB in five
+    /// days — see `Coordinator.reportNewlyGone` for the call site that did it.
+    /// Fixing a chatty caller is the real repair; this is the backstop that keeps
+    /// the next one from filling the volume before anyone notices.
+    /// `nonisolated` for the same reason `log` is: the speech and dispatch paths
+    /// write from background executors, and `Permissions` is `@MainActor`.
+    private nonisolated static let logSizeLimit: off_t = 32 * 1024 * 1024
+    private nonisolated static let rollLock = NSLock()
+
     nonisolated static func log(_ message: String) {
         let line = "\(ISO8601DateFormatter().string(from: Date()))  \(message)\n"
         let url = FileManager.default.homeDirectoryForCurrentUser
@@ -81,7 +91,26 @@ struct Permissions {
         let fd = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
         guard fd >= 0 else { return }
         _ = line.withCString { write(fd, $0, strlen($0)) }
+        // O_APPEND leaves the offset at end-of-file after the write, so the size
+        // comes free — no stat on the hot path.
+        let size = lseek(fd, 0, SEEK_CUR)
         close(fd)
+        if size > logSizeLimit { roll(url) }
+    }
+
+    /// Rename the log aside and let the next write create a fresh one. Rename is
+    /// atomic, so a concurrent writer either lands in the old file or the new one
+    /// — never in a half-truncated file, which is what `truncate` would risk.
+    private nonisolated static func roll(_ url: URL) {
+        rollLock.lock()
+        defer { rollLock.unlock() }
+        // Re-check under the lock: several threads can pass the size test at once,
+        // and without this the second one rolls the fresh file straight away.
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)??.int64Value ?? 0
+        guard size > logSizeLimit else { return }
+        let previous = url.appendingPathExtension("1")
+        try? FileManager.default.removeItem(at: previous)
+        try? FileManager.default.moveItem(at: url, to: previous)
     }
 
     static func logEnvironment() {

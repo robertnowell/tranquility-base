@@ -125,27 +125,45 @@ public struct Coordinator: Sendable {
             Coordinator.trace?("liveness probe failed; failing open")
             return try store.waitingSessions()
         }
+        // Machine-driven runs exit the moment they finish, so by the time we
+        // would announce, they are gone from the agents API. An interactive
+        // session persists while its tab is open. This is also the honest
+        // definition: if the session is gone there is no tab to open and nobody
+        // to answer.
+        //
+        // Measured rather than assumed: all five sessions with recent turns were
+        // present, including the one being typed in; the finished content-engine
+        // run was absent.
+        //
+        // The limit, stated: a headless run still executing IS live, so a long
+        // job could be announced. That is noise, and noise is recoverable —
+        // unlike the tty filter this replaces, which hid real conversations.
         let live = Set(sessions.map(\.sessionId))
-        return try store.waitingSessions().filter { session in
-            // Machine-driven runs exit the moment they finish, so by the time we
-            // would announce, they are gone from the agents API. An interactive
-            // session persists while its tab is open. This is also the honest
-            // definition: if the session is gone there is no tab to open and nobody
-            // to answer.
-            //
-            // Measured rather than assumed: all five sessions with recent turns were
-            // present, including the one being typed in; the finished content-engine
-            // run was absent.
-            //
-            // The limit, stated: a headless run still executing IS live, so a long
-            // job could be announced. That is noise, and noise is recoverable —
-            // unlike the tty filter this replaces, which hid real conversations.
-            let isLive = live.contains(session.sessionId)
-            if !isLive {
-                Coordinator.trace?("skipping \(session.projectLabel): session is gone")
-            }
-            return isLive
+        let all = try store.waitingSessions()
+        Coordinator.reportNewlyGone(all.filter { !live.contains($0.sessionId) })
+        return all.filter { live.contains($0.sessionId) }
+    }
+
+    /// Skips are logged on the TRANSITION to gone, never on the state.
+    ///
+    /// The badge polls `waiting()` continuously and dead sessions accumulate, so
+    /// logging the state wrote one line per dead session per tick — measured at
+    /// ~250 lines/second, 38.5M lines and 2.3 GB in five days. A log that large
+    /// buries the diagnostics it exists to provide and quietly eats the disk, and
+    /// the signal was never in the repetition: it is in the moment a session goes
+    /// away. Revival is handled by construction — a session that comes back live
+    /// leaves the set, so if it dies again that is a new transition and logs again.
+    private nonisolated(unsafe) static var goneReported = Set<String>()
+    private static let goneLock = NSLock()
+
+    private static func reportNewlyGone(_ gone: [WaitingSession]) {
+        goneLock.lock()
+        defer { goneLock.unlock() }
+        let ids = Set(gone.map(\.sessionId))
+        for session in gone where !goneReported.contains(session.sessionId) {
+            trace?("skipping \(session.projectLabel): session is gone")
         }
+        goneReported = ids
     }
 
     /// The badge. Shares the predicate with what a keypress will play, so the two
