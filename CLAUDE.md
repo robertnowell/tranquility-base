@@ -18,5 +18,5 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
 4. **Newest ruling wins.** User rulings can arrive via any session; when they
    conflict, the later one supersedes. Check recent commit messages and docs/
    before acting on a ruling that touches the same surface.
-5. **One session in the app layer at a time** (Sources/VoiceDispatchApp/). Core
+5. **One session in the app layer at a time** (Sources/TranquilityApp/). Core
    and tools/ parallelize safely; the panel does not.

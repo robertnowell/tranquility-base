@@ -74,8 +74,8 @@ durable fact, just a moment earlier in the same arrival.
 
 - `swift build` + `swift test`: green, 143 tests, 0 failures (142 baseline
   + f6d3de0's voice-durability test).
-- `scripts/bundle.sh`, `pkill -f VoiceDispatchApp`, relaunched from
-  `.build/debug/Voice Dispatch.app`.
+- `scripts/bundle.sh`, `pkill -f TranquilityApp`, relaunched from
+  `.build/debug/Tranquility Base.app`.
 - Live, in app.log, on a REAL arrival — the full ruled flow end to end:
   - `23:06:46 ambient: surfaced for 2 waiting`
   - `23:06:46 hail: memory directory for 3be88b72 turn 1219` (unminted

@@ -35,7 +35,7 @@ if [ -z "$IDENTITY" ]; then
   exit 0
 fi
 
-for tool in vdctl dispatch-test-target; do
+for tool in tbase tbase-test-target; do
   [ -f "$BIN_DIR/$tool" ] || continue
   codesign --force --sign "$IDENTITY" \
     --identifier "com.robertnowell.voice-dispatch.$tool" \

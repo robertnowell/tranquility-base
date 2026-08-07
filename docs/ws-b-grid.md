@@ -58,7 +58,7 @@ auto-answered.
   the app upgrades it via `store.callsign(for:)` at `showPendingSend` time
   (Core is not this pass's to change).
 - Deep-link reply: label resolved the same way.
-- The literal "Voice Dispatch" now appears ONLY in the true empty state.
+- The literal "Tranquility Base" now appears ONLY in the true empty state.
   The preparing card, the success receipt, and the transcribing fallback
   lost their app-name mastheads (title hidden when the face carries none —
   `titleLabel.isHidden = face.title.isEmpty` in the render baseline).
@@ -69,7 +69,7 @@ auto-answered.
 the menu's "N waiting" row is deleted with a comment saying why. Every
 surface — menu-bar title, grid green count, panel "N waiting" headline,
 `.idle(waiting:)` state — derives from the liveness-filtered
-`coordinator.waiting()` set. `vdctl status` still prints the raw store
+`coordinator.waiting()` set. `tbase status` still prints the raw store
 count; that is Core/CLI territory and untouched.
 
 ## Intake timer
@@ -113,7 +113,7 @@ is identical to the 1473f39 baseline.
   a session with no stored stop shows its live name alone.
 - **Row order**: green (newest first, the store's order) then quiet — so
   the 8-row cap can never hide a waiting session behind an idle one.
-- **`vdctl new` launch left untested here** — the Core session already
+- **`tbase new` launch left untested here** — the Core session already
   exercised it live (and hit the trust prompt that produced the first-run
   ruling); re-spawning throwaway interactive sessions from this pass would
   have left artifacts.

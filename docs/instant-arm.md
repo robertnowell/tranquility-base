@@ -60,7 +60,7 @@ of ms, so typing NEVER flashes the panel):
 
 ### Where the decisions live
 
-`ReplyGestureMachine` (VoiceDispatchCore) is the extracted, pure arm/hold
+`ReplyGestureMachine` (TranquilityCore) is the extracted, pure arm/hold
 timeline: the monitor schedules the timers and feeds CGEvents in; every
 decision about what they MEAN — arm, abort, begin, end — is the machine's,
 and is unit-tested with synthetic timelines (E1). `HotkeyMonitor`'s existing

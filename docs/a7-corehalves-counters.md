@@ -2,33 +2,33 @@
 
 `swift build` clean, `swift test` green: 114 tests (91 existing + 23 new), zero
 existing tests adapted. Core-only per the two-session contract: zero hunks in
-`Sources/VoiceDispatchApp/` (the parallel session's uncommitted PanelState.swift
+`Sources/TranquilityApp/` (the parallel session's uncommitted PanelState.swift
 change was left untouched and uncommitted).
 
 ## Files touched
 
-- `Sources/VoiceDispatchCore/Lexicon.swift` — **new**: the A7 shared lexicon.
-- `Sources/VoiceDispatchCore/SpokenComposition.swift` — **new**: A4 depth-1
+- `Sources/TranquilityCore/Lexicon.swift` — **new**: the A7 shared lexicon.
+- `Sources/TranquilityCore/SpokenComposition.swift` — **new**: A4 depth-1
   composition (dormant).
-- `Sources/VoiceDispatchCore/DogfoodCounters.swift` — **new**: WS-E event kinds,
+- `Sources/TranquilityCore/DogfoodCounters.swift` — **new**: WS-E event kinds,
   record API, computed counters.
-- `Sources/VoiceDispatchCore/QueueStore.swift` — new migration
+- `Sources/TranquilityCore/QueueStore.swift` — new migration
   `v5_dogfood_event` (appended; old migrations untouched).
-- `Sources/VoiceDispatchCore/Transcription.swift` — `LiveTranscriptionProvider`
+- `Sources/TranquilityCore/Transcription.swift` — `LiveTranscriptionProvider`
   gains `startSession(boosting:…)` with a forwarding default;
   `AppleSpeechRecovery` gains `lexicon` → `contextualStrings`.
-- `Sources/VoiceDispatchCore/RecoveryChain.swift` — default init gains
+- `Sources/TranquilityCore/RecoveryChain.swift` — default init gains
   `lexicon:`, handed to the Apple floor.
-- `Sources/VoiceDispatchCore/Summarizer.swift` — `summarize(_:lexicon:)`
+- `Sources/TranquilityCore/Summarizer.swift` — `summarize(_:lexicon:)`
   (defaulted; all existing call sites compile unchanged), unioned into the
   speakable-names allowlist.
-- `Sources/VoiceDispatchCore/Coordinator.swift` — `Announcement.hailText`
+- `Sources/TranquilityCore/Coordinator.swift` — `Announcement.hailText`
   (dormant); `summarize` harvests the lexicon and passes it; the agents probe
   is hoisted so lexicon + prefix-stripping share ONE `agents.sessions()` call
   per summary (it was one before; naive wiring would have made it two).
-- `Sources/vdctl/main.swift` — `vdctl dogfood [days]` and
-  `vdctl dogfood record <kind> [note…]`.
-- `Tests/VoiceDispatchCoreTests/LexiconTests.swift` (10),
+- `Sources/tbase/main.swift` — `tbase dogfood [days]` and
+  `tbase dogfood record <kind> [note…]`.
+- `Tests/TranquilityCoreTests/LexiconTests.swift` (10),
   `SpokenCompositionTests.swift` (8), `DogfoodCountersTests.swift` (4+1) — new.
 
 ## Item 1 — A7: the shared lexicon
@@ -92,7 +92,7 @@ existing tests passing unmodified, including the Phase 1b end-to-end.
   `dogfoodCounts(since:)`, `dogfoodSummary(days:)`. Counters are computed by
   query, never stored. `actionability` = actedOn/spoken, **nil** when nothing
   was spoken (0/0 is "no data", not 0%).
-- `vdctl dogfood [days]` prints the per-kind table + actionability.
+- `tbase dogfood [days]` prints the per-kind table + actionability.
 
 ## Judgment calls
 
@@ -121,9 +121,9 @@ existing tests passing unmodified, including the Phase 1b end-to-end.
    mechanical prefix is applied after clamping.
 7. **`atMs` not `at`** for the column, matching every other timestamp column
    in the schema (`createdAtMs`, `heardAtMs`, …).
-8. **`vdctl dogfood record` was added beyond the spec's summary table** — the
+8. **`tbase dogfood record` was added beyond the spec's summary table** — the
    item itself says attributionError is "manual/voice-reported"; until the
-   voice path exists, the manual path IS vdctl. Counters that cannot be fed
+   voice path exists, the manual path IS tbase. Counters that cannot be fed
    are not "live from the first WS-A build".
 9. **Cap = 100 exactly**: AssemblyAI's v3 streaming keyterms limit is 100;
    realtime `word_boost` allows more, but one list that is valid for every
@@ -135,7 +135,7 @@ existing tests passing unmodified, including the Phase 1b end-to-end.
    "find where the realtime session is configured (Transcription.swift / the
    LiveTranscriptionProvider impl) and … match its style" — the repo contains
    the protocol only; no conformer exists in Core, App, or tests, and the only
-   AssemblyAI artifacts are the Secrets key and a vdctl usage string. "Check
+   AssemblyAI artifacts are the Secrets key and a tbase usage string. "Check
    what the streaming code sends today" therefore has the answer "nothing".
    Implemented as the ready-to-wire protocol seam above; the future impl
    overrides `startSession(boosting:…)` and puts the list in `word_boost`.

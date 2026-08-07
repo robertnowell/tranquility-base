@@ -34,6 +34,6 @@ Notes, in invariant order:
   tap needs no second conversion path.
 - Provider tags distinguish the paths in `utterances`: `assemblyai-streaming`
   (streamed) vs `openai` / `apple-speech` (recovered from file).
-- Verification without a mic: `vdctl transcribe-stream <wav>` replays any saved
+- Verification without a mic: `tbase transcribe-stream <wav>` replays any saved
   recording in `~/Library/Application Support/VoiceDispatch/audio/` through the
   live provider in pseudo-realtime.

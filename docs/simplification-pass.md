@@ -90,7 +90,7 @@ doc comments, the CountdownBarView, and ruling 14's return-to-grid.
     (system 12, secondary), one attributed string so the pair truncates
     together. Readback's title is now the target label (was "Your
     reply"); the listening pill stays mono. Judgment call: the empty
-    state's "Voice Dispatch" title rides the same mono slot — it is the
+    state's "Tranquility Base" title rides the same mono slot — it is the
     app's own identity, and a second title style for one face is
     exactly the kind of chrome this pass deletes.
 12. **needs-you in amber**: the placard text itself renders in
@@ -119,7 +119,7 @@ doc comments, the CountdownBarView, and ruling 14's return-to-grid.
 
 `swift build` and `swift test` green. **No tests pinned the deleted
 faces**: the App target (PanelState/StateLegend/StatusHUD) has no test
-target by design — all 148 baseline tests are VoiceDispatchCore, and
+target by design — all 148 baseline tests are TranquilityCore, and
 this pass touches no Core file. (The suite reads 149 at commit time:
 a sibling session's in-flight MESSAGE-rung work adds one Core test in
 the same working tree; not part of this commit.) The deleted faces
@@ -158,6 +158,6 @@ removed).
   animate.
 - **Sibling-session hygiene**: the working tree carried a concurrent
   session's in-flight MESSAGE-rung + menu-bar-presence work (Core,
-  vdctl, tests, and four hunks in main.swift). This commit is
+  tbase, tests, and four hunks in main.swift). This commit is
   hunk-scoped to this pass's rulings only; the sibling's hunks remain
   uncommitted for their own session to land.

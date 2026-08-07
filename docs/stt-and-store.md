@@ -1,7 +1,7 @@
 # STT and store: Whisper lexicon prompt, durable briefs, AssemblyAI streaming
 
 Three work items, Core-only per the two-session contract (zero hunks in
-`Sources/VoiceDispatchApp/`). `swift build` clean, `swift test` green:
+`Sources/TranquilityApp/`). `swift build` clean, `swift test` green:
 141 tests (114 existing + 27 new), zero existing tests adapted.
 
 ## Item 1 — the lexicon reaches Whisper (the primary ear)
@@ -112,11 +112,11 @@ header, `sample_rate`/`format_turns` query params, binary PCM16 chunks
   Core-side integration point — nil (the only value passed today) is
   byte-identical to the previous behavior.
 
-### E2E result (`vdctl transcribe-stream`, real key, real recording)
+### E2E result (`tbase transcribe-stream`, real key, real recording)
 
 Run against `audio/93685E53….wav` (49.9s of real dictation, Aug 2) with the
 real AssemblyAI key (recovered from the claude-secrets broker into the app's
-secrets file via `vdctl set-key assemblyai --from-env` — it was NOT already in
+secrets file via `tbase set-key assemblyai --from-env` — it was NOT already in
 the app's Secrets, see contradictions):
 
 - 100 keyterms sent from the live harvested lexicon.
@@ -127,7 +127,7 @@ the app's Secrets, see contradictions):
   recording ("…the Whisper flow where it doesn't show time passing… max 10
   bars or something like that…").
 - The no-key path was also exercised (before the key was stored): the command
-  reports `assemblyai key is not configured — run: vdctl set-key assemblyai`
+  reports `assemblyai key is not configured — run: tbase set-key assemblyai`
   and exits 2 rather than failing silently.
 
 Tests: partial accumulation, explicit final, formatted-turn overwrite,
@@ -141,12 +141,12 @@ AssemblyAIStreamingTests.)
 ## Contradictions found (reported, not improvised)
 
 1. **The AssemblyAI key was NOT in the app's Secrets** — the brief said "the
-   API key exists in the app's Secrets under the assemblyai slot per vdctl
-   set-key", but `vdctl secrets` showed `assemblyai-api-key: MISSING` and
+   API key exists in the app's Secrets under the assemblyai slot per tbase
+   set-key", but `tbase secrets` showed `assemblyai-api-key: MISSING` and
    `migrate-secrets` found nothing in the keychain. The key DID exist in the
    claude-secrets broker (`ASSEMBLYAI_API_KEY`, stored 2026-05-23) and was
    moved into the app's secrets file through the designed no-argv path
-   (`claude-secrets run --inject … vdctl set-key assemblyai --from-env …`).
+   (`claude-secrets run --inject … tbase set-key assemblyai --from-env …`).
 2. **Item 1 has no dedicated commit.** Its finished changes
    (Transcription.swift, RecoveryChain.swift, LexiconTests.swift) were swept
    into the parallel app-session's commit `7f6d617` ("A4 wired…"), which used
@@ -155,7 +155,7 @@ AssemblyAIStreamingTests.)
    intact and exactly as written (verified in `git show 7f6d617`); rewriting
    pushed shared history mid-flight was not an option. Items 2 and 3 are the
    dedicated commits `6161b26` and this one.
-3. `vdctl set-key`'s success message says "stored … in the login keychain" —
+3. `tbase set-key`'s success message says "stored … in the login keychain" —
    it actually writes the 0600 secrets file (the keychain writer is legacy).
    Cosmetic; not fixed here to keep the diff on-scope.
 4. Minor: the brief said "repo committed through f20d5f3"; HEAD was already

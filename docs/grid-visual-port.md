@@ -125,7 +125,7 @@ callsign-only rows where no brief exists.
   380 panel (the mock's rows are full-bleed with internal padding).
   Restructuring the stack for full-bleed rows touches every face's
   layout — out of bounds for a surface+palette pass on the other faces.
-- **Empty idle state** keeps its "Voice Dispatch" title, Ready pill and
+- **Empty idle state** keeps its "Tranquility Base" title, Ready pill and
   Dismiss: the rulings govern the grid face; the empty state has no grid.
 - **`latestStop` / `mostRecentlyHeard`** don't join the brief (not grid
   feeders); `briefTopic` is nil there by design.

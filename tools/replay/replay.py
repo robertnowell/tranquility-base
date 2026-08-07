@@ -19,7 +19,7 @@ context their own way):
   {opening_ask}            the session's opening ask or ""
 
 These mirror exactly what AnthropicSummaryProvider.brief() interpolates in
-Sources/VoiceDispatchCore/Summarizer.swift.
+Sources/TranquilityCore/Summarizer.swift.
 
 Outputs land in tools/replay/runs/<prompt-name>/<record-id>.txt (raw model
 reply). Failures/timeouts land in <record-id>.error. Existing outputs are

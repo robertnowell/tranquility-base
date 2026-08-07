@@ -11,12 +11,12 @@
 # (A companion skill teaching how to compose these pages comes later; the hook
 # only sets the contract.)
 #
-# Contract (same as voice-dispatch-hook.sh):
+# Contract (same as tbase-hook.sh):
 #   1. NEVER block. This runs at session start.
 #   2. NEVER fail. Always exit 0, whatever happens.
 #   3. Emit the instruction on stdout; touch nothing else.
 #
-# Install: hooks.SessionStart in ~/.claude/settings.json (vdctl install-hooks).
+# Install: hooks.SessionStart in ~/.claude/settings.json (tbase install-hooks).
 
 set -u
 

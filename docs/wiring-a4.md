@@ -20,7 +20,7 @@ In the `.controlDoubleTapped` handler, replace the stub log with:
    announced yet this launch, speak nothing and log (or speak the fallback —
    your call; the quiet option matches "the voice is the away-channel").
 4. Optional but free: `store.recordDogfood(.depthOnePulled, sessionId: …)` —
-   the counters table (v5 migration) is live and `vdctl dogfood` reports it.
+   the counters table (v5 migration) is live and `tbase dogfood` reports it.
 
 ## Interaction with the arbiter
 

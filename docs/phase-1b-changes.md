@@ -7,7 +7,7 @@ No git commit made. Builds on the uncommitted WS-C/StateLegend refactor,
 untouched.
 
 **App-layer boundary (mid-flight amendment)**: a parallel session owns
-`Sources/VoiceDispatchApp/` (main.swift, StatusHUD.swift, HotkeyMonitor.swift,
+`Sources/TranquilityApp/` (main.swift, StatusHUD.swift, HotkeyMonitor.swift,
 PanelState.swift, StateLegend.swift). ZERO hunks in those files — nothing was
 edited there and nothing needed reverting. The entire strip-and-prepend
 composition lives in Core: `Coordinator.summarize` mints/loads the callsign and
@@ -18,28 +18,28 @@ what Core hands it, unmodified.
 
 ## Files touched
 
-- `Sources/VoiceDispatchCore/Summarizer.swift` — tuned prompt ported;
+- `Sources/TranquilityCore/Summarizer.swift` — tuned prompt ported;
   `correctiveNote` on `SummaryRequest`; chain gains empty-source skip, digit
   grounding with one retry, speakable-names allowlist, and a `trace` hook.
-- `Sources/VoiceDispatchCore/Callsign.swift` — **new**: directory word, topic
+- `Sources/TranquilityCore/Callsign.swift` — **new**: directory word, topic
   word selection, deterministic minting with collision checks, prefix stripping.
-- `Sources/VoiceDispatchCore/DigitGrounding.swift` — **new**: source number
+- `Sources/TranquilityCore/DigitGrounding.swift` — **new**: source number
   pool (digits + spelled one..ninety-nine), ungrounded detection over
   recap/proposal, conservative clause scrubbing.
-- `Sources/VoiceDispatchCore/Sanitizer.swift` — `sanitize(_:maxWords:allowing:)`
+- `Sources/TranquilityCore/Sanitizer.swift` — `sanitize(_:maxWords:allowing:)`
   allowlist for the identifier rules only; `speakableTerms(in:)`;
   `applyingCallsign(_:strippingLabels:to:)` (lives here because only this file
   can mint a `SanitizedSpokenText`).
-- `Sources/VoiceDispatchCore/QueueStore.swift` — new migration
+- `Sources/TranquilityCore/QueueStore.swift` — new migration
   `v4_session_callsign` (old migrations untouched); `callsign(for:)`,
   `mintCallsign(_:for:)` (first-write-wins), `activeCallsigns(excluding:)`;
   the four `WaitingSession` queries LEFT JOIN the callsign.
-- `Sources/VoiceDispatchCore/Models.swift` — `WaitingSession.callsign` exposed
+- `Sources/TranquilityCore/Models.swift` — `WaitingSession.callsign` exposed
   for future UI use.
-- `Sources/VoiceDispatchCore/Coordinator.swift` — `summarize` now mints/loads
+- `Sources/TranquilityCore/Coordinator.swift` — `summarize` now mints/loads
   the callsign and applies the mechanical prefix; traces empty-source skips and
   digit scrubs with the event id.
-- `Tests/VoiceDispatchCoreTests/Phase1bTests.swift` — **new**, 26 tests.
+- `Tests/TranquilityCoreTests/Phase1bTests.swift` — **new**, 26 tests.
 - `docs/phase-1b-changes.md` — this file.
 
 ## 1. Prompt port

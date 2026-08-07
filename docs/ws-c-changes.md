@@ -5,25 +5,25 @@ Structure pass. Zero pixels changed except the sanctioned items listed under
 
 ## Files touched
 
-- `Sources/VoiceDispatchApp/StateLegend.swift` — **new**. Single source of truth for
+- `Sources/TranquilityApp/StateLegend.swift` — **new**. Single source of truth for
   state glyphs, state-pill labels, the hint chain, control titles, lens→NSColor
   mapping, speak tiers, menu-bar icon mapping, dictation-destination templates,
   slow-transcription copy, and the Readiness plain-words mapping.
-- `Sources/VoiceDispatchApp/StatusHUD.swift` — show* methods pull glyph/label/hint
+- `Sources/TranquilityApp/StatusHUD.swift` — show* methods pull glyph/label/hint
   from StateLegend; duplicated hint chain unified into `currentActionHint()` /
   `StateLegend.actionHint`; booleans `isListening`, `isSpeakingNow` deleted and
   `awaitingConfirm` replaced by a derived predicate; transcribing elapsed
   counter + Cancel/Retry affordances added; build() colors routed through lenses.
-- `Sources/VoiceDispatchApp/main.swift` — menu-bar icon states read from the
+- `Sources/TranquilityApp/main.swift` — menu-bar icon states read from the
   legend; `isCapturingAudio` wired into the ⌃⌥ gesture; `.controlDoubleTapped`
   no-op handler; Readiness plain-words at both `sessionNotReady` call sites;
   Cancel/Retry wiring for slow transcription; status-line glyphs and
   dictation-destination strings routed through the legend.
-- `Sources/VoiceDispatchApp/HotkeyMonitor.swift` — bare-⌃ double-tap detector
+- `Sources/TranquilityApp/HotkeyMonitor.swift` — bare-⌃ double-tap detector
   emitting `.controlDoubleTapped` (0.45s window, sawOtherInput/chord-safe).
-- `Sources/VoiceDispatchApp/OnboardingWindow.swift` — permission dot references
+- `Sources/TranquilityApp/OnboardingWindow.swift` — permission dot references
   `StateLegend.Glyph.dot` (same character, no visual change).
-- `Tests/VoiceDispatchCoreTests/CoordinatorTests.swift` — new test
+- `Tests/TranquilityCoreTests/CoordinatorTests.swift` — new test
   `testSubagentStopNeverSpeaksOnItsOwn` pinning the pyramid guard.
 - `docs/ws-c-changes.md` — this file.
 
@@ -79,7 +79,7 @@ Structure pass. Zero pixels changed except the sanctioned items listed under
   entries make it false without touching the timer, same as before).
 - Pyramid guard: `SubagentStop` can never speak on its own. Verified two
   existing chokepoints — the hook drops it at the source
-  (`hooks/voice-dispatch-hook.sh` line ~68) and every announcement selection
+  (`hooks/tbase-hook.sh` line ~68) and every announcement selection
   (`waitingSessions`, `latestStop`) filters `hookEvent = 'Stop'` in SQL. No new
   guard needed; the new test pins the SQL chokepoint because the spool decoder
   *would* accept a "SubagentStop" row if the hook ever let one through.
@@ -133,7 +133,7 @@ Structure pass. Zero pixels changed except the sanctioned items listed under
 
 - State glyph characters (◌ ◀ ↺ ❙❙ ▶ ⚠ ● ‹ › ✕ ✓ ✗ →) appear as string literals
   only in `StateLegend.swift` within the app module. Remaining hits elsewhere:
-  two doc *comments*, and `vdctl` ("audio✓/audio✗" CLI diagnostics — a separate
+  two doc *comments*, and `tbase` ("audio✓/audio✗" CLI diagnostics — a separate
   executable target that cannot import the app module; not panel state glyphs).
 - `isListening` / `isSpeakingNow` stored properties: zero references (the name
   `isListening` survives only as a parameter label of `StateLegend.actionHint`).

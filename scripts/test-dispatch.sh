@@ -2,7 +2,7 @@
 #
 # Integration test for the dispatch leg.
 #
-# Launches `dispatch-test-target` in a throwaway Terminal.app tab and drives the
+# Launches `tbase-test-target` in a throwaway Terminal.app tab and drives the
 # full path — tty lookup, AppleScript injection, the separate Return, read-back
 # verification — with no Claude Code session involved. Safe to run repeatedly.
 #
@@ -18,23 +18,23 @@ SID="dispatch-it-$$"
 TRANSCRIPT="$HOME/Library/Application Support/VoiceDispatch/test-targets/$SID.jsonl"
 
 cleanup() {
-  pkill -f "dispatch-test-target $SID" 2>/dev/null
+  pkill -f "tbase-test-target $SID" 2>/dev/null
   osascript -e "tell application \"Terminal\" to close (every window whose name contains \"$SID\")" 2>/dev/null
   rm -f "$TRANSCRIPT"
 }
 trap cleanup EXIT
 
-osascript -e "tell application \"Terminal\" to do script \"$BIN/dispatch-test-target $SID\"" >/dev/null
+osascript -e "tell application \"Terminal\" to do script \"$BIN/tbase-test-target $SID\"" >/dev/null
 sleep 3
 
-PID=$(pgrep -f "dispatch-test-target $SID" | head -1)
+PID=$(pgrep -f "tbase-test-target $SID" | head -1)
 [ -z "$PID" ] && { echo "harness failed to start"; exit 1; }
 TTY="/dev/$(ps -o tty= -p "$PID" | tr -d ' ')"
 
 PASS=0; FAIL=0
 expect() { # expect <name> <expected-exit> <args...>
   local name="$1" want="$2"; shift 2
-  "$BIN/vdctl" send-raw "$PID" "$TTY" "$TRANSCRIPT" "$@" >/dev/null 2>&1
+  "$BIN/tbase" send-raw "$PID" "$TTY" "$TRANSCRIPT" "$@" >/dev/null 2>&1
   local got=$?
   if [ "$got" -eq "$want" ]; then
     echo "  ok    $name"; PASS=$((PASS+1))
@@ -52,11 +52,11 @@ expect "multi-line collapses to one turn"    0 "$(printf 'One.\nTwo.\nThree.')"
 expect "quotes and backslashes survive"      0 'He said "ship it" and the path is C:\temp\x'
 
 # Failure paths, checked separately because they use a different target.
-"$BIN/vdctl" send-raw 999999 "$TTY" "$TRANSCRIPT" x >/dev/null 2>&1
+"$BIN/tbase" send-raw 999999 "$TTY" "$TRANSCRIPT" x >/dev/null 2>&1
 [ $? -eq 5 ] && { echo "  ok    dead pid fails closed"; PASS=$((PASS+1)); } \
              || { echo "  FAIL  dead pid"; FAIL=$((FAIL+1)); }
 
-"$BIN/vdctl" send-raw "$PID" /dev/ttys999 "$TRANSCRIPT" x >/dev/null 2>&1
+"$BIN/tbase" send-raw "$PID" /dev/ttys999 "$TRANSCRIPT" x >/dev/null 2>&1
 [ $? -eq 5 ] && { echo "  ok    unknown tty fails closed"; PASS=$((PASS+1)); } \
              || { echo "  FAIL  unknown tty"; FAIL=$((FAIL+1)); }
 

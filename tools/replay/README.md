@@ -1,7 +1,7 @@
 # TTS-summary prompt replay harness
 
 Offline tuning loop for the voice-dispatch summarizer prompt
-(`Sources/VoiceDispatchCore/Summarizer.swift`, `AnthropicSummaryProvider`).
+(`Sources/TranquilityCore/Summarizer.swift`, `AnthropicSummaryProvider`).
 Replays REAL historical summarizer inputs through candidate prompts and
 compares outputs mechanically, so a prompt rewrite (callsign-first, <15
 words, exact parameters, REPORT/REQUEST typing) can be tuned against

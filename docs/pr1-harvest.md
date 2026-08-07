@@ -86,7 +86,7 @@ This also fixes the duplication where "client-report" was both the title and the
 
 ## Observability
 
-`AppleSpeechRecovery.trace` logs utterance counts, spans and text — and is now wired into the app, not just `vdctl`. Without it the recogniser was the one unobservable stage, which is how a bug that kept only the last utterance of every paused recording survived. `app.log` therefore contains what you dictated; README says so plainly, in the same spirit as the existing `model-calls.jsonl` warning. The asymmetry is circulation, not secrecy: `app.log` is the file you attach to an issue.
+`AppleSpeechRecovery.trace` logs utterance counts, spans and text — and is now wired into the app, not just `tbase`. Without it the recogniser was the one unobservable stage, which is how a bug that kept only the last utterance of every paused recording survived. `app.log` therefore contains what you dictated; README says so plainly, in the same spirit as the existing `model-calls.jsonl` warning. The asymmetry is circulation, not secrecy: `app.log` is the file you attach to an issue.
 
 ## Not covered
 

@@ -1,12 +1,12 @@
-Voice Dispatch — NOTICE
+Tranquility Base — NOTICE
 
 Portions of this software are adapted from Clicky
 (https://github.com/farzaa/clicky), MIT License, Copyright (c) 2026 Farza:
 
   - the global push-to-talk CGEvent-tap monitor
-    (Sources/VoiceDispatchApp/HotkeyMonitor.swift)
+    (Sources/TranquilityApp/HotkeyMonitor.swift)
   - PCM16 audio conversion and WAV assembly
-    (Sources/VoiceDispatchCore/AudioStore.swift: BuddyPCM16Converter,
+    (Sources/TranquilityCore/AudioStore.swift: BuddyPCM16Converter,
     BuddyWAVBuilder)
 
 The onboarding permission-checklist pattern is likewise modeled on Clicky's.

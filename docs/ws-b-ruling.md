@@ -39,13 +39,13 @@ stream's text is >20% shorter than Whisper's.
 
 ## New-session affordance — ruled 05 Aug (addendum)
 
-Voice dispatch must also START sessions, not only answer them: "sometimes I
+Tranquility Base must also START sessions, not only answer them: "sometimes I
 want to be reactive, but sometimes I want to kick off an investigation."
 
 - v1 is choiceless: always `claude --dangerously-skip-permissions`, always
   the home directory. Directory/agent pickers come later, or never.
 - Core half is DONE: `SessionLauncher.launch(directory:command:)` — same
-  AppleScript transport, same Automation grant. `vdctl new [dir]` exercises it.
+  AppleScript transport, same Automation grant. `tbase new [dir]` exercises it.
 - **Wiring ask for the grid session** (you own the menu + grid right now):
   one menu item — title "New session", target-less closure onto
   `SessionLauncher.launch()` with `SessionLauncher.trace = Permissions.log`

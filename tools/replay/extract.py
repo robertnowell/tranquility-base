@@ -2,7 +2,7 @@
 """Extract the summarizer's historical inputs+outputs into a replay corpus.
 
 Source: ~/Library/Application Support/VoiceDispatch/model-calls.jsonl
-(written by Sources/VoiceDispatchCore/ModelCallLog.swift; one line per
+(written by Sources/TranquilityCore/ModelCallLog.swift; one line per
 Anthropic call made by AnthropicSummaryProvider in Summarizer.swift).
 
 Each JSONL line has: {at, model, status, elapsedMs, system, user, response}.
