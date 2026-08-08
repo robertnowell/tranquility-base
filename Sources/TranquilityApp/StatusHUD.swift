@@ -1540,6 +1540,31 @@ final class StatusHUD: NSObject {
         }
 
         switch name {
+        // The display/speech split, in the case that motivated it: a findings
+        // line whose whole content is column names. The voice says "a variable"
+        // once; the card must show all four, and the highlight must be sitting
+        // at the END of the name whose stand-in is mid-utterance — not part-way
+        // through it, and not still behind it. Verbatim prose before the names
+        // is character-identical in both forms, so the cursor there is exact.
+        case "redacted":
+            let findings = SpokenTextSanitizer().sanitize(
+                "Transcription succeeded; dispatch was queued behind the running "
+                + "turn and never landed. The utterances table already carries "
+                + "audioPath, audioBytes, transcriptText and dispatchAttempts "
+                + "— no migration needed.")
+            _ = showAnnouncement(
+                topic: "Dispatch queue audit", spoken: findings,
+                sessionId: "pose", pid: 1, project: callsign,
+                cwd: NSHomeDirectory() + "/Projects/tranquility-base",
+                placard: "\(StateLegend.Glyph.speaking) "
+                    + SpokenComposition.RungKind.findings.rawValue)
+            // Three characters into the spoken stand-in — far enough that the
+            // name it replaces must be fully lit.
+            let stand = findings.text.range(of: "a variable")
+            let cursor = stand.map { findings.text.distance(from: findings.text.startIndex,
+                                                            to: $0.lowerBound) + 3 }
+            highlight(upTo: cursor ?? findings.text.count / 2)
+
         case "grid":
             showIdle(rows: [
                 .init(id: "s1", name: "Validate hero image binding",
