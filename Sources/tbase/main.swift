@@ -597,6 +597,21 @@ case "hook-config":
             exit(6)
         }
 
+    case "lexicon":
+        // What the app is actually biasing toward right now. A vocabulary
+        // feature nobody can inspect is a vocabulary feature nobody can trust.
+        let lex = Lexicon.harvest(store: store)
+        print("\(lex.terms.count) term(s), priority order "
+              + "(callsigns and project labels first, then recency-weighted):")
+        for (i, term) in lex.terms.enumerated() {
+            print(String(format: "  %3d. %@", i + 1, term))
+        }
+        if args.count > 1 {
+            let needle = args[1].lowercased()
+            let hit = lex.terms.first { $0.lowercased() == needle }
+            print("\n\"\(args[1])\": \(hit != nil ? "PRESENT as \"\(hit!)\"" : "ABSENT")")
+        }
+
     case "transcribe-stream":
         // Chunk a saved recording through the AssemblyAI streaming provider in
         // pseudo-realtime — verification of the live path without a live mic.
@@ -613,7 +628,11 @@ case "hook-config":
             print("could not read audio at \(fileURL.path)")
             exit(1)
         }
-        let lexicon = Lexicon.harvest(store: store)
+        // `--no-lexicon` is the A/B control: the same audio through the same
+        // provider with the vocabulary withheld, which is the only way to say
+        // what the lexicon is actually worth rather than assuming it works.
+        let withoutLexicon = args.contains("--no-lexicon")
+        let lexicon = withoutLexicon ? Lexicon(terms: []) : Lexicon.harvest(store: store)
         let keyterms = AssemblyAIStreaming.keyterms(from: lexicon.terms)
         print("streaming \(String(format: "%.1f", Double(pcm.count) / 32_000))s of audio "
               + "with \(keyterms.count) keyterm(s)")
