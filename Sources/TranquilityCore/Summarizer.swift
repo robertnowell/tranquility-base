@@ -255,9 +255,9 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         worse than the name.
 
         Write every one of them as words, the way you would say them: numbers spelled \
-        out ("twenty-two ninety-four", not "2294"; "four and a half hours"; "five and \
-        a half thousand dollars"; "a four oh one"), and the common word wherever one \
-        exists. Assume the listener hears this once, in their second language.
+        out as separate words ("twenty-two ninety-four" for 2294, never one hyphenated \
+        run; "four and a half hours"; "a four oh one"), and the common word wherever \
+        one exists. Assume the listener hears this once, in their second language.
 
         ── THE REMAINING FIELDS ──
 
