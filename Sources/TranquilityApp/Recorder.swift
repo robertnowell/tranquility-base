@@ -145,6 +145,12 @@ public final class Recorder: @unchecked Sendable {
                 if attempt > 0 {
                     Permissions.log("mic: opened on attempt \(attempt + 1) after: \(lastReason)")
                 }
+                // Marked only once the microphone is genuinely open, and after the
+                // work that opening costs — so this cannot delay capture starting,
+                // only the return to the caller. See CaptureMarker: the reader is
+                // the relaunch script, which must not kill an utterance that is
+                // still only in memory.
+                CaptureMarker.begin()
                 return
             }
             _ = VDCatchObjCException { input.removeTap(onBus: 0); engine.stop() }
@@ -263,6 +269,9 @@ public final class Recorder: @unchecked Sendable {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
         }
+        // The words are about to be handed back, so the utterance is no longer
+        // only in memory and a relaunch can proceed.
+        CaptureMarker.end()
         level = 0
 
         lock.lock()
@@ -285,6 +294,7 @@ public final class Recorder: @unchecked Sendable {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
         }
+        CaptureMarker.end()
         level = 0
     }
 
