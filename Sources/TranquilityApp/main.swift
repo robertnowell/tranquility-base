@@ -1970,7 +1970,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "Microphone", granted: micGranted,
             action: #selector(openMicrophoneSettings)))
         menu.addItem(permissionRow(
-            title: "Input Monitoring (hotkey)", granted: hotkeyWorking,
+            title: "Accessibility (hotkeys + dictation)", granted: hotkeyWorking,
             action: #selector(openInputMonitoringSettings)))
         menu.addItem(.separator())
 

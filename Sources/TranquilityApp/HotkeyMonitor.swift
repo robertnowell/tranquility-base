@@ -15,7 +15,9 @@ import TranquilityCore
 ///    `start()` every couple of seconds; restarting resets the pressed state and
 ///    would kill an in-progress recording mid-utterance.
 ///
-/// Listen-only means this needs Input Monitoring rather than Accessibility — it
+/// Listen-only means either Accessibility or Input Monitoring authorises it;
+/// the app requires Accessibility (which it needs anyway to type at the cursor)
+/// and no longer asks for Input Monitoring at all — it
 /// observes the chord without consuming it. That is also why the shortcut is a
 /// modifier combination rather than a bare key: an unconsumed bare key would still
 /// reach whatever app is focused. Wispr Flow refuses bare keys for the same reason.
@@ -97,7 +99,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
             CGEvent.tapEnable(tap: tap, enable: true)
             Permissions.log(CGEvent.tapIsEnabled(tap: tap)
                 ? "hotkey: tap was DEAD; revived by watchdog"
-                : "hotkey: tap dead and revive REFUSED — Input Monitoring likely revoked")
+                : "hotkey: tap dead and revive REFUSED — Accessibility likely revoked")
         }
     }
     private var runLoopSource: CFRunLoopSource?

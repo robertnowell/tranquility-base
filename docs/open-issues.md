@@ -169,25 +169,24 @@ voice.
 
 ---
 
-## 11. Gestures should accept Accessibility OR Input Monitoring (from PR #1)
+## 11. Gestures permission — CLOSED, by deleting one
 
-**Status:** open, design ready — app-layer onboarding pass.
+**Status:** closed 07 Aug. Ruled: "it's either required or it's not — make them
+both required or get rid of one."
 
-A listen-only `CGEvent` tap is authorised by **either** permission, but onboarding
-requires Input Monitoring and calls Accessibility optional. That is backwards in
-the way that matters: on a normal Mac nothing requests Input Monitoring — Wispr
-Flow, Raycast and every comparable tool appear under Accessibility and that pane
-sits empty — so the checklist can report a permission missing while the tap it
-gates is working, and demand one the user has no way to grant.
+Input Monitoring was the one to get rid of. The tap is `.listenOnly`, which
+either permission authorises, but `FocusedInput` types at the cursor through
+the AXUIElement APIs and nothing but Accessibility authorises that. So
+Accessibility is load-bearing regardless and is a superset for the tap, which
+leaves Input Monitoring contributing nothing of its own.
 
-PR #1's design (head a05f253, `Permissions.swift` diff): `gesturesGranted =
-isGranted(.accessibility) || isGranted(.inputMonitoring)`; neither gesture
-permission independently required; Accessibility is the one to *ask* for (it also
-gives dictation-at-cursor). Granting Accessibility flips
-`CGPreflightListenEventAccess()` true, so it is a strict superset. Port deserves a
-live permissions test on a real grant state, not a drive-by.
-
----
+The old model was backwards: it required Input Monitoring — which nothing on a
+normal Mac ever requests, so that pane sits empty with nothing to switch on —
+and called Accessibility, where every comparable tool appears, optional.
+`Kind.inputMonitoring` is deleted; `isRequired` is now `true` for all three
+(microphone, automation, accessibility). `CGPreflightListenEventAccess()`
+survives as a diagnostic log line only, because when a tap fails to create it
+is the first question worth answering.
 
 ## 12. Signing scripts for machines without a dev cert (from PR #1)
 
