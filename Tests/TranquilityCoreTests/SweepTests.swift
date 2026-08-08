@@ -58,7 +58,7 @@ final class SweepTests: XCTestCase {
         }
         XCTAssertTrue(Coordinator.retiredSessionsForTesting().isEmpty,
                       "a session the agents API still reports must never be retired")
-        XCTAssertTrue(lines(containing: "session is gone").isEmpty,
+        XCTAssertTrue(lines(containing: "skipping").isEmpty,
                       "a live session must never be described as gone")
     }
 
@@ -109,7 +109,7 @@ final class SweepTests: XCTestCase {
         for i in 0..<500 {
             Coordinator.sweep(s, live: [], now: t0.addingTimeInterval(Double(i) * 0.1))
         }
-        XCTAssertEqual(lines(containing: "session is gone").count, 1,
+        XCTAssertEqual(lines(containing: "skipping").count, 1,
                        "the 2.3 GB incident: this line was written once per poll")
     }
 
@@ -124,18 +124,43 @@ final class SweepTests: XCTestCase {
         // Only heartbeats may accumulate, and at most one per 300s of the 1000s span.
         let added = logged().count - afterRetirement
         XCTAssertLessThanOrEqual(added, 4, "a retired session must not narrate itself")
-        XCTAssertEqual(lines(containing: "session is gone").count, 1)
+        XCTAssertEqual(lines(containing: "skipping").count, 1)
     }
 
-    func testTwoHundredDeadSessionsCostTwoHundredLinesTotalNotPerPoll() {
+    func testTwoHundredDeadSessionsCostOneLineNotTwoHundred() {
         let many = (0..<200).map { session("dead-\($0)") }
         for i in 0..<100 {
             Coordinator.sweep(many, live: [], now: t0.addingTimeInterval(Double(i)))
         }
-        // 200 "gone" lines, and nothing else until the delay elapses.
-        XCTAssertEqual(lines(containing: "session is gone").count, 200)
-        XCTAssertLessThan(logged().count, 210,
+        // Each line is a synchronous write on the main thread, so a burst is a
+        // stall. One line carries the same facts: how many, and which projects.
+        let announcements = lines(containing: "skipping")
+        XCTAssertEqual(announcements.count, 1,
+                       "200 dead sessions must cost one line, not two hundred")
+        XCTAssertTrue(announcements[0].contains("200 sessions, all gone"),
+                      "the count must survive the collapse: \(announcements[0])")
+        XCTAssertTrue(announcements[0].contains("promotions×200"),
+                      "and so must which projects: \(announcements[0])")
+        XCTAssertLessThan(logged().count, 5,
                           "the real queue: 200 dead sessions must not scale with poll count")
+    }
+
+    func testAManyLineSummaryNamesTheWorstOffendersAndCountsTheRest() {
+        // The real shape of the queue that caused this: replay dominating, a long
+        // tail of others. The summary must name the big ones and not print 12 labels.
+        var sessions: [WaitingSession] = []
+        for (project, n) in [("replay", 107), ("voter", 40), ("commenter", 20),
+                             ("content-engine", 12), ("contributor", 6),
+                             ("syndit", 2), ("kopi", 1)] {
+            for i in 0..<n {
+                sessions.append(session("\(project)-\(i)", cwd: "/Users/x/Projects/\(project)"))
+            }
+        }
+        Coordinator.sweep(sessions, live: [], now: t0)
+        let line = lines(containing: "skipping").first ?? ""
+        XCTAssertTrue(line.contains("188 sessions, all gone"), line)
+        XCTAssertTrue(line.contains("replay×107"), line)
+        XCTAssertTrue(line.contains("+2 more"), "the tail is counted, not listed: \(line)")
     }
 
     // MARK: - Never miss the state
@@ -164,7 +189,7 @@ final class SweepTests: XCTestCase {
                       "state must not outlive the queue it describes")
 
         Coordinator.sweep([s], live: [], now: t0.addingTimeInterval(400))    // returns
-        XCTAssertEqual(lines(containing: "session is gone").count, 2,
+        XCTAssertEqual(lines(containing: "skipping").count, 2,
                        "a session that comes back is observed from scratch, not assumed dead")
     }
 }

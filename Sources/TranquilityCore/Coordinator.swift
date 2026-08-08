@@ -211,30 +211,39 @@ public struct Coordinator: Sendable {
     /// `now` is injected so the timing rules above are testable without sleeping;
     /// production always passes the real clock.
     static func sweep(_ all: [WaitingSession], live: Set<String>, now: Date = Date()) {
-        sweepLock.lock()
-        defer { sweepLock.unlock() }
+        // Collected under the lock, spoken after it. `trace` writes to app.log with a
+        // synchronous open/write/close, and every caller of `waiting()` is on the main
+        // actor — so lines emitted in place are file I/O on the UI thread. That is the
+        // same stall this app already learned from the liveness probe, which had to be
+        // moved off-main because "called synchronously from the main actor it froze the
+        // UI on every tick". Two hundred writes in one sweep is that mistake again.
+        var gone: [String] = []
+        var retiredNow: [String] = []
+        var revived: [String] = []
+        var longestGone = 0
+        var heartbeat: String?
 
+        sweepLock.lock()
         for session in all {
             let id = session.sessionId
             guard !live.contains(id) else {
                 // Answerable now, whatever it was a moment ago.
-                if retired.remove(id) != nil {
-                    trace?("\(session.projectLabel) is live again; un-retired")
-                }
+                if retired.remove(id) != nil { revived.append(session.projectLabel) }
                 absent[id] = nil
                 continue
             }
             guard !retired.contains(id) else { continue }   // accounted for; say nothing
             var record = absent[id] ?? Absence(since: now, announced: false)
             if !record.announced {
-                trace?("skipping \(session.projectLabel): session is gone")
+                gone.append(session.projectLabel)
                 record.announced = true
             }
-            if now.timeIntervalSince(record.since) >= retirementDelay {
+            let elapsed = now.timeIntervalSince(record.since)
+            if elapsed >= retirementDelay {
                 retired.insert(id)
                 absent[id] = nil
-                trace?("retired \(session.projectLabel) after "
-                     + "\(Int(now.timeIntervalSince(record.since)))s gone")
+                retiredNow.append(session.projectLabel)
+                longestGone = max(longestGone, Int(elapsed))
             } else {
                 absent[id] = record
             }
@@ -249,9 +258,45 @@ public struct Coordinator: Sendable {
         if now.timeIntervalSince(lastHeartbeat) >= heartbeatInterval {
             lastHeartbeat = now
             let liveCount = all.count { live.contains($0.sessionId) }
-            trace?("sweep: \(liveCount) live, \(retired.count) retired, "
-                 + "\(absent.count) going, \(all.count) queued")
+            heartbeat = "sweep: \(liveCount) live, \(retired.count) retired, "
+                      + "\(absent.count) going, \(all.count) queued"
         }
+        sweepLock.unlock()
+
+        // Both shapes lead with "skipping" so one grep finds every skip, whether it
+        // was a lone session or two hundred collapsed into a count.
+        if let line = phrase(gone, one: { "skipping \($0): session is gone" },
+                             many: { "skipping \($0) sessions, all gone: \($1)" }) {
+            trace?(line)
+        }
+        if let line = phrase(retiredNow,
+                             one: { "retired \($0) after \(longestGone)s gone" },
+                             many: { "retired \($0) sessions after \(longestGone)s gone: \($1)" }) {
+            trace?(line)
+        }
+        if let line = phrase(revived, one: { "\($0) is live again; un-retired" },
+                             many: { "\($0) sessions live again: \($1)" }) { trace?(line) }
+        if let heartbeat { trace?(heartbeat) }
+    }
+
+    /// One line whether it is one session or two hundred.
+    ///
+    /// At scale the information is *which projects and how many*, not two hundred
+    /// repetitions of the same sentence — and since each line is a synchronous write
+    /// on the main thread, collapsing them is a latency fix as much as a legibility
+    /// one. A single session still reads as a sentence, because that is the case you
+    /// are usually actually debugging.
+    private static func phrase(_ labels: [String],
+                               one: (String) -> String,
+                               many: (Int, String) -> String) -> String? {
+        guard let first = labels.first else { return nil }
+        guard labels.count > 1 else { return one(first) }
+        let counts = Dictionary(grouping: labels, by: { $0 })
+            .map { (label: $0.key, count: $0.value.count) }
+            .sorted { ($0.count, $1.label) > ($1.count, $0.label) }
+        let shown = counts.prefix(5).map { "\($0.label)×\($0.count)" }.joined(separator: ", ")
+        let hidden = counts.count - min(5, counts.count)
+        return many(labels.count, hidden > 0 ? "\(shown), +\(hidden) more" : shown)
     }
 
     /// The badge. Shares the predicate with what a keypress will play, so the two
