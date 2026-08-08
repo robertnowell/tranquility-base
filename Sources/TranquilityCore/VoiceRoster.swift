@@ -27,6 +27,7 @@ public enum VoiceRoster {
         "mZ8K1MPRiT5wDQaasg3i",  // Alexander Kensington — studio quality
         "NFG5qt843uXKj4pFvR7C",  // Adam Stone — smooth, deep
         "ZF6FPAbjXT4488VcRRnw",  // Amelia — the narrator, by request
+        "EGxJIQ5TF187oclOp8aT",  // Kay — cloned, added by request
     ]
 
     /// Overridable for tests; the app always uses the support directory.
