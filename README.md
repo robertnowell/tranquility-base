@@ -84,7 +84,7 @@ deep-links to the exact Settings pane. All granting is observable — the dots g
 green live.
 
 - **Microphone** — record your reply
-- **Accessibility** — see the modifier gestures from any app, and type dictation at your cursor
+- **Input Monitoring** — see the modifier gestures from any app
 - **Automation (Terminal)** — type replies into the right tab
 - **Accessibility** *(optional)* — dictation types at your cursor; without it,
   clipboard

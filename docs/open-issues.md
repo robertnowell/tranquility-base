@@ -169,24 +169,38 @@ voice.
 
 ---
 
-## 11. Gestures permission — CLOSED, by deleting one
+## 11. Gestures permission — RESOLVED by measurement: BOTH are required
 
-**Status:** closed 07 Aug. Ruled: "it's either required or it's not — make them
-both required or get rid of one."
+**Status:** closed 08 Aug, the opposite way round from how it was closed on the 7th.
 
-Input Monitoring was the one to get rid of. The tap is `.listenOnly`, which
-either permission authorises, but `FocusedInput` types at the cursor through
-the AXUIElement APIs and nothing but Accessibility authorises that. So
-Accessibility is load-bearing regardless and is a superset for the tap, which
-leaves Input Monitoring contributing nothing of its own.
+The 7th's reasoning: a `.listenOnly` tap is authorised by Accessibility OR Input
+Monitoring; `FocusedInput` needs Accessibility regardless to type at the cursor;
+therefore Input Monitoring contributes nothing and was deleted. Apple's docs and
+the community sources agree with that reasoning.
 
-The old model was backwards: it required Input Monitoring — which nothing on a
-normal Mac ever requests, so that pane sits empty with nothing to switch on —
-and called Accessibility, where every comparable tool appears, optional.
-`Kind.inputMonitoring` is deleted; `isRequired` is now `true` for all three
-(microphone, automation, accessibility). `CGPreflightListenEventAccess()`
-survives as a diagnostic log line only, because when a tap fails to create it
-is the first question worth answering.
+It is wrong. Measured with a probe carrying its own bundle id (inheriting no
+grants) while a second process posted a keystroke every 400ms, so that "no
+events" could not be confused with "nobody typed":
+
+| condition | listenEventAccess | tapEnabled | events received |
+|---|---|---|---|
+| no permissions | false | false | 0 |
+| **Accessibility only** | **false** | **false** | **0** |
+
+Accessibility alone leaves the tap created but DISABLED and silent — the exact
+silent-denial failure that made the app look broken in the first place, and the
+one a new user would have hit on day one.
+
+**Both are required.** Input Monitoring carries the gestures; Accessibility
+carries dictation-at-cursor. Neither may be dropped again without repeating that
+experiment; the probe is worth rebuilding rather than trusting this note.
+
+Incidental finding worth keeping: because the app is signed with a real
+development identity, its TCC grants key to identity + bundle id rather than
+path, so they survive every rebuild and rename — and the Settings panes hide the
+rows when the recorded path no longer exists. An app can therefore hold a
+permission that appears nowhere in System Settings, which is exactly how this
+question stayed unanswerable for so long.
 
 ## 12. Signing scripts for machines without a dev cert (from PR #1)
 

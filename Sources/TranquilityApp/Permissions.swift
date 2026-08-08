@@ -14,12 +14,14 @@ import TranquilityCore
 struct Permissions {
     enum Kind: CaseIterable {
         case microphone
+        case inputMonitoring
         case automation
         case accessibility
 
         var title: String {
             switch self {
             case .microphone: return "Microphone"
+            case .inputMonitoring: return "Input Monitoring"
             case .automation: return "Automation (Terminal)"
             case .accessibility: return "Accessibility"
             }
@@ -28,33 +30,37 @@ struct Permissions {
         var why: String {
             switch self {
             case .microphone: return "to record your spoken reply"
+            case .inputMonitoring: return "to notice the hotkeys while you're in another app (measured: Accessibility alone does NOT do this)"
             case .automation: return "to type replies into the right Terminal tab"
-            case .accessibility: return "to notice the hotkeys, and to type dictation at your cursor"
+            case .accessibility: return "so dictation can type at your cursor"
             }
         }
 
-        /// All of them. Ruled 07 Aug: "it's either required or it's not — make
-        /// them both required or get rid of one." Input Monitoring was the one
-        /// to get rid of, and this is the reasoning, kept where the next person
-        /// will look for it.
+        /// All four. Ruled 07 Aug: "it's either required or it's not — make them
+        /// both required or get rid of one." The first attempt got rid of Input
+        /// Monitoring on the reasoning that a `.listenOnly` tap is authorised by
+        /// either permission and Accessibility is needed anyway for typing at the
+        /// cursor. The documentation agrees with that reasoning. It is wrong.
         ///
-        /// Our tap is `.listenOnly`, which either Accessibility or Input
-        /// Monitoring authorises. But `FocusedInput` types dictation at the
-        /// cursor through the AXUIElement APIs, and NOTHING but Accessibility
-        /// authorises that. So Accessibility is load-bearing whatever we do,
-        /// and being a superset for the tap, it leaves Input Monitoring with
-        /// nothing of its own to contribute.
+        /// MEASURED 08 Aug, on a purpose-built probe with its own bundle id (so
+        /// it inherited nothing) while a second process posted a keystroke every
+        /// 400ms so that "no events" could not mean "nobody typed":
         ///
-        /// The old model had this exactly backwards — it required Input
-        /// Monitoring, which nothing on a normal Mac ever requests (so that
-        /// pane sits empty and there is nothing to switch on), and called
-        /// Accessibility, where every comparable tool appears, a nice-to-have.
+        ///     accessibility=true  listenEventAccess=false
+        ///     tapEnabled=false    eventsReceived=0
+        ///
+        /// Accessibility alone leaves the tap created but DISABLED and silent.
+        /// Input Monitoring is what carries the gestures; Accessibility is what
+        /// carries dictation-at-cursor. Both are load-bearing, so both are
+        /// required, and neither may be quietly dropped again without repeating
+        /// that experiment.
         var isRequired: Bool { true }
 
         var settingsURL: String {
             let base = "x-apple.systempreferences:com.apple.preference.security?"
             switch self {
             case .microphone: return base + "Privacy_Microphone"
+            case .inputMonitoring: return base + "Privacy_ListenEvent"
             case .automation: return base + "Privacy_Automation"
             case .accessibility: return base + "Privacy_Accessibility"
             }
@@ -127,10 +133,7 @@ struct Permissions {
         log("micUsageDescription=\(bundle.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") != nil)")
         log("micStatus=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue) "
             + "(\(statusDescription(.microphone)))")
-        // Kept as a diagnostic only: it is no longer a requirement, but when a
-        // tap fails to create, knowing whether the system considers event
-        // listening authorised is the first question worth answering.
-        log("listenEventAccess=\(CGPreflightListenEventAccess()) (diagnostic, not required)")
+        log("inputMonitoring=\(CGPreflightListenEventAccess())")
         log("automation=\(statusDescription(.automation)) accessibility=\(AXIsProcessTrusted())")
     }
 
@@ -138,6 +141,8 @@ struct Permissions {
         switch kind {
         case .microphone:
             return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        case .inputMonitoring:
+            return CGPreflightListenEventAccess()
         case .automation:
             return automationStatus() == noErr
         case .accessibility:
@@ -161,6 +166,8 @@ struct Permissions {
             case .restricted: return "restricted by policy"
             @unknown default: return "unknown"
             }
+        case .inputMonitoring:
+            return CGPreflightListenEventAccess() ? "granted" : "not granted. Click Grant"
         case .automation:
             switch automationStatus() {
             case noErr: return "granted"
@@ -170,7 +177,7 @@ struct Permissions {
             }
         case .accessibility:
             return AXIsProcessTrusted() ? "granted"
-                : "not granted. Click Grant — the hotkeys and dictation both need it"
+                : "not granted. Click Grant — dictation types at your cursor with it"
         }
     }
 
@@ -185,6 +192,10 @@ struct Permissions {
             // switch on, which is exactly the dead end this hit.
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
             return granted || isGranted(kind)
+        case .inputMonitoring:
+            // Prompts the first time and lists the app thereafter. Safe to call
+            // repeatedly — it returns the current state once already decided.
+            return CGRequestListenEventAccess()
         case .automation:
             // The consent prompt only appears when an actual Apple Event is sent,
             // so send the most harmless one Terminal understands.
