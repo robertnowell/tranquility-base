@@ -497,13 +497,19 @@ public struct SummarizerChain: Sendable {
 
         // Each section is clamped against its own budget before composing, so a long
         // recap can never eat the proposal — the half that carries the decision.
+        //
+        // Clamped but NOT redacted: the brief keeps the names the session itself
+        // used, because that is what the card shows and what the store keeps. The
+        // genericising happens once, below, and produces a value carrying both
+        // forms — so the thing read and the thing heard are two projections of one
+        // sequence rather than two strings that have to be kept in step.
         if let recap = brief.recap {
-            brief.recap = sanitizer.sanitize(
-                recap, maxWords: SpokenTextSanitizer.recapWords, allowing: speakable).text
+            brief.recap = SpokenTextSanitizer.clamp(
+                recap, maxWords: SpokenTextSanitizer.recapWords)
         }
         if let proposal = brief.proposal {
-            brief.proposal = sanitizer.sanitize(
-                proposal, maxWords: SpokenTextSanitizer.proposalWords, allowing: speakable).text
+            brief.proposal = SpokenTextSanitizer.clamp(
+                proposal, maxWords: SpokenTextSanitizer.proposalWords)
         }
 
         return Summary(
