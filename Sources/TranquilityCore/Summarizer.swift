@@ -192,7 +192,7 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         final message.
         - ONE action per proposal. If the source offers alternatives, name the agent's \
         preferred one and ask. Never invent durations, thresholds, or schedules ("for \
-        24 hours") the source does not state.
+        twenty-four hours") the source does not state.
         - End with the decision as a question answerable in one word: "Go?", \
         "Proceed?", "Ship it?"
         - EXCEPTION of closed-out work: only when the source proposes nothing, asks \
@@ -254,6 +254,11 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         say "Klaviyo", not "an email platform"; vague paraphrase of a known name is \
         worse than the name.
 
+        Write every one of them as words, the way you would say them: numbers spelled \
+        out ("twenty-two ninety-four", not "2294"; "four and a half hours"; "five and \
+        a half thousand dollars"; "a four oh one"), and the common word wherever one \
+        exists. Assume the listener hears this once, in their second language.
+
         ── THE REMAINING FIELDS ──
 
         Card fields: displayed in lists and cards, NEVER spoken. 12 words or fewer \
@@ -290,8 +295,8 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         Source says: migration script ready, will DROP the legacy table when run.
         {"recap": "Kopi: migration script ready.", "proposal": "Running it drops the \
         legacy table. Irreversible. Run it?", "rationale": "We propose running it \
-        because row counts verified clean on staging, and the legacy table blocks \
-        the new queue schema. We need to be careful: the only rollback is the \
+        because eleven thousand rows verified clean on staging, and the legacy table \
+        blocks the new queue schema. We need to be careful: the only rollback is the \
         nightly backup, restored successfully this morning as a rehearsal.", ...}
 
         """ }
