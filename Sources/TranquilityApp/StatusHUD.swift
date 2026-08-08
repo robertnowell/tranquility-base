@@ -1565,6 +1565,32 @@ final class StatusHUD: NSObject {
                                                             to: $0.lowerBound) + 3 }
             highlight(upTo: cursor ?? findings.text.count / 2)
 
+        // The other half of the split: a brief long enough that the clamp drops
+        // its tail. Held at the END of the spoken text, so everything the voice
+        // said is lit and everything it will never say is not — the open
+        // question being whether "never spoken" and "not yet spoken" should
+        // really look the same.
+        case "redacted-long":
+            let long = SpokenTextSanitizer().sanitize(
+                "Transcription succeeded; dispatch was queued behind the running "
+                + "turn and never landed. The utterances table already carries "
+                + "audioPath, audioBytes, transcriptText and dispatchAttempts, so "
+                + "no migration is needed for the retry work. The sweep turned up "
+                + "six defects: two are ordering bugs in the announce path, three "
+                + "are stale rows the reconciliation never retired, and the last "
+                + "is a race between the intake timer and the boot sweep that only "
+                + "reproduces on a cold start. None of them explain the dropped "
+                + "dispatch, which the logs now attribute to the running-turn "
+                + "guard rather than to transport. The audio itself was recovered "
+                + "intact and replayed cleanly.")
+            _ = showAnnouncement(
+                topic: "Dispatch queue audit", spoken: long,
+                sessionId: "pose", pid: 1, project: callsign,
+                cwd: NSHomeDirectory() + "/Projects/tranquility-base",
+                placard: "\(StateLegend.Glyph.speaking) "
+                    + SpokenComposition.RungKind.findings.rawValue)
+            highlight(upTo: long.text.count)
+
         case "grid":
             showIdle(rows: [
                 .init(id: "s1", name: "Validate hero image binding",
