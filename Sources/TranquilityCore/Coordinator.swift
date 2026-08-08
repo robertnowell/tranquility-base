@@ -122,7 +122,7 @@ public struct Coordinator: Sendable {
         // hid every waiting session the moment the CLI hiccuped — real work,
         // silently gone, which is the one failure this app must never have.
         guard let sessions = agents.sessions() else {
-            Coordinator.trace?("liveness probe failed; failing open")
+            Coordinator.noteProbeFailure()
             return try store.waitingSessions()
         }
         // Machine-driven runs exit the moment they finish, so by the time we
@@ -153,7 +153,7 @@ public struct Coordinator: Sendable {
     /// poll, writing a line each time: ~250 lines/second, 38.5M lines, 2.3 GB in
     /// five days. A log that large buries the diagnostics it exists to provide.
     ///
-    /// Four rules, in the order they matter:
+    /// Five rules, in the order they matter:
     ///
     /// 1. **Liveness governs.** A session is retired only while the agents API says
     ///    it is gone, and the instant it reappears it is un-retired and said out
@@ -161,34 +161,56 @@ public struct Coordinator: Sendable {
     ///    count — because nothing else is evidence that no one is there to answer.
     ///    This is the rule that keeps the tty filter's failure from repeating: that
     ///    one inferred "nobody is here" from a proxy, and hid real conversations.
+    ///    Measured while designing this: every replay session carries a tty,
+    ///    inherited from the terminal that launched the harness.
     /// 2. **Retirement is timed, not counted.** The liveness probe is cached for six
-    ///    seconds, so consecutive polls can be the same observation; counting them
-    ///    would retire a session on one probe wearing three hats. Absence has to
-    ///    persist for `retirementDelay` of wall clock.
-    /// 3. **A failed probe is not evidence.** `waiting()` returns before reaching
-    ///    here when the probe fails, so an outage can never age a session into
-    ///    retirement — it simply produces no new evidence either way.
-    /// 4. **State is in memory, so a restart forgets.** Deliberate: the worst case
-    ///    is re-observing sessions already known dead, which is the same fail-open
-    ///    posture as the probe itself. Persisting it would mean a bug in this file
-    ///    could bury a live session across restarts.
+    ///    seconds, so consecutive polls can be one observation; counting them would
+    ///    retire a session on a single probe wearing three hats.
+    /// 3. **Only observed absence ages a session.** A gap in sweeping — a probe
+    ///    outage, a laptop asleep, the app paused — is not evidence, so a gap longer
+    ///    than `gapTolerance` restarts every absence clock. Without this the wall
+    ///    clock did the ageing: two observations five minutes apart across an outage
+    ///    retired a session that had been watched exactly twice.
+    /// 4. **What is said is symmetric.** Anything announced gone is announced again
+    ///    when it returns, retired or not. A log that says a session died and never
+    ///    retracts it sends the next debugger down a hole.
+    /// 5. **State is in memory, so a restart forgets.** Deliberate: the worst case is
+    ///    re-observing sessions already known dead, the same fail-open posture as the
+    ///    probe. Persisted, a bug here could bury a live session across restarts.
     ///
-    /// What it says, and nothing else: each session's arrival at gone, its
-    /// retirement, its return — plus one state line every `heartbeatInterval`, so a
-    /// log that rolled ten minutes ago still answers "what is it doing" without the
-    /// history that rolled away.
-    private struct Absence { var since: Date; var announced: Bool }
-    private nonisolated(unsafe) static var absent: [String: Absence] = [:]
-    private nonisolated(unsafe) static var retired: Set<String> = []
-    private nonisolated(unsafe) static var lastHeartbeat = Date.distantPast
+    /// Durations use a monotonic clock. These are elapsed times, and a wall clock
+    /// steps — an NTP correction backwards froze retirement and silenced the
+    /// heartbeat for the length of the step.
+    typealias Instant = ContinuousClock.Instant
+
+    /// One record per session. Unified rather than an `absent` map beside a `retired`
+    /// set, because two structures describing one lifecycle drift: the pair could say
+    /// a session was both retired and freshly absent.
+    private struct Watch {
+        var since: Instant       // start of the CURRENT observed absence
+        var lastSeen: Instant    // last sweep that saw this session at all
+        var announced = false    // "gone" has been said, so say "back" if it returns
+        var retired = false
+    }
+    private nonisolated(unsafe) static var watched: [String: Watch] = [:]
+    private nonisolated(unsafe) static var lastSweep: Instant?
+    private nonisolated(unsafe) static var lastHeartbeat: Instant?
+    private nonisolated(unsafe) static var probeFailingSince: Instant?
     private static let sweepLock = NSLock()
 
     /// Long enough that a slow probe or a tab being cycled cannot retire a session
     /// someone is using; short enough that a finished batch run stops being swept
     /// while you are still in the same coffee.
-    private static let retirementDelay: TimeInterval = 120
+    private static let retirementDelay: Duration = .seconds(120)
     /// 288 lines a day. The transitions say what changed; this says what IS.
-    private static let heartbeatInterval: TimeInterval = 300
+    private static let heartbeatInterval: Duration = .seconds(300)
+    /// Normal polling is every 1–5s, so a longer gap means the app was not watching.
+    private static let gapTolerance: Duration = .seconds(30)
+    /// `waitingSessions()` is `LIMIT 200`, so a session can leave the result set
+    /// without leaving the queue. Forgetting on that basis re-announced older dead
+    /// sessions every time a newer one was dismissed and slid one back into view,
+    /// and retirement never converged. Records expire on their own clock instead.
+    private static let watchRetention: Duration = .seconds(3600)
 
     /// Tests share this process, and the sweep's memory is static — without a reset
     /// one test's retirements would leak into the next and the failure would look
@@ -196,21 +218,45 @@ public struct Coordinator: Sendable {
     static func resetSweepStateForTesting() {
         sweepLock.lock()
         defer { sweepLock.unlock() }
-        absent = [:]
-        retired = []
-        lastHeartbeat = .distantPast
+        watched = [:]
+        lastSweep = nil
+        lastHeartbeat = nil
+        probeFailingSince = nil
     }
 
     /// Retired right now, for assertions. Not used in production.
     static func retiredSessionsForTesting() -> Set<String> {
         sweepLock.lock()
         defer { sweepLock.unlock() }
-        return retired
+        return Set(watched.filter(\.value.retired).keys)
     }
 
-    /// `now` is injected so the timing rules above are testable without sleeping;
-    /// production always passes the real clock.
-    static func sweep(_ all: [WaitingSession], live: Set<String>, now: Date = Date()) {
+    /// The probe could not answer. Said on the way in and then at heartbeat cadence,
+    /// never per poll: `sessions()` caches only successes, so during an outage every
+    /// single call re-spawns the subprocess AND wrote a line — the 2.3 GB shape again
+    /// on the branch beside the one that caused it.
+    static func noteProbeFailure(now: Instant = .now) {
+        var line: String?
+        do {
+            sweepLock.lock()
+            defer { sweepLock.unlock() }
+            if let since = probeFailingSince {
+                if now - (lastHeartbeat ?? since) >= heartbeatInterval {
+                    lastHeartbeat = now
+                    line = "liveness probe still failing after "
+                         + "\(Int((now - since).components.seconds))s; failing open, "
+                         + "\(watched.count) sessions unwatched"
+                }
+            } else {
+                probeFailingSince = now
+                lastHeartbeat = now
+                line = "liveness probe failed; failing open (every session treated as live)"
+            }
+        }
+        if let line { trace?(line) }
+    }
+
+    static func sweep(_ all: [WaitingSession], live: Set<String>, now: Instant = .now) {
         // Collected under the lock, spoken after it. `trace` writes to app.log with a
         // synchronous open/write/close, and every caller of `waiting()` is on the main
         // actor — so lines emitted in place are file I/O on the UI thread. That is the
@@ -221,48 +267,68 @@ public struct Coordinator: Sendable {
         var retiredNow: [String] = []
         var revived: [String] = []
         var longestGone = 0
+        var recovered: String?
         var heartbeat: String?
 
-        sweepLock.lock()
-        for session in all {
-            let id = session.sessionId
-            guard !live.contains(id) else {
-                // Answerable now, whatever it was a moment ago.
-                if retired.remove(id) != nil { revived.append(session.projectLabel) }
-                absent[id] = nil
-                continue
+        do {
+            sweepLock.lock()
+            defer { sweepLock.unlock() }
+
+            if let failingSince = probeFailingSince {
+                recovered = "liveness probe recovered after "
+                          + "\(Int((now - failingSince).components.seconds))s"
+                probeFailingSince = nil
             }
-            guard !retired.contains(id) else { continue }   // accounted for; say nothing
-            var record = absent[id] ?? Absence(since: now, announced: false)
-            if !record.announced {
-                gone.append(session.projectLabel)
-                record.announced = true
+            // Rule 3: a gap means nobody was watching, so no absence observed across
+            // it may count toward retirement.
+            let blind = lastSweep.map { now - $0 > gapTolerance } ?? true
+            lastSweep = now
+
+            for session in all {
+                let id = session.sessionId
+                guard !live.contains(id) else {
+                    // Answerable now, whatever it was a moment ago. Rule 4: if we said
+                    // it was gone, we say it is back — retired or merely absent.
+                    if let watch = watched.removeValue(forKey: id), watch.announced {
+                        revived.append(session.projectLabel)
+                    }
+                    continue
+                }
+                var watch = watched[id] ?? Watch(since: now, lastSeen: now)
+                if blind { watch.since = now }        // the gap is not evidence
+                watch.lastSeen = now
+                defer { watched[id] = watch }
+
+                guard !watch.retired else { continue }   // accounted for; say nothing
+                if !watch.announced {
+                    gone.append(session.projectLabel)
+                    watch.announced = true
+                }
+                let elapsed = now - watch.since
+                if elapsed >= retirementDelay {
+                    watch.retired = true
+                    retiredNow.append(session.projectLabel)
+                    longestGone = max(longestGone, Int(elapsed.components.seconds))
+                }
             }
-            let elapsed = now.timeIntervalSince(record.since)
-            if elapsed >= retirementDelay {
-                retired.insert(id)
-                absent[id] = nil
-                retiredNow.append(session.projectLabel)
-                longestGone = max(longestGone, Int(elapsed))
-            } else {
-                absent[id] = record
+
+            // Records expire on their own clock, NOT on absence from a truncated
+            // query — see `watchRetention`.
+            watched = watched.filter { now - $0.value.lastSeen < watchRetention }
+
+            // Nil means this is the first sweep, which is exactly when the state is
+            // most worth stating — so it beats immediately rather than in five minutes.
+            if lastHeartbeat.map({ now - $0 >= heartbeatInterval }) ?? true {
+                lastHeartbeat = now
+                let liveCount = all.count { live.contains($0.sessionId) }
+                let retiredCount = watched.count(where: \.value.retired)
+                heartbeat = "sweep: \(liveCount) live, \(retiredCount) retired, "
+                          + "\(watched.count - retiredCount) going, "
+                          + "\(all.count) in the newest-200 window"
             }
         }
 
-        // Neither map may outlive the queue it describes: a session that leaves the
-        // waiting set is forgotten, so if it ever returns it is observed fresh.
-        let present = Set(all.map(\.sessionId))
-        absent = absent.filter { present.contains($0.key) }
-        retired = retired.intersection(present)
-
-        if now.timeIntervalSince(lastHeartbeat) >= heartbeatInterval {
-            lastHeartbeat = now
-            let liveCount = all.count { live.contains($0.sessionId) }
-            heartbeat = "sweep: \(liveCount) live, \(retired.count) retired, "
-                      + "\(absent.count) going, \(all.count) queued"
-        }
-        sweepLock.unlock()
-
+        if let recovered { trace?(recovered) }
         // Both shapes lead with "skipping" so one grep finds every skip, whether it
         // was a lone session or two hundred collapsed into a count.
         if let line = phrase(gone, one: { "skipping \($0): session is gone" },
@@ -274,7 +340,7 @@ public struct Coordinator: Sendable {
                              many: { "retired \($0) sessions after \(longestGone)s gone: \($1)" }) {
             trace?(line)
         }
-        if let line = phrase(revived, one: { "\($0) is live again; un-retired" },
+        if let line = phrase(revived, one: { "\($0) is live again" },
                              many: { "\($0) sessions live again: \($1)" }) { trace?(line) }
         if let heartbeat { trace?(heartbeat) }
     }
@@ -298,6 +364,7 @@ public struct Coordinator: Sendable {
         let hidden = counts.count - min(5, counts.count)
         return many(labels.count, hidden > 0 ? "\(shown), +\(hidden) more" : shown)
     }
+
 
     /// The badge. Shares the predicate with what a keypress will play, so the two
     /// cannot disagree.
