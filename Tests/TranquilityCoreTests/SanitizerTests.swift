@@ -190,3 +190,116 @@ extension SanitizerTests {
         XCTAssertEqual(keys, ["topic", "goal", "happened", "question", "next", "risk", "branch"])
     }
 }
+
+// MARK: - Two projections of one sequence
+//
+// The display/speech split. These are the tests that would catch the failure
+// this design exists to make impossible: the two forms drifting apart, and the
+// highlight cursor landing in the wrong place because of it.
+
+extension SanitizerTests {
+    /// The name survives for the eye and is genericised only for the ear.
+    func testDisplayKeepsTheNameThatSpeechGenericises() {
+        let result = sanitizer.sanitize("The table carries dispatchAttempts today.")
+        XCTAssertEqual(result.text, "The table carries a variable today.")
+        XCTAssertEqual(result.displayText, "The table carries dispatchAttempts today.")
+    }
+
+    /// Verbatim stretches are character-identical in both forms, so the cursor
+    /// maps exactly — no drift, no arithmetic.
+    func testCursorIsExactBeforeAnyRedaction() {
+        let result = sanitizer.sanitize("The table carries dispatchAttempts today.")
+        for index in 0..."The table carries ".count {
+            XCTAssertEqual(result.displayIndex(forSpoken: index), index)
+        }
+    }
+
+    /// An entity is atomic to a reader: the whole name lights up as soon as its
+    /// spoken stand-in begins, rather than a proportion of it.
+    func testCursorLightsTheWholeNameOnceItsSpokenFormBegins() {
+        let result = sanitizer.sanitize("The table carries dispatchAttempts today.")
+        let nameStart = "The table carries ".count
+        let nameEnd = nameStart + "dispatchAttempts".count
+        // One character into "a variable" — the whole name is already lit.
+        XCTAssertEqual(result.displayIndex(forSpoken: nameStart + 1), nameEnd)
+        // And it does not overshoot into the text that follows.
+        XCTAssertEqual(result.displayIndex(forSpoken: nameStart + "a variable".count), nameEnd)
+    }
+
+    /// The cursor never runs backwards or past either end, whatever the input —
+    /// a monotone prefix is the whole contract the panel relies on.
+    func testCursorIsMonotoneAndInBounds() {
+        let result = sanitizer.sanitize(
+            "Schema has no column on brand_products; it has syncedAt, priceCents "
+            + "and compareAtPriceCents as fields, edited in /Users/x/app/main.swift.")
+        var previous = 0
+        for index in 0...(result.text.count + 5) {
+            let mapped = result.displayIndex(forSpoken: index)
+            XCTAssertGreaterThanOrEqual(mapped, previous, "cursor went backwards at \(index)")
+            XCTAssertLessThanOrEqual(mapped, result.displayText.count)
+            previous = mapped
+        }
+    }
+
+    /// The reason the collapse is safe: the listener hears the phrase once, and
+    /// the reader still gets every name that was collapsed.
+    func testRepeatedRedactionsCollapseForSpeechButNotForReading() {
+        let result = sanitizer.sanitize(
+            "Table carries audioPath, audioBytes, transcriptText, dispatchAttempts today.")
+        XCTAssertEqual(result.text, "Table carries a variable today.")
+        for name in ["audioPath", "audioBytes", "transcriptText", "dispatchAttempts"] {
+            XCTAssertTrue(result.displayText.contains(name), "\(name) missing from the card")
+        }
+    }
+
+    /// Clean text has one projection, not two — nothing to get out of step.
+    func testCleanTextHasIdenticalProjections() {
+        let input = "Export refactor is done and tests pass."
+        let result = sanitizer.sanitize(input)
+        XCTAssertEqual(result.text, result.displayText)
+        XCTAssertEqual(result.text, input)
+    }
+
+    /// The callsign is attribution: it is heard AND seen, and it moves every
+    /// other index with it rather than being pasted on afterwards.
+    func testCallsignJoinsBothProjections() {
+        let base = sanitizer.sanitize("carries dispatchAttempts today.")
+        let hailed = sanitizer.applyingCallsign("promotions", strippingLabels: [], to: base)
+        XCTAssertTrue(hailed.text.hasPrefix("promotions: "))
+        XCTAssertTrue(hailed.displayText.hasPrefix("promotions: "))
+        XCTAssertTrue(hailed.displayText.contains("dispatchAttempts"))
+        XCTAssertEqual(hailed.displayIndex(forSpoken: 0), 0)
+    }
+
+    /// What the clamp drops is still worth reading. The panel needs to know where
+    /// the voice stopped so it can say so.
+    func testClampedTailSurvivesForTheEyeAndIsMarked() {
+        let sentence = Array(repeating: "word", count: 12).joined(separator: " ") + "."
+        let long = Array(repeating: sentence, count: 8).joined(separator: " ")
+        let result = sanitizer.sanitize(long, maxWords: 20)
+        XCTAssertLessThanOrEqual(result.wordCount, 20)
+        XCTAssertGreaterThan(result.displayText.count, result.text.count,
+                             "the unspoken tail must survive for the reader")
+        XCTAssertLessThan(result.spokenTailBegins, result.displayText.count)
+    }
+
+    /// End to end: what the store and the card keep is what the session said;
+    /// only the voice gets the generic version.
+    func testBriefKeepsTheNamesWhileOnlySpeechGenericisesThem() async {
+        struct Fixed: SummaryProvider {
+            let name = "fixed"
+            let isConfigured = true
+            func brief(for request: SummaryRequest) async throws -> SessionBrief {
+                SessionBrief(topic: "Utterances", happened: "columns checked",
+                             recap: "Table carries dispatchAttempts.", proposal: "Merge it?")
+            }
+        }
+        let summary = await SummarizerChain(providers: [Fixed()]).summarize(
+            SummaryRequest(lastAssistantMessage: "table carries dispatchAttempts",
+                           projectLabel: "tranquility-base"))
+        XCTAssertEqual(summary.brief.recap, "Table carries dispatchAttempts.")
+        XCTAssertTrue(summary.spoken.text.contains("a variable"), summary.spoken.text)
+        XCTAssertFalse(summary.spoken.text.contains("dispatchAttempts"))
+        XCTAssertTrue(summary.spoken.displayText.contains("dispatchAttempts"))
+    }
+}

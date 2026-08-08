@@ -44,6 +44,10 @@ final class StatusHUD: NSObject {
     var dictationDestination: String?
     /// The event the panel is currently about, so Dismiss can retire it.
     private(set) var currentEventId: String?
+    /// What is being said, in both forms. The card shows the unredacted side;
+    /// the voice reports its progress in spoken coordinates, so the highlight
+    /// asks this value to translate rather than assuming the two line up.
+    private var currentSpoken: SanitizedSpokenText?
     private var countdownTimer: Timer?
     private var onCancelSend: ((_ restartListening: Bool) -> Void)?
     private var onCommitSend: (() -> Void)?
@@ -151,8 +155,12 @@ final class StatusHUD: NSObject {
     /// when it was not: this returned Void, so a refusal reached nobody and the
     /// audio played into a live microphone anyway (Coordinator.speak).
     @discardableResult
+    /// `spoken` carries both forms. The card is painted from the unredacted one —
+    /// a listener cannot use `dispatchAttempts` but a reader needs it, and
+    /// hearing "a variable" four times while reading four column names is the
+    /// whole point of the split.
     func showAnnouncement(
-        topic: String, spoken: String, sessionId: String, pid: Int?, project: String,
+        topic: String, spoken: SanitizedSpokenText, sessionId: String, pid: Int?, project: String,
         cwd: String?, eventId: String? = nil,
         placard: String? = nil
     ) -> Bool {
@@ -164,6 +172,7 @@ final class StatusHUD: NSObject {
         guard transition(to: .speaking(eventId: eventId), because: "audio starting")
         else { return false }
         currentEventId = eventId
+        currentSpoken = spoken
         currentTarget = (sessionId, pid, project)
         // Into the fresh Face, never before it: the wholesale rebuild is what
         // clears a previous pull's placard on ordinary announcements. The topic
@@ -171,7 +180,7 @@ final class StatusHUD: NSObject {
         // the regular face) and is dropped when it adds nothing — a topic equal
         // to the project rendered as "promotions — promotions".
         let extra = topic.caseInsensitiveCompare(project) == .orderedSame ? "" : topic
-        face = Face(title: project, topic: extra, body: spoken,
+        face = Face(title: project, topic: extra, body: spoken.displayText,
                     placardOverride: placard ?? "")
         render()
         return true
@@ -1348,7 +1357,8 @@ final class StatusHUD: NSObject {
             ]) }),
             ("preparing", { _ = self.showPreparing() }),
             ("announcement", { self.showAnnouncement(
-                topic: "Product image binding fix validation", spoken: long,
+                topic: "Product image binding fix validation",
+                spoken: SpokenTextSanitizer().sanitize(long),
                 sessionId: "s", pid: 1, project: "promotions", cwd: "/tmp/promotions") }),
             ("listening", {
                 var t = 0.0
@@ -1406,7 +1416,7 @@ final class StatusHUD: NSObject {
                 .init(id: "b", name: "tranquility base", callsign: "", lamp: .running),
             ]) }),
             ("speaking", { self.showAnnouncement(
-                topic: "Hero image binding fix", spoken: long,
+                topic: "Hero image binding fix", spoken: SpokenTextSanitizer().sanitize(long),
                 sessionId: "s", pid: 1, project: "promotions", cwd: "/tmp/promotions") }),
             ("hidden", { self.hide() }),
         ]
@@ -1518,10 +1528,11 @@ final class StatusHUD: NSObject {
                       spoken text: String, highlightFraction: Double,
                       placard: String? = nil,
                       cwd: String = NSHomeDirectory() + "/Projects/kopi/promotions") {
-            showAnnouncement(topic: topic, spoken: text,
+            let sanitized = SpokenTextSanitizer().sanitize(text)
+            showAnnouncement(topic: topic, spoken: sanitized,
                              sessionId: "pose", pid: 1, project: project, cwd: cwd,
                              placard: placard)
-            highlight(upTo: Int(Double(text.count) * highlightFraction))
+            highlight(upTo: Int(Double(sanitized.text.count) * highlightFraction))
         }
         // A mid-level frozen waveform: speech-shaped, never pinned at full.
         func seedMeter() {
@@ -1970,8 +1981,14 @@ final class StatusHUD: NSObject {
             Permissions.log("highlight upTo=\(index) SKIPPED: no body text")
             return
         }
-        Permissions.log("highlight upTo=\(index) of \(body.count) thread=\(Thread.isMainThread)")
-        let clamped = max(0, min(index, body.count))
+        // The voice counts in the text it is saying; the card is showing the
+        // unredacted text. Where they differ the translation is exact inside
+        // ordinary prose and atomic across a name — the whole of
+        // `dispatchAttempts` lights the moment "a variable" starts.
+        let cursor = currentSpoken?.displayIndex(forSpoken: index) ?? index
+        Permissions.log("highlight upTo=\(index)→\(cursor) of \(body.count) "
+                        + "thread=\(Thread.isMainThread)")
+        let clamped = max(0, min(cursor, body.count))
         let attributed = NSMutableAttributedString(string: body)
         let full = NSRange(location: 0, length: (body as NSString).length)
         attributed.addAttribute(
