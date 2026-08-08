@@ -186,10 +186,16 @@ events" could not be confused with "nobody typed":
 |---|---|---|---|
 | no permissions | false | false | 0 |
 | **Accessibility only** | **false** | **false** | **0** |
+| + Input Monitoring | true | true | 17, then 5 |
 
 Accessibility alone leaves the tap created but DISABLED and silent — the exact
 silent-denial failure that made the app look broken in the first place, and the
 one a new user would have hit on day one.
+
+The third row is the positive control, and it is the row that makes the second
+one mean anything: until the probe was seen SUCCEEDING, "zero events" could
+equally have been a defect in the probe. Nothing changed between rows two and
+three except the one switch.
 
 **Both are required.** Input Monitoring carries the gestures; Accessibility
 carries dictation-at-cursor. Neither may be dropped again without repeating that
