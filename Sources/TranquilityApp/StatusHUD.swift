@@ -1479,7 +1479,16 @@ final class StatusHUD: NSObject {
             // announcement to have taken the stage — and an unconditional
             // restore here would yank it off, which is the same bug
             // `returnToGridWork` guards against in main.swift.
+            //
+            // Through endCapture, not a bare repaint: pendingSend does not admit
+            // idle (PanelState.admits), by design, so that a stale repaint can
+            // never paint "Ready" over a live undo window. A drill standing its
+            // own fixture down is not stale, which is exactly what the user door
+            // is for — and it is also what cancels the countdown and drops the
+            // send/cancel closures. A bare showIdle here logs a second REFUSED
+            // and changes nothing; measured 08 Aug before this line existed.
             guard let self, case .pendingSend = self.state else { return }
+            self.endCapture(because: "selftest pendingSend cleanup")
             self.showIdle(rows: [])
         }
     }
