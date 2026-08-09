@@ -166,6 +166,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Consulted only for unprompted surfacing. A keypress is never gated: you
     /// cannot interrupt someone who has just asked for something.
     private let gate = InterruptGate(minimumIdleSeconds: 0)
+    /// What the gate decided, and what the room sounded like when it decided it.
+    /// Not a log-only rollout — the check is live — but the record is where a
+    /// surprising hold gets explained after the fact, which is the whole reason
+    /// the thresholds can be provisional.
+    private let gateLog = GateObservationLog()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -1852,6 +1857,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Held, not dropped. The count is still right the moment the panel is
             // next shown, and nothing was lost by staying quiet.
             Permissions.log("ambient: held (\(decision.reason))")
+            gateLog.record(decision, context: "arrival")
+            // A hail held because the device is busy looks exactly like an agent
+            // that never came back, so this one refusal explains itself. Every
+            // other veto stays in the log: a locked screen needs no note, and
+            // nobody is reading the panel anyway. `flashNotice` paints only in
+            // `.idle`, so a dismissed panel is not raised by this — which is the
+            // ruling, and is structural rather than remembered.
+            if decision.heldForCourtesy { hud.flashNotice(StateLegend.heldMicBusyNotice) }
             return
         }
         let target = try? coordinator?.nextToAnnounce()
@@ -1868,7 +1881,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.showIdle(rows: rows)
         // A2 — the hail: a quiet chime and the callsign, nothing else. The summary
         // plays only when you say "go ahead" (⌃⌥).
-        if let target { speakHail(for: target) }
+        //
+        // The panel goes up NOW and the voice waits for the courtesy check. That
+        // ordering is the point: showing up is silent and can never interrupt
+        // anybody, so it should never be delayed by a check about interrupting.
+        if let target { Task { await courteouslyHail(target) } }
+    }
+
+    /// Listen for a moment, then hail — or hold, and say why.
+    ///
+    /// The expensive half of the ladder in docs/courtesy-check-evidence-plan.md.
+    /// Everything cheap has already run inside `gate.evaluate()` above; this is
+    /// the only step that opens the microphone, and it is reached only when every
+    /// free veto has passed.
+    private func courteouslyHail(_ target: WaitingSession) async {
+        let samples = await recorder.sampleRoom(seconds: CourtesyCheck.listenSeconds)
+
+        guard let samples else {
+            // Could not look — capture took the device, or the mic would not
+            // open. Nil degrades to speaking rather than to silence, EXCEPT that
+            // the re-check below still has to pass, which is what stops a hail
+            // firing into a capture that just cancelled this sample.
+            Permissions.log("courtesy: no sample taken")
+            if stillSafeToHail() { speakHail(for: target) }
+            return
+        }
+
+        let assessment = await CourtesyCheck().assess(samples: samples, sampleRate: 16000)
+        Permissions.log("courtesy: \(assessment.reason)")
+
+        if assessment.speechDetected {
+            hud.flashNotice(StateLegend.heldSpeechNotice)
+            return
+        }
+        guard stillSafeToHail() else { return }
+        speakHail(for: target)
+    }
+
+    /// Step 6 of the ladder: ask the cheap questions AGAIN.
+    ///
+    /// Seconds passed while the microphone was open, and the room is allowed to
+    /// change its mind inside them — the screen locks, a call starts, the user
+    /// reaches for the reply key. A gate that only evaluates the "before" is a
+    /// gate that speaks into a room that has already moved on.
+    private func stillSafeToHail() -> Bool {
+        guard hud.canSurfaceAmbiently else {
+            Permissions.log("courtesy: held on re-check (panel owns the stage)")
+            return false
+        }
+        let again = gate.evaluate()
+        guard again.allowed else {
+            Permissions.log("courtesy: held on re-check (\(again.reason))")
+            gateLog.record(again, context: "arrival-recheck")
+            if again.heldForCourtesy { hud.flashNotice(StateLegend.heldMicBusyNotice) }
+            return false
+        }
+        return true
     }
 
     /// A2 — the hail. A turn arrived and the panel surfaced for it; say WHO and

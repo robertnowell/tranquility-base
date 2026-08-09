@@ -1852,6 +1852,27 @@ final class StatusHUD: NSObject {
         showIdle(rows: [])
         let stayedGone = !noticeIsShowing
 
+        // The courtesy holds (ruled 08 Aug). A hail the app decided not to speak
+        // is indistinguishable from an agent that never came back, so it says so
+        // in the strip — and the drill that matters is the SECOND one: a held
+        // hail must never raise a panel the user put away. That is ruling 1
+        // ("an arrival changes nothing about the panel's shape") reached through
+        // the back door, and it is the likeliest regression in the feature.
+        showIdle(rows: [])
+        flashNotice(StateLegend.heldSpeechNotice)
+        let courtesyOnGrid = noticeIsShowing
+            && stateLabel.attributedStringValue.string == StateLegend.heldSpeechNotice
+        hide()
+        flashNotice(StateLegend.heldMicBusyNotice)
+        let holdRefusedWhileHidden = !noticeIsShowing && !isOnScreen
+        showIdle(rows: [])
+        let didNotSummonThePanel = !noticeIsShowing
+        SelfTest.report("courtesy", [
+            ("holdShownOnGrid", courtesyOnGrid),
+            ("refusedWhileHidden", holdRefusedWhileHidden),
+            ("didNotSummonThePanel", didNotSummonThePanel),
+        ])
+
         // The device fault: the ONE failure card with a door out. Ordinary
         // failures must not grow one.
         showDeviceFault("Nothing arrived from the input device.")
@@ -2120,6 +2141,14 @@ final class StatusHUD: NSObject {
             // out from under the photograph.
             _ = pose("grid")
             flashNotice(StateLegend.noWordsNotice)
+            noticeExpiry?.cancel()
+            noticeExpiry = nil
+            return true
+
+        case "courtesy":
+            // The hold, on the grid it interrupted nothing to reach.
+            _ = pose("grid")
+            flashNotice(StateLegend.heldSpeechNotice)
             noticeExpiry?.cancel()
             noticeExpiry = nil
             return true
