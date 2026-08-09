@@ -737,6 +737,15 @@ final class StatusHUD: NSObject {
     /// survive into this one — the residue class of bug (a countdown bar on the
     /// Speaking card, meter dots on Ready) is unrepresentable, because a widget
     /// no arm mentions is at its baseline, not left over.
+    ///
+    /// **The contract that keeps that true, for anyone adding an arm: a widget
+    /// PROPERTY that any arm mutates must be written in the baseline too, not
+    /// only the widget's content.** It has been learned twice — the grid's
+    /// monospaced key line, then the empty room's 17pt centred body — and both
+    /// times the symptom was the same, a later face inheriting type it never
+    /// asked for. Setting `.stringValue` and leaving `.font`, `.alignment` or
+    /// `.textColor` behind is the residue class this funnel exists to close;
+    /// the baseline is not "content", it is every attribute anyone touches.
     private func render() {
         // The leaving state's machinery dies here, in one place: the
         // transcription ticker, and (outside a live capture) the meter.
