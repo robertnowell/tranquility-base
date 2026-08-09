@@ -59,9 +59,15 @@ switched off. Silence at launch is what makes starting at login acceptable.
 3. **Silence as the resting posture, not the exception.** Any new surface that
    wants a voice argues for it against this ruling rather than inheriting it.
 
-## Direction, not a task
+## Direction — SUPERSEDED the same evening
 
-Recorded so a parallel session does not build against it. Neither is scheduled.
+> **Both items below were scheduled hours after this was written.** See
+> **docs/ruling-the-collapsed-strip.md**, which carries the geometry, the
+> stickiness requirement, and four open questions. CLAUDE.md rule 4: the later
+> ruling wins, and this section is kept only so a session that arrives here first
+> is sent there rather than concluding the work is unscheduled.
+
+Recorded originally as not-scheduled:
 
 - **The grid becomes contextual.** Today `showIdle(note:rows:)` draws one row per
   live session, capped at 8 (docs/ws-b-grid.md). The intent is that what the idle
