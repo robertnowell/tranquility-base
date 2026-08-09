@@ -749,8 +749,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let waiting = (try? coordinator.waiting()) ?? []
         // One probe serves every row; the name shown is Claude's own (re-ruled
         // 05 Aug — the terminal tab's string, verbatim), callsign as fallback.
-        let liveById = Dictionary(
-            uniqueKeysWithValues: (ClaudeAgentsCLI().sessions() ?? []).map { ($0.sessionId, $0) })
+        //
+        // `uniquingKeysWith:` rather than `uniqueKeysWithValues:`, because the latter
+        // TRAPS on a duplicate key and `agents --json` genuinely returns them:
+        // `claude --resume <id>` leaves the original process running and adds a second
+        // live entry carrying the SAME sessionId. That killed the app twice —
+        // 06 Aug 14:35 and 07 Aug 17:39 — the second crash landing eighteen seconds
+        // after a resume started. EXC_BREAKPOINT in a refresh timer, so it fires as
+        // soon as the duplicate appears and there is no recovery path.
+        //
+        // First-seen wins, matching the `first(where:)` lookups used on every other
+        // path (Coordinator.dispatch among them), so one rule governs everywhere
+        // rather than this view resolving collisions differently from dispatch.
+        // WHICH duplicate is the right target is a separate, open question — both
+        // processes are alive and both answer to the id — so the collision is logged
+        // rather than silently settled.
+        var liveById: [String: LiveSession] = [:]
+        for session in ClaudeAgentsCLI().sessions() ?? [] {
+            if let existing = liveById[session.sessionId] {
+                Permissions.log("agents: duplicate sessionId \(session.sessionId.prefix(8)) "
+                    + "— pids \(existing.pid) and \(session.pid); keeping \(existing.pid)")
+                continue
+            }
+            liveById[session.sessionId] = session
+        }
         // The topic is the stored brief's composed 3–6-word label, carried by
         // the waiting query's brief join — NEVER a prose prefix of summaryText
         // or the raw assistant message (ruled: that derivation produced orphan
