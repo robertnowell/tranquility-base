@@ -78,12 +78,26 @@ echo "→ testing"
 # "tests failed" on a green tree — a check that cries wolf gets deleted, so it
 # is worth the extra variable.
 #
+# That was fixed HALF WAY the first time: the run was captured into a variable,
+# and then the variable was piped into `grep -q` anyway, which is the same race
+# one line further down. It reappeared on 09 Aug the moment the suite grew — the
+# first "with 0 failures" sits near the top of 68KB of output, so grep matched
+# and exited while printf still had most of it to write, and preflight reported
+# "tests failed (exit 0)" on a tree where all 277 passed. Under `bash -x` it
+# passed, which is the signature of a race and cost a while to see.
+#
+# So: no pipe at all. Bash can test a substring without spawning anything, and
+# a check with no subprocess has no pipeline to fail.
+#
 # The exit STATUS is the verdict; the summary line is a corroborating check that
 # the run actually happened rather than dying before it reached the tests.
 TEST_OUT=$(swift test 2>&1) && TEST_STATUS=0 || TEST_STATUS=$?
-if [ "$TEST_STATUS" -ne 0 ] || ! printf '%s\n' "$TEST_OUT" | grep -qE "with 0 failures"; then
+if [ "$TEST_STATUS" -ne 0 ] || [[ "$TEST_OUT" != *"with 0 failures"* ]]; then
   echo "✗ tests failed (exit $TEST_STATUS)" >&2
-  printf '%s\n' "$TEST_OUT" | grep -E "error:|failed|XCTAssert" | head -20 >&2
+  # `head` closing early is the same SIGPIPE trap; this one is on the way out
+  # through `exit 1`, but an unguarded pipeline under `set -e` would skip the
+  # diagnosis it exists to print.
+  printf '%s\n' "$TEST_OUT" | grep -E "error:|failed|XCTAssert" | head -20 >&2 || true
   exit 1
 fi
 printf '%s\n' "$TEST_OUT" | grep -E "Executed [0-9]+ tests" | tail -1 | sed 's/^[[:space:]]*/  /'
