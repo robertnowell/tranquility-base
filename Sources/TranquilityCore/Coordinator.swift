@@ -78,6 +78,14 @@ public struct Coordinator: Sendable {
         func put(_ summary: Summary, for id: String, latest: Int64) {
             bySession[id] = (latest, summary)
         }
+        /// Read WITHOUT consuming — for warming the audio of something already
+        /// prepared. `take` is the announcement path and must stay destructive;
+        /// this one must not be, or a prefetch would eat the summary it is
+        /// trying to make faster.
+        func peek(_ id: String, latest: Int64) -> Summary? {
+            guard let entry = bySession[id], entry.latestId == latest else { return nil }
+            return entry.summary
+        }
         /// Removing on read keeps a summary from being spoken twice.
         func take(_ id: String, latest: Int64) -> Summary? {
             guard let entry = bySession.removeValue(forKey: id),
@@ -92,7 +100,17 @@ public struct Coordinator: Sendable {
     /// anything already prepared is skipped.
     public func prepareNext() async throws {
         guard let session = try nextToAnnounce() else { return }
-        guard await !prepared.has(session.sessionId, latest: session.latestId) else { return }
+        guard await !prepared.has(session.sessionId, latest: session.latestId) else {
+            // Text already in hand, but the VOICE may not be: a summary restored
+            // from the store, or prepared before the roster resolved, leaves the
+            // clip unrendered. Cheap to re-assert — `prewarm` returns immediately
+            // on a hit — and it closes the window where the second press of a
+            // backlog paid full price for audio it could have had.
+            if let ready = await prepared.peek(session.sessionId, latest: session.latestId) {
+                await prewarmAnnouncement(ready, for: session)
+            }
+            return
+        }
         // A stored brief for this exact event (written before a restart) is the
         // same summary this call would regenerate — load it instead of paying
         // for a model call twice.
@@ -103,6 +121,21 @@ public struct Coordinator: Sendable {
             summary = await summarize(session)
         }
         await prepared.put(summary, for: session.sessionId, latest: session.latestId)
+        // Text AND audio, both before the press (ruled 08 Aug). Writing the
+        // summary ahead of time already removed the model call from the critical
+        // path; the ElevenLabs round trip was the half still on it, and it is the
+        // half with the ugly tail — measured p50 1s but an 11s maximum, spent
+        // staring at a card of grey text with nothing moving on it.
+        await prewarmAnnouncement(summary, for: session)
+    }
+
+    /// The announcement's own clip, in the session's own voice. Only the main
+    /// summary — the ⌃⌃ ladder is deliberately NOT rendered here: a rung is
+    /// ~1.4x the length of the announcement and three of them is ~4x, spent on a
+    /// pull that 28% of announcements never get. The ladder warms lazily from the
+    /// app layer once you are actually listening.
+    private func prewarmAnnouncement(_ summary: Summary, for session: WaitingSession) async {
+        await speech.prewarm(summary.spoken, voice: voiceId(for: session.sessionId))
     }
 
     /// The newest session waiting on you.

@@ -128,6 +128,69 @@ extension SystemSpeechProvider: AVSpeechSynthesizerDelegate {
     }
 }
 
+// MARK: - Prefetched audio
+
+/// A rendered utterance: the audio, and the per-character start times that drive
+/// the read-along highlight. Split out from `speak` so the network half can run
+/// BEFORE anyone presses anything — see `ClipCache`.
+public struct SpokenClip: Sendable {
+    public let audio: Data
+    /// Nil when the vendor returned no alignment; playback then runs without a
+    /// highlight rather than failing.
+    public let starts: [Double]?
+}
+
+/// Clips rendered ahead of the press, keyed by exactly what produced them.
+///
+/// Keyed by the full text, the voice and the model — not by session, and not by
+/// any path or id. A path-keyed cache shipped stale narration once already
+/// (video pipeline, 06 Aug): the file name matched while the words behind it had
+/// moved on. Content IS the identity, so content is the key, and a summary that
+/// changes by one word simply misses rather than speaking yesterday's sentence.
+///
+/// Bounded because a long session announces indefinitely: eight clips is the
+/// announcement plus a full ladder plus slack, and the oldest is evicted rather
+/// than letting a day of audio accumulate in memory.
+actor ClipCache {
+    private var entries: [(key: String, clip: SpokenClip)] = []
+    /// Renders already running, so two presses in the same second cannot pay for
+    /// the same clip twice — the second awaits the first instead of duplicating it.
+    private var inFlight: [String: Task<SpokenClip, Error>] = [:]
+    private let limit: Int
+
+    init(limit: Int = 8) { self.limit = limit }
+
+    static func key(text: String, voice: String?, model: String) -> String {
+        "\(voice ?? "default")|\(model)|\(text)"
+    }
+
+    func cached(_ key: String) -> SpokenClip? {
+        entries.first(where: { $0.key == key })?.clip
+    }
+
+    func store(_ clip: SpokenClip, for key: String) {
+        entries.removeAll { $0.key == key }
+        entries.append((key, clip))
+        if entries.count > limit { entries.removeFirst(entries.count - limit) }
+    }
+
+    /// The clip for `key`, rendering it only if nobody already is. Callers that
+    /// arrive mid-render await the same task, so a prefetch that is still in
+    /// flight when the user presses is waited on rather than raced.
+    func clip(for key: String, render: @escaping @Sendable () async throws -> SpokenClip) async throws -> SpokenClip {
+        if let hit = cached(key) { return hit }
+        if let running = inFlight[key] { return try await running.value }
+        let task = Task { try await render() }
+        inFlight[key] = task
+        defer { inFlight[key] = nil }
+        let clip = try await task.value
+        store(clip, for: key)
+        return clip
+    }
+
+    func hasClip(for key: String) -> Bool { cached(key) != nil }
+}
+
 // MARK: - ElevenLabs (optional)
 
 /// Nicer voice at the cost of a network round trip. Kept behind the same protocol so
@@ -144,7 +207,19 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
     public var model: String
     /// Voice UX cares about sub-second starts, so this is far tighter than a normal
     /// network timeout — past this we are better off speaking in a plainer voice.
+    /// NOTE: this is URLSession's inactivity timeout and does NOT bound the call;
+    /// `foregroundDeadline` is what actually does. Kept because it still cuts off
+    /// a connection that stalls completely.
     public var timeout: TimeInterval
+    /// Wall-clock budget when somebody is standing there waiting. Past this the
+    /// system voice is strictly better than more silence: four seconds is the
+    /// measured point where a wait stops reading as "loading" and starts reading
+    /// as "broken", and the p90 render is one second, so this costs the good
+    /// voice almost nothing.
+    public var foregroundDeadline: TimeInterval
+    /// Nobody is waiting on a prefetch, so it gets room to finish on a bad link
+    /// rather than burning the request and re-paying for it at press time.
+    public var prefetchDeadline: TimeInterval
 
     private var player: AVAudioPlayer?
 
@@ -164,11 +239,15 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
     public init(
         voiceId: String = VoiceCatalog.selectedVoiceId,
         model: String = "eleven_flash_v2_5",
-        timeout: TimeInterval = 3
+        timeout: TimeInterval = 3,
+        foregroundDeadline: TimeInterval = 4,
+        prefetchDeadline: TimeInterval = 20
     ) {
         self.voiceId = voiceId
         self.model = model
         self.timeout = timeout
+        self.foregroundDeadline = foregroundDeadline
+        self.prefetchDeadline = prefetchDeadline
     }
 
     public var isConfigured: Bool {
@@ -180,15 +259,30 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
     }
     public var isSpeaking: Bool { player?.isPlaying ?? false }
 
-    public func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
+    /// Render an utterance to audio WITHOUT playing it.
+    ///
+    /// Separated from `speak` so the whole network cost can be paid before the
+    /// user asks. Nothing here touches the generation counter or the player: a
+    /// prefetch has no claim on the speakers and must be invisible to whatever
+    /// is currently talking.
+    ///
+    /// `deadline` is the real one. `timeoutInterval` is URLSession's INACTIVITY
+    /// timeout, not a total budget — a connection trickling bytes resets it
+    /// forever, which is exactly how the three-second fallback to the system
+    /// voice became unreachable on the slow links it was written for (measured:
+    /// an eleven-second ladder fetch that never once fell back). A wall-clock
+    /// race is the only thing that bounds it.
+    public func synthesize(
+        _ text: SanitizedSpokenText, voice: String?, deadline: TimeInterval
+    ) async throws -> SpokenClip {
         guard let key = Secrets.read(.elevenLabsAPIKey) else { throw SpeechError.notConfigured }
-        let mine = currentGeneration()
+        let model = self.model
 
         // The /with-timestamps variant returns per-character start times alongside the
         // audio, which is the only way to follow along with a pre-rendered clip.
         var request = URLRequest(
             url: URL(string: "https://api.elevenlabs.io/v1/text-to-speech/"
-                     + "\(voiceOverride ?? VoiceCatalog.selectedVoiceId)/with-timestamps")!)
+                     + "\(voice ?? VoiceCatalog.selectedVoiceId)/with-timestamps")!)
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.setValue(key, forHTTPHeaderField: "xi-api-key")
@@ -198,7 +292,11 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
             "model_id": model,
         ])
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let started = Date()
+        let sending = request
+        let (data, response) = try await Self.withDeadline(deadline) {
+            try await URLSession.shared.data(for: sending)
+        }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             // ElevenLabs explains itself in the body: invalid_api_key, quota
             // exceeded, and detected_unusual_activity are all 401 and all mean
@@ -217,8 +315,53 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         else { throw SpeechError.synthesisFailed("unexpected response shape") }
 
         let starts = (json["alignment"] as? [String: Any])?["character_start_times_seconds"] as? [Double]
-        ElevenLabsSpeechProvider.trace?("alignment starts=\(starts?.count ?? -1) chars=\(text.text.count) onWord=\(onWord != nil)")
+        // Throughput, not just duration: this is the line that tells a slow link
+        // apart from a slow vendor, which nothing in the log could do before.
+        let elapsed = Date().timeIntervalSince(started)
+        ElevenLabsSpeechProvider.trace?(String(
+            format: "synth %.2fs %dkB (%.0f kB/s) starts=%d chars=%d",
+            elapsed, audioData.count / 1024,
+            Double(audioData.count) / 1024 / max(elapsed, 0.001),
+            starts?.count ?? -1, text.text.count))
+        return SpokenClip(audio: audioData, starts: starts)
+    }
 
+    /// Fail the whole attempt at a wall-clock bound, cancelling the request.
+    /// `URLSession.data(for:)` honours task cancellation, so losing the race
+    /// tears the connection down rather than leaving it to land unheard.
+    static func withDeadline<T: Sendable>(
+        _ seconds: TimeInterval, _ work: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await work() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw SpeechError.synthesisFailed(
+                    String(format: "no audio after %.1fs", seconds))
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else {
+                throw SpeechError.synthesisFailed("deadline race produced nothing")
+            }
+            return first
+        }
+    }
+
+    public func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
+        let clip = try await synthesize(
+            text, voice: voiceOverride, deadline: foregroundDeadline)
+        try await play(clip, text: text, onWord: onWord)
+    }
+
+    /// Play an already-rendered clip. This is the half a prefetch skips, and the
+    /// only half that owns the speakers — so the generation check lives here.
+    public func play(
+        _ clip: SpokenClip, text: SanitizedSpokenText,
+        onWord: (@Sendable (Range<Int>) -> Void)?
+    ) async throws {
+        let mine = currentGeneration()
+        let audioData = clip.audio
+        let starts = clip.starts
         guard mine == currentGeneration() else { throw SpeechError.interrupted }
 
         // Keep the last N spoken files on disk (Robert, 06 Aug: the first
@@ -226,6 +369,8 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         // from memory there was nothing to listen to after the fact — no way
         // to tell generated-clipped from playback-clipped). Same 0700 boundary
         // as everything else; pruned, so it can never become model-calls.
+        // Archived at PLAYBACK, not synthesis: the folder is a record of what
+        // was heard, and a prefetched clip nobody listened to is not that.
         SpokenAudioArchive.keep(audioData, label: text.text)
 
         let audio = try AVAudioPlayer(data: audioData)
@@ -323,6 +468,10 @@ public struct SpeechChain: Sendable {
     let generation = Generation()
     public let preferred: (any SpeechProvider)?
     public let fallback: any SpeechProvider
+    /// Shared by every path that speaks, so a clip rendered by `prewarm` is the
+    /// same object `speak` finds. Lives on the chain rather than the provider
+    /// because the chain is what both the announcement and the ⌃⌃ ladder hold.
+    let clips = ClipCache()
 
     public init(
         preferred: (any SpeechProvider)? = ElevenLabsSpeechProvider(),
@@ -330,6 +479,34 @@ public struct SpeechChain: Sendable {
     ) {
         self.preferred = preferred
         self.fallback = fallback
+    }
+
+    /// Render an utterance now so a later `speak` of the SAME text in the SAME
+    /// voice plays instantly. Best-effort by construction: it returns a Bool for
+    /// logging and swallows everything else, because a failed prefetch must cost
+    /// nothing but a re-render at press time.
+    ///
+    /// Silently a no-op unless the preferred provider is ElevenLabs — the system
+    /// voice has no network half to pay in advance.
+    @discardableResult
+    public func prewarm(_ text: SanitizedSpokenText, voice: String? = nil) async -> Bool {
+        guard let eleven = preferred as? ElevenLabsSpeechProvider, eleven.isConfigured else {
+            return false
+        }
+        let key = ClipCache.key(
+            text: text.text, voice: voice ?? VoiceCatalog.selectedVoiceId, model: eleven.model)
+        if await clips.hasClip(for: key) { return true }
+        do {
+            _ = try await clips.clip(for: key) {
+                try await eleven.synthesize(
+                    text, voice: voice, deadline: eleven.prefetchDeadline)
+            }
+            ElevenLabsSpeechProvider.trace?("prewarm: ready (\(text.text.count) chars)")
+            return true
+        } catch {
+            ElevenLabsSpeechProvider.trace?("prewarm: failed \(error)")
+            return false
+        }
     }
 
     public var isSpeaking: Bool {
@@ -399,7 +576,23 @@ public struct SpeechChain: Sendable {
         if let preferred, preferred.isConfigured {
             do {
                 ElevenLabsSpeechProvider.trace?("chain: trying \(preferred.name)")
-                try await preferred.speak(text, onWord: onWord)
+                if let eleven = preferred as? ElevenLabsSpeechProvider {
+                    // Through the cache, so a prefetched clip plays with no
+                    // network at all — and a press that lands DURING a prefetch
+                    // awaits that same render instead of starting a second one.
+                    let key = ClipCache.key(
+                        text: text.text, voice: voice ?? VoiceCatalog.selectedVoiceId,
+                        model: eleven.model)
+                    let warm = await clips.hasClip(for: key)
+                    ElevenLabsSpeechProvider.trace?("chain: clip \(warm ? "HIT" : "miss")")
+                    let clip = try await clips.clip(for: key) {
+                        try await eleven.synthesize(
+                            text, voice: voice, deadline: eleven.foregroundDeadline)
+                    }
+                    try await eleven.play(clip, text: text, onWord: onWord)
+                } else {
+                    try await preferred.speak(text, onWord: onWord)
+                }
                 return Spoken(provider: preferred.name, completed: true, heardAny: true)
             } catch SpeechError.interrupted {
                 // Stopped on purpose, part-way through. It was being spoken, so it
