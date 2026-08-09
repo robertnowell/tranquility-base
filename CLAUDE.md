@@ -37,8 +37,10 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    no unit tests and cannot easily have them — it needs a window server — yet it
    is the most-edited code in the repo and where sessions collide. Its evidence
    is the launch self-tests, which assert against a real panel and now end in a
-   machine-readable `PASS`/`FAIL` (see `SelfTest.report`). New panel behaviour
-   adds a drill; "252 tests green" says nothing about it.
+   machine-readable `PASS`/`FAIL` (see `SelfTest.report`). `relaunch.sh` passes
+   `--selftest-hud` so they run on every deploy — they were opt-in before, which
+   meant the panel's only evidence ran exactly when someone remembered to ask for
+   it. New panel behaviour adds a drill; "252 tests green" says nothing about it.
 8. **Run `scripts/preflight.sh` before landing a branch.** It refuses a dirty or
    behind tree, catches local `main` drifting from origin/main (which happened,
    unnoticed, for a day on 08 Aug), builds, tests, and then deliberately stops

@@ -127,9 +127,17 @@ if pgrep -f TranquilityApp >/dev/null; then
   sleep 1
 fi
 
-echo "→ launching"
+echo "→ launching (with panel self-tests)"
 LAUNCHED_AT=$(date +%s)
-open "$APP_PATH"
+# --selftest-hud, every relaunch. The drills were opt-in, which meant the panel's
+# only evidence ran exactly when someone remembered to ask for it — i.e. never in
+# the loop that ships code. They run synchronously at startup, paint through
+# every state with worst-case text, and clean up onto the idle grid, which is
+# where launch lands anyway. One instance, so no hotkey race.
+#
+# --selftest-arm is deliberately NOT included: it needs the microphone and drives
+# the real recorder and store. Opt in by hand when changing the arm path.
+open "$APP_PATH" --args --selftest-hud
 sleep 4
 
 if pgrep -f TranquilityApp >/dev/null; then
