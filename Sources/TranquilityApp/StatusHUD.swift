@@ -1458,12 +1458,15 @@ final class StatusHUD: NSObject {
                         seconds: 4, send: { sent = true }, cancel: { _ in cancelled = true })
 
         let cancellable = cancelPendingSend(restartListening: false)
-        Permissions.log("selftest pendingSend: cancellable=\(cancellable) "
-                        + "cancelled=\(cancelled) sent=\(sent)")
+        // `notSent`, not `sent`: the whole point of the drill is that nothing was
+        // sent, so the expectation is written here where it is known.
+        SelfTest.report("pendingSend", [
+            ("cancellable", cancellable), ("cancelled", cancelled), ("notSent", !sent),
+        ])
 
         // And it must stay stopped: the timer should be dead, not merely ignored.
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            Permissions.log("selftest pendingSend: after the window, sent=\(sent)")
+            SelfTest.report("pendingSend.afterWindow", [("stillNotSent", !sent)])
         }
     }
 
@@ -1565,8 +1568,7 @@ final class StatusHUD: NSObject {
             let restored = label == "hidden"
                 ? state.name == "hidden" && !isOnScreen
                 : before == after
-            Permissions.log("selftest arm[\(label)]: armed=\(armed) "
-                            + "restored=\(restored)")
+            SelfTest.report("arm[\(label)]", [("armed", armed), ("restored", restored)])
             Permissions.log("selftest arm[\(label)] before:  \(before)")
             Permissions.log("selftest arm[\(label)] arming:  \(armingMatrix)")
             Permissions.log("selftest arm[\(label)] after:   \(after)")
@@ -1574,8 +1576,10 @@ final class StatusHUD: NSObject {
         // And the upgrade path: arming admits exactly one successor, listening.
         showArming(target: "promotions copy")
         showListening(level: { 0.3 })
-        Permissions.log("selftest arm[upgrade]: state=\(state.name) "
-                        + "(want listening) meterShown=\(!meter.isHidden)")
+        SelfTest.report("arm[upgrade]", [
+            ("becameListening", state.name == "listening"),
+            ("meterShown", !meter.isHidden),
+        ])
         recordingEnded()
         endCapture(because: "selftest arm cleanup")
 
@@ -1603,10 +1607,17 @@ final class StatusHUD: NSObject {
         hide()
         showReceipt(.sent)
         let refusedWhileHidden = !receiptIsShowing
-        Permissions.log("selftest receipt: shown=\(shownWhileVisible) "
-                        + "clearedByDismiss=\(clearedByDismiss) "
-                        + "refusedWhileHidden=\(refusedWhileHidden) "
-                        + "layoutUndisturbed=\(matrixBefore != matrixUnderReceipt ? "n/a (state changed)" : "yes")")
+        // layoutUndisturbed is deliberately NOT a check: showResult changed the
+        // state in between, so the matrices are expected to differ and comparing
+        // them asserts nothing. Logged as context, never as a verdict — a gate
+        // that fails on an unobservable is a gate that gets disabled.
+        SelfTest.report("receipt", [
+            ("shown", shownWhileVisible),
+            ("clearedByDismiss", clearedByDismiss),
+            ("refusedWhileHidden", refusedWhileHidden),
+        ])
+        Permissions.log("selftest receipt context: layoutComparable="
+                        + "\(matrixBefore == matrixUnderReceipt)")
 
         // The stomp that froze the app (2026-08-05): a stale idle repaint against a
         // live capture. Must be REFUSED, and the pill must still be on the walls.
@@ -1614,8 +1625,7 @@ final class StatusHUD: NSObject {
         showIdle(rows: [.init(id: "a", name: "promotions copy", callsign: "", lamp: .ready),
                         .init(id: "b", name: "syndit", callsign: "", lamp: .ready)])
         let survived = state.isCapturingAudio && !meter.isHidden
-        Permissions.log("selftest legality: idle-over-listening refused=\(survived) "
-                        + "state=\(state.name)")
+        SelfTest.report("legality", [("idleOverListeningRefused", survived)])
         recordingEnded()
         // Through the user door, exactly as a real abort must go — showIdle alone
         // is (correctly) refused from a capture state.
@@ -1632,8 +1642,11 @@ final class StatusHUD: NSObject {
         let clearedByCard = !noticeIsShowing
         flashNotice(StateLegend.noWordsNotice)
         let refusedOnCard = !noticeIsShowing
-        Permissions.log("selftest notice: onGrid=\(noticedOnGrid) "
-                        + "clearedByCard=\(clearedByCard) refusedOnCard=\(refusedOnCard)")
+        SelfTest.report("notice", [
+            ("onGrid", noticedOnGrid),
+            ("clearedByCard", clearedByCard),
+            ("refusedOnCard", refusedOnCard),
+        ])
         // And the leak the two transition doors close: a notice must not survive
         // a hide and come back up with the panel. `.hidden` returns out of
         // render() before its body runs, so nothing down there can retire it.
@@ -1650,9 +1663,12 @@ final class StatusHUD: NSObject {
         let faultOffersDoor = !micSettingsButton.isHidden && titleLabel.isHidden
         showResult("An ordinary failure, which has nowhere to send you.")
         let plainFailureHasNoDoor = micSettingsButton.isHidden
-        Permissions.log("selftest notice: clearedByHide=\(clearedByHide) "
-                        + "stayedGone=\(stayedGone) faultOffersDoor=\(faultOffersDoor) "
-                        + "plainFailureHasNoDoor=\(plainFailureHasNoDoor)")
+        SelfTest.report("notice.leak", [
+            ("clearedByHide", clearedByHide),
+            ("stayedGone", stayedGone),
+            ("faultOffersDoor", faultOffersDoor),
+            ("plainFailureHasNoDoor", plainFailureHasNoDoor),
+        ])
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
     }
