@@ -117,3 +117,12 @@ is identical to the 1473f39 baseline.
   exercised it live (and hit the trust prompt that produced the first-run
   ruling); re-spawning throwaway interactive sessions from this pass would
   have left artifacts.
+
+## Where this is going (08 Aug 2026)
+
+The fixed row-per-session list is not the final resting face. Ruled but not
+scheduled: the grid becomes **contextual** — what it shows determined by state
+rather than always being the list — and the lamps **compress to the side** into a
+denser resting face. Neither is built, and the ruling says explicitly "we don't
+need to do yet". Recorded in docs/ruling-the-app-is-silent-and-the-panel-speaks.md
+so a session extending the grid knows which direction it is extending toward.
