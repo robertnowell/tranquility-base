@@ -70,4 +70,47 @@ if [ "$PASSED" -eq 0 ]; then
   exit 0
 fi
 
-echo "✓ $PASSED self-test verdict(s) passed"
+# ---------------------------------------------------------------------------
+# The drills passed. Is the app still usable?
+#
+# These two checks exist because the answer was NO, twice, under a green tick
+# (08 Aug). selfTestPendingSend left its card on the stage; pendingSend refuses
+# every transition asked of it; and so the app took keystrokes and answered none
+# of them while this script printed "✓ 10 self-test verdict(s) passed". The
+# drills were all telling the truth. Nobody was asking the other question.
+#
+# Every drill asserts its own facts. Neither of these does: they ask only whether
+# the panel came out of the drills able to accept input, which is the property a
+# user has and no verdict line covers. Any FUTURE drill that leaves the panel
+# hostage fails the deploy here, without anyone remembering to add a check.
+
+# 1. Refusals AFTER the last verdict. During the drills refusals are expected —
+#    several of them assert that the legality table refuses things. After the
+#    last verdict there is no drill left to be refusing anything, so a refusal
+#    there means something is still holding the stage.
+LAST_VERDICT_LINE=$(printf '%s\n' "$RECENT" | grep -nE "selftest .*: (PASS|FAIL|SKIP)" | tail -1 | cut -d: -f1)
+if [ -n "$LAST_VERDICT_LINE" ]; then
+  AFTER=$(printf '%s\n' "$RECENT" | tail -n "+$((LAST_VERDICT_LINE + 1))")
+  STUCK=$(printf '%s\n' "$AFTER" | grep -E "state: REFUSED" || true)
+  if [ -n "$STUCK" ]; then
+    echo "✗ the panel is refusing transitions after the drills finished:" >&2
+    printf '%s\n' "$STUCK" | sed 's/^/    /' >&2
+    echo "  A drill left the stage claimed. The app is up but will not answer input." >&2
+    exit 4
+  fi
+fi
+
+# 2. The state it settled in. The stage-owning states (PanelState.ownsStage)
+#    legally refuse repaints, which is right while a capture is genuinely live
+#    and wrong as a resting state seconds after launch. Anything else is fine —
+#    speaking and preparing are ordinary launch outcomes.
+LAST_STATE=$(printf '%s\n' "$RECENT" | grep -oE "state: [a-zA-Z.]+ -> [a-zA-Z.]+" | tail -1 | awk '{print $4}')
+case "${LAST_STATE:-}" in
+  listening|transcribing|pendingSend|arming)
+    echo "✗ the panel settled in '$LAST_STATE', which owns the stage and refuses input." >&2
+    echo "  Expected idle/hidden/speaking after launch. Something did not clean up." >&2
+    exit 4
+    ;;
+esac
+
+echo "✓ $PASSED self-test verdict(s) passed; panel accepting input (${LAST_STATE:-no transitions})"
