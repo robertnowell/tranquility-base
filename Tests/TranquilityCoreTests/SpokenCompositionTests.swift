@@ -70,7 +70,7 @@ final class SpokenCompositionTests: XCTestCase {
             "ship the promotions poller. the filter may drop real alerts. Proceed?")
     }
 
-    func testDepthOneWordBudgetClampsTheRationaleAtASentenceBoundary() {
+    func testDepthOneSpeaksTheWholeRationale() {
         let long = "We propose running the full migration now because staging "
             + "verified every row count and the legacy table blocks the new queue "
             + "schema from serving reads. We need to be careful because the drop is "
@@ -80,11 +80,13 @@ final class SpokenCompositionTests: XCTestCase {
         let brief = SessionBrief(topic: "export", happened: "done", rationale: long)
         let out = SpokenComposition.depthOneSpokenText(
             for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertTrue(out.text.contains("We propose"), "the why always survives the clamp")
-        XCTAssertFalse(out.text.contains("runbook"),
-                       "over budget, the trailing sentence goes whole — never mid-clause")
-        // Budget bounds the whole utterance now — no prefix rides on top.
-        XCTAssertLessThanOrEqual(out.wordCount, SpokenComposition.depthOneMaxWords)
+        XCTAssertTrue(out.text.contains("We propose"))
+        // The trailing sentence used to be dropped by a 40-word clamp while the
+        // card kept showing it. ⌃⌃ means "tell me more"; answering it with a
+        // tighter budget than the announcement was backwards (ruled 08 Aug).
+        XCTAssertTrue(out.text.contains("runbook"),
+                      "the rationale is spoken in full, however long it runs")
+        XCTAssertEqual(out.displayIndex(forSpoken: out.text.count), out.displayText.count)
     }
 
     func testDepthOneSanitizesIdentifiersAndPaths() {
@@ -165,15 +167,18 @@ final class SpokenCompositionTests: XCTestCase {
         XCTAssertEqual(rungs[0].spoken.text, "No further rationale recorded.")
     }
 
-    func testLadderRungsAreClampedAndSanitized() {
+    func testLadderRungsAreSanitizedAndSpokenInFull() {
         let brief = SessionBrief(
             topic: "export", happened: "done",
             findings: "The probe found that buildLockedLayoutAssets regressed. "
                 + String(repeating: "A further sentence of trailing detail follows here. ", count: 8))
         let rungs = SpokenComposition.ladderRungs(
             for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertFalse(rungs[0].spoken.text.contains("buildLockedLayoutAssets"))
-        XCTAssertLessThanOrEqual(rungs[0].spoken.wordCount, SpokenComposition.depthOneMaxWords)
+        XCTAssertFalse(rungs[0].spoken.text.contains("buildLockedLayoutAssets"),
+                       "identifiers are still genericised for the ear")
+        XCTAssertEqual(rungs[0].spoken.displayIndex(forSpoken: rungs[0].spoken.text.count),
+                       rungs[0].spoken.displayText.count,
+                       "a rung speaks all of what its card shows")
     }
 
 }
