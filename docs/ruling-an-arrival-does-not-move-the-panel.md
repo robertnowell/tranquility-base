@@ -110,42 +110,137 @@ Reasons this is the right instrument:
   Signals struct exists precisely because live-state reads once made fifteen
   tests depend on what was in front on the developer's screen.
 
-### Ambient noise level — recommended against, and not ruled
+## Ruling 3 — the courtesy check: listen for a moment before speaking
 
-The ruling asks for it and then removes its only purpose. Its job was to
-separate "loud room, safe to speak" from "conversation, stay quiet"; the ruling
-then decides the loud-room case does not need the exception. What is left does
-not justify the cost:
+Ruled 08 Aug, later the same evening, **overriding this session's earlier
+recommendation against ambient sensing**. The recommendation argued against a
+permanently open microphone; what is ruled is not that.
 
-- Measuring ambient level means **holding the microphone open continuously**. On
-  macOS that lights the orange recording indicator permanently and puts this app
-  in Control Center's "using your microphone" list all day. An app whose entire
-  pitch is calm and trust cannot be the one that appears to listen constantly —
-  that is the screenshot that ends it.
-- It would be the app's first always-on sensor, in a product whose privacy story
-  is currently "the mic opens when you hold a key."
-- `DeviceIsRunningSomewhere` already covers every case mediated by an app. The
-  only residue is talking to a person in the room with nothing running, which is
-  also the case no cheap signal can see.
+> "You could just open the mic for 5 seconds if it's not in use. Can you check
+> if it's in use? If it's in use, that's a signal. But if the mic is not in use,
+> you can put it in use and just do a noise check. You're not even transcribing
+> anything, you're just checking if people are talking."
+>
+> "It's just to check if you're about to interrupt them. If there's people
+> talking around, you should not speak. It's that simple. It's a courtesy thing.
+> It's just listening before you talk."
+>
+> "From a privacy perspective, we're not trying to spy on you. We just don't want
+> to interrupt you."
+>
+> "As long as we don't have — like, we're unable to turn on the mic for just a
+> quick second to listen before we're about to talk, and that's the only time we
+> do it — that's fine."
 
-*This session's recommendation, not ruled: ship the device-in-use veto, do not
-build ambient sensing.* If the residue turns out to matter, the honest next
-step is a manual mute, not a permanent open microphone.
+**The bound is the ruling.** The microphone opens *only* in the moment before an
+unprompted announcement, for a few seconds, and never otherwise. That is a
+different object from an always-on sensor, and the earlier objection does not
+reach it: an indicator that lights for five seconds immediately before the app
+speaks is not a surveillance story, it is the app visibly doing the thing it
+just told you it does.
 
-### One consequence worth deciding
+### The ladder, in order
 
-Ruling 1 says a dismissed panel stays dismissed; ruling 2 keeps the spoken
-callsign. Together they describe the only configuration where **the voice is the
-sole channel** — no lamp is on screen to fall back to. The "silence wins ties"
-argument leans on the lamp being visible, and when fully dismissed it is not;
-only the menu-bar count is, and nobody is looking at it.
+1. **Is the device in use by anyone?** `kAudioDevicePropertyDeviceIsRunningSomewhere`
+   — instant, no permission, does not open the mic. In use → **hold**. This alone
+   catches every app-mediated case (background Zoom, Meet, Teams, recorders,
+   dictation) and is the reason the check below is rare.
+2. **Otherwise, open the mic for a few seconds and listen.** Speech-like energy →
+   **hold**. Quiet → speak.
 
-So the veto is doing the most work in exactly the state where being wrong costs
-the most. Two defensible readings, and this session is not picking one:
+### Never transcribe — and the privacy question dissolves
 
-- The veto is the same everywhere, and a held hail while dismissed simply waits
-  for the next tick that clears it.
-- Dismissed is a stronger signal than collapsed — the user put the panel away —
-  and deserves a stricter gate, not an equal one.
+The ruling wonders aloud about transcribing a couple of words and then worries
+about it ("maybe you don't want to do that for privacy reasons… obfuscate them
+or something, like '4 words detected'"). The worry is well-placed and the
+mitigation is unnecessary, because **the words are not needed**: knowing whether
+someone is speaking does not require knowing what they said.
 
-Needs Robert.
+So the rule is stronger and simpler than obfuscation. There is no transcript to
+obfuscate, because none is ever produced. No audio is buffered past the check,
+nothing touches the network, and the only thing that outlives it is a boolean and
+a level number in `GateObservationLog`. "We store an obfuscated transcript" is a
+promise a user has to trust; "there is no transcript" is a property they can
+verify.
+
+### The primitive already exists
+
+`Recorder` was built for this shape without knowing it:
+
+- `start(openingStream: false)` opens the mic **with no network session** — its
+  own comment says "no network session for audio that a tap will discard."
+- The tap already computes per-buffer RMS into `peakLevel` / `level`. Ambient
+  level needs no new DSP to begin with.
+- `abandon()` is the discard path: it clears the buffer
+  (`removeAll(keepingCapacity: false)`), removes the tap, and stops the engine
+  **without returning `Data`**. `stop()` returns audio; the courtesy check must
+  never call it. That one substitution is what makes "nothing is kept" a
+  structural property rather than a policy.
+
+### Bias the detector — the errors are not symmetric
+
+A false positive (we think someone is talking, we stay quiet) costs nothing: the
+hail is held, the lamp is still green, the next tick tries again. A false
+negative (we think the room is quiet, we talk over a sentence) is the entire
+failure this ruling exists to prevent.
+
+So the threshold leans toward silence, and a crude detector is adequate — which
+is fortunate, because separating "person talking" from "podcast" from "loud
+fan" reliably is genuinely hard. **Any speech-like energy at all holds the
+hail.** Nobody should build a classifier here.
+
+### Ship it log-only first
+
+`GateObservationLog` exists for exactly this and says so: "the plan calls for
+running log-only for a day before the gate is allowed to suppress anything,
+because thresholds tuned in the abstract are usually wrong." An ambient-level
+threshold is the most abstract-tuned number anyone will pick in this codebase.
+Run the check, log what it would have decided, suppress nothing, then choose the
+number from a day of real rooms.
+
+### Open, and small
+
+- **The hail is delayed by the length of the check.** Probably fine — it is an
+  ambient announcement, not a response to a keypress — but it is a real latency
+  change and should be a named constant, not a literal.
+- **The indicator lights unprompted.** For a few seconds, with no user action
+  preceding it. Honest, and still the one moment a user might ask why. Worth
+  deciding whether the panel says anything while it happens (this session's read:
+  no — a "checking if you're busy" placard is more interruption than the hail).
+- **A capture that starts mid-check wins.** If the user holds ⌥ while a courtesy
+  check is running, the check aborts immediately and the capture takes the
+  device. The check must never be able to make the app feel like the mic is
+  stuck.
+
+### Why not "let the collapsed strip appear, at least"
+
+Considered and declined on 08 Aug, by the ruling's own reasoning, which is worth
+preserving because it is the tempting mistake:
+
+> "I could be tempted into the argument that the collapsed panel at least should
+> appear when an agent comes back. But now we violated two things — if it's
+> minimized and a collapsed panel appears, I have to bring it back to full width.
+> Whereas if I just hit ⌃⌥, it brings the grid back exactly where I want it."
+
+The defect is that **an auto-appearing panel has to pick a width, and any width
+it picks is a guess against a stored answer.** If it appears collapsed, a user
+whose stored state was expanded now has to expand it — the app has both un-hidden
+something they hid and overwritten a preference they set. `⌃⌥` has neither
+problem: it restores the stored width, because the user asked.
+
+This is the same principle as the collapsed strip's stickiness rule, and the
+reason ruling 1 is not a matter of taste: any behaviour where an arrival sets the
+panel's shape is a behaviour where the app overrules a preference it was given.
+
+### The residual soft spot
+
+Rulings 1 and 3 together describe the one configuration where **the voice is the
+sole channel** — fully dismissed, no lamp on screen, only the menu-bar count that
+nobody is looking at. The "silence wins ties" argument leans on the visual
+fallback existing, and there it does not.
+
+So the veto does the most work in exactly the state where being wrong costs the
+most, which is an argument for the courtesy check being *stricter* when
+dismissed than when a strip is visible — not an argument against ruling 1.
+Recorded, not ruled; and cheap to revisit once the log-only pass has real
+numbers, which is the right order anyway.
