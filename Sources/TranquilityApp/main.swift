@@ -877,9 +877,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .replyBegan:
             break  // already lit by the arm that preceded it
         case .next, .dismiss, .optionTapped, .pauseToggled, .controlDoubleTapped:
-            hud.flashAcknowledge()
+            hud.acknowledge(.recognized)
+        case .controlRegistered:
+            // Blue: received, not acted on. The second ⌃ of a ⌃⌃ arrives while
+            // this light is still up and recolours it green, so the pair reads
+            // as one light resolving rather than two flashes.
+            hud.acknowledge(.registered)
         }
         switch transition {
+        case .controlRegistered:
+            // Acknowledged above and nothing else. A first ⌃ is not an
+            // instruction — the whole point of the case is that the light can
+            // report a press the app is not going to act on.
+            break
         case .next:
             // Open issue #6, wired at last: ⌃⌥ while the microphone is open would
             // start an announcement into a live mic — it would record itself.
@@ -1504,7 +1514,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let session = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "session" })?.value
             Permissions.log("deeplink: \(action) session=\(session?.prefix(8) ?? "-")")
-            hud.flashAcknowledge()
+            // A deeplink is an instruction that arrived and is being carried
+            // out, so it reads as recognized — the same green a gesture gets.
+            hud.acknowledge(.recognized)
 
             switch action {
             case "hear":

@@ -235,7 +235,7 @@ non-blocking acknowledgment at the top — "sending to ⟨callsign⟩ → sent �
 dedicated card, not a stage owner; errors keep their cards. Supersedes the earlier
 "kill the Sent face" ruling in its spirit: that killed a *blocking* card, this is
 a whisper. Design goes through the render funnel as a transient overlay (like
-`flashAcknowledge`), never a `PanelState`.
+`acknowledge(_:)`), never a `PanelState`.
 
 ---
 
