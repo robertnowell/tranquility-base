@@ -112,7 +112,17 @@ public final class LiveAudioCapture: @unchecked Sendable {
         try handle.seek(toOffset: 40)
         try handle.write(contentsOf: le32(frameBytes))
         try handle.seekToEnd()
-        try handle.synchronize()
+        // Deliberately NO fsync. The failure this type exists for is the
+        // PROCESS going away — a relaunch, a crash, a kill. A plain write(2)
+        // has already handed the bytes to the kernel by then, so the page
+        // cache survives all three; fsync only adds cover for a kernel panic
+        // or power loss, which is not what took the 08 Aug recordings.
+        //
+        // The cost it would add is the reason to care: this runs from the
+        // audio tap, once per ~64ms buffer, and an fsync can block for tens of
+        // milliseconds. Paying that on the capture path to insure against a
+        // failure mode we have never seen would trade a real dropout for an
+        // imaginary rescue.
     }
 
     /// Promote the live file to a finished recording, atomically.
