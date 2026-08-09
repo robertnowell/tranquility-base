@@ -72,11 +72,21 @@ swift build 2>&1 | grep -E "error:|warning: .*never used" || true
 swift build >/dev/null
 
 echo "→ testing"
-if ! swift test 2>&1 | tail -40 | grep -qE "with 0 failures"; then
-  echo "✗ tests failed" >&2
-  swift test 2>&1 | grep -E "error:|failed" | head -20 >&2
+# Captured, never piped. `... | grep -q ...` under `set -o pipefail` reports a
+# FAILED pipeline on success: grep exits the moment it matches, the writer takes
+# SIGPIPE, and pipefail faithfully reports that non-zero. It cost one false
+# "tests failed" on a green tree — a check that cries wolf gets deleted, so it
+# is worth the extra variable.
+#
+# The exit STATUS is the verdict; the summary line is a corroborating check that
+# the run actually happened rather than dying before it reached the tests.
+TEST_OUT=$(swift test 2>&1) && TEST_STATUS=0 || TEST_STATUS=$?
+if [ "$TEST_STATUS" -ne 0 ] || ! printf '%s\n' "$TEST_OUT" | grep -qE "with 0 failures"; then
+  echo "✗ tests failed (exit $TEST_STATUS)" >&2
+  printf '%s\n' "$TEST_OUT" | grep -E "error:|failed|XCTAssert" | head -20 >&2
   exit 1
 fi
+printf '%s\n' "$TEST_OUT" | grep -E "Executed [0-9]+ tests" | tail -1 | sed 's/^[[:space:]]*/  /'
 echo "✓ build clean, tests green"
 
 cat <<EOF
