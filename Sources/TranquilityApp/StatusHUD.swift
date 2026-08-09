@@ -1465,8 +1465,22 @@ final class StatusHUD: NSObject {
         ])
 
         // And it must stay stopped: the timer should be dead, not merely ignored.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
             SelfTest.report("pendingSend.afterWindow", [("stillNotSent", !sent)])
+            // Then stand the drill's card down. It is the only drill whose
+            // assertion outlives the call that starts it, so it is the only one
+            // that cannot clean up before returning — and for as long as its
+            // card holds the stage, `pendingSend` refuses every transition the
+            // launch tail and every ⌃⌥ afterwards ask for. Measured 08 Aug: a
+            // relaunch left the app answering `announce: refused, reply flow on
+            // stage` to every press, with ten drills reporting PASS above it.
+            //
+            // Conditional, because five seconds is long enough for a real
+            // announcement to have taken the stage — and an unconditional
+            // restore here would yank it off, which is the same bug
+            // `returnToGridWork` guards against in main.swift.
+            guard let self, case .pendingSend = self.state else { return }
+            self.showIdle(rows: [])
         }
     }
 
