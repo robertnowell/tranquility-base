@@ -1801,6 +1801,14 @@ final class StatusHUD: NSObject {
             announce(project: callsign, topic: "Hero image binding fix",
                      spoken: spoken, highlightFraction: 0.6)
 
+        // The card up, the audio not here yet — the state the shimmer exists
+        // for, held still so it can actually be looked at. It is otherwise
+        // almost unobservable by design: the clip is normally prefetched, so
+        // playback starts before the 400ms arm and no frame is ever drawn.
+        case "waiting":
+            announce(project: callsign, topic: "Hero image binding fix",
+                     spoken: spoken, highlightFraction: 0)
+
         case "depth1":
             // Exactly the ⌃⌃ path: the same announcement card, the rationale as
             // the spoken text, karaoke highlight and all — with the rung-naming
@@ -2304,32 +2312,53 @@ final class StatusHUD: NSObject {
         host.wantsLayer = true
         guard let hostLayer = host.layer, host.bounds.width > 0 else { return }
 
-        let band = max(host.bounds.width * 0.45, 60)
+        // The FIRST WORD only (Robert, 08 Aug). The first version washed the
+        // whole card, which is a progress bar wearing a costume — it implies the
+        // wait has an extent and that the extent is the text, and neither is
+        // true. One word is the honest claim: reading is about to begin HERE.
+        // It is also where the eye already is.
+        let font = host.font ?? .systemFont(ofSize: 12)
+        let firstWord = String(host.stringValue.prefix { !$0.isWhitespace })
+        guard !firstWord.isEmpty else { return }
+        let wordWidth = min(
+            max((firstWord as NSString).size(withAttributes: [.font: font]).width, 24),
+            host.bounds.width)
+        let lineHeight = ceil(font.boundingRectForFont.height)
+        // NSTextField is not flipped, so the first line sits at the TOP of the
+        // layer's coordinate space, not the origin.
+        let lineY = host.isFlipped ? 0 : max(host.bounds.height - lineHeight, 0)
+
+        let band = max(wordWidth * 0.6, 16)
         let sweep = CAGradientLayer()
-        sweep.frame = CGRect(x: 0, y: 0, width: band, height: host.bounds.height)
+        sweep.frame = CGRect(x: 0, y: lineY, width: band, height: lineHeight)
         sweep.startPoint = CGPoint(x: 0, y: 0.5)
         sweep.endPoint = CGPoint(x: 1, y: 0.5)
         let ink = StateLegend.Palette.ink
+        // 0.08, down from 0.14. Against text already dimmed to 0.35 this is a
+        // suggestion of movement, not a highlight — if you have to decide
+        // whether you saw it, it is at the right strength.
         sweep.colors = [
             ink.withAlphaComponent(0).cgColor,
-            ink.withAlphaComponent(0.14).cgColor,
+            ink.withAlphaComponent(0.08).cgColor,
             ink.withAlphaComponent(0).cgColor,
         ]
         sweep.locations = [0, 0.5, 1]
 
         let travel = CABasicAnimation(keyPath: "position.x")
         travel.fromValue = -band / 2
-        travel.toValue = host.bounds.width + band / 2
-        travel.duration = 1.2
+        travel.toValue = wordWidth + band / 2
+        // 2.6s, up from 1.2. The old pace read as urgent, which is the opposite
+        // of what a wait should say — the panel is meant to be the calm thing in
+        // the room. Slower over a shorter distance reads as breathing.
+        travel.duration = 2.6
         travel.repeatCount = .infinity
-        // Eased at both ends, so it reads as something moving rather than
-        // something scrolling past on a loop.
         travel.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         sweep.add(travel, forKey: "sweep")
 
         hostLayer.addSublayer(sweep)
         shimmerLayer = sweep
-        Permissions.log("shimmer: started (waiting on audio)")
+        Permissions.log("shimmer: started over \"\(firstWord)\" "
+                        + "(w=\(Int(wordWidth)) band=\(Int(band)))")
     }
 
     private func stopBodyShimmer() {
