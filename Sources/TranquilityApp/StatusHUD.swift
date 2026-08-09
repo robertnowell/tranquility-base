@@ -466,6 +466,45 @@ final class StatusHUD: NSObject {
         notice = nil
     }
 
+    /// When the room went empty, and the clock that turns it into a lesson.
+    ///
+    /// A timestamp rather than a one-shot flag because the empty face repaints
+    /// on every ambient tick: a flag would be reset by the tick five seconds in,
+    /// and the sentence would never arrive. Elapsed time since the room emptied
+    /// is the fact; the work item only exists to paint it when nothing else is
+    /// repainting.
+    private var emptySince: Date?
+    private var gettingStartedWork: DispatchWorkItem?
+
+    /// Retired in the one place state changes, so no path has to remember —
+    /// the same discipline the notice follows. A panel that has left idle is a
+    /// panel with something to do, and the room is no longer empty.
+    private func forgetEmptyRoom() {
+        emptySince = nil
+        gettingStartedWork?.cancel()
+        gettingStartedWork = nil
+    }
+
+    /// Paint the sentence when the room has been empty long enough, if nothing
+    /// has happened by then. Re-armed on every empty repaint with the time
+    /// REMAINING, never restarted from ten.
+    private func scheduleGettingStarted(in seconds: TimeInterval) {
+        gettingStartedWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  case .idle = self.state,
+                  self.face.sessionRows.isEmpty,
+                  let since = self.emptySince,
+                  Date().timeIntervalSince(since) >= StateLegend.gettingStartedAfter
+            else { return }
+            Permissions.log("empty room: teaching the first press")
+            self.face = Face(body: StateLegend.gettingStartedMessage, gettingStarted: true)
+            self.render()
+        }
+        gettingStartedWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, seconds), execute: work)
+    }
+
     /// `note` is a prefix about what just happened ("Stopped."). The sentence about
     /// what is waiting is always derived from `waiting`, never passed in — the two
     /// were computed at different call sites and drifted, so the panel showed
@@ -509,7 +548,7 @@ final class StatusHUD: NSObject {
         // The hide/show leak this closes: `.hidden` returns out of render before
         // its body runs, so a notice cleared down there survived a dismiss and
         // came back up with the panel.
-        if case .idle = next {} else { clearNotice() }
+        if case .idle = next {} else { clearNotice(); forgetEmptyRoom() }
         return true
     }
 
@@ -519,7 +558,7 @@ final class StatusHUD: NSObject {
         guard next != state else { return }
         Permissions.log("state: \(state.name) -> \(next.name)  (\(reason), user door)")
         state = next
-        if case .idle = next {} else { clearNotice() }
+        if case .idle = next {} else { clearNotice(); forgetEmptyRoom() }
     }
 
     /// Tear down a capture state for real before leaving it. The legality table
@@ -568,12 +607,27 @@ final class StatusHUD: NSObject {
         currentTarget = nil; currentEventId = nil
 
         if rows.isEmpty {
-            // The true empty state — the ONLY surface where the literal app name
-            // appears, with the one-line hint.
-            face = Face(title: "Tranquility Base",
-                        body: [note, "Nothing waiting. Agents appear here as they finish."]
-                            .compactMap { $0 }.joined(separator: " "))
+            // An empty room says two different things depending on how long it
+            // has been empty. For the first ten seconds it is a room whose
+            // agents have not reported in yet, and it describes itself. After
+            // that nobody is coming on their own, and the only useful thing the
+            // panel can say is how to start one (ruled 08 Aug).
+            let since = emptySince ?? Date()
+            emptySince = since
+            let elapsed = Date().timeIntervalSince(since)
+            if elapsed >= StateLegend.gettingStartedAfter {
+                face = Face(body: StateLegend.gettingStartedMessage, gettingStarted: true)
+            } else {
+                // The true empty state — the ONLY surface where the literal app name
+                // appears, with the one-line hint.
+                face = Face(title: "Tranquility Base",
+                            body: [note, "Nothing waiting. Agents appear here as they finish."]
+                                .compactMap { $0 }.joined(separator: " "))
+                scheduleGettingStarted(in: StateLegend.gettingStartedAfter - elapsed)
+            }
         } else {
+            // Someone reported in: the room is not empty and the clock is void.
+            forgetEmptyRoom()
             // No "N waiting" headline (ruled): the strip says SESSIONS, the lamps
             // say who is waiting, and the count lives in the menu bar.
             face = Face(body: note ?? "", sessionRows: rows)
@@ -642,6 +696,10 @@ final class StatusHUD: NSObject {
         /// for a device fault — the one failure in this app whose fix is a
         /// setting rather than saying it again.
         var offersMicSettings = false
+        /// The empty room has been empty long enough to teach the first press
+        /// instead of describing itself. A face of idle, not a state of its own:
+        /// nothing about what the panel ADMITS changes, only what it says.
+        var gettingStarted = false
     }
     private var face = Face()
 
@@ -708,6 +766,11 @@ final class StatusHUD: NSObject {
         // in MONO, matching the grid rows; the topic joins in the regular face.
         renderTitle()
         bodyLabel.stringValue = face.body
+        // Part of the baseline for the same reason the hint's font is: the empty
+        // room's 17pt centred sentence is the only face that changes either, so
+        // a state that never mentions them must not inherit them.
+        bodyLabel.font = .systemFont(ofSize: 12)
+        bodyLabel.alignment = .natural
         hintLabel.stringValue = ""
         goButton.isHidden = currentTarget?.pid == nil
         dontSendButton.isHidden = true
@@ -753,6 +816,21 @@ final class StatusHUD: NSObject {
             hintLabel.stringValue = StateLegend.gridHint
             waitingRows.isHidden = false
             rebuildSessionRows()
+
+        case .idle where face.gettingStarted:
+            // The empty room, past its ten seconds: ONE sentence and nothing
+            // else. Every other element is switched off by name rather than
+            // left to the baseline, because the point of this face is what it
+            // does NOT show — the app's name, the Ready pill, and the key line
+            // are all complexity charged to someone who has not pressed a key
+            // yet. The gear stays: it is the only door to settings, and a first
+            // -run face that strands the microphone pane is worse than a busy
+            // one. Centred and larger, so it reads as the panel's whole purpose
+            // rather than a caption on an absence.
+            stateLabel.isHidden = true
+            titleLabel.isHidden = true
+            bodyLabel.font = .systemFont(ofSize: 17, weight: .regular)
+            bodyLabel.alignment = .center
 
         case .idle:
             // True empty state: the baseline already says everything — the app
@@ -808,6 +886,9 @@ final class StatusHUD: NSObject {
         // all — the two transition doors retire it on the way out — so this is a
         // read, and render() stays the pure projection it claims to be.
         if let notice {
+            // Unhidden explicitly: the empty room's face switches the strip off,
+            // and a notice with nowhere to land is feedback the user never gets.
+            stateLabel.isHidden = false
             stateLabel.textColor = StateLegend.Palette.fault
             stateLabel.attributedStringValue = placardText(
                 notice, color: StateLegend.Palette.fault)
@@ -1774,6 +1855,36 @@ final class StatusHUD: NSObject {
             ("faultOffersDoor", faultOffersDoor),
             ("plainFailureHasNoDoor", plainFailureHasNoDoor),
         ])
+        // The empty room. Its ten seconds are backdated rather than waited out —
+        // the clock is a timestamp precisely so it can be reasoned about without
+        // a ten-second drill — but everything after the clock is the real path:
+        // the same showIdle every ambient tick calls, painting the real panel.
+        showIdle(rows: [])
+        let describesItselfFirst = !face.gettingStarted
+            && titleLabel.stringValue == "Tranquility Base"
+        emptySince = Date().addingTimeInterval(-StateLegend.gettingStartedAfter - 1)
+        showIdle(rows: [])
+        let teaches = face.gettingStarted
+            && bodyLabel.stringValue == StateLegend.gettingStartedMessage
+            && titleLabel.isHidden && stateLabel.isHidden
+            && bodyLabel.alignment == .center
+        // The ruling's other half: this surface spells the keys out. A glyph
+        // creeping back in is the failure the drill is here to catch.
+        let spelledOut = !StateLegend.gettingStartedMessage.contains("⌃")
+            && !StateLegend.gettingStartedMessage.contains("⌥")
+        // An agent reporting in takes the room back, and the ambient repaint
+        // that follows must not inherit the big centred type.
+        showIdle(rows: [StateLegend.SessionRow(
+            id: "drill", name: "an agent arrives", callsign: "drill", lamp: .ready)])
+        let roomTakenBack = !face.gettingStarted && emptySince == nil
+            && bodyLabel.alignment == .natural
+        SelfTest.report("emptyRoom", [
+            ("describesItselfFirst", describesItselfFirst),
+            ("teachesAfterTheClock", teaches),
+            ("spelledOutNotGlyphs", spelledOut),
+            ("roomTakenBack", roomTakenBack),
+        ])
+
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
     }
