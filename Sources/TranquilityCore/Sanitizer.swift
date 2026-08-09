@@ -42,10 +42,22 @@ public struct SpokenSegment: Sendable, Equatable {
 /// together from `segments` in one pass, which is what makes
 /// `displayIndex(forSpoken:)` exact rather than an estimate.
 public struct SanitizedSpokenText: Sendable, Equatable {
-    /// The spoken projection, clamped to the word budget.
+    /// The spoken projection: the WHOLE text, with identifiers said as words.
     public let text: String
-    /// The unredacted projection — every name the session actually used. Never
-    /// clamped: the eye can read past where the voice stopped.
+    /// The unredacted projection — every name the session actually used.
+    ///
+    /// The two differ in CONTENT, never in coverage: `read_products` is shown
+    /// where "a variable" is said. Both cover the same source from end to end.
+    ///
+    /// They used to differ in length too. The spoken side was clamped to a word
+    /// budget and the displayed side was not, on the theory that "the eye can
+    /// read past where the voice stopped" — which presumes you are looking, and
+    /// this app's premise is that you are not. What it produced was a voice that
+    /// stopped mid-brief while the card showed the rest: 198 characters spoken
+    /// against 373 displayed, deterministically, on every brief over the budget
+    /// (07 Aug FINDINGS rung, app.log 23:30:04). It made nothing shorter for the
+    /// reader and severed the thought for the listener, so it solved neither
+    /// thing it was built for. Ruled 08 Aug: what is shown is what is said.
     public let displayText: String
     /// The pieces, in order.
     public let segments: [SpokenSegment]
@@ -53,29 +65,23 @@ public struct SanitizedSpokenText: Sendable, Equatable {
     /// What the sanitizer had to replace, as rule labels. Useful for tests and for
     /// telling whether the summarizer is behaving.
     public let redactions: [String]
-    /// The budget this text was clamped against. Carried so that a later edit —
-    /// prepending a callsign, stripping a label echo — rebuilds against the same
-    /// budget instead of silently reverting to the default.
-    public let budget: Int
 
     /// Where each segment landed in `text` and in `displayText`. Same count as
     /// `segments`; parallel by construction, never recomputed by arithmetic.
     private let spokenRanges: [Range<Int>]
     private let displayRanges: [Range<Int>]
 
-    fileprivate init(segments: [SpokenSegment], maxWords: Int) {
+    fileprivate init(segments: [SpokenSegment]) {
         let spoken = SanitizedSpokenText.project(segments, \.spoken)
         let display = SanitizedSpokenText.project(segments, \.display)
-        let clamped = SpokenTextSanitizer.clamp(spoken.text, maxWords: maxWords)
 
         self.segments = segments
-        self.text = clamped
+        self.text = spoken.text
         self.displayText = display.text
         self.spokenRanges = spoken.ranges
         self.displayRanges = display.ranges
-        self.wordCount = clamped.split(whereSeparator: \.isWhitespace).count
+        self.wordCount = spoken.text.split(whereSeparator: \.isWhitespace).count
         self.redactions = segments.compactMap(\.label)
-        self.budget = maxWords
     }
 
     /// Translate a cursor in the spoken text to the matching cursor in the
@@ -89,8 +95,6 @@ public struct SanitizedSpokenText: Sendable, Equatable {
     /// a listener.
     public func displayIndex(forSpoken index: Int) -> Int {
         guard !segments.isEmpty else { return 0 }
-        // The cursor can never lead the voice past what the voice will actually
-        // say: the clamp may have dropped a tail that is still on screen.
         let cursor = min(max(index, 0), text.count)
         guard cursor > 0 else { return 0 }
 
@@ -106,10 +110,6 @@ public struct SanitizedSpokenText: Sendable, Equatable {
         }
         return displayRanges.last?.upperBound ?? 0
     }
-
-    /// Where the spoken text ran out, in display coordinates. Everything after
-    /// this was written and shown but never said — the clamp dropped it.
-    public var spokenTailBegins: Int { displayIndex(forSpoken: text.count) }
 
     /// Concatenate the segment texts, normalising whitespace as it goes and
     /// recording where each segment landed.
@@ -267,12 +267,11 @@ public struct SpokenTextSanitizer: Sendable {
     /// platform'". Only the identifier-genericizing rules consult it; when a
     /// token is not on the list, the existing stripping behavior stands.
     public func sanitize(
-        _ raw: String, maxWords: Int = SpokenTextSanitizer.maxWords,
-        allowing allowlist: Set<String> = []
+        _ raw: String, allowing allowlist: Set<String> = []
     ) -> SanitizedSpokenText {
         let working = raw.replacingOccurrences(of: "\n", with: " ")
         let segments = Self.collapsingRepeats(Self.segments(of: working, allowing: allowlist))
-        return SanitizedSpokenText(segments: segments, maxWords: maxWords)
+        return SanitizedSpokenText(segments: segments)
     }
 
     /// Cut the text into verbatim and redacted pieces.
@@ -447,7 +446,7 @@ public struct SpokenTextSanitizer: Sendable {
         let stripped = Self.strippingLeadingLabels(labels + [callsign], from: spoken.segments)
         let prefix = SpokenSegment.verbatim(
             Self.isEmpty(stripped) ? "\(callsign):" : "\(callsign): ")
-        return SanitizedSpokenText(segments: [prefix] + stripped, maxWords: spoken.budget)
+        return SanitizedSpokenText(segments: [prefix] + stripped)
     }
 
     /// Strip a leading callsign/label echo WITHOUT prepending one.
@@ -461,7 +460,7 @@ public struct SpokenTextSanitizer: Sendable {
     ) -> SanitizedSpokenText {
         let stripped = Self.strippingLeadingLabels(labels, from: spoken.segments)
         guard !Self.isEmpty(stripped) else { return spoken }
-        return SanitizedSpokenText(segments: stripped, maxWords: spoken.budget)
+        return SanitizedSpokenText(segments: stripped)
     }
 
     private static func isEmpty(_ segments: [SpokenSegment]) -> Bool {

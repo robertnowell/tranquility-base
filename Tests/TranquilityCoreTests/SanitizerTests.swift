@@ -42,13 +42,17 @@ final class SanitizerTests: XCTestCase {
         XCTAssertTrue(result.redactions.isEmpty)
     }
 
-    /// The budget is honoured by dropping whole sentences.
-    func testWordBudgetIsEnforcedAcrossSentences() throws {
+    /// The sanitizer no longer shortens anything (ruled 08 Aug). Length belongs to
+    /// the SUMMARIZER, which clamps the brief's own sections — so a short brief is
+    /// short on the card and short in the ear, together. Clamping here shortened
+    /// only the audio, which left the card long and the voice truncated.
+    func testTheSanitizerNeverShortensWhatItIsGiven() throws {
         let sentence = Array(repeating: "word", count: 10).joined(separator: " ") + "."
         let long = Array(repeating: sentence, count: 20).joined(separator: " ")
         let result = sanitizer.sanitize(long)
-        XCTAssertLessThanOrEqual(result.wordCount, SpokenTextSanitizer.maxWords)
-        XCTAssertTrue(result.text.hasSuffix("."), "must end on a complete sentence")
+        XCTAssertEqual(result.wordCount, 200, "200 words in, 200 words out")
+        XCTAssertEqual(result.text, result.displayText,
+                       "nothing redacted here, so the projections are identical")
     }
 
     /// Deliberate: text with no sentence structure is spoken whole rather than cut.
@@ -271,16 +275,42 @@ extension SanitizerTests {
         XCTAssertEqual(hailed.displayIndex(forSpoken: 0), 0)
     }
 
-    /// What the clamp drops is still worth reading. The panel needs to know where
-    /// the voice stopped so it can say so.
-    func testClampedTailSurvivesForTheEyeAndIsMarked() {
+    /// The invariant that replaced the word clamp (ruled 08 Aug): the voice covers
+    /// everything the card shows. They still differ in CONTENT — `read_products`
+    /// shown, "a variable" said — but never in coverage.
+    ///
+    /// The clamp truncated the spoken projection and left the displayed one whole,
+    /// so a brief over budget was deterministically half-spoken: 198 characters of
+    /// audio against a 373-character card, ending at a sentence boundary so it
+    /// sounded like a finished thought rather than a fault.
+    func testTheVoiceReachesTheEndOfWhatTheCardShows() {
         let sentence = Array(repeating: "word", count: 12).joined(separator: " ") + "."
         let long = Array(repeating: sentence, count: 8).joined(separator: " ")
-        let result = sanitizer.sanitize(long, maxWords: 20)
-        XCTAssertLessThanOrEqual(result.wordCount, 20)
-        XCTAssertGreaterThan(result.displayText.count, result.text.count,
-                             "the unspoken tail must survive for the reader")
-        XCTAssertLessThan(result.spokenTailBegins, result.displayText.count)
+        for text in [long, Self.findingsThatUsedToBeCutInHalf] {
+            let result = sanitizer.sanitize(text)
+            XCTAssertEqual(result.displayIndex(forSpoken: result.text.count),
+                           result.displayText.count,
+                           "the voice must reach the end of the displayed text")
+        }
+    }
+
+    /// The exact FINDINGS rung from the incident (app.log 08 Aug 23:30:04), where
+    /// ElevenLabs was handed 198 characters for a 373-character card.
+    static let findingsThatUsedToBeCutInHalf = """
+        Hero brief fully formed and costed thirty-five thousand tokens across \
+        plan, art-direction-brief, and hero-description stages — all discarded by \
+        fixed-layout constraint. No image-generation step ran. Neighbor-color \
+        guidance is starved: sibling sections author in parallel, each seeing only \
+        one real color in context; the rest are colorless stubs, forcing the model \
+        to guess.
+        """
+
+    func testTheIncidentTextIsNoLongerHalfSpoken() {
+        let result = sanitizer.sanitize(Self.findingsThatUsedToBeCutInHalf)
+        XCTAssertEqual(result.text.count, result.displayText.count,
+                       "no redactions here, so the two projections must be identical")
+        XCTAssertTrue(result.text.hasSuffix("forcing the model to guess."),
+                      "the last sentence used to be dropped from the audio")
     }
 
     /// End to end: what the store and the card keep is what the session said;
