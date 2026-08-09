@@ -296,6 +296,37 @@ enum StateLegend {
     /// stays: it is the one mark that earns the amber.
     static let noWordsNotice = "\(Glyph.needsYou) No words detected — try again"
 
+    // MARK: - The device fault (ruled 08 Aug)
+
+    /// The third tier's placard. It names the CONDITION, not a classification:
+    /// no audio arrived. "Needs you" would be true here and still wrong — it is
+    /// the pill a waiting agent wears, and no agent is involved in a dead
+    /// microphone.
+    static let noAudioPlacard = "\(Glyph.needsYou) No audio"
+    static let micSettingsTitle = "Microphone settings"
+
+    /// Say what to do, not just that something broke — the same rule the
+    /// Bluetooth mic-open failure follows, applied to the quieter case where the
+    /// device opens successfully and then sends nothing.
+    ///
+    /// Naming the device is the whole message. "No audio detected" invites you
+    /// to blame the app; "Nothing is arriving from AirPods Pro" points at the
+    /// thing that is actually wrong, and is usually enough on its own.
+    static func noAudioMessage(device: AudioInputDevice.Device?) -> String {
+        guard let device else {
+            return "The microphone opened, but no input device is bound to it. "
+                + "Pick one under Microphone settings."
+        }
+        if device.isBluetooth {
+            return "Nothing arrived from \(device.name) — it opened and then sent "
+                + "silence. Bluetooth mics do this when they re-rate themselves; "
+                + "switching to the built-in mic is the reliable fix."
+        }
+        return "Nothing arrived from \(device.name) — the mic was open the whole "
+            + "time and the level never moved. Check that it isn't muted, or "
+            + "pick a different input."
+    }
+
     // MARK: - Controls
 
     static let backTitle = "\(Glyph.back) Back"

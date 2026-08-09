@@ -28,6 +28,7 @@ final class StatusHUD: NSObject {
     /// text action, not a lozenge. The Reply/Dismiss buttons are dead — chords
     /// are the interface.
     private var dontSendButton: NSButton!
+    private var micSettingsButton: NSButton!
     private var hintLabel: NSTextField!
     private var contentStack: NSStackView?
     /// Derived, not stored. True exactly while the undo countdown is live AND the
@@ -383,6 +384,28 @@ final class StatusHUD: NSObject {
         render()
     }
 
+    /// The microphone is open and nothing is arriving from it — the third tier
+    /// of the silence gate, and the only one that is a genuine fault.
+    ///
+    /// It earns a card where the other two do not, on both counts a card is for:
+    /// there is something wrong that saying it again will not fix, and there is
+    /// an action that fixes it. So this one keeps the amber, keeps the stage,
+    /// and waits — and unlike every other failure it offers a way OUT rather
+    /// than back.
+    ///
+    /// No title, deliberately. `showResult` names the session a failure was
+    /// about, and this one is about the machine: the agent did nothing, is owed
+    /// nothing, and putting its name at the top of a hardware fault is the same
+    /// misattribution the "Needs you" pill used to make on a quiet room.
+    func showDeviceFault(_ message: String) {
+        guard transition(to: .result, because: "no audio from the input device")
+        else { return }
+        face = Face(body: message,
+                    placardOverride: StateLegend.noAudioPlacard,
+                    offersMicSettings: true)
+        render()
+    }
+
     /// The dictation receipt (ui-pass-7, ruling 5): dictation success shows its
     /// card again, because it tells you where the words went — which app was
     /// typed into, or what is now on the clipboard, is invisible otherwise.
@@ -480,6 +503,13 @@ final class StatusHUD: NSObject {
         if case .preparing = next {} else {
             preparingPaint?.cancel(); preparingPaint = nil
         }
+        // Same discipline for the grid notice: it belongs to idle alone, and it
+        // is retired HERE — in the one place state changes — so render() never
+        // has to write to the thing it is painting, and no path has to remember.
+        // The hide/show leak this closes: `.hidden` returns out of render before
+        // its body runs, so a notice cleared down there survived a dismiss and
+        // came back up with the panel.
+        if case .idle = next {} else { clearNotice() }
         return true
     }
 
@@ -489,6 +519,7 @@ final class StatusHUD: NSObject {
         guard next != state else { return }
         Permissions.log("state: \(state.name) -> \(next.name)  (\(reason), user door)")
         state = next
+        if case .idle = next {} else { clearNotice() }
     }
 
     /// Tear down a capture state for real before leaving it. The legality table
@@ -607,6 +638,10 @@ final class StatusHUD: NSObject {
         var voices: [Voice] = []
         var roster: [String] = []
         var transcription: (cancel: () -> Void, retry: () -> Void)?
+        /// The failure card carries a way out to the microphone pane. True only
+        /// for a device fault — the one failure in this app whose fix is a
+        /// setting rather than saying it again.
+        var offersMicSettings = false
     }
     private var face = Face()
 
@@ -676,6 +711,7 @@ final class StatusHUD: NSObject {
         hintLabel.stringValue = ""
         goButton.isHidden = currentTarget?.pid == nil
         dontSendButton.isHidden = true
+        micSettingsButton.isHidden = true
         countdownBar.isHidden = true; meter.isHidden = true
         voiceList.isHidden = true; waitingRows.isHidden = true
         gearButton.isHidden = false; backButton.isHidden = true
@@ -754,6 +790,8 @@ final class StatusHUD: NSObject {
             stateLabel.attributedStringValue = placardText(
                 stateLabel.attributedStringValue.string,
                 color: StateLegend.Palette.fault)
+            // A device fault is the only failure with somewhere to send you.
+            micSettingsButton.isHidden = !face.offersMicSettings
 
         case .settings:
             stateLabel.stringValue = ""
@@ -766,18 +804,13 @@ final class StatusHUD: NSObject {
             rebuildVoiceRows()
         }
 
-        // The notice owns the strip while it lives, and only on idle — it is the
-        // face a refusal returns you TO, so it can never cover a card. Anywhere
-        // else it dies here rather than waiting for its clock: leaving idle is
-        // the panel saying it has something better to show.
-        if case .idle = state {
-            if let notice {
-                stateLabel.textColor = StateLegend.Palette.fault
-                stateLabel.attributedStringValue = placardText(
-                    notice, color: StateLegend.Palette.fault)
-            }
-        } else if self.notice != nil {
-            clearNotice()
+        // The notice owns the strip while it lives. It can only exist on idle at
+        // all — the two transition doors retire it on the way out — so this is a
+        // read, and render() stays the pure projection it claims to be.
+        if let notice {
+            stateLabel.textColor = StateLegend.Palette.fault
+            stateLabel.attributedStringValue = placardText(
+                notice, color: StateLegend.Palette.fault)
         }
 
         // The action row exists exactly when a quiet action is visible. (The
@@ -931,7 +964,7 @@ final class StatusHUD: NSObject {
     /// the row of lozenge buttons is dead (ruled); this is what replaced its
     /// per-state visibility flag.
     private func updateActionRowVisibility() {
-        actionRow.isHidden = [goButton, dontSendButton,
+        actionRow.isHidden = [goButton, dontSendButton, micSettingsButton,
                               cancelTranscriptionButton, retryTranscriptionButton]
             .allSatisfy { $0?.isHidden ?? true }
         if let panel { resizeToFit(panel); position(panel) }
@@ -1601,6 +1634,25 @@ final class StatusHUD: NSObject {
         let refusedOnCard = !noticeIsShowing
         Permissions.log("selftest notice: onGrid=\(noticedOnGrid) "
                         + "clearedByCard=\(clearedByCard) refusedOnCard=\(refusedOnCard)")
+        // And the leak the two transition doors close: a notice must not survive
+        // a hide and come back up with the panel. `.hidden` returns out of
+        // render() before its body runs, so nothing down there can retire it.
+        showIdle(rows: [])
+        flashNotice(StateLegend.noWordsNotice)
+        hide()
+        let clearedByHide = !noticeIsShowing
+        showIdle(rows: [])
+        let stayedGone = !noticeIsShowing
+
+        // The device fault: the ONE failure card with a door out. Ordinary
+        // failures must not grow one.
+        showDeviceFault("Nothing arrived from the input device.")
+        let faultOffersDoor = !micSettingsButton.isHidden && titleLabel.isHidden
+        showResult("An ordinary failure, which has nowhere to send you.")
+        let plainFailureHasNoDoor = micSettingsButton.isHidden
+        Permissions.log("selftest notice: clearedByHide=\(clearedByHide) "
+                        + "stayedGone=\(stayedGone) faultOffersDoor=\(faultOffersDoor) "
+                        + "plainFailureHasNoDoor=\(plainFailureHasNoDoor)")
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
     }
@@ -1805,6 +1857,13 @@ final class StatusHUD: NSObject {
             adopt()
             showResult("promotions copy's tab is gone — copied your words to the clipboard.")
 
+        case "no-audio":
+            // The third tier. No adopted target on purpose: the fault is the
+            // machine's, so no agent's name goes at the top of it. The device is
+            // the one this machine would actually bind — a pose photographs the
+            // real condition, the same way the grid poses real callsigns.
+            showDeviceFault(StateLegend.noAudioMessage(device: AudioInputDevice.resolve()))
+
         case "notice":
             // What the silence gate looks like now (ruled 08 Aug): the grid you
             // were already on, one amber line in the strip where AGENTS sits,
@@ -1860,7 +1919,8 @@ final class StatusHUD: NSObject {
             ("title", titleLabel), ("body", bodyLabel), ("state", stateLabel),
             ("hint", hintLabel), ("bar", countdownBar), ("meter", meter),
             ("actions", actionRow), ("go", goButton),
-            ("dontSend", dontSendButton), ("voices", voiceList),
+            ("dontSend", dontSendButton), ("micSettings", micSettingsButton),
+            ("voices", voiceList),
             ("gear", gearButton), ("back", backButton), ("rows", waitingRows),
             ("cancelTx", cancelTranscriptionButton),
             ("retryTx", retryTranscriptionButton),
@@ -1973,6 +2033,11 @@ final class StatusHUD: NSObject {
             "GO TO AGENT \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
             color: StateLegend.Palette.advisory)
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
+        // The device-fault card's way out. Quiet like its row-mates: it is a
+        // door, not an alarm — the placard and the body have already said how
+        // bad this is, and a loud button would say it a third time.
+        micSettingsButton = quietAction(StateLegend.micSettingsTitle,
+                                        #selector(micSettingsTapped))
 
         // A real symbol at a real size. The text glyph was 12pt — visually timid
         // and, worse, a hit target well under the ~24pt a fingertip-sized control
@@ -2014,6 +2079,7 @@ final class StatusHUD: NSObject {
         buttons.orientation = .horizontal
         buttons.spacing = 12
         buttons.addView(dontSendButton, in: .leading)
+        buttons.addView(micSettingsButton, in: .leading)
         buttons.addView(cancelTranscriptionButton, in: .leading)
         buttons.addView(retryTranscriptionButton, in: .leading)
         buttons.addView(goButton, in: .trailing)
@@ -2269,6 +2335,15 @@ final class StatusHUD: NSObject {
     var onDismiss: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     var onLeaveSettings: (() -> Void)?
+
+    /// PROVISIONAL (08 Aug): opens Settings, which today lands on the Voices
+    /// pane — there is no Microphone pane yet. The button is honest about the
+    /// destination it WILL have, and lands one tab away from it in the meantime,
+    /// which beats both a dead control and a button named after the pane it can
+    /// actually reach. Proposal: docs/settings-microphone.html.
+    @objc nonisolated private func micSettingsTapped() {
+        MainActor.assumeIsolated { onOpenSettings?() }
+    }
 
     @objc nonisolated private func gearTapped() {
         MainActor.assumeIsolated { onOpenSettings?() }

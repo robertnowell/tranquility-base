@@ -38,6 +38,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Two seconds because a deliberate utterance is essentially never shorter,
     /// and every sub-second capture the log has ever gated was an accident.
     private static let notionalUtterance: TimeInterval = 2.0
+
+    /// Past this, a recording that carried NO signal at all stops being a quiet
+    /// room and starts being a broken input. Five seconds of holding a key is a
+    /// deliberate, sustained act; a microphone that produced nothing across it
+    /// is not waiting for you to speak up, it is not working.
+    private static let deviceFaultHold: TimeInterval = 5.0
     private var pressStartedAt: Date?
     private var listeningIndicator: DispatchWorkItem?
     /// Instant-arm (docs/instant-arm.md): when the arm window opened and the
@@ -1274,13 +1280,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hud.recordingEnded()
             guard let captured = try? recorder.stop() else {
                 updateTitle()
-                lastStatusLine = "nothing recorded"
-                // Leave the capture state honestly — the pill used to linger here
-                // with a dead meter, and now the arbiter would (rightly) block
-                // anything else from painting over it.
-                hud.endCapture(because: "nothing recorded")
-                showIdleGrid(note: "Nothing recorded.")
-                rebuildMenu()
+                // The silence gate's event, one layer down: the device returned
+                // so little that Recorder refused to hand it back. This printed
+                // "Nothing recorded." over the grid whether you brushed the key
+                // or held it for a minute against a dead microphone — the two
+                // cases that most need telling apart, and the dead-mic one is
+                // the reason this path exists at all.
+                reportNothingHeard(because: "nothing recorded")
                 return
             }
             updateTitle()
@@ -1537,6 +1543,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The one answer to every way a recording can come back with no words in
+    /// it — the silence gate below, and the `nothingRecorded` throw in
+    /// `.replyEnded`, which is the same event seen one layer down and used to be
+    /// answered completely differently ("Nothing recorded." over the grid, or a
+    /// failure card, depending on which threshold you happened to trip).
+    ///
+    /// Three tiers, and the axis is how long the microphone was OPEN — never how
+    /// much audio came back. `Recorder.lastOpenSeconds` says why: a dead device
+    /// reports a zero-length recording however long you held the key, so buffer
+    /// length cannot tell a slip of the thumb from broken hardware.
+    ///
+    ///   under 2s           nothing at all. You tapped the key or changed your
+    ///                      mind. You did not make an error, and a screen that
+    ///                      appears for a slip teaches you to fear the key.
+    ///   2s+, some signal   one amber line in the grid's strip, on its own
+    ///                      clock. You meant to speak, the room was quiet, and
+    ///                      saying it again fixes it — so nothing to dismiss.
+    ///   5s+, NO signal     a card. The one tier saying it again will not fix:
+    ///                      the input is dead, the fix is a setting, so it holds
+    ///                      the stage and offers the door out.
+    private func reportNothingHeard(because reason: String) {
+        let held = recorder.lastOpenSeconds
+        let signal = recorder.peakLevel > 0
+        Permissions.log(String(format: "nothing heard (%@): held %.2fs, peak %.4f",
+                               reason, held, recorder.peakLevel))
+        // Home first, through the user door: the capture state owns the stage,
+        // so a plain idle repaint is (correctly) refused from it.
+        hud.endCapture(because: reason)
+        if held >= Self.deviceFaultHold, !signal {
+            let device = AudioInputDevice.resolve()
+            lastStatusLine = "\(StateLegend.Glyph.needsYou) no audio from "
+                + (device?.name ?? "the input device")
+            hud.showDeviceFault(StateLegend.noAudioMessage(device: device))
+        } else {
+            lastStatusLine = "nothing heard"
+            showIdleGrid()
+            if held >= Self.notionalUtterance {
+                hud.flashNotice(StateLegend.noWordsNotice)
+            }
+        }
+        rebuildMenu()
+    }
+
     private func sendReply(_ pcm: Data) {
         guard let coordinator else { return }
         // This utterance's live stream, if one opened. finish() is nil on any
@@ -1552,22 +1601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.log(String(format:
                 "send: refused, silence gate (%.2fs, peak %.4f)", seconds, recorder.peakLevel))
             recordingTarget = nil
-            lastStatusLine = "nothing heard"
-            // Home, always: the gate is not a place to stand. Through the user
-            // door, because the mic state owns the stage and showIdle alone is
-            // (correctly) refused from it.
-            hud.endCapture(because: "silence gate")
-            showIdleGrid()
-            // What the panel says about it depends ENTIRELY on how long the mic
-            // was open (ruled 08 Aug). Under `notionalUtterance` you tapped the
-            // key, or bailed — there is no error to report, because you did not
-            // make one, and a screen that appears for a tap teaches you to fear
-            // the key. Past it you meant to speak and the room stayed quiet,
-            // which is worth one amber line and nothing more.
-            if seconds >= Self.notionalUtterance {
-                hud.flashNotice(StateLegend.noWordsNotice)
-            }
-            rebuildMenu()
+            reportNothingHeard(because: "silence gate")
             return
         }
         let mine = replyGeneration

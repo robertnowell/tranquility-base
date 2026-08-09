@@ -44,6 +44,21 @@ public final class Recorder: @unchecked Sendable {
     /// Loudest moment of the current recording; the silence gate reads it.
     public private(set) var peakLevel: Float = 0
 
+    /// How long the microphone was open for the last capture, by the wall clock.
+    ///
+    /// Deliberately NOT the length of the audio, and the difference is the whole
+    /// point. Duration measured from the buffer is a measure of what the DEVICE
+    /// gave us: a microphone that yields no samples reports a zero-length
+    /// recording however long you held the key, so buffer-length cannot tell a
+    /// slip of the thumb from a dead input — both read as "too short". The wall
+    /// clock can, and that distinction is what decides whether the panel says
+    /// nothing, says one quiet line, or says something is actually wrong.
+    ///
+    /// Recorded before the `nothingRecorded` guard in `stop()`, because the case
+    /// that most needs it is exactly the one that throws.
+    public private(set) var lastOpenSeconds: TimeInterval = 0
+    private var openedAt: Date?
+
     public init(sampleRate: Double = 16000) {
         self.sampleRate = sampleRate
     }
@@ -78,6 +93,8 @@ public final class Recorder: @unchecked Sendable {
         guard !running else { lock.unlock(); return }
         buffer.removeAll(keepingCapacity: true)
         peakLevel = 0
+        openedAt = Date()
+        lastOpenSeconds = 0
         running = true
         if let stale = stream {
             // An aborted utterance never took its stream; close it quietly.
@@ -261,8 +278,19 @@ public final class Recorder: @unchecked Sendable {
     @discardableResult
     public func stop() throws -> Data {
         lock.lock()
-        guard running else { lock.unlock(); throw RecorderError.nothingRecorded }
+        // Never ran, or already stopped: there is no "how long was it open"
+        // answer for THIS event, and leaving the last capture's answer standing
+        // would let a stale five seconds masquerade as a fresh device fault.
+        guard running else {
+            lastOpenSeconds = 0
+            lock.unlock(); throw RecorderError.nothingRecorded
+        }
         running = false
+        // Before the nothingRecorded guard below, on purpose: a dead device
+        // takes that throw, and how long it was open is the only evidence the
+        // caller will have to work with.
+        lastOpenSeconds = openedAt.map { Date().timeIntervalSince($0) } ?? 0
+        openedAt = nil
         lock.unlock()
 
         _ = VDCatchObjCException {
@@ -288,6 +316,8 @@ public final class Recorder: @unchecked Sendable {
     public func abandon() {
         lock.lock()
         running = false
+        lastOpenSeconds = openedAt.map { Date().timeIntervalSince($0) } ?? 0
+        openedAt = nil
         buffer.removeAll(keepingCapacity: false)
         lock.unlock()
         _ = VDCatchObjCException {
