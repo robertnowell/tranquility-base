@@ -50,14 +50,27 @@ point; it is a property of the idle face that `render()` reads. A session that
 implements this by adding a state has misread it.
 
 **The collapsed geometry.** ~40px wide, height unchanged. Logo at top, lamps
-stacked below it, Expand at the top, dismiss (the X) at the bottom. Nothing
-else: no callsigns, no topics, no `AGENTS` strip label, no `gridHint` key line.
-The lamp's 9px circle and its four fills (`StateLegend.Lamp`) are already the
-whole vocabulary the strip needs — collapsing changes what is omitted, never
-what a color means.
+stacked below it, dismiss (the X) at the bottom. Nothing else: no callsigns, no
+topics, no `AGENTS` strip label, no `gridHint` key line. The lamp's 9px circle
+and its four fills (`StateLegend.Lamp`) are already the whole vocabulary the
+strip needs — collapsing changes what is omitted, never what a color means.
 
-**Idle lamps drop out when collapsed.** They return on expand. See open
-question 1 for what counts as idle.
+**Expand has no slot of its own — the logo becomes it on hover** (ruled 08 Aug,
+second pass). At rest the strip is exactly what the first ruling described:
+"that color and our logo and that's it." While the cursor is anywhere over the
+panel, the logo swaps in place to the Expand affordance; on exit it swaps back.
+
+The swap is in place and the header keeps one fixed slot, so nothing below it
+ever moves — **the collapsed strip has no vertical movement caused by chrome.**
+This is the whole reason the control is a swap and not a row: a dedicated Expand
+row would push the lamps down, and the lamps holding still is the property that
+makes the strip readable at a glance. Any implementation where hovering reflows
+the column has lost the point of the design.
+
+**Idle lamps drop out when collapsed; blue stays.** `.running` (quiet putty) is
+the idle lamp and is omitted while collapsed, returning on expand. `.ready`,
+`.working`, and `.fault` all survive collapse — ruled 08 Aug, second pass: blue
+is "I am waiting on it", which is half of the only question the strip answers.
 
 **Stickiness is the load-bearing part.** Collapsed-vs-expanded is durable user
 state, persisted across relaunch (the app installs with a login item — it
@@ -71,13 +84,16 @@ reopen it, and no session should spend a pass on it.
 
 ## Open — do not guess these
 
-1. **What "idle lamps" means.** `Lamp` has four cases. `.ready` (green) and
-   `.fault` (amber) obviously survive collapse. `.running` (quiet putty) is
-   obviously the "idle lamp" being dropped. `.working` (advisory blue) is
-   genuinely ambiguous: the ruling's own test is "am I waiting on it, or is it
-   waiting on me", and blue is precisely the first half of that — which argues
-   it survives. *This session's read, not ruled: hide `.running`, keep
-   `.working`.* Needs Robert.
+1. ~~**What "idle lamps" means.**~~ **RESOLVED 08 Aug, same evening** — "keep the
+   blue dots while it's in the collapsed state." Hide `.running`; keep `.ready`,
+   `.working`, `.fault`. Moved up into the ruled section.
+
+1b. **Does the X hover-swap too?** Not asked and not answered. The logo→Expand
+   swap establishes that collapsed chrome is hover-revealed; a permanently
+   visible dismiss control alongside a hover-revealed expand control is the
+   inconsistent reading. *This session's read, not ruled: both ends of the strip
+   are hover-revealed, so at rest the strip is logo + lamps and nothing else,
+   which is what the first ruling literally described.* Needs Robert.
 
 2. **Collapse vs. Minimize — one control or two.** The ruling says "it's
    possible you might want two controls." Note that a third tier already
