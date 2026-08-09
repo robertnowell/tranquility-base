@@ -86,6 +86,16 @@ public struct CourtesyCheck: Sendable {
     /// PROVISIONAL, and in RAW RMS — see `Assessment.level`. Worth exactly
     /// nothing until the log-only pass produces real numbers
     /// (docs/courtesy-check-evidence-plan.md). Do not defend it.
+    /// How long the microphone stays open for one check.
+    ///
+    /// Long enough to span a pause between sentences, short enough that the hail
+    /// still feels attached to the arrival that caused it. Every millisecond of
+    /// it is a millisecond the recording indicator is lit with no user action
+    /// behind it, which is the real budget being spent here.
+    ///
+    /// PROVISIONAL, like the floor.
+    public static let listenSeconds: TimeInterval = 4
+
     public var quietFloor: Float
 
     public var words: WordCounter

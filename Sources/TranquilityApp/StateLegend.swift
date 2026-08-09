@@ -316,6 +316,22 @@ enum StateLegend {
     /// stays: it is the one mark that earns the amber.
     static let noWordsNotice = "\(Glyph.needsYou) No words detected — try again"
 
+    // MARK: - The courtesy check (ruled 08 Aug)
+
+    /// Why the app stayed quiet, in the transient strip line.
+    ///
+    /// A held hail is otherwise indistinguishable from an agent that never came
+    /// back, which is the one thing the panel must never be ambiguous about. So
+    /// the suppression announces itself — visually, silently, in the same slot
+    /// `noWordsNotice` uses.
+    ///
+    /// Both name the CONDITION, following `noAudioMessage`'s rule: not a
+    /// classification of the agent, and not a transcription outcome. Nothing was
+    /// "detected but not understood" — nothing was ever read. The quiet glyph,
+    /// not the amber triangle: nothing is wrong and nothing needs the user.
+    static let heldMicBusyNotice = "\(Glyph.quiet) Held — the microphone is in use"
+    static let heldSpeechNotice = "\(Glyph.quiet) Held — someone was talking"
+
     // MARK: - The device fault (ruled 08 Aug)
 
     /// The third tier's placard. It names the CONDITION, not a classification:

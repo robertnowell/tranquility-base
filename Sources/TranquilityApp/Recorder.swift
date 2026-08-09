@@ -82,12 +82,30 @@ public final class Recorder: @unchecked Sendable {
         }
     }
 
+    /// Capture always wins the device.
+    ///
+    /// The cancel lives HERE rather than at the five call sites that start a
+    /// capture, because a sixth will be added by somebody who has never heard of
+    /// the courtesy check, and `start` refuses while the engine is already
+    /// `running` — so a room sample left in flight would turn their key press
+    /// into a silent no-op. One structural guard beats five remembered ones.
+    public func start(openingStream: Bool = true) throws {
+        cancelRoomSample()
+        try startEngine(openingStream: openingStream)
+    }
+
+    /// The engine open itself. Private so that only `start` (which yields to
+    /// capture) and `sampleRoom` (which IS the room sample, and must not cancel
+    /// itself) can reach it.
+    ///
     /// `openingStream: false` is the instant-arm path (docs/instant-arm.md):
     /// capture begins optimistically at the arm window WITHOUT creating a
     /// StreamedUtterance — no network session for audio that a tap will
     /// discard. The stream attaches at hold-resolution via `openStream()`,
-    /// which feeds it everything buffered since this call.
-    public func start(openingStream: Bool = true) throws {
+    /// which feeds it everything buffered since this call. The courtesy sample
+    /// uses it for the same reason from the other direction: audio that will
+    /// never become a transcript has no business opening a socket.
+    private func startEngine(openingStream: Bool) throws {
         guard Self.microphoneAuthorized() else { throw RecorderError.microphoneDenied }
         lock.lock()
         guard !running else { lock.unlock(); return }
@@ -177,6 +195,116 @@ public final class Recorder: @unchecked Sendable {
 
         lock.lock(); running = false; lock.unlock()
         throw RecorderError.engineFailed(lastReason)
+    }
+
+    // MARK: - The courtesy sample (listening before we talk)
+
+    /// Which room sample owns the device. Bumped by `cancelRoomSample`, so a
+    /// sampler that wakes after being cancelled can tell that the engine it is
+    /// about to tear down is no longer its own.
+    ///
+    /// Without this the race is real and nasty: cancel abandons the engine, the
+    /// user's capture starts on a fresh one, and THEN the sleeping sampler wakes
+    /// and abandons that — killing the recording a user is actively speaking
+    /// into. Guarded by `lock` like everything else here.
+    private var roomSampleGeneration = 0
+    private var roomSampling = false
+
+    /// Open the microphone briefly, hand back what it heard, and close it.
+    ///
+    /// The whole of the privacy story is in what this does NOT do. It uses
+    /// `start(openingStream: false)`, so no network session is ever created; it
+    /// ends in `abandon()`, never `stop()`, so no `Data` is returned to a caller
+    /// that could persist it; and it hands back samples for a decision that is
+    /// made and discarded. Nothing is written, nothing is uploaded, nothing
+    /// outlives the call. See docs/ruling-an-arrival-does-not-move-the-panel.md.
+    ///
+    /// Returns nil when the device is unavailable — capture already owns it, the
+    /// mic is denied, the engine could not start. Nil means "could not look",
+    /// which the courtesy check degrades to speaking rather than to silence.
+    public func sampleRoom(seconds: TimeInterval) async -> [Int16]? {
+        guard let generation = beginRoomSample() else { return nil }
+
+        do { try startEngine(openingStream: false) } catch {
+            failRoomSample()
+            Permissions.log("courtesy: mic would not open — \(error)")
+            return nil
+        }
+
+        // Slept in slices so a cancellation lands within ~100ms rather than at
+        // the end of the window. A user reaching for the reply key must not wait
+        // out a check they have already overruled.
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard roomSampleIsStillOurs(generation) else { return nil }
+        }
+
+        guard let captured = finishRoomSample(generation) else { return nil }
+        abandon()
+        return Self.pcm16Samples(captured)
+    }
+
+    // The lock is touched only from these synchronous helpers: `NSLock.lock()`
+    // is unavailable from an async context under Swift 6, and reaching for a
+    // different primitive would mean this one file holding two.
+
+    private func beginRoomSample() -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        guard !running, !roomSampling else { return nil }
+        roomSampling = true
+        roomSampleGeneration += 1
+        return roomSampleGeneration
+    }
+
+    private func roomSampleIsStillOurs(_ generation: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return roomSampleGeneration == generation
+    }
+
+    /// The captured window, or nil if this sample was cancelled while it slept.
+    /// Nil here is what stops a woken sampler from abandoning the engine that a
+    /// live capture is now using.
+    private func finishRoomSample(_ generation: Int) -> Data? {
+        lock.lock(); defer { lock.unlock() }
+        guard roomSampleGeneration == generation else { return nil }
+        roomSampling = false
+        return buffer
+    }
+
+    private func failRoomSample() {
+        lock.lock(); roomSampling = false; lock.unlock()
+    }
+
+    /// Stop any room sample immediately and give the device back.
+    ///
+    /// Called on the capture path BEFORE `start`, because `start` refuses while
+    /// `running` is true — a courtesy check left in flight would otherwise turn
+    /// the user's key press into a silent no-op.
+    public func cancelRoomSample() {
+        lock.lock()
+        guard roomSampling else { lock.unlock(); return }
+        roomSampling = false
+        roomSampleGeneration += 1
+        lock.unlock()
+        abandon()
+        Permissions.log("courtesy: sample cancelled, device released to capture")
+    }
+
+    /// Whether a room sample currently holds the microphone.
+    public var isSamplingRoom: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return roomSampling
+    }
+
+    private static func pcm16Samples(_ data: Data) -> [Int16] {
+        guard !data.isEmpty else { return [] }
+        return data.withUnsafeBytes { raw in
+            let count = raw.count / MemoryLayout<Int16>.size
+            var out = [Int16](repeating: 0, count: count)
+            _ = out.withUnsafeMutableBytes { raw.copyBytes(to: $0, count: count * 2) }
+            return out
+        }
     }
 
     /// Bind to the preferred input NOW, at launch, instead of on the first press.
