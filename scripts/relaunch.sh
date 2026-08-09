@@ -119,6 +119,31 @@ done
 echo "→ building"
 ( cd "$CLEAN_WORKTREE" && ./scripts/bundle.sh debug >/dev/null )
 
+# Deploy INTO the installed copy when there is one.
+#
+# Once scripts/install.sh has run, /Applications holds the app the Dock,
+# Spotlight and the login item all point at. Building here and opening the
+# worktree copy instead would leave two bundles with one bundle id: the one you
+# just built running now, and a stale one starting at your next login. So the
+# built bundle replaces the installed one and everything downstream uses that
+# path. No install, no change — the worktree copy stays the target, exactly as
+# before, so this is safe on a machine that has never run the installer.
+INSTALLED="/Applications/$APP"
+if [ -d "$INSTALLED" ]; then
+  echo "→ updating the installed copy"
+  rm -rf "$INSTALLED"
+  cp -R "$APP_PATH" "$INSTALLED"
+  xattr -dr com.apple.quarantine "$INSTALLED" 2>/dev/null || true
+  if ! codesign --verify --deep --strict "$INSTALLED" 2>/dev/null; then
+    # A copy that does not verify is a DIFFERENT app to macOS: every permission
+    # would be re-prompted. Keep running the worktree build rather than install
+    # something that would silently cost the user their grants.
+    echo "✗ the installed copy does not verify — leaving it and using the worktree build" >&2
+    INSTALLED=""
+  fi
+  [ -n "$INSTALLED" ] && APP_PATH="$INSTALLED"
+fi
+
 # Only now. Two instances racing for one global hotkey is its own bug, so the old
 # one goes down immediately before the new one comes up, not before the build.
 if pgrep -f TranquilityApp >/dev/null; then
