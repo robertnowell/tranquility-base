@@ -1656,7 +1656,12 @@ final class StatusHUD: NSObject {
     /// drag's arithmetic depends on that.
     private func rebuildVoiceRows() {
         voiceStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let byId = Dictionary(uniqueKeysWithValues: face.voices.map { ($0.id, $0) })
+        // Same hazard as the agents probe in sessionRowsNow: `uniqueKeysWithValues:`
+        // traps on a duplicate key, and `voices` is decoded from voices.json — data
+        // from the account, not a literal we control. A repeated voice id would kill
+        // the app on opening settings. First-seen wins; a duplicate id is the same
+        // voice twice, so which copy survives cannot matter.
+        let byId = Dictionary(face.voices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         // A roster id the catalog no longer lists has no row (nothing to play,
         // nothing to name); it stays in the persisted roster untouched until
         // the user next reorders, which saves exactly what is on screen.
