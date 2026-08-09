@@ -288,6 +288,14 @@ enum StateLegend {
     /// ruling 1): every user-facing noun on the panel says agent.
     static let newAgentTitle = "NEW AGENT"
 
+    /// The grid strip's transient amber line, for the refusal that is not a
+    /// failure (ruled 08 Aug). It says what happened to the MICROPHONE and
+    /// nothing else: no "Nothing sent" (nothing was ever going to be), and no
+    /// classification of the agent — "Needs you" is our internal reading of a
+    /// session's condition, and no session's condition changed. The triangle
+    /// stays: it is the one mark that earns the amber.
+    static let noWordsNotice = "\(Glyph.needsYou) No words detected — try again"
+
     // MARK: - Controls
 
     static let backTitle = "\(Glyph.back) Back"
