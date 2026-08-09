@@ -128,6 +128,7 @@ if pgrep -f TranquilityApp >/dev/null; then
 fi
 
 echo "→ launching"
+LAUNCHED_AT=$(date +%s)
 open "$APP_PATH"
 sleep 4
 
@@ -135,5 +136,26 @@ if pgrep -f TranquilityApp >/dev/null; then
   echo "✓ running $TARGET"
 else
   echo "✗ did not stay up — check ~/Library/Application Support/VoiceDispatch/app.log" >&2
+  exit 1
+fi
+
+# The self-tests, read rather than merely run.
+#
+# The panel is the most-edited code in the repo and the only layer `swift test`
+# cannot reach, so "252 tests green" has never said anything about it. The drills
+# that CAN speak for it have run at every launch since the beginning and nothing
+# ever looked at the answer. Now the relaunch does.
+#
+# Reporting, not refusing. The app is already up on the new build by this point,
+# and taking it back down over a failed drill would contradict the one rule this
+# script exists to hold — never leave the app down. A loud non-zero exit is
+# enough to stop a merge; the operator decides what to do about the app.
+#
+# The drills are asynchronous (one reports five seconds after the undo window),
+# so give them room before reading.
+sleep 6
+if ! ./scripts/check-selftests.sh "" "$LAUNCHED_AT"; then
+  echo "✗ the build is running, but its self-tests did not pass." >&2
+  echo "  Fix or revert before landing this — the panel has no other coverage." >&2
   exit 1
 fi

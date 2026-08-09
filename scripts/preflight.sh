@@ -1,0 +1,96 @@
+#!/bin/bash
+#
+# Everything that must be true before a branch lands, and nothing that lands it.
+#
+# Why this stops short of pushing: this repo has no CI, and the layer that
+# collides most — Sources/TranquilityApp — has no unit tests at all, so a green
+# `swift test` is not evidence about the panel. A one-command land-and-deploy
+# would put the frictionless path exactly where the judgment is needed. So this
+# does the mechanical part and then prints the command it deliberately did not
+# run.
+#
+# It also closes the failure that actually happened (08 Aug): local `main` sat
+# two unpushed commits away from origin/main for a day while origin/main moved
+# on. Nobody noticed until a merge went looking. Checking is cheap; discovering
+# it mid-merge is not.
+#
+# Usage: scripts/preflight.sh [base]        (default base: origin/main)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+BASE="${1:-origin/main}"
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+if [ "$BRANCH" = "HEAD" ]; then
+  echo "✗ detached HEAD — check out the branch you mean to land." >&2
+  exit 1
+fi
+
+# A dirty tree is not necessarily YOURS. Several sessions work this repo at once
+# and one of them was mid-edit in these files as recently as this afternoon, so
+# this refuses rather than stashing, and says whose problem it might be.
+if [ -n "$(git status --porcelain)" ]; then
+  echo "✗ working tree is dirty — refusing." >&2
+  git status --short >&2
+  echo "  If these edits are not yours, another session is live in this tree." >&2
+  echo "  Commit or stash deliberately; never 'git add -A'." >&2
+  exit 1
+fi
+
+echo "→ fetching"
+git fetch -q origin
+
+AHEAD=$(git rev-list --count "$BASE..HEAD")
+BEHIND=$(git rev-list --count "HEAD..$BASE")
+echo "→ $BRANCH is $AHEAD ahead, $BEHIND behind $BASE"
+
+if [ "$BEHIND" -gt 0 ]; then
+  echo "✗ behind $BASE by $BEHIND commit(s) — rebase or merge before landing:" >&2
+  git log --oneline "HEAD..$BASE" | sed 's/^/    /' >&2
+  echo "    git merge $BASE        # or: git rebase $BASE" >&2
+  exit 1
+fi
+
+if [ "$AHEAD" -eq 0 ]; then
+  echo "✓ nothing to land — $BRANCH is already $BASE"
+  exit 0
+fi
+
+# Local main drifting from origin/main is the specific bug this catches.
+if git show-ref -q --verify refs/heads/main; then
+  MAIN_AHEAD=$(git rev-list --count "origin/main..main")
+  if [ "$MAIN_AHEAD" -gt 0 ]; then
+    echo "✗ local main has $MAIN_AHEAD commit(s) not on origin/main:" >&2
+    git log --oneline origin/main..main | sed 's/^/    /' >&2
+    echo "  Resolve that before landing, or this merge will fork it further." >&2
+    exit 1
+  fi
+fi
+
+echo "→ building"
+swift build 2>&1 | grep -E "error:|warning: .*never used" || true
+swift build >/dev/null
+
+echo "→ testing"
+if ! swift test 2>&1 | tail -40 | grep -qE "with 0 failures"; then
+  echo "✗ tests failed" >&2
+  swift test 2>&1 | grep -E "error:|failed" | head -20 >&2
+  exit 1
+fi
+echo "✓ build clean, tests green"
+
+cat <<EOF
+
+Preflight passed. Nothing has been pushed or deployed — deliberately.
+
+  Remember what green does and does not mean here: swift test proves
+  TranquilityCore. It says nothing about Sources/TranquilityApp, which has no
+  unit tests. The panel's evidence is the launch self-tests, and those only
+  speak after scripts/relaunch.sh.
+
+To land:
+  git branch -f main $BRANCH && git push origin main:main && scripts/relaunch.sh
+
+  (branch -f rather than checkout: it moves the ref without touching a working
+  tree another session may be editing.)
+EOF
