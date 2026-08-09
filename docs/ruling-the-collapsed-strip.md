@@ -55,10 +55,17 @@ topics, no `AGENTS` strip label, no `gridHint` key line. The lamp's 9px circle
 and its four fills (`StateLegend.Lamp`) are already the whole vocabulary the
 strip needs — collapsing changes what is omitted, never what a color means.
 
-**Expand has no slot of its own — the logo becomes it on hover** (ruled 08 Aug,
-second pass). At rest the strip is exactly what the first ruling described:
-"that color and our logo and that's it." While the cursor is anywhere over the
-panel, the logo swaps in place to the Expand affordance; on exit it swaps back.
+**All collapsed chrome is hover-revealed** (ruled 08 Aug, second and third
+passes). At rest the strip is exactly what the first ruling described: "that
+color and our logo and that's it." While the cursor is anywhere over the panel,
+the logo swaps in place to the Expand affordance and the X appears at the
+bottom; on exit both revert. Expand has no slot of its own — it *is* the logo's
+slot.
+
+**The X minimizes to the menu bar, from either width** — "when it's collapsed or
+whatever, the X just minimizes it to the top bar." It is not a close and not a
+collapse; it is the existing dismiss, reachable at both widths, and it lands in
+the third tier below.
 
 The swap is in place and the header keeps one fixed slot, so nothing below it
 ever moves — **the collapsed strip has no vertical movement caused by chrome.**
@@ -82,47 +89,55 @@ brings up the grid at whatever width it was last at. Nothing else sets it.
 much." WS-B's rule (green newest-first, then quiet) stands; this ruling does not
 reopen it, and no session should spend a pass on it.
 
+**Three states, and only three** (ruled 08 Aug, third pass — "yes, only 3
+states"). There is no Minimize control, because the third tier already ships:
+
+| | footprint | shows | reached by |
+|---|---|---|---|
+| expanded | the grid | all lamps + callsigns, idle included | Expand (the logo, on hover) |
+| collapsed | ~40px strip | ready / working / fault lamps | Collapse |
+| minimized | menu-bar item only | the waiting count (`menuBarCount`) | the X, from either width |
+
+**Nothing ever auto-collapses** (ruled 08 Aug, third pass, adopting this
+session's recommendation). The width changes when the user changes it and at no
+other time. A strip whose shape is constant and whose colour is the only
+variable can be read at a glance; one that reorganizes itself while you are not
+looking has to be re-read every time, which spends the exact calm the product
+is selling.
+
 ## Open — do not guess these
 
-1. ~~**What "idle lamps" means.**~~ **RESOLVED 08 Aug, same evening** — "keep the
-   blue dots while it's in the collapsed state." Hide `.running`; keep `.ready`,
-   `.working`, `.fault`. Moved up into the ruled section.
+Questions 1, 1b, 2 and 3 were all resolved on 08 Aug within the same evening and
+have moved into the ruled section above: blue survives collapse, the X is
+hover-revealed, there are three states and no Minimize control, and nothing
+auto-collapses.
 
-1b. **Does the X hover-swap too?** Not asked and not answered. The logo→Expand
-   swap establishes that collapsed chrome is hover-revealed; a permanently
-   visible dismiss control alongside a hover-revealed expand control is the
-   inconsistent reading. *This session's read, not ruled: both ends of the strip
-   are hover-revealed, so at rest the strip is logo + lamps and nothing else,
-   which is what the first ruling literally described.* Needs Robert.
+4. **Reflow when a lamp appears.** In a 40px column that omits idle lamps, a
+   session going quiet→ready makes a lamp *appear*, moving every lamp below it.
+   This is the last place vertical movement can enter the resting face, and the
+   ruled principle — chrome must never push the lamps down — argues it should
+   not be allowed in through the back door either.
 
-2. **Collapse vs. Minimize — one control or two.** The ruling says "it's
-   possible you might want two controls." Note that a third tier already
-   exists and ships: dismiss hides the panel outright and the menu-bar item
-   carries the count (WS-B, `menuBarCount`). So the tiers are already
-   expanded / hidden, and this ruling inserts collapsed between them. *This
-   session's read, not ruled: no new Minimize control — the existing dismiss
-   IS minimize, and a fourth tier buys nothing.* Needs Robert.
+   Posed originally as fixed-8-slot-column versus reflowing-stack. There is a
+   third reading that may dissolve it, and a session picking this up should
+   consider it first: **`.running` already renders as a socket, not a lamp** —
+   `StateLegend.Lamp.running` is hover putty with a hairline ring, described in
+   its own doc comment as reading "as a socket, not an absence." So "hide the
+   idle lamps" and "never move the live ones" may not be in conflict at all:
+   keep one slot per live session, and let idle sessions render as the socket
+   they already are. Nothing moves when a session lights up, because the slot
+   was always there, and the strip at rest is still just colour and logo because
+   an unlit socket is nearly invisible against the surface.
 
-3. **When, if ever, anything collapses on its own.** The ruling is explicit
-   that this is unresolved — "the conditions of when that happens I'm not
-   completely sure." Until it is ruled, the answer is **nothing auto-collapses**,
-   because that is the only behaviour that cannot be wrong. *This session's
-   read, not ruled: it should stay that way permanently. A strip whose shape is
-   constant and whose colour is the only variable is glanceable; one that
-   reorganizes itself while you are not looking has to be re-read each time,
-   which is the calm the product is selling being spent on cleverness.*
-
-4. **Reflow when a lamp appears.** In a 40px column that hides idle lamps, a
-   session going quiet→ready must appear, which moves every lamp below it. This
-   is the one place motion is unavoidable in the resting face. Stable slots (a
-   lamp keeps its position and fades between fills) versus a reflowing stack are
-   materially different products; the first costs a fixed 8-slot column, the
-   second costs the user their positional memory. Not ruled either way.
+   That reading is this session's, not Robert's, and it changes what "idle lamps
+   drop out" means — under it they dim rather than disappear. Worth one sentence
+   of confirmation before anyone builds it. Needs Robert.
 
 5. **Screen position.** "You could totally use the whole thing just in the
    single-column contextual view on the right" — unclear whether the collapsed
-   strip docks to a screen edge or stays where the panel is. Today the panel is
-   a positioned floating card; docking is a different amount of work. Not ruled.
+   strip docks to a screen edge or stays where the panel already floats. Today
+   the panel is a positioned floating card; docking is a different amount of
+   work. Still not ruled.
 
 ## What this does not touch
 
