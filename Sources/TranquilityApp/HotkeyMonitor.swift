@@ -38,6 +38,16 @@ public final class HotkeyMonitor: @unchecked Sendable {
         /// here — a deliberate exception to the optionTapped rule above. Reserved
         /// for WS-A's depth-1 pull; the handler today only logs.
         case controlDoubleTapped
+        /// A bare ⌃ tap that is not a command: the first of a possible ⌃⌃, or a
+        /// press that turned out to be nothing. Carries no instruction — it
+        /// exists so the acknowledgment light can say "received" without also
+        /// claiming "done", which are different facts that used to look alike.
+        ///
+        /// Emitted on RELEASE, like every other classification here, and that is
+        /// load-bearing: a key-down signal would light the panel on the ⌃ of
+        /// every ⌃C and the ⌥ of every typed special character. An interfered
+        /// press never reaches this switch, so typing still never shows anything.
+        case controlRegistered
         /// Option, held past the threshold.
         case replyBegan
         case replyEnded
@@ -215,6 +225,13 @@ public final class HotkeyMonitor: @unchecked Sendable {
                 onTransition(.controlDoubleTapped)
             } else {
                 lastControlTapAt = Date()
+                // Say so. This tap commands nothing — it may yet become ⌃⌃, or
+                // it may have been the whole of what the user did — but it WAS
+                // received, and the one thing the panel must never do is leave
+                // that in doubt. Emitted as its own case rather than folded into
+                // the gesture cases because the light draws it differently: this
+                // is the only transition that is not an instruction.
+                onTransition(.controlRegistered)
             }
         default: break  // an unassigned combination: no action.
         }

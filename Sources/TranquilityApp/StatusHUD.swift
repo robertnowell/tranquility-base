@@ -1202,6 +1202,9 @@ final class StatusHUD: NSObject {
     /// property, which is exactly what a rapid second gesture produces.
     private var ackBar: NSView?
     private var ackHeld = false
+    /// The pending fade. Held so the next press inside the window can cancel it
+    /// — cancelling is what turns two presses into one light.
+    private var ackStandDown: DispatchWorkItem?
     /// The height last requested of the panel — the resize's own memory, so an
     /// in-flight animation cannot be mistaken for a settled size.
     private var intendedHeight: CGFloat?
@@ -1371,7 +1374,14 @@ final class StatusHUD: NSObject {
     /// an acknowledgment. One light, one press.
     func holdAcknowledge() {
         guard let layer = ackBarLayer() else { return }
+        // A hold that begins inside an acknowledgment's window takes the light
+        // over: cancel the stand-down that would otherwise fade it mid-press,
+        // and claim the colour, or a hold following a blue ⌃ would be held in
+        // blue and say the wrong thing for as long as the key is down.
+        ackStandDown?.cancel(); ackStandDown = nil
         layer.removeAnimation(forKey: "ack")
+        layer.removeAnimation(forKey: "ack-colour")
+        layer.backgroundColor = Acknowledgement.recognized.color
         layer.opacity = 1
         ackHeld = true
         Permissions.log("ack: held on")
@@ -1393,21 +1403,93 @@ final class StatusHUD: NSObject {
         Permissions.log("ack: released")
     }
 
-    /// One flash, for gestures that are instantaneous by nature (a ⌃⌥ tap,
-    /// ⌃⌃, dismiss) and have no key-down/key-up span to hold a light through.
-    func flashAcknowledge() {
-        // A held light outranks a flash: a chord arriving mid-hold must not
-        // cut the hold's own light short.
+    /// What the light is saying about the press that just landed.
+    ///
+    /// Two colours, because a press and a gesture are different facts and only
+    /// one of them means the app did something. Both are Palette tokens already
+    /// carrying these meanings elsewhere in the panel — advisory blue is what
+    /// the app uses to say "noted", ready green is what it uses to say "go".
+    enum Acknowledgement {
+        /// Blue. A key landed and was understood as input, but the gesture it
+        /// belongs to has not resolved yet. Today that is the first of a
+        /// possible ⌃⌃ — bare ⌃ is the opening key of two chords and means
+        /// nothing alone, so it must be visibly *received* without claiming
+        /// anything was done.
+        case registered
+        /// Green. That was a gesture and the app acted on it.
+        case recognized
+
+        var color: CGColor {
+            switch self {
+            case .registered: return StateLegend.Palette.advisory.cgColor
+            case .recognized: return StateLegend.Palette.ready.cgColor
+            }
+        }
+        var name: String {
+            switch self {
+            case .registered: return "registered (blue)"
+            case .recognized: return "recognized (green)"
+            }
+        }
+    }
+
+    /// How long the light stays up after the last press before standing down.
+    ///
+    /// Half a second, which is the span a sequence lives in: it is longer than
+    /// the gap between two taps of the same hand (⌃⌃ and ⌥⌥ run 50–100ms apart,
+    /// per HotkeyMonitor's own measurements), so the second tap of a pair always
+    /// arrives while the light is still up and RECOLOURS it. That is the whole
+    /// design — ⌃ then ⌃ is one light going blue to green, not two flashes.
+    private static let ackHold: TimeInterval = 0.5
+    /// And out. Slow enough not to snap, fast enough not to linger as state:
+    /// the light is a receipt, not a status lamp.
+    private static let ackFade: TimeInterval = 0.25
+
+    /// Acknowledge a press: colour the light, hold it, then let it go.
+    ///
+    /// Supersedes the single 0.5s pulse-to-zero this replaced. The pulse started
+    /// fading the instant it appeared, so a two-tap gesture read as two separate
+    /// flickers and a press that resolved into something else could not show
+    /// that it had — there was no light still up to change. Holding first makes
+    /// the colour the signal and the fade merely the ending.
+    func acknowledge(_ what: Acknowledgement) {
+        // A held light outranks this: a chord arriving mid-hold must not cut
+        // the hold's own light short (unchanged from the pulse it replaces).
         guard !ackHeld, let layer = ackBarLayer() else { return }
+        ackStandDown?.cancel(); ackStandDown = nil
+
+        let wasLit = layer.opacity > 0
         layer.removeAnimation(forKey: "ack")
-        layer.opacity = 0
-        let pulse = CABasicAnimation(keyPath: "opacity")
-        pulse.fromValue = 1.0
-        pulse.toValue = 0.0
-        pulse.duration = 0.5
-        pulse.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        layer.add(pulse, forKey: "ack")
-        Permissions.log("ack: pulsed (visible=\(panel?.isVisible == true))")
+
+        // Recolour visibly when the light is already up. Snapping the colour
+        // would land in the same frame as the press and read as a flash — the
+        // thing this design exists to avoid — so the change itself is animated
+        // and IS the acknowledgment.
+        if wasLit, layer.backgroundColor != what.color {
+            let recolour = CABasicAnimation(keyPath: "backgroundColor")
+            recolour.fromValue = layer.backgroundColor
+            recolour.toValue = what.color
+            recolour.duration = 0.18
+            recolour.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(recolour, forKey: "ack-colour")
+        }
+        layer.backgroundColor = what.color
+        layer.opacity = 1
+
+        let standDown = DispatchWorkItem { [weak self] in
+            // A hold that started inside the window owns the light now.
+            guard let self, !self.ackHeld, let layer = self.ackBar?.layer else { return }
+            layer.opacity = 0
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 1.0
+            fade.toValue = 0.0
+            fade.duration = Self.ackFade
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            layer.add(fade, forKey: "ack")
+        }
+        ackStandDown = standDown
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.ackHold, execute: standDown)
+        Permissions.log("ack: \(what.name) (visible=\(panel?.isVisible == true))")
     }
 
     /// Returns false when the stage refused (a reply flow is live) — the caller
