@@ -148,13 +148,73 @@ just told you it does.
 2. **Otherwise, open the mic for a few seconds and listen.** Speech-like energy →
    **hold**. Quiet → speak.
 
-### Never transcribe — and the privacy question dissolves
+### The native recogniser is already here, already on-device, already permissioned
+
+Asked 08 Aug: "can't we run native speech-to-text, which isn't a network call…
+that's our fallback, right? I guess it's enable transcription, that's a user
+permission on a machine that has to be enabled."
+
+Yes, and it costs nothing new. Verified in the tree:
+
+- `AppleSpeechRecovery` (Transcription.swift) is the **last provider in
+  `RecoveryChain`** — "cloud first for quality, on-device last because it can
+  never be unavailable." `SFSpeechRecognizer` is already a dependency.
+- `NSSpeechRecognitionUsageDescription` is **already in the Info.plist**
+  (scripts/bundle.sh:70). No new permission, no new prompt, no fourth item in
+  onboarding. The "three permissions reasoned better than four" fight
+  (`bd9e71a` / `d0cf0ac`) does not get reopened by this.
+- `requiresOnDeviceRecognition = true` is **already set** (Transcription.swift:143).
+  The on-device discipline is established practice here, not a new claim.
+
+**One inversion is mandatory.** Today the line reads
+`if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }`
+— so on a machine lacking the on-device model, dictation silently uses the
+network. For dictation that is an accepted quality trade the user opted into by
+speaking. For the courtesy check it would mean **shipping ambient room audio to
+Apple to decide whether to say a callsign**, which inverts the entire point.
+
+So: if `supportsOnDeviceRecognition` is false, the courtesy check does not run
+the recogniser at all. It falls back to level-only, or holds. It must never
+reach the network. This is the one place the existing pattern must not be
+copied verbatim.
+
+### Words as a signal, never as content
+
+The check asks the recogniser one question — **did any word come back?** — and
+never looks at which. That is precisely the discrimination the ruling asked for
+("catch if we can get any words, or if it's just loud"): a human talking
+produces words, a fan and a passing truck do not.
+
+Pairs cleanly with the RMS floor already in `Recorder`: loud with no words is
+noise and speaking is fine; any word at all holds the hail.
+
+A podcast or a video produces words too, and will hold the hail. That is the
+right degradation — talking over something you are listening to is the same
+discourtesy — and it needs no special case.
+
+**The purist alternative, if "no text is ever produced" matters more than
+speed:** `SoundAnalysis`'s built-in classifier (`SNClassifySoundRequest`) scores
+audio against sound classes including speech, on-device, and never produces text
+at all — so it needs only the microphone permission, not the speech one. Better
+privacy property, one more framework, and a confidence threshold to tune instead
+of a word count. Recommended if the check ever moves somewhere the speech
+permission is not already granted. Not recommended today, because the recogniser
+is already wired and the word-count signal is trivially easy to threshold.
+
+### Never keep the words — and the privacy question dissolves
 
 The ruling wonders aloud about transcribing a couple of words and then worries
 about it ("maybe you don't want to do that for privacy reasons… obfuscate them
 or something, like '4 words detected'"). The worry is well-placed and the
-mitigation is unnecessary, because **the words are not needed**: knowing whether
-someone is speaking does not require knowing what they said.
+mitigation is unnecessary, because **the content is not needed**: knowing that
+someone is speaking does not require knowing what they said. The recogniser
+runs, the callback reports that words arrived, the count is the whole signal,
+and the strings are never read, logged, or stored.
+
+Note this is a sharper rule than the app applies to dictation, deliberately.
+`Transcription.trace` logs your words on purpose, and README says so — that is
+content you asked the app to capture. Room audio captured to decide whether to
+speak is not, and does not get the same treatment.
 
 So the rule is stronger and simpler than obfuscation. There is no transcript to
 obfuscate, because none is ever produced. No audio is buffered past the check,
