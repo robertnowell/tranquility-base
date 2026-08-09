@@ -28,6 +28,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// beats two chords to remember, and the boundary is unambiguous in practice
     /// because nobody holds a key for a third of a second by accident.
     private static let tapThreshold: TimeInterval = 0.35
+
+    /// How long the microphone must have been open before a silence-gated
+    /// recording is worth saying anything about (ruled 08 Aug). Not a send
+    /// threshold — the gate above it is unchanged, and a real 1.2-second "yes,
+    /// do it" still goes. This is purely how long you have to have HELD the key
+    /// before "no words" is news rather than noise about a slip of the thumb.
+    ///
+    /// Two seconds because a deliberate utterance is essentially never shorter,
+    /// and every sub-second capture the log has ever gated was an accident.
+    private static let notionalUtterance: TimeInterval = 2.0
     private var pressStartedAt: Date?
     private var listeningIndicator: DispatchWorkItem?
     /// Instant-arm (docs/instant-arm.md): when the arm window opened and the
@@ -1465,7 +1475,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.log(String(format:
                 "send: refused, silence gate (%.2fs, peak %.4f)", seconds, recorder.peakLevel))
             recordingTarget = nil
-            hud.showResult("Didn't catch that — too short or too quiet. Nothing sent.")
+            lastStatusLine = "nothing heard"
+            // Home, always: the gate is not a place to stand. Through the user
+            // door, because the mic state owns the stage and showIdle alone is
+            // (correctly) refused from it.
+            hud.endCapture(because: "silence gate")
+            showIdleGrid()
+            // What the panel says about it depends ENTIRELY on how long the mic
+            // was open (ruled 08 Aug). Under `notionalUtterance` you tapped the
+            // key, or bailed — there is no error to report, because you did not
+            // make one, and a screen that appears for a tap teaches you to fear
+            // the key. Past it you meant to speak and the room stayed quiet,
+            // which is worth one amber line and nothing more.
+            if seconds >= Self.notionalUtterance {
+                hud.flashNotice(StateLegend.noWordsNotice)
+            }
             rebuildMenu()
             return
         }

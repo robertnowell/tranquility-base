@@ -395,6 +395,54 @@ final class StatusHUD: NSObject {
         render()
     }
 
+    // MARK: - The grid notice (ruled 08 Aug)
+
+    /// A few seconds of amber in the grid's own strip, where the AGENTS placard
+    /// sits — the whole surface for a refusal that is not a failure.
+    ///
+    /// The silence gate used to paint the full `.result` face: the "Needs you"
+    /// pill, the session's title, "Didn't catch that — too short or too quiet.
+    /// Nothing sent." Three claims, and the only true one was the mic's. It
+    /// read as an incident report about an agent that had done nothing wrong,
+    /// it demanded a dismissal for a press that cost nothing, and it took the
+    /// stage away from the grid you were looking at. A card is for work left to
+    /// do; there is none here but to speak again.
+    ///
+    /// So: no state, no transition, no dismissal. The notice is a decoration on
+    /// idle that expires on its own clock, and it cannot exist anywhere else —
+    /// if the panel has moved to a card, whatever that card is about outranks a
+    /// stale word about the microphone.
+    private var notice: String?
+    private var noticeExpiry: DispatchWorkItem?
+
+    func flashNotice(_ text: String, seconds: TimeInterval = 5) {
+        guard case .idle = state else {
+            Permissions.log("notice: refused in \(state.name) — \(text)")
+            return
+        }
+        noticeExpiry?.cancel()
+        notice = text
+        Permissions.log("notice: \(text)")
+        let expiry = DispatchWorkItem { [weak self] in
+            guard let self, self.notice != nil else { return }
+            self.clearNotice()
+            self.render()
+        }
+        noticeExpiry = expiry
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: expiry)
+        render()
+    }
+
+    /// Whether the strip is currently carrying a notice — the selftest asserts
+    /// this returns to false, since nothing but its own clock clears it.
+    var noticeIsShowing: Bool { notice != nil }
+
+    private func clearNotice() {
+        noticeExpiry?.cancel()
+        noticeExpiry = nil
+        notice = nil
+    }
+
     /// `note` is a prefix about what just happened ("Stopped."). The sentence about
     /// what is waiting is always derived from `waiting`, never passed in — the two
     /// were computed at different call sites and drifted, so the panel showed
@@ -704,6 +752,20 @@ final class StatusHUD: NSObject {
             hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
             hintLabel.stringValue = "check = on roster · ▶ preview · drag ≡ to reorder"
             rebuildVoiceRows()
+        }
+
+        // The notice owns the strip while it lives, and only on idle — it is the
+        // face a refusal returns you TO, so it can never cover a card. Anywhere
+        // else it dies here rather than waiting for its clock: leaving idle is
+        // the panel saying it has something better to show.
+        if case .idle = state {
+            if let notice {
+                stateLabel.textColor = StateLegend.Palette.fault
+                stateLabel.attributedStringValue = placardText(
+                    notice, color: StateLegend.Palette.fault)
+            }
+        } else if self.notice != nil {
+            clearNotice()
         }
 
         // The action row exists exactly when a quiet action is visible. (The
@@ -1491,6 +1553,21 @@ final class StatusHUD: NSObject {
         // is (correctly) refused from a capture state.
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
+
+        // The notice: takes the strip on the grid, refused onto a card, and
+        // cleared by the move to one. Nothing outside its own clock clears it,
+        // so it has to prove it does not leak — same burden as the receipt.
+        flashNotice(StateLegend.noWordsNotice)
+        let noticedOnGrid = noticeIsShowing
+            && stateLabel.attributedStringValue.string == StateLegend.noWordsNotice
+        showResult("A card arriving over a notice.")
+        let clearedByCard = !noticeIsShowing
+        flashNotice(StateLegend.noWordsNotice)
+        let refusedOnCard = !noticeIsShowing
+        Permissions.log("selftest notice: onGrid=\(noticedOnGrid) "
+                        + "clearedByCard=\(clearedByCard) refusedOnCard=\(refusedOnCard)")
+        endCapture(because: "selftest cleanup")
+        showIdle(rows: [])
     }
 
     // MARK: - Pose driver (dev tooling)
@@ -1692,6 +1769,17 @@ final class StatusHUD: NSObject {
         case "needsyou":
             adopt()
             showResult("promotions copy's tab is gone — copied your words to the clipboard.")
+
+        case "notice":
+            // What the silence gate looks like now (ruled 08 Aug): the grid you
+            // were already on, one amber line in the strip where AGENTS sits,
+            // and no card at all. Pinned — the notice's own clock would clear it
+            // out from under the photograph.
+            _ = pose("grid")
+            flashNotice(StateLegend.noWordsNotice)
+            noticeExpiry?.cancel()
+            noticeExpiry = nil
+            return true
 
         case "receipt":
             // The dictation receipt (ui-pass-7, ruling 5). No adopted target:
