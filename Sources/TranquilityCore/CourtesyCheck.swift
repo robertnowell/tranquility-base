@@ -1,0 +1,263 @@
+import AVFoundation
+import Foundation
+import Speech
+
+/// Listening for a moment before speaking, so the app does not talk over a human.
+///
+/// Ruled 08 Aug 2026 (docs/ruling-an-arrival-does-not-move-the-panel.md, ruling 3):
+/// before an unprompted hail, check whether anyone is talking; if they are, hold.
+/// "It's a courtesy thing. It's just listening before you talk."
+///
+/// ## Two properties this type exists to guarantee
+///
+/// **It cannot return words.** `WordCounter` yields an `Int?`, not a string, and
+/// nothing in this file can produce text at an API boundary. That is deliberate:
+/// the privacy question here does not get answered by a promise to discard the
+/// transcript, it gets answered by there being no transcript to discard. Knowing
+/// that someone is speaking never required knowing what they said.
+///
+/// This is a sharper rule than the app applies to dictation, on purpose.
+/// `Transcription.trace` logs your words and the README says so — that is content
+/// you asked the app to capture. Room audio taken to decide whether to say a
+/// callsign is not, and does not get the same treatment.
+///
+/// **It never opens the microphone.** `assess` takes samples and returns a
+/// verdict. Opening the device, timing the window and closing it is a thin shell
+/// somewhere else. That is what makes the interesting behaviour a pure function
+/// of a buffer, and therefore testable against fixtures instead of against
+/// somebody standing in a room saying "seems right".
+public struct CourtesyCheck: Sendable {
+
+    /// What a few seconds of room audio amounted to. Carries no audio and no text.
+    public struct Assessment: Sendable, Equatable {
+        /// The verdict: someone is talking, hold the hail.
+        public let speechDetected: Bool
+        /// Raw RMS of the window, 0...1. Logged; never a verdict on its own.
+        ///
+        /// Deliberately NOT `Recorder.rms`'s scale. That one multiplies by 8 and
+        /// clamps for a level meter, where saturating early is a feature — a bar
+        /// that pins at loud reads fine. Here the number's only job is to let the
+        /// log-only pass choose a threshold, and the first run of `tbase courtesy`
+        /// showed why the meter scale cannot do that: noise at 0.3 amplitude, a
+        /// pure tone at 0.4 and real speech all reported 1.0000, so a day of
+        /// observations would have produced one value and no information.
+        public let level: Float
+        /// How many words came back. Never WHICH — see the type doc.
+        /// Zero when the recogniser ran and heard none; nil when it did not run.
+        public let wordCount: Int?
+        /// Why, in the gate log's voice.
+        public let reason: String
+    }
+
+    /// Counts words in a window without ever surfacing them.
+    ///
+    /// Injectable for the same reason `InterruptGate.Signals` is: a test that
+    /// consults the machine is not testing the thing it claims to. With a stub
+    /// counter the whole ladder below is deterministic; the real recogniser gets
+    /// its own integration test that skips when unauthorised.
+    ///
+    /// Returns nil when the count could not be taken at all — no on-device model,
+    /// no authorisation, recogniser unavailable. Nil is "I could not look", which
+    /// the ladder treats differently from zero, "I looked and heard nobody".
+    public struct WordCounter: Sendable {
+        public var count: @Sendable (_ samples: [Int16], _ sampleRate: Double) async -> Int?
+
+        public init(count: @escaping @Sendable (_ samples: [Int16], _ sampleRate: Double) async -> Int?) {
+            self.count = count
+        }
+
+        /// Heard nobody. For tests about the ladder rather than about recognition.
+        public static let silent = WordCounter { _, _ in 0 }
+        /// Could not look. Exercises the degrade-to-speaking path.
+        public static let unavailable = WordCounter { _, _ in nil }
+        /// Heard someone.
+        public static func hearing(_ words: Int) -> WordCounter { WordCounter { _, _ in words } }
+    }
+
+    /// RMS below which the room is quiet and the recogniser is not worth waking.
+    ///
+    /// A pre-filter, not the verdict. Its only job is to skip the expensive
+    /// question when the answer is obvious, so the common case — an empty room —
+    /// costs nothing. Deliberately LOW: a threshold tuned to comfortable speech
+    /// misses the person murmuring beside you, and that is the case this whole
+    /// feature exists for. When in doubt it should pass the buck to the
+    /// recogniser, which is the thing that can actually tell.
+    ///
+    /// PROVISIONAL, and in RAW RMS — see `Assessment.level`. Worth exactly
+    /// nothing until the log-only pass produces real numbers
+    /// (docs/courtesy-check-evidence-plan.md). Do not defend it.
+    public var quietFloor: Float
+
+    public var words: WordCounter
+
+    public init(quietFloor: Float = 0.005, words: WordCounter = .apple) {
+        self.quietFloor = quietFloor
+        self.words = words
+    }
+
+    /// The ladder, in order. Cheap first, and the verdict leans toward silence.
+    ///
+    /// The errors are not symmetric and the thresholds are set accordingly. A
+    /// false positive — we think someone is talking, we hold — costs a delayed
+    /// hail: the lamp is still green, the next tick tries again, nothing is lost.
+    /// A false negative talks over somebody's sentence, which is the entire
+    /// failure this exists to prevent. So a crude detector is adequate, and
+    /// nobody should build a classifier here.
+    public func assess(samples: [Int16], sampleRate: Double) async -> Assessment {
+        let level = Self.rms(samples)
+
+        // 1. Too quiet to be anybody. Skip the recogniser entirely.
+        if level < quietFloor {
+            return Assessment(
+                speechDetected: false, level: level, wordCount: nil,
+                reason: String(format: "room is quiet (level %.4f < floor %.4f)", level, quietFloor))
+        }
+
+        // 2. Loud enough that it might be a person. Ask whether it is.
+        guard let heard = await words.count(samples, sampleRate) else {
+            // Could not look. Degrade to today's behaviour rather than to
+            // permanent silence: a user whose recogniser is unavailable still
+            // wants to know their agent came back, and a check that can never
+            // run must not turn into a hail that never fires.
+            return Assessment(
+                speechDetected: false, level: level, wordCount: nil,
+                reason: String(format: "audible (level %.4f) but no recogniser — speaking anyway", level))
+        }
+
+        // 3. A person produces words; a fan does not. This is the discrimination
+        //    the ruling asked for — "catch if we can get any words, or if it's
+        //    just loud". A podcast produces words too and will hold the hail,
+        //    which is the right degradation and needs no special case: talking
+        //    over something you are listening to is the same discourtesy.
+        if heard > 0 {
+            return Assessment(
+                speechDetected: true, level: level, wordCount: heard,
+                reason: String(format: "speech detected (%d words, level %.4f)", heard, level))
+        }
+        return Assessment(
+            speechDetected: false, level: level, wordCount: 0,
+            reason: String(format: "audible but wordless (level %.4f) — noise, not a person", level))
+    }
+
+    /// Plain RMS over the window, 0...1, unscaled and unclamped.
+    ///
+    /// `Recorder.rms` is the same computation times 8 and clamped, because it
+    /// drives a level meter. Do not copy that here: the multiplier saturates
+    /// everything above ~0.125 to exactly 1.0, which is invisible in a meter and
+    /// fatal to a threshold nobody has chosen yet.
+    static func rms(_ samples: [Int16]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sum: Double = 0
+        for s in samples {
+            let v = Double(s) / 32768
+            sum += v * v
+        }
+        return Float((sum / Double(samples.count)).squareRoot())
+    }
+}
+
+// MARK: - The real recogniser
+
+extension CourtesyCheck.WordCounter {
+
+    /// `SFSpeechRecognizer`, on-device, counting only.
+    ///
+    /// Costs no new permission: `AppleSpeechRecovery` already makes the
+    /// recogniser the last provider in `RecoveryChain`, and
+    /// `NSSpeechRecognitionUsageDescription` is already in the bundle
+    /// (scripts/bundle.sh). The "three permissions reasoned better than four"
+    /// question (bd9e71a / d0cf0ac) is not reopened by this.
+    ///
+    /// **The one line that must not be copied from `AppleSpeechRecovery`.**
+    /// Transcription guards its on-device request as
+    /// `if recognizer.supportsOnDeviceRecognition { requiresOnDeviceRecognition = true }`,
+    /// so a machine without the local model silently uses the network. For
+    /// dictation that is an accepted quality trade for words you chose to speak.
+    /// Here it would mean shipping ambient room audio to Apple in order to decide
+    /// whether to say a callsign, which inverts the entire point of the feature.
+    /// So the guard is inverted: no on-device model means no recognition at all.
+    public static let apple = CourtesyCheck.WordCounter { samples, sampleRate in
+        guard SFSpeechRecognizer.authorizationStatus() == .authorized,
+              let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+              recognizer.isAvailable,
+              recognizer.supportsOnDeviceRecognition
+        else { return nil }
+
+        guard let buffer = CourtesyCheck.pcmBuffer(from: samples, sampleRate: sampleRate)
+        else { return nil }
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        // Never the network. Unconditional, unlike the dictation path.
+        request.requiresOnDeviceRecognition = true
+        // Nothing downstream reads text, so partials would only be more chances
+        // to hold words we have no use for.
+        request.shouldReportPartialResults = false
+        // No `contextualStrings`. The lexicon biases the recogniser toward THIS
+        // app's callsigns, which is right for dictation and pointless here —
+        // we are asking whether a human is audible, not who they are.
+        request.append(buffer)
+        request.endAudio()
+
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Int?, Never>) in
+            let resumed = OneShot()
+            recognizer.recognitionTask(with: request) { result, error in
+                if let error {
+                    // Two very different failures arrive down one channel, and
+                    // the first run of `tbase courtesy` proved it: noise and a
+                    // pure tone both reported "no recogniser — speaking anyway"
+                    // on a machine whose recogniser was working perfectly, and
+                    // had just counted nine words in the row below.
+                    //
+                    // `kAFAssistantErrorDomain` 1110 is "no speech detected" —
+                    // the recogniser ran, listened, and heard nobody. That is a
+                    // VERDICT (0 words), not an outage. Reporting it as an
+                    // outage is harmless while nil means "speak", and becomes a
+                    // silent lie the day anyone makes nil mean "hold".
+                    let ns = error as NSError
+                    let heardNobody = ns.domain == "kAFAssistantErrorDomain" && ns.code == 1110
+                    if resumed.claim() { continuation.resume(returning: heardNobody ? 0 : nil) }
+                    return
+                }
+                guard let result, result.isFinal else { return }
+                // The ONLY thing read off the result. The transcription itself is
+                // never touched, logged, or returned.
+                let count = result.bestTranscription.segments.count
+                if resumed.claim() { continuation.resume(returning: count) }
+            }
+        }
+    }
+}
+
+extension CourtesyCheck {
+    /// PCM16 mono to the float buffer the recogniser wants. In memory only —
+    /// the courtesy check never writes audio anywhere, which is why this does not
+    /// reuse `AppleSpeechRecovery`'s file-based `SFSpeechURLRecognitionRequest`.
+    static func pcmBuffer(from samples: [Int16], sampleRate: Double) -> AVAudioPCMBuffer? {
+        guard !samples.isEmpty,
+              let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                         sampleRate: sampleRate,
+                                         channels: 1,
+                                         interleaved: false),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format,
+                                            frameCapacity: AVAudioFrameCount(samples.count)),
+              let channel = buffer.floatChannelData?[0]
+        else { return nil }
+        for (i, s) in samples.enumerated() { channel[i] = Float(s) / 32768 }
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        return buffer
+    }
+}
+
+/// One-shot latch for a continuation a callback may reach more than once.
+/// `Transcription` has its own `Resumed` for the same reason; that one is private
+/// to the file and this target has no shared home for a four-line primitive.
+private final class OneShot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
+    }
+}

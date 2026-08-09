@@ -27,6 +27,13 @@ func usage() -> Never {
                                 replay a saved recording through the AssemblyAI
                                 streaming provider in pseudo-realtime
 
+    the courtesy check (listening before we talk):
+      tbase devices             input devices, and which are running for anybody
+      tbase gate                what the interrupt gate would decide right now
+      tbase gate-watch [secs]   log-only observation; suppresses nothing
+      tbase courtesy [sentence] run the speech/noise discrimination over
+                                synthesised fixtures — no microphone is opened
+
     dispatch:
       tbase targets                       live sessions, with tty and enrolment
       tbase enroll <sessionId>            allow dispatch into a session
@@ -530,6 +537,49 @@ case "hook-config":
         print(String(format: "idle:         %.1fs", decision.idleSeconds))
         print("frontmost:    \(decision.frontmostApp ?? "unknown")")
         print("screenLocked: \(decision.screenLocked)")
+        print("micInUse:     \(decision.microphoneInUse)")
+        print("heldForCourtesy: \(decision.heldForCourtesy)")
+
+    case "devices":
+        // Which inputs exist, and which are running for somebody right now.
+        // Start a Zoom call or a QuickTime recording and run this again: the
+        // in-use column flips without this app ever opening the microphone.
+        let inputs = AudioInputDevice.allInputs()
+        guard !inputs.isEmpty else { print("no input devices"); break }
+        for d in inputs {
+            let tags = [d.isBuiltIn ? "built-in" : nil, d.isBluetooth ? "bluetooth" : nil]
+                .compactMap { $0 }.joined(separator: ",")
+            let mark = AudioInputDevice.isInUse(d.id) ? "IN USE" : "idle  "
+            print("  \(mark)  \(d.name)\(tags.isEmpty ? "" : "  [\(tags)]")")
+        }
+        print("\nanyInputInUse: \(AudioInputDevice.anyInputInUse())")
+
+    case "courtesy":
+        // Prove the discrimination the ruling asks for, without needing a room:
+        // synthesise speech with `say`, synthesise noise, and run both through
+        // the same assessment the hail will consult.
+        //
+        // With no argument it uses a fixed sentence; `tbase courtesy "..."`
+        // speaks your own. Either way nothing is recorded and no microphone is
+        // opened — this exercises assess(), which takes samples by design.
+        let sentence = args.count > 1
+            ? args.dropFirst().joined(separator: " ")
+            : "the quick brown fox jumps over the lazy dog"
+
+        await CourtesyDemo.authorizeIfNeeded()
+        let check = CourtesyCheck()
+        print("quiet floor:  \(check.quietFloor)\n")
+
+        for (label, samples) in try CourtesyDemo.corpus(speaking: sentence) {
+            let a = await check.assess(samples: samples, sampleRate: 16000)
+            let verdict = a.speechDetected ? "HOLD " : "speak"
+            let name = label.padding(toLength: 20, withPad: " ", startingAt: 0)
+            print(String(format: "  %@  %@  level %.4f  words %@",
+                         verdict, name, a.level,
+                         a.wordCount.map(String.init) ?? "—"))
+            print("         \(a.reason)")
+        }
+        print("\nHOLD = someone is talking, the hail waits.")
 
     case "gate-watch":
         // Log-only observation. Records what the gate WOULD decide, and acts on
