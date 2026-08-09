@@ -120,6 +120,49 @@ public enum AudioInputDevice {
         }
     }
 
+    // MARK: - In use by anyone (the courtesy check's first question)
+
+    /// Whether ANY process on the machine currently has this device running —
+    /// us, Zoom, a screen recorder, system dictation.
+    ///
+    /// This is the signal `InterruptGate.mutedApps` could never be. That list is
+    /// matched against the FRONTMOST app only, so the overwhelmingly common
+    /// shape of the failure — a call in the background while you read your
+    /// terminal — matches nothing and the app talks over you. It is also
+    /// unmaintainable by construction: it can only ever name the conferencing
+    /// apps somebody thought of.
+    ///
+    /// Crucially this does NOT open the microphone. It asks the HAL a question
+    /// about the device, so it costs no permission, lights no recording
+    /// indicator, and puts the app nowhere in Control Center. That is what makes
+    /// it safe to ask before every announcement, and what makes it the cheap
+    /// gate that keeps the expensive one (actually listening) rare.
+    public static func isInUse(_ id: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var running: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &running) == noErr
+        else { return false }
+        return running != 0
+    }
+
+    /// Is any input device in use? Asks every input, not just the resolved one.
+    ///
+    /// Deliberately broader than `resolve()`: a Zoom call is happening on the
+    /// device Zoom chose, which on a machine with AirPods connected is very
+    /// often not the built-in mic this app prefers. Asking only about our own
+    /// device would answer the wrong question and miss the call entirely.
+    ///
+    /// Fails toward "in use" being unobservable rather than false — an
+    /// enumeration that returns nothing yields false, which degrades to today's
+    /// behaviour (speak) rather than to permanent silence.
+    public static func anyInputInUse() -> Bool {
+        allInputs().contains { isInUse($0.id) }
+    }
+
     // MARK: - Property reads
 
     private static func inputChannelCount(_ id: AudioDeviceID) -> Int {

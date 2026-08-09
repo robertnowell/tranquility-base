@@ -18,6 +18,11 @@ public struct InterruptGate: Sendable {
         public let idleSeconds: Double
         public let frontmostApp: String?
         public let screenLocked: Bool
+        public var microphoneInUse: Bool = false
+        /// True when the veto was the microphone — the one refusal the panel
+        /// explains to the user rather than only logging, because a hail held for
+        /// courtesy is indistinguishable from an agent that never came back.
+        public var heldForCourtesy: Bool { !allowed && microphoneInUse }
     }
 
     /// Typing right now. The one moment that is unambiguously bad.
@@ -48,25 +53,43 @@ public struct InterruptGate: Sendable {
         public var idleSeconds: @Sendable () -> Double
         public var frontmostApp: @Sendable () -> String?
         public var screenLocked: @Sendable () -> Bool
+        /// Is any input device running for anybody? See
+        /// `AudioInputDevice.anyInputInUse` for why this subsumes `mutedApps`.
+        public var microphoneInUse: @Sendable () -> Bool
 
         public init(
             idleSeconds: @escaping @Sendable () -> Double = { InterruptGate.idleSeconds() },
             frontmostApp: @escaping @Sendable () -> String? = { InterruptGate.frontmostApplication() },
-            screenLocked: @escaping @Sendable () -> Bool = { InterruptGate.screenIsLocked() }
+            screenLocked: @escaping @Sendable () -> Bool = { InterruptGate.screenIsLocked() },
+            microphoneInUse: @escaping @Sendable () -> Bool = { AudioInputDevice.anyInputInUse() }
         ) {
             self.idleSeconds = idleSeconds
             self.frontmostApp = frontmostApp
             self.screenLocked = screenLocked
+            self.microphoneInUse = microphoneInUse
         }
 
-        /// Nothing in front, nothing locked, idle forever. For tests that are about
-        /// the loop rather than about the gate.
+        /// Nothing in front, nothing locked, idle forever, no microphone running.
+        /// For tests that are about the loop rather than about the gate.
         public static let quiescent = Signals(
             idleSeconds: { .greatestFiniteMagnitude },
             frontmostApp: { nil },
-            screenLocked: { false })
+            screenLocked: { false },
+            microphoneInUse: { false })
     }
 
+    /// Order is load-bearing, and the rule is: **the cheapest question first, and
+    /// the microphone last.**
+    ///
+    /// Every veto below is free — an idle-time read, one `lsappinfo`, one HAL
+    /// property read. None of them opens the microphone. Only when all of them
+    /// pass is it worth paying for the expensive question (actually listening,
+    /// which lights the recording indicator), so the common cases — locked
+    /// screen, call in front, device already busy — never light it at all.
+    ///
+    /// A regression that reorders this starts turning the recording light on
+    /// over a locked screen, which is the failure that loses a user permanently.
+    /// See docs/courtesy-check-evidence-plan.md.
     public func evaluate() -> Decision {
         let idle = signals.idleSeconds()
         let app = signals.frontmostApp()
@@ -79,6 +102,15 @@ public struct InterruptGate: Sendable {
         if let app, mutedApps.contains(app) {
             return Decision(allowed: false, reason: "muted app in front: \(app)",
                             idleSeconds: idle, frontmostApp: app, screenLocked: false)
+        }
+        // The microphone is in use by SOMEBODY — us, a call, a recorder. Checked
+        // after the frontmost list because it costs a HAL round-trip rather than
+        // nothing, and before idle time because a call in progress is a far
+        // better reason to stay quiet than a keystroke three seconds ago.
+        if signals.microphoneInUse() {
+            return Decision(allowed: false, reason: "microphone in use elsewhere",
+                            idleSeconds: idle, frontmostApp: app, screenLocked: false,
+                            microphoneInUse: true)
         }
         if idle < minimumIdleSeconds {
             return Decision(
