@@ -272,6 +272,90 @@ number from a day of real rooms.
   device. The check must never be able to make the app feel like the mic is
   stuck.
 
+## Ruling 4 — a held hail is visible, and the logo announces in colour
+
+Ruled 08 Aug, same conversation.
+
+### The toast: a suppression is never silent about being silent
+
+> "We should alert at least as like a little toast, the same as the sent —
+> agent returned silently. With maybe a clickable explanation."
+
+A held hail currently exists only in `app.log`. That is fine for a gate nobody
+notices and wrong for one that decides whether the app speaks: the user must be
+able to tell "nothing came back" from "something came back and I chose not to
+interrupt you."
+
+**Mechanism: `flashNotice(_:)` with a new `StateLegend` string.** This is the
+exact shape `noWordsNotice` already has — the grid strip's transient line for
+"the refusal that is not a failure" — and it already carries drill coverage to
+copy. Not a new `PanelState`, not a new face, not a new widget.
+
+**Wording follows the `noAudioMessage` precedent: name the condition, not a
+classification.** That doc comment is explicit that "Needs you" was true and
+still wrong because it described our reading rather than what happened. Same
+discipline here — the line says why the app stayed quiet:
+
+- microphone in use elsewhere → the device was busy
+- speech detected → someone was talking
+
+The suggested phrasings from the ruling ("speech was detected but not
+understood", "speech detected but not listened to") should not ship as written:
+they describe a transcription outcome, and no transcription outcome occurred.
+Nothing was understood or not-understood, because nothing was ever read.
+
+**It never says what was said.** There is nothing to say — no words are kept —
+and the toast must not imply otherwise.
+
+**And it must not raise a dismissed panel.** A toast that opens the window
+undoes ruling 1 through the back door, and it is the single most likely
+regression in this whole feature. Held-while-dismissed is recorded in the gate
+log and shown the next time the panel is on screen; it does not summon one.
+Drilled, per the evidence plan.
+
+### The glow: colour as the arrival event
+
+> "The icon can turn or flash the colour of the returning session… not a flash,
+> but like a little glow, you know, so it's kind of a reveal, an announcement.
+> So even if the audio is silent, the callsign's silent, you still get that
+> visual feedback."
+
+The logo glows briefly in the returning session's lamp colour — green for
+`.ready`, amber for `.fault` — then settles.
+
+**Why this is not redundant with the lamp.** The lamps are **state**: what is
+true right now, readable at any moment. The glow is an **event**: this just
+happened. A user glancing over five minutes later should learn the state and
+learn nothing about the timing, which is precisely what a transient carries and
+a lamp cannot. That distinction is the reason to build it, and the reason it
+must decay completely.
+
+**It is compatible with ruling 1** — a glow changes no dimension and opens no
+window. It is the arrival changing what the panel *says*, which was always
+allowed.
+
+**The no-blinking law still binds.** `Lamp.working`'s doc comment is explicit:
+"Solid, never blinking — a room full of blinking lamps is the opposite of calm."
+One glow, one decay, done. A session that turns this into a pulse loop, or that
+leaves the logo tinted until acknowledged, has rebuilt the notification badge
+this product exists to avoid.
+
+### Open — the menu bar cannot do this today
+
+When fully minimized there is no logo on screen; there is a status item, and it
+is a **template image**, monochrome by design. WS-B already hit this and ruled
+around it: "the template-image status item is monochrome by design; the count
+appearing next to the symbol is the 'equivalent' for now. A colored dot belongs
+to the MOCR palette item."
+
+So the glow reaches expanded and collapsed for free, and reaches minimized only
+by giving up the template image — which means owning the icon's appearance in
+light mode, dark mode, and menu-bar tinting, forever. That is a real cost for
+the state where the user has most clearly said they want less.
+
+*This session's read, not ruled: ship the glow for expanded and collapsed, leave
+the minimized status item monochrome with its count.* Needs Robert.
+
 ### Why not "let the collapsed strip appear, at least"
 
 Considered and declined on 08 Aug, by the ruling's own reasoning, which is worth
