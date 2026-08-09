@@ -1322,7 +1322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // A tap is an explicit request to hear something, so the
                 // interruptibility gate does not apply — you cannot interrupt
                 // someone who just asked.
-                switch try await coordinator.announceNext(
+                let outcome = try await coordinator.announceNext(
                     only: eventId,
                     ignoringGate: true,
                     onWillSpeak: { [weak self] announcement in
@@ -1360,7 +1360,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     onWord: { [weak self] range in
                         Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
                     }
-                ) {
+                )
+
+                // A superseded announcement does not get to speak for the app.
+                //
+                // Everything below is REPORTING — a status line, a card, the grid.
+                // None of it is bookkeeping: the cursor advance and the unread
+                // revert both happen inside Coordinator.speak, before this returns.
+                // So an announcement that has already been replaced has nothing it
+                // needs to do here, and no right to do it — the stage belongs to
+                // whatever replaced it.
+                //
+                // This rule already existed, applied at two of the five places that
+                // needed it. The three that lacked it painted the grid over the
+                // announcement that superseded them: 38 times in one day, twice
+                // while the microphone was open (app.log, `speaking -> idle
+                // (grid from announceNext(only:):1378)`). Stated once, above the
+                // switch, no branch can be added that forgets it.
+                guard !Task.isCancelled else {
+                    Permissions.log("announce: superseded, not reporting")
+                    return
+                }
+
+                switch outcome {
                 case .spoke(let announcement):
                     Permissions.log("announce: spoke via \(announcement.via)")
                     if let degraded = announcement.degraded {
@@ -1371,7 +1393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     lastStatusLine = "\(StateLegend.Glyph.speaking) \(announcement.brief.topic)"
                     hud.highlight(upTo: announcement.spoken.text.count)
                     // Ruling 14: fully spoken, no gesture in 4s → the grid.
-                    if !Task.isCancelled { scheduleReturnToGrid() }
+                    scheduleReturnToGrid()
                 case .interrupted(let failure):
                     // The announce task reverts an interrupted item to unread. If the
                     // interruption WAS the reply, re-apply the mark — this runs after
