@@ -474,6 +474,12 @@ final class StatusHUD: NSObject {
             Permissions.log("state: \(state.name) -> \(next.name)  (\(reason))")
             state = next
         }
+        // Leaving Preparing cancels its pending paint wherever that happens, so
+        // no path has to remember to. A card that arrives 250ms after the thing
+        // it was covering for is worse than one that never arrived.
+        if case .preparing = next {} else {
+            preparingPaint?.cancel(); preparingPaint = nil
+        }
         return true
     }
 
@@ -645,6 +651,7 @@ final class StatusHUD: NSObject {
         // the paths that end a pending send — commit, cancel, endCapture, its own
         // expiry — say so themselves); only its pixels are, in the baseline.
         endTranscribingUI()
+        stopBodyShimmer()
         if !state.isCapturingAudio { meterTimer?.invalidate(); meterTimer = nil }
         if case .hidden = state { panel?.orderOut(nil); return }
         let panel = panel ?? build()
@@ -689,6 +696,11 @@ final class StatusHUD: NSObject {
             // attribution — without it the baseline's plain stringValue showed
             // every word full-dark until the first word event repainted it.
             highlight(upTo: 0)
+            // The card is up but the audio is not here yet. Until now that
+            // window had no affordance at all: a full card of grey text, ink
+            // that never moved, and nothing to say whether it was loading or
+            // dead. On a slow link it could sit there for eleven seconds.
+            armBodyShimmer()
 
         case .idle where !face.sessionRows.isEmpty:
             // The grid: the idle face IS one row per live session (WS-B, ruled).
@@ -1370,13 +1382,36 @@ final class StatusHUD: NSObject {
     /// changed. Pixels and voice obey the same table.
     @discardableResult
     func showPreparing() -> Bool {
+        // The STAGE is claimed immediately — the refusal above is load-bearing,
+        // and deferring it would let a reply flow be spoken over.
         guard transition(to: .preparing, because: "announce requested") else { return false }
-        // One identity: no app-name masthead — the Preparing pill and the body
-        // carry it. The callsign arrives with the announcement itself.
-        face = Face(body: "Writing the summary and fetching the voice…")
-        render()
+        // The PIXELS are not. Measured over 118 announcements: p50 0s, p90 1s,
+        // and only 5 ran past three seconds. A whole-card "Writing the summary
+        // and fetching the voice…" for a wait that is usually imperceptible is
+        // a loading screen charging rent on the common case — and now that both
+        // the summary and its audio are prefetched, the common case is that
+        // there is nothing to wait for at all.
+        //
+        // So it paints only if it is still true a quarter-second later. The
+        // press is never unacknowledged in the meantime: the ⌃⌥ ack pulse
+        // already fires on the keypress itself, independently of this.
+        preparingPaint?.cancel()
+        let paint = DispatchWorkItem { [weak self] in
+            guard let self, case .preparing = self.state else { return }
+            Permissions.log("preparing: still waiting at 250ms — painting the card")
+            // One identity: no app-name masthead — the Preparing pill and the body
+            // carry it. The callsign arrives with the announcement itself.
+            self.face = Face(body: "Writing the summary and fetching the voice…")
+            self.render()
+        }
+        preparingPaint = paint
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: paint)
         return true
     }
+
+    /// Armed by `showPreparing`, cancelled the moment anything else takes the
+    /// stage — so a fast announcement never flashes a loading card on its way in.
+    private var preparingPaint: DispatchWorkItem?
 
     /// Prove a pending send can be stopped for its whole life.
     ///
@@ -2128,6 +2163,10 @@ final class StatusHUD: NSObject {
         Permissions.log("highlight upTo=\(index)→\(cursor) of \(body.count) "
                         + "thread=\(Thread.isMainThread)")
         let clamped = max(0, min(cursor, body.count))
+        // The first real word is the only "it started" signal anyone needs, and
+        // it is a better one than any spinner: the wash gives way to the thing
+        // it was standing in for.
+        if clamped > 0 { stopBodyShimmer() }
         let attributed = NSMutableAttributedString(string: body)
         let full = NSRange(location: 0, length: (body as NSString).length)
         attributed.addAttribute(
@@ -2146,6 +2185,78 @@ final class StatusHUD: NSObject {
             if value != nil { bright += range.length }
         }
         Permissions.log("highlight rendered bright=\(bright)/\(full.length)")
+    }
+
+    // MARK: - Waiting for the voice
+
+    private var shimmerLayer: CAGradientLayer?
+    private var shimmerArm: DispatchWorkItem?
+
+    /// A wash that travels across the unspoken text while its audio is still
+    /// being fetched.
+    ///
+    /// It is a SWEEP, not a pulse and not a glow on the first word, and the
+    /// direction is the same one the read-along will travel in a moment. That
+    /// is the whole argument: a point of light on the first word reads as a
+    /// badge — something wrong, or something to click — while a wash moving
+    /// left to right is the gesture the highlight itself is about to make, so
+    /// it says "the reading starts here, shortly" without a word of text.
+    ///
+    /// Not blue. Blue in this card already means GO TO AGENT, and a second blue
+    /// is a second meaning. This is the card's own ink at low alpha, so the
+    /// dimmed text simply brightens as the wash passes and settles back.
+    ///
+    /// Armed at 400ms, never sooner: below that a person cannot tell a shimmer
+    /// from a flicker, and with the clip usually prefetched most announcements
+    /// will now start speaking before this ever draws a frame.
+    private func armBodyShimmer() {
+        shimmerArm?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.startBodyShimmer() }
+        shimmerArm = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    private func startBodyShimmer() {
+        guard case .speaking = state, shimmerLayer == nil,
+              let host = bodyLabel, !host.stringValue.isEmpty else { return }
+        host.wantsLayer = true
+        guard let hostLayer = host.layer, host.bounds.width > 0 else { return }
+
+        let band = max(host.bounds.width * 0.45, 60)
+        let sweep = CAGradientLayer()
+        sweep.frame = CGRect(x: 0, y: 0, width: band, height: host.bounds.height)
+        sweep.startPoint = CGPoint(x: 0, y: 0.5)
+        sweep.endPoint = CGPoint(x: 1, y: 0.5)
+        let ink = StateLegend.Palette.ink
+        sweep.colors = [
+            ink.withAlphaComponent(0).cgColor,
+            ink.withAlphaComponent(0.14).cgColor,
+            ink.withAlphaComponent(0).cgColor,
+        ]
+        sweep.locations = [0, 0.5, 1]
+
+        let travel = CABasicAnimation(keyPath: "position.x")
+        travel.fromValue = -band / 2
+        travel.toValue = host.bounds.width + band / 2
+        travel.duration = 1.2
+        travel.repeatCount = .infinity
+        // Eased at both ends, so it reads as something moving rather than
+        // something scrolling past on a loop.
+        travel.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        sweep.add(travel, forKey: "sweep")
+
+        hostLayer.addSublayer(sweep)
+        shimmerLayer = sweep
+        Permissions.log("shimmer: started (waiting on audio)")
+    }
+
+    private func stopBodyShimmer() {
+        shimmerArm?.cancel(); shimmerArm = nil
+        guard let layer = shimmerLayer else { return }
+        layer.removeAllAnimations()
+        layer.removeFromSuperlayer()
+        shimmerLayer = nil
+        Permissions.log("shimmer: stopped")
     }
 
     func recordingEnded() {

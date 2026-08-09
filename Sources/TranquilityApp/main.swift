@@ -90,6 +90,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (goal, risk, question) from the already-computed brief — no model call,
     /// and the session itself is never woken.
     private var lastAnnouncement: Coordinator.Announcement?
+    /// Which utterance we have already queued a follow-on render for, so the
+    /// eight-per-second highlight tick cannot spawn eight prefetches.
+    private var warmedAfter: String?
+
+    /// Render the rung the user is most likely to ask for next, WHILE the
+    /// current one is playing.
+    ///
+    /// Deliberately not at turn arrival. Measured over 123 announcements: 72%
+    /// get at least one ⌃⌃, and of those essentially every walk opens on
+    /// FINDINGS — but a rung is ~1.4x the announcement's length, so rendering
+    /// the whole ladder up front is ~4x the credits for a pull a quarter of
+    /// announcements never make. Gating on "the main clip is actually playing"
+    /// buys the common case at close to its true hit rate, and the fetch hides
+    /// entirely under a twenty-second read.
+    ///
+    /// The MESSAGE rung is `announcement.spoken` verbatim, so its cache key is
+    /// the announcement's and it warms for free.
+    private func warmNextRung(after index: Int, token: String) {
+        guard warmedAfter != token else { return }
+        warmedAfter = token
+        guard let announcement = lastAnnouncement, let coordinator else { return }
+        let rungs = SpokenComposition.ladderRungs(for: announcement)
+        guard !rungs.isEmpty else { return }
+        let next = rungs[index % rungs.count]
+        let voice = coordinator.voiceId(for: announcement.event.sessionId)
+        let speech = coordinator.speech
+        Permissions.log("prewarm: queueing \(next.kind.rawValue) (\(next.spoken.text.count) chars)")
+        // Utility priority and detached: this must never compete with the audio
+        // currently playing or with the highlight driving off it.
+        Task.detached(priority: .utility) {
+            await speech.prewarm(next.spoken, voice: voice)
+        }
+    }
+
     /// The ⌃⌃ ladder walk: which announcement it belongs to, and the next rung.
     /// A new announcement resets the walk; wrapping past the end is "say again".
     private var ladderKey: String?
@@ -1053,11 +1087,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                           sessionId: announcement.event.sessionId)
                 // In the session's voice (ruled 05 Aug, a559f29): the pull deepens
                 // that session's announcement, so it must sound like it.
+                // The rung after this one, warmed while this one talks. Walks
+                // continue ~75% of the time at every step, and the render hides
+                // completely under the rung already playing.
+                let nextRung = ladderIndex
+                let warmToken = "\(key):rung\(ladderIndex)"
                 _ = await coordinator.speech.speak(
                     rung.spoken,
                     voice: coordinator.voiceId(for: announcement.event.sessionId),
                     onWord: { [weak self] range in
-                        Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
+                        Task { @MainActor in
+                            guard let self else { return }
+                            self.hud.highlight(upTo: range.upperBound)
+                            self.warmNextRung(after: nextRung, token: warmToken)
+                        }
                     })
                 hud.highlight(upTo: rung.spoken.text.count)
                 lastStatusLine = "\(rung.kind.rawValue.lowercased()) spoken"
@@ -1358,7 +1401,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         return true
                     },
                     onWord: { [weak self] range in
-                        Task { @MainActor in self?.hud.highlight(upTo: range.upperBound) }
+                        Task { @MainActor in
+                            guard let self else { return }
+                            self.hud.highlight(upTo: range.upperBound)
+                            // First audio of the announcement is the moment the
+                            // ladder becomes likely — and the moment the main
+                            // fetch is provably done, so the two never compete
+                            // for a narrow link. Rung 0 is FINDINGS, which is
+                            // where essentially every walk opens.
+                            guard let last = self.lastAnnouncement else { return }
+                            self.warmNextRung(
+                                after: 0,
+                                token: "\(last.event.sessionId):\(last.event.latestId):main")
+                        }
                     }
                 )
 
