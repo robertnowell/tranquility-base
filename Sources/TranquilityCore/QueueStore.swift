@@ -753,15 +753,42 @@ public final class QueueStore: Sendable {
                 .fetchAll(db)
 
             for var u in inFlight {
-                let audioExists = u.audioPath.map { FileManager.default.fileExists(atPath: $0) } ?? false
+                // Resolved, not tested by hand. A row interrupted mid-utterance
+                // has its audio at `<id>.wav.live`, so a bare fileExists against
+                // the recorded `audioPath` reports MISSING for the one case
+                // write-ahead exists to survive — and this sweep would discard it
+                // on the first launch after the crash, with the audio intact
+                // beside it. `resolve` is the only place that knows both states.
+                let found = AudioStore.resolve(audioPath: u.audioPath)
 
                 switch u.status {
                 case .recorded, .transcribing:
-                    if audioExists {
+                    switch found {
+                    case .finished:
                         // Nothing external was touched. Safe to retry from disk.
                         u.status = .recorded
                         report.requeuedForTranscription.append(u.id)
-                    } else {
+                    case .interrupted(let url):
+                        // The process died holding the microphone. The audio is
+                        // readable to the last flushed frame, so this is
+                        // recoverable — promote it and let it transcribe by the
+                        // ordinary path. Discarding here would be the durability
+                        // feature undone by the cleanup feature.
+                        if let promoted = try? LiveAudioCapture.adopt(
+                            LiveAudioCapture.Interrupted(
+                                utteranceId: u.id, url: url,
+                                byteCount: ((try? FileManager.default
+                                    .attributesOfItem(atPath: url.path))?[.size] as? Int) ?? 0,
+                                modifiedAt: Date(timeIntervalSince1970: 0))) {
+                            u.audioPath = promoted.path
+                            u.status = .recorded
+                            report.requeuedForTranscription.append(u.id)
+                        } else {
+                            u.status = .discarded
+                            u.discardedReason = "interrupted capture could not be promoted"
+                            report.missingAudio.append(u.id)
+                        }
+                    case .missing:
                         u.status = .discarded
                         u.discardedReason = "audio missing at boot reconciliation"
                         report.missingAudio.append(u.id)
@@ -795,7 +822,11 @@ public final class QueueStore: Sendable {
             at: Self.audioDirectory, includingPropertiesForKeys: nil) else { return [] }
         let known = Set(try dbQueue.read { db in try String.fetchAll(db, sql: "SELECT id FROM utterances") })
         return files
-            .map { $0.deletingPathExtension().lastPathComponent }
+            // Through AudioStore, not by hand: a bare deletingPathExtension turns
+            // `u4.wav.live` into `u4.wav`, which matches no row id, so every
+            // interrupted capture reported as an orphan forever — breaking the one
+            // diagnostic that would have shown them piling up.
+            .map { AudioStore.utteranceId(of: $0) }
             .filter { !known.contains($0) }
     }
 
@@ -821,12 +852,61 @@ public final class QueueStore: Sendable {
 
         var deleted = 0
         for var u in rows {
-            if let path = u.audioPath, FileManager.default.fileExists(atPath: path) {
-                try? FileManager.default.removeItem(atPath: path)
+            // Through the resolver: a row reaped while its capture was still
+            // live has its audio at `.wav.live`, and following `audioPath`
+            // literally would leave the file behind forever.
+            switch AudioStore.resolve(audioPath: u.audioPath) {
+            case .finished(let url), .interrupted(let url):
+                try? FileManager.default.removeItem(at: url)
                 deleted += 1
+            case .missing:
+                break
             }
             u.audioPath = nil
             try update(utterance: u)
+        }
+        return deleted + (try reapAbandonedLiveCaptures(olderThan: interval))
+    }
+
+    /// Live captures no row will ever claim.
+    ///
+    /// A `.wav.live` file is written from the first frame, before any row exists
+    /// for it. A process that dies in that window leaves audio that the
+    /// row-driven sweep above cannot see by construction — nothing points at it.
+    /// Left alone that is unbounded growth at 32KB/s of uncompressed WAV, and it
+    /// is how the audio directory reached 339MB across 2,586 files without
+    /// anyone noticing.
+    ///
+    /// Age is the only safe test, and it must be generous: a file still being
+    /// appended to is a recording in progress, and deleting one would be far
+    /// worse than keeping it. The default reap interval (72h) is orders of
+    /// magnitude longer than any utterance, so a live file older than that is
+    /// unambiguously abandoned.
+    @discardableResult
+    func reapAbandonedLiveCaptures(
+        olderThan interval: TimeInterval,
+        in directory: URL = QueueStore.audioDirectory
+    ) throws -> Int {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey])
+        else { return 0 }
+
+        let known = Set(try dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT id FROM utterances")
+        })
+        let cutoff = Date().addingTimeInterval(-interval)
+
+        var deleted = 0
+        for url in files where url.pathExtension == LiveAudioCapture.liveExtension {
+            // A row still claims it: leave it to the row-driven pass, which
+            // knows the row's status and therefore whether it is reapable.
+            guard !known.contains(AudioStore.utteranceId(of: url)) else { continue }
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            guard modified < cutoff else { continue }
+            try? fm.removeItem(at: url)
+            deleted += 1
         }
         return deleted
     }

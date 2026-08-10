@@ -503,38 +503,6 @@ enum StateLegend {
     /// stays: it is the one mark that earns the amber.
     static let noWordsNotice = "\(Glyph.needsYou) No words detected — try again"
 
-    // MARK: - The courtesy check (ruled 08 Aug)
-
-    /// Why the app stayed quiet, in the transient strip line.
-    ///
-    /// A held hail is otherwise indistinguishable from an agent that never came
-    /// back, which is the one thing the panel must never be ambiguous about. So
-    /// the suppression announces itself — visually, silently, in the same slot
-    /// `noWordsNotice` uses.
-    ///
-    /// Both name the CONDITION, following `noAudioMessage`'s rule: not a
-    /// classification of the agent, and not a transcription outcome. Nothing was
-    /// "detected but not understood" — nothing was ever read. The quiet glyph,
-    /// not the amber triangle: nothing is wrong and nothing needs the user.
-    /// Why the app stayed quiet, on the advisory channel.
-    ///
-    /// Blue, not amber, and the distinction is semantic rather than decorative:
-    /// amber is the needs-you channel, and nothing here needs the user. The app
-    /// noticed someone else was using audio and declined to talk over them —
-    /// that is news you may ignore, which is exactly what MIL-STD-411 reserves
-    /// the advisory channel for.
-    ///
-    /// No em dash: this is a status line, not a sentence with an aside in it.
-    ///
-    /// Names the app, because the HAL's process list knows it and "the
-    /// microphone is in use" leaves the user guessing which of their windows is
-    /// responsible. Trimmed of the reverse-DNS prefix: "zoom.us" reads,
-    /// "us.zoom.xos" does not.
-    static func heldNotice(_ app: String) -> String {
-        let short = app.split(separator: ".").last.map(String.init) ?? app
-        return "\(Glyph.quiet) Held. \(short) is using audio."
-    }
-
     // MARK: - The device fault (ruled 08 Aug)
 
     /// The third tier's placard. It names the CONDITION, not a classification:
@@ -601,6 +569,14 @@ enum StateLegend {
     static let retryTranscriptionTitle = "Retry"
     /// After this many seconds of transcribing, say so and offer a way out.
     static let slowTranscriptionThreshold: TimeInterval = 20
+
+    /// What the arrival notification says. One line, no callsign.
+    ///
+    /// The panel is already on screen with the grid and it names WHICH agent;
+    /// repeating that here would be the same information twice, in the louder
+    /// channel. This carries one bit — something came back — which is all a
+    /// Pavlovian cue can carry anyway.
+    static let arrivalChimeTitle = "An agent is ready for you"
 
     // MARK: - Menu bar
 

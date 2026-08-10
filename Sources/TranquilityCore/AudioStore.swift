@@ -66,6 +66,66 @@ public struct AudioStore: Sendable {
         FileManager.default.fileExists(atPath: url(for: utteranceId).path)
     }
 
+    // MARK: - Resolving a recording in either state
+
+    /// What is actually on disk for an utterance.
+    ///
+    /// `.wav.live` is not a third kind of file — it is the same recording in an
+    /// earlier state (see `LiveAudioCapture`). Before this existed, every sweep
+    /// did its own path arithmetic against `<id>.wav` and therefore had to be
+    /// taught the live extension separately. Three of them had not been, and one
+    /// of those was load-bearing: boot reconciliation discards an in-flight row
+    /// whose audio it cannot find, so a capture interrupted mid-utterance — the
+    /// exact case write-ahead exists to survive — would have been retired on the
+    /// first launch after the crash, with the audio sitting intact beside it.
+    ///
+    /// One accessor, so the knowledge lives once and the next sweep somebody
+    /// writes inherits it rather than re-deriving it wrongly.
+    public enum Resolved: Sendable, Equatable {
+        /// A complete recording. Every caller behaves as it always has.
+        case finished(URL)
+        /// A capture a process did not come back from. Recoverable: readable to
+        /// the last flushed frame, and promotable by `LiveAudioCapture.adopt`.
+        /// **Never treat this as missing.**
+        case interrupted(URL)
+        /// Genuinely gone.
+        case missing
+    }
+
+    /// Resolve from the path a row actually recorded, which is the authoritative
+    /// one — a row's `audioPath` is where its audio was written, and
+    /// reconstructing it from an id plus the default directory is a guess that is
+    /// wrong for every caller using a different store (the tests, the replay
+    /// tool). Two existing sweep tests caught exactly that mistake.
+    public static func resolve(audioPath: String?) -> Resolved {
+        guard let audioPath, !audioPath.isEmpty else { return .missing }
+        let recorded = URL(fileURLWithPath: audioPath)
+        if FileManager.default.fileExists(atPath: recorded.path) { return .finished(recorded) }
+        let live = recorded.appendingPathExtension(LiveAudioCapture.liveExtension)
+        if FileManager.default.fileExists(atPath: live.path) { return .interrupted(live) }
+        return .missing
+    }
+
+    public func resolve(utteranceId: String) -> Resolved {
+        let finished = url(for: utteranceId)
+        if FileManager.default.fileExists(atPath: finished.path) { return .finished(finished) }
+        let live = finished.appendingPathExtension(LiveAudioCapture.liveExtension)
+        if FileManager.default.fileExists(atPath: live.path) { return .interrupted(live) }
+        return .missing
+    }
+
+    /// The utterance id a file in the audio directory belongs to, in either
+    /// state. `deletingPathExtension()` alone turns `u4.wav.live` into `u4.wav`,
+    /// which matches no row id — the bug that made every live capture report as
+    /// an orphan forever.
+    public static func utteranceId(of url: URL) -> String {
+        var trimmed = url
+        if trimmed.pathExtension == LiveAudioCapture.liveExtension {
+            trimmed = trimmed.deletingPathExtension()
+        }
+        return trimmed.deletingPathExtension().lastPathComponent
+    }
+
     /// Verify a file still matches what was recorded. Used by the boot sweep before
     /// re-queuing an utterance for transcription.
     public func verify(utteranceId: String, expectedSha256: String?) -> Bool {
