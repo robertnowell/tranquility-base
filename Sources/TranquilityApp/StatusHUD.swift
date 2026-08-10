@@ -1037,14 +1037,16 @@ final class StatusHUD: NSObject {
     /// conversation); the arm path never probes for one.
     private func armingPill() -> NSAttributedString {
         let font = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
+        // `hint`, not `faint`: the pill names where the words are about to go,
+        // which is the one thing you must be able to read before releasing.
         let pill = NSMutableAttributedString(
             string: StateLegend.Glyph.dot, attributes: [
-                .font: font, .foregroundColor: StateLegend.Palette.faint,
+                .font: font, .foregroundColor: StateLegend.Palette.hint,
             ])
         if !face.listeningTarget.isEmpty {
             pill.append(NSAttributedString(
                 string: " \(Self.pillTarget(face.listeningTarget))", attributes: [
-                    .font: font, .foregroundColor: StateLegend.Palette.faint,
+                    .font: font, .foregroundColor: StateLegend.Palette.hint,
                 ]))
         }
         return pill
@@ -1511,7 +1513,7 @@ final class StatusHUD: NSObject {
 
         var color: CGColor {
             switch self {
-            case .registered: return StateLegend.Palette.advisory.cgColor
+            case .registered: return StateLegend.Palette.working.cgColor
             case .recognized: return StateLegend.Palette.ready.cgColor
             }
         }
@@ -2309,7 +2311,7 @@ final class StatusHUD: NSObject {
         goButton.isBordered = false
         goButton.attributedTitle = letterspaced(
             "GO TO AGENT \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
-            color: StateLegend.Palette.advisory)
+            color: StateLegend.Palette.accent)
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
         // The device-fault card's way out. Quiet like its row-mates: it is a
         // door, not an alarm — the placard and the body have already said how
@@ -2870,13 +2872,14 @@ private final class PlacardRowView: NSControl {
 
         let plus = NSTextField(labelWithString: "+")
         plus.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        plus.textColor = StateLegend.Palette.faint
+        // The marker and its label are one affordance and take one ink.
+        plus.textColor = StateLegend.Palette.hint
         plus.translatesAutoresizingMaskIntoConstraints = false
 
         let label = NSTextField(labelWithString: "")
         label.attributedStringValue = letterspaced(
             StateLegend.newAgentTitle, size: 9.5, tracking: 1.33,
-            color: StateLegend.Palette.faint)
+            color: StateLegend.Palette.hint)
         label.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(plus); addSubview(label)
@@ -3011,7 +3014,7 @@ private final class VoiceRowView: NSControl {
 
         let category = NSTextField(labelWithString: voice.category)
         category.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
-        category.textColor = StateLegend.Palette.faint
+        category.textColor = StateLegend.Palette.hint
         category.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(grip); addSubview(check); addSubview(play)
@@ -3099,7 +3102,13 @@ private final class CheckView: NSControl {
         if on {
             let mark = NSTextField(labelWithString: StateLegend.Glyph.confirm)
             mark.font = .monospacedSystemFont(ofSize: 9, weight: .bold)
-            mark.textColor = NSColor(srgbRed: 0.93, green: 0.93, blue: 0.89, alpha: 1)
+            // Punched out of the lamp, in the housing's own colour: 6.35:1
+            // against `ready`. This was a hardcoded near-white, which read fine
+            // on the old dark green and would have fallen to 1.88:1 on the
+            // brighter one — an invisible tick, visible only at runtime, in one
+            // state. Exactly the failure the "no literals outside the Palette"
+            // rule exists to prevent.
+            mark.textColor = StateLegend.Palette.surface
             mark.translatesAutoresizingMaskIntoConstraints = false
             addSubview(mark)
             NSLayoutConstraint.activate([

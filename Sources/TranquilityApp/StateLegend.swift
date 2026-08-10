@@ -38,13 +38,36 @@ enum StateLegend {
         static let denied = "✗"
     }
 
-    // MARK: - Palette (the ruled design: light console, MOCR identity v0)
+    // MARK: - Palette (the ruled design: dark console, MOCR identity v1)
 
-    /// The panel's entire palette, defined once. FED-STD-595-derived tokens from
-    /// the vd-grid-mock research record (2026-08-04, variant A ruled). Semantic
-    /// NSColor is dead in the panel: the surface is an opaque light console on
-    /// EVERY face, so system dark mode must never flip a text color against it —
-    /// every color the panel paints comes from here, in absolute sRGB.
+    /// The panel's entire palette, defined once. Semantic NSColor is dead in the
+    /// panel: the surface is an opaque console on EVERY face, so system
+    /// appearance must never flip a text color against it — every color the
+    /// panel paints comes from here, in absolute sRGB.
+    ///
+    /// RE-RULED 09 Aug: the console is dark. The light putty it replaces was not
+    /// wrong by taste, it was wrong by arithmetic. On a light panel every element
+    /// must be DARKER than the panel to be seen, so the surface's own lightness
+    /// is the entire contrast budget, drawn on by the four ink tiers, three lamps
+    /// and the amber simultaneously. Measured on the shipping putty (L* 78.6),
+    /// `faint` sat at 2.13:1 against a 4.5:1 floor for small text and `fault` at
+    /// 1.72:1 against 3:1 — both already failing, unnoticed, for the life of the
+    /// build. Dimming the putty for comfort (repeatedly asked for, correctly)
+    /// only shortens that budget: 45 points of usable range at L* 78.6, 29 at
+    /// L* 60. There is no light surface where the ramp and the lamps both fit.
+    ///
+    /// On the dark ground the budget sits ABOVE the surface and is larger —
+    /// 14.10:1 of room against the bright putty's 1.77:1 — and every floor
+    /// clears with margin. See docs/ruling-the-console-goes-dark.md for the
+    /// measurements and the experiments they came from.
+    ///
+    /// The lamp pair is green + blue and stays that way: purple measured further
+    /// apart on every discriminability metric and was rejected anyway, because
+    /// purple does not read as *becoming* green. Adjacent states in a process
+    /// want adjacent hues; the separation is bought in LIGHTNESS, which is the
+    /// channel that survives at 9px (ΔE2000 said the old pair was 12× above the
+    /// perceptibility threshold while being invisible in practice — at this size
+    /// ΔE predicts nothing and ΔL* predicts everything).
     enum Palette {
         private static func hex(_ v: UInt32, alpha: CGFloat = 1) -> NSColor {
             NSColor(srgbRed: CGFloat((v >> 16) & 0xFF) / 255,
@@ -52,45 +75,97 @@ enum StateLegend {
                     blue: CGFloat(v & 0xFF) / 255, alpha: alpha)
         }
 
-        /// The console surface — light putty (FED-STD-595 36440 family,
-        /// light gull gray). Opaque, panel-wide: an instrument guarantees its
+        // Contrast figures below are WCAG ratios against `surface`, measured.
+
+        /// The console housing. Opaque, panel-wide: an instrument guarantees its
         /// own contrast; blur borrowed the desktop's and couldn't.
-        static let surface = hex(0xC4C3B7)
-        /// Text ink — off-black console lettering (FS 37031/37038 black family,
-        /// warmed). Also the base every hairline derives from.
-        static let ink = hex(0x23241F)
-        /// Secondary ink: strip labels, ready-row topics.
-        static let secondary = hex(0x4A4B43)
-        /// Muted: quiet-row topics.
-        static let muted = hex(0x5F6055)
-        /// Faint: hints, placards, the gear at rest.
-        static let faint = hex(0x83847A)
+        static let surface = hex(0x2A2C28)
+        /// Text ink — card prose and grid row names. 8.39:1. Deliberately NOT
+        /// the brightest available: at 11.15:1 the card read as shouting, and
+        /// APCA (which, unlike the WCAG ratio, is polarity-aware) put it at
+        /// Lc −86.7 against the light card's Lc 63.4 — 37% more perceptual
+        /// contrast, spent only because the budget was there. This value is
+        /// Lc −69.0. Also the base every hairline derives from.
+        static let ink = hex(0xC9C8BF)
+        /// Secondary ink: strip labels, ready-row topics. 6.69:1.
+        static let secondary = hex(0xB4B3A9)
+        /// Muted: quiet-row topics, retired sessions. 4.51:1.
+        static let muted = hex(0x93928A)
+        /// The hint line and placards — small text, so it owes the 4.5:1 text
+        /// floor and now meets it at 4.57:1. Split out of `faint` (09 Aug):
+        /// one token was being asked to be both a legible hint and a recessive
+        /// decoration, and could not be both. That is why the key line has
+        /// always looked mushy.
+        static let hint = hex(0x94938A)
+        /// Faint — DECORATIVE ONLY, no contrast floor: the gear at rest, rules
+        /// and separators. Never small text. 2.18:1 by design.
+        static let faint = hex(0x5E5F58)
         /// Hairline — ink at 25%: the strip border and the hint's top rule.
-        static let hairline = hex(0x23241F, alpha: 0.25)
+        static let hairline = hex(0xC9C8BF, alpha: 0.25)
         /// Soft hairline — ink at 12%: the rule between grid rows.
-        static let hairlineSoft = hex(0x23241F, alpha: 0.12)
-        /// Hover row, and the quiet lamp's fill — surface, one step down.
-        static let hover = hex(0xBDBCB0)
-        /// Ready green — the console "go" lamp (FS 34128 green family). Accent
-        /// = state, not user preference: this replaces controlAccentColor for
-        /// the ✓ send button and the ack pulse.
-        static let ready = hex(0x416B47)
-        /// Fault amber (FS 33538 amber family; the mock's `--warn` token).
-        static let fault = hex(0xC8862A)
-        /// Advisory blue (MS25041 blue-lens class: "any color except red or
-        /// green" for advisory). Ruled 05 Aug for optional affordances like
-        /// GO TO AGENT — green read as "the thing to click," but navigation
-        /// you MAY take is advisory, not go. (Klein blue was considered and
-        /// declined: attention-seizing, and it's the user's house brand, not
-        /// this product's.)
-        static let advisory = hex(0x3E5A75)
+        static let hairlineSoft = hex(0xC9C8BF, alpha: 0.12)
+        /// Hover row — surface, one step UP. The direction inverts with the
+        /// ground: on putty a hover went darker, on housing it goes lighter.
+        static let hover = hex(0x343631)
+        /// The quiet lamp's fill — an unlit socket, 1.45:1. Not a compromise:
+        /// dark-cockpit doctrine says the panel is dark when all is nominal and
+        /// a lit lamp always means deviation. On this ground that falls out of
+        /// the arithmetic instead of being imposed on it.
+        static let socket = hex(0x43453F)
+        /// Ready green — the console "go" lamp. 6.35:1, the brightest lamp on
+        /// the panel, because it is the rare one that actually wants you.
+        /// Accent = state: this replaces controlAccentColor for the ✓ send
+        /// button and the ack pulse.
+        static let ready = hex(0x6FBF83)
+        /// Working blue — the agent has work in hand. 3.10:1: deliberately the
+        /// DIMMEST lamp, clearing its floor and no more. Ruled 09 Aug against
+        /// a brighter variant, on the busy panel: working is the state you are
+        /// in most of the time, and seven bright dots is a lit-up panel rather
+        /// than a hierarchy. Emphasis and calm are opposable on a dark ground
+        /// in a way the light ground could not offer — there, contrast only ran
+        /// one direction, so dimming a lamp just made it harder to see.
+        static let working = hex(0x527A9C)
+        /// Fault amber — stopped on something it cannot pass alone. 6.43:1,
+        /// up from 1.72:1 on the putty, where the needs-you channel was the
+        /// least visible thing on the panel.
+        static let fault = hex(0xE0A44A)
+        /// Advisory accent for optional affordances — GO TO AGENT. 3.41:1 and
+        /// dimmed at the call site: the card's focal point is the prose and the
+        /// actions are keyboard, so the one navigation the panel owns is a door,
+        /// not a verb. On the dark ground a saturated accent inverts that
+        /// hierarchy outright; this one recedes under the text.
+        static let accent = hex(0x6E7F8C)
+
+        // MARK: The light console, kept for the swap
+        //
+        // Not dead code — the measured light half of the same design, held here
+        // so the panel can go back or grow a second theme without re-deriving
+        // it. These values pass every floor a LIGHT ground can pass; the ones
+        // that cannot are called out. Surface is #BCBBB0 (L* 75.7, −3 from the
+        // original putty: enough to take the glare off without spending budget
+        // the ramp needs).
+        //
+        //   surface       0xBCBBB0     ink           0x23241F   8.09:1
+        //   secondary     0x4A4B43     4.57:1        muted      0x4E4F47
+        //   hint          0x494A42     4.52:1        faint      0x7B7C72  deco
+        //   hover         0xB4B3A8     socket        0xB4B3A8
+        //   ready         0x3F6A4A     3.22:1        working    0x374F67   4.39:1
+        //   fault         0x8A5410     3.24:1        accent     0x5A6B7A
+        //
+        // Two notes for whoever swaps them. The lamp step inverts: on light the
+        // working lamp must be DARKER than ready to recede (ΔL* 8.3), on dark it
+        // is dimmer, and the hex tables are not interchangeable row for row.
+        // And `socket` equals `hover` on light because an unlit lamp against
+        // putty has to be carried by its ring — there is no "off" that reads as
+        // off on a light ground, which is half of why the console went dark.
     }
 
     // MARK: - Lenses
 
     /// A semantic role, not a color. Each lens maps into the Palette — the one
     /// place the mapping can change. No lens reaches for a semantic NSColor:
-    /// the opaque light surface must read identically in light and dark mode.
+    /// the opaque surface must read identically whatever the system appearance
+    /// is doing.
     enum Lens {
         /// Chrome: the state pill and secondary controls.
         case chrome
@@ -105,7 +180,10 @@ enum StateLegend {
             switch self {
             case .chrome: return Palette.secondary
             case .content: return Palette.ink
-            case .guidance: return Palette.faint
+            // `hint`, not `faint`, since the split (09 Aug): guidance is small
+            // TEXT and owes the 4.5:1 floor. Pointing this at `faint` is what
+            // shipped the key line at 2.13:1.
+            case .guidance: return Palette.hint
             case .action: return Palette.ready
             }
         }
@@ -166,8 +244,8 @@ enum StateLegend {
         var fill: NSColor {
             switch self {
             case .ready: return Palette.ready
-            case .working: return Palette.advisory
-            case .running: return Palette.hover
+            case .working: return Palette.working
+            case .running: return Palette.socket
             case .fault: return Palette.fault
             }
         }
