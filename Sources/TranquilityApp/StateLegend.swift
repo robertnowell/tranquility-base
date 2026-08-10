@@ -353,6 +353,28 @@ enum StateLegend {
         let lamp: Lamp
     }
 
+    /// Quiet rows sink (ruled 10 Aug). A session that is merely alive never
+    /// interleaves with sessions that are doing something.
+    ///
+    /// The bands above this already had an order — waiting first, then stored
+    /// sessions by recency, then the unranked newcomers — but `.running` rows
+    /// were scattered through the last two, so an idle session could sit between
+    /// two working ones. That reads as a gap rather than a row, and it got worse
+    /// when the console went dark: an unlit socket mid-list looks like the grid
+    /// dropped a line.
+    ///
+    /// Deliberately a stable partition and not a `sorted(by:)` — Swift's sort is
+    /// not guaranteed stable, and every band above this one is carrying an order
+    /// somebody chose (recency, mostly). A comparator that reshuffled ties would
+    /// silently spend the ordering the rest of this file works to produce.
+    ///
+    /// Only `.running` moves. Whether `.fault` should outrank `.working` is a
+    /// real question and not this ruling's: nothing here claims the active band
+    /// is correctly ordered, only that the quiet band is not part of it.
+    static func quietRowsLast(_ rows: [SessionRow]) -> [SessionRow] {
+        rows.filter { $0.lamp != .running } + rows.filter { $0.lamp == .running }
+    }
+
     /// The one DISPLAYED identity — RE-RULED 05 Aug (twice): the terminal
     /// tab's string wins wherever we have it. The constraint is literal — the
     /// string on screen is the string in the tab, checkable at a glance,

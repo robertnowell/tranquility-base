@@ -1920,9 +1920,37 @@ final class StatusHUD: NSObject {
 
         contrastDrill()
         titleDoorDrill()
+        quietRowsDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
+    }
+
+    /// Quiet rows sink, and the active band keeps the order it arrived in.
+    ///
+    /// The ordering itself is a pure function on an array, so the interesting
+    /// half is not "does idle go last" — it is that nothing ELSE moves. The
+    /// bands feeding it are recency-ordered, and a partition that quietly
+    /// reshuffled ties would spend that ordering without any visible symptom.
+    /// So the drill checks positions, not just the tail.
+    private func quietRowsDrill() {
+        func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
+            StateLegend.SessionRow(id: id, name: id, callsign: id, lamp: lamp)
+        }
+        // Deliberately interleaved, and with two of each active lamp, so a
+        // comparator that grouped by lamp rather than partitioning would fail.
+        let mixed = [row("w1", .working), row("i1", .running), row("r1", .ready),
+                     row("i2", .running), row("f1", .fault), row("w2", .working)]
+        let sorted = StateLegend.quietRowsLast(mixed).map(\.id)
+
+        SelfTest.report("quietRows", [
+            ("quietLast", sorted.suffix(2) == ["i1", "i2"]),
+            ("activeKeepsArrivalOrder", Array(sorted.prefix(4)) == ["w1", "r1", "f1", "w2"]),
+            ("nothingLost", sorted.count == mixed.count),
+            ("allQuietIsStillAllQuiet",
+             StateLegend.quietRowsLast([row("i1", .running), row("i2", .running)])
+                .map(\.id) == ["i1", "i2"]),
+        ])
     }
 
     /// The identity opens the tab — but only when there is a tab.

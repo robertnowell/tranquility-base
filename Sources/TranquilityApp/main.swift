@@ -725,7 +725,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 callsign: activity?.shortReason ?? "",
                 lamp: lamp(for: activity)))
         }
-        return rows
+        // Last, and after every band has been appended: a session that is merely
+        // alive drops below the ones doing something, without disturbing the
+        // recency order the bands above spent this whole function establishing.
+        return StateLegend.quietRowsLast(rows)
     }
 
     /// The lamp a non-waiting session shows. A waiting session is green by

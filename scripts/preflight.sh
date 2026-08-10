@@ -103,6 +103,30 @@ fi
 printf '%s\n' "$TEST_OUT" | grep -E "Executed [0-9]+ tests" | tail -1 | sed 's/^[[:space:]]*/  /'
 echo "✓ build clean, tests green"
 
+# --- the palette owns every colour --------------------------------------------
+#
+# StateLegend.swift already carries a grep contract in writing, for glyphs: the
+# state characters are "defined here and nowhere else in this module". Colour
+# earns the same rule, and earned it the hard way — CheckView's tick was a
+# hardcoded near-white, correct against the old dark green and 1.88:1 against the
+# new one. An invisible checkmark, in one state, discoverable only by hitting
+# that state at runtime.
+#
+# The contrast drill cannot catch that class: it measures Palette tokens, and a
+# literal pasted into a view is by definition not one. This is the check that
+# sees it, and it costs nothing.
+echo "→ colour literals"
+STRAY=$(grep -rn 'NSColor(srgbRed:\|NSColor(calibratedRed:\|NSColor(red:' \
+  Sources/ --include='*.swift' | grep -v 'Sources/TranquilityApp/StateLegend.swift:' || true)
+if [ -n "$STRAY" ]; then
+  echo "✗ colour literal outside the Palette:" >&2
+  printf '%s\n' "$STRAY" >&2
+  echo "  Add it to StateLegend.Palette and reference it from there — a literal" >&2
+  echo "  in a view is a colour no drill can measure and no theme can move." >&2
+  exit 1
+fi
+echo "✓ every colour comes from the Palette"
+
 cat <<EOF
 
 Preflight passed. Nothing has been pushed or deployed — deliberately.
