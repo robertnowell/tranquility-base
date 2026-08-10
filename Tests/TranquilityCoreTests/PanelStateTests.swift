@@ -138,4 +138,22 @@ final class PanelStateTests: XCTestCase {
             XCTAssertTrue(state.acceptsEscape, "\(state.name) must accept Escape")
         }
     }
+
+    // MARK: - Speaking, for the ⌥ handler
+
+    /// Ruled 10 Aug: while the panel is talking, one ⌥ tap means stop and
+    /// listen. The handler asks `isSpeaking` directly, so it has to be true for
+    /// exactly one case and false for every other — a false positive here would
+    /// hijack a tap that meant something else.
+    func testIsSpeakingIsTrueOnlyWhileSpeaking() {
+        XCTAssertTrue(PanelState.speaking(eventId: nil).isSpeaking)
+        XCTAssertTrue(PanelState.speaking(eventId: "abc").isSpeaking)
+
+        for other: PanelState in [.hidden, .idle(waiting: 0), .idle(waiting: 3),
+                                  .arming, .listening(eventId: nil),
+                                  .transcribing(startedAt: Date()), .preparing] {
+            XCTAssertFalse(other.isSpeaking, "\(other) must not read as speaking")
+        }
+    }
+
 }
