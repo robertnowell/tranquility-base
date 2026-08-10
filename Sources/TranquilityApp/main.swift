@@ -435,7 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 "Testing the word highlight. The second sentence should light up after the first.")
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
-                hud.showAnnouncement(topic: "Highlight check", spoken: text,
+                hud.showAnnouncement(spoken: text,
                                      sessionId: "selftest", pid: nil,
                                      project: "tranquility-base", cwd: nil)
                 _ = await SpeechChain().speak(text, onWord: { [weak self] range in
@@ -1093,7 +1093,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let live = (ClaudeAgentsCLI().sessions() ?? [])
                     .first { $0.sessionId == announcement.event.sessionId }
                 hud.showAnnouncement(
-                    topic: announcement.brief.topic,
                     spoken: rung.spoken,
                     sessionId: announcement.event.sessionId,
                     pid: live?.pid,
@@ -1403,8 +1402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         // announcement is not one — recording it anyway is how a
                         // turn nobody heard became the reply target.
                         guard self.hud.showAnnouncement(
-                            topic: announcement.brief.topic,
-                            spoken: announcement.spoken,
+                                    spoken: announcement.spoken,
                             sessionId: announcement.event.sessionId,
                             pid: live?.pid,
                             project: name,
