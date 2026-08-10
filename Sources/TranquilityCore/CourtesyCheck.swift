@@ -312,7 +312,15 @@ extension CourtesyCheck.WordCounter {
             // Timing out to nil degrades to speaking, which is the same thing
             // every other "could not look" does.
             DispatchQueue.global().asyncAfter(deadline: .now() + CourtesyCheck.recognitionTimeout) {
-                if resumed.claim() { continuation.resume(returning: nil) }
+                if resumed.claim() {
+                    // Traced, because an untraced timeout is exactly the hole
+                    // that made the 10 Aug investigation take all day: a nil
+                    // with no explanation reads as "could not look" and is
+                    // indistinguishable from every other could-not-look.
+                    CourtesyCheck.trace?("recogniser timed out after "
+                        + "\(Int(CourtesyCheck.recognitionTimeout))s — no result, no error")
+                    continuation.resume(returning: nil)
+                }
             }
 
             recognizer.recognitionTask(with: request) { result, error in
