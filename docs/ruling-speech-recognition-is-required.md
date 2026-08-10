@@ -1,3 +1,38 @@
+# Speech Recognition was never asked for, so it never worked
+
+> **CORRECTED 10 Aug 2026.** The original version of this doc asserted that an
+> unauthorised `SFSpeechRecognizer` *hangs* — accepts work and never calls back.
+> That is wrong, and it was load-bearing for two other wrong conclusions. What
+> is true is simpler and duller: nothing ever called `requestAuthorization`, so
+> the status sat at `notDetermined` and the recogniser refused. One probe call
+> moved it to `.authorized`, after which the recogniser answers normally, with
+> `kAFAssistantErrorDomain` code 1110 ("No speech detected") on quiet audio.
+>
+> Research record: `~/Documents/deep-research/2026-08-10-sfspeechrecognizer-authorization-macos/`.
+>
+> What the correction changes:
+> - **Dead:** "an unauthorised recogniser hangs." Apple documents no behaviour
+>   at all for calling `recognitionTask` while `.notDetermined` (two Tier 1
+>   sources). The observed hang was never isolated from a self-inflicted one —
+>   the harness blocked the main thread on a semaphore before AppKit existed.
+> - **Dead:** "TCC keys on path, so the build copy and the installed copy hold
+>   independent grants." Apple DTS is explicit that a bundled `.app` is keyed on
+>   bundle id plus a code-signing requirement. Both copies always shared one
+>   state, and that state was `notDetermined`.
+> - **Dead:** "on-device recognition bypasses TCC." Apple draws that line at the
+>   API level — `SpeechAnalyzer` needs no grant, `SFSpeechRecognizer` always
+>   does, whatever `requiresOnDeviceRecognition` says.
+> - **Stands:** the permission must be explicitly requested; there is no
+>   implicit prompt; onboarding is the only honest place to ask.
+> - **Stands, on its own merits:** bounding the recovery continuation. An
+>   unbounded third-party callback on the provider that is meant to be the floor
+>   is a defect whether or not this particular hang was real.
+> - **Reverted:** the guards that made `AppleSpeechRecovery` refuse on
+>   `.notDetermined`. Built on the false premise; they would have made a fresh
+>   install's fallback refuse silently instead of attempting and reporting.
+> - **Reverted:** making the permission REQUIRED. It does not block the core
+>   loop, and requiring it put an onboarding window on screen at every launch.
+
 # Speech Recognition was always required; now it is asked for
 
 Ruled 09 Aug 2026, after a measurement that went the other way twice. Records

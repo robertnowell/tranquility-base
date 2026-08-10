@@ -132,32 +132,21 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
     static let callbackTimeout: TimeInterval = 120
 
     public var isConfigured: Bool {
-        // Authorisation counts as configuration. Without it this provider cannot
-        // do anything except hang, and `RecoveryChain` already knows how to skip
-        // a provider that is not configured — which is a cheaper and more honest
-        // outcome than an attempt that will time out.
-        SFSpeechRecognizer.authorizationStatus() == .authorized
-            && (SFSpeechRecognizer(locale: Locale(identifier: "en-US"))?.isAvailable ?? false)
+        // Deliberately does NOT gate on authorisation.
+        //
+        // It did, briefly, on 10 Aug, on the premise that an unauthorised
+        // recogniser hangs. Measured: it does not — it returns
+        // kAFAssistantErrorDomain errors like any other failure, and the hang
+        // that premise came from was never reproduced once the grant existed.
+        // Gating here would have made the fallback refuse silently on a fresh
+        // install rather than attempt and report, which is the opposite of what
+        // a last-resort provider is for.
+        SFSpeechRecognizer(locale: Locale(identifier: "en-US"))?.isAvailable ?? false
     }
 
     public func transcribe(fileAt url: URL) async throws -> TranscriptionResult {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw TranscriptionFailure.fileUnreadable
-        }
-        // Authorisation first, because an UNAUTHORISED recogniser does not refuse
-        // — it accepts the work and never calls back at all. Measured 10 Aug in a
-        // bundle reporting `notDetermined`: the task started on 54,400 samples
-        // and produced neither a result nor an error, ever.
-        //
-        // That matters more here than anywhere else. This provider is the last in
-        // `RecoveryChain`, chosen because it "can never be unavailable" — and a
-        // provider that hangs is worse than one that is unavailable, because the
-        // chain never reaches the end and the utterance never resolves. Failing
-        // fast is what lets the chain do its job.
-        guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
-            throw TranscriptionFailure.providerUnavailable(
-                "speech recognition not authorised (status "
-                + "\(SFSpeechRecognizer.authorizationStatus().rawValue))")
         }
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
               recognizer.isAvailable

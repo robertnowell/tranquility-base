@@ -256,17 +256,11 @@ extension CourtesyCheck.WordCounter {
     public static let apple = CourtesyCheck.WordCounter { samples, sampleRate in
         // Authorisation, checked first and cheaply.
         //
-        // Briefly removed on 10 Aug, on the theory that the guard was itself what
-        // made this feature inert — `AppleSpeechRecovery` appeared to transcribe
-        // with the status at `notDetermined`. Removing it measured the truth:
-        // `recognitionTask` accepted 54,400 samples and then produced neither a
-        // result nor an error, ever. An unauthorised recogniser does not refuse,
-        // it hangs, and the only thing that ended the call was the timeout below.
-        //
-        // So the guard is right and it stays. Its one real defect was silence,
-        // which the trace now fixes: nil here means "could not look", and a
-        // permanently unauthorised recogniser is a permanent could-not-look that
-        // used to be indistinguishable from a permanently quiet room.
+        // Not because an unauthorised recogniser hangs — measured 10 Aug, it
+        // does not; it errors like anything else. The guard is here because a
+        // status check is free and an audio round-trip is not, and because it
+        // gives the trace below something true to say instead of letting the
+        // failure arrive as a generic error three seconds later.
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
             CourtesyCheck.trace?("speech recognition not authorised (status "
                 + "\(SFSpeechRecognizer.authorizationStatus().rawValue)) — the check "
