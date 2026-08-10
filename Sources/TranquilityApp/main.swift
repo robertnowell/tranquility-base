@@ -504,6 +504,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// A2 — the hail. A turn arrived and the panel surfaced for it; say WHO and
+    /// stop: a minor chime, then just the callsign through the normal speech
+    /// chain. The content waits for ⌃⌥ ("go ahead"). Nothing is marked heard and
+    /// no cursor moves, so standby — saying nothing — loses nothing: the grid row
+    /// stays lit and ⌃⌥ later plays the full summary exactly as before.
+    ///
+    /// The voice is the away-channel, and this is its ONLY unprompted use in the
+    /// app. It never interrupts: if anything is already speaking (or the
+    /// microphone is open), the surfaced panel and the lit lamp ARE the hail and
+    /// the audio is skipped — a hail that talks over another utterance would be
+    /// the app interrupting itself to say less.
+    /// Home from a card, by any door — ⌃⌥ or the clicked breadcrumb (ruled
+    /// 06 Aug: voiced first, but the pointer works too). Stops the voice and
+    /// returns to the grid, advancing NOTHING: no dismissal, no markHeard, no
+    /// next announcement. A mid-speech stop also wakes the announce task,
+    /// whose `.interrupted` arm repaints the grid with its own note; painting
+    /// it now covers the already-finished card too.
+    private func goHomeFromCard(via door: String) {
+        Permissions.log("\(door): home")
+        coordinator?.speech.stop()
+        GreetingCache.stop()
+        showIdleGrid()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         permissionTimer?.invalidate()
         intakeTimer?.invalidate()
@@ -518,6 +542,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // restarts, so calling start() on every tick is safe.
 
     private func startPermissionPolling() {
+        Task { @MainActor in Permissions.notificationsAuthorized = await ArrivalChime.isAuthorized }
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -1865,7 +1890,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // nobody is reading the panel anyway. `flashNotice` paints only in
             // `.idle`, so a dismissed panel is not raised by this — which is the
             // ruling, and is structural rather than remembered.
-            if let busy = decision.audioBusyWith { hud.flashNotice(StateLegend.heldNotice(busy), lens: .advisory) }
             return
         }
         let target = try? coordinator?.nextToAnnounce()
@@ -1880,83 +1904,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Permissions.log("ambient: surfaced for \(waiting) waiting")
         hud.showIdle(rows: rows)
-        // A2 — the hail: a quiet chime and the callsign, nothing else. The summary
-        // plays only when you say "go ahead" (⌃⌥).
+        // The arrival makes a SOUND, not a sentence.
         //
-        // No listening step. The gate above already answered "is a human on the
-        // other end of some audio right now" from the HAL's process list, which
-        // is what the deleted room-listening version was trying to infer by
-        // opening the microphone for four seconds.
-        if let target { speakHail(for: target) }
+        // The spoken callsign is dead (ruled 10 Aug). It was the most expensive
+        // thing in the app — it needed the interrupt gate, then a courtesy check,
+        // then a microphone and a recogniser to decide whether saying one word
+        // was rude — and in the whole time it shipped it never once announced
+        // successfully. A chime carries the same information ("something came
+        // back") at none of that cost, and the panel already carries WHICH.
+        ArrivalChime.play()
     }
 
-    /// A2 — the hail. A turn arrived and the panel surfaced for it; say WHO and
-    /// stop: a minor chime, then just the callsign through the normal speech
-    /// chain. The content waits for ⌃⌥ ("go ahead"). Nothing is marked heard and
-    /// no cursor moves, so standby — saying nothing — loses nothing: the grid row
-    /// stays lit and ⌃⌥ later plays the full summary exactly as before.
-    ///
-    /// The voice is the away-channel, and this is its ONLY unprompted use in the
-    /// app. It never interrupts: if anything is already speaking (or the
-    /// microphone is open), the surfaced panel and the lit lamp ARE the hail and
-    /// the audio is skipped — a hail that talks over another utterance would be
-    /// the app interrupting itself to say less.
-    /// Home from a card, by any door — ⌃⌥ or the clicked breadcrumb (ruled
-    /// 06 Aug: voiced first, but the pointer works too). Stops the voice and
-    /// returns to the grid, advancing NOTHING: no dismissal, no markHeard, no
-    /// next announcement. A mid-speech stop also wakes the announce task,
-    /// whose `.interrupted` arm repaints the grid with its own note; painting
-    /// it now covers the already-finished card too.
-    private func goHomeFromCard(via door: String) {
-        Permissions.log("\(door): home")
-        coordinator?.speech.stop()
-        GreetingCache.stop()
-        showIdleGrid()
-    }
-
-    private func speakHail(for target: WaitingSession) {
-        guard let coordinator else { return }
-        let turn = "\(target.sessionId):\(target.latestId)"
-        guard turn != lastHailedTurn else { return }
-        // Marked hailed even when the audio is skipped below: the panel surface
-        // carried the news, and this exact turn must never chime twice.
-        lastHailedTurn = turn
-        guard !isAnnouncing, !coordinator.speech.isSpeaking, !coordinator.speech.isPaused,
-              !recorder.isRecording, !hud.isCapturingAudio else {
-            Permissions.log("hail: silent (audio busy) — the surfaced panel is the hail")
-            return
-        }
-        // The spoken half of Announcement.hailText (Core, dormant by design),
-        // computed from the same WaitingSession fields so no announcement is
-        // fetched and nothing advances: the callsign, else the directory word
-        // for a session not yet minted.
-        let text = target.callsign ?? Callsign.directoryWord(cwd: target.cwd)
-        let previous = announceTask
-        announceTask = Task { @MainActor in
-            // Take the announce slot WITHOUT stopping anything — the guard above
-            // means whatever held it is already finished; awaiting is just the
-            // structural no-overlap guarantee every utterance in this app obeys.
-            _ = await previous?.value
-            guard !Task.isCancelled else { return }
-            Permissions.log("hail: \(text) for \(target.sessionId.prefix(8)) turn \(target.latestId)")
-            // Deliberate, not an alarm: Tink at half volume, then a beat of air
-            // before the name so the two read as one gesture, not a collision.
-            if let chime = NSSound(named: "Tink") {
-                chime.volume = 0.5
-                chime.play()
-                try? await Task.sleep(nanoseconds: 300_000_000)
-            }
-            guard !Task.isCancelled else { return }
-            // The session's durable voice (ruled 05 Aug, f6d3de0): the hail IS a
-            // session utterance — the whole point of voice identity is that the
-            // ear knows WHO before the name even registers, and the hail is the
-            // first sound a turn makes. One roster definition (a559f29): the
-            // Coordinator's accessor, never a local derivation.
-            _ = await coordinator.speech.speak(
-                SpokenTextSanitizer().sanitize(text),
-                voice: coordinator.voiceId(for: target.sessionId))
-        }
-    }
 
     /// The tty of the frontmost Terminal tab, or nil if Terminal is not in front.
     private func frontmostSessionTty() -> String? {
