@@ -1022,10 +1022,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 handle(.replyEnded)
                 return
             }
-            // Two quick taps lock hands-free listening: Wispr's pattern, for
-            // replies too long to spend holding a key. Everything downstream is the
-            // ordinary reply path — same meter, same undo window, same routing.
-            if let last = lastOptionTapAt, Date().timeIntervalSince(last) < 0.45 {
+            // Talking over the announcement is the commonest thing there is, and
+            // for a long time it did nothing. Ruled a bug, 10 Aug: "If something
+            // is speaking and I hit Option, it should listen to me. It should not
+            // be discarded."
+            //
+            // Until now a tap while speaking only armed the double-tap window, so
+            // it took TWO taps inside 0.45s to be heard — and the log of a
+            // frustrated session shows exactly what that costs: `⌥ tap: no
+            // meaning in speaking` at 19:51:05 and again at 19:51:06, a full
+            // second apart, each one forgotten before the next arrived, until the
+            // sixth press. A key that ignores you while the app is talking is the
+            // one moment you most need it.
+            //
+            // So while we are speaking, ONE tap is the whole gesture: stop
+            // talking and listen. It locks hands-free, which makes the next tap
+            // send — the same tap-to-start, tap-to-send pair the double-tap
+            // already gave, minus the timing you had to get right.
+            let speakingOverYou = hud.state.isSpeaking
+            if speakingOverYou || (lastOptionTapAt.map { Date().timeIntervalSince($0) < 0.45 } ?? false) {
                 lastOptionTapAt = nil
                 guard micGranted else { return }
                 if recorder.isRecording {
@@ -1071,7 +1086,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // capture ends it, so this line should be rare. When a storm
                 // of them appears again, that is the user pressing the mic key
                 // and being ignored.
-                Permissions.log("⌥ tap: no meaning in \(hud.state)")
+                Permissions.log("⌥ tap: first of a pair, in \(hud.state)")
             }
 
         case .pauseToggled:

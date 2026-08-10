@@ -61,6 +61,17 @@ public enum PanelState: Equatable {
         }
     }
 
+    /// The panel is reading something out loud right now.
+    ///
+    /// Exists so the ⌥ handler can ask the question directly rather than pattern
+    /// matching on a case it does not otherwise care about: while we are talking,
+    /// one tap means stop and listen (ruled 10 Aug).
+    public var isSpeaking: Bool {
+        if case .speaking = self { return true }
+        return false
+    }
+
+
     /// Escape means "stop what is happening here". It is live wherever something is
     /// happening, which now includes listening and settings — the two states where
     /// it silently did nothing.
