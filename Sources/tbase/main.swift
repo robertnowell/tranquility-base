@@ -33,6 +33,8 @@ func usage() -> Never {
       tbase gate-watch [secs]   log-only observation; suppresses nothing
       tbase courtesy [sentence] run the speech/noise discrimination over
                                 synthesised fixtures — no microphone is opened
+      tbase courtesy-live [s]   open the REAL mic for one window and print the
+                                verdict (scripts/courtesy-eval.sh drives this)
 
     dispatch:
       tbase targets                       live sessions, with tty and enrolment
@@ -553,6 +555,37 @@ case "hook-config":
             print("  \(mark)  \(d.name)\(tags.isEmpty ? "" : "  [\(tags)]")")
         }
         print("\nanyInputInUse: \(AudioInputDevice.anyInputInUse())")
+
+    case "courtesy-live":
+        // The real microphone, the real window, one line of verdict. Built for
+        // scripts/courtesy-eval.sh to call in a loop while stimuli play through
+        // the speakers — see that script for what it is actually measuring.
+        let seconds = args.count > 1 ? (Double(args[1]) ?? CourtesyCheck.listenSeconds)
+                                     : CourtesyCheck.listenSeconds
+        await CourtesyDemo.authorizeIfNeeded()
+        guard await CourtesyLive.microphoneAuthorized() else {
+            // A CLI has no bundle of its own, so the grant belongs to the
+            // terminal. Without it AVAudioEngine does NOT error — it starts
+            // happily and delivers digital silence, which reads downstream as
+            // "the quietest room in the world" rather than as a broken tool.
+            print("ERROR\tmicrophone not authorised for this terminal — every "
+                + "sample would be silence")
+            exit(2)
+        }
+        do {
+            let samples = try CourtesyLive.sample(seconds: seconds)
+            let a = await CourtesyCheck().assess(samples: samples, sampleRate: 16000)
+            FileHandle.standardError.write(Data(
+                "  (captured \(samples.count) samples, \(String(format: "%.1f", Double(samples.count)/16000))s)\n".utf8))
+            // One machine-readable line: verdict, level, words. The eval script
+            // tabulates these; a human reading them gets the same story.
+            print(String(format: "%@\tlevel=%.4f\twords=%@\t%@",
+                         a.speechDetected ? "HOLD" : "SPEAK", a.level,
+                         a.wordCount.map(String.init) ?? "-", a.reason))
+        } catch {
+            print("ERROR\t\(error)")
+            exit(2)
+        }
 
     case "courtesy":
         // Prove the discrimination the ruling asks for, without needing a room:
