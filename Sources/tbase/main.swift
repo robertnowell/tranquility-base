@@ -27,14 +27,10 @@ func usage() -> Never {
                                 replay a saved recording through the AssemblyAI
                                 streaming provider in pseudo-realtime
 
-    the courtesy check (listening before we talk):
+    the courtesy check (is anyone else using audio?):
       tbase devices             input devices, and which are running for anybody
       tbase gate                what the interrupt gate would decide right now
       tbase gate-watch [secs]   log-only observation; suppresses nothing
-      tbase courtesy [sentence] run the speech/noise discrimination over
-                                synthesised fixtures — no microphone is opened
-      tbase courtesy-live [s]   open the REAL mic for one window and print the
-                                verdict (scripts/courtesy-eval.sh drives this)
 
     dispatch:
       tbase targets                       live sessions, with tty and enrolment
@@ -539,13 +535,23 @@ case "hook-config":
         print(String(format: "idle:         %.1fs", decision.idleSeconds))
         print("frontmost:    \(decision.frontmostApp ?? "unknown")")
         print("screenLocked: \(decision.screenLocked)")
-        print("micInUse:     \(decision.microphoneInUse)")
-        print("heldForCourtesy: \(decision.heldForCourtesy)")
+        
+        print("audioBusyWith:  \(decision.audioBusyWith ?? "nobody")")
 
     case "devices":
         // Which inputs exist, and which are running for somebody right now.
         // Start a Zoom call or a QuickTime recording and run this again: the
         // in-use column flips without this app ever opening the microphone.
+        print("OUTPUTS (is anything playing?)")
+        for d in AudioInputDevice.allOutputs() {
+            let tags = [d.isBuiltIn ? "built-in" : nil, d.isBluetooth ? "bluetooth" : nil]
+                .compactMap { $0 }.joined(separator: ",")
+            let mark = AudioInputDevice.isInUse(d.id) ? "IN USE" : "idle  "
+            print("  \(mark)  \(d.name)\(tags.isEmpty ? "" : "  [\(tags)]")")
+        }
+        print("  anyOutputInUse: \(AudioInputDevice.anyOutputInUse())\n")
+
+        print("INPUTS (is anyone listening?)")
         let inputs = AudioInputDevice.allInputs()
         guard !inputs.isEmpty else { print("no input devices"); break }
         for d in inputs {
@@ -556,86 +562,19 @@ case "hook-config":
         }
         print("\nanyInputInUse: \(AudioInputDevice.anyInputInUse())")
 
-    case "courtesy-file":
-        // Assess a WAV the APP captured. This exists because the two halves of
-        // the question live in two processes: the app bundle holds the
-        // microphone grant and has never asked for speech; this terminal holds
-        // speech and is denied the microphone. Splitting capture from
-        // recognition answers "can the recogniser hear this audio?" without
-        // granting anything new to either — and that is the question that
-        // decides whether the app needs a fourth permission at all.
-        guard args.count > 1 else { usage() }
-        await CourtesyDemo.authorizeIfNeeded()
-        for path in args.dropFirst() {
-            let name = (path as NSString).lastPathComponent
-            do {
-                let samples = try CourtesyDemo.readWAV(path)
-                let a = await CourtesyCheck().assess(samples: samples, sampleRate: 16000)
-                print(String(format: "  %-22@ %@  level=%.4f  words=%@  %@",
-                             name as NSString, a.speechDetected ? "HOLD " : "SPEAK",
-                             a.level, a.wordCount.map(String.init) ?? "-", a.reason))
-            } catch {
-                print("  \(name)  ERROR  \(error)")
-            }
+        let processes = AudioInputDevice.audioProcesses().filter { $0.usingInput || $0.usingOutput }
+        print("\nWHO (macOS 14.2+ process list)")
+        if processes.isEmpty {
+            print("  (the HAL named nobody — either nothing is running audio, or")
+            print("   this macOS predates kAudioHardwarePropertyProcessObjectList)")
+        }
+        for p in processes.sorted(by: { $0.name < $1.name }) {
+            let dirs = [p.usingInput ? "mic" : nil, p.usingOutput ? "speakers" : nil]
+                .compactMap { $0 }.joined(separator: " + ")
+            print("  \(p.name)  —  \(dirs)")
         }
 
-    case "courtesy-live":
-        // The real microphone, the real window, one line of verdict. Built for
-        // scripts/courtesy-eval.sh to call in a loop while stimuli play through
-        // the speakers — see that script for what it is actually measuring.
-        let seconds = args.count > 1 ? (Double(args[1]) ?? CourtesyCheck.listenSeconds)
-                                     : CourtesyCheck.listenSeconds
-        await CourtesyDemo.authorizeIfNeeded()
-        guard await CourtesyLive.microphoneAuthorized() else {
-            // A CLI has no bundle of its own, so the grant belongs to the
-            // terminal. Without it AVAudioEngine does NOT error — it starts
-            // happily and delivers digital silence, which reads downstream as
-            // "the quietest room in the world" rather than as a broken tool.
-            print("ERROR\tmicrophone not authorised for this terminal — every "
-                + "sample would be silence")
-            exit(2)
-        }
-        do {
-            let samples = try CourtesyLive.sample(seconds: seconds)
-            let a = await CourtesyCheck().assess(samples: samples, sampleRate: 16000)
-            FileHandle.standardError.write(Data(
-                "  (captured \(samples.count) samples, \(String(format: "%.1f", Double(samples.count)/16000))s)\n".utf8))
-            // One machine-readable line: verdict, level, words. The eval script
-            // tabulates these; a human reading them gets the same story.
-            print(String(format: "%@\tlevel=%.4f\twords=%@\t%@",
-                         a.speechDetected ? "HOLD" : "SPEAK", a.level,
-                         a.wordCount.map(String.init) ?? "-", a.reason))
-        } catch {
-            print("ERROR\t\(error)")
-            exit(2)
-        }
 
-    case "courtesy":
-        // Prove the discrimination the ruling asks for, without needing a room:
-        // synthesise speech with `say`, synthesise noise, and run both through
-        // the same assessment the hail will consult.
-        //
-        // With no argument it uses a fixed sentence; `tbase courtesy "..."`
-        // speaks your own. Either way nothing is recorded and no microphone is
-        // opened — this exercises assess(), which takes samples by design.
-        let sentence = args.count > 1
-            ? args.dropFirst().joined(separator: " ")
-            : "the quick brown fox jumps over the lazy dog"
-
-        await CourtesyDemo.authorizeIfNeeded()
-        let check = CourtesyCheck()
-        print("quiet floor:  \(check.quietFloor)\n")
-
-        for (label, samples) in try CourtesyDemo.corpus(speaking: sentence) {
-            let a = await check.assess(samples: samples, sampleRate: 16000)
-            let verdict = a.speechDetected ? "HOLD " : "speak"
-            let name = label.padding(toLength: 20, withPad: " ", startingAt: 0)
-            print(String(format: "  %@  %@  level %.4f  words %@",
-                         verdict, name, a.level,
-                         a.wordCount.map(String.init) ?? "—"))
-            print("         \(a.reason)")
-        }
-        print("\nHOLD = someone is talking, the hail waits.")
 
     case "gate-watch":
         // Log-only observation. Records what the gate WOULD decide, and acts on

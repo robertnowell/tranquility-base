@@ -18,11 +18,12 @@ public struct InterruptGate: Sendable {
         public let idleSeconds: Double
         public let frontmostApp: String?
         public let screenLocked: Bool
-        public var microphoneInUse: Bool = false
-        /// True when the veto was the microphone — the one refusal the panel
-        /// explains to the user rather than only logging, because a hail held for
-        /// courtesy is indistinguishable from an agent that never came back.
-        public var heldForCourtesy: Bool { !allowed && microphoneInUse }
+        /// Which other app was using audio, when that is why we held.
+        public var audioBusyWith: String? = nil
+        /// True when the veto was audio — the one refusal the panel explains to
+        /// the user rather than only logging, because a hail held for courtesy is
+        /// indistinguishable from an agent that never came back.
+        public var heldForCourtesy: Bool { !allowed && audioBusyWith != nil }
     }
 
     /// Typing right now. The one moment that is unambiguously bad.
@@ -53,20 +54,26 @@ public struct InterruptGate: Sendable {
         public var idleSeconds: @Sendable () -> Double
         public var frontmostApp: @Sendable () -> String?
         public var screenLocked: @Sendable () -> Bool
-        /// Is any input device running for anybody? See
-        /// `AudioInputDevice.anyInputInUse` for why this subsumes `mutedApps`.
-        public var microphoneInUse: @Sendable () -> Bool
+        /// Which other app is using audio right now, if any.
+        ///
+        /// Names the app rather than returning a bool, because the panel's
+        /// notice reads better naming it and because the process list this comes
+        /// from has the name anyway. See `AudioInputDevice.otherAppUsingAudio`
+        /// for why a bare device-level flag was not enough.
+        public var audioBusyWith: @Sendable () -> String?
 
         public init(
             idleSeconds: @escaping @Sendable () -> Double = { InterruptGate.idleSeconds() },
             frontmostApp: @escaping @Sendable () -> String? = { InterruptGate.frontmostApplication() },
             screenLocked: @escaping @Sendable () -> Bool = { InterruptGate.screenIsLocked() },
-            microphoneInUse: @escaping @Sendable () -> Bool = { AudioInputDevice.anyInputInUse() }
+            audioBusyWith: @escaping @Sendable () -> String? = {
+                AudioInputDevice.otherAppUsingAudio(ourBundleID: Bundle.main.bundleIdentifier)
+            }
         ) {
             self.idleSeconds = idleSeconds
             self.frontmostApp = frontmostApp
             self.screenLocked = screenLocked
-            self.microphoneInUse = microphoneInUse
+            self.audioBusyWith = audioBusyWith
         }
 
         /// Nothing in front, nothing locked, idle forever, no microphone running.
@@ -75,7 +82,7 @@ public struct InterruptGate: Sendable {
             idleSeconds: { .greatestFiniteMagnitude },
             frontmostApp: { nil },
             screenLocked: { false },
-            microphoneInUse: { false })
+            audioBusyWith: { nil })
     }
 
     /// Order is load-bearing, and the rule is: **the cheapest question first, and
@@ -103,14 +110,21 @@ public struct InterruptGate: Sendable {
             return Decision(allowed: false, reason: "muted app in front: \(app)",
                             idleSeconds: idle, frontmostApp: app, screenLocked: false)
         }
-        // The microphone is in use by SOMEBODY — us, a call, a recorder. Checked
+        // Another app has audio open — a call, a video, a recording. Checked
         // after the frontmost list because it costs a HAL round-trip rather than
         // nothing, and before idle time because a call in progress is a far
         // better reason to stay quiet than a keystroke three seconds ago.
-        if signals.microphoneInUse() {
-            return Decision(allowed: false, reason: "microphone in use elsewhere",
+        //
+        // This is the entire courtesy check. The version that opened the
+        // microphone and listened to the room was deleted on 10 Aug: it was
+        // ~200 lines and an eval harness in service of an announcement whose
+        // existence is itself undecided, and this answers the same question —
+        // is a human on the other end of some audio — for one HAL round-trip,
+        // no permission, and nothing opened.
+        if let busy = signals.audioBusyWith() {
+            return Decision(allowed: false, reason: "audio in use by \(busy)",
                             idleSeconds: idle, frontmostApp: app, screenLocked: false,
-                            microphoneInUse: true)
+                            audioBusyWith: busy)
         }
         if idle < minimumIdleSeconds {
             return Decision(
