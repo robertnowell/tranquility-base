@@ -1917,8 +1917,74 @@ final class StatusHUD: NSObject {
             ("roomTakenBack", roomTakenBack),
         ])
 
+        contrastDrill()
+
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
+    }
+
+    /// Assert the palette still measures what the ruling says it measures.
+    ///
+    /// This drill renders nothing. It exists because every other drill here
+    /// checks that the panel LAID OUT correctly, and a colour that has slipped
+    /// under its contrast floor lays out perfectly — it just cannot be read. The
+    /// light console shipped `faint` at 2.13:1 and `fault` at 1.72:1 for its
+    /// entire life, through every one of these self-tests, because nothing was
+    /// looking.
+    ///
+    /// Four things are asserted, and the last two are the ones that catch drift
+    /// rather than typos:
+    ///  - every token clears its own floor against the surface;
+    ///  - the lamps stay far enough apart in LIGHTNESS to be told apart at 9px;
+    ///  - the ink ramp stays ORDERED — ink more legible than secondary, than
+    ///    muted, than hint. A single warmed hex can silently invert two tiers,
+    ///    and an inverted ramp is a hierarchy that lies;
+    ///  - `hint` outranks `faint`, which is the entire point of having split
+    ///    them. Re-merging them by accident is how the mushy key line comes back.
+    private func contrastDrill() {
+        let surface = StateLegend.Palette.surface
+        var checks: [(String, Bool)] = []
+
+        for token in StateLegend.contrastFloors {
+            let ratio = StateLegend.Measure.contrast(token.ink, surface)
+            checks.append(("\(token.name)≥\(token.floor)", ratio >= token.floor))
+            Permissions.log(String(
+                format: "contrast: %@ = %.2f:1 (floor %.1f) L*=%.1f",
+                token.name, ratio, token.floor,
+                StateLegend.Measure.lightness(token.ink)))
+        }
+
+        let lampGap = StateLegend.Measure.lightnessGap(
+            StateLegend.Palette.ready, StateLegend.Palette.working)
+        checks.append(("lampΔL*≥\(StateLegend.lampLightnessFloor)",
+                       lampGap >= StateLegend.lampLightnessFloor))
+
+        // Ready is the rare lamp that wants you; working is the common one that
+        // is only news. On a dark ground that ordering is expressible, and the
+        // busy panel was ruled on it — so it is worth defending.
+        let readyOutshinesWorking =
+            StateLegend.Measure.contrast(StateLegend.Palette.ready, surface)
+            > StateLegend.Measure.contrast(StateLegend.Palette.working, surface)
+        checks.append(("readyOutshinesWorking", readyOutshinesWorking))
+
+        let ramp = [StateLegend.Palette.ink, StateLegend.Palette.secondary,
+                    StateLegend.Palette.muted, StateLegend.Palette.hint]
+            .map { StateLegend.Measure.contrast($0, surface) }
+        checks.append(("inkRampOrdered", zip(ramp, ramp.dropFirst()).allSatisfy { $0 > $1 }))
+
+        checks.append(("hintOutranksFaint",
+                       StateLegend.Measure.contrast(StateLegend.Palette.hint, surface)
+                       > StateLegend.Measure.contrast(StateLegend.Palette.faint, surface)))
+
+        // The tick is punched out of the lamp, not the panel, so it is the one
+        // pair here measured against something other than the surface. It was a
+        // hardcoded near-white until 09 Aug and would have gone invisible at
+        // 1.88:1 on the brighter green.
+        checks.append(("checkmarkOnReady≥3",
+                       StateLegend.Measure.contrast(surface, StateLegend.Palette.ready) >= 3.0))
+
+        Permissions.log(String(format: "contrast: lamp ΔL* = %.1f", lampGap))
+        SelfTest.report("contrast", checks)
     }
 
     // MARK: - Pose driver (dev tooling)
