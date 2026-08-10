@@ -1864,7 +1864,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // nobody is reading the panel anyway. `flashNotice` paints only in
             // `.idle`, so a dismissed panel is not raised by this — which is the
             // ruling, and is structural rather than remembered.
-            if decision.heldForCourtesy { hud.flashNotice(StateLegend.heldMicBusyNotice) }
+            if let busy = decision.audioBusyWith { hud.flashNotice(StateLegend.heldNotice(busy)) }
             return
         }
         let target = try? coordinator?.nextToAnnounce()
@@ -1882,61 +1882,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A2 — the hail: a quiet chime and the callsign, nothing else. The summary
         // plays only when you say "go ahead" (⌃⌥).
         //
-        // The panel goes up NOW and the voice waits for the courtesy check. That
-        // ordering is the point: showing up is silent and can never interrupt
-        // anybody, so it should never be delayed by a check about interrupting.
-        if let target { Task { await courteouslyHail(target) } }
-    }
-
-    /// Listen for a moment, then hail — or hold, and say why.
-    ///
-    /// The expensive half of the ladder in docs/courtesy-check-evidence-plan.md.
-    /// Everything cheap has already run inside `gate.evaluate()` above; this is
-    /// the only step that opens the microphone, and it is reached only when every
-    /// free veto has passed.
-    private func courteouslyHail(_ target: WaitingSession) async {
-        let samples = await recorder.sampleRoom(seconds: CourtesyCheck.listenSeconds)
-
-        guard let samples else {
-            // Could not look — capture took the device, or the mic would not
-            // open. Nil degrades to speaking rather than to silence, EXCEPT that
-            // the re-check below still has to pass, which is what stops a hail
-            // firing into a capture that just cancelled this sample.
-            Permissions.log("courtesy: no sample taken")
-            if stillSafeToHail() { speakHail(for: target) }
-            return
-        }
-
-        let assessment = await CourtesyCheck().assess(samples: samples, sampleRate: 16000)
-        Permissions.log("courtesy: \(assessment.reason)")
-
-        if assessment.speechDetected {
-            hud.flashNotice(StateLegend.heldSpeechNotice)
-            return
-        }
-        guard stillSafeToHail() else { return }
-        speakHail(for: target)
-    }
-
-    /// Step 6 of the ladder: ask the cheap questions AGAIN.
-    ///
-    /// Seconds passed while the microphone was open, and the room is allowed to
-    /// change its mind inside them — the screen locks, a call starts, the user
-    /// reaches for the reply key. A gate that only evaluates the "before" is a
-    /// gate that speaks into a room that has already moved on.
-    private func stillSafeToHail() -> Bool {
-        guard hud.canSurfaceAmbiently else {
-            Permissions.log("courtesy: held on re-check (panel owns the stage)")
-            return false
-        }
-        let again = gate.evaluate()
-        guard again.allowed else {
-            Permissions.log("courtesy: held on re-check (\(again.reason))")
-            gateLog.record(again, context: "arrival-recheck")
-            if again.heldForCourtesy { hud.flashNotice(StateLegend.heldMicBusyNotice) }
-            return false
-        }
-        return true
+        // No listening step. The gate above already answered "is a human on the
+        // other end of some audio right now" from the HAL's process list, which
+        // is what the deleted room-listening version was trying to infer by
+        // opening the microphone for four seconds.
+        if let target { speakHail(for: target) }
     }
 
     /// A2 — the hail. A turn arrived and the panel surfaced for it; say WHO and
@@ -2396,24 +2346,6 @@ private final class Counter: @unchecked Sendable {
 import AVFoundation
 private func AVAuthorizationStatusIsUndetermined() -> Bool {
     AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined
-}
-
-// The acoustic eval, before AppKit exists.
-//
-// Deliberately ahead of NSApplication: this runs as a SECOND instance (launched
-// with `open -n`, so TCC attributes it to this bundle and it inherits the
-// microphone grant the terminal does not have), and a second instance that
-// reached AppDelegate would install a status item and fight the running one for
-// the global hotkey. Nothing below this line happens.
-if let flag = CommandLine.arguments.firstIndex(of: "--courtesy-eval"),
-   flag + 2 < CommandLine.arguments.count {
-    let manifest = CommandLine.arguments[flag + 1]
-    let out = CommandLine.arguments[flag + 2]
-    let seconds = CommandLine.arguments.count > flag + 3
-        ? Double(CommandLine.arguments[flag + 3]) ?? CourtesyCheck.listenSeconds
-        : CourtesyCheck.listenSeconds
-    CourtesyEval.run(manifest: manifest, out: out, seconds: seconds)
-    exit(0)
 }
 
 let app = NSApplication.shared

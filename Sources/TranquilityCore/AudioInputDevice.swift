@@ -64,6 +64,39 @@ public enum AudioInputDevice {
 
     /// Every device with at least one input channel. Output-only devices are
     /// excluded here rather than at each call site.
+    /// Every audio device the HAL knows about, input or output.
+    static func allDeviceIDs() -> [AudioDeviceID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr
+        else { return [] }
+        var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr
+        else { return [] }
+        return ids
+    }
+
+    private static func outputChannelCount(_ id: AudioDeviceID) -> Int {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &address, 0, nil, &size) == noErr, size > 0
+        else { return 0 }
+        let buffer = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: 16)
+        defer { buffer.deallocate() }
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, buffer) == noErr
+        else { return 0 }
+        let list = buffer.assumingMemoryBound(to: AudioBufferList.self)
+        return Int(UnsafeMutableAudioBufferListPointer(list).reduce(0) { $0 + $1.mNumberChannels })
+    }
+
     public static func allInputs() -> [Device] {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
@@ -147,6 +180,176 @@ public enum AudioInputDevice {
         guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &running) == noErr
         else { return false }
         return running != 0
+    }
+
+    // MARK: - Who is using the audio hardware (macOS 14.2+)
+
+    /// One process the HAL knows about, and whether it is currently running
+    /// audio in either direction.
+    public struct AudioProcess: Sendable, Equatable {
+        public let pid: pid_t
+        public let bundleID: String?
+        public let usingInput: Bool
+        public let usingOutput: Bool
+        /// Best available name: the bundle id if the HAL knows it, else the
+        /// process name from the kernel, else the bare pid.
+        public var name: String {
+            if let bundleID, !bundleID.isEmpty { return bundleID }
+            return ProcessProbe.name(of: Int(pid)) ?? "pid \(pid)"
+        }
+    }
+
+    /// Every process currently running audio, named.
+    ///
+    /// `kAudioHardwarePropertyProcessObjectList` arrived in macOS 14.2 alongside
+    /// the Core Audio process-tap API. Before it there was no supported way to
+    /// ask WHICH app holds the microphone — only whether the device was running
+    /// — so "something is listening" was the most any app could say.
+    ///
+    /// Returns an empty array on anything older, which callers must treat as "we
+    /// cannot tell" rather than "nobody is using it": the device-level
+    /// `isInUse` check stays the authority on whether to speak.
+    public static func audioProcesses() -> [AudioProcess] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr, size > 0
+        else { return [] }
+        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr
+        else { return [] }
+
+        return ids.compactMap { id in
+            let input = processFlag(id, kAudioProcessPropertyIsRunningInput)
+            let output = processFlag(id, kAudioProcessPropertyIsRunningOutput)
+            guard input || output else { return nil }
+            return AudioProcess(pid: processPID(id) ?? -1,
+                                bundleID: processBundleID(id),
+                                usingInput: input, usingOutput: output)
+        }
+    }
+
+    private static func processFlag(_ id: AudioObjectID,
+                                    _ selector: AudioObjectPropertySelector) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value) == noErr && value != 0
+    }
+
+    private static func processPID(_ id: AudioObjectID) -> pid_t? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyPID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value: pid_t = 0
+        var size = UInt32(MemoryLayout<pid_t>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value) == noErr
+        else { return nil }
+        return value
+    }
+
+    private static func processBundleID(_ id: AudioObjectID) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyBundleID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value: CFString? = nil
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        let status = withUnsafeMutablePointer(to: &value) {
+            AudioObjectGetPropertyData(id, &address, 0, nil, &size, $0)
+        }
+        guard status == noErr, let value else { return nil }
+        return value as String
+    }
+
+    /// Bundle ids that hold audio without a human being on the other end.
+    ///
+    /// Measured 10 Aug, sampling every three seconds: `com.apple.CoreSpeech`
+    /// (Siri / "Hey Siri" listening) and `com.apple.Sound-Settings.extension`
+    /// (the Sound pane drawing its input-level meter) both held the microphone
+    /// continuously on an otherwise idle machine. A device-level "is the mic in
+    /// use" check cannot tell those from a phone call, so a gate built on it
+    /// would have vetoed every announcement for as long as System Settings was
+    /// open — going permanently silent for a reason the user cannot see, which
+    /// is worse than the interruption it is preventing.
+    ///
+    /// Deliberately short, and deliberately not a general "system process"
+    /// filter: anything not on this list gets the benefit of the doubt and
+    /// blocks the hail. Adding to it should require the same evidence the
+    /// original entries have — an observation of it holding audio with nobody
+    /// speaking.
+    static let alwaysOnAudioClients: Set<String> = [
+        "com.apple.CoreSpeech",
+        "com.apple.Sound-Settings.extension",
+        "com.apple.controlcenter",
+    ]
+
+    /// Somebody ELSE is using the audio hardware — not us, not a system daemon
+    /// that always is. Returns who, for the log and the panel's one-line notice.
+    ///
+    /// This is the whole courtesy check, after the room-listening version was
+    /// deleted. It costs one HAL round-trip, opens nothing, needs no permission,
+    /// and answers the question the listening version was trying to infer from
+    /// a microphone: is a human on the other end of some audio right now.
+    ///
+    /// `ourBundleID` is excluded because our own TTS shows up here the moment we
+    /// speak — an app that refused to announce because it was announcing would
+    /// deadlock itself on the first hail.
+    ///
+    /// Nil when the process list is unavailable (before macOS 14.2) — callers
+    /// must fall back to the device-level flag rather than reading nil as "the
+    /// coast is clear".
+    public static func otherAppUsingAudio(ourBundleID: String?) -> String? {
+        let processes = audioProcesses()
+        guard !processes.isEmpty else { return nil }
+        return processes.first { p in
+            guard p.usingInput || p.usingOutput else { return false }
+            guard let bundle = p.bundleID, !bundle.isEmpty else { return false }
+            if bundle == ourBundleID { return false }
+            return !alwaysOnAudioClients.contains(bundle)
+        }?.name
+    }
+
+    /// Whether the HAL can name audio clients at all on this machine.
+    public static var canNameAudioClients: Bool { !audioProcesses().isEmpty }
+
+    /// Every device with at least one OUTPUT channel.
+    ///
+    /// Same enumeration as `allInputs`, other scope. Kept here rather than in a
+    /// new type because it is the same HAL round-trip against the same device
+    /// list, and splitting it would duplicate `allDeviceIDs` for no gain.
+    public static func allOutputs() -> [Device] {
+        allDeviceIDs().compactMap { id in
+            guard outputChannelCount(id) > 0, let name = name(id) else { return nil }
+            let transport = transportType(id)
+            return Device(id: id, name: name,
+                          isBuiltIn: transport == kAudioDeviceTransportTypeBuiltIn,
+                          isBluetooth: transport == kAudioDeviceTransportTypeBluetooth
+                              || transport == kAudioDeviceTransportTypeBluetoothLE)
+        }
+    }
+
+    /// Is anything PLAYING right now — a call, a video, music, another app's
+    /// notification chime?
+    ///
+    /// The same question as `anyInputInUse`, asked of the other direction, and
+    /// worth asking for the same reason: talking over a podcast is the same
+    /// discourtesy as talking over a person, and neither needs a microphone to
+    /// detect. Free, no permission, opens nothing.
+    ///
+    /// Excludes aggregate and virtual devices by name where we can tell — a
+    /// loopback device that is always "running" would pin this to true forever
+    /// and silence every announcement, which is the failure mode to watch for.
+    public static func anyOutputInUse() -> Bool {
+        allOutputs().contains { isInUse($0.id) }
     }
 
     /// Is any input device in use? Asks every input, not just the resolved one.

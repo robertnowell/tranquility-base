@@ -485,8 +485,14 @@ enum StateLegend {
     /// classification of the agent, and not a transcription outcome. Nothing was
     /// "detected but not understood" — nothing was ever read. The quiet glyph,
     /// not the amber triangle: nothing is wrong and nothing needs the user.
-    static let heldMicBusyNotice = "\(Glyph.quiet) Held — the microphone is in use"
-    static let heldSpeechNotice = "\(Glyph.quiet) Held — someone was talking"
+    /// Names the app, because the HAL's process list knows it and "the
+    /// microphone is in use" leaves the user guessing at which of their windows
+    /// is responsible. Trimmed of the reverse-DNS prefix: "zoom.us" reads,
+    /// "us.zoom.xos" does not.
+    static func heldNotice(_ app: String) -> String {
+        let short = app.split(separator: ".").last.map(String.init) ?? app
+        return "\(Glyph.quiet) Held — \(short) is using audio"
+    }
 
     // MARK: - The device fault (ruled 08 Aug)
 

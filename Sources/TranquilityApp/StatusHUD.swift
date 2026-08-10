@@ -1861,11 +1861,11 @@ final class StatusHUD: NSObject {
         // ("an arrival changes nothing about the panel's shape") reached through
         // the back door, and it is the likeliest regression in the feature.
         showIdle(rows: [])
-        flashNotice(StateLegend.heldSpeechNotice)
+        flashNotice(StateLegend.heldNotice("zoom.us"))
         let courtesyOnGrid = noticeIsShowing
-            && stateLabel.attributedStringValue.string == StateLegend.heldSpeechNotice
+            && stateLabel.attributedStringValue.string == StateLegend.heldNotice("zoom.us")
         hide()
-        flashNotice(StateLegend.heldMicBusyNotice)
+        flashNotice(StateLegend.heldNotice("Music"))
         let holdRefusedWhileHidden = !noticeIsShowing && !isOnScreen
         showIdle(rows: [])
         let didNotSummonThePanel = !noticeIsShowing
@@ -2216,7 +2216,7 @@ final class StatusHUD: NSObject {
         case "courtesy":
             // The hold, on the grid it interrupted nothing to reach.
             _ = pose("grid")
-            flashNotice(StateLegend.heldSpeechNotice)
+            flashNotice(StateLegend.heldNotice("zoom.us"))
             noticeExpiry?.cancel()
             noticeExpiry = nil
             return true
