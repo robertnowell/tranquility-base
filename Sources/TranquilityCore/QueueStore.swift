@@ -753,15 +753,42 @@ public final class QueueStore: Sendable {
                 .fetchAll(db)
 
             for var u in inFlight {
-                let audioExists = u.audioPath.map { FileManager.default.fileExists(atPath: $0) } ?? false
+                // Resolved, not tested by hand. A row interrupted mid-utterance
+                // has its audio at `<id>.wav.live`, so a bare fileExists against
+                // the recorded `audioPath` reports MISSING for the one case
+                // write-ahead exists to survive — and this sweep would discard it
+                // on the first launch after the crash, with the audio intact
+                // beside it. `resolve` is the only place that knows both states.
+                let found = AudioStore.resolve(audioPath: u.audioPath)
 
                 switch u.status {
                 case .recorded, .transcribing:
-                    if audioExists {
+                    switch found {
+                    case .finished:
                         // Nothing external was touched. Safe to retry from disk.
                         u.status = .recorded
                         report.requeuedForTranscription.append(u.id)
-                    } else {
+                    case .interrupted(let url):
+                        // The process died holding the microphone. The audio is
+                        // readable to the last flushed frame, so this is
+                        // recoverable — promote it and let it transcribe by the
+                        // ordinary path. Discarding here would be the durability
+                        // feature undone by the cleanup feature.
+                        if let promoted = try? LiveAudioCapture.adopt(
+                            LiveAudioCapture.Interrupted(
+                                utteranceId: u.id, url: url,
+                                byteCount: ((try? FileManager.default
+                                    .attributesOfItem(atPath: url.path))?[.size] as? Int) ?? 0,
+                                modifiedAt: Date(timeIntervalSince1970: 0))) {
+                            u.audioPath = promoted.path
+                            u.status = .recorded
+                            report.requeuedForTranscription.append(u.id)
+                        } else {
+                            u.status = .discarded
+                            u.discardedReason = "interrupted capture could not be promoted"
+                            report.missingAudio.append(u.id)
+                        }
+                    case .missing:
                         u.status = .discarded
                         u.discardedReason = "audio missing at boot reconciliation"
                         report.missingAudio.append(u.id)
@@ -795,7 +822,11 @@ public final class QueueStore: Sendable {
             at: Self.audioDirectory, includingPropertiesForKeys: nil) else { return [] }
         let known = Set(try dbQueue.read { db in try String.fetchAll(db, sql: "SELECT id FROM utterances") })
         return files
-            .map { $0.deletingPathExtension().lastPathComponent }
+            // Through AudioStore, not by hand: a bare deletingPathExtension turns
+            // `u4.wav.live` into `u4.wav`, which matches no row id, so every
+            // interrupted capture reported as an orphan forever — breaking the one
+            // diagnostic that would have shown them piling up.
+            .map { AudioStore.utteranceId(of: $0) }
             .filter { !known.contains($0) }
     }
 
