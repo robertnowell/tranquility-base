@@ -15,7 +15,6 @@ import TranquilityCore
 struct Permissions {
     enum Kind: CaseIterable {
         case microphone
-        case speechRecognition
         case inputMonitoring
         case automation
         case accessibility
@@ -23,7 +22,6 @@ struct Permissions {
         var title: String {
             switch self {
             case .microphone: return "Microphone"
-            case .speechRecognition: return "Speech Recognition"
             case .inputMonitoring: return "Input Monitoring"
             case .automation: return "Automation (Terminal)"
             case .accessibility: return "Accessibility"
@@ -33,14 +31,13 @@ struct Permissions {
         var why: String {
             switch self {
             case .microphone: return "to record your spoken reply"
-            case .speechRecognition: return "so transcription still works when the network doesn't, and so the app can tell whether you're mid-conversation before it speaks"
             case .inputMonitoring: return "to notice the hotkeys while you're in another app (measured: Accessibility alone does NOT do this)"
             case .automation: return "to type replies into the right Terminal tab"
             case .accessibility: return "so dictation can type at your cursor"
             }
         }
 
-        /// All five. Ruled 07 Aug: "it's either required or it's not — make them
+        /// All four. Ruled 07 Aug: "it's either required or it's not — make them
         /// both required or get rid of one." The first attempt got rid of Input
         /// Monitoring on the reasoning that a `.listenOnly` tap is authorised by
         /// either permission and Accessibility is needed anyway for typing at the
@@ -58,26 +55,12 @@ struct Permissions {
         /// carries dictation-at-cursor. Both are load-bearing, so both are
         /// required, and neither may be quietly dropped again without repeating
         /// that experiment.
-        /// Speech Recognition joins the required set on the same terms the 08 Aug
-        /// ruling set for Input Monitoring: an argument against evidence, not
-        /// against another argument. The evidence is that `AppleSpeechRecovery` is
-        /// the last provider in `RecoveryChain` — "on-device last because it can
-        /// never be unavailable" — and `SFSpeechRecognizer` returns nothing at all
-        /// without this grant. A fallback that cannot run is not a fallback, and
-        /// the app had no way to say so.
-        ///
-        /// Measured 09 Aug: the installed bundle had the grant (apple-speech
-        /// produced 409 and 513 characters of real transcript that day) while a
-        /// freshly built copy at a different path reported `notDetermined`, since
-        /// TCC keys on path as well as bundle id. So the grant existed by accident
-        /// on one machine and would not exist at all on a new install.
         var isRequired: Bool { true }
 
         var settingsURL: String {
             let base = "x-apple.systempreferences:com.apple.preference.security?"
             switch self {
             case .microphone: return base + "Privacy_Microphone"
-            case .speechRecognition: return base + "Privacy_SpeechRecognition"
             case .inputMonitoring: return base + "Privacy_ListenEvent"
             case .automation: return base + "Privacy_Automation"
             case .accessibility: return base + "Privacy_Accessibility"
@@ -149,11 +132,11 @@ struct Permissions {
         let bundle = Bundle.main
         log("bundleID=\(bundle.bundleIdentifier ?? "nil") path=\(bundle.bundlePath)")
         log("micUsageDescription=\(bundle.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") != nil)")
-        // Speech alongside the mic, because the 09 Aug investigation turned on
-        // exactly this: the grant existed on the installed bundle and not on a
-        // build copy at another path, and nothing in the log said so either way.
-        log("speechStatus=\(SFSpeechRecognizer.authorizationStatus().rawValue) "
-            + "(\(statusDescription(.speechRecognition)))")
+        // Speech status is logged but is NOT a gate — measured 10 Aug: the
+        // recogniser transcribes with the status still at notDetermined, so
+        // requiring it put an onboarding window in front of a permission the app
+        // does not actually need.
+        log("speechStatus=\(SFSpeechRecognizer.authorizationStatus().rawValue)")
         log("micStatus=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue) "
             + "(\(statusDescription(.microphone)))")
         log("inputMonitoring=\(CGPreflightListenEventAccess())")
@@ -164,8 +147,6 @@ struct Permissions {
         switch kind {
         case .microphone:
             return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        case .speechRecognition:
-            return SFSpeechRecognizer.authorizationStatus() == .authorized
         case .inputMonitoring:
             return CGPreflightListenEventAccess()
         case .automation:
@@ -185,14 +166,6 @@ struct Permissions {
         switch kind {
         case .microphone:
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
-            case .authorized: return "granted"
-            case .notDetermined: return "not asked yet. Click Grant"
-            case .denied: return "denied earlier. Switch it on in Settings"
-            case .restricted: return "restricted by policy"
-            @unknown default: return "unknown"
-            }
-        case .speechRecognition:
-            switch SFSpeechRecognizer.authorizationStatus() {
             case .authorized: return "granted"
             case .notDetermined: return "not asked yet. Click Grant"
             case .denied: return "denied earlier. Switch it on in Settings"
@@ -225,24 +198,6 @@ struct Permissions {
             // switch on, which is exactly the dead end this hit.
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
             return granted || isGranted(kind)
-        case .speechRecognition:
-            // Asked HERE and nowhere else, deliberately.
-            //
-            // Before this existed, nothing in the app ever called
-            // requestAuthorization — the grant was acquired implicitly, the first
-            // time `AppleSpeechRecovery` actually ran, which is to say in the
-            // middle of a failed dictation. That is the worst possible moment: the
-            // user is recovering a transcript, and a consent dialog they have to
-            // read appears over it.
-            //
-            // And the courtesy check must never be the thing that asks. Its entire
-            // purpose is not interrupting; a check that opens with a permission
-            // dialog has interrupted harder than the announcement it was trying to
-            // be polite about. Onboarding or not at all.
-            _ = await withCheckedContinuation { (c: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
-                SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0) }
-            }
-            return isGranted(kind)
         case .inputMonitoring:
             // Prompts the first time and lists the app thereafter. Safe to call
             // repeatedly — it returns the current state once already decided.
