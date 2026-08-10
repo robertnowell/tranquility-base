@@ -15,6 +15,7 @@ import TranquilityCore
 struct Permissions {
     enum Kind: CaseIterable {
         case microphone
+        case speechRecognition
         case inputMonitoring
         case automation
         case accessibility
@@ -22,6 +23,7 @@ struct Permissions {
         var title: String {
             switch self {
             case .microphone: return "Microphone"
+            case .speechRecognition: return "Speech Recognition"
             case .inputMonitoring: return "Input Monitoring"
             case .automation: return "Automation (Terminal)"
             case .accessibility: return "Accessibility"
@@ -31,13 +33,14 @@ struct Permissions {
         var why: String {
             switch self {
             case .microphone: return "to record your spoken reply"
+            case .speechRecognition: return "so transcription still works when the network is down, and so the app can tell whether you are mid-conversation before it speaks"
             case .inputMonitoring: return "to notice the hotkeys while you're in another app (measured: Accessibility alone does NOT do this)"
             case .automation: return "to type replies into the right Terminal tab"
             case .accessibility: return "so dictation can type at your cursor"
             }
         }
 
-        /// All four. Ruled 07 Aug: "it's either required or it's not — make them
+        /// The four that block. Ruled 07 Aug: "it's either required or it's not — make them
         /// both required or get rid of one." The first attempt got rid of Input
         /// Monitoring on the reasoning that a `.listenOnly` tap is authorised by
         /// either permission and Accessibility is needed anyway for typing at the
@@ -55,12 +58,31 @@ struct Permissions {
         /// carries dictation-at-cursor. Both are load-bearing, so both are
         /// required, and neither may be quietly dropped again without repeating
         /// that experiment.
-        var isRequired: Bool { true }
+        /// Speech Recognition is the one that does NOT block.
+        ///
+        /// The other four gate the core loop: without them the app cannot hear
+        /// you, cannot see the hotkey, cannot type into a tab. Without this one
+        /// the app works — dictation still runs on the cloud provider, and the
+        /// two features that need it degrade honestly and fast (the recovery
+        /// chain skips the on-device provider; the courtesy check speaks rather
+        /// than holding).
+        ///
+        /// It was briefly required on 10 Aug and that was wrong: `allGranted`
+        /// went false on a machine where it had never been asked for, which put
+        /// the onboarding window on screen at every launch of an app that starts
+        /// from a login item. Asked for, visible, never blocking.
+        var isRequired: Bool {
+            switch self {
+            case .speechRecognition: return false
+            case .microphone, .inputMonitoring, .automation, .accessibility: return true
+            }
+        }
 
         var settingsURL: String {
             let base = "x-apple.systempreferences:com.apple.preference.security?"
             switch self {
             case .microphone: return base + "Privacy_Microphone"
+            case .speechRecognition: return base + "Privacy_SpeechRecognition"
             case .inputMonitoring: return base + "Privacy_ListenEvent"
             case .automation: return base + "Privacy_Automation"
             case .accessibility: return base + "Privacy_Accessibility"
@@ -147,6 +169,8 @@ struct Permissions {
         switch kind {
         case .microphone:
             return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        case .speechRecognition:
+            return SFSpeechRecognizer.authorizationStatus() == .authorized
         case .inputMonitoring:
             return CGPreflightListenEventAccess()
         case .automation:
@@ -166,6 +190,14 @@ struct Permissions {
         switch kind {
         case .microphone:
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
+            case .authorized: return "granted"
+            case .notDetermined: return "not asked yet. Click Grant"
+            case .denied: return "denied earlier. Switch it on in Settings"
+            case .restricted: return "restricted by policy"
+            @unknown default: return "unknown"
+            }
+        case .speechRecognition:
+            switch SFSpeechRecognizer.authorizationStatus() {
             case .authorized: return "granted"
             case .notDetermined: return "not asked yet. Click Grant"
             case .denied: return "denied earlier. Switch it on in Settings"
@@ -198,6 +230,24 @@ struct Permissions {
             // switch on, which is exactly the dead end this hit.
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
             return granted || isGranted(kind)
+        case .speechRecognition:
+            // Asked HERE and nowhere else.
+            //
+            // There is no implicit prompt: `recognitionTask` never triggers one,
+            // and until something calls this the status sits at `notDetermined`
+            // forever. Measured 10 Aug — the app had run for days with the usage
+            // string in its Info.plist, the recogniser never once usable, and no
+            // call site for this method anywhere in Sources/. One probe call
+            // moved it straight to `.authorized`.
+            //
+            // And the courtesy check must never be the caller. Its whole purpose
+            // is not interrupting; a check that opens with a permission dialog
+            // has interrupted harder than the announcement it was being polite
+            // about. Onboarding or not at all.
+            _ = await withCheckedContinuation { (c: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
+                SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0) }
+            }
+            return isGranted(kind)
         case .inputMonitoring:
             // Prompts the first time and lists the app thereafter. Safe to call
             // repeatedly — it returns the current state once already decided.
