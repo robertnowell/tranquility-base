@@ -35,6 +35,8 @@ touching the panel, the arrival path, or the announcement path.
 
 | Doc | Status | About |
 |---|---|---|
+| `ruling-the-capture-is-a-strip-under-the-card.md` | RULED, NOT BUILT | The reading card stays up for the whole capture; arming / listening / read-back are one fixed-height strip beneath it; ⌃⌃ while recording advances the text silently. Supersedes most of `ruling-capture-returns-to-its-card.md`. Names three open questions — do not guess them. |
+| `ruling-capture-returns-to-its-card.md` | RULED, NOT BUILT | A capture that sends nothing returns to the card it interrupted, and no outcome reopens the microphone. **Was indexed BUILT `d106206` in error** — that commit added the doc and nothing else. Read the strip ruling first: it dissolves this doc's face-restore design and keeps only §C's lost-address rescue, §D, and §E. |
 | `ruling-the-collapsed-strip.md` | RULED, NOT BUILT | The grid collapses to a ~40px lamp strip; the user owns the width; three states (expanded / collapsed / minimized). Names its own open questions — do not guess them. |
 | `ruling-an-arrival-does-not-move-the-panel.md` | RULED, NOT BUILT | An arrival never changes the panel's shape or visibility; a live microphone vetoes the spoken hail; the courtesy check listens before speaking and keeps nothing. |
 | `courtesy-check-evidence-plan.md` | RULED, PARTLY BUILT | How we would know the courtesy check works. `LiveAudioCapture` has landed; the gate itself has not. Ship log-only before it suppresses anything. |
@@ -44,7 +46,6 @@ touching the panel, the arrival path, or the announcement path.
 | Doc | Status | About |
 |---|---|---|
 | `acknowledgement.md` | BUILT `bc67741` | The two-colour light: blue registered, green recognized, hold 500ms then fade. |
-| `ruling-capture-returns-to-its-card.md` | BUILT `d106206` | A capture that sends nothing returns to the card it interrupted. |
 | `measurement-audio-must-be-durable-from-the-first-frame.md` | BUILT `05b9422` | A recording is on disk while it is still being spoken. |
 | `instant-arm.md` | BUILT | The `.arming` state, the ~80ms grace, and why typing must never flash the panel. |
 | `ruling-the-app-is-silent-and-the-panel-speaks.md` | PARTLY BUILT | Launch speaks nothing (`main.swift`, shipped) and the empty room teaches the first press (`a1b5291`). The rest — mute onboarding, silence as posture — is not built. **Its "Direction" section is SUPERSEDED** by `ruling-the-collapsed-strip.md`. |
