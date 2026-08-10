@@ -30,7 +30,27 @@ WINDOW=4
 WORK=$(mktemp -d)
 APP=".build/debug/Tranquility Base.app"
 
-trap 'rm -rf "$WORK"' EXIT INT TERM
+# The deployed app runs its own courtesy checks, which open the microphone. Two
+# processes contending for one input device does not produce a measurement — the
+# 10 Aug run came back at roughly half the levels of every previous run for
+# exactly this reason. So the running instance goes down for the duration and is
+# brought back afterwards, on every exit path including Ctrl-C.
+APP_WAS_RUNNING=no
+if pgrep -f TranquilityApp >/dev/null; then
+  APP_WAS_RUNNING=yes
+  echo "→ stopping the running app so it cannot contend for the microphone"
+  pkill -f TranquilityApp || true
+  sleep 1
+fi
+
+restore_app() {
+  rm -rf "$WORK"
+  if [ "$APP_WAS_RUNNING" = yes ] && ! pgrep -f TranquilityApp >/dev/null; then
+    echo "→ restarting the app"
+    open -a "/Applications/Tranquility Base.app" 2>/dev/null || true
+  fi
+}
+trap restore_app EXIT INT TERM
 
 echo "→ building the app bundle"
 scripts/bundle.sh >/dev/null
@@ -102,7 +122,9 @@ for r in $(seq 1 "$REPEATS"); do
   # only comparison that separates "the app cannot ask" from "the detector
   # cannot hear" — and only the second one would mean the approach is wrong.
   echo "  --- the SAME audio, recognised in the terminal (speech grant) ---"
-  ./.build/debug/tbase courtesy-file "$WORK"/*.wav 2>&1 | grep -v "^requesting"
+  # Only the CAPTURED windows. The stimulus files live in the same directory
+  # and assessing them measures our own synthesis, not the room.
+  ./.build/debug/tbase courtesy-file "$WORK"/captured-*.wav 2>&1 | grep -v "^requesting"
 done
 
 echo

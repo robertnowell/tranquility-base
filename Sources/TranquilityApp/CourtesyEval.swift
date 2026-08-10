@@ -23,6 +23,32 @@ import TranquilityCore
 /// Entered before AppKit — no status item, no hotkey, no panel — so a second
 /// instance launched for a measurement can never race the running one for the
 /// global hotkey.
+///
+/// ## KNOWN LIMITATION, measured 10 Aug: the recogniser cannot answer in here
+///
+/// Every case run through this harness reports `recogniser timed out after 10s —
+/// no result, no error`, INCLUDING after the speech grant was obtained, while
+/// the very same captured audio recognises fine when `tbase courtesy-file` reads
+/// it back (14 words near, 14 mid, 4 far, 4 across pauses).
+///
+/// The difference is not authorisation and not the audio. It is this file: the
+/// eval runs before `NSApplication` exists and blocks the main thread on a
+/// `DispatchSemaphore` while it waits. Speech delivers its callbacks to the main
+/// queue, so the callback can never be serviced — the deadlock is ours.
+///
+/// Two consequences, and the second matters more:
+///
+/// 1. **This harness cannot measure the recogniser.** It can measure levels and
+///    capture audio faithfully; recognition has to be read back out of process
+///    (`tbase courtesy-file`), which is what the eval script now does.
+/// 2. **It says nothing bad about production.** The real app runs
+///    `NSApplication.run()`, so its main queue is live and the callback has
+///    somewhere to land. The only honest end-to-end test is a real arrival in
+///    the running app, read out of `app.log`.
+///
+/// Fixing this properly means running the eval after AppKit is up rather than
+/// before it — which reintroduces the status-item/hotkey race this placement
+/// exists to avoid. Not worth it while out-of-process readback works.
 enum CourtesyEval {
 
     /// One row of the plan: what to play, and how loud.
@@ -107,7 +133,7 @@ enum CourtesyEval {
             // the two processes that can each answer one — without granting
             // anything new to either.
             let wav = (out as NSString).deletingLastPathComponent
-                + "/" + c.label.replacingOccurrences(of: " ", with: "-") + ".wav"
+                + "/captured-" + c.label.replacingOccurrences(of: " ", with: "-") + ".wav"
             if let samples = captured { writeWAV(samples, to: wav) }
 
             let assessment = captured == nil ? nil
