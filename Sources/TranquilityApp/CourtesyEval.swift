@@ -59,6 +59,11 @@ enum CourtesyEval {
         let recorder = Recorder()
         var report = ""
 
+        // Surface why the recogniser refuses, instead of letting it vanish into
+        // "no recogniser — speaking anyway".
+        let traceLines = TraceBox()
+        CourtesyCheck.trace = { traceLines.add($0) }
+
         // Report BOTH grants as this bundle sees them, because the first two eval
         // runs were each derailed by a permission rather than by the detector,
         // and an eval that cannot say which is which is worth nothing.
@@ -118,7 +123,17 @@ enum CourtesyEval {
             Thread.sleep(forTimeInterval: 0.6)
         }
 
+        for line in traceLines.all() { report += "# trace\t\(line)\n" }
         write(report, to: out)
+    }
+
+    private final class TraceBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lines: [String] = []
+        func add(_ s: String) {
+            lock.lock(); if !lines.contains(s) { lines.append(s) }; lock.unlock()
+        }
+        func all() -> [String] { lock.lock(); defer { lock.unlock() }; return lines }
     }
 
     private static func waitForSamples(_ recorder: Recorder, seconds: Double) -> [Int16]? {

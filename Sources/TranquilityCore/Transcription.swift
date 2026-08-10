@@ -126,13 +126,38 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
     /// `app.log` contains what you dictated — it is the file you'd attach to an issue.
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 
+    /// How long to wait for `recognitionTask` before declaring the provider
+    /// unavailable. See the guard in `transcribe` for what this is insuring
+    /// against; it should never be reached.
+    static let callbackTimeout: TimeInterval = 120
+
     public var isConfigured: Bool {
-        SFSpeechRecognizer(locale: Locale(identifier: "en-US"))?.isAvailable ?? false
+        // Authorisation counts as configuration. Without it this provider cannot
+        // do anything except hang, and `RecoveryChain` already knows how to skip
+        // a provider that is not configured — which is a cheaper and more honest
+        // outcome than an attempt that will time out.
+        SFSpeechRecognizer.authorizationStatus() == .authorized
+            && (SFSpeechRecognizer(locale: Locale(identifier: "en-US"))?.isAvailable ?? false)
     }
 
     public func transcribe(fileAt url: URL) async throws -> TranscriptionResult {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw TranscriptionFailure.fileUnreadable
+        }
+        // Authorisation first, because an UNAUTHORISED recogniser does not refuse
+        // — it accepts the work and never calls back at all. Measured 10 Aug in a
+        // bundle reporting `notDetermined`: the task started on 54,400 samples
+        // and produced neither a result nor an error, ever.
+        //
+        // That matters more here than anywhere else. This provider is the last in
+        // `RecoveryChain`, chosen because it "can never be unavailable" — and a
+        // provider that hangs is worse than one that is unavailable, because the
+        // chain never reaches the end and the utterance never resolves. Failing
+        // fast is what lets the chain do its job.
+        guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
+            throw TranscriptionFailure.providerUnavailable(
+                "speech recognition not authorised (status "
+                + "\(SFSpeechRecognizer.authorizationStatus().rawValue))")
         }
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
               recognizer.isAvailable
@@ -145,6 +170,25 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
 
         return try await withCheckedThrowingContinuation { continuation in
             let resumed = Resumed()
+
+            // Belt as well as braces. The guard above closes the failure we have
+            // actually seen; this closes the class it belongs to — a third-party
+            // callback that may simply never arrive, on the one provider whose
+            // whole job is to be the floor under everything else.
+            //
+            // Generous, because this is off the critical path: the user is not
+            // waiting on it (RecoveryChain runs after the fact) and a real
+            // recognition of a long recording can legitimately take a while. It
+            // should never fire; if it does, the chain records the reason and
+            // stops instead of waiting for a callback that is not coming.
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.callbackTimeout) {
+                if resumed.claim() {
+                    AppleSpeechRecovery.trace?("timed out after \(Self.callbackTimeout)s "
+                        + "with no result and no error")
+                    continuation.resume(throwing: TranscriptionFailure.providerUnavailable(
+                        "recogniser never called back (\(Int(Self.callbackTimeout))s)"))
+                }
+            }
             // Accumulated per utterance, keyed by the start time of the utterance.
             //
             // This is the fix for the bug that made a 22-second paragraph transcribe
