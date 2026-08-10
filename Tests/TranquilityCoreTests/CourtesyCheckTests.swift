@@ -10,6 +10,18 @@ import XCTest
 /// and hardware-free, which is the whole reason `assess` takes samples instead of
 /// opening the device. See docs/courtesy-check-evidence-plan.md for the scenario
 /// matrix these implement.
+/// A flag a `@Sendable` counter closure may set. Swift 6 refuses a captured
+/// `var` here, and threading the result out of the closure instead would stop
+/// the test asserting the thing it is actually about: that the recogniser was
+/// REACHED, not merely that the verdict came out right.
+private final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    func raise() { lock.lock(); value = true; lock.unlock() }
+    func reset() { lock.lock(); value = false; lock.unlock() }
+    var isRaised: Bool { lock.lock(); defer { lock.unlock() }; return value }
+}
+
 final class CourtesyCheckTests: XCTestCase {
 
     // MARK: - Signal fixtures, synthesised
@@ -50,11 +62,11 @@ final class CourtesyCheckTests: XCTestCase {
             return 0
         }
         let check = CourtesyCheck(words: neverCalled)
-        let assessment = await check.assess(samples: noise(amplitude: 0.0005), sampleRate: 16000)
+        let assessment = await check.assess(samples: noise(amplitude: 0.0004), sampleRate: 16000)
 
         XCTAssertFalse(assessment.speechDetected)
         XCTAssertNil(assessment.wordCount, "nil is 'did not look', not 'heard nobody'")
-        XCTAssertTrue(assessment.reason.contains("quiet"), assessment.reason)
+        XCTAssertTrue(assessment.reason.contains("silent room"), assessment.reason)
     }
 
     /// A dead or denied microphone must not read as the quietest room in the
@@ -67,7 +79,7 @@ final class CourtesyCheckTests: XCTestCase {
         XCTAssertFalse(assessment.speechDetected, "still degrades to speaking")
         XCTAssertNil(assessment.wordCount)
         XCTAssertTrue(assessment.reason.contains("dead or denied"), assessment.reason)
-        XCTAssertFalse(assessment.reason.contains("room is quiet"),
+        XCTAssertFalse(assessment.reason.contains("silent room"),
                        "blaming the room for a dead device is the bug")
     }
 
@@ -79,11 +91,11 @@ final class CourtesyCheckTests: XCTestCase {
             return 0
         }
         let check = CourtesyCheck(words: neverCalled)
-        let assessment = await check.assess(samples: noise(amplitude: 0.0005), sampleRate: 16000)
+        let assessment = await check.assess(samples: noise(amplitude: 0.0004), sampleRate: 16000)
 
         XCTAssertGreaterThan(assessment.level, 0, "fixture must have a real floor")
         XCTAssertLessThan(assessment.level, check.quietFloor)
-        XCTAssertTrue(assessment.reason.contains("room is quiet"), assessment.reason)
+        XCTAssertTrue(assessment.reason.contains("silent room"), assessment.reason)
     }
 
     func testEmptyBufferIsQuietRatherThanACrash() async {
@@ -110,6 +122,26 @@ final class CourtesyCheckTests: XCTestCase {
         let check = CourtesyCheck(words: .silent)
         let assessment = await check.assess(samples: tone(), sampleRate: 16000)
         XCTAssertFalse(assessment.speechDetected)
+    }
+
+    /// The regression the 09 Aug acoustic eval bought: a distant voice must REACH
+    /// the recogniser. Both far-speech rows measured 0.0039–0.0049 through air,
+    /// and the old 0.005 floor discarded them unheard — which is precisely the
+    /// failure this feature exists to prevent: a person across the room, and we
+    /// talk over them.
+    func testDistantSpeechLevelsReachTheRecogniser() async {
+        let consulted = Flag()
+        let counter = CourtesyCheck.WordCounter { _, _ in consulted.raise(); return 3 }
+        let check = CourtesyCheck(words: counter)
+
+        for measured in [Float(0.0039), Float(0.0049)] {
+            consulted.reset()
+            let amplitude = Double(measured) * 1.732  // rms of uniform noise = a/sqrt(3)
+            let assessment = await check.assess(samples: noise(amplitude: amplitude),
+                                                sampleRate: 16000)
+            XCTAssertTrue(consulted.isRaised, "level \(measured) never reached the recogniser")
+            XCTAssertTrue(assessment.speechDetected, assessment.reason)
+        }
     }
 
     // MARK: - The verdict
