@@ -45,6 +45,20 @@ enum CourtesyDemo {
         ]
     }
 
+    /// Read a 16k mono PCM16 WAV back to samples — the other half of the
+    /// capture/recognise split described in `tbase courtesy-file`.
+    static func readWAV(_ path: String) throws -> [Int16] {
+        let file = try AVAudioFile(forReading: URL(fileURLWithPath: path))
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                            frameCapacity: AVAudioFrameCount(file.length)),
+              case _ = try file.read(into: buffer),
+              let channel = buffer.floatChannelData?[0]
+        else { return [] }
+        return (0..<Int(buffer.frameLength)).map {
+            Int16(max(-1, min(1, channel[$0])) * 32767)
+        }
+    }
+
     static func silence(seconds: Double = 2, rate: Double = 16000) -> [Int16] {
         [Int16](repeating: 0, count: Int(seconds * rate))
     }

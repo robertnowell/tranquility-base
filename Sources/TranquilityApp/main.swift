@@ -2398,6 +2398,24 @@ private func AVAuthorizationStatusIsUndetermined() -> Bool {
     AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined
 }
 
+// The acoustic eval, before AppKit exists.
+//
+// Deliberately ahead of NSApplication: this runs as a SECOND instance (launched
+// with `open -n`, so TCC attributes it to this bundle and it inherits the
+// microphone grant the terminal does not have), and a second instance that
+// reached AppDelegate would install a status item and fight the running one for
+// the global hotkey. Nothing below this line happens.
+if let flag = CommandLine.arguments.firstIndex(of: "--courtesy-eval"),
+   flag + 2 < CommandLine.arguments.count {
+    let manifest = CommandLine.arguments[flag + 1]
+    let out = CommandLine.arguments[flag + 2]
+    let seconds = CommandLine.arguments.count > flag + 3
+        ? Double(CommandLine.arguments[flag + 3]) ?? CourtesyCheck.listenSeconds
+        : CourtesyCheck.listenSeconds
+    CourtesyEval.run(manifest: manifest, out: out, seconds: seconds)
+    exit(0)
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
