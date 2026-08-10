@@ -31,6 +31,32 @@ final class StatusHUD: NSObject {
     private var micSettingsButton: NSButton!
     private var hintLabel: NSTextField!
     private var contentStack: NSStackView?
+    /// The collapsed column. Built once, hidden until the width changes.
+    private var strip: CollapsedStrip?
+
+    /// Collapsed or expanded, and DURABLE — the user owns the width and nothing
+    /// else sets it. Persisted because the app installs with a login item and
+    /// restarts far more often than the user thinks about it; a width that reset
+    /// on every relaunch would not be a preference, it would be a default with
+    /// extra steps. See docs/ruling-the-collapsed-strip.md.
+    private static let collapsedKey = "panelCollapsed"
+    private(set) var isCollapsed: Bool = UserDefaults.standard.bool(forKey: StatusHUD.collapsedKey) {
+        didSet {
+            UserDefaults.standard.set(isCollapsed, forKey: StatusHUD.collapsedKey)
+            Permissions.log("panel: \(isCollapsed ? "collapsed" : "expanded")")
+        }
+    }
+
+    /// Lamps the collapsed column is currently showing — the drill asserts idle
+    /// ones never reach it.
+    var collapsedLampCount: Int { strip?.lamps.count ?? 0 }
+    var collapsedIsOnScreen: Bool { strip?.isHidden == false }
+
+    func setCollapsed(_ collapsed: Bool) {
+        guard collapsed != isCollapsed else { return }
+        isCollapsed = collapsed
+        render()
+    }
     /// Derived, not stored. True exactly while the undo countdown is live AND the
     /// panel is in `.pendingSend` — the two facts the old boolean tracked by hand.
     /// Entering any other state makes it false (the state entry points used to
@@ -830,6 +856,10 @@ final class StatusHUD: NSObject {
             hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
             hintLabel.stringValue = StateLegend.gridHint
             waitingRows.isHidden = false
+            // The collapsed column is the same data at another width. Every
+            // widget the expanded face owns stays hidden behind it; render()
+            // remains the single place either one is decided.
+            if isCollapsed { strip?.show(rows: face.sessionRows) }
             rebuildSessionRows()
 
         case .idle where face.gettingStarted:
@@ -1209,6 +1239,28 @@ final class StatusHUD: NSObject {
     /// literally unreachable. Never ship a fixed-height container around
     /// variable-length text.
     private func resizeToFit(_ panel: NSPanel) {
+        // Collapsed is a fixed frame, so the column never resizes under the
+        // user and the lamps never move. It is also the only face that is
+        // FLUSH to the screen edge — `position` gives every other face a
+        // margin; a sidebar with a gap behind it is a floating card pretending
+        // to be a sidebar.
+        if isCollapsed, case .idle = state {
+            strip?.isHidden = false
+            contentStack?.isHidden = true
+            var frame = panel.frame
+            frame.size = NSSize(width: CollapsedStrip.width, height: CollapsedStrip.height)
+            if let screen = NSScreen.main {
+                frame.origin.x = screen.visibleFrame.maxX - CollapsedStrip.width
+                frame.origin.y = screen.visibleFrame.maxY - CollapsedStrip.height - 16
+            }
+            intendedHeight = CollapsedStrip.height
+            panel.setFrame(frame, display: true)
+            strip?.frame = NSRect(origin: .zero, size: frame.size)
+            return
+        }
+        strip?.isHidden = true
+        contentStack?.isHidden = false
+
         guard let stack = contentStack else { return }
         panel.contentView?.layoutSubtreeIfNeeded()
         let needed = stack.fittingSize
@@ -1837,6 +1889,46 @@ final class StatusHUD: NSObject {
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
 
+        // The collapsed strip. Three properties, and the third is the ruling.
+        let mixed: [StateLegend.SessionRow] = [
+            .init(id: "a", name: "promotions copy", callsign: "promotions", lamp: .ready),
+            .init(id: "b", name: "syndit", callsign: "syndit", lamp: .running),
+            .init(id: "c", name: "tranquility base", callsign: "tbase", lamp: .working),
+            .init(id: "d", name: "kopi", callsign: "kopi", lamp: .running),
+            .init(id: "e", name: "bookmarks", callsign: "bookmarks", lamp: .fault),
+        ]
+        setCollapsed(true)
+        showIdle(rows: mixed)
+        // Idle lamps do not appear collapsed: five rows in, three are live.
+        let idleLampsOmitted = collapsedLampCount == 3
+        let stripShown = collapsedIsOnScreen
+        let collapsedSize = panel.map {
+            abs($0.frame.width - CollapsedStrip.width) < 1
+                && abs($0.frame.height - CollapsedStrip.height) < 1
+        } ?? false
+        // Flush right: a sidebar with a gap behind it is a floating card
+        // pretending to be one.
+        let flushRight = panel.map { p in
+            NSScreen.main.map { abs(p.frame.maxX - $0.visibleFrame.maxX) < 1 } ?? false
+        } ?? false
+        // An arrival must not change the width. This is ruling 1 reached from
+        // the other side — the app does not open the panel for you, and it does
+        // not widen it for you either.
+        let widthBefore = panel?.frame.width ?? 0
+        showIdle(rows: mixed + [.init(id: "f", name: "new one", callsign: "new", lamp: .ready)])
+        let widthHeldOnArrival = abs((panel?.frame.width ?? 0) - widthBefore) < 1
+        setCollapsed(false)
+        let expandedAgain = !collapsedIsOnScreen
+        SelfTest.report("collapsed", [
+            ("idleLampsOmitted", idleLampsOmitted),
+            ("stripShown", stripShown),
+            ("fixedSize", collapsedSize),
+            ("flushRight", flushRight),
+            ("widthHeldOnArrival", widthHeldOnArrival),
+            ("expandRestoresTheGrid", expandedAgain),
+        ])
+        showIdle(rows: [])
+
         // The notice: takes the strip on the grid, refused onto a card, and
         // cleared by the move to one. Nothing outside its own clock clears it,
         // so it has to prove it does not leak — same burden as the receipt.
@@ -2265,6 +2357,15 @@ final class StatusHUD: NSObject {
             return true
 
 
+        case "collapsed":
+            setCollapsed(true)
+            showIdle(rows: [
+                .init(id: "a", name: "promotions copy", callsign: "promotions", lamp: .ready),
+                .init(id: "b", name: "tranquility base", callsign: "tbase", lamp: .working),
+                .init(id: "c", name: "bookmarks", callsign: "bookmarks", lamp: .fault),
+            ])
+            return true
+
         case "receipt":
             // The dictation receipt (ui-pass-7, ruling 5). No adopted target:
             // dictation is exactly the path with no agent, so the Delivered
@@ -2550,6 +2651,25 @@ final class StatusHUD: NSObject {
             buttons.widthAnchor.constraint(equalToConstant: 348),
         ])
         self.contentStack = stack
+
+        // The strip lives beside the stack rather than inside it: it owns the
+        // whole panel when it is up, and nesting it would put the grid's
+        // spacing and insets between it and the edges it is flush against.
+        let column = CollapsedStrip(frame: NSRect(x: 0, y: 0,
+                                                  width: CollapsedStrip.width,
+                                                  height: CollapsedStrip.height))
+        column.autoresizingMask = [.width, .height]
+        column.isHidden = true
+        column.onExpand = { [weak self] in self?.setCollapsed(false) }
+        column.onDismiss = { [weak self] in self?.dismiss() }
+        column.onNewAgent = { [weak self] in
+            MainActor.assumeIsolated { self?.onNewSession?() }
+        }
+        column.onPick = { [weak self] id in
+            MainActor.assumeIsolated { self?.onPickWaiting?(id) }
+        }
+        panel.contentView?.addSubview(column)
+        self.strip = column
 
         panel.contentView = background
         self.panel = panel
