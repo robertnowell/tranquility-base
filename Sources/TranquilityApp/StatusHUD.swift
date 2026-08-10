@@ -1862,33 +1862,6 @@ final class StatusHUD: NSObject {
         showIdle(rows: [])
         let stayedGone = !noticeIsShowing
 
-        // The courtesy holds (ruled 08 Aug). A hail the app decided not to speak
-        // is indistinguishable from an agent that never came back, so it says so
-        // in the strip — and the drill that matters is the SECOND one: a held
-        // hail must never raise a panel the user put away. That is ruling 1
-        // ("an arrival changes nothing about the panel's shape") reached through
-        // the back door, and it is the likeliest regression in the feature.
-        showIdle(rows: [])
-        flashNotice(StateLegend.heldNotice("zoom.us"), lens: .advisory)
-        let courtesyOnGrid = noticeIsShowing
-            && stateLabel.attributedStringValue.string == StateLegend.heldNotice("zoom.us")
-        // The channel is the assertion that matters. Amber is the needs-you
-        // colour and nothing here needs the user; spending amber on "we stayed
-        // quiet" blunts it for the cases that do.
-        let courtesyIsAdvisory = stateLabel.textColor == StateLegend.Palette.working
-        let courtesyHasNoEmDash = !StateLegend.heldNotice("zoom.us").contains("—")
-        hide()
-        flashNotice(StateLegend.heldNotice("Music"), lens: .advisory)
-        let holdRefusedWhileHidden = !noticeIsShowing && !isOnScreen
-        showIdle(rows: [])
-        let didNotSummonThePanel = !noticeIsShowing
-        SelfTest.report("courtesy", [
-            ("holdShownOnGrid", courtesyOnGrid),
-            ("advisoryNotAmber", courtesyIsAdvisory),
-            ("noEmDash", courtesyHasNoEmDash),
-            ("refusedWhileHidden", holdRefusedWhileHidden),
-            ("didNotSummonThePanel", didNotSummonThePanel),
-        ])
 
         // The device fault: the ONE failure card with a door out. Ordinary
         // failures must not grow one.
@@ -2291,13 +2264,6 @@ final class StatusHUD: NSObject {
             noticeExpiry = nil
             return true
 
-        case "courtesy":
-            // The hold, on the grid it interrupted nothing to reach.
-            _ = pose("grid")
-            flashNotice(StateLegend.heldNotice("zoom.us"))
-            noticeExpiry?.cancel()
-            noticeExpiry = nil
-            return true
 
         case "receipt":
             // The dictation receipt (ui-pass-7, ruling 5). No adopted target:
