@@ -245,8 +245,21 @@ extension CourtesyCheck.WordCounter {
     /// whether to say a callsign, which inverts the entire point of the feature.
     /// So the guard is inverted: no on-device model means no recognition at all.
     public static let apple = CourtesyCheck.WordCounter { samples, sampleRate in
-        guard SFSpeechRecognizer.authorizationStatus() == .authorized,
-              let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+        // NO authorization guard, measured 10 Aug.
+        //
+        // The guard was here on the reasoning that an unauthorised recogniser
+        // cannot work. It is wrong, and it was the thing making this feature
+        // inert: `AppleSpeechRecovery` has been transcribing all along with the
+        // status at `notDetermined` — 409 and 513 characters of real transcript
+        // on 09 Aug, on a bundle that reports "not asked yet" to this very API.
+        // On-device recognition does not enforce TCC the way the status implies.
+        //
+        // So we do what the recovery provider does: run it, and let a failure be
+        // a failure. `recognitionTask` reports an unauthorised or unavailable
+        // recogniser as an error, which the handler below already maps to nil —
+        // "could not look" — and nil degrades to speaking. Asking the status
+        // first added nothing except a false negative.
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
               recognizer.isAvailable,
               recognizer.supportsOnDeviceRecognition
         else { return nil }
