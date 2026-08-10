@@ -41,14 +41,20 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
-  <!-- voicedispatch:// deep links, so any local HTML page can carry buttons that
-       hear a session's summary or start a reply to it. The browser confirms
-       before launching an external scheme, which is the drive-by guard. -->
+  <!-- tranquilitybase:// deep links, so any local HTML page can carry buttons
+       that open the agent that made it. The browser confirms before launching
+       an external scheme, which is the drive-by guard.
+       `voicedispatch` is the app's old name and stays registered: it is written
+       into pages already on disk, and a footer whose button stopped working is
+       worse than a footer with a stale scheme in its status bar. New pages get
+       `tranquilitybase` — the scheme is visible to whoever hovers the link, so
+       it has to say what the app is called. -->
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
       <key>CFBundleURLName</key><string>Tranquility Base actions</string>
-      <key>CFBundleURLSchemes</key><array><string>voicedispatch</string></array>
+      <key>CFBundleURLSchemes</key>
+      <array><string>tranquilitybase</string><string>voicedispatch</string></array>
     </dict>
   </array>
 
