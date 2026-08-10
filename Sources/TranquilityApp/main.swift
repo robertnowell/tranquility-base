@@ -317,6 +317,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
+        hud.onNewSessionForArtifact = { [weak self] ref in
+            self?.newSession(forArtifact: ref)
+        }
+        // The card's second door, and the other direction of the same
+        // correlation the footer opens: the page links back to its agent, and
+        // the agent's card opens its page.
+        hud.artifactForSession = { session in
+            ArtifactStore.latest(for: session, root: QueueStore.supportDirectory.path)
+        }
+        hud.onOpenPage = { page in
+            NSWorkspace.shared.open(URL(fileURLWithPath: page))
+        }
         hud.onBreadcrumbHome = { [weak self] in self?.goHomeFromCard(via: "breadcrumb") }
         hud.onClearLamp = { [weak self] id in
             guard let self, let coordinator = self.coordinator else { return }
@@ -1545,9 +1557,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Hold: transcribe and route the reply back to whichever session last spoke.
     // MARK: - Deep links
 
-    /// voicedispatch://hear?session=ID   speak that session's summary
-    /// voicedispatch://reply?session=ID  open the mic, route the reply there
-    /// voicedispatch://show              raise the panel
+    /// tranquilitybase://discuss?session=ID&ref=PATH   open that agent
+    /// tranquilitybase://hear?session=ID               speak that session's summary
+    /// tranquilitybase://reply?session=ID              open the mic, route the reply there
+    /// tranquilitybase://show                          raise the panel
+    ///
+    /// `discuss` is the one a generated page links to, and it is deliberately
+    /// the calmest of the four: it puts you in front of the agent — panel up,
+    /// its card, its last summary spoken — and stops there. Opening a
+    /// microphone because someone clicked a link in a document would be the app
+    /// deciding you had something to say; the card already carries the reply
+    /// and the tab for when you do.
     ///
     /// This is what lets a local HTML page carry live buttons: an <a href> to a
     /// custom scheme needs no server and no CORS, and the browser confirms before
@@ -1556,19 +1576,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// records silently, and nothing sends without the usual undo window.
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
+            // Parsing lives in Core, where it is tested. This layer only acts.
+            let parsed = DeepLink.parse(url)
             let action = url.host ?? ""
-            let session = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?.first(where: { $0.name == "session" })?.value
+            let session: String?
+            let ref: String?
+            switch parsed {
+            case let .discuss(s, r): session = s; ref = r
+            case let .hear(s):       session = s; ref = nil
+            case let .reply(s):      session = s; ref = nil
+            case .show, .unknown:    session = nil; ref = nil
+            }
             Permissions.log("deeplink: \(action) session=\(session?.prefix(8) ?? "-")")
             // A deeplink is an instruction that arrived and is being carried
             // out, so it reads as recognized — the same green a gesture gets.
             hud.acknowledge(.recognized)
 
             switch action {
+            case "discuss":
+                discuss(session: session, ref: ref)
             case "hear":
                 announceNext(only: session)
             case "reply":
-                guard micGranted, !recorder.isRecording else { break }
+                // Silence here is the failure that reads as a broken link: the
+                // browser hands off, the app comes forward, and nothing happens.
+                // A refusal that costs a whole click has to say its name.
+                guard micGranted else {
+                    hud.showResult("The microphone isn't granted, so there is "
+                                   + "nothing to reply with. Settings ▸ Privacy "
+                                   + "▸ Microphone.")
+                    break
+                }
+                guard !recorder.isRecording else { break }
+                // Sweep the spool BEFORE looking, for the reason the announce
+                // path does it (main.swift, `announceNext`): hooks append to a
+                // text file and the app files it into SQLite on a five-second
+                // tick, so a page written seconds ago names a session that is
+                // in the queue and not yet in the table. Looking without
+                // sweeping reports it missing, which is a lie with a five-second
+                // half-life — the worst kind to debug.
+                _ = try? coordinator?.intake()
                 // The page names its session; that is the whole point of the button.
                 // Unknown id → refuse to open the mic, never fall back to a guess.
                 guard let session,
@@ -1599,6 +1646,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("deeplink: unknown action \(action)")
             }
         }
+    }
+
+    /// "Discuss with agent", from a page that agent wrote.
+    ///
+    /// Two outcomes and no third: either the agent is here, in which case you
+    /// land on it exactly as if you had clicked its row in the grid, or it is
+    /// not, in which case you are offered one. The second is not an error path
+    /// — it is what EVERY page does eventually, and what every page does
+    /// immediately on a machine that is not the one that made it.
+    private func discuss(session: String?, ref: String?) {
+        // Sweep first, for the same reason `reply` now does: a page can be
+        // clicked before its own session has been filed.
+        _ = try? coordinator?.intake()
+        let known = session.flatMap { id in try? store?.latestStop(for: id) } ?? nil
+        guard let session, known != nil else {
+            Permissions.log("deeplink: discuss, no agent for \(session?.prefix(8) ?? "-")")
+            inviteNewSession(for: ref)
+            return
+        }
+        // The grid row's own move: raise the panel, then read that session's
+        // last summary onto the stage. `announceNext(only:)` is deliberately
+        // outside the unheard filter, so this answers however many times you
+        // click it.
+        showPanel()
+        announceNext(only: session)
+    }
+
+    /// The invitation. Without a `ref` there is nothing to open with and
+    /// nothing to say about it, so this stays silent rather than offering a
+    /// blank session — the grid's own NEW AGENT row is the door for that.
+    private func inviteNewSession(for ref: String?) {
+        // A page can put any string in a URL; it cannot put a file on your
+        // disk. Everything the invitation goes on to build — a directory, a
+        // prompt, a shell command — is derived from a path that got past this,
+        // which is why the check lives in Core with tests around it.
+        guard let path = DeepLink.artifact(
+            from: ref, exists: { FileManager.default.fileExists(atPath: $0) })
+        else {
+            Permissions.log("invitation: refused ref \(ref ?? "-")")
+            hud.showResult("That page names an agent this Mac has no record of, "
+                           + "and nothing on this disk to open instead.")
+            return
+        }
+        let directory = (path as NSString).deletingLastPathComponent
+        hud.showNewSessionInvitation(
+            artifact: (path as NSString).lastPathComponent,
+            directory: abbreviatingHome(directory),
+            ref: path)
+    }
+
+    /// `~` back, for display only: an absolute home path eats the width the
+    /// artifact's own name needs, and the grid abbreviates the same way.
+    private func abbreviatingHome(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
     }
 
     /// The one answer to every way a recording can come back with no words in
@@ -1971,10 +2073,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// home directory, `claude --dangerously-skip-permissions`). Its turns
     /// enter the loop — and the grid — as soon as the session first stops.
     private func newSession() {
-        let dir = SessionLauncher.defaultDirectory
+        newSession(directory: SessionLauncher.defaultDirectory,
+                   command: SessionLauncher.defaultCommand)
+    }
+
+    /// The invitation's other half: a fresh agent in the artifact's own
+    /// directory, opening with the artifact.
+    ///
+    /// The prompt is handed over twice on purpose. The clipboard copy is
+    /// unconditional and cannot fail; the command-line copy is the one that
+    /// makes the session start already holding the file, and it is skipped for
+    /// any path carrying a quote, because that path would be interpolated
+    /// through AppleScript into a shell and both layers quote differently. A
+    /// session that opens blank with the prompt one ⌘V away is a small loss; a
+    /// mangled `do script` is a window full of shell errors as the first thing
+    /// a new user sees.
+    private func newSession(forArtifact path: String) {
+        let directory = (path as NSString).deletingLastPathComponent
+        let opening = DeepLink.openingPrompt(for: path)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(opening, forType: .string)
+        let inline = DeepLink.openingCommand(base: SessionLauncher.defaultCommand,
+                                             prompt: opening)
+        let command = inline ?? SessionLauncher.defaultCommand
+        Permissions.log("invitation: launching in \(directory) "
+                        + "(prompt \(inline == nil ? "clipboard only" : "inline"))")
+        newSession(directory: directory, command: command)
+    }
+
+    private func newSession(directory dir: String, command: String) {
         let before = Set((ClaudeAgentsCLI().sessions() ?? [])
             .filter { $0.cwd == dir }.map(\.sessionId))
-        switch SessionLauncher.launch() {
+        switch SessionLauncher.launch(directory: dir, command: command) {
         case .success:
             lastStatusLine = "new session launched"
             rebuildMenu()

@@ -29,6 +29,8 @@ final class StatusHUD: NSObject {
     /// are the interface.
     private var dontSendButton: NSButton!
     private var micSettingsButton: NSButton!
+    private var newSessionButton: NSButton!
+    private var openPageButton: NSButton!
     private var hintLabel: NSTextField!
     private var contentStack: NSStackView?
     /// The collapsed column. Built once, hidden until the width changes.
@@ -102,6 +104,23 @@ final class StatusHUD: NSObject {
     private static let spokenMark = NSAttributedString.Key("vdSpoken")
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
+
+    /// The page the agent on stage most recently wrote, if it still exists.
+    ///
+    /// Derived from `currentTarget` rather than stored beside it. Storing it
+    /// would mean clearing it at all four sites that clear the target, and the
+    /// one that got missed would leave a button pointing at the previous
+    /// agent's page — the exact confusion this feature exists to end. It is the
+    /// other half of what the footer starts: the page links back to its agent,
+    /// and the agent's card links out to its page.
+    private var currentArtifact: String? {
+        currentTarget.flatMap { artifactForSession?($0.sessionId) }
+    }
+    /// Wired by the app onto ArtifactStore. Nil until then, and nil is a
+    /// complete answer — most sessions have written no page at all.
+    var artifactForSession: ((String) -> String?)?
+    /// Wired by the app onto the workspace's "open this file" call.
+    var onOpenPage: ((String) -> Void)?
 
     // MARK: - Public surface
 
@@ -433,6 +452,52 @@ final class StatusHUD: NSObject {
         render()
     }
 
+    /// A page arrived asking for an agent that is not there — the deep link
+    /// names a session this Mac has no record of, or whose terminal tab is gone.
+    ///
+    /// It earns a card on the same two counts the device fault does: there is
+    /// something to know, and there is one action that resolves it. Everything
+    /// else about it is the opposite. It speaks on the advisory channel, not
+    /// amber, because nothing is broken — an artifact simply outlived the
+    /// conversation that made it, which is the NORMAL end state of every page
+    /// that gets shared. And it carries no session title: there is no agent to
+    /// name, which is the whole message.
+    ///
+    /// This is also the entire experience of a page made on someone else's
+    /// machine, so it is the first thing a new user ever sees the app do.
+    func showNewSessionInvitation(artifact: String, directory: String, ref: String) {
+        guard transition(to: .result, because: "no agent for \(artifact)") else { return }
+        invitationRef = ref
+        face = Face(body: StateLegend.orphanedArtifact(artifact, directory: directory),
+                    placardOverride: StateLegend.startSessionPlacard,
+                    lens: .advisory,
+                    offersNewSession: true)
+        render()
+    }
+
+    /// The artifact the live invitation is about. Held here rather than passed
+    /// through the button because the button is a target/action pair from
+    /// AppKit's era and carries no payload.
+    private var invitationRef: String?
+
+    /// Wired by the app onto SessionLauncher, with the artifact in hand.
+    var onNewSessionForArtifact: ((String) -> Void)?
+
+    @objc nonisolated private func openPageTapped() {
+        MainActor.assumeIsolated {
+            guard let page = currentArtifact else { return }
+            Permissions.log("openPage: \(page)")
+            onOpenPage?(page)
+        }
+    }
+
+    @objc nonisolated private func newSessionForArtifactTapped() {
+        MainActor.assumeIsolated {
+            guard let ref = invitationRef else { return }
+            onNewSessionForArtifact?(ref)
+        }
+    }
+
     /// The dictation receipt (ui-pass-7, ruling 5): dictation success shows its
     /// card again, because it tells you where the words went — which app was
     /// typed into, or what is now on the clipboard, is invisible otherwise.
@@ -728,6 +793,14 @@ final class StatusHUD: NSObject {
         /// for a device fault — the one failure in this app whose fix is a
         /// setting rather than saying it again.
         var offersMicSettings = false
+        /// Which channel a waiting card speaks on. Amber stays the default
+        /// because nearly every card that waits IS a failure. The invitation is
+        /// the exception — an artifact outlived its agent, nothing is broken —
+        /// and painting that amber would spend the needs-you channel on an
+        /// offer, which is exactly what blunted it on the silence gate.
+        var lens: StateLegend.Lens = .fault
+        /// The invitation's door: start a fresh agent holding this artifact.
+        var offersNewSession = false
         /// The empty room has been empty long enough to teach the first press
         /// instead of describing itself. A face of idle, not a state of its own:
         /// nothing about what the panel ADMITS changes, only what it says.
@@ -814,8 +887,14 @@ final class StatusHUD: NSObject {
         bodyLabel.alignment = .natural
         hintLabel.stringValue = ""
         goButton.isHidden = currentTarget?.pid == nil
+        // The card's second door. It rides the same rule as "Go to agent" —
+        // shown wherever an agent is named — because the two are one pair: this
+        // agent, and the last thing it made. A session that has written no page
+        // simply has one door, and most do.
+        openPageButton.isHidden = currentArtifact == nil
         dontSendButton.isHidden = true
         micSettingsButton.isHidden = true
+        newSessionButton.isHidden = true
         countdownBar.isHidden = true; meter.isHidden = true
         voiceList.isHidden = true; waitingRows.isHidden = true
         gearButton.isHidden = false; backButton.isHidden = true
@@ -905,16 +984,21 @@ final class StatusHUD: NSObject {
             countdownBar.isHidden = false
 
         case .result:
-            // A failure stays until dismissed. Amber presence beyond the glyph
-            // (ruled): the placard text itself in amber ink — flat, calm.
+            // A card that waits until dismissed. Amber presence beyond the glyph
+            // (ruled): the placard text itself in the channel's ink — flat, calm.
             // Re-rendered attributed rather than via textColor, which attributed
-            // runs ignore.
-            stateLabel.textColor = StateLegend.Palette.fault
+            // runs ignore. The channel comes from the face, not the state: the
+            // invitation waits the same way a failure does and means the
+            // opposite.
+            stateLabel.textColor = face.lens.color
             stateLabel.attributedStringValue = placardText(
                 stateLabel.attributedStringValue.string,
-                color: StateLegend.Palette.fault)
+                color: face.lens.color)
             // A device fault is the only failure with somewhere to send you.
             micSettingsButton.isHidden = !face.offersMicSettings
+            // The invitation's door out is a door IN: it starts the agent that
+            // this page no longer has.
+            newSessionButton.isHidden = !face.offersNewSession
 
         case .settings:
             stateLabel.stringValue = ""
@@ -1095,7 +1179,8 @@ final class StatusHUD: NSObject {
     /// the row of lozenge buttons is dead (ruled); this is what replaced its
     /// per-state visibility flag.
     private func updateActionRowVisibility() {
-        actionRow.isHidden = [goButton, dontSendButton, micSettingsButton,
+        actionRow.isHidden = [goButton, openPageButton, dontSendButton,
+                              micSettingsButton, newSessionButton,
                               cancelTranscriptionButton, retryTranscriptionButton]
             .allSatisfy { $0?.isHidden ?? true }
         if let panel { resizeToFit(panel); position(panel) }
@@ -1967,6 +2052,49 @@ final class StatusHUD: NSObject {
             ("faultOffersDoor", faultOffersDoor),
             ("plainFailureHasNoDoor", plainFailureHasNoDoor),
         ])
+
+        // The invitation (10 Aug). It waits like a failure and must not look
+        // like one: the one card in `.result` that speaks on the advisory
+        // channel. The drill asserts both halves, because the amber is what
+        // would make a stranger's first sight of this app read as an error.
+        showNewSessionInvitation(artifact: "plan.html",
+                                 directory: "~/Projects/tranquility-base",
+                                 ref: "/tmp/plan.html")
+        let invitationOffersTheDoor = !newSessionButton.isHidden
+        let invitationIsAdvisory =
+            stateLabel.textColor == StateLegend.Lens.advisory.color
+        let invitationNamesNoAgent = titleLabel.isHidden
+        let invitationNamesTheArtifact = bodyLabel.stringValue.contains("plan.html")
+        showResult("An ordinary failure, which starts nothing.")
+        let failureStartsNothing = newSessionButton.isHidden
+        let failureIsStillAmber =
+            stateLabel.textColor == StateLegend.Palette.fault
+        // The card's second door. The drill that matters is the ABSENCE one:
+        // most sessions have written no page, and a door to nothing would be on
+        // every card in the app.
+        let priorResolver = artifactForSession
+        artifactForSession = { _ in nil }
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("Finished the poller. Go?"),
+            sessionId: "drill", pid: 1, project: "promotions copy", cwd: "/tmp")
+        let noPageNoDoor = openPageButton.isHidden
+        artifactForSession = { _ in "/tmp/tb-drill-page.html" }
+        render()
+        let pageOpensADoor = !openPageButton.isHidden
+        artifactForSession = priorResolver
+        SelfTest.report("openPage", [
+            ("noPageNoDoor", noPageNoDoor),
+            ("pageOpensADoor", pageOpensADoor),
+        ])
+
+        SelfTest.report("invitation", [
+            ("offersTheDoor", invitationOffersTheDoor),
+            ("advisoryNotAmber", invitationIsAdvisory),
+            ("namesNoAgent", invitationNamesNoAgent),
+            ("namesTheArtifact", invitationNamesTheArtifact),
+            ("failureStartsNothing", failureStartsNothing),
+            ("failureIsStillAmber", failureIsStillAmber),
+        ])
         // The empty room. Its ten seconds are backdated rather than waited out —
         // the clock is a timestamp precisely so it can be reasoned about without
         // a ten-second drill — but everything after the clock is the real path:
@@ -2411,6 +2539,7 @@ final class StatusHUD: NSObject {
             ("hint", hintLabel), ("bar", countdownBar), ("meter", meter),
             ("actions", actionRow), ("go", goButton),
             ("dontSend", dontSendButton), ("micSettings", micSettingsButton),
+            ("newSession", newSessionButton), ("openPage", openPageButton),
             ("voices", voiceList),
             ("gear", gearButton), ("back", backButton), ("rows", waitingRows),
             ("cancelTx", cancelTranscriptionButton),
@@ -2528,12 +2657,29 @@ final class StatusHUD: NSObject {
         goButton.attributedTitle = letterspaced(
             "GO TO AGENT \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
             color: StateLegend.Palette.accent)
+        // "Open page" sits beside "Go to agent" and shares its treatment,
+        // because they are the same kind of move — leave this panel, go to the
+        // thing — and differ only in destination: one is a terminal tab, the
+        // other a browser. Two doors in one ink, so neither reads as the
+        // primary and the choice stays yours.
+        openPageButton = NSButton(title: "Open page", target: self,
+                                  action: #selector(openPageTapped))
+        openPageButton.isBordered = false
+        openPageButton.attributedTitle = letterspaced(
+            "OPEN PAGE \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
+            color: StateLegend.Palette.accent)
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
         // The device-fault card's way out. Quiet like its row-mates: it is a
         // door, not an alarm — the placard and the body have already said how
         // bad this is, and a loud button would say it a third time.
         micSettingsButton = quietAction(StateLegend.micSettingsTitle,
                                         #selector(micSettingsTapped))
+        // The invitation's action. Quiet like its row-mates, and deliberately
+        // NOT go-green: "Go to agent" navigates to something that exists, and
+        // this one creates it. Sharing the promoted ink would make the two
+        // read as the same move.
+        newSessionButton = quietAction(StateLegend.startSessionTitle,
+                                       #selector(newSessionForArtifactTapped))
 
         // A real symbol at a real size. The text glyph was 12pt — visually timid
         // and, worse, a hit target well under the ~24pt a fingertip-sized control
@@ -2576,8 +2722,10 @@ final class StatusHUD: NSObject {
         buttons.spacing = 12
         buttons.addView(dontSendButton, in: .leading)
         buttons.addView(micSettingsButton, in: .leading)
+        buttons.addView(newSessionButton, in: .leading)
         buttons.addView(cancelTranscriptionButton, in: .leading)
         buttons.addView(retryTranscriptionButton, in: .leading)
+        buttons.addView(openPageButton, in: .trailing)
         buttons.addView(goButton, in: .trailing)
 
         hintLabel.maximumNumberOfLines = 0
