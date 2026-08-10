@@ -262,8 +262,10 @@ case "reconcile":
     // this exists.
     let hookPath = FileManager.default.currentDirectoryPath + "/hooks/tbase-hook.sh"
     let visualPath = FileManager.default.currentDirectoryPath + "/hooks/visual-output-hook.sh"
+    let artifactPath = FileManager.default.currentDirectoryPath + "/hooks/artifact-hook.sh"
     guard FileManager.default.isExecutableFile(atPath: hookPath),
-          FileManager.default.isExecutableFile(atPath: visualPath) else {
+          FileManager.default.isExecutableFile(atPath: visualPath),
+          FileManager.default.isExecutableFile(atPath: artifactPath) else {
         print("run from the repo root: hooks/*.sh not found or not executable"); exit(1)
     }
     let settingsURL = FileManager.default.homeDirectoryForCurrentUser
@@ -282,11 +284,15 @@ case "reconcile":
     // (event, script marker, script path): the spool hook feeds the loop; the
     // visual-output hook teaches sessions the browser-not-terminal rule for
     // anything the user must SEE (they hear turns by voice, away from the tab).
-    let wiring: [(event: String, marker: String, path: String)] = [
-        ("Stop", "tbase-hook", hookPath),
-        ("Notification", "tbase-hook", hookPath),
-        ("UserPromptSubmit", "tbase-hook", hookPath),
-        ("SessionStart", "visual-output-hook", visualPath),
+    // The artifact hook needs a matcher, which the other three do not: it runs
+    // after a tool call rather than at a turn boundary, and running it after
+    // every Bash and Read would be thousands of no-op subprocesses a day.
+    let wiring: [(event: String, marker: String, path: String, matcher: String?)] = [
+        ("Stop", "tbase-hook", hookPath, nil),
+        ("Notification", "tbase-hook", hookPath, nil),
+        ("UserPromptSubmit", "tbase-hook", hookPath, nil),
+        ("SessionStart", "visual-output-hook", visualPath, nil),
+        ("PostToolUse", "artifact-hook", artifactPath, "Write"),
     ]
     for wire in wiring {
         var entries = hooks[wire.event] as? [[String: Any]] ?? []
@@ -295,7 +301,10 @@ case "reconcile":
                 .contains { ($0["command"] as? String)?.contains(wire.marker) == true }
         }
         if !present {
-            entries.append(["hooks": [["type": "command", "command": wire.path, "timeout": 5]]])
+            var entry: [String: Any] = [
+                "hooks": [["type": "command", "command": wire.path, "timeout": 5]]]
+            if let matcher = wire.matcher { entry["matcher"] = matcher }
+            entries.append(entry)
             hooks[wire.event] = entries
             changed += 1
         }
@@ -310,13 +319,15 @@ case "reconcile":
 case "hook-config":
         let hookPath = FileManager.default.currentDirectoryPath + "/hooks/tbase-hook.sh"
         let visualPath = FileManager.default.currentDirectoryPath + "/hooks/visual-output-hook.sh"
+        let artifactPath = FileManager.default.currentDirectoryPath + "/hooks/artifact-hook.sh"
         print("""
         Add to ~/.claude/settings.json (merge with existing hooks):
 
         "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "\(hookPath)"}]}],
         "Notification": [{"matcher": "", "hooks": [{"type": "command", "command": "\(hookPath)"}]}],
         "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": "\(hookPath)"}]}],
-        "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "\(visualPath)"}]}]
+        "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "\(visualPath)"}]}],
+        "PostToolUse": [{"matcher": "Write", "hooks": [{"type": "command", "command": "\(artifactPath)"}]}]
         """)
 
     // MARK: dispatch
