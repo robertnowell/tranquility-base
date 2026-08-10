@@ -72,6 +72,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the panel names while you speak and what the send addresses must be the SAME
     /// stored fact, not two derivations that usually agree.
     private var recordingTarget: String?
+    /// Sessions this app is mid-delivery to, so the grid can say so. See
+    /// `DeliveryInFlight`: the target's own transcript cannot know about a
+    /// reply until it lands, so for the whole transcribe → confirm → dispatch
+    /// window the row read quiet — the one stretch the user KNOWS is busy,
+    /// because they started it. Consumed by `lamp(for:sessionId:)`.
+    private var delivering = DeliveryInFlight()
     /// No session to answer? The mic still works: the transcript goes to the
     /// clipboard instead of a terminal. A voice tool that refuses to listen just
     /// because nothing is waiting is leaving its best hardware idle.
@@ -262,6 +268,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // straight at it changed nothing and the count went stale. Only
                 // while idle: speech, a recording, a countdown or a failure notice
                 // are conversations in progress and must not be redrawn under.
+                // Housekeeping only — isInFlight gates on the ceiling itself, so
+                // an expired entry is already invisible to the lamp. This just
+                // stops the map growing across a long-lived app.
+                self.delivering.prune()
                 let rows = self.sessionRowsNow()
                 let waiting = rows.filter { $0.lamp == .ready }.count
                 // The menu-bar annunciator refreshes every tick, so its count can
@@ -552,10 +562,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// happened. "Couldn't send it" hid a `try?` that swallowed the real outcome —
     /// including the one case that matters most, where the text may have landed but
     /// the read-back could not confirm it.
-    private func send(utteranceId: String, label: String) {
+    private func send(utteranceId: String, label: String, sessionId: String) {
         guard let coordinator else { return }
         let mine = replyGeneration
         Task { @MainActor in
+            // The second half of the delivery window (see DeliveryInFlight):
+            // the capture handed it to the countdown, the countdown handed it
+            // here, and it closes on the outcome however that outcome reads.
+            // Same discipline as the first half — one defer, not seven cases.
+            defer { delivering.finished(sessionId: sessionId) }
             guard mine == replyGeneration else {
                 // Superseded between the timer firing and this running.
                 try? coordinator.cancelSend(utteranceId: utteranceId)
@@ -730,7 +745,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
                 callsign: activity?.shortReason ?? (stored.callsign ?? ""),
-                lamp: lamp(for: activity)))
+                lamp: lamp(for: activity, sessionId: stored.sessionId)))
         }
         // Live sessions with no stored events yet: nothing to rank them by,
         // so they close the grid.
@@ -748,7 +763,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     liveName: Self.tabTitle(transcriptPath: nil, live: live),
                     callsign: nil, fallback: "session"),
                 callsign: activity?.shortReason ?? "",
-                lamp: lamp(for: activity)))
+                lamp: lamp(for: activity, sessionId: live.sessionId)))
         }
         // Last, and after every band has been appended: a session that is merely
         // alive drops below the ones doing something, without disturbing the
@@ -761,12 +776,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// this answers the question the grid could not: working, stuck, or just
     /// sitting there. Unreadable transcript = the old quiet lamp, never a
     /// guess.
-    private func lamp(for activity: SessionActivity?) -> StateLegend.Lamp {
-        switch activity {
-        case .working: return .working
-        case .blocked: return .fault
-        case .idle, nil: return .running
-        }
+    ///
+    /// A delivery in flight upgrades QUIET to blue, and nothing else. That
+    /// precedence is the whole rule, and it is deliberate: green and amber are
+    /// the two channels that mean *you* — something unread, or something
+    /// stopped — and a reply already on its way is news, not a task. Masking
+    /// either of them with advisory blue would spend the one signal the grid
+    /// exists to carry, to say something the user just did themselves. Quiet
+    /// is the only lamp with nothing to lose, and it is exactly the lamp that
+    /// was lying.
+    private func lamp(for activity: SessionActivity?, sessionId: String) -> StateLegend.Lamp {
+        let observed: StateLegend.Lamp = {
+            switch activity {
+            case .working: return .working
+            case .blocked: return .fault
+            case .idle, nil: return .running
+            }
+        }()
+        guard observed == .running, delivering.isInFlight(sessionId) else { return observed }
+        return .working
     }
 
     /// The tab's string for a session, or nil while it has none: the
@@ -1716,6 +1744,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 recordingTarget = nil
+                // The delivery window opens HERE — at the capture's close, not
+                // at the dispatch — because this is the moment the words become
+                // ours to deliver, and every second from here to the outcome is
+                // a second the grid used to call that session idle.
+                delivering.began(sessionId: spokenTo)
+                // One clear-site, not eight. Every exit below closes the window
+                // — the supersede return, the six terminal outcomes, the catch —
+                // except `.readyToSend`, which hands the delivery to the undo
+                // countdown and `send()` to finish. Enumerating exits is how a
+                // lamp gets stuck on; a defer keyed to the single hand-off
+                // cannot miss one.
+                var handedToCountdown = false
+                defer { if !handedToCountdown { delivering.finished(sessionId: spokenTo) } }
                 let streamed = await liveStream?.finish()
                 let outcome = try await coordinator.submitReply(
                     pcm16: pcm, to: spokenTo, streamed: streamed)
@@ -1754,14 +1795,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // Sending is the default. The window exists to stop it, not to
                     // permit it: approving every correct transcript is a toll.
                     lastStatusLine = "sending to \(label)…"
+                    // The countdown and the send own the window from here.
+                    handedToCountdown = true
                     hud.showPendingSend(
                         text: text, label: label, seconds: 4,
-                        send: { [weak self] in self?.send(utteranceId: utteranceId, label: label) },
+                        send: { [weak self] in
+                            self?.send(utteranceId: utteranceId, label: label,
+                                       sessionId: sessionId)
+                        },
                         cancel: { [weak self] restartListening in
                             guard let self else { return }
                             // The recording is kept, just taken out of the sendable
                             // set — you rejected these words, not the audio.
                             try? self.coordinator?.cancelSend(utteranceId: utteranceId)
+                            // Nothing is on its way any more: the lamp goes back
+                            // to whatever the transcript honestly says.
+                            self.delivering.finished(sessionId: sessionId)
                             guard restartListening else { return }
                             // Straight back to listening: you stopped it because the
                             // words were wrong, so the next thing you want is to say
