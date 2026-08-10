@@ -556,6 +556,29 @@ case "hook-config":
         }
         print("\nanyInputInUse: \(AudioInputDevice.anyInputInUse())")
 
+    case "courtesy-file":
+        // Assess a WAV the APP captured. This exists because the two halves of
+        // the question live in two processes: the app bundle holds the
+        // microphone grant and has never asked for speech; this terminal holds
+        // speech and is denied the microphone. Splitting capture from
+        // recognition answers "can the recogniser hear this audio?" without
+        // granting anything new to either — and that is the question that
+        // decides whether the app needs a fourth permission at all.
+        guard args.count > 1 else { usage() }
+        await CourtesyDemo.authorizeIfNeeded()
+        for path in args.dropFirst() {
+            let name = (path as NSString).lastPathComponent
+            do {
+                let samples = try CourtesyDemo.readWAV(path)
+                let a = await CourtesyCheck().assess(samples: samples, sampleRate: 16000)
+                print(String(format: "  %-22@ %@  level=%.4f  words=%@  %@",
+                             name as NSString, a.speechDetected ? "HOLD " : "SPEAK",
+                             a.level, a.wordCount.map(String.init) ?? "-", a.reason))
+            } catch {
+                print("  \(name)  ERROR  \(error)")
+            }
+        }
+
     case "courtesy-live":
         // The real microphone, the real window, one line of verdict. Built for
         // scripts/courtesy-eval.sh to call in a loop while stimuli play through
