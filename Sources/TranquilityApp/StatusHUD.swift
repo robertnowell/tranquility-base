@@ -20,7 +20,7 @@ import TranquilityCore
 @MainActor
 final class StatusHUD: NSObject {
     private var panel: NSPanel?
-    private var titleLabel: NSTextField!
+    private var titleLabel: DoorLabel!
     private var bodyLabel: NSTextField!
     private var stateLabel: NSTextField!
     private var goButton: NSButton!
@@ -160,8 +160,13 @@ final class StatusHUD: NSObject {
     /// a listener cannot use `dispatchAttempts` but a reader needs it, and
     /// hearing "a variable" four times while reading four column names is the
     /// whole point of the split.
+    ///
+    /// The `topic` parameter is gone (10 Aug). It only ever fed the card's second
+    /// line, and that line said the same thing as `spoken` with the detail taken
+    /// out. Leaving the parameter behind for callers to keep supplying would have
+    /// been a slower way of deleting it.
     func showAnnouncement(
-        topic: String, spoken: SanitizedSpokenText, sessionId: String, pid: Int?, project: String,
+        spoken: SanitizedSpokenText, sessionId: String, pid: Int?, project: String,
         cwd: String?, eventId: String? = nil,
         placard: String? = nil
     ) -> Bool {
@@ -176,12 +181,8 @@ final class StatusHUD: NSObject {
         currentSpoken = spoken
         currentTarget = (sessionId, pid, project)
         // Into the fresh Face, never before it: the wholesale rebuild is what
-        // clears a previous pull's placard on ordinary announcements. The topic
-        // rides separately from the identity (ruled: identity in mono, topic in
-        // the regular face) and is dropped when it adds nothing — a topic equal
-        // to the project rendered as "promotions — promotions".
-        let extra = topic.caseInsensitiveCompare(project) == .orderedSame ? "" : topic
-        face = Face(title: project, topic: extra, body: spoken.displayText,
+        // clears a previous pull's placard on ordinary announcements.
+        face = Face(title: project, body: spoken.displayText,
                     placardOverride: placard ?? "")
         render()
         return true
@@ -680,9 +681,6 @@ final class StatusHUD: NSObject {
         /// every face, matching the grid rows (ruled). The app name on the true
         /// empty state rides the same slot: it is the app's own identity.
         var title = ""
-        /// The composed topic, in the REGULAR face beside the mono identity;
-        /// empty when it adds nothing the identity doesn't.
-        var topic = ""
         var body = "", listeningTarget = ""
         /// Names the pill when a face needs its own placard — the ⌃⌃ ladder
         /// rungs ("◀ FINDINGS") and READBACK. Empty = the state's own placard.
@@ -978,31 +976,35 @@ final class StatusHUD: NSObject {
         }
     }
 
-    /// The identity in MONO (matching the grid rows) on line one; the topic in
-    /// the regular face starting on line TWO (ui-pass-7, ruling 4) — always its
-    /// own line, never a same-line continuation. Still one attributed string in
-    /// one label, so the pair stays a single layout unit; each line truncates
-    /// against the panel edge by itself.
+    /// The identity in MONO (matching the grid rows), on one line, alone.
+    ///
+    /// The topic that used to ride line two is dead (ruled 10 Aug). It was a
+    /// 3–6 word compression of the thing the body was about to say in full, so
+    /// the card opened by saying the same thing twice at two sizes — and the
+    /// second saying was the one carrying no detail. What the card is FOR is the
+    /// reason, and the reason is `body`. `showAnnouncement` had already been
+    /// half-admitting this: it dropped the topic whenever it equalled the
+    /// project, which is the special case of a general truth.
+    ///
+    /// What the identity is for is getting BACK to the session — so it is now a
+    /// door (see `titleIsADoor`), which is the job it was actually doing.
     private func renderTitle() {
         titleLabel.isHidden = face.title.isEmpty
         guard !face.title.isEmpty else { titleLabel.stringValue = ""; return }
         let truncating = NSMutableParagraphStyle()
         truncating.lineBreakMode = .byTruncatingTail
-        let line = NSMutableAttributedString(
+        titleLabel.attributedStringValue = NSAttributedString(
             string: face.title, attributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold),
                 .foregroundColor: StateLegend.Palette.ink,
                 .paragraphStyle: truncating,
             ])
-        if !face.topic.isEmpty {
-            line.append(NSAttributedString(
-                string: "\n\(face.topic)", attributes: [
-                    .font: NSFont.systemFont(ofSize: 12),
-                    .foregroundColor: StateLegend.Palette.secondary,
-                    .paragraphStyle: truncating,
-                ]))
-        }
-        titleLabel.attributedStringValue = line
+        // Only a live target has a tab to open. No per-face flag is needed for
+        // this: `currentTarget` is already nil on exactly the faces whose title
+        // is not a session — it is cleared going idle and again by showVoices,
+        // so "Voices" and the empty room's "Tranquility Base" cannot inherit the
+        // last session's tab. `titleDoorDrill` holds that alignment.
+        titleLabel.isADoor = currentTarget?.pid != nil
     }
 
     /// The listening pill: the live dot in channel green (mic open = go), the
@@ -1687,7 +1689,6 @@ final class StatusHUD: NSObject {
             ]) }),
             ("preparing", { _ = self.showPreparing() }),
             ("announcement", { self.showAnnouncement(
-                topic: "Product image binding fix validation",
                 spoken: SpokenTextSanitizer().sanitize(long),
                 sessionId: "s", pid: 1, project: "promotions", cwd: "/tmp/promotions") }),
             ("listening", {
@@ -1746,7 +1747,7 @@ final class StatusHUD: NSObject {
                 .init(id: "b", name: "tranquility base", callsign: "", lamp: .running),
             ]) }),
             ("speaking", { self.showAnnouncement(
-                topic: "Hero image binding fix", spoken: SpokenTextSanitizer().sanitize(long),
+                spoken: SpokenTextSanitizer().sanitize(long),
                 sessionId: "s", pid: 1, project: "promotions", cwd: "/tmp/promotions") }),
             ("hidden", { self.hide() }),
         ]
@@ -1918,9 +1919,44 @@ final class StatusHUD: NSObject {
         ])
 
         contrastDrill()
+        titleDoorDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
+    }
+
+    /// The identity opens the tab — but only when there is a tab.
+    ///
+    /// The door is derived from `currentTarget`, not stored per face, which is
+    /// correct only for as long as `currentTarget` is nil on every face whose
+    /// title is not a session. That is true today (idle and showVoices both
+    /// clear it) and it is the kind of thing that stops being true quietly. So
+    /// it is asserted rather than trusted: a title that offers to open a tab
+    /// that is not there would fail at the click, which is the worst place to
+    /// find out.
+    ///
+    /// Also asserts the topic line stays dead. It was removed because it said
+    /// the body's own sentence with the detail taken out, and it is exactly the
+    /// sort of thing a later pass restores meaning well.
+    private func titleDoorDrill() {
+        var checks: [(String, Bool)] = []
+
+        currentTarget = ("drill", 1, "promotions copy")
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("Finished the poller. Go?"),
+            sessionId: "drill", pid: 1, project: "promotions copy", cwd: "/tmp")
+        checks.append(("sessionTitleIsADoor", titleLabel.isADoor))
+        checks.append(("titleIsOneLine", titleLabel.maximumNumberOfLines == 1))
+        // The identity, alone. A second line here is the topic coming back.
+        checks.append(("noSecondLine", !titleLabel.stringValue.contains("\n")))
+
+        showSettings(voices: [], roster: [], note: "")
+        checks.append(("settingsTitleIsNotADoor", !titleLabel.isADoor))
+
+        showIdle(rows: [])
+        checks.append(("idleClearsTheTarget", currentTarget == nil))
+
+        SelfTest.report("titleDoor", checks)
     }
 
     /// Assert the palette still measures what the ruling says it measures.
@@ -2018,12 +2054,12 @@ final class StatusHUD: NSObject {
             adoptTarget(sessionId: "pose", pid: nil, label: callsign,
                         cwd: NSHomeDirectory() + "/Projects/kopi/promotions")
         }
-        func announce(project: String, topic: String,
+        func announce(project: String,
                       spoken text: String, highlightFraction: Double,
                       placard: String? = nil,
                       cwd: String = NSHomeDirectory() + "/Projects/kopi/promotions") {
             let sanitized = SpokenTextSanitizer().sanitize(text)
-            showAnnouncement(topic: topic, spoken: sanitized,
+            showAnnouncement(spoken: sanitized,
                              sessionId: "pose", pid: 1, project: project, cwd: cwd,
                              placard: placard)
             highlight(upTo: Int(Double(sanitized.text.count) * highlightFraction))
@@ -2047,7 +2083,7 @@ final class StatusHUD: NSObject {
                 + "audioPath, audioBytes, transcriptText and dispatchAttempts "
                 + "— no migration needed.")
             _ = showAnnouncement(
-                topic: "Dispatch queue audit", spoken: findings,
+                spoken: findings,
                 sessionId: "pose", pid: 1, project: callsign,
                 cwd: NSHomeDirectory() + "/Projects/tranquility-base",
                 placard: "\(StateLegend.Glyph.speaking) "
@@ -2078,7 +2114,7 @@ final class StatusHUD: NSObject {
                 + "guard rather than to transport. The audio itself was recovered "
                 + "intact and replayed cleanly.")
             _ = showAnnouncement(
-                topic: "Dispatch queue audit", spoken: long,
+                spoken: long,
                 sessionId: "pose", pid: 1, project: callsign,
                 cwd: NSHomeDirectory() + "/Projects/tranquility-base",
                 placard: "\(StateLegend.Glyph.speaking) "
@@ -2112,7 +2148,7 @@ final class StatusHUD: NSObject {
             _ = showPreparing()
 
         case "speaking":
-            announce(project: callsign, topic: "Hero image binding fix",
+            announce(project: callsign,
                      spoken: spoken, highlightFraction: 0.6)
 
         // The card up, the audio not here yet — the state the shimmer exists
@@ -2120,14 +2156,14 @@ final class StatusHUD: NSObject {
         // almost unobservable by design: the clip is normally prefetched, so
         // playback starts before the 400ms arm and no frame is ever drawn.
         case "waiting":
-            announce(project: callsign, topic: "Hero image binding fix",
+            announce(project: callsign,
                      spoken: spoken, highlightFraction: 0)
 
         case "depth1":
             // Exactly the ⌃⌃ path: the same announcement card, the rationale as
             // the spoken text, karaoke highlight and all — with the rung-naming
             // pill main.swift sends ("◀ WHY", the ladder's own convention).
-            announce(project: callsign, topic: "Hero image binding fix",
+            announce(project: callsign,
                      spoken: rationale, highlightFraction: 0.4,
                      placard: "\(StateLegend.Glyph.speaking) "
                         + SpokenComposition.RungKind.why.rawValue)
@@ -2343,14 +2379,19 @@ final class StatusHUD: NSObject {
         stateLabel.addGestureRecognizer(NSClickGestureRecognizer(
             target: self, action: #selector(breadcrumbClicked)))
 
-        titleLabel = NSTextField(labelWithString: "")
+        titleLabel = DoorLabel(labelWithString: "")
         // The identity face: mono, matching the grid rows (ruled). renderTitle
-        // sets the attributed pair; this is the fallback style. Two lines
-        // (ui-pass-7, ruling 4): identity on line one, topic on line two.
+        // sets the string; this is the fallback style. ONE line since the topic
+        // died (10 Aug) — the identity was always the only thing on line one.
         titleLabel.font = .monospacedSystemFont(ofSize: 13, weight: .semibold)
         titleLabel.textColor = StateLegend.Lens.content.color
         titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.maximumNumberOfLines = 2
+        titleLabel.maximumNumberOfLines = 1
+        // The second door to the session. GO TO AGENT stays — it is the
+        // discoverable one, and you said you use it. This is the shortcut for
+        // when your eye is already on the name, which is where it already goes.
+        titleLabel.addGestureRecognizer(
+            NSClickGestureRecognizer(target: self, action: #selector(goToSession)))
 
         bodyLabel = NSTextField(wrappingLabelWithString: "")
         bodyLabel.font = .systemFont(ofSize: 12)
@@ -2807,6 +2848,37 @@ private func letterspaced(_ text: String, size: CGFloat, tracking: CGFloat,
 /// A control with real frames, not a bezel-less NSButton: an attributed title
 /// can only flow its runs inline, and columns need columns. Hover paints the
 /// row in the palette's hover putty, exactly like the mock.
+/// The card's identity label, when the identity is also a way back to the tab.
+///
+/// A click target with no affordance is a secret, and a card that grows a button
+/// for something the eye is already resting on is the detail this pass exists to
+/// remove. The cursor is the whole affordance: nothing changes until the pointer
+/// arrives, and then it says "this opens".
+///
+/// `isADoor` is false whenever there is no live target — the app's own name on
+/// the empty room rides this same label, and a name that offers to open nothing
+/// is worse than a name that offers nothing.
+private final class DoorLabel: NSTextField {
+    var isADoor = false {
+        didSet {
+            guard isADoor != oldValue else { return }
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard isADoor else { return }
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    /// The gesture recogniser does the work; this only keeps a dead label from
+    /// swallowing clicks meant for the card behind it.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        isADoor ? super.hitTest(point) : nil
+    }
+}
+
 private final class GridRowView: NSControl {
     // Variant C metrics (ruled 05 Aug, from the accepted draft render, scaled
     // from its 640px frame to the panel's 352): taller rows, the name in the
