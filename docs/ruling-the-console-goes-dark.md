@@ -141,9 +141,8 @@ literal outside the palette.
 
 ## Not done here
 
-- The contrast assertions belong in the launch self-tests (CLAUDE.md rule 7:
-  `swift test` is not evidence about the panel). Every number above was computed
-  by hand and will rot the first time someone nudges a hex.
+- ~~The contrast assertions belong in the launch self-tests.~~ **Done** in
+  `832b2ba` — see the addendum at the foot of this file.
 - Idle vs exited sessions still share a treatment. Deferred by the user.
 - Idle sessions should sort below active ones. Not a colour change.
 - The card's second headline (`face.topic`) still ships; the title is not yet a
