@@ -6,10 +6,16 @@ import TranquilityCore
 /// Microphone capture for push-to-talk.
 ///
 /// Buffers converted PCM16 in memory while the key is held and flushes once on
-/// release, **before** anything touches the network. Per-chunk write-ahead was
-/// considered and rejected: it only buys the crash-mid-utterance case, and the
-/// failures that actually happen are network and API ones, which a single flush at
-/// key-up already covers. That is a deliberate line, not an oversight.
+/// release, **before** anything touches the network.
+///
+/// That single flush was originally defended on the grounds that "the failures
+/// that actually happen are network and API ones", which per-chunk write-ahead
+/// would not help with. **Measured false, 08 Aug 2026**: six utterances were
+/// lost when a parallel relaunch replaced the process mid-capture, where release
+/// never happens and so the flush never runs. `LiveAudioCapture` (Core) is the
+/// write-ahead path built in answer; wiring it here is the outstanding half, and
+/// this comment is not the place to re-argue the line it already lost. See
+/// docs/measurement-audio-must-be-durable-from-the-first-frame.md.
 public final class Recorder: @unchecked Sendable {
     public enum RecorderError: Error, Sendable {
         case microphoneDenied
@@ -65,6 +71,12 @@ public final class Recorder: @unchecked Sendable {
     /// a peak of 0 is consistent with all three and proves none of them.
     public private(set) var tapBuffersDelivered = 0
     public private(set) var tapBuffersKept = 0
+
+    /// Longest a device gets to hand over its first buffer before the open is
+    /// treated as failed. Only ever paid by a device that will not deliver.
+    static let firstBufferCeiling: TimeInterval = 0.25
+    /// Poll granularity while waiting for it.
+    static let firstBufferSlice: TimeInterval = 0.010
 
     /// How long the microphone was open for the last capture, by the wall clock.
     ///
@@ -140,6 +152,34 @@ public final class Recorder: @unchecked Sendable {
         // Worst case here is ~480ms before giving up, well under the event-tap
         // watchdog.
         var lastReason = "unknown"
+        // Wait for the first tap buffer, then stop waiting — the gate polls
+        // rather than sleeping a fixed interval, so the happy path pays only as
+        // long as the device actually takes.
+        //
+        // Cost on a healthy open is one slice: a 1024-frame buffer at a 48kHz
+        // device is 21ms, so the first check at 10ms usually misses and the
+        // second lands. That 10–20ms is invisible where it is spent — the arm
+        // window opens the microphone optimistically, ~165ms after key-down and
+        // long before the hold resolves ("mic open +165ms after key-down",
+        // "stream opened over armed mic … +97ms after hold resolved", app.log
+        // 10 Aug), so the open is already off the critical path for the face the
+        // user sees at ~96ms.
+        //
+        // The ceiling is only ever paid by a device that is not going to deliver
+        // at all, and buys a retry instead of a silent recording. Six attempts
+        // at the ceiling is a 1.5s worst case before the loop gives up, which is
+        // the correct trade against handing back nine seconds of nothing.
+        func waitForFirstBuffer() -> Bool {
+            let deadline = Date().addingTimeInterval(Self.firstBufferCeiling)
+            repeat {
+                lock.lock(); let delivered = tapBuffersDelivered; lock.unlock()
+                if delivered > 0 { return true }
+                usleep(UInt32(Self.firstBufferSlice * 1_000_000))
+            } while Date() < deadline
+            lock.lock(); let delivered = tapBuffersDelivered; lock.unlock()
+            return delivered > 0
+        }
+
         for attempt in 0..<6 {
             // A retry that re-asks the same cached question is not a retry. Every
             // attempt past the first gets a NEW engine, because the failure this
@@ -193,6 +233,23 @@ public final class Recorder: @unchecked Sendable {
             }
 
             if exception == nil && startError == nil {
+                // An engine that started is not the same as a microphone that is
+                // recording. `engine.start()` returning is the last thing this
+                // loop used to check, and on 10 Aug it returned successfully four
+                // times over captures of 8.62s, 24.14s, 29.01s and 67.21s that
+                // came back at peak 0.0000 — the graph never rendered, the tap
+                // never fired, and the panel said "listening" the whole time.
+                // The counters that prove it (tapBuffersDelivered) already
+                // existed; nothing consulted them until the recording was over,
+                // by which point the only thing left to do was apologise.
+                //
+                // So the open now finishes when audio actually arrives.
+                if !waitForFirstBuffer() {
+                    lastReason = "engine started but the tap delivered nothing in "
+                        + "\(Int(Self.firstBufferCeiling * 1000))ms — graph not rendering"
+                    _ = VDCatchObjCException { input.removeTap(onBus: 0); engine.stop() }
+                    continue
+                }
                 // Say WHICH device the capture is bound to and at WHAT rate the
                 // tap was installed. `warmUp` logged the bind at launch and
                 // nothing logged it again, so every mid-session rebind — the
