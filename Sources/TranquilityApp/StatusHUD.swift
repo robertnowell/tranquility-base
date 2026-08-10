@@ -2551,6 +2551,12 @@ final class StatusHUD: NSObject {
 
     private func position(_ panel: NSPanel) {
         guard let screen = NSScreen.main else { return }
+        // Collapsed owns its own frame, flush to the edge, and `resizeToFit`
+        // has already set it. Returning here rather than special-casing the
+        // margin below: this runs immediately AFTER that call on every render,
+        // so a margin applied here silently undoes it — which is exactly what
+        // the flushRight drill caught on the first deploy.
+        if isCollapsed, case .idle = state { return }
         let margin: CGFloat = 16
         let size = panel.frame.size
         // Top-right, below the menu bar.
