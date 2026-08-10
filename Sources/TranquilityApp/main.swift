@@ -320,6 +320,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onNewSessionForArtifact = { [weak self] ref in
             self?.newSession(forArtifact: ref)
         }
+        // The card's second door, and the other direction of the same
+        // correlation the footer opens: the page links back to its agent, and
+        // the agent's card opens its page.
+        hud.artifactForSession = { session in
+            ArtifactStore.latest(for: session, root: QueueStore.supportDirectory.path)
+        }
+        hud.onOpenPage = { page in
+            NSWorkspace.shared.open(URL(fileURLWithPath: page))
+        }
         hud.onBreadcrumbHome = { [weak self] in self?.goHomeFromCard(via: "breadcrumb") }
         hud.onClearLamp = { [weak self] id in
             guard let self, let coordinator = self.coordinator else { return }

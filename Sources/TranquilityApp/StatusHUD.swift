@@ -30,6 +30,7 @@ final class StatusHUD: NSObject {
     private var dontSendButton: NSButton!
     private var micSettingsButton: NSButton!
     private var newSessionButton: NSButton!
+    private var openPageButton: NSButton!
     private var hintLabel: NSTextField!
     private var contentStack: NSStackView?
     /// Derived, not stored. True exactly while the undo countdown is live AND the
@@ -77,6 +78,23 @@ final class StatusHUD: NSObject {
     private static let spokenMark = NSAttributedString.Key("vdSpoken")
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
+
+    /// The page the agent on stage most recently wrote, if it still exists.
+    ///
+    /// Derived from `currentTarget` rather than stored beside it. Storing it
+    /// would mean clearing it at all four sites that clear the target, and the
+    /// one that got missed would leave a button pointing at the previous
+    /// agent's page — the exact confusion this feature exists to end. It is the
+    /// other half of what the footer starts: the page links back to its agent,
+    /// and the agent's card links out to its page.
+    private var currentArtifact: String? {
+        currentTarget.flatMap { artifactForSession?($0.sessionId) }
+    }
+    /// Wired by the app onto ArtifactStore. Nil until then, and nil is a
+    /// complete answer — most sessions have written no page at all.
+    var artifactForSession: ((String) -> String?)?
+    /// Wired by the app onto the workspace's "open this file" call.
+    var onOpenPage: ((String) -> Void)?
 
     // MARK: - Public surface
 
@@ -438,6 +456,14 @@ final class StatusHUD: NSObject {
 
     /// Wired by the app onto SessionLauncher, with the artifact in hand.
     var onNewSessionForArtifact: ((String) -> Void)?
+
+    @objc nonisolated private func openPageTapped() {
+        MainActor.assumeIsolated {
+            guard let page = currentArtifact else { return }
+            Permissions.log("openPage: \(page)")
+            onOpenPage?(page)
+        }
+    }
 
     @objc nonisolated private func newSessionForArtifactTapped() {
         MainActor.assumeIsolated {
@@ -835,6 +861,11 @@ final class StatusHUD: NSObject {
         bodyLabel.alignment = .natural
         hintLabel.stringValue = ""
         goButton.isHidden = currentTarget?.pid == nil
+        // The card's second door. It rides the same rule as "Go to agent" —
+        // shown wherever an agent is named — because the two are one pair: this
+        // agent, and the last thing it made. A session that has written no page
+        // simply has one door, and most do.
+        openPageButton.isHidden = currentArtifact == nil
         dontSendButton.isHidden = true
         micSettingsButton.isHidden = true
         newSessionButton.isHidden = true
@@ -1118,8 +1149,8 @@ final class StatusHUD: NSObject {
     /// the row of lozenge buttons is dead (ruled); this is what replaced its
     /// per-state visibility flag.
     private func updateActionRowVisibility() {
-        actionRow.isHidden = [goButton, dontSendButton, micSettingsButton,
-                              newSessionButton,
+        actionRow.isHidden = [goButton, openPageButton, dontSendButton,
+                              micSettingsButton, newSessionButton,
                               cancelTranscriptionButton, retryTranscriptionButton]
             .allSatisfy { $0?.isHidden ?? true }
         if let panel { resizeToFit(panel); position(panel) }
@@ -1973,6 +2004,24 @@ final class StatusHUD: NSObject {
         let failureStartsNothing = newSessionButton.isHidden
         let failureIsStillAmber =
             stateLabel.textColor == StateLegend.Palette.fault
+        // The card's second door. The drill that matters is the ABSENCE one:
+        // most sessions have written no page, and a door to nothing would be on
+        // every card in the app.
+        let priorResolver = artifactForSession
+        artifactForSession = { _ in nil }
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("Finished the poller. Go?"),
+            sessionId: "drill", pid: 1, project: "promotions copy", cwd: "/tmp")
+        let noPageNoDoor = openPageButton.isHidden
+        artifactForSession = { _ in "/tmp/tb-drill-page.html" }
+        render()
+        let pageOpensADoor = !openPageButton.isHidden
+        artifactForSession = priorResolver
+        SelfTest.report("openPage", [
+            ("noPageNoDoor", noPageNoDoor),
+            ("pageOpensADoor", pageOpensADoor),
+        ])
+
         SelfTest.report("invitation", [
             ("offersTheDoor", invitationOffersTheDoor),
             ("advisoryNotAmber", invitationIsAdvisory),
@@ -2423,7 +2472,7 @@ final class StatusHUD: NSObject {
             ("hint", hintLabel), ("bar", countdownBar), ("meter", meter),
             ("actions", actionRow), ("go", goButton),
             ("dontSend", dontSendButton), ("micSettings", micSettingsButton),
-            ("newSession", newSessionButton),
+            ("newSession", newSessionButton), ("openPage", openPageButton),
             ("voices", voiceList),
             ("gear", gearButton), ("back", backButton), ("rows", waitingRows),
             ("cancelTx", cancelTranscriptionButton),
@@ -2541,6 +2590,17 @@ final class StatusHUD: NSObject {
         goButton.attributedTitle = letterspaced(
             "GO TO AGENT \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
             color: StateLegend.Palette.accent)
+        // "Open page" sits beside "Go to agent" and shares its treatment,
+        // because they are the same kind of move — leave this panel, go to the
+        // thing — and differ only in destination: one is a terminal tab, the
+        // other a browser. Two doors in one ink, so neither reads as the
+        // primary and the choice stays yours.
+        openPageButton = NSButton(title: "Open page", target: self,
+                                  action: #selector(openPageTapped))
+        openPageButton.isBordered = false
+        openPageButton.attributedTitle = letterspaced(
+            "OPEN PAGE \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
+            color: StateLegend.Palette.accent)
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
         // The device-fault card's way out. Quiet like its row-mates: it is a
         // door, not an alarm — the placard and the body have already said how
@@ -2598,6 +2658,7 @@ final class StatusHUD: NSObject {
         buttons.addView(newSessionButton, in: .leading)
         buttons.addView(cancelTranscriptionButton, in: .leading)
         buttons.addView(retryTranscriptionButton, in: .leading)
+        buttons.addView(openPageButton, in: .trailing)
         buttons.addView(goButton, in: .trailing)
 
         hintLabel.maximumNumberOfLines = 0
