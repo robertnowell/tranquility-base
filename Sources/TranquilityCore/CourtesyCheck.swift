@@ -74,33 +74,56 @@ public struct CourtesyCheck: Sendable {
         public static func hearing(_ words: Int) -> WordCounter { WordCounter { _, _ in words } }
     }
 
-    /// RMS below which the room is quiet and the recogniser is not worth waking.
-    ///
-    /// A pre-filter, not the verdict. Its only job is to skip the expensive
-    /// question when the answer is obvious, so the common case — an empty room —
-    /// costs nothing. Deliberately LOW: a threshold tuned to comfortable speech
-    /// misses the person murmuring beside you, and that is the case this whole
-    /// feature exists for. When in doubt it should pass the buck to the
-    /// recogniser, which is the thing that can actually tell.
-    ///
-    /// PROVISIONAL, and in RAW RMS — see `Assessment.level`. Worth exactly
-    /// nothing until the log-only pass produces real numbers
-    /// (docs/courtesy-check-evidence-plan.md). Do not defend it.
     /// How long the microphone stays open for one check.
     ///
     /// Long enough to span a pause between sentences, short enough that the hail
-    /// still feels attached to the arrival that caused it. Every millisecond of
-    /// it is a millisecond the recording indicator is lit with no user action
-    /// behind it, which is the real budget being spent here.
+    /// still feels attached to the arrival that caused it. Every millisecond is a
+    /// millisecond the recording indicator is lit with no user action behind it,
+    /// which is the real budget being spent.
     ///
-    /// PROVISIONAL, like the floor.
+    /// Kept at 4s against a request for 2s, and the 09 Aug eval weakened rather
+    /// than broke the argument: speech across 1.2–1.4s gaps WAS detected, so the
+    /// pause failure is milder than predicted — but a shorter window still has
+    /// strictly fewer chances to catch a word, and the errors are not symmetric.
+    /// Also load-bearing against the intake tick, which is 5s: a window at or
+    /// past it would let overlapping arrivals skip the check entirely, because
+    /// `sampleRoom` returns nil while one is already running and nil degrades to
+    /// speaking.
     public static let listenSeconds: TimeInterval = 4
 
+    /// RMS below which nothing audible arrived at all.
+    ///
+    /// A "did the device give us anything" guard, NOT a discriminator. It was the
+    /// second one until 09 Aug, when the acoustic eval showed that job cost more
+    /// than it bought:
+    ///
+    ///   speech far (vol 20)      level 0.0049  — discarded by the old 0.005 floor
+    ///   speech very far (vol 10) level 0.0039  — discarded by the old 0.005 floor
+    ///   quiet room               level 0.0030
+    ///
+    /// A talker across the room and an empty room were less than a factor of two
+    /// apart and the threshold sat between them, so the filter was throwing away
+    /// exactly the audio this feature exists to catch. The room floor moved too —
+    /// 0.0010 on one run, 0.0030 on another — which makes any fixed absolute
+    /// value fragile across rooms and hours.
+    ///
+    /// Its only justification was cost: do not wake the recogniser for an empty
+    /// room. The same eval retired that from the other side. The recogniser
+    /// rejected a pure tone at 0.2474 and broadband noise at 0.0238 — both far
+    /// louder than speech it correctly caught at 0.0126 — so it does not
+    /// false-positive on loudness, and there is nothing left for a pre-filter to
+    /// protect against. Letting it arbitrate anything audible makes the code
+    /// simpler and the detection better at once.
+    ///
+    /// So: low enough that a distant voice always reaches the recogniser, high
+    /// enough that a dead-quiet room does not pay for recognition. The check runs
+    /// once per arrival, not continuously — a second of CPU is not a budget worth
+    /// losing a detection over.
     public var quietFloor: Float
 
     public var words: WordCounter
 
-    public init(quietFloor: Float = 0.005, words: WordCounter = .apple) {
+    public init(quietFloor: Float = 0.0005, words: WordCounter = .apple) {
         self.quietFloor = quietFloor
         self.words = words
     }
@@ -144,11 +167,11 @@ public struct CourtesyCheck: Sendable {
                         + "is dead or denied, not the room")
         }
 
-        // 2. Too quiet to be anybody. Skip the recogniser entirely.
+        // 2. Nothing audible arrived. Skip the recogniser entirely.
         if level < quietFloor {
             return Assessment(
                 speechDetected: false, level: level, wordCount: nil,
-                reason: String(format: "room is quiet (level %.4f < floor %.4f)", level, quietFloor))
+                reason: String(format: "silent room (level %.5f < floor %.5f)", level, quietFloor))
         }
 
         // 3. Loud enough that it might be a person. Ask whether it is.
