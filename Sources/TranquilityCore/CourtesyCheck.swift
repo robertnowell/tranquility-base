@@ -116,14 +116,42 @@ public struct CourtesyCheck: Sendable {
     public func assess(samples: [Int16], sampleRate: Double) async -> Assessment {
         let level = Self.rms(samples)
 
-        // 1. Too quiet to be anybody. Skip the recogniser entirely.
+        // 1. Digital silence is a DEAD DEVICE, not a quiet room.
+        //
+        // No real microphone returns exactly zero over thousands of samples;
+        // room tone, preamp hiss and the ADC's own noise floor guarantee some
+        // energy. Exact zero means nothing arrived — a revoked permission (which
+        // does not throw: AVAudioEngine starts happily and delivers zeros), or
+        // the Bluetooth mic that opens and then sends silence, which this repo
+        // has already met once and named in `StateLegend.noAudioMessage`.
+        //
+        // Found by the acoustic eval on 09 Aug: every stimulus, including
+        // speech at full volume, reported level 0.0000 and "room is quiet".
+        // The verdict was right by accident and the REASON was a lie, which is
+        // the same defect as the kAFAssistantErrorDomain case below — and the
+        // day anyone makes "could not look" mean hold, an unreadable device
+        // would become permanent silence instead of degrading to speech.
+        //
+        // Same conclusion `Recorder.lastOpenSeconds` reaches from the other
+        // side: a device that yields no samples cannot be told from a slip of
+        // the thumb by looking at the buffer, so say which one you actually saw.
+        if level == 0 {
+            return Assessment(
+                speechDetected: false, level: 0, wordCount: nil,
+                reason: samples.isEmpty
+                    ? "no samples — the device returned nothing"
+                    : "digital silence over \(samples.count) samples — the microphone "
+                        + "is dead or denied, not the room")
+        }
+
+        // 2. Too quiet to be anybody. Skip the recogniser entirely.
         if level < quietFloor {
             return Assessment(
                 speechDetected: false, level: level, wordCount: nil,
                 reason: String(format: "room is quiet (level %.4f < floor %.4f)", level, quietFloor))
         }
 
-        // 2. Loud enough that it might be a person. Ask whether it is.
+        // 3. Loud enough that it might be a person. Ask whether it is.
         guard let heard = await words.count(samples, sampleRate) else {
             // Could not look. Degrade to today's behaviour rather than to
             // permanent silence: a user whose recogniser is unavailable still
@@ -134,7 +162,7 @@ public struct CourtesyCheck: Sendable {
                 reason: String(format: "audible (level %.4f) but no recogniser — speaking anyway", level))
         }
 
-        // 3. A person produces words; a fan does not. This is the discrimination
+        // 4. A person produces words; a fan does not. This is the discrimination
         //    the ruling asked for — "catch if we can get any words, or if it's
         //    just loud". A podcast produces words too and will hold the hail,
         //    which is the right degradation and needs no special case: talking

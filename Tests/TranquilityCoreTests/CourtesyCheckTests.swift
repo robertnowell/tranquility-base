@@ -50,11 +50,40 @@ final class CourtesyCheckTests: XCTestCase {
             return 0
         }
         let check = CourtesyCheck(words: neverCalled)
-        let assessment = await check.assess(samples: silence(), sampleRate: 16000)
+        let assessment = await check.assess(samples: noise(amplitude: 0.0005), sampleRate: 16000)
 
         XCTAssertFalse(assessment.speechDetected)
         XCTAssertNil(assessment.wordCount, "nil is 'did not look', not 'heard nobody'")
         XCTAssertTrue(assessment.reason.contains("quiet"), assessment.reason)
+    }
+
+    /// A dead or denied microphone must not read as the quietest room in the
+    /// world. Found by the acoustic eval, which reported level 0.0000 for speech
+    /// at full volume and blamed the room.
+    func testDigitalSilenceIsADeadDeviceNotAQuietRoom() async {
+        let check = CourtesyCheck(words: .silent)
+        let assessment = await check.assess(samples: silence(), sampleRate: 16000)
+
+        XCTAssertFalse(assessment.speechDetected, "still degrades to speaking")
+        XCTAssertNil(assessment.wordCount)
+        XCTAssertTrue(assessment.reason.contains("dead or denied"), assessment.reason)
+        XCTAssertFalse(assessment.reason.contains("room is quiet"),
+                       "blaming the room for a dead device is the bug")
+    }
+
+    /// A real room floor — tiny but not zero — is a quiet ROOM, and must still
+    /// take the cheap path without waking the recogniser.
+    func testRoomToneIsAQuietRoomAndSkipsTheRecogniser() async {
+        let neverCalled = CourtesyCheck.WordCounter { _, _ in
+            XCTFail("the recogniser must not run below the quiet floor")
+            return 0
+        }
+        let check = CourtesyCheck(words: neverCalled)
+        let assessment = await check.assess(samples: noise(amplitude: 0.0005), sampleRate: 16000)
+
+        XCTAssertGreaterThan(assessment.level, 0, "fixture must have a real floor")
+        XCTAssertLessThan(assessment.level, check.quietFloor)
+        XCTAssertTrue(assessment.reason.contains("room is quiet"), assessment.reason)
     }
 
     func testEmptyBufferIsQuietRatherThanACrash() async {
