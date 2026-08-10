@@ -27,8 +27,7 @@ func usage() -> Never {
                                 replay a saved recording through the AssemblyAI
                                 streaming provider in pseudo-realtime
 
-    the courtesy check (is anyone else using audio?):
-      tbase devices             input devices, and which are running for anybody
+    interruption gate:
       tbase gate                what the interrupt gate would decide right now
       tbase gate-watch [secs]   log-only observation; suppresses nothing
 
@@ -536,44 +535,6 @@ case "hook-config":
         print("frontmost:    \(decision.frontmostApp ?? "unknown")")
         print("screenLocked: \(decision.screenLocked)")
         
-        print("audioBusyWith:  \(decision.audioBusyWith ?? "nobody")")
-
-    case "devices":
-        // Which inputs exist, and which are running for somebody right now.
-        // Start a Zoom call or a QuickTime recording and run this again: the
-        // in-use column flips without this app ever opening the microphone.
-        print("OUTPUTS (is anything playing?)")
-        for d in AudioInputDevice.allOutputs() {
-            let tags = [d.isBuiltIn ? "built-in" : nil, d.isBluetooth ? "bluetooth" : nil]
-                .compactMap { $0 }.joined(separator: ",")
-            let mark = AudioInputDevice.isInUse(d.id) ? "IN USE" : "idle  "
-            print("  \(mark)  \(d.name)\(tags.isEmpty ? "" : "  [\(tags)]")")
-        }
-        print("  anyOutputInUse: \(AudioInputDevice.anyOutputInUse())\n")
-
-        print("INPUTS (is anyone listening?)")
-        let inputs = AudioInputDevice.allInputs()
-        guard !inputs.isEmpty else { print("no input devices"); break }
-        for d in inputs {
-            let tags = [d.isBuiltIn ? "built-in" : nil, d.isBluetooth ? "bluetooth" : nil]
-                .compactMap { $0 }.joined(separator: ",")
-            let mark = AudioInputDevice.isInUse(d.id) ? "IN USE" : "idle  "
-            print("  \(mark)  \(d.name)\(tags.isEmpty ? "" : "  [\(tags)]")")
-        }
-        print("\nanyInputInUse: \(AudioInputDevice.anyInputInUse())")
-
-        let processes = AudioInputDevice.audioProcesses().filter { $0.usingInput || $0.usingOutput }
-        print("\nWHO (macOS 14.2+ process list)")
-        if processes.isEmpty {
-            print("  (the HAL named nobody — either nothing is running audio, or")
-            print("   this macOS predates kAudioHardwarePropertyProcessObjectList)")
-        }
-        for p in processes.sorted(by: { $0.name < $1.name }) {
-            let dirs = [p.usingInput ? "mic" : nil, p.usingOutput ? "speakers" : nil]
-                .compactMap { $0 }.joined(separator: " + ")
-            print("  \(p.name)  —  \(dirs)")
-        }
-
 
 
     case "gate-watch":

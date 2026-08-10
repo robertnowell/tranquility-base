@@ -16,6 +16,7 @@ struct Permissions {
     enum Kind: CaseIterable {
         case microphone
         case speechRecognition
+        case notifications
         case inputMonitoring
         case automation
         case accessibility
@@ -24,6 +25,7 @@ struct Permissions {
             switch self {
             case .microphone: return "Microphone"
             case .speechRecognition: return "Speech Recognition"
+            case .notifications: return "Notifications"
             case .inputMonitoring: return "Input Monitoring"
             case .automation: return "Automation (Terminal)"
             case .accessibility: return "Accessibility"
@@ -33,7 +35,8 @@ struct Permissions {
         var why: String {
             switch self {
             case .microphone: return "to record your spoken reply"
-            case .speechRecognition: return "so transcription still works when the network is down, and so the app can tell whether you are mid-conversation before it speaks"
+            case .speechRecognition: return "so transcription still works when the network is down"
+            case .notifications: return "for the sound an agent makes when it comes back — and so Do Not Disturb can silence it, which only the system can decide"
             case .inputMonitoring: return "to notice the hotkeys while you're in another app (measured: Accessibility alone does NOT do this)"
             case .automation: return "to type replies into the right Terminal tab"
             case .accessibility: return "so dictation can type at your cursor"
@@ -73,7 +76,7 @@ struct Permissions {
         /// from a login item. Asked for, visible, never blocking.
         var isRequired: Bool {
             switch self {
-            case .speechRecognition: return false
+            case .speechRecognition, .notifications: return false
             case .microphone, .inputMonitoring, .automation, .accessibility: return true
             }
         }
@@ -83,6 +86,7 @@ struct Permissions {
             switch self {
             case .microphone: return base + "Privacy_Microphone"
             case .speechRecognition: return base + "Privacy_SpeechRecognition"
+            case .notifications: return "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
             case .inputMonitoring: return base + "Privacy_ListenEvent"
             case .automation: return base + "Privacy_Automation"
             case .accessibility: return base + "Privacy_Accessibility"
@@ -171,6 +175,11 @@ struct Permissions {
             return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         case .speechRecognition:
             return SFSpeechRecognizer.authorizationStatus() == .authorized
+        case .notifications:
+            // Synchronous read of an asynchronous fact. The checklist repaints
+            // on a timer, so a value one tick stale is invisible; blocking the
+            // main thread on the real query would not be.
+            return notificationsAuthorized
         case .inputMonitoring:
             return CGPreflightListenEventAccess()
         case .automation:
@@ -196,6 +205,8 @@ struct Permissions {
             case .restricted: return "restricted by policy"
             @unknown default: return "unknown"
             }
+        case .notifications:
+            return notificationsAuthorized ? "granted" : "not asked yet. Click Grant"
         case .speechRecognition:
             switch SFSpeechRecognizer.authorizationStatus() {
             case .authorized: return "granted"
@@ -230,6 +241,10 @@ struct Permissions {
             // switch on, which is exactly the dead end this hit.
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
             return granted || isGranted(kind)
+        case .notifications:
+            await ArrivalChime.requestAuthorization()
+            notificationsAuthorized = await ArrivalChime.isAuthorized
+            return notificationsAuthorized
         case .speechRecognition:
             // Asked HERE and nowhere else.
             //
@@ -267,6 +282,11 @@ struct Permissions {
         guard let url = URL(string: kind.settingsURL) else { return }
         NSWorkspace.shared.open(url)
     }
+
+    /// Last known notification authorisation. Refreshed off the permission
+    /// timer; see `isGranted(.notifications)` for why it is cached rather than
+    /// queried inline.
+    nonisolated(unsafe) static var notificationsAuthorized = false
 
     static var missing: [Kind] { Kind.allCases.filter { !isGranted($0) } }
     /// The core loop's gate: required permissions only. Accessibility never blocks.
