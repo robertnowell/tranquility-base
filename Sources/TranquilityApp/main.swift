@@ -1865,7 +1865,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // nobody is reading the panel anyway. `flashNotice` paints only in
             // `.idle`, so a dismissed panel is not raised by this — which is the
             // ruling, and is structural rather than remembered.
-            if let busy = decision.audioBusyWith { hud.flashNotice(StateLegend.heldNotice(busy)) }
+            if let busy = decision.audioBusyWith { hud.flashNotice(StateLegend.heldNotice(busy), lens: .advisory) }
             return
         }
         let target = try? coordinator?.nextToAnnounce()

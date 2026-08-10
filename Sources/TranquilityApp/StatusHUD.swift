@@ -437,13 +437,21 @@ final class StatusHUD: NSObject {
     /// if the panel has moved to a card, whatever that card is about outranks a
     /// stale word about the microphone.
     private var notice: String?
+    /// Which channel the live notice speaks on. Amber is the needs-you channel;
+    /// advisory blue is news you may ignore. A notice that picked the wrong one
+    /// is worse than no notice: amber trains the eye to check, and spending that
+    /// on "nothing is wrong, we just stayed quiet" blunts it for the cases that
+    /// do need checking.
+    private var noticeLens: StateLegend.Lens = .fault
     private var noticeExpiry: DispatchWorkItem?
 
-    func flashNotice(_ text: String, seconds: TimeInterval = 5) {
+    func flashNotice(_ text: String, lens: StateLegend.Lens = .fault,
+                     seconds: TimeInterval = 5) {
         guard case .idle = state else {
-            Permissions.log("notice: refused in \(state.name) — \(text)")
+            Permissions.log("notice: refused in \(state.name): \(text)")
             return
         }
+        noticeLens = lens
         noticeExpiry?.cancel()
         notice = text
         Permissions.log("notice: \(text)")
@@ -896,9 +904,8 @@ final class StatusHUD: NSObject {
             // Unhidden explicitly: the empty room's face switches the strip off,
             // and a notice with nowhere to land is feedback the user never gets.
             stateLabel.isHidden = false
-            stateLabel.textColor = StateLegend.Palette.fault
-            stateLabel.attributedStringValue = placardText(
-                notice, color: StateLegend.Palette.fault)
+            stateLabel.textColor = noticeLens.color
+            stateLabel.attributedStringValue = placardText(notice, color: noticeLens.color)
         }
 
         // The action row exists exactly when a quiet action is visible. (The
@@ -1862,16 +1869,23 @@ final class StatusHUD: NSObject {
         // ("an arrival changes nothing about the panel's shape") reached through
         // the back door, and it is the likeliest regression in the feature.
         showIdle(rows: [])
-        flashNotice(StateLegend.heldNotice("zoom.us"))
+        flashNotice(StateLegend.heldNotice("zoom.us"), lens: .advisory)
         let courtesyOnGrid = noticeIsShowing
             && stateLabel.attributedStringValue.string == StateLegend.heldNotice("zoom.us")
+        // The channel is the assertion that matters. Amber is the needs-you
+        // colour and nothing here needs the user; spending amber on "we stayed
+        // quiet" blunts it for the cases that do.
+        let courtesyIsAdvisory = stateLabel.textColor == StateLegend.Palette.working
+        let courtesyHasNoEmDash = !StateLegend.heldNotice("zoom.us").contains("—")
         hide()
-        flashNotice(StateLegend.heldNotice("Music"))
+        flashNotice(StateLegend.heldNotice("Music"), lens: .advisory)
         let holdRefusedWhileHidden = !noticeIsShowing && !isOnScreen
         showIdle(rows: [])
         let didNotSummonThePanel = !noticeIsShowing
         SelfTest.report("courtesy", [
             ("holdShownOnGrid", courtesyOnGrid),
+            ("advisoryNotAmber", courtesyIsAdvisory),
+            ("noEmDash", courtesyHasNoEmDash),
             ("refusedWhileHidden", holdRefusedWhileHidden),
             ("didNotSummonThePanel", didNotSummonThePanel),
         ])
