@@ -91,6 +91,13 @@ public struct CourtesyCheck: Sendable {
     /// speaking.
     public static let listenSeconds: TimeInterval = 4
 
+    /// How long to wait for the recogniser before giving up on it.
+    ///
+    /// Generous relative to the work — recognising a four-second window
+    /// on-device takes well under a second in every measurement so far — because
+    /// this is a deadlock guard, not a latency target. It should never fire.
+    static let recognitionTimeout: TimeInterval = 10
+
     /// RMS below which nothing audible arrived at all.
     ///
     /// A "did the device give us anything" guard, NOT a discriminator. It was the
@@ -261,6 +268,22 @@ extension CourtesyCheck.WordCounter {
 
         return await withCheckedContinuation { (continuation: CheckedContinuation<Int?, Never>) in
             let resumed = OneShot()
+
+            // The only unbounded wait in the hail path, so it gets a bound.
+            //
+            // `recognitionTask` resumes this on a final result or on an error,
+            // and `endAudio()` above should guarantee one of them. "Should" is
+            // the problem: if neither ever arrives the continuation never
+            // resumes, the hail is lost with no log line, and the symptom is
+            // "the app quietly stopped announcing" — the hardest class of bug to
+            // attribute in a feature whose correct behaviour is often silence.
+            //
+            // Timing out to nil degrades to speaking, which is the same thing
+            // every other "could not look" does.
+            DispatchQueue.global().asyncAfter(deadline: .now() + CourtesyCheck.recognitionTimeout) {
+                if resumed.claim() { continuation.resume(returning: nil) }
+            }
+
             recognizer.recognitionTask(with: request) { result, error in
                 if let error {
                     // Two very different failures arrive down one channel, and
