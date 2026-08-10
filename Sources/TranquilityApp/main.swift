@@ -1527,12 +1527,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// records silently, and nothing sends without the usual undo window.
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
+            // Parsing lives in Core, where it is tested. This layer only acts.
+            let parsed = DeepLink.parse(url)
             let action = url.host ?? ""
-            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
-            let session = items?.first(where: { $0.name == "session" })?.value
-            // The artifact the page is: what a fresh agent would open holding,
-            // and the only thing the invitation has to offer.
-            let ref = items?.first(where: { $0.name == "ref" })?.value
+            let session: String?
+            let ref: String?
+            switch parsed {
+            case let .discuss(s, r): session = s; ref = r
+            case let .hear(s):       session = s; ref = nil
+            case let .reply(s):      session = s; ref = nil
+            case .show, .unknown:    session = nil; ref = nil
+            }
             Permissions.log("deeplink: \(action) session=\(session?.prefix(8) ?? "-")")
             // A deeplink is an instruction that arrived and is being carried
             // out, so it reads as recognized — the same green a gesture gets.
@@ -1623,12 +1628,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// nothing to say about it, so this stays silent rather than offering a
     /// blank session — the grid's own NEW AGENT row is the door for that.
     private func inviteNewSession(for ref: String?) {
-        guard let ref, !ref.isEmpty else {
+        // A page can put any string in a URL; it cannot put a file on your
+        // disk. Everything the invitation goes on to build — a directory, a
+        // prompt, a shell command — is derived from a path that got past this,
+        // which is why the check lives in Core with tests around it.
+        guard let path = DeepLink.artifact(
+            from: ref, exists: { FileManager.default.fileExists(atPath: $0) })
+        else {
+            Permissions.log("invitation: refused ref \(ref ?? "-")")
             hud.showResult("That page names an agent this Mac has no record of, "
-                           + "and doesn't say what it is about.")
+                           + "and nothing on this disk to open instead.")
             return
         }
-        let path = (ref as NSString).expandingTildeInPath
         let directory = (path as NSString).deletingLastPathComponent
         hud.showNewSessionInvitation(
             artifact: (path as NSString).lastPathComponent,
@@ -2092,16 +2103,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// a new user sees.
     private func newSession(forArtifact path: String) {
         let directory = (path as NSString).deletingLastPathComponent
-        let opening = "Read \(path) — I want to talk about it. "
-            + "Start by telling me what it is and where it stands."
+        let opening = DeepLink.openingPrompt(for: path)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(opening, forType: .string)
-        let quotable = !path.contains("'") && !path.contains("\"")
-        let command = quotable
-            ? "\(SessionLauncher.defaultCommand) '\(opening)'"
-            : SessionLauncher.defaultCommand
+        let inline = DeepLink.openingCommand(base: SessionLauncher.defaultCommand,
+                                             prompt: opening)
+        let command = inline ?? SessionLauncher.defaultCommand
         Permissions.log("invitation: launching in \(directory) "
-                        + "(prompt \(quotable ? "inline" : "clipboard only"))")
+                        + "(prompt \(inline == nil ? "clipboard only" : "inline"))")
         newSession(directory: directory, command: command)
     }
 
