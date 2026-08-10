@@ -149,6 +149,11 @@ struct Permissions {
         let bundle = Bundle.main
         log("bundleID=\(bundle.bundleIdentifier ?? "nil") path=\(bundle.bundlePath)")
         log("micUsageDescription=\(bundle.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") != nil)")
+        // Speech alongside the mic, because the 09 Aug investigation turned on
+        // exactly this: the grant existed on the installed bundle and not on a
+        // build copy at another path, and nothing in the log said so either way.
+        log("speechStatus=\(SFSpeechRecognizer.authorizationStatus().rawValue) "
+            + "(\(statusDescription(.speechRecognition)))")
         log("micStatus=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue) "
             + "(\(statusDescription(.microphone)))")
         log("inputMonitoring=\(CGPreflightListenEventAccess())")
