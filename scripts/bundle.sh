@@ -44,11 +44,15 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <!-- tranquilitybase:// deep links, so any local HTML page can carry buttons
        that open the agent that made it. The browser confirms before launching
        an external scheme, which is the drive-by guard.
-       `voicedispatch` is the app's old name and stays registered: it is written
-       into pages already on disk, and a footer whose button stopped working is
-       worse than a footer with a stale scheme in its status bar. New pages get
-       `tranquilitybase` — the scheme is visible to whoever hovers the link, so
-       it has to say what the app is called. -->
+       The voicedispatch scheme is the app's old name and stays registered: it
+       is written into pages already on disk, and a footer whose button stopped
+       working is worse than a footer with a stale scheme in its status bar. New
+       pages get tranquilitybase, because the scheme is visible to whoever
+       hovers the link and it has to say what the app is called.
+       NOTE: this heredoc is unquoted, so backticks here become command
+       substitution. A backticked scheme name in this comment silently ate the
+       scheme it was documenting (10 Aug) — the app built, signed, launched, and
+       simply had no tranquilitybase:// registration. Keep prose plain. -->
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
