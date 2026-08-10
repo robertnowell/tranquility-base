@@ -44,6 +44,28 @@ public final class Recorder: @unchecked Sendable {
     /// Loudest moment of the current recording; the silence gate reads it.
     public private(set) var peakLevel: Float = 0
 
+    /// What the tap actually handed us, and how much of it survived conversion.
+    ///
+    /// These two numbers separate the three ways a capture comes back empty,
+    /// which nothing in the log could tell apart before:
+    ///
+    ///   delivered 0, kept 0    the tap never fired. The engine started, the
+    ///                          graph is not rendering, and no microphone was
+    ///                          ever really open — the case behind 10 Aug's
+    ///                          24.14s / 29.01s / 67.21s captures at peak 0.0000.
+    ///   delivered n, kept 0    the device is feeding us and every buffer fails
+    ///                          conversion. A format problem downstream of the
+    ///                          tap, not a dead input.
+    ///   delivered n, kept n    the device is honest; if `peakLevel` is also 0 it
+    ///                          is sending real silence, which is a muted or
+    ///                          denied mic (CourtesyCheck already names that one).
+    ///
+    /// Counted rather than inferred on purpose. `peakLevel` cannot stand in for
+    /// them: `rms` reads `floatChannelData` and returns 0 for an Int16 buffer, so
+    /// a peak of 0 is consistent with all three and proves none of them.
+    public private(set) var tapBuffersDelivered = 0
+    public private(set) var tapBuffersKept = 0
+
     /// How long the microphone was open for the last capture, by the wall clock.
     ///
     /// Deliberately NOT the length of the audio, and the difference is the whole
@@ -93,6 +115,8 @@ public final class Recorder: @unchecked Sendable {
         guard !running else { lock.unlock(); return }
         buffer.removeAll(keepingCapacity: true)
         peakLevel = 0
+        tapBuffersDelivered = 0
+        tapBuffersKept = 0
         openedAt = Date()
         lastOpenSeconds = 0
         running = true
@@ -142,14 +166,24 @@ public final class Recorder: @unchecked Sendable {
             let exception = VDCatchObjCException {
                 input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] pcmBuffer, _ in
                     guard let self else { return }
-                    if let converted = BuddyPCM16Converter.pcm16Data(
-                        from: pcmBuffer, targetSampleRate: self.sampleRate) {
-                        self.lock.lock()
+                    // Convert first, outside the lock, as before — it is the
+                    // expensive part and nothing else needs serialising for it.
+                    let converted = BuddyPCM16Converter.pcm16Data(
+                        from: pcmBuffer, targetSampleRate: self.sampleRate)
+                    self.lock.lock()
+                    // Counted BEFORE the conversion is consulted, so "the tap
+                    // fired" and "the buffer survived" stay separable. Counting
+                    // only successes would collapse the two failures this exists
+                    // to tell apart back into one indistinguishable empty buffer.
+                    self.tapBuffersDelivered += 1
+                    var liveStream: StreamedUtterance?
+                    if let converted {
+                        self.tapBuffersKept += 1
                         self.buffer.append(converted)
-                        let liveStream = self.stream
-                        self.lock.unlock()
-                        liveStream?.feed(pcm16: converted)
+                        liveStream = self.stream
                     }
+                    self.lock.unlock()
+                    if let converted { liveStream?.feed(pcm16: converted) }
                     let rms = Self.rms(of: pcmBuffer)
                     self.level = rms
                     if rms > self.peakLevel { self.peakLevel = rms }
@@ -159,9 +193,21 @@ public final class Recorder: @unchecked Sendable {
             }
 
             if exception == nil && startError == nil {
-                if attempt > 0 {
-                    Permissions.log("mic: opened on attempt \(attempt + 1) after: \(lastReason)")
-                }
+                // Say WHICH device the capture is bound to and at WHAT rate the
+                // tap was installed. `warmUp` logged the bind at launch and
+                // nothing logged it again, so every mid-session rebind — the
+                // exact path a capture comes back empty on — left no record of
+                // what was in play. Reasoning from an absent error line is not
+                // evidence, which is the same standard `warmUp`'s own comment sets.
+                //
+                // The deviceID is read raw, never resolved to a name: resolving
+                // walks CoreAudio, and this is the instant-arm path, which budgets
+                // ~80ms end to end. The name costs nothing on the failure path,
+                // where `reportNothingHeard` already resolves it.
+                Permissions.log("mic: open attempt \(attempt + 1) "
+                    + "deviceID=\(input.auAudioUnit.deviceID) "
+                    + "tap=\(Int(format.sampleRate))Hz/\(format.channelCount)ch"
+                    + (attempt > 0 ? " after: \(lastReason)" : ""))
                 // Marked only once the microphone is genuinely open, and after the
                 // work that opening costs — so this cannot delay capture starting,
                 // only the return to the caller. See CaptureMarker: the reader is
@@ -304,8 +350,18 @@ public final class Recorder: @unchecked Sendable {
 
         lock.lock()
         let captured = buffer
+        let delivered = tapBuffersDelivered
+        let kept = tapBuffersKept
         buffer.removeAll(keepingCapacity: false)
         lock.unlock()
+
+        // One line per capture, success or failure, because the failures are only
+        // legible next to what a working capture looks like. Logged BEFORE the
+        // nothingRecorded guard for the same reason `lastOpenSeconds` is recorded
+        // before it: the case that most needs the evidence is the one that throws.
+        Permissions.log(String(
+            format: "capture: %.2fs open, tap delivered %d, kept %d, %d bytes, peak %.4f",
+            lastOpenSeconds, delivered, kept, captured.count, peakLevel))
 
         guard captured.count > 1600 else { throw RecorderError.nothingRecorded }  // <50ms
         return captured
