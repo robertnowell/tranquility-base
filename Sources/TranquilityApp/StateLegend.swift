@@ -89,8 +89,15 @@ enum StateLegend {
         static let ink = hex(0xC9C8BF)
         /// Secondary ink: strip labels, ready-row topics. 6.69:1.
         static let secondary = hex(0xB4B3A9)
-        /// Muted: quiet-row topics, retired sessions. 4.51:1.
-        static let muted = hex(0x93928A)
+        /// Muted: quiet-row topics, retired sessions. 5.30:1.
+        ///
+        /// Sits between `secondary` and `hint` deliberately. It was 0x93928A at
+        /// 4.51:1, which cleared its own floor and still broke the ramp — `hint`
+        /// measured 4.57:1, so the two tiers were inverted and "muted" was the
+        /// more legible of the pair. Caught by the contrast drill on its first
+        /// run, which is the entire argument for having one: every token passed
+        /// its individual floor, and the hierarchy was still wrong.
+        static let muted = hex(0xA09F96)
         /// The hint line and placards — small text, so it owes the 4.5:1 text
         /// floor and now meets it at 4.57:1. Split out of `faint` (09 Aug):
         /// one token was being asked to be both a legible hint and a recessive
@@ -159,6 +166,77 @@ enum StateLegend {
         // putty has to be carried by its ring — there is no "off" that reads as
         // off on a light ground, which is half of why the console went dark.
     }
+
+    // MARK: - The palette's own evidence
+
+    /// Contrast arithmetic, so the ruling's numbers are ASSERTED rather than
+    /// remembered.
+    ///
+    /// Every figure in docs/ruling-the-console-goes-dark.md was computed by hand,
+    /// once. Hand-computed numbers rot the first time someone warms a hex by four
+    /// points to taste — and the failure is invisible, because a colour that has
+    /// slipped under its floor still renders. That is exactly how `faint` shipped
+    /// at 2.13:1 and `fault` at 1.72:1 for the life of the light console without
+    /// anyone noticing.
+    ///
+    /// `swift test` cannot help here (CLAUDE.md rule 7: it says nothing about the
+    /// panel), so the floors ride the launch self-tests, which `relaunch.sh`
+    /// already gates on.
+    enum Measure {
+        /// WCAG relative luminance. Tokens are minted in absolute sRGB, so the
+        /// conversion is a formality — but an alpha-blended token has no
+        /// meaningful luminance of its own and must never be measured.
+        static func relativeLuminance(_ color: NSColor) -> CGFloat {
+            guard let c = color.usingColorSpace(.sRGB) else { return 0 }
+            func channel(_ v: CGFloat) -> CGFloat {
+                v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channel(c.redComponent)
+                 + 0.7152 * channel(c.greenComponent)
+                 + 0.0722 * channel(c.blueComponent)
+        }
+
+        /// WCAG contrast ratio, always ≥ 1 whichever way round the pair is given.
+        static func contrast(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            let (x, y) = (relativeLuminance(a), relativeLuminance(b))
+            let (hi, lo) = x > y ? (x, y) : (y, x)
+            return (hi + 0.05) / (lo + 0.05)
+        }
+
+        /// CIE L*. The lamps are separated in LIGHTNESS, not hue — at 9px
+        /// ΔE2000 said the old green/blue pair was twelve times above the
+        /// perceptibility threshold while being invisible, and ΔL* said 4.2.
+        /// So ΔL* is the quantity worth defending.
+        static func lightness(_ color: NSColor) -> CGFloat {
+            let y = relativeLuminance(color)
+            return y > 0.008856 ? 116 * pow(y, 1.0 / 3.0) - 16 : 903.3 * y
+        }
+
+        static func lightnessGap(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            abs(lightness(a) - lightness(b))
+        }
+    }
+
+    /// Every contrast floor the ruling bought, as data rather than prose.
+    ///
+    /// Text floors are WCAG 1.4.3 (4.5:1 at these sizes; 7:1 for the body ink we
+    /// chose to hold higher). Lamp floors are 1.4.11's 3:1 for non-text state
+    /// information. `faint` is absent on purpose — it is decorative by ruling and
+    /// owes nothing, which is the whole reason it was split off `hint`.
+    static var contrastFloors: [(name: String, ink: NSColor, floor: CGFloat)] {
+        [("ink", Palette.ink, 7.0),
+         ("secondary", Palette.secondary, 4.5),
+         ("muted", Palette.muted, 4.5),
+         ("hint", Palette.hint, 4.5),
+         ("ready", Palette.ready, 3.0),
+         ("working", Palette.working, 3.0),
+         ("fault", Palette.fault, 3.0),
+         ("accent", Palette.accent, 3.0)]
+    }
+
+    /// The lamp separation the busy panel was ruled on. Below this the ready and
+    /// working lamps start collapsing into each other at 9px again.
+    static let lampLightnessFloor: CGFloat = 6.0
 
     // MARK: - Lenses
 

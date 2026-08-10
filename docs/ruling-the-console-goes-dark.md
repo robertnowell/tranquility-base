@@ -158,3 +158,32 @@ et al. 2013; Dobres et al. 2017; Buchner, Mayr & Brandt 2009; WCAG 1.4.11; APCA)
 Experiments: lamp separation, contrast budget, dark theme, card polarity, and the
 face-swap test — five rendered pages, generated from the same colour maths used
 to pick these values.
+
+---
+
+## Addendum, same day: the drill earned its keep immediately
+
+The contrast floors are now asserted in the launch self-tests (`selftest
+contrast:`), not just written down here. On its **first execution** the drill
+failed — on the palette this document had already ruled.
+
+`muted` measured 4.51:1 and `hint` measured 4.57:1. Both cleared their own
+floors. The ramp was inverted anyway: the tier named "muted" was the more
+legible of the two, so the visual hierarchy said the opposite of what the names
+said. `muted` moved to `#A09F96` (5.30:1), restoring
+ink 8.39 > secondary 6.69 > muted 5.30 > hint 4.57.
+
+This is the case for asserting an ordering rather than a set of floors. Every
+token passed its individual check and the hierarchy was still wrong, and no
+amount of staring at the panel would have surfaced it — an inverted ramp renders
+perfectly, it just quietly ranks things in the wrong order.
+
+What the drill asserts: every token against its floor; lamp ΔL* ≥ 6; the ink ramp
+strictly ordered; `hint` outranking `faint` (so the split cannot silently
+re-merge); and the checkmark against `ready`, the one pair measured against
+something other than the surface.
+
+**Not yet run in the app.** The drill is wired into `selfTest()` and will execute
+on the next `relaunch.sh`. Its arithmetic was verified out-of-process against the
+hex values parsed from `StateLegend.swift` itself, because launching a second
+instance to run it would have raced the live one for the global hotkey.
