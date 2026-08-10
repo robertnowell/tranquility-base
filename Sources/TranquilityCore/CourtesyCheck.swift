@@ -74,6 +74,15 @@ public struct CourtesyCheck: Sendable {
         public static func hearing(_ words: Int) -> WordCounter { WordCounter { _, _ in words } }
     }
 
+    /// Why the recogniser said no, when it says no.
+    ///
+    /// Added 10 Aug, because the failure that mattered was invisible by design:
+    /// every recogniser error maps to nil ("could not look") and nil degrades to
+    /// speaking, so a permanently broken recogniser and a permanently quiet room
+    /// produce the same behaviour and nearly the same log line. `Transcription`
+    /// carries the same hook for the same reason.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
     /// How long the microphone stays open for one check.
     ///
     /// Long enough to span a pause between sentences, short enough that the hail
@@ -245,27 +254,41 @@ extension CourtesyCheck.WordCounter {
     /// whether to say a callsign, which inverts the entire point of the feature.
     /// So the guard is inverted: no on-device model means no recognition at all.
     public static let apple = CourtesyCheck.WordCounter { samples, sampleRate in
-        // NO authorization guard, measured 10 Aug.
+        // Authorisation, checked first and cheaply.
         //
-        // The guard was here on the reasoning that an unauthorised recogniser
-        // cannot work. It is wrong, and it was the thing making this feature
-        // inert: `AppleSpeechRecovery` has been transcribing all along with the
-        // status at `notDetermined` — 409 and 513 characters of real transcript
-        // on 09 Aug, on a bundle that reports "not asked yet" to this very API.
-        // On-device recognition does not enforce TCC the way the status implies.
+        // Briefly removed on 10 Aug, on the theory that the guard was itself what
+        // made this feature inert — `AppleSpeechRecovery` appeared to transcribe
+        // with the status at `notDetermined`. Removing it measured the truth:
+        // `recognitionTask` accepted 54,400 samples and then produced neither a
+        // result nor an error, ever. An unauthorised recogniser does not refuse,
+        // it hangs, and the only thing that ended the call was the timeout below.
         //
-        // So we do what the recovery provider does: run it, and let a failure be
-        // a failure. `recognitionTask` reports an unauthorised or unavailable
-        // recogniser as an error, which the handler below already maps to nil —
-        // "could not look" — and nil degrades to speaking. Asking the status
-        // first added nothing except a false negative.
-        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
-              recognizer.isAvailable,
-              recognizer.supportsOnDeviceRecognition
-        else { return nil }
+        // So the guard is right and it stays. Its one real defect was silence,
+        // which the trace now fixes: nil here means "could not look", and a
+        // permanently unauthorised recogniser is a permanent could-not-look that
+        // used to be indistinguishable from a permanently quiet room.
+        guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
+            CourtesyCheck.trace?("speech recognition not authorised (status "
+                + "\(SFSpeechRecognizer.authorizationStatus().rawValue)) — the check "
+                + "cannot run, so the hail speaks")
+            return nil
+        }
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")) else {
+            CourtesyCheck.trace?("no recogniser for en-US at all")
+            return nil
+        }
+        guard recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else {
+            CourtesyCheck.trace?("recogniser unusable: available=\(recognizer.isAvailable) "
+                + "onDevice=\(recognizer.supportsOnDeviceRecognition) "
+                + "auth=\(SFSpeechRecognizer.authorizationStatus().rawValue)")
+            return nil
+        }
 
-        guard let buffer = CourtesyCheck.pcmBuffer(from: samples, sampleRate: sampleRate)
-        else { return nil }
+        guard let buffer = CourtesyCheck.pcmBuffer(from: samples, sampleRate: sampleRate) else {
+            CourtesyCheck.trace?("could not build a PCM buffer from \(samples.count) samples "
+                + "at \(sampleRate)Hz")
+            return nil
+        }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         // Never the network. Unconditional, unlike the dictation path.
@@ -279,6 +302,7 @@ extension CourtesyCheck.WordCounter {
         request.append(buffer)
         request.endAudio()
 
+        CourtesyCheck.trace?("recogniser starting on \(samples.count) samples")
         return await withCheckedContinuation { (continuation: CheckedContinuation<Int?, Never>) in
             let resumed = OneShot()
 
@@ -312,6 +336,8 @@ extension CourtesyCheck.WordCounter {
                     // silent lie the day anyone makes nil mean "hold".
                     let ns = error as NSError
                     let heardNobody = ns.domain == "kAFAssistantErrorDomain" && ns.code == 1110
+                    CourtesyCheck.trace?("recogniser error: domain=\(ns.domain) "
+                        + "code=\(ns.code) heardNobody=\(heardNobody) — \(ns.localizedDescription)")
                     if resumed.claim() { continuation.resume(returning: heardNobody ? 0 : nil) }
                     return
                 }

@@ -184,6 +184,35 @@ final class CourtesyCheckTests: XCTestCase {
         XCTAssertEqual(assessment.wordCount, 4)
     }
 
+    /// `AppleSpeechRecovery` refuses fast when the grant is missing, instead of
+    /// entering the hang measured on 10 Aug — a provider that never returns keeps
+    /// `RecoveryChain` from ever reaching its end, which is strictly worse than
+    /// one that is unavailable.
+    ///
+    /// Skipped where the grant EXISTS, because there the provider is expected to
+    /// work; the assertion is about the unauthorised machine, and pretending
+    /// otherwise would make this a test that passes for the wrong reason.
+    func testAppleRecoveryRefusesFastWithoutAuthorization() async throws {
+        try XCTSkipIf(SFSpeechRecognizer.authorizationStatus() == .authorized,
+                      "this asserts the UNauthorised path; the grant is present here")
+        XCTAssertFalse(AppleSpeechRecovery().isConfigured,
+                       "an unauthorised recogniser is not a configured provider")
+
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("tb-auth-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        FileManager.default.createFile(atPath: url.path, contents: Data([0]))
+
+        let started = Date()
+        do {
+            _ = try await AppleSpeechRecovery().transcribe(fileAt: url)
+            XCTFail("expected a refusal")
+        } catch {
+            XCTAssertLessThan(Date().timeIntervalSince(started), 5,
+                              "refusal must be immediate, not a timeout")
+        }
+    }
+
     // MARK: - RMS
 
     /// Raw and unsaturating — the property the meter scale does not have, and
