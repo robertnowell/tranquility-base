@@ -43,6 +43,9 @@ final class StatusHUD: NSObject {
     ///
     /// ONE slot, three phases (ruling item 3): arming, listening and read-back
     /// all write this one label, and the box does not move between them.
+    /// What the last Don't send asked for, so the drill can see §D hold.
+    /// Nil until the button is pressed; the ruling says it must then be false.
+    private var dontSendRestartedListening: Bool?
     private var stripLabel: NSTextField!
     private var stripRule: NSView!
     private var contentStack: NSStackView?
@@ -248,14 +251,25 @@ final class StatusHUD: NSObject {
     /// underneath, the strip IS the panel and the pill returns to the top,
     /// which is exactly what the panel did before this change — so a capture
     /// from the grid is byte-identical to the one that shipped.
-    private func renderCaptureStrip(_ placard: NSAttributedString,
+    private func renderCaptureStrip(_ placard: NSAttributedString?,
                                     detail: String? = nil) {
         guard face.hasCard else {
+            // Nothing to sit under: the pill climbs back to the top and this is
+            // the panel that shipped. A capture from the grid needs the dot and
+            // the name, because nothing else on screen carries either.
             titleLabel.isHidden = true
-            stateLabel.attributedStringValue = placard
+            if let placard { stateLabel.attributedStringValue = placard }
             return
         }
         stripRule.isHidden = false
+        // Under a card the strip says as little as possible (ruled 10 Aug).
+        // The pill's two jobs are both already done above it: the green dot
+        // means "the mic is open", which the live waveform says better, and the
+        // target name means "this is who you are answering", which is the
+        // card's own title — so the pill was printing the agent's name twice on
+        // one panel. What is left is the meter, which is the only part that was
+        // ever telling you something new.
+        guard let placard else { return }
         stripLabel.isHidden = false
         let line = NSMutableAttributedString(attributedString: placard)
         if let detail, !detail.isEmpty {
@@ -428,8 +442,14 @@ final class StatusHUD: NSObject {
     // therefore redundant, and it was not free: it crashed in swift_getObjectType
     // on a bad executor pointer, killing the app on a button press. `nonisolated`
     // plus assumeIsolated keeps the isolation guarantee without the check.
-    @objc nonisolated private func cancelPendingSendTapped() {
-        MainActor.assumeIsolated { cancelPendingSend(restartListening: true) }
+    @objc nonisolated func cancelPendingSendTapped() {
+        // FALSE (ruling §D, "no outcome reopens the microphone on its own").
+        // Don't send meant "don't send, and start listening again", so the one
+        // button whose entire job is to stop cost you an open mic you did not
+        // ask for. Holding ⌥ is how you say it again; that path passes false
+        // for the same reason and has always been the only one that should
+        // restart a capture.
+        MainActor.assumeIsolated { cancelPendingSend(restartListening: false) }
     }
 
     @objc nonisolated private func breadcrumbClicked() {
@@ -1179,13 +1199,13 @@ final class StatusHUD: NSObject {
             // The card, if there is one, is untouched — title, body and ink
             // all stay where the baseline put them. Only when there is nothing
             // to sit under does the pill climb back to the top.
-            renderCaptureStrip(armingPill())
+            renderCaptureStrip(face.hasCard ? nil : armingPill())
             meter.isHidden = false
             meter.reset()
 
         case .listening:
             // The pill's dot in channel green (ruled): mic open = go.
-            renderCaptureStrip(listeningPill())
+            renderCaptureStrip(face.hasCard ? nil : listeningPill())
             meter.isHidden = false
 
         case .pendingSend:
@@ -2228,12 +2248,15 @@ final class StatusHUD: NSObject {
             && bodyLabel.stringValue == cardBody && !titleLabel.isHidden
         let armedKeepsPlacard = stateLabel.attributedStringValue.string == cardPlacard
         let armedInk = inkBrightLength
-        let armedStrip = !stripLabel.isHidden && !stripRule.isHidden
+        // The RULE, not the label: under a card the strip is deliberately
+        // wordless for arming and listening, so asserting on the label would
+        // now assert the opposite of the ruling.
+        let armedStrip = !stripRule.isHidden && stripLabel.isHidden
 
         showListening(level: { 0.3 })
         panel?.contentView?.layoutSubtreeIfNeeded()
         let listeningInk = inkBrightLength
-        let listeningStrip = !stripLabel.isHidden
+        let listeningStrip = !stripRule.isHidden && stripLabel.isHidden
         let topDuring = panel?.frame.maxY ?? 0
 
         // Through transcribing, because that is the real order and the
@@ -2243,7 +2266,7 @@ final class StatusHUD: NSObject {
         showTranscribing("Transcribing your reply…", onCancel: {}, onRetry: {})
         panel?.contentView?.layoutSubtreeIfNeeded()
         let transcribingInk = inkBrightLength
-        let transcribingStrip = !stripLabel.isHidden
+        let transcribingStrip = !stripRule.isHidden
         showPendingSend(text: "ship it", label: "promotions copy",
                         seconds: 60, send: {}, cancel: { _ in })
         panel?.contentView?.layoutSubtreeIfNeeded()
@@ -2264,7 +2287,22 @@ final class StatusHUD: NSObject {
         let gridCaptureIsWholePanel = stripLabel.isHidden && titleLabel.isHidden
         endCapture(because: "selftest strip grid cleanup")
 
+        // §D: Don't send must not reopen the microphone. The button and the
+        // chord share `cancelPendingSend`, so the drill drives the BUTTON's
+        // door — the one that was passing true — and asserts the capture is
+        // actually over rather than merely repainted.
+        showTranscribing("Transcribing your reply…", onCancel: {}, onRetry: {})
+        showPendingSend(text: "do not send this", label: "promotions copy",
+                        seconds: 60, send: {}, cancel: { restart in
+                            self.dontSendRestartedListening = restart
+                        })
+        dontSendRestartedListening = nil
+        cancelPendingSendTapped()
+        let dontSendKeptMicShut = dontSendRestartedListening == false
+        endCapture(because: "selftest dontSend cleanup")
+
         SelfTest.report("strip", [
+            ("dontSendKeepsTheMicShut", dontSendKeptMicShut),
             ("cardSurvivesArming", armedKeepsCard),
             ("placardSurvives", armedKeepsPlacard),
             ("inkSurvivesArming", armedInk == cardInk),
