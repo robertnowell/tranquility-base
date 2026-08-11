@@ -45,6 +45,23 @@ public final class Recorder: @unchecked Sendable {
     private var stream: StreamedUtterance?
     private var running = false
 
+    /// The write-ahead copy, open for the length of the utterance.
+    ///
+    /// The in-memory buffer above is the transport — it feeds the streaming
+    /// provider and is handed to transcription at key-up. This is the RECORD,
+    /// and it exists from the first frame rather than from key-up, because the
+    /// failure that took six utterances on 08 Aug was the process going away
+    /// mid-capture, where key-up never happens.
+    ///
+    /// Belt and braces on purpose: every use is optional and every failure is
+    /// swallowed. If the live file cannot be opened or written, the capture
+    /// carries on exactly as it did before this existed — the durable copy is
+    /// an addition to the old path, never a dependency of it.
+    private var liveCapture: LiveAudioCapture?
+    /// Where the last completed capture was promoted to, for the caller to adopt
+    /// rather than re-writing bytes it already has on disk.
+    public private(set) var lastCaptureURL: URL?
+
     /// Live input level, for a waveform or an orb pulse.
     public private(set) var level: Float = 0
     /// Loudest moment of the current recording; the silence gate reads it.
@@ -132,6 +149,15 @@ public final class Recorder: @unchecked Sendable {
         openedAt = Date()
         lastOpenSeconds = 0
         running = true
+        lastCaptureURL = nil
+        // A capture id of our own: the utterance id does not exist yet — it is
+        // minted at key-up, after the recording is over — and a filename is
+        // needed now. Core adopts this file under the real id when the row is
+        // created.
+        liveCapture = try? LiveAudioCapture(
+            utteranceId: "capture-\(UUID().uuidString)",
+            sampleRate: sampleRate,
+            directory: QueueStore.audioDirectory)
         if let stale = stream {
             // An aborted utterance never took its stream; close it quietly.
             stream = nil
@@ -222,8 +248,14 @@ public final class Recorder: @unchecked Sendable {
                         self.buffer.append(converted)
                         liveStream = self.stream
                     }
+                    let live = self.liveCapture
                     self.lock.unlock()
-                    if let converted { liveStream?.feed(pcm16: converted) }
+                    if let converted {
+                        liveStream?.feed(pcm16: converted)
+                        // A failed append means "this chunk is not durable", never
+                        // "stop recording" — the in-memory path is untouched by it.
+                        try? live?.append(pcm16: converted)
+                    }
                     let rms = Self.rms(of: pcmBuffer)
                     self.level = rms
                     if rms > self.peakLevel { self.peakLevel = rms }
@@ -406,11 +438,14 @@ public final class Recorder: @unchecked Sendable {
         level = 0
 
         lock.lock()
+        let finishing = liveCapture
+        liveCapture = nil
         let captured = buffer
         let delivered = tapBuffersDelivered
         let kept = tapBuffersKept
         buffer.removeAll(keepingCapacity: false)
         lock.unlock()
+        lastCaptureURL = (try? finishing?.finish())?.url
 
         // One line per capture, success or failure, because the failures are only
         // legible next to what a working capture looks like. Logged BEFORE the
@@ -431,8 +466,14 @@ public final class Recorder: @unchecked Sendable {
         running = false
         lastOpenSeconds = openedAt.map { Date().timeIntervalSince($0) } ?? 0
         openedAt = nil
+        let discarding = liveCapture
+        liveCapture = nil
         buffer.removeAll(keepingCapacity: false)
         lock.unlock()
+        // Abandoning is a decision, not a death: remove the file rather than
+        // leaving it for the boot sweep to offer back.
+        discarding?.abandon()
+        lastCaptureURL = nil
         _ = VDCatchObjCException {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
