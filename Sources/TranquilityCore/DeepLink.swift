@@ -30,6 +30,10 @@ public enum DeepLink {
         /// The action a generated page carries: put me in front of the agent
         /// that wrote this. `ref` is the page itself.
         case discuss(session: String?, ref: String?)
+        /// The agent's own page: everything it has done, and everything it has
+        /// made. `ref` rides along so a session this Mac has never seen still
+        /// gets the invitation rather than silence.
+        case home(session: String?, ref: String?)
         case hear(session: String?)
         case reply(session: String?)
         case show
@@ -48,6 +52,7 @@ public enum DeepLink {
         }
         switch url.host ?? "" {
         case "discuss": return .discuss(session: value("session"), ref: value("ref"))
+        case "home":    return .home(session: value("session"), ref: value("ref"))
         case "hear":    return .hear(session: value("session"))
         case "reply":   return .reply(session: value("session"))
         case "show":    return .show
