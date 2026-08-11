@@ -470,7 +470,48 @@ enum StateLegend {
     /// answers to, in order. ON PROBATION (simplification pass): the only hint
     /// line left anywhere; the per-card chord hints are dead with no
     /// replacement. See docs/simplification-pass.md.
-    static let gridHint = "⌃⌥ hear · hold ⌥ reply · ⌃⌃ why · ⌃⇧ dismiss"
+    static let controlsTitle = "Controls"
+
+    /// What hovering `Controls` reveals, in order of how often you reach for it.
+    ///
+    /// Probation ended 10 Aug: the key line — four chords spelled out along the
+    /// bottom of every grid, permanently — collapses to one word that reveals
+    /// them on hover. A hint that is always on screen is either being read
+    /// every time, which means the gestures never stuck, or never, which means
+    /// it is decoration billed to the calmest surface the app has. It was the
+    /// second. One word holds the door open at the cost of one word.
+    ///
+    /// Three lines, not four. `⌃⇧` came off the list — "I've never used
+    /// Control+Shift to dismiss. What does dismiss even do?" — and the
+    /// complaint was right about the LINE while being wrong about the chord,
+    /// which is why it stayed confusing. The line advertised the redundant
+    /// half: dismissing a card is something you can see and click, and the
+    /// click is smarter than the chord (it picks `hide()` from a resting grid
+    /// and the full teardown from a live one). The chord's load-bearing half —
+    /// cancelling a transcription in flight, the only exit that exists before
+    /// the Cancel button appears at ~20s — the line never mentioned at all. So
+    /// the word is gone and the key is not. A session that "finishes the
+    /// cleanup" by deleting `Bindings.dismiss` re-opens a bug that was closed
+    /// on purpose; the honest prerequisite is showing Cancel from the first
+    /// second.
+    static let controlsNote: [(chord: String, meaning: String)] = [
+        ("⌃⌥", "hear the next agent update"),
+        ("hold ⌥", "speak"),
+        ("⌃⌃", "hear more"),
+    ]
+
+    /// The panel signs its own bottom-right corner (ruled 10 Aug: "subtle but
+    /// noticeable"). It balances `Controls` across a line that would otherwise
+    /// be a word alone in a corner, and it is the expanded grid's half of the
+    /// identity the collapsed strip already carries as a stacked glyph.
+    ///
+    /// Set in `hint`, the same ink as `Controls`, NOT in `faint`: `faint` is
+    /// ruled decorative-only with no contrast floor and explicitly "never small
+    /// text", and a wordmark is small text. Subtlety is bought with
+    /// letterspacing and stillness instead — `Controls` brightens to `ink`
+    /// under the cursor and the signature never does, so the pair reads as one
+    /// live thing and one dead one at identical contrast.
+    static let wordmark = "Tranquility Base"
     /// The quiet placard row above the hint. "AGENT", not "SESSION" (ui-pass-7,
     /// ruling 1): every user-facing noun on the panel says agent.
     static let newAgentTitle = "NEW AGENT"
