@@ -343,6 +343,12 @@ final class StatusHUD: NSObject {
             a.isNull || b.isNull || !a.intersects(b)
         }
 
+        // Expanded, explicitly. The collapsed drill runs before this one and
+        // leaves the panel 40pt wide, where the placard and the gear are both
+        // hidden — so this measured a band that wasn't on screen. It is the
+        // EXPANDED top band that has four tenants; the collapsed strip has its
+        // own geometry and its own drill.
+        setCollapsed(false)
         // The worst case on purpose: the grid (which is the only face showing
         // the chevron) under a receipt whose callsign is long enough to reach.
         showIdle(note: nil, rows: [
@@ -365,10 +371,19 @@ final class StatusHUD: NSObject {
             ("lanesAreInOrder", collapse.isNull || placard.isNull
                 || collapse.maxX <= placard.minX),
         ])
-        Permissions.log("selftest topBand: collapse=\(Int(collapse.minX))..\(Int(collapse.maxX))"
-            + " placard=\(Int(placard.minX))..\(Int(placard.maxX))"
-            + " receipt=\(Int(chip.minX))..\(Int(chip.maxX))"
-            + " gear=\(Int(gear.minX))..\(Int(gear.maxX))")
+        // `.null` is how `rect` says "not on screen", and its minX is
+        // infinity — which `Int(_:)` does not convert, it TRAPS. That killed
+        // the whole self-test run on the first deploy after this drill landed,
+        // in the log line rather than the assertions, and the assertions had
+        // already reported PASS. A diagnostic that can crash the thing it is
+        // diagnosing is worse than no diagnostic.
+        func span(_ r: CGRect) -> String {
+            r.isNull || !r.minX.isFinite || !r.maxX.isFinite
+                ? "—" : "\(Int(r.minX))..\(Int(r.maxX))"
+        }
+        Permissions.log("selftest topBand: collapse=\(span(collapse))"
+            + " placard=\(span(placard)) receipt=\(span(chip))"
+            + " gear=\(span(gear))")
         clearReceipt()
     }
 
