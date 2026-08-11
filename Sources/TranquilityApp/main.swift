@@ -2170,19 +2170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A guaranteed way back to the panel. The status icon can end up behind the
         // notch or in the overflow on a crowded menu bar, and then there is no
         // discoverable route to a window that has no Dock icon by design.
-        // Collapse lives in the menu as well as on the panel, because the panel
-        // is the thing being collapsed: once it is a 40px column the affordance
-        // that got you there is no longer on screen in the same shape, and a
-        // width you cannot get back to from outside the panel is a trap.
-        let collapse = NSMenuItem(
-            title: hud.isCollapsed ? "Expand panel" : "Collapse panel",
-            action: #selector(toggleCollapsed), keyEquivalent: "")
-        collapse.target = self
-        menu.addItem(collapse)
 
-        let show = NSMenuItem(title: "Show panel", action: #selector(showPanel), keyEquivalent: "")
-        show.target = self
-        menu.addItem(show)
 
         // The proactive half (ruled 05 Aug addendum): kick off an investigation
         // instead of reacting to one. Same code path as `tbase new` and the
