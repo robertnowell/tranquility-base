@@ -46,6 +46,16 @@ final class StatusHUD: NSObject {
     /// What the last Don't send asked for, so the drill can see §D hold.
     /// Nil until the button is pressed; the ruling says it must then be false.
     private var dontSendRestartedListening: Bool?
+    /// The grid's bottom line: `Controls` left, the wordmark right. Its own
+    /// widget rather than more text in `hintLabel`, because it is two things at
+    /// two edges and one of them is a hover target — the hint slot stays what
+    /// it is, a sentence, and the settings pane keeps using it unchanged.
+    private var gridFooter: GridFooterView!
+    /// The hover sticky, parented to `background` rather than the content
+    /// stack: it must appear without moving anything. A revealed ROW would push
+    /// the grid up and resize the panel on a mouse-over, which is the same
+    /// reflow-on-hover the collapsed strip forbids, for the same reason.
+    private var controlsSticky: ControlsNoteView!
     private var stripLabel: NSTextField!
     private var stripRule: NSView!
     private var contentStack: NSStackView?
@@ -280,6 +290,15 @@ final class StatusHUD: NSObject {
         }
         stripLabel.attributedStringValue = line
     }
+
+    /// The one door the Controls sticky opens and closes through, so the hover
+    /// and the drill can never drift apart — the rule `dismiss()` follows.
+    ///
+    /// Nothing but a visibility flip: no transition, no render, no resize. A
+    /// hover is not a state, and a pointer crossing a word must not be able to
+    /// write into the panel's state machine. Closing is owned by render()'s
+    /// baseline, which is why leaving the grid closes the note for free.
+    func setControlsNote(open: Bool) { controlsSticky?.isHidden = !open }
 
     /// Restore exactly the face arming replaced. No-op unless the panel is
     /// still arming — an upgrade or an explicit dismiss has already moved it
@@ -1115,6 +1134,10 @@ final class StatusHUD: NSObject {
         // funnel exists to close, and it would draw a line across a card that
         // has nothing under it.
         stripLabel.isHidden = true; stripRule.isHidden = true
+        // The footer belongs to the grid alone, and the sticky dies with it: a
+        // note left open while the face changes underneath is exactly the
+        // residue class render()'s baseline exists to make impossible.
+        gridFooter.isHidden = true; controlsSticky.isHidden = true
         stripLabel.stringValue = ""
         voiceList.isHidden = true; waitingRows.isHidden = true
         gearButton.isHidden = false; backButton.isHidden = true
@@ -1179,7 +1202,7 @@ final class StatusHUD: NSObject {
                                     range: NSRange(location: 0, length: stripTitle.length))
             stateLabel.attributedStringValue = stripTitle
             hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
-            hintLabel.stringValue = StateLegend.gridHint
+            gridFooter.isHidden = false
             waitingRows.isHidden = false
             collapseButton?.isHidden = isCollapsed
             // Settings is an expanded-face affordance. The gear lives on
@@ -2346,6 +2369,39 @@ final class StatusHUD: NSObject {
         let faultIsInTheStrip = stripLabel.stringValue.contains("lost its address")
         endCapture(because: "selftest fault cleanup")
 
+        // The Controls drill. The collapse only pays if opening the note costs
+        // nothing, so the claims are asserted rather than asserted about: the
+        // footer belongs to the grid, the note opens, the PANEL DOES NOT MOVE
+        // when it does, it fits inside the panel it overlays, and leaving the
+        // grid closes it. That last one is the residue class — a note still
+        // open over the face that replaced its owner.
+        showIdle(note: nil, rows: [
+            .init(id: "c1", name: "Fix hero image binding",
+                  callsign: "promotions copy", lamp: .ready),
+            .init(id: "c2", name: "tranquility base", callsign: "", lamp: .running),
+        ])
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let footerOnGrid = !gridFooter.isHidden
+        let heightShut = panel?.frame.height ?? 0
+        setControlsNote(open: true)
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let heightOpen = panel?.frame.height ?? 0
+        let noteOpens = !controlsSticky.isHidden
+        let noteWidth = controlsSticky.frame.width
+        let column = (panel?.frame.width ?? 0) - 28
+        showResult("A failure card, arriving under an open Controls note.")
+        let closedOnLeave = controlsSticky.isHidden && gridFooter.isHidden
+        SelfTest.report("controls", [
+            ("footerOnGrid", footerOnGrid),
+            ("noteOpens", noteOpens),
+            ("noReflow", heightOpen == heightShut),
+            ("noteFitsColumn", noteWidth > 0 && noteWidth <= column),
+            ("closedOnLeave", closedOnLeave),
+        ])
+        Permissions.log("selftest controls: panelH \(heightShut)->\(heightOpen) "
+                        + "noteW=\(noteWidth) column=\(column) "
+                        + "lines=\(StateLegend.controlsNote.count)")
+
         SelfTest.report("strip", [
             ("dontSendKeepsTheMicShut", dontSendKeptMicShut),
             ("faultKeepsTheCard", faultKeepsCard),
@@ -3064,6 +3120,11 @@ final class StatusHUD: NSObject {
             ("newSession", newSessionButton), ("openPage", openPageButton),
             ("voices", voiceList),
             ("gear", gearButton), ("back", backButton), ("rows", waitingRows),
+            // `sticky` is in the matrix precisely BECAUSE it is hover-driven:
+            // the drill's job is to prove that leaving the grid closes it, and
+            // a widget the matrix never names is a residue class nobody can
+            // diff for.
+            ("footer", gridFooter), ("sticky", controlsSticky),
             ("cancelTx", cancelTranscriptionButton),
             ("retryTx", retryTranscriptionButton),
         ]
@@ -3320,6 +3381,13 @@ final class StatusHUD: NSObject {
         stripRule.translatesAutoresizingMaskIntoConstraints = false
         stripRule.heightAnchor.constraint(equalToConstant: 1).isActive = true
 
+        gridFooter = GridFooterView(width: Self.gridWidth)
+        controlsSticky = ControlsNoteView()
+        controlsSticky.isHidden = true
+        gridFooter.onControlsHover = { [weak self] hovering in
+            self?.setControlsNote(open: hovering)
+        }
+
         countdownBar = CountdownBarView()
 
         meter = LevelMeterView()
@@ -3364,7 +3432,7 @@ final class StatusHUD: NSObject {
         // anchors the top edge — so the strip costs no geometry work.
         let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
                                         waitingRows, bodyLabel,
-                                        stripRule, stripLabel,
+                                        stripRule, stripLabel, gridFooter,
                                         countdownBar, meter, voiceList, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -3374,6 +3442,16 @@ final class StatusHUD: NSObject {
 
         background.addSubview(stack)
         background.addSubview(gearButton)
+        // Above everything: the sticky overlays the last grid rows on purpose.
+        // It has no constraint to the background's own edges, so it contributes
+        // nothing to the fitting size resizeToFit() measures — the panel is
+        // exactly as tall with the note open as with it shut.
+        background.addSubview(controlsSticky, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            controlsSticky.leadingAnchor.constraint(equalTo: gridFooter.leadingAnchor),
+            controlsSticky.bottomAnchor.constraint(equalTo: gridFooter.topAnchor,
+                                                   constant: -8),
+        ])
 
         // Collapse lives on the panel, left of the gear. It was in the menu bar
         // first, which was wrong twice over: clicking the status item already
@@ -4029,6 +4107,152 @@ private final class PlacardRowView: NSControl {
         guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
         sendAction(action, to: target)
     }
+}
+
+/// A bare hover rectangle. `Controls` owns its own tracking rect rather than
+/// borrowing the footer's: the footer spans the whole grid width, and hovering
+/// the app's name in the opposite corner is not hovering a control.
+private final class HoverBox: NSView {
+    var onHover: ((Bool) -> Void)?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        // .activeAlways, like the grid rows'. The panel is a .nonactivatingPanel
+        // and never becomes key — .activeInKeyWindow would simply never fire.
+        addTrackingArea(NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
+}
+
+/// The grid's bottom line: `Controls` at the left edge, `Tranquility Base` at
+/// the right. Two words at two edges, the same size and the same ink — the
+/// difference between them is that one answers the cursor.
+private final class GridFooterView: NSView {
+    /// Shorter than a grid row on purpose: a rule-under-the-page line, not a
+    /// row you might mistake for a session.
+    static let height: CGFloat = 14
+
+    /// True on enter, false on exit — for `Controls` only.
+    var onControlsHover: ((Bool) -> Void)?
+
+    init(width: CGFloat) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        let font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .regular)
+        let controls = NSTextField(labelWithString: StateLegend.controlsTitle)
+        controls.font = font
+        controls.textColor = StateLegend.Palette.hint
+        controls.translatesAutoresizingMaskIntoConstraints = false
+
+        let box = HoverBox()
+        box.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(controls)
+        box.onHover = { [weak self] hovering in
+            // One ink tier under the cursor — `hint` to `ink`, both above their
+            // floors, so the change is a confirmation and never the difference
+            // between legible and not.
+            controls.textColor = hovering
+                ? StateLegend.Palette.ink : StateLegend.Palette.hint
+            self?.onControlsHover?(hovering)
+        }
+
+        let mark = NSTextField(labelWithString: "")
+        mark.attributedStringValue = letterspaced(
+            StateLegend.wordmark, size: 9.5, tracking: 0.9,
+            color: StateLegend.Palette.hint)
+        mark.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(box); addSubview(mark)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: width),
+            heightAnchor.constraint(equalToConstant: Self.height),
+            // The box hugs the word horizontally but takes the footer's full
+            // height, so the hover target is a comfortable strip rather than
+            // the 8pt band the glyphs actually occupy.
+            controls.leadingAnchor.constraint(equalTo: box.leadingAnchor),
+            controls.trailingAnchor.constraint(equalTo: box.trailingAnchor),
+            controls.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+            box.leadingAnchor.constraint(equalTo: leadingAnchor),
+            box.topAnchor.constraint(equalTo: topAnchor),
+            box.bottomAnchor.constraint(equalTo: bottomAnchor),
+            mark.trailingAnchor.constraint(equalTo: trailingAnchor),
+            mark.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+}
+
+/// The sticky note behind `Controls`: the chords the key line used to spell out
+/// along the bottom of every grid, now shown only when asked for.
+private final class ControlsNoteView: NSView {
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        // One step up from the surface — the same lift the grid rows use for
+        // hover, so the note reads as the panel raising a corner of itself
+        // rather than a foreign window arriving on top of it.
+        layer?.backgroundColor = StateLegend.Palette.hover.cgColor
+        layer?.cornerRadius = 4
+        layer?.borderWidth = 1
+        layer?.borderColor = StateLegend.Palette.hairline.cgColor
+
+        let font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .regular)
+        // ONE chord column, sized to the widest chord — the rule the grid's
+        // callsign column already follows. Per-line widths would start every
+        // meaning at its own x, and a three-line rag is what made the old
+        // single-line key line read as a run-on.
+        let chordWidth = StateLegend.controlsNote
+            .map { ceil(($0.chord as NSString)
+                .size(withAttributes: [.font: font]).width) }
+            .max() ?? 0
+
+        let rows = NSStackView()
+        rows.orientation = .vertical
+        rows.alignment = .leading
+        rows.spacing = 4
+        rows.translatesAutoresizingMaskIntoConstraints = false
+
+        for entry in StateLegend.controlsNote {
+            let chord = NSTextField(labelWithString: entry.chord)
+            chord.font = font
+            // The chord is the thing you are here to learn; the gloss explains
+            // it. Full ink on the key, hint on the words.
+            chord.textColor = StateLegend.Palette.ink
+            chord.translatesAutoresizingMaskIntoConstraints = false
+            chord.widthAnchor.constraint(equalToConstant: chordWidth).isActive = true
+
+            let meaning = NSTextField(labelWithString: entry.meaning)
+            meaning.font = font
+            meaning.textColor = StateLegend.Palette.hint
+            meaning.translatesAutoresizingMaskIntoConstraints = false
+
+            let line = NSStackView(views: [chord, meaning])
+            line.orientation = .horizontal
+            line.alignment = .firstBaseline
+            line.spacing = 10
+            rows.addArrangedSubview(line)
+        }
+
+        addSubview(rows)
+        NSLayoutConstraint.activate([
+            rows.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            rows.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            rows.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            rows.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
 }
 
 /// The readback countdown, drawn by Core Animation instead of a ticking
