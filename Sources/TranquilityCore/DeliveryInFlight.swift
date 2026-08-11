@@ -36,13 +36,26 @@ public struct DeliveryInFlight: Sendable, Equatable {
     /// the happy path — it exists for the paths that never come back.
     public static let ceiling: TimeInterval = 90
 
-    private var started: [String: Date] = [:]
+    private struct Delivery: Equatable {
+        let at: Date
+        /// The waiting event this reply ANSWERS, if it was answering one. Green
+        /// is only a lie about the turn being answered — see `isInFlight`.
+        let answering: Int64?
+    }
+
+    private var started: [String: Delivery] = [:]
 
     public init() {}
 
     /// The capture closed on this session and the words are now ours to deliver.
-    public mutating func began(sessionId: String, at: Date = Date()) {
-        started[sessionId] = at
+    ///
+    /// `answering` is the waiting event's `latestId` at the moment the capture
+    /// closed, or nil when the reply answers nothing in the waiting set. It is
+    /// what lets the lamp tell "green is stale, you are answering it right now"
+    /// apart from "a NEWER turn arrived while you were talking" — the second is
+    /// still genuinely unread, and must stay green.
+    public mutating func began(sessionId: String, answering: Int64? = nil, at: Date = Date()) {
+        started[sessionId] = Delivery(at: at, answering: answering)
     }
 
     /// The dispatch resolved — any way it resolved. A failure clears too: the
@@ -53,15 +66,39 @@ public struct DeliveryInFlight: Sendable, Equatable {
     }
 
     public func isInFlight(_ sessionId: String, now: Date = Date()) -> Bool {
-        guard let at = started[sessionId] else { return false }
-        return now.timeIntervalSince(at) <= Self.ceiling
+        guard let d = started[sessionId] else { return false }
+        return now.timeIntervalSince(d.at) <= Self.ceiling
+    }
+
+    /// Whether a delivery in flight has made this session's GREEN row stale.
+    ///
+    /// Green means "there is something here you have not answered". From the
+    /// moment the capture closes until dispatch resolves, that is false in the
+    /// most misleading way available: the user has just spoken to this exact
+    /// turn, and the cursor does not advance until the send confirms
+    /// (`Coordinator.confirmAndSend`), so the row goes on claiming to want them.
+    /// Reported 10 Aug: "it shows the lamp still is green, which is actually
+    /// worse than idle — now it looks like it's still waiting on me, and it's a
+    /// lie. I literally just spoke to this session."
+    ///
+    /// Bounded to the turn being answered. If a NEWER event arrives while the
+    /// reply is in flight — the agent finished something else, a second turn
+    /// landed — `latestId` moves past what we are answering, and that row is
+    /// unread work the user has genuinely not seen. Green wins, and must.
+    public func supersedesWaiting(
+        _ sessionId: String, latestId: Int64, now: Date = Date()
+    ) -> Bool {
+        guard let d = started[sessionId], now.timeIntervalSince(d.at) <= Self.ceiling,
+              let answering = d.answering
+        else { return false }
+        return latestId <= answering
     }
 
     /// Drop entries the ceiling has expired. The lamp is already correct
     /// without this — `isInFlight` gates on the ceiling itself — so this is
     /// housekeeping on the poller, not a correctness step.
     public mutating func prune(now: Date = Date()) {
-        started = started.filter { now.timeIntervalSince($0.value) <= Self.ceiling }
+        started = started.filter { now.timeIntervalSince($0.value.at) <= Self.ceiling }
     }
 
     /// Sessions currently claiming the lamp. Test and log surface only.

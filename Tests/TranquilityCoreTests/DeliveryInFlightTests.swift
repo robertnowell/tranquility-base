@@ -56,6 +56,48 @@ final class DeliveryInFlightTests: XCTestCase {
         XCTAssertGreaterThan(DeliveryInFlight.ceiling, worstCaseDispatch * 2)
     }
 
+    // MARK: - Green is a lie while you are answering it
+
+    /// The report that forced this: the cursor does not advance until the send
+    /// confirms, so the row claimed to be waiting on the user seconds after the
+    /// user spoke to it. Worse than the quiet lamp, because it asks for them.
+    func testTheTurnBeingAnsweredStopsClaimingToWait() {
+        var flight = DeliveryInFlight()
+        flight.began(sessionId: "s1", answering: 42, at: t0)
+        XCTAssertTrue(flight.supersedesWaiting("s1", latestId: 42, now: t0))
+    }
+
+    /// The other half, and the reason this is bounded to an event id at all: a
+    /// turn that lands WHILE the reply is in flight is unread work the user has
+    /// genuinely never seen. Green wins.
+    func testANewerTurnArrivingMidFlightStaysGreen() {
+        var flight = DeliveryInFlight()
+        flight.began(sessionId: "s1", answering: 42, at: t0)
+        XCTAssertFalse(flight.supersedesWaiting("s1", latestId: 43, now: t0))
+    }
+
+    /// A reply that answered nothing in the waiting set never suppresses green.
+    func testADeliveryAnsweringNothingLeavesGreenAlone() {
+        var flight = DeliveryInFlight()
+        flight.began(sessionId: "s1", answering: nil, at: t0)
+        XCTAssertFalse(flight.supersedesWaiting("s1", latestId: 42, now: t0))
+        XCTAssertTrue(flight.isInFlight("s1", now: t0))
+    }
+
+    /// The ceiling governs the green override too — a missed clear must not
+    /// hide a waiting agent, which is the most costly direction to be wrong in.
+    func testTheCeilingRestoresGreen() {
+        var flight = DeliveryInFlight()
+        flight.began(sessionId: "s1", answering: 42, at: t0)
+        XCTAssertFalse(flight.supersedesWaiting(
+            "s1", latestId: 42, now: t0.addingTimeInterval(DeliveryInFlight.ceiling + 1)))
+    }
+
+    func testAnUntouchedSessionNeverSupersedes() {
+        let flight = DeliveryInFlight()
+        XCTAssertFalse(flight.supersedesWaiting("s1", latestId: 42, now: t0))
+    }
+
     func testPruningDropsOnlyExpiredEntries() {
         var flight = DeliveryInFlight()
         flight.began(sessionId: "old", at: t0)

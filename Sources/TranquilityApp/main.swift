@@ -733,7 +733,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 id: $0.sessionId,
                 name: tabDisplayName(for: $0, live: liveById[$0.sessionId]),
                 callsign: $0.callsign ?? "",
-                lamp: .ready)
+                // Green says "you have not answered this". While a reply to
+                // this very turn is in flight that is the most misleading thing
+                // the grid can say — the cursor does not advance until the send
+                // confirms, so the row goes on asking for the user seconds after
+                // they spoke to it. A newer turn arriving still wins: see
+                // DeliveryInFlight.supersedesWaiting.
+                lamp: delivering.supersedesWaiting($0.sessionId, latestId: $0.latestId)
+                    ? .working : .ready)
         }
         // Live sessions with nothing waiting: quiet rows, so a skipped or heard
         // session stays findable. Walked via `known` — already latestId DESC —
@@ -1923,7 +1930,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // at the dispatch — because this is the moment the words become
                 // ours to deliver, and every second from here to the outcome is
                 // a second the grid used to call that session idle.
-                delivering.began(sessionId: spokenTo)
+                // Which turn this answers, read at the capture's close rather
+                // than at dispatch: the whole point is to be right about the
+                // row DURING the wait, and a turn that lands while the user is
+                // still talking must not be swallowed by their reply to the
+                // previous one.
+                let answering = (try? coordinator.waiting())?
+                    .first { $0.sessionId == spokenTo }?.latestId
+                delivering.began(sessionId: spokenTo, answering: answering)
                 // One clear-site, not eight. Every exit below closes the window
                 // — the supersede return, the six terminal outcomes, the catch —
                 // except `.readyToSend`, which hands the delivery to the undo
