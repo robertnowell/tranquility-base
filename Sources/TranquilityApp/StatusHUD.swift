@@ -2226,7 +2226,22 @@ final class StatusHUD: NSObject {
     /// Let an in-flight frame animation finish, then lay out. Drills measure
     /// geometry, and geometry is a lie while the animator is running.
     private func settleAnimations() {
-        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        // Waits for the frame to STOP MOVING, not for a fixed interval.
+        //
+        // A flat 0.3s was enough for a 0.16s animation on an idle machine and
+        // not on a loaded one — `collapsedWidthReal` failed on a deploy while
+        // another session was building, measuring a frame still in flight. A
+        // drill that fails on machine load teaches people to re-run it until it
+        // passes, which is worse than not having it.
+        var last = panel?.frame ?? .zero
+        var stableReads = 0
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline, stableReads < 2 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            let now = panel?.frame ?? .zero
+            stableReads = now.equalTo(last) ? stableReads + 1 : 0
+            last = now
+        }
         panel?.contentView?.layoutSubtreeIfNeeded()
         panel?.displayIfNeeded()
     }
