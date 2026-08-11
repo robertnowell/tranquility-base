@@ -2262,11 +2262,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openSettings() {
-        hud.showSettings(
-            voices: VoiceCatalog.cached(),
-            roster: VoiceRoster.load(),
-            note: "Checked voices are the cast; agents draw a durable voice "
-                + "in roster order.")
+        // Paid voices first, then the free ones the machine already has. Without the
+        // second half this pane read "15 of 0 on roster" whenever no ElevenLabs key
+        // was configured — an empty list on a Mac with forty voices installed, and no
+        // hint that free ones exist at all.
+        let paid = VoiceCatalog.cached()
+        let free = SystemVoiceCatalog.asCatalogueVoices()
+        let missing = SystemVoiceCatalog.recommendationStatus().missing
+
+        var note = "Checked voices are the cast; agents draw a durable voice "
+            + "in roster order."
+        if paid.isEmpty {
+            note += "  No ElevenLabs key, so the free macOS voices below are what "
+                + "you have."
+        }
+        if let best = missing.first {
+            // Name one, not four. A list of downloads is a chore; a single "this one
+            // is the good one" is an instruction.
+            note += "  Better free voice available: \(best.name) — \(best.note). "
+                + "Settings → \(SystemVoiceCatalog.remainingSteps)"
+        }
+
+        hud.showSettings(voices: paid + free, roster: VoiceRoster.load(), note: note)
     }
 
     @objc private func showPanel() {
