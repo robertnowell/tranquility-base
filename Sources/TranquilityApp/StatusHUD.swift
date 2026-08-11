@@ -838,6 +838,25 @@ final class StatusHUD: NSObject {
         /// instead of describing itself. A face of idle, not a state of its own:
         /// nothing about what the panel ADMITS changes, only what it says.
         var gettingStarted = false
+
+        /// How far the read-along got, in DISPLAY coordinates. `nil` is the
+        /// unspoken baseline, which is why a fresh `Face()` starts grey.
+        ///
+        /// The ink is part of the face (ruling §A, docs/ruling-capture-returns
+        /// -to-its-card.md). It used to live only in the pixels: `render()`'s
+        /// `.speaking` arm called `highlight(upTo: 0)` unconditionally, because
+        /// entering `.speaking` had always meant a fresh card. Any repaint of a
+        /// face that had been read to therefore reset it to unread grey and
+        /// re-armed the loading wash — measured, `20:21:29 highlight upTo=0→0
+        /// of 437`. As a field, any repaint of any face restores its own ink,
+        /// because the cursor travelled with the face.
+        ///
+        /// DISPLAY space, not spoken space, and this is load-bearing: the card
+        /// shows the unredacted text while the voice counts in the sanitized
+        /// one, and `currentSpoken` may have moved on by the time a face is
+        /// repainted. Re-mapping a stale spoken index is how the ink would come
+        /// back in the wrong place. The mapping happens once, at `highlight`.
+        var spokenUpTo: Int?
     }
     private var face = Face()
 
@@ -947,15 +966,24 @@ final class StatusHUD: NSObject {
         case .speaking:
             // Karaoke starts unspoken (ui-pass-7, ruling 6): the card's text
             // first paints entirely in the faint treatment; ink arrives only
-            // word-by-word with the voice. highlight(upTo: 0) IS the initial
-            // attribution — without it the baseline's plain stringValue showed
-            // every word full-dark until the first word event repainted it.
-            highlight(upTo: 0)
+            // word-by-word with the voice. The paint IS the initial attribution
+            // — without it the baseline's plain stringValue showed every word
+            // full-dark until the first word event repainted it.
+            //
+            // From the face, not from zero (ruling §A). A fresh card carries no
+            // cursor and paints grey; a card that has been read to — a ⌃⌃ rung
+            // you are part-way through — repaints at the cursor it reached.
+            let inkCursor = face.spokenUpTo ?? 0
+            paintInk(displayCursor: inkCursor)
             // The card is up but the audio is not here yet. Until now that
             // window had no affordance at all: a full card of grey text, ink
             // that never moved, and nothing to say whether it was loading or
             // dead. On a slow link it could sit there for eleven seconds.
-            armBodyShimmer()
+            //
+            // Only when nothing has been spoken yet. Re-arming the wash over
+            // text that is already half-inked is the other half of the "it
+            // reset" symptom — the words go grey AND start loading again.
+            if inkCursor == 0 { armBodyShimmer() }
 
         case .idle where !face.sessionRows.isEmpty:
             // The grid: the idle face IS one row per live session (WS-B, ruled).
@@ -2007,6 +2035,36 @@ final class StatusHUD: NSObject {
         ])
         recordingEnded()
         endCapture(because: "selftest arm cleanup")
+
+        // The ink drill (10 Aug). The defect: a card you have been reading
+        // resets to unread grey the moment a capture repaints it, because the
+        // ink lived in the pixels instead of the face. That is incident 1 of
+        // docs/ruling-capture-returns-to-its-card.md — reported, specified, and
+        // until now unbuilt. Arm-and-revert is the path that reproduces it with
+        // today's API; it is also the path the capture strip is about to make
+        // the MAIN path, which is why this lands before the strip and not with
+        // it. Read from the pixels, never from `face.spokenUpTo` — asking the
+        // field would only prove the field agrees with itself.
+        let inkBody = "Finished the poller and the hero binding, then reran the "
+            + "promotions suite; four cases still fail on the same null topic."
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize(inkBody),
+            sessionId: "ink", pid: 1, project: "promotions copy", cwd: "/tmp")
+        let inkFresh = inkBrightLength
+        highlight(upTo: 40)
+        let inkRead = inkBrightLength
+        showArming(target: "promotions copy")
+        let inkArmed = inkBrightLength
+        revertArming(because: "selftest ink")
+        let inkRestored = inkBrightLength
+        SelfTest.report("ink", [
+            ("freshCardStartsUnspoken", inkFresh == 0),
+            ("readingLightsTheInk", inkRead > 0),
+            ("survivesTheCapture", inkRestored == inkRead),
+        ])
+        Permissions.log("selftest ink: fresh=\(inkFresh) read=\(inkRead) "
+                        + "armed=\(inkArmed) restored=\(inkRestored)")
+        endCapture(because: "selftest ink cleanup")
 
         // The receipt drill. A chip outside the render funnel has to prove it
         // cleans up after itself, because no arm of render() will do it: this
@@ -3156,6 +3214,19 @@ final class StatusHUD: NSObject {
         let cursor = currentSpoken?.displayIndex(forSpoken: index) ?? index
         Permissions.log("highlight upTo=\(index)→\(cursor) of \(body.count) "
                         + "thread=\(Thread.isMainThread)")
+        // The mapped cursor rides the face from here on. Stored BEFORE the
+        // paint, so a face read mid-paint is never behind its own pixels.
+        face.spokenUpTo = cursor
+        paintInk(displayCursor: cursor)
+    }
+
+    /// Paint the body at a display-space cursor. The painting half of
+    /// `highlight(upTo:)`, split out so `render()` can repaint a face's ink
+    /// without pretending a word event just arrived — the mapping is the part
+    /// that must happen once, at the event; the painting must happen on every
+    /// repaint or the ink is only as durable as the last paint.
+    private func paintInk(displayCursor cursor: Int) {
+        guard let body = bodyLabel?.stringValue, !body.isEmpty else { return }
         let clamped = max(0, min(cursor, body.count))
         // The first real word is the only "it started" signal anyone needs, and
         // it is a better one than any spinner: the wash gives way to the thing
@@ -3174,11 +3245,21 @@ final class StatusHUD: NSObject {
             .font, value: NSFont.systemFont(ofSize: 12), range: full)
         bodyLabel.attributedStringValue = attributed
 
+        Permissions.log("highlight rendered bright=\(inkBrightLength)/\(full.length)")
+    }
+
+    /// How many characters are currently painted as spoken. Read from the
+    /// PIXELS, not from `face.spokenUpTo` — a drill that asked the field would
+    /// only prove the field agrees with itself, and the defect being guarded
+    /// against is precisely the pixels disagreeing with the face.
+    private var inkBrightLength: Int {
+        guard let attributed = bodyLabel?.attributedStringValue else { return 0 }
         var bright = 0
-        bodyLabel.attributedStringValue.enumerateAttribute(Self.spokenMark, in: full) { value, range, _ in
+        let full = NSRange(location: 0, length: attributed.length)
+        attributed.enumerateAttribute(Self.spokenMark, in: full) { value, range, _ in
             if value != nil { bright += range.length }
         }
-        Permissions.log("highlight rendered bright=\(bright)/\(full.length)")
+        return bright
     }
 
     // MARK: - Waiting for the voice
