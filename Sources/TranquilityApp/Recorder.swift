@@ -445,7 +445,11 @@ public final class Recorder: @unchecked Sendable {
         let kept = tapBuffersKept
         buffer.removeAll(keepingCapacity: false)
         lock.unlock()
-        lastCaptureURL = (try? finishing?.finish())?.url
+        // Closed, NOT promoted. The utterance id does not exist yet and may
+        // never exist — the silence gate refuses a short capture, a replaced
+        // reply drops its predecessor — so the file keeps the extension that
+        // says nothing claims it, and the reaper can find it if nothing ever does.
+        lastCaptureURL = try? finishing?.close()
 
         // One line per capture, success or failure, because the failures are only
         // legible next to what a working capture looks like. Logged BEFORE the

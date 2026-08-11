@@ -125,6 +125,29 @@ public final class LiveAudioCapture: @unchecked Sendable {
         // imaginary rescue.
     }
 
+    /// Close the file and leave it where it is, still `.wav.live`.
+    ///
+    /// The right ending for a capture whose row does not exist yet. Promotion
+    /// belongs to whoever adopts it under a real utterance id — and until that
+    /// happens the `.live` extension is the truth: **nothing claims this audio.**
+    ///
+    /// Promoting at key-up instead was shipped on 10 Aug and leaked immediately.
+    /// Not every capture that stops gets submitted — the silence gate refuses
+    /// short or quiet ones, a replaced reply drops its predecessor, a cancelled
+    /// transcription never lands — and each of those left a promoted `.wav` that
+    /// no row pointed at, that the row-driven reap could not see, and that the
+    /// live-file reap skipped because it was no longer `.live`. A file with no
+    /// claimant must keep the extension that says so.
+    @discardableResult
+    public func close() throws -> URL {
+        lock.lock(); defer { lock.unlock() }
+        guard !closed else { return url }
+        try rewriteSizes()
+        try handle.close()
+        closed = true
+        return url
+    }
+
     /// Promote the live file to a finished recording, atomically.
     ///
     /// Returns the same `Stored` shape `AudioStore.write` returns, so a caller
