@@ -356,7 +356,14 @@ final class StatusHUD: NSObject {
                   callsign: "promotions copy", lamp: .ready),
         ])
         showReceipt(.sending("bookmarks provenance track a rebuild"))
-        panel?.contentView?.layoutSubtreeIfNeeded()
+        // Not layoutSubtreeIfNeeded alone: expanding out of the collapsed strip
+        // animates the frame from 40pt to 380pt, and a lane measured while that
+        // is in flight reads the stack's leading edge wherever the animator
+        // happens to have left it. Measured mid-flight on the first run —
+        // collapse=10..36 placard=26..87, a 10pt overlap that does not exist
+        // once the panel has stopped moving. Geometry is a lie while the
+        // animator is running, which is exactly what settleAnimations is for.
+        settleAnimations()
 
         let collapse = rect(collapseButton)
         let placard = inkRect(stateLabel)
