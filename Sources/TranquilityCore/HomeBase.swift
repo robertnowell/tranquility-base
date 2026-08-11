@@ -18,6 +18,20 @@ import Foundation
 /// retention layer's seed. So the page is a projection of a table that fills
 /// itself, and it is complete the moment the turn ends.
 ///
+/// **Caps are the instrument voice, and this page is prose.** The panel's
+/// letterspaced small caps mark placards and controls — AGENTS, NEW AGENT,
+/// GO TO AGENT — and ui-pass-7 rules on exactly why: caps at 10.5/+1.3 "matches
+/// the grid's placard voice… so the button reads as an instrument control
+/// rather than prose". That convention works there because it is sparse and
+/// because everything wearing it is a control. Applied to a document's section
+/// headings it says the opposite of what it means, and applied four times a
+/// screen it stops marking anything at all — the page below the fold turns into
+/// a wall of small caps with no hierarchy left to read.
+///
+/// So on this page caps survive in exactly two places, both of them real
+/// labels: the eyebrow, and the field tags on a turn (next / asked / risk).
+/// Structure is carried by type — size, weight, and the serif — never by case.
+///
 /// **Length is a hard constraint, not a preference.** A session log that grows
 /// without bound is a log; this has to stay a briefing you can read in a
 /// sitting. So: newest first, one block per turn, and a cap. What falls off the
@@ -160,7 +174,7 @@ public enum HomeBase {
                 + "<span class=\"on\">\(e(dayStamp.string(from: page.at)))</span></li>"
             }.joined()
             pages = """
-                <h2>Pages this agent made</h2>
+                <h2>What it has made</h2>
                 <p class="sub">The hub summarises; these hold the detail.</p>
                 <ul class="pages">\(items)</ul>
                 """
@@ -234,10 +248,9 @@ public enum HomeBase {
                    font-weight:600;margin:0 0 14px;max-width:19ch}
           .deck{font-family:var(--serif);font-size:17.5px;line-height:1.5;color:var(--dim);
                 margin:0 0 18px;max-width:52ch}
-          .line{font:600 10.5px/1.5 ui-monospace,Menlo,monospace;letter-spacing:.1em;
-                text-transform:uppercase;color:var(--faint);margin:0;padding:12px 0 0;
-                border-top:1px solid var(--rule)}
-          .line b{color:var(--dim)}
+          .line{font:13px/1.5 ui-monospace,Menlo,monospace;color:var(--faint);margin:0;
+                padding:12px 0 0;border-top:1px solid var(--rule)}
+          .line b{color:var(--dim);font-weight:600}
           .rule{width:56px;height:2px;background:var(--amber);margin:26px 0 18px}
           .body{font-family:var(--serif);font-size:16.5px;line-height:1.62;margin:0 0 20px;
                 max-width:58ch}
@@ -246,11 +259,13 @@ public enum HomeBase {
           blockquote{margin:0;padding:0 0 0 22px;border-left:2px solid var(--amber);
                      font-family:var(--serif);font-style:italic;font-size:18px;line-height:1.45;
                      max-width:50ch}
-          .attrib{display:block;margin-top:12px;font:600 10px/1 ui-monospace,Menlo,monospace;
-                  letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-style:normal}
-          h2{font:600 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;
-             color:var(--accent);margin:36px 0 4px}
-          .sub{color:var(--faint);font-size:12.5px;margin:0 0 6px}
+          .attrib{display:block;margin-top:12px;font:13px/1 ui-monospace,Menlo,monospace;
+                  color:var(--faint);font-style:normal}
+          h2{font-family:var(--serif);font-size:21px;font-weight:600;letter-spacing:-.01em;
+             color:var(--fg);margin:40px 0 2px;position:relative;padding-top:16px}
+          h2::before{content:"";position:absolute;top:0;left:0;width:34px;height:2px;
+             background:var(--amber)}
+          .sub{color:var(--faint);font-size:13px;margin:0 0 10px}
           ul.pages{list-style:none;padding:0;margin:10px 0 0}
           ul.pages li{display:flex;align-items:baseline;gap:10px;padding:9px 0;
                       border-top:1px solid var(--rule)}
@@ -260,19 +275,20 @@ public enum HomeBase {
           ol li{display:flex;gap:16px;padding:13px 0;border-top:1px solid var(--rule)}
           .when{flex:0 0 92px;font:11.5px/1.7 ui-monospace,Menlo,monospace;color:var(--faint)}
           .what{flex:1;min-width:0}
-          .what h3{margin:0 0 4px;font-size:15px;letter-spacing:-.01em}
+          .what h3{margin:0 0 5px;font-family:var(--serif);font-size:17px;font-weight:600;
+                   letter-spacing:-.01em}
           .what p{margin:0 0 4px;font-size:14px}
           .what .m{color:var(--dim);font-size:13px}
           .what span{font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;
                      text-transform:uppercase;color:var(--faint);margin-right:6px}
           .what .risky span{color:var(--amber)}
-          li.line .what h3{font-size:14px;font-weight:600}
+          li.line .what h3{font-size:15px;font-weight:600;color:var(--dim)}
           li.line .what .h{color:var(--dim);font-size:13.5px}
           .digest{margin-top:14px;padding:14px 16px;background:var(--card);border-radius:10px;
                   font-size:13.5px;color:var(--dim)}
           .digest b{color:var(--fg)}
           footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--rule);
-                 font:12.5px/1.5 ui-monospace,Menlo,monospace;color:var(--faint);
+                 font:12.5px/1.6 ui-monospace,Menlo,monospace;color:var(--faint);
                  display:flex;flex-wrap:wrap;gap:12px;align-items:center}
           footer b{color:var(--dim)}
           footer .discuss{margin-left:auto;text-decoration:none;background:var(--accent);
@@ -280,7 +296,7 @@ public enum HomeBase {
         </style></head><body><div class="wrap">
         \(brief)
         \(pages)
-        <h2>What this agent has done</h2>
+        <h2>What it has done</h2>
         <p class="sub">Newest first. Older turns lose resolution, never their links.</p>
         <ol>\(rows)</ol>
         \(digest)\(empty)
