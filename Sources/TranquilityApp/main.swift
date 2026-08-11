@@ -1276,7 +1276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // completely under the rung already playing.
                 let nextRung = ladderIndex
                 let warmToken = "\(key):rung\(ladderIndex)"
-                _ = await coordinator.speech.speak(
+                let spoken = await coordinator.speech.speak(
                     rung.spoken,
                     voice: coordinator.voiceId(for: announcement.event.sessionId),
                     onWord: { [weak self] range in
@@ -1291,7 +1291,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Ruling 14: the pull said its piece; with no gesture in 4s the
                 // grid comes back. Guarded against a superseding gesture — its
                 // cancel of THIS task must not be undone by a late schedule.
-                if !Task.isCancelled { scheduleReturnToGrid() }
+                //
+                // And guarded on `completed`, which this used to discard with
+                // `_ = await`. An unfinished rung must not arm the clock: when the
+                // provider returned early the grid landed four seconds into an
+                // eighteen-second rung that then talked over it for fourteen more.
+                // The root cause was the provider (Speech.swift's keyed continuation),
+                // but a caller that reads the result cannot be lied to twice.
+                if !Task.isCancelled, spoken.completed { scheduleReturnToGrid() }
+                else if !spoken.completed {
+                    Permissions.log("ladder: rung did not complete, grid clock not armed")
+                }
                 rebuildMenu()
             }
 

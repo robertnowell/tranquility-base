@@ -56,7 +56,23 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
     public let isConfigured = true
 
     private let synthesizer = AVSpeechSynthesizer()
-    private var continuation: CheckedContinuation<Void, Error>?
+
+    /// The continuation is keyed to the utterance it is waiting on.
+    ///
+    /// It used to be a bare slot, and that is what made `speak` return before its
+    /// own audio: `speak` calls `stop()` first, so the OUTGOING utterance's
+    /// `didCancel` arrives *after* the incoming continuation has been installed, and
+    /// resumed whichever one happened to be stored — the successor's. The caller
+    /// then believed the announcement was over about 300ms in.
+    ///
+    /// Measured on 08 Aug: 4 of 4 ⌃⌃ pulls that interrupted live speech returned
+    /// early and painted the grid four seconds into an eighteen-second rung, which
+    /// kept talking for fourteen seconds after the card had gone. 0 of 50 pulls
+    /// issued while nothing was speaking did.
+    ///
+    /// Identity comes from the delegate itself — every callback carries its
+    /// utterance — so a stale one now resolves nothing rather than the wrong thing.
+    private var pending: (utterance: AVSpeechUtterance, cont: CheckedContinuation<Void, Error>)?
     private var wordCallback: (@Sendable (Range<Int>) -> Void)?
     private let lock = NSLock()
 
@@ -84,27 +100,54 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             lock.lock()
-            continuation = cont
+            pending = (utterance, cont)
             wordCallback = onWord
             lock.unlock()
             synthesizer.speak(utterance)
         }
     }
 
+    /// Stops whatever is speaking and always settles the waiter.
+    ///
+    /// The `guard synthesizer.isSpeaking` that used to open this was two bugs in one
+    /// line: a stop landing between `synthesizer.speak()` and audio actually starting
+    /// stopped nothing AND left the continuation unresumed, so the caller hung on an
+    /// utterance it had asked to cancel. `stopSpeaking` is already a no-op when idle,
+    /// so the guard bought nothing and cost the exit.
     public func stop() {
-        guard synthesizer.isSpeaking else { return }
         synthesizer.stopSpeaking(at: .immediate)
-        resume(with: .failure(SpeechError.interrupted))
+        resumeAny(with: .failure(SpeechError.interrupted))
     }
 
-    private func resume(with result: Result<Void, Error>) {
+    /// Resume only if this callback belongs to the utterance we are waiting on.
+    private func resume(_ utterance: AVSpeechUtterance, with result: Result<Void, Error>) {
         lock.lock()
-        let cont = continuation
-        continuation = nil
+        guard let waiting = pending, waiting.utterance === utterance else {
+            // A callback from an utterance we already abandoned. Dropping it is the
+            // whole fix: resuming here would settle the NEXT announcement's await.
+            lock.unlock()
+            return
+        }
+        pending = nil
         lock.unlock()
+        settle(waiting.cont, result)
+    }
+
+    /// Settle the waiter whatever it is waiting on — used by `stop()`, which is a
+    /// deliberate teardown rather than a callback about one particular utterance.
+    private func resumeAny(with result: Result<Void, Error>) {
+        lock.lock()
+        let waiting = pending
+        pending = nil
+        lock.unlock()
+        guard let waiting else { return }
+        settle(waiting.cont, result)
+    }
+
+    private func settle(_ cont: CheckedContinuation<Void, Error>, _ result: Result<Void, Error>) {
         switch result {
-        case .success: cont?.resume()
-        case .failure(let error): cont?.resume(throwing: error)
+        case .success: cont.resume()
+        case .failure(let error): cont.resume(throwing: error)
         }
     }
 }
@@ -120,11 +163,11 @@ extension SystemSpeechProvider: AVSpeechSynthesizerDelegate {
     }
 
     public func speechSynthesizer(_ s: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        resume(with: .success(()))
+        resume(utterance, with: .success(()))
     }
 
     public func speechSynthesizer(_ s: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        resume(with: .failure(SpeechError.interrupted))
+        resume(utterance, with: .failure(SpeechError.interrupted))
     }
 }
 
@@ -429,14 +472,38 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         bumpGeneration()
         player?.stop()
         player = nil
+        // A stop ends the pause too, or the next playback would start "paused" and
+        // its loop would spin on a flag nobody set.
+        generationQueue.sync { pausedByUser = false }
     }
 
-    public var isPaused: Bool { player != nil && !(player?.isPlaying ?? false) }
+    /// Recorded, not inferred.
+    ///
+    /// This used to be `player != nil && !player.isPlaying`, which cannot tell "the
+    /// user paused it" from "it finished" — `player` is cleared only in `stop()`, so
+    /// the moment playback ended naturally the flag latched true and stayed true.
+    /// The playback loops below wait on `isPlaying || isPaused`, so they never exited:
+    /// `speak` never returned, `Coordinator` never saw `completed`, and the heard
+    /// cursor was never advanced. Invisible whenever ElevenLabs is unconfigured,
+    /// because the system voice resumes its continuation from `didFinish` instead.
+    ///
+    /// Pausing is a user intent, so it is stored when the user expresses it rather
+    /// than guessed from a player state that two different situations share.
+    public var isPaused: Bool { generationQueue.sync { pausedByUser } }
+    private var pausedByUser = false
 
     /// AVAudioPlayer keeps `currentTime` across a pause, so resuming continues from
     /// where it stopped rather than starting the summary over.
-    public func pause() { player?.pause() }
-    public func resume() { player?.play() }
+    public func pause() {
+        guard player?.isPlaying == true else { return }
+        generationQueue.sync { pausedByUser = true }
+        player?.pause()
+    }
+
+    public func resume() {
+        generationQueue.sync { pausedByUser = false }
+        player?.play()
+    }
 }
 
 // MARK: - Chain
