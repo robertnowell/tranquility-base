@@ -142,6 +142,22 @@ public final class Recorder: @unchecked Sendable {
     public private(set) var lastOpenSeconds: TimeInterval = 0
     private var openedAt: Date?
 
+    /// Every marker operation happens here, in program order.
+    ///
+    /// Its own queue rather than the main one because the marker reports whether
+    /// this process is alive enough to be holding a microphone, and the main
+    /// queue is the one thing in this app already known to wedge (2026-08-05,
+    /// an NSException unwinding through a main-queue block). A heartbeat that
+    /// stops when the main thread stops would report a live capture as dead and
+    /// invite the relaunch that kills it — the exact failure being fixed.
+    ///
+    /// Serialised, and entered with `sync`, so begin / refresh / end can never
+    /// reorder. The failure that ordering prevents is specific: a timer firing
+    /// after `end()` would recreate the file, leaving a marker no capture owns
+    /// and blocking every relaunch for `staleAfter`.
+    private let markerQueue = DispatchQueue(label: "base.tranquility.capture-marker")
+    private var markerTimer: DispatchSourceTimer?
+
     public init(sampleRate: Double = 16000) {
         self.sampleRate = sampleRate
         observeConfigurationChanges()
@@ -334,7 +350,7 @@ public final class Recorder: @unchecked Sendable {
                 // only the return to the caller. See CaptureMarker: the reader is
                 // the relaunch script, which must not kill an utterance that is
                 // still only in memory.
-                CaptureMarker.begin()
+                beginMarkerHeartbeat()
                 return
             }
             _ = VDCatchObjCException { input.removeTap(onBus: 0); engine.stop() }
@@ -483,7 +499,7 @@ public final class Recorder: @unchecked Sendable {
         }
         // The words are about to be handed back, so the utterance is no longer
         // only in memory and a relaunch can proceed.
-        CaptureMarker.end()
+        endMarkerHeartbeat()
         level = 0
 
         lock.lock()
@@ -530,8 +546,34 @@ public final class Recorder: @unchecked Sendable {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
         }
-        CaptureMarker.end()
+        endMarkerHeartbeat()
         level = 0
+    }
+
+    /// Mark the microphone open, and keep saying so.
+    ///
+    /// The stamp is written before the timer starts, so protection begins at the
+    /// same instant the microphone does rather than one heartbeat later.
+    private func beginMarkerHeartbeat() {
+        markerQueue.sync {
+            CaptureMarker.begin()
+            markerTimer?.cancel()
+            let timer = DispatchSource.makeTimerSource(queue: markerQueue)
+            timer.schedule(deadline: .now() + CaptureMarker.heartbeat,
+                           repeating: CaptureMarker.heartbeat)
+            timer.setEventHandler { CaptureMarker.refresh() }
+            timer.resume()
+            markerTimer = timer
+        }
+    }
+
+    /// Stop saying so, then clear the mark — in that order, on the one queue.
+    private func endMarkerHeartbeat() {
+        markerQueue.sync {
+            markerTimer?.cancel()
+            markerTimer = nil
+            CaptureMarker.end()
+        }
     }
 
     private static func rms(of buffer: AVAudioPCMBuffer) -> Float {

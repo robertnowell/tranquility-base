@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import TranquilityCore
+import UserNotifications
 
 /// The sound an agent makes when it comes back.
 ///
@@ -49,6 +50,19 @@ enum ArrivalChime {
     static let soundName = "Tink"
 
     private static var sound: NSSound?
+
+    /// Sweep up after the notification era.
+    ///
+    /// The chime posted 36 notifications that were delivered, suppressed by Do
+    /// Not Disturb, and left sitting in Notification Center — litter from a
+    /// mechanism this app no longer uses. It clears its own, at launch, every
+    /// launch: it posts none now, so the call is a no-op forever after the first
+    /// one, and an app that leaves a pile of undismissable rows behind a deleted
+    /// feature is not one anybody should trust with a login item.
+    static func clearOldNotifications() {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+    }
 
     /// One sound, now. Plays under Do Not Disturb, deliberately.
     static func play() {

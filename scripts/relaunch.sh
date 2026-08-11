@@ -77,7 +77,12 @@ fi
 # The marker is written by Recorder.start and cleared by stop/abandon; it carries
 # its start time so a crash cannot wedge relaunches forever (see CaptureMarker).
 MARKER="$HOME/Library/Application Support/VoiceDispatch/capturing"
-STALE_AFTER=180
+# Mirrors CaptureMarker.staleAfter, which this script cannot read because it is
+# bash. The marker is re-stamped every CaptureMarker.heartbeat seconds for as
+# long as the microphone is open, so age means "silence from the writer", not
+# "length of the utterance". It was the second reading, at 180s, that let this
+# script destroy a live four-minute capture on 10 Aug. Change both or neither.
+STALE_AFTER=20
 GIVE_UP_AFTER=120
 waited=0
 while [ -f "$MARKER" ]; do
