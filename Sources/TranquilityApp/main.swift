@@ -591,6 +591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // restarts, so calling start() on every tick is safe.
 
     private func startPermissionPolling() {
+        ArrivalChime.clearOldNotifications()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -1713,48 +1714,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "hear":
                 announceNext(only: session)
             case "reply":
-                // Silence here is the failure that reads as a broken link: the
-                // browser hands off, the app comes forward, and nothing happens.
-                // A refusal that costs a whole click has to say its name.
-                guard micGranted else {
-                    hud.showResult("The microphone isn't granted, so there is "
-                                   + "nothing to reply with. Settings ▸ Privacy "
-                                   + "▸ Microphone.")
-                    break
-                }
-                guard !recorder.isRecording else { break }
-                // Sweep the spool BEFORE looking, for the reason the announce
-                // path does it (main.swift, `announceNext`): hooks append to a
-                // text file and the app files it into SQLite on a five-second
-                // tick, so a page written seconds ago names a session that is
-                // in the queue and not yet in the table. Looking without
-                // sweeping reports it missing, which is a lie with a five-second
-                // half-life — the worst kind to debug.
+                // A deep link may not record. It is the one rule this surface
+                // has that the others do not need: any page in any browser can
+                // fire one of these, and a link that opens a live microphone is
+                // a page deciding you had something to say. The browser's
+                // consent sheet is not consent to be recorded — it is consent
+                // to open an app.
+                //
+                // So this lands you on the agent with the reply ARMED and waits
+                // for a gesture you make yourself. One ⌥ tap and you are
+                // speaking, which is the same gesture the card has always used;
+                // the link's job ends at putting the target in front of you.
                 _ = try? coordinator?.intake()
-                // The page names its session; that is the whole point of the button.
-                // Unknown id → refuse to open the mic, never fall back to a guess.
+                // The page names its session; that is the whole point of the
+                // button. Unknown id → say so, never fall back to a guess about
+                // which agent your words belong to.
                 guard let session,
                       let target = try? store?.waitingSessionsIncludingHeard()
                           .first(where: { $0.sessionId == session }) else {
-                    hud.showResult("That page's agent isn't in the log. Nothing recorded.")
+                    hud.showResult("That page's agent isn't in the log.")
                     break
                 }
+                guard !recorder.isRecording else { break }
                 let live = (ClaudeAgentsCLI().sessions() ?? [])
                     .first(where: { $0.sessionId == session })
-                let pid = live?.pid
                 let name = tabDisplayName(for: target, live: live)
-                hud.adoptTarget(sessionId: session, pid: pid,
+                hud.adoptTarget(sessionId: session, pid: live?.pid,
                                 label: name, cwd: target.cwd)
                 recordingTarget = session
                 activeConversation = (session, name, target.cwd)
-                // Hands-free, because no key is held: a single ⌥ tap or the Send
-                // button ends it. Without this the recording had no clean ending.
-                handsFreeListening = true
-                coordinator?.speech.stop()
-                try? recorder.start()
-                isBusy = true
-                updateTitle()
-                hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
+                showPanel()
+                announceNext(only: session)
+                if !micGranted {
+                    // Said once, on arrival, rather than discovered at the press.
+                    hud.note("The microphone isn't granted — Settings ▸ Privacy ▸ "
+                             + "Microphone before you can reply.")
+                }
             case "home":
                 // The agent's own page. Written after every turn, so it exists
                 // for any session that has ever been summarized; for one that
