@@ -1576,6 +1576,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     lastStatusLine = "\(StateLegend.Glyph.speaking) \(announcement.brief.topic)"
                     hud.highlight(upTo: announcement.spoken.text.count)
+                    // The agent's page catches up here, off the main thread and
+                    // after the audio: the brief for this turn has just been
+                    // stored, so this is the first moment the page can be
+                    // right, and nothing downstream waits on it. A failure is
+                    // logged and dropped — a stale home base must never cost
+                    // anyone an announcement.
+                    let spokenSession = announcement.event.sessionId
+                    Task.detached { [weak self] in
+                        guard let store = await self?.store else { return }
+                        do {
+                            if let file = try HomeBase.write(sessionId: spokenSession,
+                                                             store: store) {
+                                Permissions.log("homebase: \(file.lastPathComponent) "
+                                                + "for \(spokenSession.prefix(8))")
+                            }
+                        } catch {
+                            Permissions.log("homebase FAILED: \(error)")
+                        }
+                    }
                     // Ruling 14: fully spoken, no gesture in 4s → the grid.
                     scheduleReturnToGrid()
                 case .interrupted(let failure):
@@ -1638,6 +1657,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let ref: String?
             switch parsed {
             case let .discuss(s, r): session = s; ref = r
+            case let .home(s, r):    session = s; ref = r
             case let .hear(s):       session = s; ref = nil
             case let .reply(s):      session = s; ref = nil
             case .show, .unknown:    session = nil; ref = nil
@@ -1695,6 +1715,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 isBusy = true
                 updateTitle()
                 hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
+            case "home":
+                // The agent's own page. Written after every turn, so it exists
+                // for any session that has ever been summarized; for one that
+                // has not, there is nothing to show and the invitation is the
+                // honest answer.
+                if let session, let store,
+                   let file = try? HomeBase.write(sessionId: session, store: store) {
+                    NSWorkspace.shared.open(file)
+                } else {
+                    inviteNewSession(for: ref)
+                }
             case "show":
                 showPanel()
             default:
