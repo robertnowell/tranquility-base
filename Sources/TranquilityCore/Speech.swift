@@ -94,7 +94,15 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
         stop()
         let utterance = AVSpeechUtterance(string: text.text)
         utterance.rate = rate
-        if let voiceIdentifier, let voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier) {
+        // Resolved per utterance, not frozen at construction.
+        //
+        // The chain holds one provider for the life of the app and `speech` is a
+        // `let`, so a voice chosen at construction could never change: picking a new
+        // one from the menu would store the preference and keep speaking in the old
+        // voice. An explicit `voiceIdentifier` still wins — that is how the previewer
+        // auditions a row without disturbing the narrator.
+        let chosen = voiceIdentifier ?? SystemVoiceCatalog.preferredIdentifier()
+        if let chosen, let voice = AVSpeechSynthesisVoice(identifier: chosen) {
             utterance.voice = voice
         }
 
@@ -542,8 +550,10 @@ public struct SpeechChain: Sendable {
 
     public init(
         preferred: (any SpeechProvider)? = ElevenLabsSpeechProvider(),
-        fallback: any SpeechProvider = SystemSpeechProvider(
-            voiceIdentifier: SystemVoiceCatalog.preferredIdentifier())
+        // Bare: the provider resolves the preferred voice per utterance, so a voice
+        // chosen from the menu takes effect on the next announcement rather than the
+        // next launch.
+        fallback: any SpeechProvider = SystemSpeechProvider()
     ) {
         self.preferred = preferred
         self.fallback = fallback

@@ -2190,7 +2190,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func chooseVoice(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
-        VoiceCatalog.selectedVoiceId = id
+        // Two catalogues, two settings. Writing a macOS identifier into
+        // `selectedVoiceId` would store it where only ElevenLabs reads, so the pick
+        // would appear to take and change nothing audible — the same class of silent
+        // no-op as the preview that played one voice for every row.
+        if SystemVoiceCatalog.isSystemVoice(id) {
+            SystemVoiceCatalog.choose(id)
+            // No rebuild needed: SystemSpeechProvider resolves the preference per
+            // utterance, so the next announcement uses it.
+        } else {
+            VoiceCatalog.selectedVoiceId = id
+        }
         lastStatusLine = "voice: \(sender.title)"
         rebuildMenu()
 
@@ -2446,12 +2456,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Picking a voice plays it immediately. A name in a list tells you nothing
         // about what it sounds like, and the whole point of choosing is hearing.
-        let voices = VoiceCatalog.cached()
+        // Free voices belong here too. This submenu listed ElevenLabs voices only and
+        // grouped by ElevenLabs categories, so with no key `voices` was empty and the
+        // whole Voice menu silently vanished — the same fault as the pane, on the
+        // other of the two surfaces. Fixing one and not the other is why the change
+        // looked like it had not landed.
+        let voices = VoiceCatalog.cached() + SystemVoiceCatalog.asCatalogueVoices()
         if !voices.isEmpty {
             let item = NSMenuItem(title: "Voice", action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             let selected = VoiceCatalog.selectedVoiceId
-            for group in ["cloned", "generated", "professional", "premade"] {
+            // Free groups first — they are what most machines have, and on a machine
+            // with no key they are all there is.
+            for group in ["Free · Premium", "Free · Enhanced", "Free · Basic",
+                          "cloned", "generated", "professional", "premade"] {
                 let inGroup = voices.filter { $0.category == group }
                 guard !inGroup.isEmpty else { continue }
                 if submenu.numberOfItems > 0 { submenu.addItem(.separator()) }
