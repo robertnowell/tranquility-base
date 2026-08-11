@@ -67,6 +67,9 @@ public enum HomeBase {
         /// work.
         public let goal: String?
         public let turns: [Turn]
+        /// When this agent last moved. The byline's "as of", and the only
+        /// timestamp the top of the page carries.
+        public let lastActive: Date?
         /// Everything this agent has made. The hub summarises; these hold the
         /// detail, and a count without them is a dead end — a reader who cannot
         /// act on a label stops following the trail.
@@ -74,10 +77,10 @@ public enum HomeBase {
 
         public init(sessionId: String, title: String?, callsign: String?,
                     cwd: String?, goal: String?, turns: [Turn],
-                    pages: [ArtifactStore.Page]) {
+                    pages: [ArtifactStore.Page], lastActive: Date? = nil) {
             self.sessionId = sessionId; self.title = title; self.callsign = callsign
             self.cwd = cwd; self.goal = goal; self.turns = turns
-            self.pages = pages
+            self.pages = pages; self.lastActive = lastActive ?? turns.first?.at
         }
     }
 
@@ -130,53 +133,36 @@ public enum HomeBase {
         let newest = model.turns.first          // turns arrive newest-first
         let ordered = model.turns
 
-        // ---- the block that is allowed to show judgment ---------------------
-        // Everything below this is a projection of the brief table and renders
-        // for any agent forever without a model call — which is where the
-        // dependability comes from, and also why every hub otherwise looks
-        // alike. This is the one place the reader's eye can land before it
-        // starts scanning, so it gets the hierarchy: eyebrow, display line,
-        // deck, then the proposal in the agent's own words.
-        var brief = ""
+        // ---- the top of the page --------------------------------------------
+        // What sits here is decided by subtraction. The eyebrow is gone: a
+        // tracked uppercase label above a headline borrows editorial authority
+        // it has not earned, and Butterick bounds caps to "less than one line"
+        // in any case. The metadata strip is gone too — "71 turns · 5 pages" is
+        // a dateline in all but name, and the Times abolished that pattern in
+        // 2023 after finding readers misread it, replacing it with plain
+        // language folded into the byline. Counts live over the things they
+        // count, where the list already proves them.
+        //
+        // What replaces four decorative devices is one free distinction the
+        // newspapers have always used: the SERIF carries the story, the SANS
+        // carries facts about the story. A reader separates them before reading
+        // a word.
+        var head = ""
         if let n = newest {
-            var deck = ""
-            if let goal = model.goal { deck = "<p class=\"deck\">\(e(goal))</p>" }
-            var quote = ""
-            if let q = n.question, !q.isEmpty {
-                quote = "<blockquote>\(e(q))<span class=\"attrib\">Waiting on you</span></blockquote>"
-            } else if let next = n.nextStep, !next.isEmpty {
-                quote = "<blockquote>\(e(next))<span class=\"attrib\">Proposed</span></blockquote>"
+            let deck = n.question.map { "\(e(n.happened)) \(e($0))" }
+                ?? (n.nextStep.map { "\(e(n.happened)) Proposing: \(e($0))" }
+                    ?? e(n.happened))
+            var byline = model.callsign.map { "Agent \(e($0))" } ?? "Agent \(e(String(model.sessionId.prefix(8))))"
+            if let dir = (model.cwd as NSString?)?.lastPathComponent, !dir.isEmpty {
+                byline += ", working in \(e(dir))"
             }
-            let dir = (model.cwd as NSString?)?.lastPathComponent ?? "—"
-            // Built outside the template: a line continuation inside a Swift
-            // multiline string keeps the next line's indentation, which shipped
-            // "5   pages" into the header.
-            let pageCount = "\(model.pages.count) page\(model.pages.count == 1 ? "" : "s")"
-            brief = """
-                <section class="brief">
-                  <p class="eyebrow">Where this stands</p>
-                  <h1 class="display">\(e(n.topic))</h1>
-                  \(deck)
-                  <p class="line">\(ordered.count) turns &middot; \(pageCount) &middot; in <b>\(e(dir))</b></p>
-                  <div class="rule"></div>
-                  <p class="body"><span class="cap">\(e(String(n.happened.prefix(1))))</span>\
-                  \(e(String(n.happened.dropFirst())))</p>
-                  \(quote)
-                </section>
-                """
-        }
-
-        // ---- the pages, newest first ----------------------------------------
-        var pages = ""
-        if !model.pages.isEmpty {
-            let items = model.pages.reversed().map { page in
-                "<li><a class=\"page\" href=\"file://\(e(page.path))\">\(e(page.label))</a>"
-                + "<span class=\"on\">\(e(dayStamp.string(from: page.at)))</span></li>"
-            }.joined()
-            pages = """
-                <h2>What it has made</h2>
-                <p class="sub">The hub summarises; these hold the detail.</p>
-                <ul class="pages">\(items)</ul>
+            if let last = model.lastActive {
+                byline += " · last moved \(e(stamp.string(from: last)))"
+            }
+            head = """
+                <h1>\(e(n.topic))</h1>
+                <p class="deck">\(deck)</p>
+                <p class="byline">\(byline)</p>
                 """
         }
 
@@ -220,6 +206,26 @@ public enum HomeBase {
                 + e(shown) + (topics.count > 14 ? "…" : ".") + "</div>"
         }
 
+        // ---- what it made: the documents' own titles, not their filenames ----
+        var pages = ""
+        if !model.pages.isEmpty {
+            let items = model.pages.reversed().map { page -> String in
+                let summary = ArtifactStore.summarize(path: page.path)
+                let name = summary.title ?? page.label
+                let blurb = summary.blurb.map {
+                    " data-blurb=\"\(e($0))\""
+                } ?? ""
+                return "<li><a class=\"page\" href=\"file://\(e(page.path))\"\(blurb)>"
+                    + "\(e(name))</a><span class=\"on\">\(e(dayStamp.string(from: page.at)))</span></li>"
+            }.joined()
+            let count = model.pages.count
+            pages = """
+                <h2>What it has made</h2>
+                <p class="sub">\(count) page\(count == 1 ? "" : "s"). This page summarises; those hold the detail.</p>
+                <ul class="pages">\(items)</ul>
+                """
+        }
+
         let empty = ordered.isEmpty
             ? "<div class=\"digest\">Nothing summarized yet. This page fills in as the "
               + "agent finishes turns.</div>" : ""
@@ -232,69 +238,76 @@ public enum HomeBase {
         <meta name="intranet:type" content="agent">
         <meta name="intranet:visibility" content="local">
         <style>
-          :root{--bg:#fbfaf8;--fg:#16150f;--dim:#6b675c;--faint:#a29c8d;--accent:#1f4f8f;
-                --rule:#ddd8cc;--card:#f2efe8;--amber:#a8762a;
-                --serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif}
-          @media(prefers-color-scheme:dark){:root{--bg:#131310;--fg:#eceae2;--dim:#8f8a7c;
-                --faint:#6a6558;--accent:#7fb0e8;--rule:#2e2c26;--card:#1e1d19;--amber:#d9a441}}
+          /* Two families, one job each — the newspaper's own division of labour.
+             The serif carries the story; the sans carries facts ABOUT the story
+             (byline, dates, tags). A reader tells them apart before reading a
+             word, which is one free distinction doing the work four decorative
+             ones were doing badly. Colour is the weakest tool in Butterick's
+             list — "position, size, font, and sometimes color" — so amber is
+             spent in exactly one place: the risk tag. */
+          :root{--bg:#fbfaf8;--fg:#16150f;--dim:#5d5a51;--faint:#94908a;--rule:#ddd8cc;
+                --amber:#a8762a;--card:#f2efe8;--accent:#1f4f8f;
+                --serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;
+                --sans:ui-sans-serif,-apple-system,'Helvetica Neue',sans-serif}
+          @media(prefers-color-scheme:dark){:root{--bg:#131310;--fg:#eceae2;--dim:#a5a196;
+                --faint:#6a6558;--rule:#2e2c26;--amber:#d9a441;--card:#1e1d19;--accent:#7fb0e8}}
           *{box-sizing:border-box}html{background:var(--bg)}
-          body{margin:0;background:var(--bg);color:var(--fg);
-               font:16px/1.6 ui-sans-serif,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
-          .wrap{max-width:760px;margin:0 auto;padding:60px 26px 46px}
-          .brief{padding:0 0 26px;border-bottom:1px solid var(--rule);margin-bottom:30px}
-          .eyebrow{font:600 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.18em;
-                   text-transform:uppercase;color:var(--amber);margin:0 0 14px}
-          .display{font-family:var(--serif);font-size:33px;line-height:1.1;letter-spacing:-.015em;
-                   font-weight:600;margin:0 0 14px;max-width:19ch}
-          .deck{font-family:var(--serif);font-size:17.5px;line-height:1.5;color:var(--dim);
-                margin:0 0 18px;max-width:52ch}
-          .line{font:13px/1.5 ui-monospace,Menlo,monospace;color:var(--faint);margin:0;
-                padding:12px 0 0;border-top:1px solid var(--rule)}
-          .line b{color:var(--dim);font-weight:600}
-          .rule{width:56px;height:2px;background:var(--amber);margin:26px 0 18px}
-          .body{font-family:var(--serif);font-size:16.5px;line-height:1.62;margin:0 0 20px;
-                max-width:58ch}
-          .cap{float:left;font-family:var(--serif);font-size:52px;line-height:.86;
-               padding:4px 9px 0 0;font-weight:600}
-          blockquote{margin:0;padding:0 0 0 22px;border-left:2px solid var(--amber);
-                     font-family:var(--serif);font-style:italic;font-size:18px;line-height:1.45;
-                     max-width:50ch}
-          .attrib{display:block;margin-top:12px;font:13px/1 ui-monospace,Menlo,monospace;
-                  color:var(--faint);font-style:normal}
-          h2{font-family:var(--serif);font-size:21px;font-weight:600;letter-spacing:-.01em;
-             color:var(--fg);margin:40px 0 2px;position:relative;padding-top:16px}
-          h2::before{content:"";position:absolute;top:0;left:0;width:34px;height:2px;
-             background:var(--amber)}
-          .sub{color:var(--faint);font-size:13px;margin:0 0 10px}
-          ul.pages{list-style:none;padding:0;margin:10px 0 0}
-          ul.pages li{display:flex;align-items:baseline;gap:10px;padding:9px 0;
+          body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--serif);
+               font-size:18px;line-height:1.62;-webkit-font-smoothing:antialiased}
+          /* 66 characters is Bringhurst's ideal; 45–75 the acceptable band. */
+          .wrap{max-width:660px;margin:0 auto;padding:78px 26px 56px}
+          h1{font-size:40px;line-height:1.08;letter-spacing:-.02em;font-weight:600;
+             margin:0 0 18px;max-width:17ch}
+          .deck{font-size:20px;line-height:1.5;color:var(--dim);margin:0 0 22px;max-width:60ch}
+          .byline{font-family:var(--sans);font-size:13.5px;line-height:1.5;color:var(--faint);
+                  margin:0 0 42px;padding-bottom:22px;border-bottom:1px solid var(--rule)}
+          h2{font-size:26px;line-height:1.2;letter-spacing:-.015em;font-weight:600;
+             margin:48px 0 6px}
+          .sub{font-family:var(--sans);font-size:13px;color:var(--faint);margin:0 0 14px}
+          ul.pages{list-style:none;padding:0;margin:0}
+          ul.pages li{display:flex;align-items:baseline;gap:14px;padding:12px 0;
                       border-top:1px solid var(--rule)}
-          ul.pages .page{color:var(--fg);text-decoration:none;font-size:14.5px;flex:1}
-          ul.pages .on{font:11px ui-monospace,Menlo,monospace;color:var(--faint)}
-          ol{list-style:none;padding:0;margin:8px 0 0}
-          ol li{display:flex;gap:16px;padding:13px 0;border-top:1px solid var(--rule)}
-          .when{flex:0 0 92px;font:11.5px/1.7 ui-monospace,Menlo,monospace;color:var(--faint)}
+          ul.pages .page{color:var(--fg);text-decoration:none;font-size:18px;flex:1;
+                         line-height:1.4}
+          ul.pages .page:hover{color:var(--accent)}
+          ul.pages .on{font-family:var(--sans);font-size:12.5px;color:var(--faint);
+                       white-space:nowrap}
+          ol{list-style:none;padding:0;margin:0}
+          ol li{display:flex;gap:20px;padding:16px 0;border-top:1px solid var(--rule)}
+          .when{flex:0 0 84px;font-family:var(--sans);font-size:12.5px;line-height:1.9;
+                color:var(--faint)}
           .what{flex:1;min-width:0}
-          .what h3{margin:0 0 5px;font-family:var(--serif);font-size:17px;font-weight:600;
-                   letter-spacing:-.01em}
-          .what p{margin:0 0 4px;font-size:14px}
-          .what .m{color:var(--dim);font-size:13px}
-          .what span{font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;
-                     text-transform:uppercase;color:var(--faint);margin-right:6px}
+          .what h3{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-.01em}
+          .what p{margin:0 0 5px;font-size:16.5px;max-width:60ch}
+          .what .m{font-size:15.5px;color:var(--dim)}
+          /* The only caps left, and the only amber: a fragment marking a field. */
+          .what span{font-family:var(--sans);font-size:11px;font-weight:600;
+                     letter-spacing:.06em;text-transform:uppercase;color:var(--faint);
+                     margin-right:7px}
           .what .risky span{color:var(--amber)}
-          li.line .what h3{font-size:15px;font-weight:600;color:var(--dim)}
-          li.line .what .h{color:var(--dim);font-size:13.5px}
-          .digest{margin-top:14px;padding:14px 16px;background:var(--card);border-radius:10px;
-                  font-size:13.5px;color:var(--dim)}
-          .digest b{color:var(--fg)}
-          footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--rule);
-                 font:12.5px/1.6 ui-monospace,Menlo,monospace;color:var(--faint);
-                 display:flex;flex-wrap:wrap;gap:12px;align-items:center}
-          footer b{color:var(--dim)}
+          li.line .what h3{font-size:17px}
+          li.line .what .h{color:var(--dim);font-size:15.5px}
+          .digest{margin-top:18px;padding:16px 18px;background:var(--card);border-radius:10px;
+                  font-size:16px;color:var(--dim);max-width:64ch}
+          .digest b{color:var(--fg);font-weight:600}
+          footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--rule);
+                 font-family:var(--sans);font-size:13px;color:var(--faint);
+                 display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+          footer b{color:var(--dim);font-weight:600}
           footer .discuss{margin-left:auto;text-decoration:none;background:var(--accent);
-                          color:var(--bg);padding:8px 13px;border-radius:7px;font-weight:640}
+                          color:var(--bg);padding:8px 14px;border-radius:7px;font-weight:600}
+          /* Hover cards, only where hover means something. A tap fires hover and
+             activation together, so on touch this whole affordance is absent
+             rather than sticky. */
+          #card{position:fixed;z-index:9;max-width:340px;padding:13px 15px;background:var(--card);
+                border:1px solid var(--rule);border-radius:10px;font-family:var(--sans);
+                font-size:13.5px;line-height:1.5;color:var(--dim);
+                box-shadow:0 8px 26px rgba(0,0,0,.14);opacity:0;pointer-events:none;
+                transition:opacity .2s}
+          #card.on{opacity:1;pointer-events:auto}
+          @media(hover:none),(pointer:coarse){#card{display:none}}
         </style></head><body><div class="wrap">
-        \(brief)
+        \(head)
         \(pages)
         <h2>What it has done</h2>
         <p class="sub">Newest first. Older turns lose resolution, never their links.</p>
@@ -303,7 +316,41 @@ public enum HomeBase {
         <footer>Created by <b>\(e(model.title ?? "—"))</b> &middot;
         callsign <b>\(e(model.callsign ?? "—"))</b> &middot; agent \(e(String(model.sessionId.prefix(8))))
         <a class="discuss" href="tranquilitybase://discuss?session=\(e(model.sessionId))">Discuss with agent</a>
-        </footer></div></body></html>
+        </footer></div>
+        <div id="card" role="tooltip"></div>
+        <script>
+        // WCAG 1.4.13: the card must be dismissible (Escape), hoverable (the
+        // pointer can move onto it), and persistent (it does not time out).
+        // The 650ms delay is Wikipedia's, and their reason is worth keeping:
+        // some readers hover over text while reading, so an instant preview
+        // measures as intrusive rather than helpful.
+        (function(){
+          var card = document.getElementById('card'), timer = null, live = null;
+          function hide(){ clearTimeout(timer); card.classList.remove('on'); live = null; }
+          function show(a){
+            var text = a.getAttribute('data-blurb'); if(!text) return;
+            card.textContent = text; card.classList.add('on'); live = a;
+            var r = a.getBoundingClientRect();
+            var top = r.bottom + 10, left = Math.min(r.left, innerWidth - 360);
+            if (top + card.offsetHeight > innerHeight - 12) top = r.top - card.offsetHeight - 10;
+            card.style.top = Math.max(12, top) + 'px';
+            card.style.left = Math.max(12, left) + 'px';
+          }
+          document.querySelectorAll('a.page[data-blurb]').forEach(function(a){
+            a.addEventListener('mouseenter', function(){
+              clearTimeout(timer); timer = setTimeout(function(){ show(a); }, 650);
+            });
+            a.addEventListener('mouseleave', function(){
+              clearTimeout(timer);
+              setTimeout(function(){ if(!card.matches(':hover')) hide(); }, 120);
+            });
+            a.addEventListener('focus', function(){ show(a); });
+            a.addEventListener('blur', hide);
+          });
+          card.addEventListener('mouseleave', hide);
+          document.addEventListener('keydown', function(e){ if(e.key === 'Escape') hide(); });
+        })();
+        </script></body></html>
         """
     }
 }
