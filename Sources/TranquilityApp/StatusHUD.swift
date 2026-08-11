@@ -32,6 +32,22 @@ final class StatusHUD: NSObject {
     private var newSessionButton: NSButton!
     private var openPageButton: NSButton!
     private var hintLabel: NSTextField!
+    /// The capture strip's own label, and the hairline that separates it from
+    /// whatever it sits under.
+    ///
+    /// The capture used to speak through `stateLabel` — one pill, at the top —
+    /// which is why starting a reply had to take the card's pill, and therefore
+    /// its whole face. Given a slot of its own at the bottom, the capture stops
+    /// competing for the card's: the card keeps its placard, its identity and
+    /// its ink, and the microphone says what it is doing underneath.
+    ///
+    /// ONE slot, three phases (ruling item 3): arming, listening and read-back
+    /// all write this one label, and the box does not move between them.
+    /// What the last Don't send asked for, so the drill can see §D hold.
+    /// Nil until the button is pressed; the ruling says it must then be false.
+    private var dontSendRestartedListening: Bool?
+    private var stripLabel: NSTextField!
+    private var stripRule: NSView!
     private var contentStack: NSStackView?
     /// The collapsed column. Built once, hidden until the width changes.
     private var strip: CollapsedStrip?
@@ -187,9 +203,82 @@ final class StatusHUD: NSObject {
         let prior = (state: state, face: face)
         guard transition(to: .arming, because: "arm window opened") else { return false }
         stashBeforeArming = prior
-        face = Face(listeningTarget: target ?? "")
+        beginCaptureFace(target: target ?? "")
         render()
         return true
+    }
+
+    /// Start a capture on the CURRENT face rather than in place of it.
+    ///
+    /// This is the whole of the strip design (ruling item 1): "a capture
+    /// augments the face; it does not replace it." Every capture entry point
+    /// used to run `face = Face(listeningTarget:)`, which is why answering a
+    /// reply cost you the reply — three faces in sequence for one continuous
+    /// act, and a read-back that asked you to check words against a message no
+    /// longer on screen.
+    ///
+    /// With no card to sit under, this IS the old behaviour: a fresh face whose
+    /// only content is the strip, which is ruling §E — a capture begun from the
+    /// grid has nothing to augment, so the strip is the whole panel.
+    ///
+    /// The placard is snapshotted because it is the one part of the card the
+    /// baseline would otherwise recompute from `state`, and `state` is now the
+    /// capture's. `placardOverride` already exists for exactly this — naming a
+    /// pill the state cannot name — so the ladder's "◀ FINDINGS" survives a
+    /// reply without a second mechanism.
+    private func beginCaptureFace(target: String) {
+        // The branch decides whether the card lives, so it says which way it
+        // went and why. Production disagreed with the drill on 10 Aug — the
+        // drill kept the card, the real ⌥ did not — and there was no line in
+        // the log that could tell the two apart.
+        Permissions.log("capture face: hasCard=\(face.hasCard) "
+                        + "body=\(face.body.count) rows=\(face.sessionRows.count) "
+                        + "title=\(face.title) state=\(state.name)")
+        guard face.hasCard else {
+            face = Face(listeningTarget: target)
+            return
+        }
+        if face.placardOverride.isEmpty {
+            face.placardOverride = stateLabel.attributedStringValue.string
+        }
+        face.listeningTarget = target
+    }
+
+    /// Paint the capture strip: rule, placard, and an optional second line.
+    ///
+    /// The branch is the whole of ruling §E. With a card on screen the capture
+    /// speaks from the bottom and leaves `stateLabel` to the card; with nothing
+    /// underneath, the strip IS the panel and the pill returns to the top,
+    /// which is exactly what the panel did before this change — so a capture
+    /// from the grid is byte-identical to the one that shipped.
+    private func renderCaptureStrip(_ placard: NSAttributedString?,
+                                    detail: String? = nil) {
+        guard face.hasCard else {
+            // Nothing to sit under: the pill climbs back to the top and this is
+            // the panel that shipped. A capture from the grid needs the dot and
+            // the name, because nothing else on screen carries either.
+            titleLabel.isHidden = true
+            if let placard { stateLabel.attributedStringValue = placard }
+            return
+        }
+        stripRule.isHidden = false
+        // Under a card the strip says as little as possible (ruled 10 Aug).
+        // The pill's two jobs are both already done above it: the green dot
+        // means "the mic is open", which the live waveform says better, and the
+        // target name means "this is who you are answering", which is the
+        // card's own title — so the pill was printing the agent's name twice on
+        // one panel. What is left is the meter, which is the only part that was
+        // ever telling you something new.
+        guard let placard else { return }
+        stripLabel.isHidden = false
+        let line = NSMutableAttributedString(attributedString: placard)
+        if let detail, !detail.isEmpty {
+            line.append(NSAttributedString(
+                string: "\n" + detail,
+                attributes: [.font: NSFont.systemFont(ofSize: 11),
+                             .foregroundColor: StateLegend.Palette.secondary]))
+        }
+        stripLabel.attributedStringValue = line
     }
 
     /// Restore exactly the face arming replaced. No-op unless the panel is
@@ -217,8 +306,8 @@ final class StatusHUD: NSObject {
         // not the focused field on this screen. The hands-free ✕/✓ buttons are
         // dead code deleted (simplification pass): they were never attached to
         // any view hierarchy, and the chords cover both actions.
-        face = Face(listeningTarget: currentTarget?.label ?? dictationDestination
-                        ?? StateLegend.clipboardDestination)
+        beginCaptureFace(target: currentTarget?.label ?? dictationDestination
+                            ?? StateLegend.clipboardDestination)
         render()
     }
 
@@ -290,11 +379,19 @@ final class StatusHUD: NSObject {
         else { return }
         onCancelSend = cancel
         onCommitSend = send
-        // READBACK placard via the same placardOverride the ladder pills use;
-        // the identity (mono) titles the card, the words being sent are the body.
-        face = Face(title: label, body: "\u{201C}\(text)\u{201D}",
-                    placardOverride: StateLegend.readbackPlacard,
-                    countdownSeconds: seconds)
+        // The read-back joins the strip instead of taking the stage (ruling
+        // item 4): the READBACK placard, the words and the countdown all render
+        // under the reply they answer, which is the first time checking one
+        // against the other has been possible. With no card to sit under, the
+        // strip is the whole panel and this is the old behaviour verbatim.
+        if face.hasCard {
+            face.readback = text
+            face.countdownSeconds = seconds
+        } else {
+            face = Face(title: label, body: "\u{201C}\(text)\u{201D}",
+                        placardOverride: StateLegend.readbackPlacard,
+                        countdownSeconds: seconds)
+        }
         render()
     }
 
@@ -345,8 +442,14 @@ final class StatusHUD: NSObject {
     // therefore redundant, and it was not free: it crashed in swift_getObjectType
     // on a bad executor pointer, killing the app on a button press. `nonisolated`
     // plus assumeIsolated keeps the isolation guarantee without the check.
-    @objc nonisolated private func cancelPendingSendTapped() {
-        MainActor.assumeIsolated { cancelPendingSend(restartListening: true) }
+    @objc nonisolated func cancelPendingSendTapped() {
+        // FALSE (ruling §D, "no outcome reopens the microphone on its own").
+        // Don't send meant "don't send, and start listening again", so the one
+        // button whose entire job is to stop cost you an open mic you did not
+        // ask for. Holding ⌥ is how you say it again; that path passes false
+        // for the same reason and has always been the only one that should
+        // restart a capture.
+        MainActor.assumeIsolated { cancelPendingSend(restartListening: false) }
     }
 
     @objc nonisolated private func breadcrumbClicked() {
@@ -429,8 +532,17 @@ final class StatusHUD: NSObject {
         guard transition(to: .transcribing(startedAt: Date()),
                          because: "transcription started")
         else { return }
-        face = Face(title: currentTarget?.label ?? "", body: message,
-                    transcription: (cancel: onCancel, retry: onRetry))
+        // A capture phase like the others: the card stays and the strip says
+        // what is happening to your words. Without this the card survived the
+        // microphone and then died on the way to the transcript, which is the
+        // same defect one step later.
+        if face.hasCard {
+            face.transcription = (cancel: onCancel, retry: onRetry)
+            face.captureNote = message
+        } else {
+            face = Face(title: currentTarget?.label ?? "", body: message,
+                        transcription: (cancel: onCancel, retry: onRetry))
+        }
         render()
     }
 
@@ -458,8 +570,24 @@ final class StatusHUD: NSObject {
     /// left to do, so it stays until dismissed, titled by the session it is
     /// about — the one displayed identity, in mono.
     func showResult(_ message: String) {
+        // Read BEFORE the transition, which is the only moment that can tell
+        // the two kinds of failure apart: one that arrives while the capture
+        // flow owns the stage happened TO the capture; one that arrives from
+        // idle or a card — the invitation, an orphaned artifact — did not, and
+        // keeps the full card it has always had. Two drills caught this being
+        // applied to both (notice.leak's plainFailureHasNoDoor and
+        // invitation's failureIsStillAmber), which is exactly the overreach
+        // they exist to refuse.
+        let failedDuringCapture = state.ownsStage
         guard transition(to: .result, because: "reply failed") else { return }
-        face = Face(title: currentTarget?.label ?? "", body: message)
+        // A failure that happened TO a capture joins the strip, for the same
+        // reason the read-back did. Amber either way; the channel does not
+        // change, only the slot it speaks from.
+        if face.hasCard, failedDuringCapture {
+            face.captureFault = message
+        } else {
+            face = Face(title: currentTarget?.label ?? "", body: message)
+        }
         render()
     }
 
@@ -838,6 +966,52 @@ final class StatusHUD: NSObject {
         /// instead of describing itself. A face of idle, not a state of its own:
         /// nothing about what the panel ADMITS changes, only what it says.
         var gettingStarted = false
+
+        /// How far the read-along got, in DISPLAY coordinates. `nil` is the
+        /// unspoken baseline, which is why a fresh `Face()` starts grey.
+        ///
+        /// The ink is part of the face (ruling §A, docs/ruling-capture-returns
+        /// -to-its-card.md). It used to live only in the pixels: `render()`'s
+        /// `.speaking` arm called `highlight(upTo: 0)` unconditionally, because
+        /// entering `.speaking` had always meant a fresh card. Any repaint of a
+        /// face that had been read to therefore reset it to unread grey and
+        /// re-armed the loading wash — measured, `20:21:29 highlight upTo=0→0
+        /// of 437`. As a field, any repaint of any face restores its own ink,
+        /// because the cursor travelled with the face.
+        ///
+        /// DISPLAY space, not spoken space, and this is load-bearing: the card
+        /// shows the unredacted text while the voice counts in the sanitized
+        /// one, and `currentSpoken` may have moved on by the time a face is
+        /// repainted. Re-mapping a stale spoken index is how the ink would come
+        /// back in the wrong place. The mapping happens once, at `highlight`.
+        var spokenUpTo: Int?
+
+        /// Whether this face is a CARD — something a capture can sit under.
+        ///
+        /// The strip ruling's §E: "a capture begun from the grid has no card to
+        /// sit under, so the strip is the whole panel, exactly as today." The
+        /// question the capture entry points have to answer is therefore not
+        /// "what state am I in" but "is there anything here worth keeping", and
+        /// the face can answer it about itself. Derived, never stored: a stored
+        /// flag is one more thing that can disagree with the face it describes.
+        var hasCard: Bool { !body.isEmpty && sessionRows.isEmpty }
+
+        /// The words waiting to be sent, shown in the strip during the undo
+        /// window. Separate from `body`, which belongs to the card underneath —
+        /// the whole point of the read-back moving into the strip is that the
+        /// reply and the message it answers are on screen at the same time.
+        var readback: String?
+
+        /// What the strip says during `.transcribing` — "Transcribing your
+        /// reply…" and, past twenty seconds, the slow note. On the face rather
+        /// than read from the state so the one strip painter has one source.
+        var captureNote: String?
+
+        /// A capture that ended badly, said in the strip instead of the card.
+        /// The failure is ABOUT the reply you just spoke, so it belongs under
+        /// the message you spoke it to — taking the whole panel for it throws
+        /// away the one thing you would need in order to try again.
+        var captureFault: String?
     }
     private var face = Face()
 
@@ -918,6 +1092,13 @@ final class StatusHUD: NSObject {
         // a state that never mentions them must not inherit them.
         bodyLabel.font = .systemFont(ofSize: 12)
         bodyLabel.alignment = .natural
+        // The ink is a BODY ATTRIBUTE, so it belongs to the baseline: the line
+        // above writes a plain string and would otherwise erase the read-along
+        // on every repaint that is not `.speaking` — which, now that a capture
+        // keeps the card, is most of them. Only faces that have actually been
+        // read to carry a cursor; a `.result` or `.receipt` card has none and
+        // keeps its full-dark body exactly as before.
+        if let cursor = face.spokenUpTo { paintInk(displayCursor: cursor) }
         hintLabel.stringValue = ""
         goButton.isHidden = currentTarget?.pid == nil
         // The card's second door. It rides the same rule as "Go to agent" —
@@ -929,6 +1110,12 @@ final class StatusHUD: NSObject {
         micSettingsButton.isHidden = true
         newSessionButton.isHidden = true
         countdownBar.isHidden = true; meter.isHidden = true
+        // The strip belongs to the capture arms alone. Both the label AND its
+        // rule are baselined — a rule left behind is the residue class this
+        // funnel exists to close, and it would draw a line across a card that
+        // has nothing under it.
+        stripLabel.isHidden = true; stripRule.isHidden = true
+        stripLabel.stringValue = ""
         voiceList.isHidden = true; waitingRows.isHidden = true
         gearButton.isHidden = false; backButton.isHidden = true
         // Only the grid can be collapsed: a card is a conversation in progress
@@ -941,21 +1128,35 @@ final class StatusHUD: NSObject {
         cancelTranscriptionButton.isHidden = true; retryTranscriptionButton.isHidden = true
 
         switch state {
-        case .hidden, .preparing, .transcribing, .receipt:
+        case .transcribing:
+            if let note = face.captureNote {
+                renderCaptureStrip(placardText(note))
+            }
+
+        case .hidden, .preparing, .receipt:
             break
 
         case .speaking:
             // Karaoke starts unspoken (ui-pass-7, ruling 6): the card's text
             // first paints entirely in the faint treatment; ink arrives only
-            // word-by-word with the voice. highlight(upTo: 0) IS the initial
-            // attribution — without it the baseline's plain stringValue showed
-            // every word full-dark until the first word event repainted it.
-            highlight(upTo: 0)
+            // word-by-word with the voice. The paint IS the initial attribution
+            // — without it the baseline's plain stringValue showed every word
+            // full-dark until the first word event repainted it.
+            //
+            // From the face, not from zero (ruling §A). A fresh card carries no
+            // cursor and paints grey; a card that has been read to — a ⌃⌃ rung
+            // you are part-way through — repaints at the cursor it reached.
+            let inkCursor = face.spokenUpTo ?? 0
+            paintInk(displayCursor: inkCursor)
             // The card is up but the audio is not here yet. Until now that
             // window had no affordance at all: a full card of grey text, ink
             // that never moved, and nothing to say whether it was loading or
             // dead. On a slow link it could sit there for eleven seconds.
-            armBodyShimmer()
+            //
+            // Only when nothing has been spoken yet. Re-arming the wash over
+            // text that is already half-inked is the other half of the "it
+            // reset" symptom — the words go grey AND start loading again.
+            if inkCursor == 0 { armBodyShimmer() }
 
         case .idle where !face.sessionRows.isEmpty:
             // The grid: the idle face IS one row per live session (WS-B, ruled).
@@ -1017,21 +1218,37 @@ final class StatusHUD: NSObject {
             // it draws its resting floor. Same widgets as .listening; the
             // upgrade at hold-resolution is an alpha/content change, not a
             // relayout.
-            titleLabel.isHidden = true
-            stateLabel.attributedStringValue = armingPill()
+            // The card, if there is one, is untouched — title, body and ink
+            // all stay where the baseline put them. Only when there is nothing
+            // to sit under does the pill climb back to the top.
+            renderCaptureStrip(face.hasCard ? nil : armingPill())
             meter.isHidden = false
             meter.reset()
 
         case .listening:
-            titleLabel.isHidden = true
             // The pill's dot in channel green (ruled): mic open = go.
-            stateLabel.attributedStringValue = listeningPill()
+            renderCaptureStrip(face.hasCard ? nil : listeningPill())
             meter.isHidden = false
 
         case .pendingSend:
             // Exactly ONE negative (ruled), as a quiet text action.
             dontSendButton.isHidden = false
             countdownBar.isHidden = false
+            // The read-back is the strip's third phase, in the same slot the
+            // other two used. The placard names it; the words follow.
+            if let readback = face.readback {
+                renderCaptureStrip(placardText(StateLegend.readbackPlacard),
+                                   detail: "\u{201C}\(readback)\u{201D}")
+            }
+
+        case .result where face.captureFault != nil:
+            // The card keeps its own placard, identity and ink; the fault
+            // speaks from the strip, in the needs-you channel.
+            renderCaptureStrip(NSAttributedString(
+                string: "\(StateLegend.Glyph.needsYou) \(face.captureFault ?? "")",
+                attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                             .foregroundColor: StateLegend.Palette.fault]))
+            micSettingsButton.isHidden = !face.offersMicSettings
 
         case .result:
             // A card that waits until dismissed. Amber presence beyond the glyph
@@ -2008,6 +2225,148 @@ final class StatusHUD: NSObject {
         recordingEnded()
         endCapture(because: "selftest arm cleanup")
 
+        // The ink drill (10 Aug). The defect: a card you have been reading
+        // resets to unread grey the moment a capture repaints it, because the
+        // ink lived in the pixels instead of the face. That is incident 1 of
+        // docs/ruling-capture-returns-to-its-card.md — reported, specified, and
+        // until now unbuilt. Arm-and-revert is the path that reproduces it with
+        // today's API; it is also the path the capture strip is about to make
+        // the MAIN path, which is why this lands before the strip and not with
+        // it. Read from the pixels, never from `face.spokenUpTo` — asking the
+        // field would only prove the field agrees with itself.
+        let inkBody = "Finished the poller and the hero binding, then reran the "
+            + "promotions suite; four cases still fail on the same null topic."
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize(inkBody),
+            sessionId: "ink", pid: 1, project: "promotions copy", cwd: "/tmp")
+        let inkFresh = inkBrightLength
+        highlight(upTo: 40)
+        let inkRead = inkBrightLength
+        showArming(target: "promotions copy")
+        let inkArmed = inkBrightLength
+        revertArming(because: "selftest ink")
+        let inkRestored = inkBrightLength
+        SelfTest.report("ink", [
+            ("freshCardStartsUnspoken", inkFresh == 0),
+            ("readingLightsTheInk", inkRead > 0),
+            ("survivesTheCapture", inkRestored == inkRead),
+        ])
+        Permissions.log("selftest ink: fresh=\(inkFresh) read=\(inkRead) "
+                        + "armed=\(inkArmed) restored=\(inkRestored)")
+        endCapture(because: "selftest ink cleanup")
+
+        // The strip drill (10 Aug). The promise is one sentence — speaking to
+        // an agent does not cost you the thing it said — so the assertions are
+        // about the CARD, not about the strip: its identity, its ink and its
+        // placard must be byte-identical on the other side of a capture. The
+        // strip merely has to show up.
+        let stripBody = "Reran the promotions suite after the binding fix; four "
+            + "cases still fail on the same null topic."
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize(stripBody),
+            sessionId: "strip", pid: 1, project: "promotions copy", cwd: "/tmp")
+        highlight(upTo: 30)
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let cardTitle = titleLabel.stringValue
+        let cardBody = bodyLabel.stringValue
+        let cardPlacard = stateLabel.attributedStringValue.string
+        let cardInk = inkBrightLength
+        let topBefore = panel?.frame.maxY ?? 0
+
+        showArming(target: "promotions copy")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let armedKeepsCard = titleLabel.stringValue == cardTitle
+            && bodyLabel.stringValue == cardBody && !titleLabel.isHidden
+        let armedKeepsPlacard = stateLabel.attributedStringValue.string == cardPlacard
+        let armedInk = inkBrightLength
+        // The RULE, not the label: under a card the strip is deliberately
+        // wordless for arming and listening, so asserting on the label would
+        // now assert the opposite of the ruling.
+        let armedStrip = !stripRule.isHidden && stripLabel.isHidden
+
+        showListening(level: { 0.3 })
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let listeningInk = inkBrightLength
+        let listeningStrip = !stripRule.isHidden && stripLabel.isHidden
+        let topDuring = panel?.frame.maxY ?? 0
+
+        // Through transcribing, because that is the real order and the
+        // legality table enforces it: `.listening` does not admit
+        // `.pendingSend`. The first version of this drill skipped the step and
+        // the refusal made the read-back assertion fail for the wrong reason.
+        showTranscribing("Transcribing your reply…", onCancel: {}, onRetry: {})
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let transcribingInk = inkBrightLength
+        let transcribingStrip = !stripRule.isHidden
+        showPendingSend(text: "ship it", label: "promotions copy",
+                        seconds: 60, send: {}, cancel: { _ in })
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let readbackInStrip = stripLabel.stringValue.contains("ship it")
+        let readbackKeepsCard = bodyLabel.stringValue == cardBody
+        let readbackInk = inkBrightLength
+        let topAfter = panel?.frame.maxY ?? 0
+        _ = cancelPendingSend(restartListening: false)
+        endCapture(because: "selftest strip cleanup")
+
+        // §E: a capture begun from the grid has nothing to sit under, so the
+        // strip is the whole panel — the behaviour that shipped, unchanged.
+        showIdle(note: nil, rows: [
+            .init(id: "s1", name: "Fix hero image binding",
+                  callsign: "promotions copy", lamp: .ready),
+        ])
+        showArming(target: "promotions copy")
+        let gridCaptureIsWholePanel = stripLabel.isHidden && titleLabel.isHidden
+        endCapture(because: "selftest strip grid cleanup")
+
+        // §D: Don't send must not reopen the microphone. The button and the
+        // chord share `cancelPendingSend`, so the drill drives the BUTTON's
+        // door — the one that was passing true — and asserts the capture is
+        // actually over rather than merely repainted.
+        showTranscribing("Transcribing your reply…", onCancel: {}, onRetry: {})
+        showPendingSend(text: "do not send this", label: "promotions copy",
+                        seconds: 60, send: {}, cancel: { restart in
+                            self.dontSendRestartedListening = restart
+                        })
+        dontSendRestartedListening = nil
+        cancelPendingSendTapped()
+        let dontSendKeptMicShut = dontSendRestartedListening == false
+        endCapture(because: "selftest dontSend cleanup")
+
+        // A capture failure keeps the card it was about. The one thing you
+        // need in order to say it again is the message you were answering.
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize(stripBody),
+            sessionId: "fault", pid: 1, project: "promotions copy", cwd: "/tmp")
+        highlight(upTo: 30)
+        let faultCardInk = inkBrightLength
+        showListening(level: { 0.2 })
+        showResult("This recording lost its address. Audio kept; nothing sent.")
+        let faultKeepsCard = bodyLabel.stringValue == cardBody
+            && inkBrightLength == faultCardInk
+        let faultIsInTheStrip = stripLabel.stringValue.contains("lost its address")
+        endCapture(because: "selftest fault cleanup")
+
+        SelfTest.report("strip", [
+            ("dontSendKeepsTheMicShut", dontSendKeptMicShut),
+            ("faultKeepsTheCard", faultKeepsCard),
+            ("faultSpeaksFromTheStrip", faultIsInTheStrip),
+            ("cardSurvivesArming", armedKeepsCard),
+            ("placardSurvives", armedKeepsPlacard),
+            ("inkSurvivesArming", armedInk == cardInk),
+            ("inkSurvivesListening", listeningInk == cardInk),
+            ("inkSurvivesReadback", readbackInk == cardInk),
+            ("stripAppears", armedStrip && listeningStrip && transcribingStrip),
+            ("inkSurvivesTranscribing", transcribingInk == cardInk),
+            ("readbackJoinsTheStrip", readbackInStrip && readbackKeepsCard),
+            ("gridCaptureIsWholePanel", gridCaptureIsWholePanel),
+        ])
+        // Logged, not asserted: an animated resize may be in flight, so the
+        // live frame is a transient and an equality here would be flaky. The
+        // top edge is `visibleFrame.maxY - 16` by construction (`position`),
+        // and these three lines are how a regression in that would be seen.
+        Permissions.log("selftest strip: ink=\(cardInk) top \(topBefore)"
+                        + " -> \(topDuring) -> \(topAfter)")
+
         // The receipt drill. A chip outside the render funnel has to prove it
         // cleans up after itself, because no arm of render() will do it: this
         // is the residue class the arbiter exists to make impossible, and the
@@ -2945,6 +3304,22 @@ final class StatusHUD: NSObject {
 
         hintLabel.maximumNumberOfLines = 0
         hintLabel.lineBreakMode = .byTruncatingMiddle
+
+        // The strip's own furniture. The rule is what makes the capture read as
+        // an extension of the panel rather than another paragraph of the card —
+        // and it is hidden with the label, so a face with no capture has no
+        // orphan line across it.
+        stripLabel = NSTextField(labelWithString: "")
+        stripLabel.font = .systemFont(ofSize: 11)
+        stripLabel.textColor = StateLegend.Palette.hint
+        stripLabel.maximumNumberOfLines = 2
+        stripLabel.lineBreakMode = .byTruncatingHead
+        stripRule = NSView()
+        stripRule.wantsLayer = true
+        stripRule.layer?.backgroundColor = StateLegend.Palette.hairline.cgColor
+        stripRule.translatesAutoresizingMaskIntoConstraints = false
+        stripRule.heightAnchor.constraint(equalToConstant: 1).isActive = true
+
         countdownBar = CountdownBarView()
 
         meter = LevelMeterView()
@@ -2982,8 +3357,14 @@ final class StatusHUD: NSObject {
         waitingRows.alignment = .leading
         waitingRows.spacing = 2
 
+        // The strip's furniture sits BELOW the body and above the meter, so a
+        // capture extends the panel downward and the card above it does not
+        // move (ruled 10 Aug: "extend below, not move everything down by
+        // inserting above"). The panel already grows this way — `position`
+        // anchors the top edge — so the strip costs no geometry work.
         let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
                                         waitingRows, bodyLabel,
+                                        stripRule, stripLabel,
                                         countdownBar, meter, voiceList, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -3038,6 +3419,8 @@ final class StatusHUD: NSObject {
         NSLayoutConstraint.activate(stackEdges + [
             bodyLabel.widthAnchor.constraint(equalToConstant: 348),
             hintLabel.widthAnchor.constraint(equalToConstant: 348),
+            stripLabel.widthAnchor.constraint(equalToConstant: 348),
+            stripRule.widthAnchor.constraint(equalToConstant: 348),
             titleLabel.widthAnchor.constraint(equalToConstant: 348),
             stateLabel.widthAnchor.constraint(equalToConstant: 348),
             // Same margin as every text row, so the eye reads one column.
@@ -3156,6 +3539,19 @@ final class StatusHUD: NSObject {
         let cursor = currentSpoken?.displayIndex(forSpoken: index) ?? index
         Permissions.log("highlight upTo=\(index)→\(cursor) of \(body.count) "
                         + "thread=\(Thread.isMainThread)")
+        // The mapped cursor rides the face from here on. Stored BEFORE the
+        // paint, so a face read mid-paint is never behind its own pixels.
+        face.spokenUpTo = cursor
+        paintInk(displayCursor: cursor)
+    }
+
+    /// Paint the body at a display-space cursor. The painting half of
+    /// `highlight(upTo:)`, split out so `render()` can repaint a face's ink
+    /// without pretending a word event just arrived — the mapping is the part
+    /// that must happen once, at the event; the painting must happen on every
+    /// repaint or the ink is only as durable as the last paint.
+    private func paintInk(displayCursor cursor: Int) {
+        guard let body = bodyLabel?.stringValue, !body.isEmpty else { return }
         let clamped = max(0, min(cursor, body.count))
         // The first real word is the only "it started" signal anyone needs, and
         // it is a better one than any spinner: the wash gives way to the thing
@@ -3174,11 +3570,21 @@ final class StatusHUD: NSObject {
             .font, value: NSFont.systemFont(ofSize: 12), range: full)
         bodyLabel.attributedStringValue = attributed
 
+        Permissions.log("highlight rendered bright=\(inkBrightLength)/\(full.length)")
+    }
+
+    /// How many characters are currently painted as spoken. Read from the
+    /// PIXELS, not from `face.spokenUpTo` — a drill that asked the field would
+    /// only prove the field agrees with itself, and the defect being guarded
+    /// against is precisely the pixels disagreeing with the face.
+    private var inkBrightLength: Int {
+        guard let attributed = bodyLabel?.attributedStringValue else { return 0 }
         var bright = 0
-        bodyLabel.attributedStringValue.enumerateAttribute(Self.spokenMark, in: full) { value, range, _ in
+        let full = NSRange(location: 0, length: attributed.length)
+        attributed.enumerateAttribute(Self.spokenMark, in: full) { value, range, _ in
             if value != nil { bright += range.length }
         }
-        Permissions.log("highlight rendered bright=\(bright)/\(full.length)")
+        return bright
     }
 
     // MARK: - Waiting for the voice
