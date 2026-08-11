@@ -20,13 +20,40 @@ public enum CaptureMarker {
         QueueStore.supportDirectory.appendingPathComponent("capturing")
     }
 
-    /// A marker orphaned by a crash must not wedge every future relaunch, so it
-    /// carries its start time and readers age it out. Three minutes is far past
-    /// any real push-to-talk utterance — the longest observed is 92 seconds — and
-    /// far short of "silently stopped protecting anything".
-    public static let staleAfter: TimeInterval = 180
+    /// How often a live capture re-stamps the marker. The writer is a timer on
+    /// its own queue, deliberately not the main one: the main queue has been
+    /// wedged by an unwinding ObjC exception in this app before, and a liveness
+    /// signal that dies with the thread it is reporting on is not a liveness
+    /// signal.
+    public static let heartbeat: TimeInterval = 5
+
+    /// How old a stamp may be before readers treat the writer as dead.
+    ///
+    /// This used to be 180s and the stamp was written once, at the start. The
+    /// two facts together meant the marker was answering "how long has this
+    /// capture been running", when the only question worth asking is "is the
+    /// process that opened this microphone still alive". Those agree for a
+    /// push-to-talk utterance, where the longest observed was 92 seconds. They
+    /// disagree for hands-free, which has no bound at all — and on 10 Aug they
+    /// disagreed at a cost: a four-minute capture read as stale at 230s and was
+    /// destroyed by `scripts/relaunch.sh`.
+    ///
+    /// Now the stamp is refreshed while the capture runs, so age means "silence
+    /// from the writer" and four times the heartbeat is generous: it survives a
+    /// stalled write or a busy queue, and still frees a genuinely dead process's
+    /// marker in twenty seconds rather than three minutes.
+    ///
+    /// `scripts/relaunch.sh` hardcodes this same number — it is a shell script
+    /// and cannot read Swift. Change both or neither.
+    public static let staleAfter: TimeInterval = 20
 
     public static func begin(now: Date = Date()) { write(to: url, now: now) }
+
+    /// Re-stamp a marker that is already ours. Identical to `begin` in effect;
+    /// named separately because the call sites mean different things and a
+    /// reader of `Recorder` should not have to work out why a capture "begins"
+    /// every five seconds.
+    public static func refresh(now: Date = Date()) { write(to: url, now: now) }
 
     public static func end() { remove(at: url) }
 
