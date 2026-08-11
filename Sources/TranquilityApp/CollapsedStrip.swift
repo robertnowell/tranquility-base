@@ -79,7 +79,11 @@ final class CollapsedStrip: NSView {
     /// then gone completely. No loop, no residue, nothing to acknowledge. A glow
     /// that persists until dismissed is a notification badge, which is the thing
     /// this product exists to not be.
-    static let glowSeconds: TimeInterval = 1.6
+    /// `var` so the drill can shorten it. The decay is the property worth
+    /// asserting; waiting 1.6 real seconds to assert it is not, and the first
+    /// version's sleep pushed every later drill past the deploy gate's window —
+    /// a test that makes the build look broken is worse than the bug it guards.
+    static var glowSeconds: TimeInterval = 1.6
 
     /// What the drill reads to prove the glow decays rather than lingering.
     var currentGlowStrength: CGFloat { glowColor == nil ? 0 : glowStrength }
