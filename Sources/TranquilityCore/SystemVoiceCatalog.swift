@@ -266,6 +266,69 @@ public enum SystemVoiceCatalog {
     }
 
 
+
+    /// Voices this Mac actually downloaded, as opposed to the ones baked into macOS.
+    ///
+    /// A downloaded voice leaves a payload: `/System/Library/AssetsV2/<catalogue>/
+    /// <sha>.asset`, whose Info.plist names it. The voices nobody chose — Bubbles,
+    /// Boing, Zarvox, Bad News — have no asset directory at all, because they ship
+    /// inside the OS image rather than being fetched. So the presence of a payload IS
+    /// the answer to "did I ask for this one", with no heuristic and no list:
+    ///
+    ///     TTSAXResourceModelAssets-ava      Aug 11 15:16   chosen
+    ///     TTSAXResourceModelAssets-zoe      Aug 11 15:50   chosen
+    ///     Nicky-Premium                     Aug 11 15:19   chosen
+    ///     TTSAXResourceModelAssets-samples  Jul 20 15:11   shipped with the OS
+    ///
+    /// Names come back lowercased because the bundle names are, and callers compare
+    /// case-insensitively against `AVSpeechSynthesisVoice.name`.
+    public static func downloadedNames() -> Set<String> {
+        let root = URL(fileURLWithPath: "/System/Library/AssetsV2")
+        guard let catalogues = try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil) else { return [] }
+
+        var names: Set<String> = []
+        for catalogue in catalogues where catalogue.lastPathComponent.contains("Voice")
+            || catalogue.lastPathComponent.contains("TTSAX") {
+            guard let assets = try? FileManager.default.contentsOfDirectory(
+                at: catalogue, includingPropertiesForKeys: nil) else { continue }
+            for asset in assets where asset.pathExtension == "asset" {
+                let info = asset.appendingPathComponent("Info.plist")
+                guard let data = try? Data(contentsOf: info),
+                      let plist = try? PropertyListSerialization.propertyList(
+                          from: data, options: [], format: nil) as? [String: Any]
+                else { continue }
+                // The two catalogues name assets in opposite directions:
+                //   TTSAXResourceModelAssets-ava   → the voice is the SUFFIX
+                //   Nicky-Premium                  → the voice is the PREFIX
+                // and only one of them carries a `Name` key. Taking the last
+                // component for both read Nicky as "premium", so the one voice
+                // downloaded from the Siri catalogue never showed as chosen.
+                let named = (plist["Name"] as? String) ?? ""
+                let bundle = (plist["CFBundleName"] as? String) ?? ""
+                let candidate: String
+                if !named.isEmpty {
+                    candidate = named                                  // authoritative when present
+                } else if bundle.hasPrefix("TTSAXResourceModelAssets-") {
+                    candidate = String(bundle.dropFirst("TTSAXResourceModelAssets-".count))
+                } else {
+                    candidate = String(bundle.split(separator: "-").first ?? "")
+                }
+                let cleaned = candidate.lowercased()
+                // "samples" is the shipped sample bank, not a voice anybody chose.
+                guard !cleaned.isEmpty, cleaned != "samples" else { continue }
+                names.insert(cleaned)
+            }
+        }
+        return names
+    }
+
+    /// Whether the user went and fetched this one.
+    public static func wasDownloaded(_ voiceName: String) -> Bool {
+        let base = (voiceName.split(separator: " ").first.map(String.init) ?? voiceName).lowercased()
+        return downloadedNames().contains(base)
+    }
+
     /// Megabytes for a voice by name, from the manifest, for installed voices as well
     /// as absent ones. The picker shows size instead of repeating a tier the name
     /// already carries: "Ava (Premium)" does not need a column saying Premium.
@@ -276,7 +339,15 @@ public enum SystemVoiceCatalog {
     }
 
     public static func asCatalogueVoices(language: String = "en-US") -> [Voice] {
-        let good = voices(matching: language).filter { rank($0.quality) > 1 }
+        // Quality OR deliberate choice. A voice you went and downloaded belongs in
+        // the list even if macOS rates it compact — you asked for it. The OS's own
+        // novelty voices never qualify on either count: they are compact AND nobody
+        // chose them, which is exactly what keeps Bubbles and Zarvox out.
+        let chosen = downloadedNames()
+        let good = voices(matching: language).filter {
+            rank($0.quality) > 1
+                || chosen.contains(($0.name.split(separator: " ").first.map(String.init) ?? $0.name).lowercased())
+        }
         // A stock Mac has none of these. Rather than an empty pane, show what it will
         // actually speak with, so the list always explains the sound coming out.
         let shown = good.isEmpty
