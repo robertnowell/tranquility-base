@@ -17,6 +17,7 @@ func usage() -> Never {
       tbase install-hooks       merge the hooks into ~/.claude/settings.json (backup kept)
       tbase hook-config         print the settings.json snippet to install the hook
       tbase paths               show where everything lives
+      tbase voices              installed free voices, and what is a download away
       tbase secrets             which credentials are readable, and from where
       tbase cursors             how far you have got with each session
       tbase calls [n]           full input and output of the last n model calls
@@ -169,6 +170,30 @@ do {
             let audio = u.audioPath.map { FileManager.default.fileExists(atPath: $0) ? "audio✓" : "audio✗" } ?? "no-audio"
             print("\(ms(u.createdAtMs))  \(u.status.rawValue)  \(audio)  \(truncate(u.transcriptText, 50))")
             if let e = u.lastError { print("    error: \(truncate(e, 90))") }
+        }
+
+    case "voices":
+        // Free voices, their quality, and what is one download away. Exists because
+        // the picker could not show any of this and the machine looked empty.
+        let installed = SystemVoiceCatalog.voices()
+        print("installed (en-US), best first:")
+        for v in installed.prefix(12) {
+            let tier = SystemVoiceCatalog.rank(v.quality) == 3 ? "PREMIUM"
+                     : SystemVoiceCatalog.rank(v.quality) == 2 ? "enhanced" : "compact"
+            print("  \(pad(tier, 9)) \(v.name)")
+        }
+        if installed.count > 12 { print("  … and \(installed.count - 12) more") }
+        print("")
+        print("speaking with: \(SystemVoiceCatalog.preferredIdentifier() ?? "(system default)")")
+        let status = SystemVoiceCatalog.recommendationStatus()
+        print("")
+        print("recommended free voices:")
+        for name in status.installed { print("  ✓ \(name)") }
+        for entry in status.missing { print("  ↓ \(entry.name) — \(entry.note)") }
+        if !status.missing.isEmpty {
+            print("")
+            print("to get them: open \(SystemVoiceCatalog.settingsURL)")
+            print("then:        \(SystemVoiceCatalog.remainingSteps)")
         }
 
     case "secrets":
