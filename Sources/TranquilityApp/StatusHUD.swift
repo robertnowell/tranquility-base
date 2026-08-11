@@ -224,6 +224,13 @@ final class StatusHUD: NSObject {
     /// pill the state cannot name — so the ladder's "◀ FINDINGS" survives a
     /// reply without a second mechanism.
     private func beginCaptureFace(target: String) {
+        // The branch decides whether the card lives, so it says which way it
+        // went and why. Production disagreed with the drill on 10 Aug — the
+        // drill kept the card, the real ⌥ did not — and there was no line in
+        // the log that could tell the two apart.
+        Permissions.log("capture face: hasCard=\(face.hasCard) "
+                        + "body=\(face.body.count) rows=\(face.sessionRows.count) "
+                        + "title=\(face.title) state=\(state.name)")
         guard face.hasCard else {
             face = Face(listeningTarget: target)
             return
