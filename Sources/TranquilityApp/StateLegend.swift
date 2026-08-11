@@ -512,6 +512,24 @@ enum StateLegend {
     static let noAudioPlacard = "\(Glyph.needsYou) No audio"
     static let micSettingsTitle = "Microphone settings"
 
+    // MARK: - The invitation (ruled 10 Aug)
+
+    /// A page outlives the agent that wrote it — after `/clear`, after the tab
+    /// closes, and always on someone else's machine. That is not a failure and
+    /// must not wear the amber pill: nothing went wrong, and the one thing to
+    /// do about it is an offer, not a repair. So the placard is quiet and the
+    /// card speaks on the advisory channel.
+    static let startSessionPlacard = "\(Glyph.quiet) No agent"
+    static let startSessionTitle = "Start a session"
+
+    /// Names the artifact, because that is the whole content of the offer: a
+    /// fresh agent is worth starting only if it opens holding the thing you
+    /// were reading.
+    static func orphanedArtifact(_ name: String, directory: String) -> String {
+        "The agent that made \(name) isn't running any more. "
+        + "Start one in \(directory) that opens with it?"
+    }
+
     /// Say what to do, not just that something broke — the same rule the
     /// Bluetooth mic-open failure follows, applied to the quieter case where the
     /// device opens successfully and then sends nothing.
