@@ -264,7 +264,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 // Write the summary before it is asked for. Doing it on demand meant
                 // every use opened with a model call you had to sit through.
-                try? await coordinator.prepareNext()
+                // The prefetch takes the overlay too: without it the app pays
+                // for a summary and a voice render on the session you are
+                // mid-reply to, for an announcement that must not play.
+                try? await coordinator.prepareNext(excluding: self.delivering)
 
                 // Reflect arrivals without being asked. The panel only ever redrew
                 // on a keypress, so a session finishing while you were looking
@@ -1512,7 +1515,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // press sat on a frozen panel for the length of a subprocess call and a
             // registered press looked exactly like a missed one.
             await Task.detached { _ = ClaudeAgentsCLI().sessions() }.value
-            if eventId == nil, (try? coordinator.nextToAnnounce()) == nil {
+            // Same overlay as the selection below, or this emptiness check
+            // says "something is waiting" about the very turn we are about to
+            // refuse to announce, and the grid never gets shown.
+            if eventId == nil,
+               (try? coordinator.nextToAnnounce(excluding: self.delivering)) == nil {
                 showIdleGrid()
                 return
             }
@@ -1524,6 +1531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let outcome = try await coordinator.announceNext(
                     only: eventId,
                     ignoringGate: true,
+                    excluding: self.delivering,
                     onWillSpeak: { [weak self] announcement in
                         // Render BEFORE the audio starts. Showing it afterwards is
                         // useless — you have already heard the whole thing by then.
@@ -2149,7 +2157,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // ruling, and is structural rather than remembered.
             return
         }
-        let target = try? coordinator?.nextToAnnounce()
+        // The hail path. Without the overlay the frontmost-tab check below is
+        // run against the session you just answered rather than the one that
+        // actually arrived — the same defect as ⌃⌥, wearing a different symptom.
+        let target = try? coordinator?.nextToAnnounce(excluding: delivering)
         if let front = frontmostSessionTty(), let target,
            let pid = (ClaudeAgentsCLI().sessions() ?? []).first(where: { $0.sessionId == target.sessionId })?.pid,
            ProcessProbe.tty(of: pid) == front {
