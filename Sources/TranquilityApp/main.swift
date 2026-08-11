@@ -475,6 +475,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Secrets.trace = { Permissions.log("secrets: \($0)") }
         QueueStore.trace = { Permissions.log("queue: \($0)") }
         Permissions.log("args=\(CommandLine.arguments)")
+        // Say out loud whether the thing this app depends on is actually wired.
+        //
+        // Nothing checked before, and the hook contract is to exit 0 whatever happens
+        // — so a renamed or moved script is indistinguishable from a healthy one. That
+        // is how events stopped for 37 minutes during active use with no symptom but
+        // lamps that would not turn green, and how `artifact-hook` shipped and sat
+        // uninstalled without ever being mentioned.
+        if let problem = HookManifest.problemSummary() {
+            Permissions.log("startup: \(problem)")
+        } else {
+            Permissions.log("startup: hooks installed and reachable")
+        }
 
         if CommandLine.arguments.contains("--show-onboarding") {
             onboarding.show { }

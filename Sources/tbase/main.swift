@@ -17,6 +17,7 @@ func usage() -> Never {
       tbase install-hooks       merge the hooks into ~/.claude/settings.json (backup kept)
       tbase hook-config         print the settings.json snippet to install the hook
       tbase paths               show where everything lives
+      tbase hooks               which hooks are wired, broken, or missing
       tbase voices              installed free voices, and what is a download away
       tbase secrets             which credentials are readable, and from where
       tbase cursors             how far you have got with each session
@@ -171,6 +172,25 @@ do {
             print("\(ms(u.createdAtMs))  \(u.status.rawValue)  \(audio)  \(truncate(u.transcriptText, 50))")
             if let e = u.lastError { print("    error: \(truncate(e, 90))") }
         }
+
+    case "hooks":
+        // The audit that did not exist: what is wired, what points at a file that is
+        // gone, and what was never installed at all.
+        guard let statuses = HookManifest.audit() else {
+            print("cannot read \(HookManifest.settingsURL.path)"); exit(1)
+        }
+        print("\(pad("EVENT", 18))  \(pad("HOOK", 20))  STATE")
+        for s in statuses {
+            let state: String
+            switch s.state {
+            case .installed: state = "ok"
+            case .brokenPath(let p): state = "BROKEN — \(p) does not exist"
+            case .missing: state = "NOT INSTALLED — \(s.hook.purpose)"
+            }
+            print("\(pad(s.hook.event, 18))  \(pad(s.hook.script, 20))  \(state)")
+        }
+        if let problem = HookManifest.problemSummary() { print(""); print(problem) }
+        else { print(""); print("all hooks installed and reachable") }
 
     case "voices":
         // Free voices, their quality, and what is one download away. Exists because
