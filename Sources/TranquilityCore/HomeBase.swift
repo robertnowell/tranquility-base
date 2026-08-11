@@ -18,6 +18,20 @@ import Foundation
 /// retention layer's seed. So the page is a projection of a table that fills
 /// itself, and it is complete the moment the turn ends.
 ///
+/// **Caps are the instrument voice, and this page is prose.** The panel's
+/// letterspaced small caps mark placards and controls — AGENTS, NEW AGENT,
+/// GO TO AGENT — and ui-pass-7 rules on exactly why: caps at 10.5/+1.3 "matches
+/// the grid's placard voice… so the button reads as an instrument control
+/// rather than prose". That convention works there because it is sparse and
+/// because everything wearing it is a control. Applied to a document's section
+/// headings it says the opposite of what it means, and applied four times a
+/// screen it stops marking anything at all — the page below the fold turns into
+/// a wall of small caps with no hierarchy left to read.
+///
+/// So on this page caps survive in exactly two places, both of them real
+/// labels: the eyebrow, and the field tags on a turn (next / asked / risk).
+/// Structure is carried by type — size, weight, and the serif — never by case.
+///
 /// **Length is a hard constraint, not a preference.** A session log that grows
 /// without bound is a log; this has to stay a briefing you can read in a
 /// sitting. So: newest first, one block per turn, and a cap. What falls off the
@@ -53,30 +67,47 @@ public enum HomeBase {
         /// work.
         public let goal: String?
         public let turns: [Turn]
-        public let artifact: String?
+        /// When this agent last moved. The byline's "as of", and the only
+        /// timestamp the top of the page carries.
+        public let lastActive: Date?
+        /// Everything this agent has made. The hub summarises; these hold the
+        /// detail, and a count without them is a dead end — a reader who cannot
+        /// act on a label stops following the trail.
+        public let pages: [ArtifactStore.Page]
 
         public init(sessionId: String, title: String?, callsign: String?,
-                    cwd: String?, goal: String?, turns: [Turn], artifact: String?) {
+                    cwd: String?, goal: String?, turns: [Turn],
+                    pages: [ArtifactStore.Page], lastActive: Date? = nil) {
             self.sessionId = sessionId; self.title = title; self.callsign = callsign
             self.cwd = cwd; self.goal = goal; self.turns = turns
-            self.artifact = artifact
+            self.pages = pages; self.lastActive = lastActive ?? turns.first?.at
         }
     }
 
-    /// Turns kept on the page. Twenty briefs of ~40 words is roughly 1,500
-    /// words — a fifteen-minute read with room for the header, and about a
-    /// twentieth of Common Sense.
-    public static let turnLimit = 20
+    /// Resolution tiers, in turns back from the newest — the knob the height
+    /// budget actually turns. Borrowed from time-series downsampling rather
+    /// than from any rule about prose: recent turns keep full resolution, older
+    /// ones lose detail, and the tail becomes one digest. Nothing is deleted,
+    /// because the detail never lived here — it is in the pages and the
+    /// transcript.
+    ///
+    /// Measured on a real 71-turn agent: 4/6 put the page at 3,540px of a
+    /// 4,000px budget with an editorial header, so the header is paid for by
+    /// dropping one full turn.
+    public static let fullTurns = 3
+    public static let lineTurns = 6
 
+    /// The directory name, and therefore the URL.
+    ///
+    /// Keyed on the agent's id ALONE, deliberately. The obvious version put the
+    /// callsign in front — readable, and wrong: a callsign is minted at the
+    /// agent's first summary, so a hub written before that gets one name and
+    /// every hub after it gets another, and every link into the first one rots.
+    /// "After the creation date, putting any information in the name is asking
+    /// for trouble one way or another" (Berners-Lee). The name goes ON the page,
+    /// where it can change freely.
     public static func slug(for model: Model) -> String {
-        let name = model.callsign ?? model.title ?? "session"
-        let words = name.lowercased()
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .prefix(4)
-            .joined(separator: "-")
-        let short = model.sessionId.split(separator: "-").first.map(String.init)
-            ?? model.sessionId
-        return words.isEmpty ? short : "\(words)-\(short)"
+        model.sessionId.split(separator: "-").first.map(String.init) ?? model.sessionId
     }
 
     static func escape(_ s: String) -> String {
@@ -92,124 +123,234 @@ public enum HomeBase {
         return f
     }()
 
+    static let dayStamp: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "d MMM"; return f
+    }()
+
     public static func render(_ model: Model, now: Date = Date()) -> String {
         let e = escape
-        let name = model.title ?? model.callsign ?? "Session \(model.sessionId.prefix(8))"
-        let shown = model.turns.prefix(turnLimit)
-        let dropped = max(0, model.turns.count - shown.count)
+        let name = model.title ?? model.callsign ?? "Agent \(model.sessionId.prefix(8))"
+        let newest = model.turns.first          // turns arrive newest-first
+        let ordered = model.turns
 
-        var rows = ""
-        for turn in shown {
-            var detail = "<p class=\"h\">\(e(turn.happened))</p>"
-            if let next = turn.nextStep, !next.isEmpty {
-                detail += "<p class=\"n\"><span>next</span> \(e(next))</p>"
+        // ---- the top of the page --------------------------------------------
+        // What sits here is decided by subtraction. The eyebrow is gone: a
+        // tracked uppercase label above a headline borrows editorial authority
+        // it has not earned, and Butterick bounds caps to "less than one line"
+        // in any case. The metadata strip is gone too — "71 turns · 5 pages" is
+        // a dateline in all but name, and the Times abolished that pattern in
+        // 2023 after finding readers misread it, replacing it with plain
+        // language folded into the byline. Counts live over the things they
+        // count, where the list already proves them.
+        //
+        // What replaces four decorative devices is one free distinction the
+        // newspapers have always used: the SERIF carries the story, the SANS
+        // carries facts about the story. A reader separates them before reading
+        // a word.
+        var head = ""
+        if let n = newest {
+            let deck = n.question.map { "\(e(n.happened)) \(e($0))" }
+                ?? (n.nextStep.map { "\(e(n.happened)) Proposing: \(e($0))" }
+                    ?? e(n.happened))
+            var byline = model.callsign.map { "Agent \(e($0))" } ?? "Agent \(e(String(model.sessionId.prefix(8))))"
+            if let dir = (model.cwd as NSString?)?.lastPathComponent, !dir.isEmpty {
+                byline += ", working in \(e(dir))"
             }
-            if let question = turn.question, !question.isEmpty {
-                detail += "<p class=\"q\"><span>asked</span> \(e(question))</p>"
+            if let last = model.lastActive {
+                byline += " · last moved \(e(stamp.string(from: last)))"
             }
-            if let risk = turn.risk, !risk.isEmpty {
-                detail += "<p class=\"r\"><span>risk</span> \(e(risk))</p>"
-            }
-            rows += """
-                <li><div class="when">\(e(stamp.string(from: turn.at)))</div>
-                <div class="what"><h3>\(e(turn.topic))</h3>\(detail)</div></li>
-
+            head = """
+                <h1>\(e(n.topic))</h1>
+                <p class="deck">\(deck)</p>
+                <p class="byline">\(byline)</p>
                 """
         }
-        if shown.isEmpty {
-            rows = "<li><div class=\"when\">—</div><div class=\"what\">"
-                + "<p class=\"h\">Nothing summarized yet. This page fills in as the "
-                + "agent finishes turns.</p></div></li>"
+
+        // ---- the stack, downsampled by age ----------------------------------
+        var rows = ""
+        for (i, turn) in ordered.enumerated() {
+            var body = "<p class=\"h\">\(e(turn.happened))</p>"
+            var cls = "line"
+            if i < fullTurns {
+                cls = "full"
+                if let next = turn.nextStep, !next.isEmpty {
+                    body += "<p class=\"m\"><span>next</span> \(e(next))</p>"
+                }
+                if let q = turn.question, !q.isEmpty {
+                    body += "<p class=\"m\"><span>asked</span> \(e(q))</p>"
+                }
+            } else if i >= fullTurns + lineTurns {
+                continue
+            }
+            // A risk survives downsampling at every tier. An exception flattened
+            // into a summary reads as "nothing here" and gets skipped, which is
+            // the failure this page exists to prevent.
+            if let risk = turn.risk, !risk.isEmpty {
+                body += "<p class=\"m risky\"><span>risk</span> \(e(risk))</p>"
+            }
+            rows += """
+                <li class="\(cls)"><div class="when">\(e(stamp.string(from: turn.at)))</div>
+                <div class="what"><h3>\(e(turn.topic))</h3>\(body)</div></li>
+                """
         }
 
-        let artifactBlock = model.artifact.map { path in
-            """
-            <a class="page" href="file://\(e(path))">\(e((path as NSString).lastPathComponent))</a>
-            <span class="dim">most recent page</span>
-            """
-        } ?? "<span class=\"dim\">no pages yet</span>"
+        // ---- the tail: one digest, every proper noun kept --------------------
+        var digest = ""
+        let tail = ordered.count > fullTurns + lineTurns
+            ? Array(ordered[(fullTurns + lineTurns)...]) : []
+        if !tail.isEmpty {
+            var topics: [String] = []
+            for t in tail where !topics.contains(t.topic) { topics.append(t.topic) }
+            let shown = topics.prefix(14).joined(separator: ", ")
+            digest = "<div class=\"digest\"><b>Before that — \(tail.count) turns.</b> "
+                + e(shown) + (topics.count > 14 ? "…" : ".") + "</div>"
+        }
+
+        // ---- what it made: the documents' own titles, not their filenames ----
+        var pages = ""
+        if !model.pages.isEmpty {
+            let items = model.pages.reversed().map { page -> String in
+                let summary = ArtifactStore.summarize(path: page.path)
+                let name = summary.title ?? page.label
+                let blurb = summary.blurb.map {
+                    " data-blurb=\"\(e($0))\""
+                } ?? ""
+                return "<li><a class=\"page\" href=\"file://\(e(page.path))\"\(blurb)>"
+                    + "\(e(name))</a><span class=\"on\">\(e(dayStamp.string(from: page.at)))</span></li>"
+            }.joined()
+            let count = model.pages.count
+            pages = """
+                <h2>What it has made</h2>
+                <p class="sub">\(count) page\(count == 1 ? "" : "s"). This page summarises; those hold the detail.</p>
+                <ul class="pages">\(items)</ul>
+                """
+        }
+
+        let empty = ordered.isEmpty
+            ? "<div class=\"digest\">Nothing summarized yet. This page fills in as the "
+              + "agent finishes turns.</div>" : ""
 
         return """
         <!doctype html>
         <html lang="en"><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>\(e(name)) — agent home base</title>
-        <meta name="intranet:type" content="session">
+        <title>\(e(name)) — agent</title>
+        <meta name="intranet:type" content="agent">
         <meta name="intranet:visibility" content="local">
         <style>
-          :root { --bg:#fbfaf8; --fg:#16150f; --dim:#6b675c; --faint:#a29c8d;
-                  --accent:#1f4f8f; --rule:#ddd8cc; --card:#f2efe8; }
-          @media (prefers-color-scheme: dark) {
-            :root { --bg:#131310; --fg:#eceae2; --dim:#8f8a7c; --faint:#6a6558;
-                    --accent:#7fb0e8; --rule:#2e2c26; --card:#1e1d19; }
-          }
-          *{box-sizing:border-box} html{background:var(--bg)}
-          body{margin:0;background:var(--bg);color:var(--fg);
-               font:16px/1.6 ui-sans-serif,-apple-system,sans-serif;
-               -webkit-font-smoothing:antialiased}
-          .wrap{max-width:760px;margin:0 auto;padding:64px 26px 48px}
-          .eyebrow{font:600 11.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;
-                   text-transform:uppercase;color:var(--faint);margin:0 0 14px}
-          h1{font-size:31px;line-height:1.15;letter-spacing:-.02em;margin:0 0 10px;font-weight:640}
-          .goal{font-size:17.5px;color:var(--dim);margin:0 0 4px;max-width:62ch}
-          .meta{margin:26px 0 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
-                gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:10px;
-                overflow:hidden}
-          .meta div{background:var(--bg);padding:12px 14px;
-                    font:12.5px/1.45 ui-monospace,Menlo,monospace;color:var(--dim)}
-          .meta b{display:block;color:var(--fg);font-weight:600;font-size:13px;
-                  margin-bottom:2px;word-break:break-word}
-          .doors{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:22px 0 0;
-                 font:12.5px/1 ui-monospace,Menlo,monospace}
-          .doors a{text-decoration:none;color:var(--bg);background:var(--accent);
-                   padding:9px 15px;border-radius:7px;font-weight:640;letter-spacing:.04em}
-          .doors a.page{background:transparent;color:var(--accent);
-                        border:1px solid currentColor}
-          .doors .dim{color:var(--faint)}
-          h2{font:600 11.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;
-             text-transform:uppercase;color:var(--accent);margin:52px 0 4px}
-          .sub{color:var(--faint);font-size:13.5px;margin:0 0 8px}
-          ol{list-style:none;padding:0;margin:14px 0 0}
-          ol li{display:flex;gap:18px;padding:16px 0;border-top:1px solid var(--rule)}
-          .when{flex:0 0 96px;font:12px/1.7 ui-monospace,Menlo,monospace;color:var(--faint)}
+          /* Two families, one job each — the newspaper's own division of labour.
+             The serif carries the story; the sans carries facts ABOUT the story
+             (byline, dates, tags). A reader tells them apart before reading a
+             word, which is one free distinction doing the work four decorative
+             ones were doing badly. Colour is the weakest tool in Butterick's
+             list — "position, size, font, and sometimes color" — so amber is
+             spent in exactly one place: the risk tag. */
+          :root{--bg:#fbfaf8;--fg:#16150f;--dim:#5d5a51;--faint:#94908a;--rule:#ddd8cc;
+                --amber:#a8762a;--card:#f2efe8;--accent:#1f4f8f;
+                --serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;
+                --sans:ui-sans-serif,-apple-system,'Helvetica Neue',sans-serif}
+          @media(prefers-color-scheme:dark){:root{--bg:#131310;--fg:#eceae2;--dim:#a5a196;
+                --faint:#6a6558;--rule:#2e2c26;--amber:#d9a441;--card:#1e1d19;--accent:#7fb0e8}}
+          *{box-sizing:border-box}html{background:var(--bg)}
+          body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--serif);
+               font-size:18px;line-height:1.62;-webkit-font-smoothing:antialiased}
+          /* 66 characters is Bringhurst's ideal; 45–75 the acceptable band. */
+          .wrap{max-width:660px;margin:0 auto;padding:78px 26px 56px}
+          h1{font-size:40px;line-height:1.08;letter-spacing:-.02em;font-weight:600;
+             margin:0 0 18px;max-width:17ch}
+          .deck{font-size:20px;line-height:1.5;color:var(--dim);margin:0 0 22px;max-width:60ch}
+          .byline{font-family:var(--sans);font-size:13.5px;line-height:1.5;color:var(--faint);
+                  margin:0 0 42px;padding-bottom:22px;border-bottom:1px solid var(--rule)}
+          h2{font-size:26px;line-height:1.2;letter-spacing:-.015em;font-weight:600;
+             margin:48px 0 6px}
+          .sub{font-family:var(--sans);font-size:13px;color:var(--faint);margin:0 0 14px}
+          ul.pages{list-style:none;padding:0;margin:0}
+          ul.pages li{display:flex;align-items:baseline;gap:14px;padding:12px 0;
+                      border-top:1px solid var(--rule)}
+          ul.pages .page{color:var(--fg);text-decoration:none;font-size:18px;flex:1;
+                         line-height:1.4}
+          ul.pages .page:hover{color:var(--accent)}
+          ul.pages .on{font-family:var(--sans);font-size:12.5px;color:var(--faint);
+                       white-space:nowrap}
+          ol{list-style:none;padding:0;margin:0}
+          ol li{display:flex;gap:20px;padding:16px 0;border-top:1px solid var(--rule)}
+          .when{flex:0 0 84px;font-family:var(--sans);font-size:12.5px;line-height:1.9;
+                color:var(--faint)}
           .what{flex:1;min-width:0}
-          .what h3{margin:0 0 5px;font-size:15.5px;letter-spacing:-.01em}
-          .what p{margin:0 0 5px;font-size:14.5px}
-          .what .h{color:var(--fg)}
-          .what .n,.what .q,.what .r{color:var(--dim);font-size:13.5px}
-          .what span{font:600 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;
-                     text-transform:uppercase;color:var(--faint);margin-right:6px}
-          footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--rule);
-                 font:12.5px/1.5 ui-monospace,Menlo,monospace;color:var(--faint)}
+          .what h3{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-.01em}
+          .what p{margin:0 0 5px;font-size:16.5px;max-width:60ch}
+          .what .m{font-size:15.5px;color:var(--dim)}
+          /* The only caps left, and the only amber: a fragment marking a field. */
+          .what span{font-family:var(--sans);font-size:11px;font-weight:600;
+                     letter-spacing:.06em;text-transform:uppercase;color:var(--faint);
+                     margin-right:7px}
+          .what .risky span{color:var(--amber)}
+          li.line .what h3{font-size:17px}
+          li.line .what .h{color:var(--dim);font-size:15.5px}
+          .digest{margin-top:18px;padding:16px 18px;background:var(--card);border-radius:10px;
+                  font-size:16px;color:var(--dim);max-width:64ch}
+          .digest b{color:var(--fg);font-weight:600}
+          footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--rule);
+                 font-family:var(--sans);font-size:13px;color:var(--faint);
+                 display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+          footer b{color:var(--dim);font-weight:600}
+          footer .discuss{margin-left:auto;text-decoration:none;background:var(--accent);
+                          color:var(--bg);padding:8px 14px;border-radius:7px;font-weight:600}
+          /* Hover cards, only where hover means something. A tap fires hover and
+             activation together, so on touch this whole affordance is absent
+             rather than sticky. */
+          #card{position:fixed;z-index:9;max-width:340px;padding:13px 15px;background:var(--card);
+                border:1px solid var(--rule);border-radius:10px;font-family:var(--sans);
+                font-size:13.5px;line-height:1.5;color:var(--dim);
+                box-shadow:0 8px 26px rgba(0,0,0,.14);opacity:0;pointer-events:none;
+                transition:opacity .2s}
+          #card.on{opacity:1;pointer-events:auto}
+          @media(hover:none),(pointer:coarse){#card{display:none}}
         </style></head><body><div class="wrap">
-
-        <p class="eyebrow">Agent home base</p>
-        <h1>\(e(name))</h1>
-        \(model.goal.map { "<p class=\"goal\">\(e($0))</p>" } ?? "")
-
-        <div class="meta">
-          <div><b>\(e(model.callsign ?? "—"))</b>callsign</div>
-          <div><b>\(e(model.sessionId.prefix(8).description))</b>session</div>
-          <div><b>\(e((model.cwd as NSString?)?.lastPathComponent ?? "—"))</b>directory</div>
-          <div><b>\(shown.count)\(dropped > 0 ? " of \(model.turns.count)" : "")</b>turns summarized</div>
-        </div>
-
-        <div class="doors">
-          <a href="tranquilitybase://discuss?session=\(e(model.sessionId))">Discuss with agent</a>
-          \(artifactBlock)
-        </div>
-
-        <h2>What has happened</h2>
-        <p class="sub">Newest first, one block per finished turn.\(dropped > 0 ? " Older turns (\(dropped)) are in the transcript." : "")</p>
-        <ol>
-        \(rows)</ol>
-
-        <footer>
-          \(e(model.title ?? "—")) &middot; callsign \(e(model.callsign ?? "—"))
-          &middot; session \(e(model.sessionId))<br>
-          Generated by Tranquility Base, \(e(stamp.string(from: now)))
-        </footer>
-        </div></body></html>
+        \(head)
+        \(pages)
+        <h2>What it has done</h2>
+        <p class="sub">Newest first. Older turns lose resolution, never their links.</p>
+        <ol>\(rows)</ol>
+        \(digest)\(empty)
+        <footer>Created by <b>\(e(model.title ?? "—"))</b> &middot;
+        callsign <b>\(e(model.callsign ?? "—"))</b> &middot; agent \(e(String(model.sessionId.prefix(8))))
+        <a class="discuss" href="tranquilitybase://discuss?session=\(e(model.sessionId))">Discuss with agent</a>
+        </footer></div>
+        <div id="card" role="tooltip"></div>
+        <script>
+        // WCAG 1.4.13: the card must be dismissible (Escape), hoverable (the
+        // pointer can move onto it), and persistent (it does not time out).
+        // The 650ms delay is Wikipedia's, and their reason is worth keeping:
+        // some readers hover over text while reading, so an instant preview
+        // measures as intrusive rather than helpful.
+        (function(){
+          var card = document.getElementById('card'), timer = null, live = null;
+          function hide(){ clearTimeout(timer); card.classList.remove('on'); live = null; }
+          function show(a){
+            var text = a.getAttribute('data-blurb'); if(!text) return;
+            card.textContent = text; card.classList.add('on'); live = a;
+            var r = a.getBoundingClientRect();
+            var top = r.bottom + 10, left = Math.min(r.left, innerWidth - 360);
+            if (top + card.offsetHeight > innerHeight - 12) top = r.top - card.offsetHeight - 10;
+            card.style.top = Math.max(12, top) + 'px';
+            card.style.left = Math.max(12, left) + 'px';
+          }
+          document.querySelectorAll('a.page[data-blurb]').forEach(function(a){
+            a.addEventListener('mouseenter', function(){
+              clearTimeout(timer); timer = setTimeout(function(){ show(a); }, 650);
+            });
+            a.addEventListener('mouseleave', function(){
+              clearTimeout(timer);
+              setTimeout(function(){ if(!card.matches(':hover')) hide(); }, 120);
+            });
+            a.addEventListener('focus', function(){ show(a); });
+            a.addEventListener('blur', hide);
+          });
+          card.addEventListener('mouseleave', hide);
+          document.addEventListener('keydown', function(e){ if(e.key === 'Escape') hide(); });
+        })();
+        </script></body></html>
         """
     }
 }
@@ -238,6 +379,12 @@ public extension HomeBase {
         let briefs = try store.briefs(for: sessionId)
         guard !briefs.isEmpty else { return nil }
         let latest = try store.latestStop(for: sessionId)
+        // Agents that ran before the hook existed have pages the store never
+        // saw. Cheap, idempotent, and only ever adds.
+        if let transcript = latest?.transcriptPath {
+            ArtifactStore.backfill(session: sessionId, transcriptPath: transcript,
+                                   root: QueueStore.supportDirectory.path)
+        }
         let here = live.first { $0.sessionId == sessionId }
         let title = (latest?.transcriptPath).flatMap {
             TranscriptTitles.shared.latestTitle(transcriptPath: $0)
@@ -248,13 +395,16 @@ public extension HomeBase {
             callsign: briefs.first?.callsign ?? latest?.callsign,
             cwd: latest?.cwd ?? here?.cwd,
             goal: briefs.last?.goal,
+            // `briefs(for:)` returns newest first, which is the order the page
+            // renders in — the renderer never re-sorts, so a change to that
+            // query cannot silently invert the page.
             turns: briefs.map {
                 Turn(at: Date(timeIntervalSince1970: Double($0.atMs) / 1000),
                      topic: $0.topic, happened: $0.happened,
                      nextStep: $0.nextStep, question: $0.question, risk: $0.risk)
             },
-            artifact: ArtifactStore.latest(for: sessionId,
-                                           root: QueueStore.supportDirectory.path))
+            pages: ArtifactStore.history(for: sessionId,
+                                         root: QueueStore.supportDirectory.path))
         let dir = root.appendingPathComponent(slug(for: model))
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("index.html")

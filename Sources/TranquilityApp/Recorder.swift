@@ -45,6 +45,24 @@ public final class Recorder: @unchecked Sendable {
     private var stream: StreamedUtterance?
     private var running = false
 
+    /// Everything one finished capture produced.
+    ///
+    /// Returned as a single value rather than a return plus a side channel.
+    /// `lastCaptureURL` was mutable state on the recorder that the caller had to
+    /// read at exactly the right moment, and nothing stopped it being read after
+    /// a later capture had cleared or replaced it. It worked because one call
+    /// site read it immediately — one refactor away from attaching the wrong
+    /// audio to an utterance, which is invisible and very bad. The compiler now
+    /// makes a stale read impossible instead of unlikely.
+    public struct Capture: Sendable {
+        /// The samples, for transcription and the streaming provider.
+        public let pcm16: Data
+        /// The write-ahead file, still `.wav.live` because nothing claims it yet.
+        /// Nil when the durable copy could not be written — capture continues
+        /// regardless, exactly as it did before write-ahead existed.
+        public let fileURL: URL?
+    }
+
     /// The write-ahead copy, open for the length of the utterance.
     ///
     /// The in-memory buffer above is the transport — it feeds the streaming
@@ -58,10 +76,6 @@ public final class Recorder: @unchecked Sendable {
     /// carries on exactly as it did before this existed — the durable copy is
     /// an addition to the old path, never a dependency of it.
     private var liveCapture: LiveAudioCapture?
-    /// Where the last completed capture was promoted to, for the caller to adopt
-    /// rather than re-writing bytes it already has on disk.
-    public private(set) var lastCaptureURL: URL?
-
     /// The hardware re-rated under the engine, so the cached input format is a
     /// lie. Set by AVAudioEngine's own configuration-change notification, which
     /// is the signal the open loop never listened for — it discovered the same
@@ -168,7 +182,6 @@ public final class Recorder: @unchecked Sendable {
         openedAt = Date()
         lastOpenSeconds = 0
         running = true
-        lastCaptureURL = nil
         // A capture id of our own: the utterance id does not exist yet — it is
         // minted at key-up, after the recording is over — and a filename is
         // needed now. Core adopts this file under the real id when the row is
@@ -447,7 +460,7 @@ public final class Recorder: @unchecked Sendable {
     /// Stop capturing and hand back everything recorded. The caller persists it
     /// before doing anything else.
     @discardableResult
-    public func stop() throws -> Data {
+    public func stop() throws -> Capture {
         lock.lock()
         // Never ran, or already stopped: there is no "how long was it open"
         // answer for THIS event, and leaving the last capture's answer standing
@@ -485,7 +498,7 @@ public final class Recorder: @unchecked Sendable {
         // never exist — the silence gate refuses a short capture, a replaced
         // reply drops its predecessor — so the file keeps the extension that
         // says nothing claims it, and the reaper can find it if nothing ever does.
-        lastCaptureURL = try? finishing?.close()
+        let captureURL = try? finishing?.close()
 
         // One line per capture, success or failure, because the failures are only
         // legible next to what a working capture looks like. Logged BEFORE the
@@ -496,7 +509,7 @@ public final class Recorder: @unchecked Sendable {
             lastOpenSeconds, delivered, kept, captured.count, peakLevel))
 
         guard captured.count > 1600 else { throw RecorderError.nothingRecorded }  // <50ms
-        return captured
+        return Capture(pcm16: captured, fileURL: captureURL)
     }
 
     /// Abandon without returning audio — used when a press is cancelled before the
@@ -513,7 +526,6 @@ public final class Recorder: @unchecked Sendable {
         // Abandoning is a decision, not a death: remove the file rather than
         // leaving it for the boot sweep to offer back.
         discarding?.abandon()
-        lastCaptureURL = nil
         _ = VDCatchObjCException {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()

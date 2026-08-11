@@ -264,7 +264,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 // Write the summary before it is asked for. Doing it on demand meant
                 // every use opened with a model call you had to sit through.
-                try? await coordinator.prepareNext()
+                // The prefetch takes the overlay too: without it the app pays
+                // for a summary and a voice render on the session you are
+                // mid-reply to, for an announcement that must not play.
+                try? await coordinator.prepareNext(excluding: self.delivering)
 
                 // Reflect arrivals without being asked. The panel only ever redrew
                 // on a keypress, so a session finishing while you were looking
@@ -355,7 +358,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ArtifactStore.latest(for: session, root: QueueStore.supportDirectory.path)
         }
         hud.onOpenPage = { page in
-            NSWorkspace.shared.open(URL(fileURLWithPath: page))
+            let url = URL(fileURLWithPath: page)
+            // Focus the tab that already has it, if there is one. Opening a new
+            // tab per click is how twenty agents become a wall of identical
+            // favicons — the state the hub exists to replace.
+            if BrowserFocus.focusExistingTab(url) == .notFound {
+                NSWorkspace.shared.open(url)
+            }
         }
         hud.onBreadcrumbHome = { [weak self] in self?.goHomeFromCard(via: "breadcrumb") }
         hud.onClearLamp = { [weak self] id in
@@ -582,14 +591,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // restarts, so calling start() on every tick is safe.
 
     private func startPermissionPolling() {
-        // Ask once, here. See ArrivalChime.requestAuthorization: routing this
-        // through onboarding meant it was never asked at all, because a
-        // non-blocking permission never makes onboarding appear.
-        Task { @MainActor in
-            await ArrivalChime.requestAuthorization()
-            Permissions.notificationsAuthorized = await ArrivalChime.isAuthorized
-            Permissions.log("notifications: \(Permissions.notificationsAuthorized ? "authorized" : "NOT authorized")")
-        }
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -1436,7 +1437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .replyEnded:
             isBusy = false
             hud.recordingEnded()
-            guard let captured = try? recorder.stop() else {
+            guard let capture = try? recorder.stop() else {
                 updateTitle()
                 // The silence gate's event, one layer down: the device returned
                 // so little that Recorder refused to hand it back. This printed
@@ -1448,7 +1449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             updateTitle()
-            sendReply(captured)
+            sendReply(capture)
 
         case .replyAborted where handsFreeListening:
             // A stray key during locked listening is not an abort signal: nothing is
@@ -1520,7 +1521,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // press sat on a frozen panel for the length of a subprocess call and a
             // registered press looked exactly like a missed one.
             await Task.detached { _ = ClaudeAgentsCLI().sessions() }.value
-            if eventId == nil, (try? coordinator.nextToAnnounce()) == nil {
+            // Same overlay as the selection below, or this emptiness check
+            // says "something is waiting" about the very turn we are about to
+            // refuse to announce, and the grid never gets shown.
+            if eventId == nil,
+               (try? coordinator.nextToAnnounce(excluding: self.delivering)) == nil {
                 showIdleGrid()
                 return
             }
@@ -1532,6 +1537,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let outcome = try await coordinator.announceNext(
                     only: eventId,
                     ignoringGate: true,
+                    excluding: self.delivering,
                     onWillSpeak: { [weak self] announcement in
                         // Render BEFORE the audio starts. Showing it afterwards is
                         // useless — you have already heard the whole thing by then.
@@ -1756,7 +1762,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // honest answer.
                 if let session, let store,
                    let file = try? HomeBase.write(sessionId: session, store: store) {
-                    NSWorkspace.shared.open(file)
+                    if BrowserFocus.focusExistingTab(file) == .notFound {
+                        NSWorkspace.shared.open(file)
+                    }
                 } else {
                     inviteNewSession(for: ref)
                 }
@@ -1865,8 +1873,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
-    private func sendReply(_ pcm: Data) {
+    private func sendReply(_ capture: Recorder.Capture) {
         guard let coordinator else { return }
+        // Unpacked once, at the top, from the value stop() returned. Both of
+        // these used to be read separately — the samples from the return, the
+        // file from mutable state on the recorder — which is how a later capture
+        // could have replaced one without the other.
+        let pcm = capture.pcm16
+        let capturedFile = capture.fileURL
         // This utterance's live stream, if one opened. finish() is nil on any
         // stream trouble, and the file path below recovers exactly as before.
         let liveStream = recorder.takeStream()
@@ -1909,7 +1923,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let streamed = await liveStream?.finish()
                     let utterance = try await store.captureAndTranscribe(
                         pcm16: pcm, sampleRate: 16_000, chain: RecoveryChain(), eventId: nil,
-                        streamed: streamed, preWritten: self.recorder.lastCaptureURL)
+                        streamed: streamed, preWritten: capturedFile)
                     // Cancelled (or replaced) while transcribing: the words must not
                     // be pasted anywhere. The audio row is durable and stays.
                     guard mine == replyGeneration else {
@@ -1975,7 +1989,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let streamed = await liveStream?.finish()
                 let outcome = try await coordinator.submitReply(
                     pcm16: pcm, to: spokenTo, streamed: streamed,
-                    preWritten: recorder.lastCaptureURL)
+                    preWritten: capturedFile)
 
                 // You started saying it again while this was still transcribing.
                 // Drop it rather than offering it: the words you replaced must never
@@ -2157,7 +2171,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // ruling, and is structural rather than remembered.
             return
         }
-        let target = try? coordinator?.nextToAnnounce()
+        // The hail path. Without the overlay the frontmost-tab check below is
+        // run against the session you just answered rather than the one that
+        // actually arrived — the same defect as ⌃⌥, wearing a different symptom.
+        let target = try? coordinator?.nextToAnnounce(excluding: delivering)
         if let front = frontmostSessionTty(), let target,
            let pid = (ClaudeAgentsCLI().sessions() ?? []).first(where: { $0.sessionId == target.sessionId })?.pid,
            ProcessProbe.tty(of: pid) == front {

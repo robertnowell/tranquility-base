@@ -169,6 +169,63 @@ final class CoordinatorTests: XCTestCase {
                        "a later event wins; nothing was written to make this true")
     }
 
+    /// THE 10 Aug bug. Reply to a session, go back to the grid, press ⌃⌥ because
+    /// you are ready for the next thing — and the session you just answered starts
+    /// talking again.
+    ///
+    /// The grid had already been taught this: its lamp goes blue the instant you
+    /// send, via `DeliveryInFlight.supersedesWaiting`. The selector had not, because
+    /// it was `waiting().first` — so the panel said blue while the keyboard acted
+    /// on green. This pins the two to the same predicate.
+    func testASessionYouAreMidReplyToIsNotOfferedNext() async throws {
+        let coordinator = try makeCoordinator()
+        try append(.stop, at: 1_000, message: "the turn you are about to answer")
+        let waiting = try XCTUnwrap(coordinator.nextToAnnounce())
+
+        var delivering = DeliveryInFlight()
+        delivering.began(sessionId: waiting.sessionId, answering: waiting.latestId)
+
+        XCTAssertNil(try coordinator.nextToAnnounce(excluding: delivering),
+                     "you are answering it right now; offering it back is the bug")
+        XCTAssertNotNil(try coordinator.nextToAnnounce(),
+                        "waiting() itself is unchanged — the overlay is the caller's")
+    }
+
+    /// The overlay must hold back only the turn being answered. A turn that arrives
+    /// WHILE the reply is in flight is genuinely unread, and swallowing it would
+    /// trade a noisy bug for a silent one — which is the worse of the two.
+    func testANewerTurnArrivingDuringDeliveryStillAnnounces() async throws {
+        let coordinator = try makeCoordinator()
+        try append(.stop, at: 1_000, message: "the turn you answered")
+        let answered = try XCTUnwrap(coordinator.nextToAnnounce())
+
+        var delivering = DeliveryInFlight()
+        delivering.began(sessionId: answered.sessionId, answering: answered.latestId)
+
+        try append(.stop, at: 2_000, message: "something new while you were talking")
+
+        XCTAssertEqual(
+            try coordinator.nextToAnnounce(excluding: delivering)?.lastAssistantMessage,
+            "something new while you were talking",
+            "a newer turn outranks the delivery overlay")
+    }
+
+    /// The overlay expires. A delivery that never resolves must not pin a session
+    /// out of the queue for ever — the same reasoning as the lamp's ceiling, and
+    /// the reason `DeliveryInFlight` bounds every entry.
+    func testAStaleDeliveryStopsHoldingTheSessionBack() async throws {
+        let coordinator = try makeCoordinator()
+        try append(.stop, at: 1_000, message: "the turn you answered")
+        let answered = try XCTUnwrap(coordinator.nextToAnnounce())
+
+        var delivering = DeliveryInFlight()
+        let longAgo = Date().addingTimeInterval(-(DeliveryInFlight.ceiling + 1))
+        delivering.began(sessionId: answered.sessionId, answering: answered.latestId, at: longAgo)
+
+        XCTAssertNotNil(try coordinator.nextToAnnounce(excluding: delivering),
+                        "a delivery past its ceiling has stopped meaning anything")
+    }
+
     /// Dismissal is scoped to the item that existed when you dismissed it. A boolean
     /// would silence the session for ever; a watermark lets the next turn revive it.
     func testDismissingASessionDoesNotSilenceItForever() async throws {
