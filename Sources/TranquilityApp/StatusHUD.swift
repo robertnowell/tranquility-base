@@ -35,6 +35,16 @@ final class StatusHUD: NSObject {
     private var contentStack: NSStackView?
     /// The collapsed column. Built once, hidden until the width changes.
     private var strip: CollapsedStrip?
+    /// The expanded face's whole view tree, held so the two widths can be
+    /// SWAPPED as content views rather than layered inside one.
+    ///
+    /// Layering was the first attempt and it put the panel off the screen. The
+    /// grid's stack pins the content view to 380pt; hiding it does not retire
+    /// its constraints, so a `setFrame` to 40pt was silently snapped back to 380
+    /// on the next layout pass — while the ORIGIN had already been moved to
+    /// `maxX - 40`. The result was a 380pt window hanging 340pt past the right
+    /// edge of the display, with only its empty left margin visible.
+    private var expandedRoot: NSView?
 
     /// Collapsed or expanded, and DURABLE — the user owns the width and nothing
     /// else sets it. Persisted because the app installs with a login item and
@@ -52,7 +62,10 @@ final class StatusHUD: NSObject {
     /// Lamps the collapsed column is currently showing — the drill asserts idle
     /// ones never reach it.
     var collapsedLampCount: Int { strip?.lamps.count ?? 0 }
-    var collapsedIsOnScreen: Bool { strip?.isHidden == false }
+    var collapsedIsOnScreen: Bool {
+        guard let strip else { return false }
+        return strip.window != nil && !strip.isHidden && panel?.contentView === strip
+    }
 
     func setCollapsed(_ collapsed: Bool) {
         guard collapsed != isCollapsed else { return }
@@ -86,6 +99,7 @@ final class StatusHUD: NSObject {
     private var voiceStack: NSStackView!
     private var voiceListHeight: NSLayoutConstraint!
     private var gearButton: NSButton!
+    private var collapseButton: NSButton!
     private var backButton: NSButton!
     private var waitingRows: NSStackView!
     var onPickWaiting: ((String) -> Void)?
@@ -898,6 +912,9 @@ final class StatusHUD: NSObject {
         countdownBar.isHidden = true; meter.isHidden = true
         voiceList.isHidden = true; waitingRows.isHidden = true
         gearButton.isHidden = false; backButton.isHidden = true
+        // Only the grid can be collapsed: a card is a conversation in progress
+        // and has no second width to go to.
+        collapseButton?.isHidden = true
         // Part of the baseline so the grid's monospaced key line can never leak
         // into another state's hint — a font no arm mentions is at its baseline.
         hintLabel.font = .systemFont(ofSize: 10)
@@ -935,6 +952,7 @@ final class StatusHUD: NSObject {
             hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
             hintLabel.stringValue = StateLegend.gridHint
             waitingRows.isHidden = false
+            collapseButton?.isHidden = isCollapsed
             // The collapsed column is the same data at another width. Every
             // widget the expanded face owns stays hidden behind it; render()
             // remains the single place either one is decided.
@@ -1330,8 +1348,10 @@ final class StatusHUD: NSObject {
         // margin; a sidebar with a gap behind it is a floating card pretending
         // to be a sidebar.
         if isCollapsed, case .idle = state {
-            strip?.isHidden = false
-            contentStack?.isHidden = true
+            if let strip, panel.contentView !== strip {
+                strip.isHidden = false
+                panel.contentView = strip
+            }
             var frame = panel.frame
             frame.size = NSSize(width: CollapsedStrip.width, height: CollapsedStrip.height)
             if let screen = NSScreen.main {
@@ -1340,11 +1360,12 @@ final class StatusHUD: NSObject {
             }
             intendedHeight = CollapsedStrip.height
             panel.setFrame(frame, display: true)
-            strip?.frame = NSRect(origin: .zero, size: frame.size)
+            panel.contentView?.layoutSubtreeIfNeeded()
             return
         }
-        strip?.isHidden = true
-        contentStack?.isHidden = false
+        if let expandedRoot, panel.contentView !== expandedRoot {
+            panel.contentView = expandedRoot
+        }
 
         guard let stack = contentStack else { return }
         panel.contentView?.layoutSubtreeIfNeeded()
@@ -1986,10 +2007,23 @@ final class StatusHUD: NSObject {
         showIdle(rows: mixed)
         // Idle lamps do not appear collapsed: five rows in, three are live.
         let idleLampsOmitted = collapsedLampCount == 3
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        panel?.displayIfNeeded()
+        // In a WINDOW, not merely un-hidden. The first version asserted
+        // `!isHidden`, which is true of a view that was added to a content view
+        // AppKit had already thrown away — so the drill passed on a strip that
+        // had never been on screen once.
         let stripShown = collapsedIsOnScreen
         let collapsedSize = panel.map {
             abs($0.frame.width - CollapsedStrip.width) < 1
                 && abs($0.frame.height - CollapsedStrip.height) < 1
+        } ?? false
+        // ON the display, entirely. The bug this exists for put a 380pt window
+        // at `maxX - 40`, hanging 340pt into nowhere; every other property here
+        // passed while it did.
+        let onScreen = panel.map { p in
+            NSScreen.main.map { p.frame.maxX <= $0.visibleFrame.maxX + 1
+                && p.frame.minX >= $0.visibleFrame.minX - 1 } ?? false
         } ?? false
         // Flush right: a sidebar with a gap behind it is a floating card
         // pretending to be one.
@@ -2008,6 +2042,7 @@ final class StatusHUD: NSObject {
             ("idleLampsOmitted", idleLampsOmitted),
             ("stripShown", stripShown),
             ("fixedSize", collapsedSize),
+            ("entirelyOnScreen", onScreen),
             ("flushRight", flushRight),
             ("widthHeldOnArrival", widthHeldOnArrival),
             ("expandRestoresTheGrid", expandedAgain),
@@ -2784,6 +2819,28 @@ final class StatusHUD: NSObject {
 
         background.addSubview(stack)
         background.addSubview(gearButton)
+
+        // Collapse lives on the panel, left of the gear. It was in the menu bar
+        // first, which was wrong twice over: clicking the status item already
+        // opens the panel, so "Show panel" was a second door to one room, and a
+        // control for shrinking the panel belongs on the panel rather than two
+        // clicks away in a menu you have to know is there.
+        collapseButton = NSButton(
+            image: NSImage(systemSymbolName: "chevron.right",
+                           accessibilityDescription: "Collapse")!
+                .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))!,
+            target: self, action: #selector(collapseTapped))
+        collapseButton.isBordered = false
+        collapseButton.contentTintColor = StateLegend.Lens.chrome.color
+        collapseButton.translatesAutoresizingMaskIntoConstraints = false
+        collapseButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        collapseButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        background.addSubview(collapseButton)
+        NSLayoutConstraint.activate([
+            collapseButton.centerYAnchor.constraint(equalTo: gearButton.centerYAnchor),
+            collapseButton.trailingAnchor.constraint(equalTo: gearButton.leadingAnchor,
+                                                     constant: -2),
+        ])
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: background.topAnchor),
             stack.leadingAnchor.constraint(equalTo: background.leadingAnchor),
@@ -2822,13 +2879,15 @@ final class StatusHUD: NSObject {
         column.onPick = { [weak self] id in
             MainActor.assumeIsolated { self?.onPickWaiting?(id) }
         }
-        panel.contentView?.addSubview(column)
         self.strip = column
 
         panel.contentView = background
+        self.expandedRoot = background
         self.panel = panel
         return panel
     }
+
+    @objc private func collapseTapped() { setCollapsed(true) }
 
     // MARK: - Actions
 
