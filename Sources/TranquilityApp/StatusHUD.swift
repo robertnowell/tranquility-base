@@ -571,7 +571,14 @@ final class StatusHUD: NSObject {
     /// about — the one displayed identity, in mono.
     func showResult(_ message: String) {
         guard transition(to: .result, because: "reply failed") else { return }
-        face = Face(title: currentTarget?.label ?? "", body: message)
+        // A failure that happened TO a capture joins the strip, for the same
+        // reason the read-back did. Amber either way; the channel does not
+        // change, only the slot it speaks from.
+        if face.hasCard {
+            face.captureFault = message
+        } else {
+            face = Face(title: currentTarget?.label ?? "", body: message)
+        }
         render()
     }
 
@@ -990,6 +997,12 @@ final class StatusHUD: NSObject {
         /// reply…" and, past twenty seconds, the slow note. On the face rather
         /// than read from the state so the one strip painter has one source.
         var captureNote: String?
+
+        /// A capture that ended badly, said in the strip instead of the card.
+        /// The failure is ABOUT the reply you just spoke, so it belongs under
+        /// the message you spoke it to — taking the whole panel for it throws
+        /// away the one thing you would need in order to try again.
+        var captureFault: String?
     }
     private var face = Face()
 
@@ -1218,6 +1231,15 @@ final class StatusHUD: NSObject {
                 renderCaptureStrip(placardText(StateLegend.readbackPlacard),
                                    detail: "\u{201C}\(readback)\u{201D}")
             }
+
+        case .result where face.captureFault != nil:
+            // The card keeps its own placard, identity and ink; the fault
+            // speaks from the strip, in the needs-you channel.
+            renderCaptureStrip(NSAttributedString(
+                string: "\(StateLegend.Glyph.needsYou) \(face.captureFault ?? "")",
+                attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                             .foregroundColor: StateLegend.Palette.fault]))
+            micSettingsButton.isHidden = !face.offersMicSettings
 
         case .result:
             // A card that waits until dismissed. Amber presence beyond the glyph
@@ -2301,8 +2323,24 @@ final class StatusHUD: NSObject {
         let dontSendKeptMicShut = dontSendRestartedListening == false
         endCapture(because: "selftest dontSend cleanup")
 
+        // A capture failure keeps the card it was about. The one thing you
+        // need in order to say it again is the message you were answering.
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize(stripBody),
+            sessionId: "fault", pid: 1, project: "promotions copy", cwd: "/tmp")
+        highlight(upTo: 30)
+        let faultCardInk = inkBrightLength
+        showListening(level: { 0.2 })
+        showResult("This recording lost its address. Audio kept; nothing sent.")
+        let faultKeepsCard = bodyLabel.stringValue == cardBody
+            && inkBrightLength == faultCardInk
+        let faultIsInTheStrip = stripLabel.stringValue.contains("lost its address")
+        endCapture(because: "selftest fault cleanup")
+
         SelfTest.report("strip", [
             ("dontSendKeepsTheMicShut", dontSendKeptMicShut),
+            ("faultKeepsTheCard", faultKeepsCard),
+            ("faultSpeaksFromTheStrip", faultIsInTheStrip),
             ("cardSurvivesArming", armedKeepsCard),
             ("placardSurvives", armedKeepsPlacard),
             ("inkSurvivesArming", armedInk == cardInk),
