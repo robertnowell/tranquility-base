@@ -87,6 +87,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// holding must not end anything.
     private var handsFreeListening = false
     private var lastOptionTapAt: Date?
+    /// When hands-free listening last opened, so the twin of a ⌥⌥ cannot close
+    /// what the first tap opened. See OptionTapDecision's THE TWIN note.
+    private var listeningStartedAt: Date?
     /// The conversation you are in: set when an announcement starts and kept
     /// through any number of replies, until you explicitly move on (⌃⌥ or dismiss).
     ///
@@ -1073,6 +1076,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 isRecording: recorder.isRecording,
                 isArmed: armedAt != nil,
                 withinPairWindow: lastOptionTapAt.map { Date().timeIntervalSince($0) < 0.45 } ?? false,
+                listeningJustStarted: listeningStartedAt.map { Date().timeIntervalSince($0) < 0.45 } ?? false,
                 micGranted: micGranted)
             Permissions.log("⌥ tap: \(decision) in \(hud.state)")
 
@@ -1154,6 +1158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // path advances the cursor on a confirmed send anyway.
                 coordinator?.speech.stop()
                 isBusy = true
+                listeningStartedAt = Date()
                 updateTitle()
                 hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
                 Permissions.log("hands-free: listening locked")
