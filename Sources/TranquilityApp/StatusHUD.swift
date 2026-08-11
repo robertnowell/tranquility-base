@@ -505,8 +505,17 @@ final class StatusHUD: NSObject {
         guard transition(to: .transcribing(startedAt: Date()),
                          because: "transcription started")
         else { return }
-        face = Face(title: currentTarget?.label ?? "", body: message,
-                    transcription: (cancel: onCancel, retry: onRetry))
+        // A capture phase like the others: the card stays and the strip says
+        // what is happening to your words. Without this the card survived the
+        // microphone and then died on the way to the transcript, which is the
+        // same defect one step later.
+        if face.hasCard {
+            face.transcription = (cancel: onCancel, retry: onRetry)
+            face.captureNote = message
+        } else {
+            face = Face(title: currentTarget?.label ?? "", body: message,
+                        transcription: (cancel: onCancel, retry: onRetry))
+        }
         render()
     }
 
@@ -949,6 +958,11 @@ final class StatusHUD: NSObject {
         /// the whole point of the read-back moving into the strip is that the
         /// reply and the message it answers are on screen at the same time.
         var readback: String?
+
+        /// What the strip says during `.transcribing` — "Transcribing your
+        /// reply…" and, past twenty seconds, the slow note. On the face rather
+        /// than read from the state so the one strip painter has one source.
+        var captureNote: String?
     }
     private var face = Face()
 
@@ -1029,6 +1043,13 @@ final class StatusHUD: NSObject {
         // a state that never mentions them must not inherit them.
         bodyLabel.font = .systemFont(ofSize: 12)
         bodyLabel.alignment = .natural
+        // The ink is a BODY ATTRIBUTE, so it belongs to the baseline: the line
+        // above writes a plain string and would otherwise erase the read-along
+        // on every repaint that is not `.speaking` — which, now that a capture
+        // keeps the card, is most of them. Only faces that have actually been
+        // read to carry a cursor; a `.result` or `.receipt` card has none and
+        // keeps its full-dark body exactly as before.
+        if let cursor = face.spokenUpTo { paintInk(displayCursor: cursor) }
         hintLabel.stringValue = ""
         goButton.isHidden = currentTarget?.pid == nil
         // The card's second door. It rides the same rule as "Go to agent" —
@@ -1058,7 +1079,12 @@ final class StatusHUD: NSObject {
         cancelTranscriptionButton.isHidden = true; retryTranscriptionButton.isHidden = true
 
         switch state {
-        case .hidden, .preparing, .transcribing, .receipt:
+        case .transcribing:
+            if let note = face.captureNote {
+                renderCaptureStrip(placardText(note))
+            }
+
+        case .hidden, .preparing, .receipt:
             break
 
         case .speaking:
@@ -2203,6 +2229,14 @@ final class StatusHUD: NSObject {
         let listeningStrip = !stripLabel.isHidden
         let topDuring = panel?.frame.maxY ?? 0
 
+        // Through transcribing, because that is the real order and the
+        // legality table enforces it: `.listening` does not admit
+        // `.pendingSend`. The first version of this drill skipped the step and
+        // the refusal made the read-back assertion fail for the wrong reason.
+        showTranscribing("Transcribing your reply…", onCancel: {}, onRetry: {})
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let transcribingInk = inkBrightLength
+        let transcribingStrip = !stripLabel.isHidden
         showPendingSend(text: "ship it", label: "promotions copy",
                         seconds: 60, send: {}, cancel: { _ in })
         panel?.contentView?.layoutSubtreeIfNeeded()
@@ -2229,7 +2263,8 @@ final class StatusHUD: NSObject {
             ("inkSurvivesArming", armedInk == cardInk),
             ("inkSurvivesListening", listeningInk == cardInk),
             ("inkSurvivesReadback", readbackInk == cardInk),
-            ("stripAppears", armedStrip && listeningStrip),
+            ("stripAppears", armedStrip && listeningStrip && transcribingStrip),
+            ("inkSurvivesTranscribing", transcribingInk == cardInk),
             ("readbackJoinsTheStrip", readbackInStrip && readbackKeepsCard),
             ("gridCaptureIsWholePanel", gridCaptureIsWholePanel),
         ])
