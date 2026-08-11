@@ -2298,7 +2298,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Name one, not four. A list of downloads is a chore; a single "this one
             // is the good one" is an instruction.
             note += "  Better free voice available: \(best.name) — \(best.note). "
-                + "Settings → \(SystemVoiceCatalog.remainingSteps)"
+                // The link lands on Read & Speak, so the instruction starts from
+                // there — naming a step the button already took reads as broken.
+                + "Read & Speak → \(SystemVoiceCatalog.remainingSteps)"
         }
 
         hud.showSettings(voices: paid + free, roster: VoiceRoster.load(), note: note)
