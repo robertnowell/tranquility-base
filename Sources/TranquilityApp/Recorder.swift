@@ -62,6 +62,24 @@ public final class Recorder: @unchecked Sendable {
     /// rather than re-writing bytes it already has on disk.
     public private(set) var lastCaptureURL: URL?
 
+    /// The hardware re-rated under the engine, so the cached input format is a
+    /// lie. Set by AVAudioEngine's own configuration-change notification, which
+    /// is the signal the open loop never listened for — it discovered the same
+    /// staleness by failing, on every single capture.
+    private var staleFormat = false
+    private var configObserver: NSObjectProtocol?
+
+    private func observeConfigurationChanges() {
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.staleFormat = true
+            Permissions.log("mic: device configuration changed; engine marked stale")
+        }
+    }
+
     /// Live input level, for a waveform or an orb pulse.
     public private(set) var level: Float = 0
     /// Loudest moment of the current recording; the silence gate reads it.
@@ -112,6 +130,7 @@ public final class Recorder: @unchecked Sendable {
 
     public init(sampleRate: Double = 16000) {
         self.sampleRate = sampleRate
+        observeConfigurationChanges()
     }
 
     public var isRecording: Bool {
@@ -308,6 +327,13 @@ public final class Recorder: @unchecked Sendable {
             _ = VDCatchObjCException { input.removeTap(onBus: 0); engine.stop() }
             lastReason = exception.map { "\($0.name.rawValue): \($0.reason ?? "no reason")" }
                 ?? "\(startError!)"
+            // Remember staleness across captures. The notification above catches a
+            // device that re-rates while we are watching; this catches the format
+            // that was already wrong when we started watching — which is what the
+            // log actually shows, the same cached 24000Hz failing attempt 1 for
+            // hours. Without this the loop pays the same wasted attempt on every
+            // capture forever, having learned nothing from the last one.
+            if lastReason.contains("format mismatch") { staleFormat = true }
         }
 
         lock.lock(); running = false; lock.unlock()
@@ -355,10 +381,20 @@ public final class Recorder: @unchecked Sendable {
     private func rebindEngine(rebuilding: Bool) -> AVAudioInputNode {
         let desired = AudioInputDevice.resolve()
         let mismatched = desired.map { engine.inputNode.auAudioUnit.deviceID != $0.id } ?? false
-        guard rebuilding || mismatched else { return engine.inputNode }
+        // `staleFormat` is the third reason, and until 10 Aug it was the missing
+        // one. deviceID mismatch only catches a change of DEVICE; a device that
+        // re-rates underneath us keeps its id and changes its format, and
+        // `inputNode` caches the format it first read. Measured: 144 successful
+        // opens today, every one at 48000Hz, and every first attempt failing on a
+        // cached "1 ch, 24000 Hz, Float32" — the same stale format, every time,
+        // for hours. The retry loop was papering over a permanent condition, one
+        // wasted attempt and ~80ms per capture.
+        guard rebuilding || mismatched || staleFormat else { return engine.inputNode }
 
         _ = VDCatchObjCException { engine.stop() }
         engine = AVAudioEngine()
+        observeConfigurationChanges()
+        staleFormat = false
         if let desired {
             do { try engine.inputNode.auAudioUnit.setDeviceID(desired.id) }
             catch {
