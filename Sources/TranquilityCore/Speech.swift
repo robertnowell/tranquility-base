@@ -542,7 +542,8 @@ public struct SpeechChain: Sendable {
 
     public init(
         preferred: (any SpeechProvider)? = ElevenLabsSpeechProvider(),
-        fallback: any SpeechProvider = SystemSpeechProvider()
+        fallback: any SpeechProvider = SystemSpeechProvider(
+            voiceIdentifier: SystemVoiceCatalog.preferredIdentifier())
     ) {
         self.preferred = preferred
         self.fallback = fallback
