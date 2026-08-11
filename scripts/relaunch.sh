@@ -51,6 +51,16 @@ echo "→ target: $TARGET  $(git log -1 --format=%s "$REF")"
 # /tmp/vd-clean from before 023f201. Either way, create what is missing rather
 # than failing on it.
 if [ ! -d "$CLEAN_WORKTREE" ]; then
+  # Prune first. /private/tmp is reaped — install.sh's own header names this as a
+  # routine occurrence — and the reaper takes the directory while leaving git's
+  # registration behind. `worktree add` then refuses:
+  #
+  #   fatal: '/private/tmp/tb-clean' is a missing but already registered worktree
+  #
+  # which broke the ONLY sanctioned relaunch path on 11 Aug, after a documented and
+  # entirely expected event. Pruning is a no-op when nothing is stale, so it costs
+  # nothing on the healthy path.
+  git worktree prune
   echo "→ creating $CLEAN_WORKTREE"
   git worktree add --detach "$CLEAN_WORKTREE" "$REF" >/dev/null
 else
