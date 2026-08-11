@@ -567,7 +567,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // restarts, so calling start() on every tick is safe.
 
     private func startPermissionPolling() {
-        Task { @MainActor in Permissions.notificationsAuthorized = await ArrivalChime.isAuthorized }
+        // Ask once, here. See ArrivalChime.requestAuthorization: routing this
+        // through onboarding meant it was never asked at all, because a
+        // non-blocking permission never makes onboarding appear.
+        Task { @MainActor in
+            await ArrivalChime.requestAuthorization()
+            Permissions.notificationsAuthorized = await ArrivalChime.isAuthorized
+            Permissions.log("notifications: \(Permissions.notificationsAuthorized ? "authorized" : "NOT authorized")")
+        }
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -2157,6 +2164,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // successfully. A chime carries the same information ("something came
         // back") at none of that cost, and the panel already carries WHICH.
         ArrivalChime.play()
+        // And the visual half. The chime is the away-channel; this is for when
+        // you are looking at the screen but the panel is a 40pt column — where
+        // a lamp changing colour is the only thing that happens, and nothing
+        // marks it as having just happened.
+        if let arriving = rows.first(where: { $0.lamp == .ready })?.lamp {
+            hud.flashArrival(arriving)
+        }
     }
 
 

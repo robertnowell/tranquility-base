@@ -64,6 +64,7 @@ final class StatusHUD: NSObject {
     /// Lamps the collapsed column is currently showing — the drill asserts idle
     /// ones never reach it.
     var collapsedLampCount: Int { strip?.lamps.count ?? 0 }
+    var collapsedGlowStrength: CGFloat { strip?.currentGlowStrength ?? 0 }
     /// In a window, visible, and actually in the view tree. NOT
     /// `panel.contentView === strip` any more: the strip is a sibling inside the
     /// panel's rounded background now, so the old check asserted an arrangement
@@ -71,6 +72,17 @@ final class StatusHUD: NSObject {
     var collapsedIsOnScreen: Bool {
         guard let strip else { return false }
         return strip.window != nil && !strip.isHidden && strip.superview != nil
+    }
+
+    /// An agent came back. Mark it on the collapsed strip.
+    ///
+    /// Only collapsed: expanded, the row itself lights up and a halo would be
+    /// the same news twice. And only ever a transient — see `CollapsedStrip.flash`
+    /// for why a glow that outlives its moment becomes the notification badge
+    /// this product exists to avoid.
+    func flashArrival(_ lamp: StateLegend.Lamp) {
+        guard isCollapsed else { return }
+        strip?.flash(lamp)
     }
 
     func setCollapsed(_ collapsed: Bool) {
@@ -2112,6 +2124,22 @@ final class StatusHUD: NSObject {
             + "wantLeft=\(Int(expandedLeftEdge)) intendedH=\(Int(intendedHeight ?? -1))")
         let expandRestoredLeft = abs((panel?.frame.minX ?? 0) - expandedLeftEdge) < 2
         let expandedAgain = !collapsedIsOnScreen
+        // The glow is a TRANSIENT. A version that persisted until acknowledged
+        // would be the notification badge this product exists to avoid, so the
+        // drill asserts it decays to nothing on its own clock.
+        setCollapsed(true)
+        showIdle(rows: mixed)
+        flashArrival(.ready)
+        let glowLit = collapsedGlowStrength > 0
+        RunLoop.current.run(until: Date().addingTimeInterval(CollapsedStrip.glowSeconds + 0.4))
+        let glowDecayed = collapsedGlowStrength == 0
+        setCollapsed(false)
+        flashArrival(.ready)
+        let glowIgnoredWhenExpanded = collapsedGlowStrength == 0
+        setCollapsed(true)
+        showIdle(rows: mixed)
+        settleAnimations()
+
         SelfTest.report("collapsed", [
             ("idleLampsOmitted", idleLampsOmitted),
             ("stripShown", stripShown),
@@ -2121,6 +2149,9 @@ final class StatusHUD: NSObject {
             ("expandRestoresTheLeftEdge", expandRestoredLeft),
             ("widthHeldOnArrival", widthHeldOnArrival),
             ("expandRestoresTheGrid", expandedAgain),
+            ("glowLit", glowLit),
+            ("glowDecayedOnItsOwn", glowDecayed),
+            ("glowOnlyWhenCollapsed", glowIgnoredWhenExpanded),
         ])
         showIdle(rows: [])
 
