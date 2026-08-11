@@ -1060,31 +1060,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     lastStatusLine = "mic already live — tap ⌥ to send"
                     return
                 }
+                // ORDER IS THE WHOLE FIX (10 Aug, second attempt). This block
+                // used to mark the session heard and stop the announcement
+                // BEFORE opening the microphone. When the open then failed —
+                // which the delivery gate now makes visible rather than silent —
+                // the session had already gone green-to-empty, the panel had
+                // already fallen back to the grid, and there was no recorder to
+                // show for it. One tap could lose a waiting agent and give
+                // nothing back.
+                //
+                // Nothing is mutated until the microphone is actually recording.
+                // A failed open now leaves the world exactly as it found it: the
+                // lamp still green, the announcement still playing, the agent
+                // still waiting on you.
+                let context = resolveReplyContext()
+                do {
+                    try recorder.start()
+                } catch {
+                    Permissions.log("mic: start failed (hands-free) — nothing changed: \(error)")
+                    hud.showResult(micFailureMessage(error))
+                    return
+                }
+
                 handsFreeListening = true
-                if let ctx = resolveReplyContext() {
+                if let ctx = context {
                     hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
                                     label: ctx.label, cwd: ctx.cwd)
                     recordingTarget = ctx.sessionId
                 } else {
                     dictationMode = true
-                hud.dictationDestination = FocusedInput.focusedEditableApp()
-                    .map { StateLegend.destination($0) } ?? StateLegend.clipboardDestination
+                    hud.dictationDestination = FocusedInput.focusedEditableApp()
+                        .map { StateLegend.destination($0) } ?? StateLegend.clipboardDestination
                 }
-                if let sessionId = hud.currentEventId,
-                   let latest = try? coordinator?.waiting().first(where: { $0.sessionId == sessionId }) {
-                    try? coordinator?.markHeard(sessionId: sessionId, through: latest.latestId)
-                }
+                // Deliberately NOT marking the session heard here (ruled 10 Aug).
+                // An agent stops waiting when you ANSWER it or when you press its
+                // lamp — never because a key was pressed while it happened to be
+                // talking. Hearing the first half of an announcement and starting
+                // to reply is not the same as being done with it, and the reply
+                // path advances the cursor on a confirmed send anyway.
                 coordinator?.speech.stop()
-                do {
-                    try recorder.start()
-                } catch {
-                    Permissions.log("mic: start failed (hands-free): \(error)")
-                    handsFreeListening = false
-                    dictationMode = false
-                    recordingTarget = nil
-                    hud.showResult(micFailureMessage(error))
-                    return
-                }
                 isBusy = true
                 updateTitle()
                 hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
@@ -1304,15 +1318,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The old transcript is discarded rather than deleted, and the gesture
             // itself starts the new recording, so nothing restarts it twice.
             hud.cancelPendingSend(restartListening: false)
-            // Replying to what is currently playing is the normal case, not an edge
-            // one — you answer as soon as you have heard enough. Mark it heard
-            // BEFORE stopping, because stopping reverts it to unread and that is
-            // what threw the reply away.
-            // Answering it counts as hearing it: you replied, so it is dealt with.
-            if let sessionId = hud.currentEventId,
-               let latest = try? coordinator?.waiting().first(where: { $0.sessionId == sessionId }) {
-                try? coordinator?.markHeard(sessionId: sessionId, through: latest.latestId)
-            }
+            // NOT marked heard here (ruled 10 Aug). Starting to record is not
+            // answering: an agent stops waiting when a reply actually lands, or
+            // when you press its lamp — never because you pressed the mic key
+            // while it was talking. This used to mark heard first, which meant a
+            // press that opened no microphone still took the session out of the
+            // queue: green to empty, and the work gone from view with nothing to
+            // show for it.
+            //
+            // The revert this used to defend against is now the correct outcome.
+            // Stopping an announcement returns it to unread — which is exactly
+            // what it should be, because you have not answered it yet. The reply
+            // path advances the cursor on a confirmed send, so a delivered answer
+            // still retires it.
             coordinator?.speech.stop()  // never record over playback
             lat("teardown done, opening mic")
             if armed != nil, recorder.isRecording {
