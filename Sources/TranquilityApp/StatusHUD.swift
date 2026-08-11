@@ -64,9 +64,13 @@ final class StatusHUD: NSObject {
     /// Lamps the collapsed column is currently showing — the drill asserts idle
     /// ones never reach it.
     var collapsedLampCount: Int { strip?.lamps.count ?? 0 }
+    /// In a window, visible, and actually in the view tree. NOT
+    /// `panel.contentView === strip` any more: the strip is a sibling inside the
+    /// panel's rounded background now, so the old check asserted an arrangement
+    /// the redesign deliberately abandoned.
     var collapsedIsOnScreen: Bool {
         guard let strip else { return false }
-        return strip.window != nil && !strip.isHidden && panel?.contentView === strip
+        return strip.window != nil && !strip.isHidden && strip.superview != nil
     }
 
     func setCollapsed(_ collapsed: Bool) {
@@ -1836,6 +1840,14 @@ final class StatusHUD: NSObject {
         }
     }
 
+    /// Let an in-flight frame animation finish, then lay out. Drills measure
+    /// geometry, and geometry is a lie while the animator is running.
+    private func settleAnimations() {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        panel?.displayIfNeeded()
+    }
+
     /// Render every state with worst-case text and confirm nothing is clipped.
     /// Run with `--selftest-hud`.
     func selfTest() {
@@ -2014,11 +2026,15 @@ final class StatusHUD: NSObject {
         defer { setCollapsed(widthBeforeDrill) }
         setCollapsed(false)
         showIdle(rows: mixed)
-        panel?.contentView?.layoutSubtreeIfNeeded()
+        settleAnimations()
         let expandedRightEdge = panel?.frame.maxX ?? 0
         let expandedLeftEdge = panel?.frame.minX ?? 0
         setCollapsed(true)
         showIdle(rows: mixed)
+        // The morph is animated, so the frame is a transient for ~0.16s. Let it
+        // land before measuring — a drill that reads mid-animation measures
+        // nothing, which is how the first version passed on a broken panel.
+        settleAnimations()
         // Idle lamps do not appear collapsed: five rows in, three are live.
         let idleLampsOmitted = collapsedLampCount == 3
         panel?.contentView?.layoutSubtreeIfNeeded()
@@ -2052,7 +2068,7 @@ final class StatusHUD: NSObject {
         let widthHeldOnArrival = abs((panel?.frame.width ?? 0) - widthBefore) < 1
         setCollapsed(false)
         showIdle(rows: mixed)
-        panel?.contentView?.layoutSubtreeIfNeeded()
+        settleAnimations()
         // The bug the user reported: expanding out of the strip left the left
         // edge where the strip's was, so 340pt of grid hung off the display.
         let expandRestoredLeft = abs((panel?.frame.minX ?? 0) - expandedLeftEdge) < 2
