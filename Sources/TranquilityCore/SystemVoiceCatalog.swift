@@ -34,9 +34,15 @@ public enum SystemVoiceCatalog {
     }
 
     /// Every installed voice for a language, best first.
-    public static func voices(matching language: String = "en-US") -> [AVSpeechSynthesisVoice] {
+    ///
+    /// Matched as a PREFIX, and defaulted to "en" rather than "en-US". Exact matching
+    /// hid every voice a user downloaded outside their own locale: Jamie (Premium) is
+    /// en-GB, Lee (Premium) en-AU, Daniel en-GB, Tessa en-ZA — all installed, all
+    /// deliberately chosen, none of them visible. A voice you went and fetched should
+    /// never be filtered out by an assumption about which English you speak.
+    public static func voices(matching language: String = "en") -> [AVSpeechSynthesisVoice] {
         AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language == language }
+            .filter { $0.language.hasPrefix(language) }
             .sorted {
                 let (a, b) = (rank($0.quality), rank($1.quality))
                 return a == b ? $0.name < $1.name : a > b
@@ -49,7 +55,7 @@ public enum SystemVoiceCatalog {
     /// Nil is a real answer, not a failure: a machine with only compact voices has
     /// nothing better to offer, and passing the compact identifier explicitly would
     /// be the same voice with more ceremony.
-    public static func preferredIdentifier(language: String = "en-US") -> String? {
+    public static func preferredIdentifier(language: String = "en") -> String? {
         if let chosen = UserDefaults.standard.string(forKey: preferenceKey) {
             // Honour an explicit choice only while it is still installed — a voice can
             // be removed in Settings, and a stale identifier makes AVSpeechSynthesizer
@@ -76,7 +82,7 @@ public enum SystemVoiceCatalog {
     /// Whether the machine has anything better than the compact default, so the app
     /// can say "there are better voices available in Settings" rather than leaving a
     /// user to conclude this is how it sounds.
-    public static func hasBetterVoiceAvailable(language: String = "en-US") -> Bool {
+    public static func hasBetterVoiceAvailable(language: String = "en") -> Bool {
         voices(matching: language).contains { rank($0.quality) > 1 }
     }
 
@@ -137,7 +143,8 @@ public enum SystemVoiceCatalog {
                 let langs = (asset["Languages"] as? [String])
                     ?? (asset["Language"] as? String).map { [$0] } ?? []
                 // MacinTalk entries carry `Language`; the rest carry `Languages`.
-                guard langs.contains(language) || langs.isEmpty && catalogue.hasPrefix("MacinTalk")
+                guard langs.contains(where: { $0.hasPrefix(language) })
+                        || langs.isEmpty && catalogue.hasPrefix("MacinTalk")
                 else { continue }
                 let mb = ((asset["_DownloadSize"] as? NSNumber)?.doubleValue ?? 0) / 1_000_000
                 largest[name] = max(largest[name] ?? 0, mb)
@@ -156,7 +163,7 @@ public enum SystemVoiceCatalog {
     /// This replaced a `VoiceRelativeDesirability >= 10000` test that worked by
     /// accident: Ava, the best voice here, carries no desirability score at all —
     /// the field belongs to the legacy catalogue and the good voices are elsewhere.
-    public static func downloadable(language: String = "en-US") -> [(name: String, megabytes: Double)] {
+    public static func downloadable(language: String = "en") -> [(name: String, megabytes: Double)] {
         catalogueEntries(language: language)
             .filter { $0.megabytes >= 50 }
             .sorted { $0.megabytes > $1.megabytes }
@@ -170,7 +177,7 @@ public enum SystemVoiceCatalog {
     /// copies of it. Identifier matching is worse still — premium voices moved from
     /// `com.apple.ttsbundle.*` to `com.apple.voice.premium.*`, so an identifier
     /// allowlist reports everything missing after an OS upgrade.
-    public static func recommendationStatus(language: String = "en-US")
+    public static func recommendationStatus(language: String = "en")
         -> (installed: [String], missing: [(name: String, note: String)]) {
         let present = voices(matching: language).map(\.name)
         func isInstalled(_ assetName: String) -> Bool {
@@ -252,7 +259,7 @@ public enum SystemVoiceCatalog {
     /// Listing them is the whole point: a picker that shows only what you have cannot
     /// tell you what you are missing, and the missing ones are the good ones. Big
     /// only — a download row for a 1MB voice from 1994 is not an offer.
-    public static func downloadRows(language: String = "en-US") -> [Voice] {
+    public static func downloadRows(language: String = "en") -> [Voice] {
         recommendationStatus(language: language).missing.compactMap { entry in
             let mb = Double(entry.note.replacingOccurrences(of: " MB", with: "")) ?? 0
             guard mb >= 100 else { return nil }
@@ -335,10 +342,10 @@ public enum SystemVoiceCatalog {
     public static func sizeMB(named voiceName: String) -> Double? {
         // "Ava (Premium)" and "Ava (Enhanced)" are both the "Ava" asset.
         let base = voiceName.split(separator: " ").first.map(String.init) ?? voiceName
-        return catalogueEntries(language: "en-US").first { $0.name == base }?.megabytes
+        return catalogueEntries(language: "en").first { $0.name == base }?.megabytes
     }
 
-    public static func asCatalogueVoices(language: String = "en-US") -> [Voice] {
+    public static func asCatalogueVoices(language: String = "en") -> [Voice] {
         // Quality OR deliberate choice. A voice you went and downloaded belongs in
         // the list even if macOS rates it compact — you asked for it. The OS's own
         // novelty voices never qualify on either count: they are compact AND nobody
