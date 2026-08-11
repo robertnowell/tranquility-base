@@ -2153,6 +2153,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.log("ambient: skipped, that session is the frontmost tab")
             return
         }
+        // RULING 1: an arrival changes what the panel SAYS, never whether it is
+        // on screen or how wide it is. A panel you put away stays away.
+        //
+        // The count in the menu bar is what carries the news to a dismissed
+        // panel — refreshed every tick and unable to go stale (WS-B,
+        // `menuBarCount`) — plus the chime below, which is the away-channel and
+        // does not need a window. Nothing is lost by not summoning one.
+        //
+        // This is the last unimplemented half of
+        // docs/ruling-an-arrival-does-not-move-the-panel.md: `showIdle` raises
+        // the panel, and `allowsAmbientSurface` is true for `.hidden`, so every
+        // arriving turn re-opened a panel the user had dismissed.
+        guard hud.isOnScreen else {
+            Permissions.log("ambient: \(waiting) waiting, panel stays dismissed")
+            ArrivalChime.play()
+            return
+        }
         Permissions.log("ambient: surfaced for \(waiting) waiting")
         hud.showIdle(rows: rows)
         // The arrival makes a SOUND, not a sentence.

@@ -21,6 +21,19 @@ must not *open* it for you either. The two halves are the same principle and
 should be read together — the user owns the width, and the user owns the
 visibility.
 
+> **BUILT 10 Aug 2026.** `surfaceArrival` now returns before `showIdle` when the
+> panel is off screen, so a dismissed panel stays dismissed. The chime still
+> fires — it is the away-channel and needs no window — and the menu-bar count
+> carries the rest. Drilled from the panel's side: `dismissTakesItAway` and
+> `showIdleWouldRaise`, the second of which pins the property the guard depends
+> on, so the guard cannot quietly become decorative.
+>
+> Ruling 3 (the courtesy check) and the whole of the room-listening design were
+> deleted on the same day — see
+> docs/ruling-the-return-is-a-sound-not-a-sentence.md. What survives from this
+> doc is ruling 1, ruling 4's toast (now the arrival glow), and the recovery
+> continuation bound.
+
 ### What ships today, and why this is a change
 
 `surfaceArrival` (main.swift) ends in `hud.showIdle(rows:)`, which raises the
