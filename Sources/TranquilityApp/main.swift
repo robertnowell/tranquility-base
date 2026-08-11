@@ -2173,6 +2173,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// identically, and what the user learns is that the app is unreliable rather
     /// than that the earbuds are. Name the device, name the fix.
     private func micFailureMessage(_ error: Error) -> String {
+        // Only advise the built-in mic if capture has not already tried it. Once
+        // the open loop has retreated there and STILL failed, telling the user to
+        // switch to the device that just failed is worse than no advice.
+        if recorder.fellBackToBuiltIn {
+            return "Couldn't open the built-in microphone either — try again. (\(error))"
+        }
         if let device = AudioInputDevice.resolve(), device.isBluetooth {
             return "Couldn't open \(device.name). Bluetooth mics change their own "
                 + "sample rate when they open — switch to the built-in mic under "
@@ -2517,6 +2523,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             entry.representedObject = option.rawValue
             entry.state = option == preference ? .on : .off
             micMenu.addItem(entry)
+        }
+        // Say when the preference is not what is actually recording. A tick beside
+        // "System default (Robert's AirPods Pro)" while capture has retreated to
+        // the built-in mic is a menu describing an intention, not a state.
+        if recorder.fellBackToBuiltIn {
+            micMenu.addItem(.separator())
+            micMenu.addItem(disabled("↳ recording on the built-in mic "
+                + "(the selected device delivered nothing)"))
         }
         micItem.submenu = micMenu
         menu.addItem(micItem)
