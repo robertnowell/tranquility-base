@@ -3432,6 +3432,27 @@ private final class GridRowView: NSControl {
     // the new row height; 11pt keeps the lamp clear of the type and hands the
     // difference to the name column.
     static let lampColumn: CGFloat = 20
+    /// The lamp's click target. Equal to the column ON PURPOSE, after trying
+    /// wider and backing it out.
+    ///
+    /// The target is already 20 × 40 — the full row height, not the 9pt dot —
+    /// so it is far larger than it looks and past the usual 24pt guidance by
+    /// area. Widening it in x has nowhere to go: the name begins at
+    /// `lampColumn`, so 28 would have swallowed the name's first 8pt and made
+    /// clicking a session's title MUTE it, and buying that space back by
+    /// pushing `lampColumn` out would reverse the 05 Aug ruling that tightened
+    /// 26 → 20 — with an argument, which rule 4 does not accept. The
+    /// discoverability this was reaching for is the hover pill's job instead.
+    static let lampHitWidth: CGFloat = lampColumn
+    /// How far the hover highlight reaches PAST the row's content on each side.
+    ///
+    /// The row's content box starts exactly where the lamp starts — the lamp is
+    /// pinned flush to `leadingAnchor` — so a highlight drawn to the row's own
+    /// bounds put a hard edge against the lamp with no air at all. The panel's
+    /// stack already holds 14pt of inset on either side; the highlight borrows
+    /// 8 of it so the lamp sits INSIDE the lit area rather than on its border.
+    /// Nothing that is drawn moves: this widens the lit rectangle only.
+    static let hoverBleed: CGFloat = 8
     static let auxFraction: CGFloat = 0.38
     static let auxFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
 
@@ -3474,12 +3495,29 @@ private final class GridRowView: NSControl {
         callsign.alignment = .right
         callsign.translatesAutoresizingMaskIntoConstraints = false
 
+        // Behind everything: the hover pill. A view rather than the row's own
+        // layer, because it has to reach wider than the row's content box —
+        // see `hoverBleed`. Neither the row nor the stack masks to bounds, so
+        // it renders into the panel's inset as intended.
+        highlight.translatesAutoresizingMaskIntoConstraints = false
+        highlight.wantsLayer = true
+        highlight.layer?.cornerRadius = 6
+        addSubview(highlight)
         addSubview(lamp); addSubview(name); addSubview(callsign)
         // A grid with no minted callsigns collapses the column entirely —
         // no phantom 12pt gutter on the right.
         let gutter: CGFloat = auxWidth > 0 ? 12 : 0
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.height),
+            // Wider than the row on both sides, and inset vertically so it
+            // reads as a pill between the rules rather than a band welded to
+            // them. The 2pt keeps the hairline rule visible under a hovered row.
+            highlight.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                               constant: -Self.hoverBleed),
+            highlight.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                                constant: Self.hoverBleed),
+            highlight.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+            highlight.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
             lamp.widthAnchor.constraint(equalToConstant: StateLegend.Lamp.diameter),
             lamp.heightAnchor.constraint(equalToConstant: StateLegend.Lamp.diameter),
             lamp.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -3506,12 +3544,16 @@ private final class GridRowView: NSControl {
             owner: self, userInfo: nil))
     }
 
+    /// The hover pill. Held so hover can paint it rather than the row's layer,
+    /// which could only ever be exactly as wide as the content.
+    private let highlight = NSView()
+
     override func mouseEntered(with event: NSEvent) {
-        layer?.backgroundColor = StateLegend.Palette.hover.cgColor
+        highlight.layer?.backgroundColor = StateLegend.Palette.hover.cgColor
     }
 
     override func mouseExited(with event: NSEvent) {
-        layer?.backgroundColor = nil
+        highlight.layer?.backgroundColor = nil
     }
 
     /// "Mischief managed" (ruled 06 Aug): clicking a lit lamp switches it off —
@@ -3526,10 +3568,10 @@ private final class GridRowView: NSControl {
     override func mouseUp(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         guard bounds.contains(point) else { return }
-        // The lamp column is its own target when the lamp is live: the whole
-        // 20pt column at full row height, not the 9px dot — a click target
-        // the size of the glyph would be a trap.
-        if let onLampTap, point.x <= Self.lampColumn {
+        // The lamp is its own target when it is live: `lampHitWidth` at full
+        // row height, not the 9px dot — a click target the size of the glyph
+        // would be a trap, and this is the switch that mutes an agent.
+        if let onLampTap, point.x <= Self.lampHitWidth {
             onLampTap()
             return
         }
