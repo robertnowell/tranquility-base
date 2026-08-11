@@ -61,23 +61,39 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertTrue(html.contains("0066 has to run before deploy"))
     }
 
-    /// The header is the only block allowed to show judgment, and it must always
-    /// name what the agent is waiting on when it is waiting on something.
+    /// The open question is the reason to read the page, so it sits in the deck
+    /// — in the sentence, not behind a label. The label it used to wear
+    /// ("WAITING ON YOU") is the device this header was rebuilt to remove.
     func testTheHeaderCarriesTheOpenQuestion() {
         let html = HomeBase.render(model(turns: [turn(1)]))
-        XCTAssertTrue(html.contains("Waiting on you"))
         XCTAssertTrue(html.contains("Go?"))
+        XCTAssertFalse(html.contains("WAITING ON YOU"))
+        XCTAssertFalse(html.lowercased().contains("where this stands"))
     }
 
-    /// A line continuation inside a Swift multiline string carries the next
-    /// line's indentation with it, which is how "5   pages" reached the header.
-    func testTheHeaderCountIsSingleSpaced() {
+    /// The byline is the one place metadata belongs, and it is prose: the
+    /// agent's name, where it works, when it last moved. Not a strip of counts.
+    func testTheBylineIsPlainLanguage() {
+        let html = HomeBase.render(model(turns: [turn(1)]))
+        XCTAssertTrue(html.contains("Agent tranquility base discuss"))
+        XCTAssertTrue(html.contains("working in tranquility-base"))
+        XCTAssertTrue(html.contains("last moved"))
+    }
+
+    /// A count belongs over the thing it counts, where the list already proves
+    /// it — never in a strip at the top restating what is visible below.
+    func testTheCountSitsWithThePagesAndNotInTheHeader() {
         let pages = [ArtifactStore.Page(path: "/tmp/a/index.html", at: Date()),
                      ArtifactStore.Page(path: "/tmp/b/index.html", at: Date())]
-        XCTAssertTrue(HomeBase.render(model(turns: [turn(1)], pages: pages))
-            .contains("2 pages &middot;"))
+        let html = HomeBase.render(model(turns: [turn(1)], pages: pages))
+        let heading = html.range(of: "What it has made")!
+        let count = html.range(of: "2 pages")!
+        XCTAssertTrue(count.lowerBound > heading.lowerBound)
+        // And nothing of the sort above the fold.
+        let byline = html.range(of: "class=\"byline\"")!
+        XCTAssertTrue(count.lowerBound > byline.lowerBound)
         XCTAssertTrue(HomeBase.render(model(turns: [turn(1)], pages: [pages[0]]))
-            .contains("1 page &middot;"))
+            .contains("1 page."))
     }
 
     func testPagesAreListedNewestFirst() {

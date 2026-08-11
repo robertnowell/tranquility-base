@@ -178,3 +178,95 @@ public extension ArtifactStore {
         }()
     }
 }
+
+public extension ArtifactStore {
+
+    /// What a page is actually called, and what it is about.
+    ///
+    /// A directory slug — "vd-grid-mock" — is a filename, not a title. The page
+    /// itself has said what it is all along, in the same places every reader
+    /// tool looks. The precedence below is Mozilla Readability's, trimmed to
+    /// what a local file can offer: `og:title`, then `<title>` with any trailing
+    /// " — Site" segment removed, then the first `<h1>`.
+    ///
+    /// Readability's most useful move is its fallback CONDITION rather than its
+    /// order: a title under 15 or over 150 characters is treated as unusable and
+    /// the `<h1>` is preferred instead. That single rule is what rescues pages
+    /// whose title is a bare slug or an entire sentence.
+    struct DocumentSummary: Sendable, Equatable {
+        public let title: String?
+        /// The opening line, for a hover card. Wikipedia's Page Previews show
+        /// the first non-empty paragraph and clip it visually rather than at a
+        /// character count; this keeps the text short enough that clipping is
+        /// rarely needed.
+        public let blurb: String?
+    }
+
+    /// Only the head and the opening of the body are read — a rendered page can
+    /// be a megabyte of inlined CSS, and the answer is always near the top.
+    static func summarize(path: String, limit: Int = 24_000) -> DocumentSummary {
+        guard let handle = FileHandle(forReadingAtPath: path) else {
+            return DocumentSummary(title: nil, blurb: nil)
+        }
+        defer { try? handle.close() }
+        let data = (try? handle.read(upToCount: limit)) ?? Data()
+        guard let html = String(data: data, encoding: .utf8) else {
+            return DocumentSummary(title: nil, blurb: nil)
+        }
+        let og = firstMatch(in: html,
+            #"<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']"#)
+        let titleTag = firstMatch(in: html, #"(?s)<title[^>]*>(.*?)</title>"#)
+            .map(trimSiteSuffix)
+        let heading = firstMatch(in: html, #"(?s)<h1[^>]*>(.*?)</h1>"#).map(stripTags)
+        let candidate = og ?? titleTag
+        let title: String?
+        if let candidate, candidate.count >= 15, candidate.count <= 150 {
+            title = candidate
+        } else {
+            title = heading ?? candidate
+        }
+        let description = firstMatch(in: html,
+            #"<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']"#)
+        let paragraph = firstMatch(in: html, #"(?s)<p[^>]*>(.*?)</p>"#).map(stripTags)
+        let blurb = (description ?? paragraph).map { text -> String in
+            text.count > 220 ? String(text.prefix(217)) + "…" : text
+        }
+        return DocumentSummary(title: title?.isEmpty == false ? title : nil,
+                               blurb: blurb?.isEmpty == false ? blurb : nil)
+    }
+
+    /// "Plan — Tranquility Base" is one title with a site name stapled on. The
+    /// separators are Readability's list.
+    private static func trimSiteSuffix(_ text: String) -> String {
+        let cleaned = stripTags(text)
+        for separator in [" — ", " – ", " | ", " · ", " \\ ", " / ", " » ", " > "] {
+            if let range = cleaned.range(of: separator, options: .backwards) {
+                let head = String(cleaned[..<range.lowerBound])
+                // Only when what remains is still a title rather than a word.
+                if head.count >= 15 { return head }
+            }
+        }
+        return cleaned
+    }
+
+    private static func stripTags(_ text: String) -> String {
+        text.replacingOccurrences(of: "<[^>]+>", with: "",
+                                  options: .regularExpression)
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&middot;", with: "·")
+            .replacingOccurrences(of: "&mdash;", with: "—")
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func firstMatch(in text: String, _ pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern,
+                                                   options: [.caseInsensitive]),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        let value = String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+}
