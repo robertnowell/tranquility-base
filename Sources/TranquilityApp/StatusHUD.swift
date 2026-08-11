@@ -2003,6 +2003,13 @@ final class StatusHUD: NSObject {
             .init(id: "d", name: "kopi", callsign: "kopi", lamp: .running),
             .init(id: "e", name: "bookmarks", callsign: "bookmarks", lamp: .fault),
         ]
+        // The drill must not spend the user's preference. `isCollapsed` is
+        // durable, `relaunch.sh` runs the selftests on EVERY deploy, and the
+        // first version of this ended on setCollapsed(false) — so every relaunch
+        // silently expanded a panel the user had collapsed, and wrote that back
+        // to disk. Saved and restored.
+        let widthBeforeDrill = isCollapsed
+        defer { setCollapsed(widthBeforeDrill) }
         setCollapsed(true)
         showIdle(rows: mixed)
         // Idle lamps do not appear collapsed: five rows in, three are live.
