@@ -64,9 +64,13 @@ final class StatusHUD: NSObject {
     /// Lamps the collapsed column is currently showing — the drill asserts idle
     /// ones never reach it.
     var collapsedLampCount: Int { strip?.lamps.count ?? 0 }
+    /// In a window, visible, and actually in the view tree. NOT
+    /// `panel.contentView === strip` any more: the strip is a sibling inside the
+    /// panel's rounded background now, so the old check asserted an arrangement
+    /// the redesign deliberately abandoned.
     var collapsedIsOnScreen: Bool {
         guard let strip else { return false }
-        return strip.window != nil && !strip.isHidden && panel?.contentView === strip
+        return strip.window != nil && !strip.isHidden && strip.superview != nil
     }
 
     func setCollapsed(_ collapsed: Bool) {
@@ -948,13 +952,26 @@ final class StatusHUD: NSObject {
             // answers to, in the panel's monospaced small type.
             // Tracking 3.2 (was 1.6): the accepted draft's strip is airier —
             // "A G E N T S" — and the title got shorter, so it can afford it.
-            stateLabel.attributedStringValue = letterspaced(
+            // Indented past the collapse toggle, which sits at the panel's far
+            // left. Without this the icon draws straight through the "AG" of
+            // AGENTS — the two were competing for the same 24pt, and the label
+            // won on paint order and lost on legibility.
+            let stripTitle = NSMutableAttributedString(attributedString: letterspaced(
                 StateLegend.gridStripTitle, size: 10, tracking: 3.2,
-                color: StateLegend.Lens.chrome.color)
+                color: StateLegend.Lens.chrome.color))
+            let indent = NSMutableParagraphStyle()
+            indent.firstLineHeadIndent = 24
+            stripTitle.addAttribute(.paragraphStyle, value: indent,
+                                    range: NSRange(location: 0, length: stripTitle.length))
+            stateLabel.attributedStringValue = stripTitle
             hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
             hintLabel.stringValue = StateLegend.gridHint
             waitingRows.isHidden = false
             collapseButton?.isHidden = isCollapsed
+            // Settings is an expanded-face affordance. The gear lives on
+            // `background` rather than inside the stack, so hiding the stack
+            // does not take it with it — it has to be named.
+            gearButton?.isHidden = isCollapsed
             // The collapsed column is the same data at another width. Every
             // widget the expanded face owns stays hidden behind it; render()
             // remains the single place either one is decided.
@@ -1360,7 +1377,12 @@ final class StatusHUD: NSObject {
             NSLayoutConstraint.activate(stripEdges)
             contentStack?.isHidden = true
             strip?.isHidden = false
-            morph(panel, toWidth: CollapsedStrip.width)
+            // Fixed height as well as fixed width — ruled, and load-bearing for
+            // the wordmark: inheriting the grid's height gave the strip 150pt on
+            // a quiet day, which left no room below the lamps and silently
+            // dropped the wordmark. The strip is the same size every time.
+            morph(panel, to: NSSize(width: CollapsedStrip.width,
+                                    height: CollapsedStrip.height))
             return
         }
         NSLayoutConstraint.deactivate(stripEdges)
@@ -1379,7 +1401,14 @@ final class StatusHUD: NSObject {
         // happened to be passing through the target height at that instant.
         // That is why two identical faces settled 12pt apart (Robert's two
         // screenshots of the same card, 06 Aug).
-        if abs((intendedHeight ?? panel.frame.height) - height) > 1 {
+        // The WIDTH has to be checked too, not just the height. Expanding out of
+        // the strip is a width-only change — the grid's height is often exactly
+        // what the collapsed panel already had — so a height-only guard skipped
+        // the resize entirely and left the panel 40pt wide. `position` then
+        // placed it from that 40pt width, and the grid rendered off the right of
+        // the display. That is the bug the user reported, and this line is it.
+        let widthIsWrong = abs(panel.frame.width - 380) > 1
+        if widthIsWrong || abs((intendedHeight ?? panel.frame.height) - height) > 1 {
             intendedHeight = height
             // The top edge holds still and the panel grows downward: origin is
             // bottom-left, so the height delta comes out of origin.y. Animated
@@ -1391,6 +1420,16 @@ final class StatusHUD: NSObject {
             frame.origin.y -= delta
             frame.size.height = height
             frame.size.width = 380
+            // The ORIGIN has to be right in the animated frame, not corrected
+            // afterwards. `position` runs immediately after this call and does
+            // set it — and then the in-flight animation lands 0.12s later with
+            // the frame it was handed, stomping the correction. Expanding out of
+            // the collapsed strip therefore kept the strip's x and put 340pt of
+            // grid off the right of the display: measured
+            // {{1672, 751}, {380, 317}} against a screen 1728 wide.
+            if let screen = NSScreen.main {
+                frame.origin.x = screen.visibleFrame.maxX - frame.size.width - 16
+            }
             if panel.isVisible {
                 // Through the animator, NOT setFrame(animate:) — that call
                 // blocks the main thread for the whole animation, which delays
@@ -1836,6 +1875,14 @@ final class StatusHUD: NSObject {
         }
     }
 
+    /// Let an in-flight frame animation finish, then lay out. Drills measure
+    /// geometry, and geometry is a lie while the animator is running.
+    private func settleAnimations() {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        panel?.displayIfNeeded()
+    }
+
     /// Render every state with worst-case text and confirm nothing is clipped.
     /// Run with `--selftest-hud`.
     func selfTest() {
@@ -2014,11 +2061,16 @@ final class StatusHUD: NSObject {
         defer { setCollapsed(widthBeforeDrill) }
         setCollapsed(false)
         showIdle(rows: mixed)
-        panel?.contentView?.layoutSubtreeIfNeeded()
+        settleAnimations()
         let expandedRightEdge = panel?.frame.maxX ?? 0
         let expandedLeftEdge = panel?.frame.minX ?? 0
+        Permissions.log("collapse drill: expanded \(panel.map { NSStringFromRect($0.frame) } ?? "-")")
         setCollapsed(true)
         showIdle(rows: mixed)
+        // The morph is animated, so the frame is a transient for ~0.16s. Let it
+        // land before measuring — a drill that reads mid-animation measures
+        // nothing, which is how the first version passed on a broken panel.
+        settleAnimations()
         // Idle lamps do not appear collapsed: five rows in, three are live.
         let idleLampsOmitted = collapsedLampCount == 3
         panel?.contentView?.layoutSubtreeIfNeeded()
@@ -2040,6 +2092,7 @@ final class StatusHUD: NSObject {
                 && p.frame.minX >= $0.visibleFrame.minX - 1 } ?? false
         } ?? false
         let collapsedWidthReal = abs((panel?.frame.width ?? 0) - CollapsedStrip.width) < 1
+        Permissions.log("collapse drill: collapsed \(panel.map { NSStringFromRect($0.frame) } ?? "-")")
         // The right edge does not move when the width does. Flush-to-the-screen
         // was the first version and was wrong: "keep the right edge in the same
         // place that it is right now and just animate the collapse."
@@ -2052,9 +2105,11 @@ final class StatusHUD: NSObject {
         let widthHeldOnArrival = abs((panel?.frame.width ?? 0) - widthBefore) < 1
         setCollapsed(false)
         showIdle(rows: mixed)
-        panel?.contentView?.layoutSubtreeIfNeeded()
+        settleAnimations()
         // The bug the user reported: expanding out of the strip left the left
         // edge where the strip's was, so 340pt of grid hung off the display.
+        Permissions.log("collapse drill: reexpanded \(panel.map { NSStringFromRect($0.frame) } ?? "-") "
+            + "wantLeft=\(Int(expandedLeftEdge)) intendedH=\(Int(intendedHeight ?? -1))")
         let expandRestoredLeft = abs((panel?.frame.minX ?? 0) - expandedLeftEdge) < 2
         let expandedAgain = !collapsedIsOnScreen
         SelfTest.report("collapsed", [
@@ -2611,11 +2666,27 @@ final class StatusHUD: NSObject {
     /// rightwards as it narrows. Taking the current right edge and keeping it is
     /// what makes this read as one panel getting thinner rather than a second
     /// panel appearing somewhere else.
-    private func morph(_ panel: NSPanel, toWidth width: CGFloat) {
+    private func morph(_ panel: NSPanel, to size: NSSize) {
+        let width = size.width
         var frame = panel.frame
-        guard abs(frame.width - width) > 0.5 else { return }
-        let rightEdge = frame.maxX
-        frame.origin.x = rightEdge - width
+        guard abs(frame.width - width) > 0.5 || abs(frame.height - size.height) > 0.5
+        else { return }
+        frame.size.height = size.height
+        // The right edge is computed, not inherited. Holding the CURRENT edge
+        // reads well while the panel is already placed and fails completely when
+        // it is not: a launch that starts collapsed morphs the default
+        // {{0,0},{380,150}} rect and lands at {{340, 0}, {40, 150}} — bottom
+        // left, off the working area entirely.
+        //
+        // Every face sits at `visibleFrame.maxX - width - 16`, so its right edge
+        // is always `maxX - 16`. Computing that is identical to holding it, and
+        // it is also correct before the panel has ever been on screen.
+        if let screen = NSScreen.main {
+            frame.origin.x = screen.visibleFrame.maxX - width - 16
+            frame.origin.y = screen.visibleFrame.maxY - frame.height - 16
+        } else {
+            frame.origin.x = frame.maxX - width
+        }
         frame.size.width = width
         intendedHeight = frame.height
         if panel.isVisible {
@@ -2637,13 +2708,10 @@ final class StatusHUD: NSObject {
         // so a margin applied here silently undoes it — which is exactly what
         // the flushRight drill caught on the first deploy.
         let margin: CGFloat = 16
-        // The collapsed strip is positioned by its own morph, which holds the
-        // right edge. Every other face is placed from its width — and it MUST be
-        // recomputed here rather than skipped, because expanding out of the
-        // strip leaves a 40pt-wide origin behind: the panel grew to 380 with its
-        // left edge still at the strip's, so 340pt of the grid hung off the
-        // right of the display. Reported, and correctly.
-        if isCollapsed, case .idle = state { return }
+        // No special case for the collapsed strip. It is placed from its own
+        // width like every other face, which is what makes its right edge line
+        // up with the grid's — and, unlike a panel that positions itself, works
+        // on the very first paint before it has ever been on screen.
         let size = panel.frame.size
         // Top-right, below the menu bar.
         let origin = NSPoint(
@@ -2879,11 +2947,14 @@ final class StatusHUD: NSObject {
         // control for shrinking the panel belongs on the panel rather than two
         // clicks away in a menu you have to know is there.
         collapseButton = NSButton(
-            // The standard macOS sidebar toggle, not a bare chevron. Every
-            // other app on the machine uses this shape for exactly this job —
-            // Chrome, Xcode, Finder, Mail — and a control that means "collapse
-            // this panel" should not need to be learned here first.
-            image: NSImage(systemSymbolName: "sidebar.right",
+            // A chevron, ruled over the standard sidebar glyph. The sidebar
+            // symbol carries a rectangle that reads as a second panel edge
+            // inside a panel that already has one, and at 12pt against a 10pt
+            // letterspaced title it was the heaviest thing in the strip. The
+            // chevron says direction and nothing else, which is all this does —
+            // and it matches the one the collapsed strip shows for Expand, so
+            // the pair reads as one control pointing two ways.
+            image: NSImage(systemSymbolName: "chevron.right",
                            accessibilityDescription: "Collapse")!
                 .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))!,
             target: self, action: #selector(collapseTapped))
@@ -2895,8 +2966,12 @@ final class StatusHUD: NSObject {
         background.addSubview(collapseButton)
         NSLayoutConstraint.activate([
             collapseButton.centerYAnchor.constraint(equalTo: gearButton.centerYAnchor),
-            collapseButton.trailingAnchor.constraint(equalTo: gearButton.leadingAnchor,
-                                                     constant: -2),
+            // FAR LEFT, not beside the gear. The top-right of the panel is the
+            // receipt's — "→ SENDING", "▶ SENT" — and a second control parked
+            // there is a collision waiting for the next send, which is exactly
+            // what it looked like. The two corners now own one thing each.
+            collapseButton.leadingAnchor.constraint(equalTo: background.leadingAnchor,
+                                                    constant: 10),
         ])
         // Held, so collapsing can DEACTIVATE them. The stack pins the panel to
         // 380pt through these; leaving them active while narrowing the window is
