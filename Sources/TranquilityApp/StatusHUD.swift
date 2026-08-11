@@ -1666,25 +1666,20 @@ final class StatusHUD: NSObject {
         // nothing to name); it stays in the persisted roster untouched until
         // the user next reorders, which saves exactly what is on screen.
         let cast = face.roster.compactMap { byId[$0] }
-        // Best first, not alphabetical. Sorting by (category, name) put "Compact"
-        // ahead of "Enhanced" ahead of "Premium", so the picker opened on the worst
-        // voices macOS ships and the one you actually want sat at the bottom.
-        // Category is ranked explicitly rather than spelled to sort, because naming a
-        // tier for its first letter is a trap the next tier walks into.
-        func tier(_ category: String) -> Int {
-            if category.contains("Premium") { return 0 }
-            if category.contains("Enhanced") { return 1 }
-            if category == "Free · Get" { return 4 }      // not installed, very last
-            if category.hasPrefix("Free") { return 3 }   // basic/compact
-            return 2                                      // paid voices, mid
+        // Caller order, not a re-sort.
+        //
+        // This sorted by (category, name), which was wrong twice over. It put
+        // "Compact" ahead of "Premium" alphabetically, and once the category column
+        // became a SIZE it started comparing "132 MB" < "479 MB" < "99 MB" as strings
+        // — so Susan, the one row that is not installed, landed third in the list
+        // instead of last. The catalogue already returns quality-ordered voices; the
+        // view's job is to show them in the order it was given.
+        let bench = face.voices.filter { !face.roster.contains($0.id) }
+        // Except for rows you cannot use yet, which always sit at the bottom.
+        let (offers, owned) = bench.reduce(into: ([Voice](), [Voice]())) { acc, v in
+            if SystemVoiceCatalog.isDownloadRow(v.id) { acc.0.append(v) } else { acc.1.append(v) }
         }
-        let bench = face.voices
-            .filter { !face.roster.contains($0.id) }
-            .sorted {
-                let (a, b) = (tier($0.category), tier($1.category))
-                return a == b ? ($0.category, $0.name) < ($1.category, $1.name) : a < b
-            }
-        for voice in cast + bench {
+        for voice in cast + owned + offers {
             let onRoster = face.roster.contains(voice.id)
             let row = VoiceRowView(
                 voice: voice, onRoster: onRoster,
@@ -4526,22 +4521,20 @@ private final class VoiceRowView: NSControl {
         // list against itself.
         check.isHidden = isDownload
 
-        let play = NSButton(title: isDownload ? "Get" : "▶",
-                            target: self, action: #selector(playTapped))
-        play.isBordered = isDownload          // an action reads as a control
-        if isDownload {
-            play.bezelStyle = .rounded
-            play.controlSize = .small
-            play.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
-        } else {
-            play.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
-        }
+        let play = NSButton(title: "▶", target: self, action: #selector(playTapped))
+        play.isBordered = false
+        play.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
         play.contentTintColor = StateLegend.Palette.secondary
+        // Invisible, not absent: the slot holds the name column's x so every row's
+        // name starts on the same pixel. Putting "Get" in this slot instead pushed
+        // the name right and misaligned that row against the whole list.
+        play.isHidden = isDownload
         play.translatesAutoresizingMaskIntoConstraints = false
 
         let name = NSTextField(labelWithString: Self.concise(voice.name))
         name.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
-        name.textColor = StateLegend.Palette.ink
+        // Dimmed when it is not installed — the row is an offer, not a voice you have.
+        name.textColor = isDownload ? StateLegend.Palette.secondary : StateLegend.Palette.ink
         name.lineBreakMode = .byTruncatingTail
         name.translatesAutoresizingMaskIntoConstraints = false
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -4551,9 +4544,20 @@ private final class VoiceRowView: NSControl {
         category.textColor = StateLegend.Palette.hint
         category.translatesAutoresizingMaskIntoConstraints = false
 
+        // The action sits on the right, where an action belongs, rather than in the
+        // preview slot where it displaced the name.
+        let get = NSButton(title: "Get", target: self, action: #selector(playTapped))
+        get.bezelStyle = .rounded
+        get.controlSize = .small
+        get.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
+        get.translatesAutoresizingMaskIntoConstraints = false
+        get.isHidden = !isDownload
+
         addSubview(grip); addSubview(check); addSubview(play)
-        addSubview(name); addSubview(category)
+        addSubview(name); addSubview(category); addSubview(get)
         NSLayoutConstraint.activate([
+            get.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            get.centerYAnchor.constraint(equalTo: centerYAnchor),
             heightAnchor.constraint(equalToConstant: Self.height),
             grip.leadingAnchor.constraint(equalTo: leadingAnchor),
             grip.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -4566,7 +4570,9 @@ private final class VoiceRowView: NSControl {
             name.centerYAnchor.constraint(equalTo: centerYAnchor),
             name.trailingAnchor.constraint(lessThanOrEqualTo: category.leadingAnchor,
                                            constant: -10),
-            category.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            category.trailingAnchor.constraint(
+                equalTo: isDownload ? get.leadingAnchor : trailingAnchor,
+                constant: isDownload ? -8 : -4),
             category.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
