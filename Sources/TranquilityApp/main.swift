@@ -1431,7 +1431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .replyEnded:
             isBusy = false
             hud.recordingEnded()
-            guard let captured = try? recorder.stop() else {
+            guard let capture = try? recorder.stop() else {
                 updateTitle()
                 // The silence gate's event, one layer down: the device returned
                 // so little that Recorder refused to hand it back. This printed
@@ -1443,7 +1443,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             updateTitle()
-            sendReply(captured)
+            sendReply(capture)
 
         case .replyAborted where handsFreeListening:
             // A stray key during locked listening is not an abort signal: nothing is
@@ -1865,8 +1865,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
-    private func sendReply(_ pcm: Data) {
+    private func sendReply(_ capture: Recorder.Capture) {
         guard let coordinator else { return }
+        // Unpacked once, at the top, from the value stop() returned. Both of
+        // these used to be read separately — the samples from the return, the
+        // file from mutable state on the recorder — which is how a later capture
+        // could have replaced one without the other.
+        let pcm = capture.pcm16
+        let capturedFile = capture.fileURL
         // This utterance's live stream, if one opened. finish() is nil on any
         // stream trouble, and the file path below recovers exactly as before.
         let liveStream = recorder.takeStream()
@@ -1909,7 +1915,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let streamed = await liveStream?.finish()
                     let utterance = try await store.captureAndTranscribe(
                         pcm16: pcm, sampleRate: 16_000, chain: RecoveryChain(), eventId: nil,
-                        streamed: streamed, preWritten: self.recorder.lastCaptureURL)
+                        streamed: streamed, preWritten: capturedFile)
                     // Cancelled (or replaced) while transcribing: the words must not
                     // be pasted anywhere. The audio row is durable and stays.
                     guard mine == replyGeneration else {
@@ -1975,7 +1981,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let streamed = await liveStream?.finish()
                 let outcome = try await coordinator.submitReply(
                     pcm16: pcm, to: spokenTo, streamed: streamed,
-                    preWritten: recorder.lastCaptureURL)
+                    preWritten: capturedFile)
 
                 // You started saying it again while this was still transcribing.
                 // Drop it rather than offering it: the words you replaced must never
