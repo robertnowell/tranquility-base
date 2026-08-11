@@ -134,13 +134,16 @@ public enum HomeBase {
                 quote = "<blockquote>\(e(next))<span class=\"attrib\">Proposed</span></blockquote>"
             }
             let dir = (model.cwd as NSString?)?.lastPathComponent ?? "—"
+            // Built outside the template: a line continuation inside a Swift
+            // multiline string keeps the next line's indentation, which shipped
+            // "5   pages" into the header.
+            let pageCount = "\(model.pages.count) page\(model.pages.count == 1 ? "" : "s")"
             brief = """
                 <section class="brief">
                   <p class="eyebrow">Where this stands</p>
                   <h1 class="display">\(e(n.topic))</h1>
                   \(deck)
-                  <p class="line">\(ordered.count) turns &middot; \(model.pages.count) \
-                  page\(model.pages.count == 1 ? "" : "s") &middot; in <b>\(e(dir))</b></p>
+                  <p class="line">\(ordered.count) turns &middot; \(pageCount) &middot; in <b>\(e(dir))</b></p>
                   <div class="rule"></div>
                   <p class="body"><span class="cap">\(e(String(n.happened.prefix(1))))</span>\
                   \(e(String(n.happened.dropFirst())))</p>
