@@ -401,6 +401,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Preview only — the narrator (VoiceCatalog.selectedVoiceId) is not
             // touched; the roster check is what changes who speaks for sessions.
             Task { @MainActor in
+                // A row for a voice that is not installed cannot be auditioned, so
+                // pressing it does the thing you actually wanted: opens the page that
+                // downloads it. The row is the button.
+                if SystemVoiceCatalog.isDownloadRow(id) {
+                    if let url = URL(string: SystemVoiceCatalog.settingsURL) {
+                        NSWorkspace.shared.open(url)
+                    }
+                    self.lastStatusLine = "Settings → \(SystemVoiceCatalog.remainingSteps)"
+                    return
+                }
                 let sample = SpokenTextSanitizer().sanitize(self.previewText())
                 // A macOS voice cannot be auditioned through the ElevenLabs path.
                 // `chain.speak(voice:)` takes an ElevenLabs id; handed a system
@@ -2306,26 +2316,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // second half this pane read "15 of 0 on roster" whenever no ElevenLabs key
         // was configured — an empty list on a Mac with forty voices installed, and no
         // hint that free ones exist at all.
+        // Installed voices, then the good ones that are a download away. A picker
+        // that shows only what you have cannot tell you what you are missing, and
+        // what you are missing is the best of them.
         let paid = VoiceCatalog.cached()
         let free = SystemVoiceCatalog.asCatalogueVoices()
-        let missing = SystemVoiceCatalog.recommendationStatus().missing
+        let getMore = SystemVoiceCatalog.downloadRows()
 
-        var note = "Checked voices are the cast; agents draw a durable voice "
-            + "in roster order."
-        if paid.isEmpty {
-            note += "  No ElevenLabs key, so the free macOS voices below are what "
-                + "you have."
-        }
-        if let best = missing.first {
-            // Name one, not four. A list of downloads is a chore; a single "this one
-            // is the good one" is an instruction.
-            note += "  Better free voice available: \(best.name) — \(best.note). "
-                // The link lands on Read & Speak, so the instruction starts from
-                // there — naming a step the button already took reads as broken.
-                + "Read & Speak → \(SystemVoiceCatalog.remainingSteps)"
-        }
+        // One line. This was four sentences of explanation — a wall of prose where a
+        // control belonged. The "Free · Get" rows below ARE the instruction now, so
+        // the note only has to say what the list is.
+        let note = paid.isEmpty
+            ? "Free macOS voices. Pick one to hear it."
+            : "Checked voices are the cast; agents draw one in roster order."
 
-        hud.showSettings(voices: paid + free, roster: VoiceRoster.load(), note: note)
+        hud.showSettings(voices: paid + free + getMore,
+                         roster: VoiceRoster.load(), note: note)
     }
 
     @objc private func showPanel() {
@@ -2462,13 +2468,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // other of the two surfaces. Fixing one and not the other is why the change
         // looked like it had not landed.
         let voices = VoiceCatalog.cached() + SystemVoiceCatalog.asCatalogueVoices()
+            + SystemVoiceCatalog.downloadRows()
         if !voices.isEmpty {
             let item = NSMenuItem(title: "Voice", action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             let selected = VoiceCatalog.selectedVoiceId
             // Free groups first — they are what most machines have, and on a machine
             // with no key they are all there is.
-            for group in ["Free · Premium", "Free · Enhanced", "Free · Basic",
+            for group in ["Free · Premium", "Free · Enhanced", "Free · Basic", "Free · Get",
                           "cloned", "generated", "professional", "premade"] {
                 let inGroup = voices.filter { $0.category == group }
                 guard !inGroup.isEmpty else { continue }
