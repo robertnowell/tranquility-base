@@ -753,7 +753,7 @@ public struct Coordinator: Sendable {
     /// before; a trustworthy final skips the recovery pass, nothing else changes.
     public func submitReply(
         pcm16: Data, sampleRate: Double = 16000, to sessionId: String? = nil,
-        streamed: TranscriptionResult? = nil
+        streamed: TranscriptionResult? = nil, preWritten: URL? = nil
     ) async throws -> ReplyOutcome {
         let target: WaitingSession?
         if let sessionId {
@@ -766,7 +766,7 @@ public struct Coordinator: Sendable {
 
         var utterance = try await store.captureAndTranscribe(
             pcm16: pcm16, sampleRate: sampleRate, chain: recovery, eventId: nil,
-            streamed: streamed)
+            streamed: streamed, preWritten: preWritten)
 
         guard utterance.status == .transcribed, let text = utterance.transcriptText else {
             return .transcriptionFailed(utteranceId: utterance.id)

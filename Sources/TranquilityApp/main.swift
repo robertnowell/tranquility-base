@@ -1888,7 +1888,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let streamed = await liveStream?.finish()
                     let utterance = try await store.captureAndTranscribe(
                         pcm16: pcm, sampleRate: 16_000, chain: RecoveryChain(), eventId: nil,
-                        streamed: streamed)
+                        streamed: streamed, preWritten: self.recorder.lastCaptureURL)
                     // Cancelled (or replaced) while transcribing: the words must not
                     // be pasted anywhere. The audio row is durable and stays.
                     guard mine == replyGeneration else {
@@ -1953,7 +1953,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 defer { if !handedToCountdown { delivering.finished(sessionId: spokenTo) } }
                 let streamed = await liveStream?.finish()
                 let outcome = try await coordinator.submitReply(
-                    pcm16: pcm, to: spokenTo, streamed: streamed)
+                    pcm16: pcm, to: spokenTo, streamed: streamed,
+                    preWritten: recorder.lastCaptureURL)
 
                 // You started saying it again while this was still transcribing.
                 // Drop it rather than offering it: the words you replaced must never
