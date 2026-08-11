@@ -2140,6 +2140,22 @@ final class StatusHUD: NSObject {
         showIdle(rows: mixed)
         settleAnimations()
 
+        // Ruling 1, from the panel's side: a dismissed panel is not raised by
+        // anything the idle face does. The arrival path guards on `isOnScreen`,
+        // and this pins the property the guard depends on — that `showIdle`
+        // WOULD raise it, so the guard is load-bearing rather than decorative.
+        setCollapsed(false)
+        showIdle(rows: mixed)
+        dismiss()
+        let wentAway = !isOnScreen
+        showIdle(rows: mixed)
+        let showIdleDoesRaise = isOnScreen
+        dismiss()
+        let dismissedAgain = !isOnScreen
+        setCollapsed(true)
+        showIdle(rows: mixed)
+        settleAnimations()
+
         SelfTest.report("collapsed", [
             ("idleLampsOmitted", idleLampsOmitted),
             ("stripShown", stripShown),
@@ -2152,6 +2168,8 @@ final class StatusHUD: NSObject {
             ("glowLit", glowLit),
             ("glowDecayedOnItsOwn", glowDecayed),
             ("glowOnlyWhenCollapsed", glowIgnoredWhenExpanded),
+            ("dismissTakesItAway", wentAway && dismissedAgain),
+            ("showIdleWouldRaise", showIdleDoesRaise),
         ])
         showIdle(rows: [])
 
