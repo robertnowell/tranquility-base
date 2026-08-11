@@ -2187,11 +2187,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 + "in roster order.")
     }
 
-    @objc private func toggleCollapsed() {
-        hud.setCollapsed(!hud.isCollapsed)
-        if !hud.isOnScreen { hud.showIdle(rows: sessionRowsNow()) }
-    }
-
     @objc private func showPanel() {
         showIdleGrid()
     }
