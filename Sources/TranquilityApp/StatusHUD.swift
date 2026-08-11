@@ -3238,13 +3238,21 @@ final class StatusHUD: NSObject {
                 + "Shopify-only filter and rerun the poller\u{201D}")
 
         case "settings":
+            // Representative of what the pane actually holds now: paid and free
+            // interleaved, size rather than tier in the right column, and a voice that
+            // is NOT installed. The old pose was four ElevenLabs voices, so it could
+            // not have shown any of the faults in the free-voice work — a pose that
+            // cannot fail is not evidence.
             showSettings(
                 voices: [Voice(id: "a", name: "Archer", category: "professional"),
+                         Voice(id: "sys1", name: "Ava (Premium)", category: "479 MB"),
+                         Voice(id: "sys2", name: "Alex", category: "885 MB"),
                          Voice(id: "b", name: "My Clone", category: "cloned"),
-                         Voice(id: "c", name: "Sarah", category: "premade"),
-                         Voice(id: "d", name: "River", category: "premade")],
-                roster: ["c", "a"],
-                note: "Checked voices are the cast agents speak with.")
+                         Voice(id: "sys3", name: "Allison (Enhanced)", category: "99 MB"),
+                         Voice(id: SystemVoiceCatalog.downloadPrefix + "Susan",
+                               name: "Susan", category: "132 MB")],
+                roster: ["sys1", "a"],
+                note: "Pick one to hear it.")
 
         default:
             return false
@@ -4501,16 +4509,33 @@ private final class VoiceRowView: NSControl {
         hairline.backgroundColor = StateLegend.Palette.hairlineSoft.cgColor
         layer?.addSublayer(hairline)
 
-        let grip = NSTextField(labelWithString: onRoster ? "≡" : "")
+        let grip = NSTextField(labelWithString: onRoster ? "≡" : "")   // download rows never show one
         grip.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         grip.textColor = StateLegend.Palette.faint
         grip.translatesAutoresizingMaskIntoConstraints = false
 
-        let check = CheckView(on: onRoster) { [weak self] in self?.onToggle() }
+        // A voice you do not have cannot be auditioned and cannot be cast, so it gets
+        // neither control. Shipping it with a checkbox and a ▶ that opened System
+        // Settings was worse than useless: a play button that does not play is a lie,
+        // and a checkbox that cannot be checked is furniture.
+        let isDownload = SystemVoiceCatalog.isDownloadRow(voice.id)
 
-        let play = NSButton(title: "▶", target: self, action: #selector(playTapped))
-        play.isBordered = false
-        play.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+        let check = CheckView(on: onRoster) { [weak self] in self?.onToggle() }
+        // Hidden rather than omitted, so the name column stays on the same x as every
+        // other row. Dropping the view would shift the whole row left and misalign the
+        // list against itself.
+        check.isHidden = isDownload
+
+        let play = NSButton(title: isDownload ? "Get" : "▶",
+                            target: self, action: #selector(playTapped))
+        play.isBordered = isDownload          // an action reads as a control
+        if isDownload {
+            play.bezelStyle = .rounded
+            play.controlSize = .small
+            play.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
+        } else {
+            play.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+        }
         play.contentTintColor = StateLegend.Palette.secondary
         play.translatesAutoresizingMaskIntoConstraints = false
 

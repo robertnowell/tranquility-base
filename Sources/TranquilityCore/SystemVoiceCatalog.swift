@@ -242,10 +242,23 @@ public enum SystemVoiceCatalog {
         recommendationStatus(language: language).missing.compactMap { entry in
             let mb = Double(entry.note.replacingOccurrences(of: " MB", with: "")) ?? 0
             guard mb >= 100 else { return nil }
+            // Name stays the name — `VoiceRowView.concise` strips anything after a
+            // separator, so "Susan — 132 MB" rendered as "Susan" and the size, the
+            // one fact that mattered, disappeared.
             return Voice(id: downloadPrefix + entry.name,
-                         name: "\(entry.name) — \(entry.note)",
-                         category: "Free · Get")
+                         name: entry.name,
+                         category: entry.note)
         }
+    }
+
+
+    /// Megabytes for a voice by name, from the manifest, for installed voices as well
+    /// as absent ones. The picker shows size instead of repeating a tier the name
+    /// already carries: "Ava (Premium)" does not need a column saying Premium.
+    public static func sizeMB(named voiceName: String) -> Double? {
+        // "Ava (Premium)" and "Ava (Enhanced)" are both the "Ava" asset.
+        let base = voiceName.split(separator: " ").first.map(String.init) ?? voiceName
+        return downloadable().first { $0.name == base }?.megabytes
     }
 
     public static func asCatalogueVoices(language: String = "en-US") -> [Voice] {
@@ -256,13 +269,11 @@ public enum SystemVoiceCatalog {
             ? voices(matching: language).filter { $0.identifier.contains(".voice.compact.") }
             : good
         return shown.map { v in
-            let tier: String
-            switch rank(v.quality) {
-            case 3: tier = "Free · Premium"
-            case 2: tier = "Free · Enhanced"
-            default: tier = "Free · Basic"
-            }
-            return Voice(id: v.identifier, name: v.name, category: tier)
+            // Size, not tier. The tier is already in the name — a column repeating
+            // "Enhanced" beside "Allison (Enhanced)" is noise, and "Free" beside a
+            // list of free voices says nothing at all.
+            let size = sizeMB(named: v.name).map { String(format: "%.0f MB", $0) } ?? ""
+            return Voice(id: v.identifier, name: v.name, category: size)
         }
     }
 
