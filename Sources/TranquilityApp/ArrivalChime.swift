@@ -80,12 +80,28 @@ enum ArrivalChime {
         // in the panel, and this is the one that leaves the panel.
         content.title = StateLegend.arrivalChimeTitle
         content.sound = .default
-        // Passive: it belongs in the list, it does not deserve the screen. The
-        // panel is the visual channel and it is already up.
-        content.interruptionLevel = .passive
+        // ACTIVE, and this is the whole feature working or not.
+        //
+        // It was `.passive` first, chosen to keep the notification off the
+        // screen — and `.passive` is documented as adding the notification to
+        // the list "without lighting up the screen OR PLAYING A SOUND". Five
+        // chimes posted with no error and none of them made a noise, because a
+        // silent sound is what was asked for. The one thing this feature exists
+        // to do was disabled by the flag meant to make it polite.
+        //
+        // `.active` presents immediately and plays the sound. It also shows a
+        // banner, which is the cost: the user can turn banners off in System
+        // Settings and keep the sound, which is the right place for that choice
+        // and not a preference this app should own.
+        content.interruptionLevel = .active
 
+        // ONE identifier, so each arrival replaces the last rather than
+        // stacking. With ~20 sessions a fresh id per arrival builds a wall of
+        // identical rows in Notification Center by the end of a day — the
+        // notification-badge pattern this product is meant to be the opposite
+        // of. Re-adding under the same id still alerts; it just does not pile up.
         let request = UNNotificationRequest(
-            identifier: UUID().uuidString, content: content, trigger: nil)
+            identifier: "tranquility-base.arrival", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
             // Logged on success too. A feature whose correct behaviour is a
             // small noise has no visible failure mode — silence is both "it
