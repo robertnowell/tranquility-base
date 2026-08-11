@@ -138,4 +138,33 @@ final class LiveAudioCaptureTests: XCTestCase {
         }
         XCTAssertEqual(LiveAudioCapture.interrupted(in: dir).map(\.utteranceId), ["new", "old"])
     }
+
+    // MARK: - Closing without a claimant
+
+    /// Shipped and leaked on 10 Aug: key-up used to promote the file to `.wav`.
+    /// Not every capture that stops gets submitted — the silence gate refuses
+    /// short ones, a replaced reply drops its predecessor — and each of those
+    /// left a `.wav` no row pointed at, invisible to both reap passes.
+    func testCloseLeavesTheFileClaimableRatherThanPromotingIt() throws {
+        let capture = try LiveAudioCapture(utteranceId: "u9", sampleRate: 16000, directory: dir)
+        try capture.append(pcm16: pcm(frames: 16000 * 3))
+        let url = try capture.close()
+
+        XCTAssertEqual(url.lastPathComponent, "u9.wav.live")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: url.deletingPathExtension().path),
+            "closing must not promote — a file with no claimant keeps the extension that says so")
+        XCTAssertEqual(
+            LiveAudioCapture.interrupted(in: dir).map(\.utteranceId), ["u9"],
+            "and it stays reachable by the sweep that cleans up after nobody")
+    }
+
+    func testAClosedFileIsCompleteAndReadable() throws {
+        let capture = try LiveAudioCapture(utteranceId: "u10", sampleRate: 16000, directory: dir)
+        try capture.append(pcm16: pcm(frames: 16000 * 2))
+        let url = try capture.close()
+        let file = try AVAudioFile(forReading: url)
+        XCTAssertEqual(file.length, 32000, "every frame is there, extension notwithstanding")
+    }
+
 }
