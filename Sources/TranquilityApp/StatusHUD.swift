@@ -1402,6 +1402,16 @@ final class StatusHUD: NSObject {
             frame.origin.y -= delta
             frame.size.height = height
             frame.size.width = 380
+            // The ORIGIN has to be right in the animated frame, not corrected
+            // afterwards. `position` runs immediately after this call and does
+            // set it — and then the in-flight animation lands 0.12s later with
+            // the frame it was handed, stomping the correction. Expanding out of
+            // the collapsed strip therefore kept the strip's x and put 340pt of
+            // grid off the right of the display: measured
+            // {{1672, 751}, {380, 317}} against a screen 1728 wide.
+            if let screen = NSScreen.main {
+                frame.origin.x = screen.visibleFrame.maxX - frame.size.width - 16
+            }
             if panel.isVisible {
                 // Through the animator, NOT setFrame(animate:) — that call
                 // blocks the main thread for the whole animation, which delays
@@ -2036,6 +2046,7 @@ final class StatusHUD: NSObject {
         settleAnimations()
         let expandedRightEdge = panel?.frame.maxX ?? 0
         let expandedLeftEdge = panel?.frame.minX ?? 0
+        Permissions.log("collapse drill: expanded \(panel.map { NSStringFromRect($0.frame) } ?? "-")")
         setCollapsed(true)
         showIdle(rows: mixed)
         // The morph is animated, so the frame is a transient for ~0.16s. Let it
@@ -2063,6 +2074,7 @@ final class StatusHUD: NSObject {
                 && p.frame.minX >= $0.visibleFrame.minX - 1 } ?? false
         } ?? false
         let collapsedWidthReal = abs((panel?.frame.width ?? 0) - CollapsedStrip.width) < 1
+        Permissions.log("collapse drill: collapsed \(panel.map { NSStringFromRect($0.frame) } ?? "-")")
         // The right edge does not move when the width does. Flush-to-the-screen
         // was the first version and was wrong: "keep the right edge in the same
         // place that it is right now and just animate the collapse."
@@ -2078,6 +2090,8 @@ final class StatusHUD: NSObject {
         settleAnimations()
         // The bug the user reported: expanding out of the strip left the left
         // edge where the strip's was, so 340pt of grid hung off the display.
+        Permissions.log("collapse drill: reexpanded \(panel.map { NSStringFromRect($0.frame) } ?? "-") "
+            + "wantLeft=\(Int(expandedLeftEdge)) intendedH=\(Int(intendedHeight ?? -1))")
         let expandRestoredLeft = abs((panel?.frame.minX ?? 0) - expandedLeftEdge) < 2
         let expandedAgain = !collapsedIsOnScreen
         SelfTest.report("collapsed", [
