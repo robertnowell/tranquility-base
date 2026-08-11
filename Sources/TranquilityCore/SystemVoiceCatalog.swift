@@ -123,21 +123,29 @@ public enum SystemVoiceCatalog {
             found.append((name, bytes / 1_000_000))
         }
         for asset in assets("MacinTalkVoiceAssets") {
-            // Apple ranks its own legacy voices and the numbers are unambiguous:
-            //
-            //   Alex   10100      Vicki 5100   Bruce 5090   Agnes 5080   Kathy 3090
-            //   Bubbles, Boing, Zarvox, …  no score at all
-            //
-            // Only Alex belongs in a recommendation. Taking everything with a score
-            // put Agnes (1MB) and Bruce (2MB) on the list — voices from the 1990s that
-            // sound worse than the compact default this is meant to replace, which
-            // would have made the feature advice-shaped but wrong.
-            let desirability = (asset["VoiceRelativeDesirability"] as? NSNumber)?.intValue ?? 0
-            guard desirability >= 10_000, let name = asset["Name"] as? String else { continue }
+            guard let name = asset["Name"] as? String else { continue }
             let bytes = (asset["_DownloadSize"] as? NSNumber)?.doubleValue ?? 0
+            // Size is the filter, because size is what a good voice costs. Measured
+            // across both catalogues:
+            //
+            //   Alex 885M   Ava 479M   Tom 411M   Susan 132M   Allison 99M
+            //   Vicki 28M   Bruce 2M   Agnes 1M   every novelty voice 0M
+            //
+            // A concatenative voice carries recorded speech; a formant voice carries a
+            // few kilobytes of rules and sounds like 1994. The megabytes ARE the
+            // quality, so the threshold reads directly on the thing being judged.
+            //
+            // This replaces a `VoiceRelativeDesirability >= 10000` test that only
+            // worked by accident: Ava — the best voice on the machine — carries no
+            // desirability score at all, because the Vocalizer catalogue does not use
+            // that field. The rank existed in one catalogue and the good voices live
+            // in the other.
+            guard bytes >= 50_000_000 else { continue }
             found.append((name, bytes / 1_000_000))
         }
-        return found.sorted { $0.name < $1.name }
+        // Biggest first, which is best first — and it stays true for voices Apple has
+        // not shipped yet, unlike any ordering we could hardcode.
+        return found.sorted { $0.megabytes > $1.megabytes }
     }
 
     /// What is here, and what is a download away.
