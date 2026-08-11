@@ -582,14 +582,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // restarts, so calling start() on every tick is safe.
 
     private func startPermissionPolling() {
-        // Ask once, here. See ArrivalChime.requestAuthorization: routing this
-        // through onboarding meant it was never asked at all, because a
-        // non-blocking permission never makes onboarding appear.
-        Task { @MainActor in
-            await ArrivalChime.requestAuthorization()
-            Permissions.notificationsAuthorized = await ArrivalChime.isAuthorized
-            Permissions.log("notifications: \(Permissions.notificationsAuthorized ? "authorized" : "NOT authorized")")
-        }
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
