@@ -69,6 +69,17 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertTrue(html.contains("Go?"))
     }
 
+    /// A line continuation inside a Swift multiline string carries the next
+    /// line's indentation with it, which is how "5   pages" reached the header.
+    func testTheHeaderCountIsSingleSpaced() {
+        let pages = [ArtifactStore.Page(path: "/tmp/a/index.html", at: Date()),
+                     ArtifactStore.Page(path: "/tmp/b/index.html", at: Date())]
+        XCTAssertTrue(HomeBase.render(model(turns: [turn(1)], pages: pages))
+            .contains("2 pages &middot;"))
+        XCTAssertTrue(HomeBase.render(model(turns: [turn(1)], pages: [pages[0]]))
+            .contains("1 page &middot;"))
+    }
+
     func testPagesAreListedNewestFirst() {
         let pages = [
             ArtifactStore.Page(path: "/tmp/old/index.html",
