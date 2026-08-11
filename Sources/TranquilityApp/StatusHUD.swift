@@ -300,6 +300,78 @@ final class StatusHUD: NSObject {
     /// baseline, which is why leaving the grid closes the note for free.
     func setControlsNote(open: Bool) { controlsSticky?.isHidden = !open }
 
+    /// The top band is shared, and this is the only thing that says so.
+    ///
+    /// Four things want the strip above the first row, and they arrive from
+    /// four unrelated places: the collapse chevron (far left, a constraint),
+    /// the state placard (leading, in the stack), the send receipt (right, a
+    /// floating chip positioned in code from the gear's own frame) and the gear
+    /// (trailing, a constraint). Nothing composes them — each one is correct on
+    /// its own and the collisions only exist between them.
+    ///
+    /// They have collided twice. The collapse control was first parked beside
+    /// the gear, where the next send drew "→ SENDING" straight through it; it
+    /// now owns the far-left corner and the comment on its constraint says why.
+    /// The grid's AGENTS placard then drew through the chevron, and the 24pt
+    /// first-line indent on that string is the fix. Both were found by looking
+    /// at the panel, which is the expensive way.
+    ///
+    /// So the rule, stated once: **the top band is divided into four lanes that
+    /// may touch but never overlap, in this order — collapse, placard, receipt,
+    /// gear.** Anything new in that band takes a lane or takes someone's.
+    private func topBandDrill() {
+        guard let host = panel?.contentView else { return }
+        func rect(_ v: NSView?) -> CGRect {
+            guard let v, !v.isHidden, let parent = v.superview else { return .null }
+            return parent.convert(v.frame, to: host)
+        }
+        // The placard's LABEL is 348pt wide by constraint; what occupies the
+        // band is its ink, offset by whatever indent the string carries.
+        func inkRect(_ label: NSTextField?) -> CGRect {
+            guard let label, !label.isHidden else { return .null }
+            var r = rect(label)
+            guard !r.isNull else { return .null }
+            let text = label.attributedStringValue
+            guard text.length > 0 else { return .null }
+            let indent = (text.attribute(.paragraphStyle, at: 0, effectiveRange: nil)
+                            as? NSParagraphStyle)?.firstLineHeadIndent ?? 0
+            r.origin.x += indent
+            r.size.width = min(r.width - indent, ceil(text.size().width) + 1)
+            return r
+        }
+        func clear(_ a: CGRect, _ b: CGRect) -> Bool {
+            a.isNull || b.isNull || !a.intersects(b)
+        }
+
+        // The worst case on purpose: the grid (which is the only face showing
+        // the chevron) under a receipt whose callsign is long enough to reach.
+        showIdle(note: nil, rows: [
+            .init(id: "t1", name: "Fix hero image binding",
+                  callsign: "promotions copy", lamp: .ready),
+        ])
+        showReceipt(.sending("bookmarks provenance track a rebuild"))
+        panel?.contentView?.layoutSubtreeIfNeeded()
+
+        let collapse = rect(collapseButton)
+        let placard = inkRect(stateLabel)
+        let chip = rect(receiptChip)
+        let gear = rect(gearButton)
+
+        SelfTest.report("topBand", [
+            ("collapseClearsPlacard", clear(collapse, placard)),
+            ("placardClearsReceipt", clear(placard, chip)),
+            ("receiptClearsGear", clear(chip, gear)),
+            ("collapseClearsReceipt", clear(collapse, chip)),
+            ("lanesAreInOrder", collapse.isNull || placard.isNull
+                || collapse.maxX <= placard.minX),
+        ])
+        Permissions.log("selftest topBand: collapse=\(Int(collapse.minX))..\(Int(collapse.maxX))"
+            + " placard=\(Int(placard.minX))..\(Int(placard.maxX))"
+            + " receipt=\(Int(chip.minX))..\(Int(chip.maxX))"
+            + " gear=\(Int(gear.minX))..\(Int(gear.maxX))")
+        clearReceipt()
+    }
+
     /// Restore exactly the face arming replaced. No-op unless the panel is
     /// still arming — an upgrade or an explicit dismiss has already moved it
     /// on, and the stash dies with it.
@@ -2401,6 +2473,8 @@ final class StatusHUD: NSObject {
         Permissions.log("selftest controls: panelH \(heightShut)->\(heightOpen) "
                         + "noteW=\(noteWidth) column=\(column) "
                         + "lines=\(StateLegend.controlsNote.count)")
+
+        topBandDrill()
 
         SelfTest.report("strip", [
             ("dontSendKeepsTheMicShut", dontSendKeptMicShut),
