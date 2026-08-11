@@ -72,6 +72,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the panel names while you speak and what the send addresses must be the SAME
     /// stored fact, not two derivations that usually agree.
     private var recordingTarget: String?
+    /// Sessions this app is mid-delivery to, so the grid can say so. See
+    /// `DeliveryInFlight`: the target's own transcript cannot know about a
+    /// reply until it lands, so for the whole transcribe → confirm → dispatch
+    /// window the row read quiet — the one stretch the user KNOWS is busy,
+    /// because they started it. Consumed by `lamp(for:sessionId:)`.
+    private var delivering = DeliveryInFlight()
     /// No session to answer? The mic still works: the transcript goes to the
     /// clipboard instead of a terminal. A voice tool that refuses to listen just
     /// because nothing is waiting is leaving its best hardware idle.
@@ -262,6 +268,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // straight at it changed nothing and the count went stale. Only
                 // while idle: speech, a recording, a countdown or a failure notice
                 // are conversations in progress and must not be redrawn under.
+                // Housekeeping only — isInFlight gates on the ceiling itself, so
+                // an expired entry is already invisible to the lamp. This just
+                // stops the map growing across a long-lived app.
+                self.delivering.prune()
                 let rows = self.sessionRowsNow()
                 let waiting = rows.filter { $0.lamp == .ready }.count
                 // The menu-bar annunciator refreshes every tick, so its count can
@@ -564,10 +574,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// happened. "Couldn't send it" hid a `try?` that swallowed the real outcome —
     /// including the one case that matters most, where the text may have landed but
     /// the read-back could not confirm it.
-    private func send(utteranceId: String, label: String) {
+    private func send(utteranceId: String, label: String, sessionId: String) {
         guard let coordinator else { return }
         let mine = replyGeneration
         Task { @MainActor in
+            // The second half of the delivery window (see DeliveryInFlight):
+            // the capture handed it to the countdown, the countdown handed it
+            // here, and it closes on the outcome however that outcome reads.
+            // Same discipline as the first half — one defer, not seven cases.
+            defer { delivering.finished(sessionId: sessionId) }
             guard mine == replyGeneration else {
                 // Superseded between the timer firing and this running.
                 try? coordinator.cancelSend(utteranceId: utteranceId)
@@ -718,7 +733,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 id: $0.sessionId,
                 name: tabDisplayName(for: $0, live: liveById[$0.sessionId]),
                 callsign: $0.callsign ?? "",
-                lamp: .ready)
+                // Green says "you have not answered this". While a reply to
+                // this very turn is in flight that is the most misleading thing
+                // the grid can say — the cursor does not advance until the send
+                // confirms, so the row goes on asking for the user seconds after
+                // they spoke to it. A newer turn arriving still wins: see
+                // DeliveryInFlight.supersedesWaiting.
+                lamp: delivering.supersedesWaiting($0.sessionId, latestId: $0.latestId)
+                    ? .working : .ready)
         }
         // Live sessions with nothing waiting: quiet rows, so a skipped or heard
         // session stays findable. Walked via `known` — already latestId DESC —
@@ -742,7 +764,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
                 callsign: activity?.shortReason ?? (stored.callsign ?? ""),
-                lamp: lamp(for: activity)))
+                lamp: lamp(for: activity, sessionId: stored.sessionId)))
         }
         // Live sessions with no stored events yet: nothing to rank them by,
         // so they close the grid.
@@ -760,7 +782,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     liveName: Self.tabTitle(transcriptPath: nil, live: live),
                     callsign: nil, fallback: "session"),
                 callsign: activity?.shortReason ?? "",
-                lamp: lamp(for: activity)))
+                lamp: lamp(for: activity, sessionId: live.sessionId)))
         }
         // Last, and after every band has been appended: a session that is merely
         // alive drops below the ones doing something, without disturbing the
@@ -773,12 +795,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// this answers the question the grid could not: working, stuck, or just
     /// sitting there. Unreadable transcript = the old quiet lamp, never a
     /// guess.
-    private func lamp(for activity: SessionActivity?) -> StateLegend.Lamp {
-        switch activity {
-        case .working: return .working
-        case .blocked: return .fault
-        case .idle, nil: return .running
-        }
+    ///
+    /// A delivery in flight upgrades QUIET to blue, and nothing else. That
+    /// precedence is the whole rule, and it is deliberate: green and amber are
+    /// the two channels that mean *you* — something unread, or something
+    /// stopped — and a reply already on its way is news, not a task. Masking
+    /// either of them with advisory blue would spend the one signal the grid
+    /// exists to carry, to say something the user just did themselves. Quiet
+    /// is the only lamp with nothing to lose, and it is exactly the lamp that
+    /// was lying.
+    private func lamp(for activity: SessionActivity?, sessionId: String) -> StateLegend.Lamp {
+        let observed: StateLegend.Lamp = {
+            switch activity {
+            case .working: return .working
+            case .blocked: return .fault
+            case .idle, nil: return .running
+            }
+        }()
+        guard observed == .running, delivering.isInFlight(sessionId) else { return observed }
+        return .working
     }
 
     /// The tab's string for a session, or nil while it has none: the
@@ -1028,11 +1063,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // know that when you need to talk, you can talk", and equally
             // that you can stop. Hands-free is now just the case that also
             // clears its latch.
-            if recorder.isRecording, armedAt == nil {
+            // The decision is made in Core, where it is tested exhaustively
+            // (OptionTapDecisionTests). This handler owns the side effects only.
+            // Both of 10 Aug's ⌥ regressions were decisions taken inside an
+            // untestable file; the rule "while speaking, ⌥ lets you speak" is now
+            // an assertion rather than a sentence in a commit message.
+            let decision = OptionTapDecision.decide(
+                isSpeaking: hud.state.isSpeaking,
+                isRecording: recorder.isRecording,
+                isArmed: armedAt != nil,
+                withinPairWindow: lastOptionTapAt.map { Date().timeIntervalSince($0) < 0.45 } ?? false,
+                micGranted: micGranted)
+            Permissions.log("⌥ tap: \(decision) in \(hud.state)")
+
+            switch decision {
+            case .ignore:
+                return
+            case .armFirstOfPair:
+                lastOptionTapAt = Date()
+                return
+            case .endCapture:
                 if handsFreeListening { handsFreeListening = false }
-                else { Permissions.log("⌥ tap: ending a capture with no key held") }
                 handle(.replyEnded)
                 return
+            case .startListening:
+                break
             }
             // Talking over the announcement is the commonest thing there is, and
             // for a long time it did nothing. Ruled a bug, 10 Aug: "If something
@@ -1051,8 +1106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // talking and listen. It locks hands-free, which makes the next tap
             // send — the same tap-to-start, tap-to-send pair the double-tap
             // already gave, minus the timing you had to get right.
-            let speakingOverYou = hud.state.isSpeaking
-            if speakingOverYou || (lastOptionTapAt.map { Date().timeIntervalSince($0) < 0.45 } ?? false) {
+            do {
                 lastOptionTapAt = nil
                 guard micGranted else { return }
                 if recorder.isRecording {
@@ -1060,45 +1114,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     lastStatusLine = "mic already live — tap ⌥ to send"
                     return
                 }
+                // ORDER IS THE WHOLE FIX (10 Aug, second attempt). This block
+                // used to mark the session heard and stop the announcement
+                // BEFORE opening the microphone. When the open then failed —
+                // which the delivery gate now makes visible rather than silent —
+                // the session had already gone green-to-empty, the panel had
+                // already fallen back to the grid, and there was no recorder to
+                // show for it. One tap could lose a waiting agent and give
+                // nothing back.
+                //
+                // Nothing is mutated until the microphone is actually recording.
+                // A failed open now leaves the world exactly as it found it: the
+                // lamp still green, the announcement still playing, the agent
+                // still waiting on you.
+                let context = resolveReplyContext()
+                do {
+                    try recorder.start()
+                } catch {
+                    Permissions.log("mic: start failed (hands-free) — nothing changed: \(error)")
+                    hud.showResult(micFailureMessage(error))
+                    return
+                }
+
                 handsFreeListening = true
-                if let ctx = resolveReplyContext() {
+                if let ctx = context {
                     hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
                                     label: ctx.label, cwd: ctx.cwd)
                     recordingTarget = ctx.sessionId
                 } else {
                     dictationMode = true
-                hud.dictationDestination = FocusedInput.focusedEditableApp()
-                    .map { StateLegend.destination($0) } ?? StateLegend.clipboardDestination
+                    hud.dictationDestination = FocusedInput.focusedEditableApp()
+                        .map { StateLegend.destination($0) } ?? StateLegend.clipboardDestination
                 }
-                if let sessionId = hud.currentEventId,
-                   let latest = try? coordinator?.waiting().first(where: { $0.sessionId == sessionId }) {
-                    try? coordinator?.markHeard(sessionId: sessionId, through: latest.latestId)
-                }
+                // Deliberately NOT marking the session heard here (ruled 10 Aug).
+                // An agent stops waiting when you ANSWER it or when you press its
+                // lamp — never because a key was pressed while it happened to be
+                // talking. Hearing the first half of an announcement and starting
+                // to reply is not the same as being done with it, and the reply
+                // path advances the cursor on a confirmed send anyway.
                 coordinator?.speech.stop()
-                do {
-                    try recorder.start()
-                } catch {
-                    Permissions.log("mic: start failed (hands-free): \(error)")
-                    handsFreeListening = false
-                    dictationMode = false
-                    recordingTarget = nil
-                    hud.showResult(micFailureMessage(error))
-                    return
-                }
                 isBusy = true
                 updateTitle()
                 hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
                 Permissions.log("hands-free: listening locked")
-            } else {
-                lastOptionTapAt = Date()
-                // Observability for the dead band (06 Aug incident: press
-                // after press arming, reverting, and MEANING nothing — the log
-                // showed the machinery but never the intent). The threshold
-                // that produced those is now 0.20s, and a tap during a live
-                // capture ends it, so this line should be rare. When a storm
-                // of them appears again, that is the user pressing the mic key
-                // and being ignored.
-                Permissions.log("⌥ tap: first of a pair, in \(hud.state)")
             }
 
         case .pauseToggled:
@@ -1304,15 +1362,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The old transcript is discarded rather than deleted, and the gesture
             // itself starts the new recording, so nothing restarts it twice.
             hud.cancelPendingSend(restartListening: false)
-            // Replying to what is currently playing is the normal case, not an edge
-            // one — you answer as soon as you have heard enough. Mark it heard
-            // BEFORE stopping, because stopping reverts it to unread and that is
-            // what threw the reply away.
-            // Answering it counts as hearing it: you replied, so it is dealt with.
-            if let sessionId = hud.currentEventId,
-               let latest = try? coordinator?.waiting().first(where: { $0.sessionId == sessionId }) {
-                try? coordinator?.markHeard(sessionId: sessionId, through: latest.latestId)
-            }
+            // NOT marked heard here (ruled 10 Aug). Starting to record is not
+            // answering: an agent stops waiting when a reply actually lands, or
+            // when you press its lamp — never because you pressed the mic key
+            // while it was talking. This used to mark heard first, which meant a
+            // press that opened no microphone still took the session out of the
+            // queue: green to empty, and the work gone from view with nothing to
+            // show for it.
+            //
+            // The revert this used to defend against is now the correct outcome.
+            // Stopping an announcement returns it to unread — which is exactly
+            // what it should be, because you have not answered it yet. The reply
+            // path advances the cursor on a confirmed send, so a delivered answer
+            // still retires it.
             coordinator?.speech.stop()  // never record over playback
             lat("teardown done, opening mic")
             if armed != nil, recorder.isRecording {
@@ -1521,6 +1583,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     lastStatusLine = "\(StateLegend.Glyph.speaking) \(announcement.brief.topic)"
                     hud.highlight(upTo: announcement.spoken.text.count)
+                    // The agent's page catches up here, off the main thread and
+                    // after the audio: the brief for this turn has just been
+                    // stored, so this is the first moment the page can be
+                    // right, and nothing downstream waits on it. A failure is
+                    // logged and dropped — a stale home base must never cost
+                    // anyone an announcement.
+                    let spokenSession = announcement.event.sessionId
+                    Task.detached { [weak self] in
+                        guard let store = await self?.store else { return }
+                        do {
+                            if let file = try HomeBase.write(sessionId: spokenSession,
+                                                             store: store) {
+                                Permissions.log("homebase: \(file.lastPathComponent) "
+                                                + "for \(spokenSession.prefix(8))")
+                            }
+                        } catch {
+                            Permissions.log("homebase FAILED: \(error)")
+                        }
+                    }
                     // Ruling 14: fully spoken, no gesture in 4s → the grid.
                     scheduleReturnToGrid()
                 case .interrupted(let failure):
@@ -1583,6 +1664,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let ref: String?
             switch parsed {
             case let .discuss(s, r): session = s; ref = r
+            case let .home(s, r):    session = s; ref = r
             case let .hear(s):       session = s; ref = nil
             case let .reply(s):      session = s; ref = nil
             case .show, .unknown:    session = nil; ref = nil
@@ -1640,6 +1722,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 isBusy = true
                 updateTitle()
                 hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
+            case "home":
+                // The agent's own page. Written after every turn, so it exists
+                // for any session that has ever been summarized; for one that
+                // has not, there is nothing to show and the invitation is the
+                // honest answer.
+                if let session, let store,
+                   let file = try? HomeBase.write(sessionId: session, store: store) {
+                    NSWorkspace.shared.open(file)
+                } else {
+                    inviteNewSession(for: ref)
+                }
             case "show":
                 showPanel()
             default:
@@ -1833,6 +1926,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 recordingTarget = nil
+                // The delivery window opens HERE — at the capture's close, not
+                // at the dispatch — because this is the moment the words become
+                // ours to deliver, and every second from here to the outcome is
+                // a second the grid used to call that session idle.
+                // Which turn this answers, read at the capture's close rather
+                // than at dispatch: the whole point is to be right about the
+                // row DURING the wait, and a turn that lands while the user is
+                // still talking must not be swallowed by their reply to the
+                // previous one.
+                let answering = (try? coordinator.waiting())?
+                    .first { $0.sessionId == spokenTo }?.latestId
+                delivering.began(sessionId: spokenTo, answering: answering)
+                // One clear-site, not eight. Every exit below closes the window
+                // — the supersede return, the six terminal outcomes, the catch —
+                // except `.readyToSend`, which hands the delivery to the undo
+                // countdown and `send()` to finish. Enumerating exits is how a
+                // lamp gets stuck on; a defer keyed to the single hand-off
+                // cannot miss one.
+                var handedToCountdown = false
+                defer { if !handedToCountdown { delivering.finished(sessionId: spokenTo) } }
                 let streamed = await liveStream?.finish()
                 let outcome = try await coordinator.submitReply(
                     pcm16: pcm, to: spokenTo, streamed: streamed)
@@ -1871,14 +1984,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // Sending is the default. The window exists to stop it, not to
                     // permit it: approving every correct transcript is a toll.
                     lastStatusLine = "sending to \(label)…"
+                    // The countdown and the send own the window from here.
+                    handedToCountdown = true
                     hud.showPendingSend(
                         text: text, label: label, seconds: 4,
-                        send: { [weak self] in self?.send(utteranceId: utteranceId, label: label) },
+                        send: { [weak self] in
+                            self?.send(utteranceId: utteranceId, label: label,
+                                       sessionId: sessionId)
+                        },
                         cancel: { [weak self] restartListening in
                             guard let self else { return }
                             // The recording is kept, just taken out of the sendable
                             // set — you rejected these words, not the audio.
                             try? self.coordinator?.cancelSend(utteranceId: utteranceId)
+                            // Nothing is on its way any more: the lamp goes back
+                            // to whatever the transcript honestly says.
+                            self.delivering.finished(sessionId: sessionId)
                             guard restartListening else { return }
                             // Straight back to listening: you stopped it because the
                             // words were wrong, so the next thing you want is to say

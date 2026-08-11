@@ -254,6 +254,33 @@ case "reconcile":
             print("(Terminal automation permission is the usual suspect)")
         }
 
+    case "homebase":
+        // One page per agent, generated from the briefs that every turn already
+        // writes. Nothing is narrated and nothing is asked of the session: the
+        // page is a projection of a table that fills itself.
+        guard args.count > 1 else {
+            print("usage: tbase homebase <sessionId> [--open]")
+            print("       tbase homebase --all      (every session with a brief)")
+            break
+        }
+        let wantsOpen = args.contains("--open")
+        let ids: [String]
+        if args[1] == "--all" {
+            ids = Array(Set(try store.recentBriefs(limit: 2000).map(\.sessionId)))
+        } else {
+            ids = [args[1]]
+        }
+        let live = ClaudeAgentsCLI().sessions() ?? []
+        for id in ids {
+            guard let file = try HomeBase.write(sessionId: id, store: store, live: live)
+            else { print("no briefs for \(id.prefix(8)) — nothing to write yet"); continue }
+            print(file.path)
+            if wantsOpen, ids.count == 1 {
+                _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/open"),
+                                     arguments: [file.path])
+            }
+        }
+
     case "install-hooks":
     // One command instead of JSON surgery. Merges the three hook entries into
     // ~/.claude/settings.json, backing it up first; already-installed is a no-op.

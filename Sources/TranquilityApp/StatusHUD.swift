@@ -2698,16 +2698,18 @@ final class StatusHUD: NSObject {
         goButton.attributedTitle = letterspaced(
             "GO TO AGENT \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
             color: StateLegend.Palette.accent)
-        // "Open page" sits beside "Go to agent" and shares its treatment,
-        // because they are the same kind of move — leave this panel, go to the
-        // thing — and differ only in destination: one is a terminal tab, the
-        // other a browser. Two doors in one ink, so neither reads as the
-        // primary and the choice stays yours.
-        openPageButton = NSButton(title: "Open page", target: self,
+        // "Open HTML" shares "Go to agent"'s treatment — same kind of move,
+        // leave this panel and go to the thing — and differs only in
+        // destination: one is a terminal tab, the other a browser. It sits at
+        // the row's LEADING edge rather than beside it: the two doors bracket
+        // the card, so neither reads as the primary and a mis-click lands on
+        // nothing. Named for the file it opens rather than for "page", which
+        // named nothing the user had a word for.
+        openPageButton = NSButton(title: "Open HTML", target: self,
                                   action: #selector(openPageTapped))
         openPageButton.isBordered = false
         openPageButton.attributedTitle = letterspaced(
-            "OPEN PAGE \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
+            "OPEN HTML \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
             color: StateLegend.Palette.accent)
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
         // The device-fault card's way out. Quiet like its row-mates: it is a
@@ -2761,12 +2763,12 @@ final class StatusHUD: NSObject {
         actionRow = buttons
         buttons.orientation = .horizontal
         buttons.spacing = 12
+        buttons.addView(openPageButton, in: .leading)
         buttons.addView(dontSendButton, in: .leading)
         buttons.addView(micSettingsButton, in: .leading)
         buttons.addView(newSessionButton, in: .leading)
         buttons.addView(cancelTranscriptionButton, in: .leading)
         buttons.addView(retryTranscriptionButton, in: .leading)
-        buttons.addView(openPageButton, in: .trailing)
         buttons.addView(goButton, in: .trailing)
 
         hintLabel.maximumNumberOfLines = 0
