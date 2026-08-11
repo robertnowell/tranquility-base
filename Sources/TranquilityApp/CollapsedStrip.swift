@@ -124,14 +124,10 @@ final class CollapsedStrip: NSView {
     // MARK: - Paint
 
     override func draw(_ dirtyRect: NSRect) {
-        StateLegend.Palette.surface.setFill()
-        bounds.fill()
-
-        // The left edge is the only border: the strip is flush to the screen's
-        // right edge, so the other three have nothing to separate it from.
-        StateLegend.Palette.hairline.setFill()
-        NSRect(x: 0, y: 0, width: 1, height: bounds.height).fill()
-
+        // NO background fill and no border. The strip lives inside the panel's
+        // own rounded, shadowed background — painting an opaque rectangle over
+        // it squares off the corners, which is what the first version did.
+        // Collapsing morphs the panel; it does not draw a new one.
         drawHeader()
         drawLamps()
 
