@@ -1383,7 +1383,14 @@ final class StatusHUD: NSObject {
         // happened to be passing through the target height at that instant.
         // That is why two identical faces settled 12pt apart (Robert's two
         // screenshots of the same card, 06 Aug).
-        if abs((intendedHeight ?? panel.frame.height) - height) > 1 {
+        // The WIDTH has to be checked too, not just the height. Expanding out of
+        // the strip is a width-only change — the grid's height is often exactly
+        // what the collapsed panel already had — so a height-only guard skipped
+        // the resize entirely and left the panel 40pt wide. `position` then
+        // placed it from that 40pt width, and the grid rendered off the right of
+        // the display. That is the bug the user reported, and this line is it.
+        let widthIsWrong = abs(panel.frame.width - 380) > 1
+        if widthIsWrong || abs((intendedHeight ?? panel.frame.height) - height) > 1 {
             intendedHeight = height
             // The top edge holds still and the panel grows downward: origin is
             // bottom-left, so the height delta comes out of origin.y. Animated
