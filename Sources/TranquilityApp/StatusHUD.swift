@@ -32,6 +32,19 @@ final class StatusHUD: NSObject {
     private var newSessionButton: NSButton!
     private var openPageButton: NSButton!
     private var hintLabel: NSTextField!
+    /// The capture strip's own label, and the hairline that separates it from
+    /// whatever it sits under.
+    ///
+    /// The capture used to speak through `stateLabel` — one pill, at the top —
+    /// which is why starting a reply had to take the card's pill, and therefore
+    /// its whole face. Given a slot of its own at the bottom, the capture stops
+    /// competing for the card's: the card keeps its placard, its identity and
+    /// its ink, and the microphone says what it is doing underneath.
+    ///
+    /// ONE slot, three phases (ruling item 3): arming, listening and read-back
+    /// all write this one label, and the box does not move between them.
+    private var stripLabel: NSTextField!
+    private var stripRule: NSView!
     private var contentStack: NSStackView?
     /// The collapsed column. Built once, hidden until the width changes.
     private var strip: CollapsedStrip?
@@ -187,9 +200,64 @@ final class StatusHUD: NSObject {
         let prior = (state: state, face: face)
         guard transition(to: .arming, because: "arm window opened") else { return false }
         stashBeforeArming = prior
-        face = Face(listeningTarget: target ?? "")
+        beginCaptureFace(target: target ?? "")
         render()
         return true
+    }
+
+    /// Start a capture on the CURRENT face rather than in place of it.
+    ///
+    /// This is the whole of the strip design (ruling item 1): "a capture
+    /// augments the face; it does not replace it." Every capture entry point
+    /// used to run `face = Face(listeningTarget:)`, which is why answering a
+    /// reply cost you the reply — three faces in sequence for one continuous
+    /// act, and a read-back that asked you to check words against a message no
+    /// longer on screen.
+    ///
+    /// With no card to sit under, this IS the old behaviour: a fresh face whose
+    /// only content is the strip, which is ruling §E — a capture begun from the
+    /// grid has nothing to augment, so the strip is the whole panel.
+    ///
+    /// The placard is snapshotted because it is the one part of the card the
+    /// baseline would otherwise recompute from `state`, and `state` is now the
+    /// capture's. `placardOverride` already exists for exactly this — naming a
+    /// pill the state cannot name — so the ladder's "◀ FINDINGS" survives a
+    /// reply without a second mechanism.
+    private func beginCaptureFace(target: String) {
+        guard face.hasCard else {
+            face = Face(listeningTarget: target)
+            return
+        }
+        if face.placardOverride.isEmpty {
+            face.placardOverride = stateLabel.attributedStringValue.string
+        }
+        face.listeningTarget = target
+    }
+
+    /// Paint the capture strip: rule, placard, and an optional second line.
+    ///
+    /// The branch is the whole of ruling §E. With a card on screen the capture
+    /// speaks from the bottom and leaves `stateLabel` to the card; with nothing
+    /// underneath, the strip IS the panel and the pill returns to the top,
+    /// which is exactly what the panel did before this change — so a capture
+    /// from the grid is byte-identical to the one that shipped.
+    private func renderCaptureStrip(_ placard: NSAttributedString,
+                                    detail: String? = nil) {
+        guard face.hasCard else {
+            titleLabel.isHidden = true
+            stateLabel.attributedStringValue = placard
+            return
+        }
+        stripRule.isHidden = false
+        stripLabel.isHidden = false
+        let line = NSMutableAttributedString(attributedString: placard)
+        if let detail, !detail.isEmpty {
+            line.append(NSAttributedString(
+                string: "\n" + detail,
+                attributes: [.font: NSFont.systemFont(ofSize: 11),
+                             .foregroundColor: StateLegend.Palette.secondary]))
+        }
+        stripLabel.attributedStringValue = line
     }
 
     /// Restore exactly the face arming replaced. No-op unless the panel is
@@ -217,8 +285,8 @@ final class StatusHUD: NSObject {
         // not the focused field on this screen. The hands-free ✕/✓ buttons are
         // dead code deleted (simplification pass): they were never attached to
         // any view hierarchy, and the chords cover both actions.
-        face = Face(listeningTarget: currentTarget?.label ?? dictationDestination
-                        ?? StateLegend.clipboardDestination)
+        beginCaptureFace(target: currentTarget?.label ?? dictationDestination
+                            ?? StateLegend.clipboardDestination)
         render()
     }
 
@@ -290,11 +358,19 @@ final class StatusHUD: NSObject {
         else { return }
         onCancelSend = cancel
         onCommitSend = send
-        // READBACK placard via the same placardOverride the ladder pills use;
-        // the identity (mono) titles the card, the words being sent are the body.
-        face = Face(title: label, body: "\u{201C}\(text)\u{201D}",
-                    placardOverride: StateLegend.readbackPlacard,
-                    countdownSeconds: seconds)
+        // The read-back joins the strip instead of taking the stage (ruling
+        // item 4): the READBACK placard, the words and the countdown all render
+        // under the reply they answer, which is the first time checking one
+        // against the other has been possible. With no card to sit under, the
+        // strip is the whole panel and this is the old behaviour verbatim.
+        if face.hasCard {
+            face.readback = text
+            face.countdownSeconds = seconds
+        } else {
+            face = Face(title: label, body: "\u{201C}\(text)\u{201D}",
+                        placardOverride: StateLegend.readbackPlacard,
+                        countdownSeconds: seconds)
+        }
         render()
     }
 
@@ -857,6 +933,22 @@ final class StatusHUD: NSObject {
         /// repainted. Re-mapping a stale spoken index is how the ink would come
         /// back in the wrong place. The mapping happens once, at `highlight`.
         var spokenUpTo: Int?
+
+        /// Whether this face is a CARD — something a capture can sit under.
+        ///
+        /// The strip ruling's §E: "a capture begun from the grid has no card to
+        /// sit under, so the strip is the whole panel, exactly as today." The
+        /// question the capture entry points have to answer is therefore not
+        /// "what state am I in" but "is there anything here worth keeping", and
+        /// the face can answer it about itself. Derived, never stored: a stored
+        /// flag is one more thing that can disagree with the face it describes.
+        var hasCard: Bool { !body.isEmpty && sessionRows.isEmpty }
+
+        /// The words waiting to be sent, shown in the strip during the undo
+        /// window. Separate from `body`, which belongs to the card underneath —
+        /// the whole point of the read-back moving into the strip is that the
+        /// reply and the message it answers are on screen at the same time.
+        var readback: String?
     }
     private var face = Face()
 
@@ -948,6 +1040,12 @@ final class StatusHUD: NSObject {
         micSettingsButton.isHidden = true
         newSessionButton.isHidden = true
         countdownBar.isHidden = true; meter.isHidden = true
+        // The strip belongs to the capture arms alone. Both the label AND its
+        // rule are baselined — a rule left behind is the residue class this
+        // funnel exists to close, and it would draw a line across a card that
+        // has nothing under it.
+        stripLabel.isHidden = true; stripRule.isHidden = true
+        stripLabel.stringValue = ""
         voiceList.isHidden = true; waitingRows.isHidden = true
         gearButton.isHidden = false; backButton.isHidden = true
         // Only the grid can be collapsed: a card is a conversation in progress
@@ -1045,21 +1143,28 @@ final class StatusHUD: NSObject {
             // it draws its resting floor. Same widgets as .listening; the
             // upgrade at hold-resolution is an alpha/content change, not a
             // relayout.
-            titleLabel.isHidden = true
-            stateLabel.attributedStringValue = armingPill()
+            // The card, if there is one, is untouched — title, body and ink
+            // all stay where the baseline put them. Only when there is nothing
+            // to sit under does the pill climb back to the top.
+            renderCaptureStrip(armingPill())
             meter.isHidden = false
             meter.reset()
 
         case .listening:
-            titleLabel.isHidden = true
             // The pill's dot in channel green (ruled): mic open = go.
-            stateLabel.attributedStringValue = listeningPill()
+            renderCaptureStrip(listeningPill())
             meter.isHidden = false
 
         case .pendingSend:
             // Exactly ONE negative (ruled), as a quiet text action.
             dontSendButton.isHidden = false
             countdownBar.isHidden = false
+            // The read-back is the strip's third phase, in the same slot the
+            // other two used. The placard names it; the words follow.
+            if let readback = face.readback {
+                renderCaptureStrip(placardText(StateLegend.readbackPlacard),
+                                   detail: "\u{201C}\(readback)\u{201D}")
+            }
 
         case .result:
             // A card that waits until dismissed. Amber presence beyond the glyph
@@ -2066,6 +2171,75 @@ final class StatusHUD: NSObject {
                         + "armed=\(inkArmed) restored=\(inkRestored)")
         endCapture(because: "selftest ink cleanup")
 
+        // The strip drill (10 Aug). The promise is one sentence — speaking to
+        // an agent does not cost you the thing it said — so the assertions are
+        // about the CARD, not about the strip: its identity, its ink and its
+        // placard must be byte-identical on the other side of a capture. The
+        // strip merely has to show up.
+        let stripBody = "Reran the promotions suite after the binding fix; four "
+            + "cases still fail on the same null topic."
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize(stripBody),
+            sessionId: "strip", pid: 1, project: "promotions copy", cwd: "/tmp")
+        highlight(upTo: 30)
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let cardTitle = titleLabel.stringValue
+        let cardBody = bodyLabel.stringValue
+        let cardPlacard = stateLabel.attributedStringValue.string
+        let cardInk = inkBrightLength
+        let topBefore = panel?.frame.maxY ?? 0
+
+        showArming(target: "promotions copy")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let armedKeepsCard = titleLabel.stringValue == cardTitle
+            && bodyLabel.stringValue == cardBody && !titleLabel.isHidden
+        let armedKeepsPlacard = stateLabel.attributedStringValue.string == cardPlacard
+        let armedInk = inkBrightLength
+        let armedStrip = !stripLabel.isHidden && !stripRule.isHidden
+
+        showListening(level: { 0.3 })
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let listeningInk = inkBrightLength
+        let listeningStrip = !stripLabel.isHidden
+        let topDuring = panel?.frame.maxY ?? 0
+
+        showPendingSend(text: "ship it", label: "promotions copy",
+                        seconds: 60, send: {}, cancel: { _ in })
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let readbackInStrip = stripLabel.stringValue.contains("ship it")
+        let readbackKeepsCard = bodyLabel.stringValue == cardBody
+        let readbackInk = inkBrightLength
+        let topAfter = panel?.frame.maxY ?? 0
+        _ = cancelPendingSend(restartListening: false)
+        endCapture(because: "selftest strip cleanup")
+
+        // §E: a capture begun from the grid has nothing to sit under, so the
+        // strip is the whole panel — the behaviour that shipped, unchanged.
+        showIdle(note: nil, rows: [
+            .init(id: "s1", name: "Fix hero image binding",
+                  callsign: "promotions copy", lamp: .ready),
+        ])
+        showArming(target: "promotions copy")
+        let gridCaptureIsWholePanel = stripLabel.isHidden && titleLabel.isHidden
+        endCapture(because: "selftest strip grid cleanup")
+
+        SelfTest.report("strip", [
+            ("cardSurvivesArming", armedKeepsCard),
+            ("placardSurvives", armedKeepsPlacard),
+            ("inkSurvivesArming", armedInk == cardInk),
+            ("inkSurvivesListening", listeningInk == cardInk),
+            ("inkSurvivesReadback", readbackInk == cardInk),
+            ("stripAppears", armedStrip && listeningStrip),
+            ("readbackJoinsTheStrip", readbackInStrip && readbackKeepsCard),
+            ("gridCaptureIsWholePanel", gridCaptureIsWholePanel),
+        ])
+        // Logged, not asserted: an animated resize may be in flight, so the
+        // live frame is a transient and an equality here would be flaky. The
+        // top edge is `visibleFrame.maxY - 16` by construction (`position`),
+        // and these three lines are how a regression in that would be seen.
+        Permissions.log("selftest strip: ink=\(cardInk) top \(topBefore)"
+                        + " -> \(topDuring) -> \(topAfter)")
+
         // The receipt drill. A chip outside the render funnel has to prove it
         // cleans up after itself, because no arm of render() will do it: this
         // is the residue class the arbiter exists to make impossible, and the
@@ -3003,6 +3177,22 @@ final class StatusHUD: NSObject {
 
         hintLabel.maximumNumberOfLines = 0
         hintLabel.lineBreakMode = .byTruncatingMiddle
+
+        // The strip's own furniture. The rule is what makes the capture read as
+        // an extension of the panel rather than another paragraph of the card —
+        // and it is hidden with the label, so a face with no capture has no
+        // orphan line across it.
+        stripLabel = NSTextField(labelWithString: "")
+        stripLabel.font = .systemFont(ofSize: 11)
+        stripLabel.textColor = StateLegend.Palette.hint
+        stripLabel.maximumNumberOfLines = 2
+        stripLabel.lineBreakMode = .byTruncatingHead
+        stripRule = NSView()
+        stripRule.wantsLayer = true
+        stripRule.layer?.backgroundColor = StateLegend.Palette.hairline.cgColor
+        stripRule.translatesAutoresizingMaskIntoConstraints = false
+        stripRule.heightAnchor.constraint(equalToConstant: 1).isActive = true
+
         countdownBar = CountdownBarView()
 
         meter = LevelMeterView()
@@ -3040,8 +3230,14 @@ final class StatusHUD: NSObject {
         waitingRows.alignment = .leading
         waitingRows.spacing = 2
 
+        // The strip's furniture sits BELOW the body and above the meter, so a
+        // capture extends the panel downward and the card above it does not
+        // move (ruled 10 Aug: "extend below, not move everything down by
+        // inserting above"). The panel already grows this way — `position`
+        // anchors the top edge — so the strip costs no geometry work.
         let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
                                         waitingRows, bodyLabel,
+                                        stripRule, stripLabel,
                                         countdownBar, meter, voiceList, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -3096,6 +3292,8 @@ final class StatusHUD: NSObject {
         NSLayoutConstraint.activate(stackEdges + [
             bodyLabel.widthAnchor.constraint(equalToConstant: 348),
             hintLabel.widthAnchor.constraint(equalToConstant: 348),
+            stripLabel.widthAnchor.constraint(equalToConstant: 348),
+            stripRule.widthAnchor.constraint(equalToConstant: 348),
             titleLabel.widthAnchor.constraint(equalToConstant: 348),
             stateLabel.widthAnchor.constraint(equalToConstant: 348),
             // Same margin as every text row, so the eye reads one column.
