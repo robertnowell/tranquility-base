@@ -82,6 +82,7 @@ final class StatusHUD: NSObject {
     /// this product exists to avoid.
     func flashArrival(_ lamp: StateLegend.Lamp) {
         guard isCollapsed else { return }
+        Permissions.log("glow: arrival")
         strip?.flash(lamp)
     }
 

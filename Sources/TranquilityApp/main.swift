@@ -302,6 +302,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if self.hud.isOnScreen, self.hud.canSurfaceAmbiently {
                         self.hud.showIdle(rows: rows)
                         self.lastShownRows = rows
+                        // The glow lives HERE, with the repaint, not with the
+                        // hail — measured 11 Aug, watching a real arrival while
+                        // collapsed produce nothing at all.
+                        //
+                        // It was inside `surfaceArrival`, behind two returns
+                        // meant for the away-channel: the interrupt gate, and
+                        // the frontmost-tab skip. Both are about whether to
+                        // INTERRUPT you. A panel you have chosen to keep on
+                        // screen updating its own contents is not an
+                        // interruption — it is the same class of thing as the
+                        // lamp turning green two lines up, which those gates
+                        // have never suppressed and should not.
+                        if arrived, let lit = rows.first(where: { $0.lamp == .ready })?.lamp {
+                            self.hud.flashArrival(lit)
+                        }
                     }
                 }
             }
@@ -2180,13 +2195,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // successfully. A chime carries the same information ("something came
         // back") at none of that cost, and the panel already carries WHICH.
         ArrivalChime.play()
-        // And the visual half. The chime is the away-channel; this is for when
-        // you are looking at the screen but the panel is a 40pt column — where
-        // a lamp changing colour is the only thing that happens, and nothing
-        // marks it as having just happened.
-        if let arriving = rows.first(where: { $0.lamp == .ready })?.lamp {
-            hud.flashArrival(arriving)
-        }
     }
 
 
