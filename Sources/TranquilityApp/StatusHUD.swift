@@ -2947,11 +2947,14 @@ final class StatusHUD: NSObject {
         // control for shrinking the panel belongs on the panel rather than two
         // clicks away in a menu you have to know is there.
         collapseButton = NSButton(
-            // The standard macOS sidebar toggle, not a bare chevron. Every
-            // other app on the machine uses this shape for exactly this job —
-            // Chrome, Xcode, Finder, Mail — and a control that means "collapse
-            // this panel" should not need to be learned here first.
-            image: NSImage(systemSymbolName: "sidebar.right",
+            // A chevron, ruled over the standard sidebar glyph. The sidebar
+            // symbol carries a rectangle that reads as a second panel edge
+            // inside a panel that already has one, and at 12pt against a 10pt
+            // letterspaced title it was the heaviest thing in the strip. The
+            // chevron says direction and nothing else, which is all this does —
+            // and it matches the one the collapsed strip shows for Expand, so
+            // the pair reads as one control pointing two ways.
+            image: NSImage(systemSymbolName: "chevron.right",
                            accessibilityDescription: "Collapse")!
                 .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))!,
             target: self, action: #selector(collapseTapped))
