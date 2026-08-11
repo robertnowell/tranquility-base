@@ -2129,9 +2129,12 @@ final class StatusHUD: NSObject {
         // drill asserts it decays to nothing on its own clock.
         setCollapsed(true)
         showIdle(rows: mixed)
+        let realGlow = CollapsedStrip.glowSeconds
+        CollapsedStrip.glowSeconds = 0.2
+        defer { CollapsedStrip.glowSeconds = realGlow }
         flashArrival(.ready)
         let glowLit = collapsedGlowStrength > 0
-        RunLoop.current.run(until: Date().addingTimeInterval(CollapsedStrip.glowSeconds + 0.4))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.45))
         let glowDecayed = collapsedGlowStrength == 0
         setCollapsed(false)
         flashArrival(.ready)
