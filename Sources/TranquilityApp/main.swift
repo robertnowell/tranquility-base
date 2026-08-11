@@ -175,6 +175,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Consulted only for unprompted surfacing. A keypress is never gated: you
     /// cannot interrupt someone who has just asked for something.
     private let gate = InterruptGate(minimumIdleSeconds: 0)
+
+    /// Auditions macOS voices. Long-lived so `stop()` can silence the previous
+    /// preview — a per-press instance would leave the old one talking over the new.
+    private let voicePreview = SystemSpeechProvider()
     /// What the gate decided, and what the room sounded like when it decided it.
     /// Not a log-only rollout — the check is live — but the record is where a
     /// surprising hold gets explained after the fact, which is the whole reason
@@ -397,9 +401,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Preview only — the narrator (VoiceCatalog.selectedVoiceId) is not
             // touched; the roster check is what changes who speaks for sessions.
             Task { @MainActor in
-                guard let chain = self.coordinator?.speech else { return }
-                _ = await chain.speak(
-                    SpokenTextSanitizer().sanitize(self.previewText()), voice: id)
+                let sample = SpokenTextSanitizer().sanitize(self.previewText())
+                // A macOS voice cannot be auditioned through the ElevenLabs path.
+                // `chain.speak(voice:)` takes an ElevenLabs id; handed a system
+                // identifier it recognised nothing, fell through to the single system
+                // provider, and that provider spoke in ITS configured voice — so every
+                // row played the same voice and the picker was unusable.
+                if SystemVoiceCatalog.isSystemVoice(id) {
+                    // One long-lived provider rather than one per press, so the
+                    // `stop()` above actually silences the previous preview. A fresh
+                    // instance each time would leave the old one talking.
+                    self.voicePreview.stop()
+                    self.voicePreview.voiceIdentifier = id
+                    try? await self.voicePreview.speak(sample, onWord: nil)
+                } else {
+                    guard let chain = self.coordinator?.speech else { return }
+                    _ = await chain.speak(sample, voice: id)
+                }
             }
         }
 

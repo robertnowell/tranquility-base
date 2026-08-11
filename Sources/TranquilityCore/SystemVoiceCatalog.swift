@@ -143,15 +143,41 @@ public enum SystemVoiceCatalog {
     ///
     /// Category carries quality, because "free" alone does not tell you that Ava
     /// (Premium) and compact Samantha are not the same offer.
+    /// Only the voices worth offering.
+    ///
+    /// Of 34 en-US voices installed here, 28 are unusable for this purpose: 20 legacy
+    /// novelty voices (Bubbles, Boing, Bells, Bad News — literal sound effects) and 8
+    /// Eloquence voices, which are the robotic ones. Listing them made the picker
+    /// open on "Albert, Bad News, Bahh, Bells, Boing, Bubbles", because the bench
+    /// sorts by (category, name) and "Compact" precedes "Enhanced" alphabetically —
+    /// so the worst voices macOS ships were the first thing the app showed.
+    ///
+    /// Filtered by QUALITY, not by identifier family: Alex is `com.apple.speech.
+    /// synthesis.voice.Alex`, the same family as the novelty voices, and is one of
+    /// the best. Quality is the thing actually being judged.
     public static func asCatalogueVoices(language: String = "en-US") -> [Voice] {
-        voices(matching: language).map { v in
+        let good = voices(matching: language).filter { rank($0.quality) > 1 }
+        // A stock Mac has none of these. Rather than an empty pane, show what it will
+        // actually speak with, so the list always explains the sound coming out.
+        let shown = good.isEmpty
+            ? voices(matching: language).filter { $0.identifier.contains(".voice.compact.") }
+            : good
+        return shown.map { v in
             let tier: String
             switch rank(v.quality) {
             case 3: tier = "Free · Premium"
             case 2: tier = "Free · Enhanced"
-            default: tier = "Free · Compact"
+            default: tier = "Free · Basic"
             }
             return Voice(id: v.identifier, name: v.name, category: tier)
         }
     }
+
+    /// Whether an id belongs to a macOS voice rather than an ElevenLabs one.
+    ///
+    /// The picker holds both, and they are spoken by different providers — passing a
+    /// system identifier to the ElevenLabs path is why every preview played the same
+    /// voice: the chain did not recognise it, fell through to the one system provider,
+    /// and that provider spoke in its own configured voice every time.
+    public static func isSystemVoice(_ id: String) -> Bool { id.hasPrefix("com.apple.") }
 }
