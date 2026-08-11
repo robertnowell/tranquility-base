@@ -69,13 +69,28 @@ public enum CaptureMarker {
     // test that dropped a real marker there would make a real relaunch wait on
     // a microphone nobody opened.
 
-    /// Written non-atomically on purpose: this sits on the mic-open path, and a
-    /// temp-file-plus-rename buys durability nothing here wants. A torn write
-    /// fails to parse, and an unparseable marker reads as "not capturing" — the
-    /// same answer as no marker at all.
+    /// Atomic, which reverses an earlier deliberate choice — and the heartbeat is
+    /// what reverses it.
+    ///
+    /// This was written non-atomically because it sat on the mic-open path and
+    /// "a torn write fails to parse, and an unparseable marker reads as 'not
+    /// capturing' — the same answer as no marker at all." That was true when the
+    /// file was written once per capture: one truncate-then-write window per
+    /// utterance, against a reader that has to be unlucky to land inside it.
+    ///
+    /// A beat every `heartbeat` seconds against a reader polling every 2s
+    /// (`relaunch.sh`) turns one coin-flip into a repeated one for the length of
+    /// the utterance — and the two outcomes are not symmetric. Reading "not
+    /// capturing" does not mean "no marker" any more; it means a relaunch
+    /// destroys the recording being written. Ten bytes rarely tear, but the cost
+    /// when they do is the entire failure this file exists to prevent.
+    ///
+    /// The old objection has also expired: writes now go through the marker
+    /// queue rather than sitting directly on the mic-open path, so the extra
+    /// rename is off the latency budget that argued against it.
     static func write(to url: URL, now: Date) {
         try? String(Int(now.timeIntervalSince1970))
-            .write(to: url, atomically: false, encoding: .utf8)
+            .write(to: url, atomically: true, encoding: .utf8)
     }
 
     static func remove(at url: URL) {
