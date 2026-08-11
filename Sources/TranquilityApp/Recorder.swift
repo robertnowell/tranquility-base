@@ -83,6 +83,44 @@ public final class Recorder: @unchecked Sendable {
     private var staleFormat = false
     private var configObserver: NSObjectProtocol?
 
+    /// The device the open loop retreated to after the preferred one refused to
+    /// deliver, overriding the preference until the next `warmUp`.
+    ///
+    /// This is the half that was missing. `AudioInputPreference` already defaults
+    /// to the built-in mic precisely because Bluetooth inputs re-rate themselves
+    /// on open — but once the preference is `systemDefault`, a connected pair of
+    /// AirPods becomes the system default and the loop binds it six times in a
+    /// row, rebuilding the engine each time and re-asking the same device the
+    /// same question. Measured 11 Aug: every retry storm of the day was on
+    /// deviceID 89 (AirPods Pro), at 48000Hz and again at 24000Hz after the HFP
+    /// flip; the built-in mic needed a second attempt exactly once.
+    ///
+    /// The information to recover was already here — `micFailureMessage` reads
+    /// `device.isBluetooth` to compose its advice — so the app diagnosed the
+    /// failure correctly and then asked the user to go fix it from a menu. It
+    /// now spends one of its six attempts fixing it instead.
+    private var forcedDevice: AudioInputDevice.Device?
+
+    /// True while capture is running on the fallback rather than the preference,
+    /// so the menu can stop claiming a device that is not the one recording.
+    public private(set) var fellBackToBuiltIn = false
+
+    /// Move the remaining attempts onto the built-in microphone.
+    ///
+    /// Only from Bluetooth, and only once: a built-in device that will not open
+    /// has no better device to be redirected to, and retargeting repeatedly would
+    /// turn a diagnosis into a loop.
+    private func retargetToBuiltInAfterFailure() {
+        guard forcedDevice == nil,
+              let current = AudioInputDevice.resolve(), current.isBluetooth,
+              let builtIn = AudioInputDevice.builtIn, builtIn.id != current.id
+        else { return }
+        forcedDevice = builtIn
+        fellBackToBuiltIn = true
+        Permissions.log("mic: \(current.name) delivered nothing — retargeting the "
+            + "remaining attempts to \(builtIn.name)")
+    }
+
     private func observeConfigurationChanges() {
         if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
         configObserver = NotificationCenter.default.addObserver(
@@ -328,6 +366,11 @@ public final class Recorder: @unchecked Sendable {
                     lastReason = "engine started but the tap delivered nothing in "
                         + "\(Int(Self.firstBufferCeiling * 1000))ms — graph not rendering"
                     _ = VDCatchObjCException { input.removeTap(onBus: 0); engine.stop() }
+                    // This is the signature the whole retreat exists for: the
+                    // engine starts, the tap installs, and no audio ever arrives.
+                    // Asking the same earbuds again five more times is how nine
+                    // seconds of silence gets recorded.
+                    retargetToBuiltInAfterFailure()
                     continue
                 }
                 // Say WHICH device the capture is bound to and at WHAT rate the
@@ -363,6 +406,11 @@ public final class Recorder: @unchecked Sendable {
             // hours. Without this the loop pays the same wasted attempt on every
             // capture forever, having learned nothing from the last one.
             if lastReason.contains("format mismatch") { staleFormat = true }
+            // The other failure exit — a throw or an NSException out of
+            // installTap/start — gets the same retreat. A format mismatch on a
+            // device that re-rates itself IS the Bluetooth failure wearing a
+            // different error string.
+            retargetToBuiltInAfterFailure()
         }
 
         lock.lock(); running = false; lock.unlock()
@@ -383,6 +431,12 @@ public final class Recorder: @unchecked Sendable {
     /// already bound and reuses it. The cost did not go away; it moved off the
     /// only path where it was ever visible.
     public func warmUp() {
+        // A launch, or a preference change, retires any fallback: the earbuds may
+        // be gone, and a retreat that outlives its cause is indistinguishable from
+        // a preference the user never set — which is the fault this whole seam is
+        // about.
+        forcedDevice = nil
+        fellBackToBuiltIn = false
         _ = rebindEngine(rebuilding: false)
         // Say which device won, POSITIVELY. Only the failure path logged before,
         // so a successful bind was indistinguishable from a bind that never ran —
@@ -408,7 +462,10 @@ public final class Recorder: @unchecked Sendable {
     /// the right device, which is every press except the first and the ones where
     /// the hardware genuinely moved.
     private func rebindEngine(rebuilding: Bool) -> AVAudioInputNode {
-        let desired = AudioInputDevice.resolve()
+        // The fallback wins over the preference while it is set. It is cleared by
+        // `warmUp`, so a launch or a preference change gets a fresh chance at the
+        // preferred device rather than inheriting a retreat forever.
+        let desired = forcedDevice ?? AudioInputDevice.resolve()
         let mismatched = desired.map { engine.inputNode.auAudioUnit.deviceID != $0.id } ?? false
         // `staleFormat` is the third reason, and until 10 Aug it was the missing
         // one. deviceID mismatch only catches a change of DEVICE; a device that
