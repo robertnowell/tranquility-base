@@ -259,15 +259,23 @@ case "reconcile":
         // writes. Nothing is narrated and nothing is asked of the session: the
         // page is a projection of a table that fills itself.
         guard args.count > 1 else {
-            print("usage: tbase homebase <sessionId> [--open]")
-            print("       tbase homebase --all      (every session with a brief)")
+            print("usage: tbase homebase <agentId> [--open]")
+            print("       tbase homebase --live     (every agent running now)")
+            print("       tbase homebase --all      (every agent ever summarized)")
             break
         }
         let wantsOpen = args.contains("--open")
         let ids: [String]
-        if args[1] == "--all" {
+        switch args[1] {
+        case "--all":
             ids = Array(Set(try store.recentBriefs(limit: 2000).map(\.sessionId)))
-        } else {
+        case "--live":
+            // A hub is for an agent you are still working with. The archive is
+            // the transcript's job — building a page for every session that
+            // ever ran fills the directory with agents nobody will open again,
+            // which is the same mess in a different window.
+            ids = (ClaudeAgentsCLI().sessions() ?? []).map(\.sessionId)
+        default:
             ids = [args[1]]
         }
         let live = ClaudeAgentsCLI().sessions() ?? []

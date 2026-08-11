@@ -98,8 +98,14 @@ public struct Coordinator: Sendable {
 
     /// Prepare whatever is currently announceable. Cheap to call repeatedly:
     /// anything already prepared is skipped.
-    public func prepareNext() async throws {
-        guard let session = try nextToAnnounce() else { return }
+    ///
+    /// Takes the delivery overlay for the same reason the speaking path does,
+    /// though the symptom here is cost rather than noise: without it, the
+    /// prefetch summarises and renders audio for the session you are mid-reply
+    /// to — a model call and an ElevenLabs round trip spent on an announcement
+    /// that must not play.
+    public func prepareNext(excluding inFlight: DeliveryInFlight = DeliveryInFlight()) async throws {
+        guard let session = try nextToAnnounce(excluding: inFlight) else { return }
         guard await !prepared.has(session.sessionId, latest: session.latestId) else {
             // Text already in hand, but the VOICE may not be: a summary restored
             // from the store, or prepared before the roster resolved, leaves the
@@ -138,13 +144,39 @@ public struct Coordinator: Sendable {
         await speech.prewarm(summary.spoken, voice: voiceId(for: session.sessionId))
     }
 
-    /// The newest session waiting on you.
+    /// The newest session waiting on you — that you are not already answering.
     ///
     /// A stack: the newest turn is the state that is actually true, and everything
     /// older is history. There is no supersession pass and no retirement sweep,
     /// because both were describing "not the latest", which the query already knows.
-    public func nextToAnnounce() throws -> WaitingSession? {
-        try waiting().first
+    ///
+    /// `excluding` applies the delivery overlay, and it is the whole reason this
+    /// is not simply `waiting().first` (ruled 10 Aug). `waiting()` answers what
+    /// the AGENT claims it needs, sourced from the store and the liveness probe.
+    /// A reply of ours in flight says nothing about that claim — it says what WE
+    /// are doing about it — so it must not be folded into `waiting()`, which
+    /// every other caller reads as the agent's own word. It belongs here, in the
+    /// question "what should we say next", which is a different question.
+    ///
+    /// The grid's lamp already composed these two correctly; this selector was
+    /// still `waiting().first`, so ⌃⌥ handed back the session you had just
+    /// replied to — visibly blue in the grid and still first in line to the
+    /// keyboard. Reported 10 Aug: "I hit next and the old session starts talking
+    /// again." The predicate is `supersedesWaiting`, deliberately the SAME one
+    /// the lamp uses, so the two cannot drift into disagreeing again.
+    ///
+    /// A newer turn arriving while the reply is in flight still wins: that turn
+    /// is genuinely unread, `supersedesWaiting` returns false for it, and it is
+    /// announced. Only the turn being answered is held back.
+    ///
+    /// The default is an empty overlay — "nothing in flight" — so a caller that
+    /// has no delivery state to offer gets exactly the old behaviour.
+    public func nextToAnnounce(
+        excluding inFlight: DeliveryInFlight = DeliveryInFlight()
+    ) throws -> WaitingSession? {
+        try waiting().first {
+            !inFlight.supersedesWaiting($0.sessionId, latestId: $0.latestId)
+        }
     }
 
     /// Everything waiting, newest first, for a UI that shows rather than describes.
@@ -461,6 +493,7 @@ public struct Coordinator: Sendable {
     public func announceNext(
         only sessionId: String? = nil,
         ignoringGate: Bool = false,
+        excluding inFlight: DeliveryInFlight = DeliveryInFlight(),
         onWillSpeak: (@MainActor (Announcement) -> Bool)? = nil,
         onWord: (@Sendable (Range<Int>) -> Void)? = nil
     ) async throws -> AnnounceOutcome {
@@ -472,7 +505,10 @@ public struct Coordinator: Sendable {
             // or typed since; the strictness belongs to the automatic path only.
             candidate = try store.latestStop(for: sessionId)
         } else {
-            candidate = try nextToAnnounce()
+            // The automatic path, and the one the bug was on: only here does the
+            // delivery overlay apply. An explicitly named session (above) is a
+            // direct request and keeps answering after you have replied to it.
+            candidate = try nextToAnnounce(excluding: inFlight)
         }
         guard let session = candidate else { return .nothingWaiting }
 
