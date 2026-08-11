@@ -183,38 +183,55 @@ final class CollapsedStrip: NSView {
     /// optical centring per letter — `I` and `T` want different side bearings
     /// than `Q` and `B`, and a text field would rag them against a shared box.
     private func drawWordmark() {
-        let top = bounds.maxY - Self.logoSlot - CGFloat(lamps.count) * Self.lampSlot
-        // Leave the bottom slot clear so the wordmark never sits where X will
-        // appear — the swap should look like a swap, not a reflow.
-        let region = NSRect(x: 0, y: Self.logoSlot,
-                            width: bounds.width, height: max(0, top - Self.logoSlot))
         let left = Array("TRANQUILITY")
-        guard region.height >= CGFloat(left.count) * 9 else { return }
+        let right = Array("BASE")
 
-        let rhythm = min(14, region.height / CGFloat(left.count))
-        let size = min(9, rhythm * 0.72)
-        let font = NSFont.monospacedSystemFont(ofSize: size, weight: .medium)
+        // Anchored to the BOTTOM of the column, not hung under the lamps.
+        //
+        // The first version started the run immediately below the last lamp, so
+        // on a three-lamp day the mark floated in the middle of the strip with
+        // dead space under it — which is what it looked like, and it looked
+        // like nothing on purpose. The mass belongs in the corner.
+        //
+        // Twelve points off the floor and no more. The first version reserved a
+        // whole `logoSlot` beneath it for the X — 52pt of nothing under the
+        // mark, which is not "at the bottom", it is hovering above it.
+        //
+        // Nothing needs reserving: the wordmark and the hover controls never
+        // coexist. The mark is drawn only when NOT hovering, and X and + are
+        // drawn only when hovering, so they can occupy the same floor.
+        let baseY: CGFloat = 12
+        let ceiling = bounds.maxY - Self.logoSlot - CGFloat(lamps.count) * Self.lampSlot - 6
+        let available = ceiling - baseY
+        guard available >= CGFloat(left.count) * 8 else { return }
+
+        // Ambient, not ostentatious: the hint line's ink, a step below the
+        // chrome the lamps and controls sit in. Legible when looked at, quiet
+        // when not.
+        let rhythm = min(13, available / CGFloat(left.count))
+        let size = max(7, min(8.5, rhythm * 0.68))
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: font, .foregroundColor: StateLegend.Palette.faint,
+            .font: NSFont.monospacedSystemFont(ofSize: size, weight: .regular),
+            .foregroundColor: StateLegend.Palette.faint,
         ]
-        // Two columns inside 40px: the left one carries the long word, the
-        // right one BASE, offset down a letter so the pair reads as a mark
-        // rather than as two lists that happen to be adjacent.
-        let leftX = bounds.width * 0.30
-        let rightX = bounds.width * 0.68
-        let start = region.maxY - rhythm
 
-        for (i, ch) in left.enumerated() {
-            let s = String(ch) as NSString
-            let w = s.size(withAttributes: attrs).width
-            s.draw(at: NSPoint(x: leftX - w / 2, y: start - CGFloat(i) * rhythm), withAttributes: attrs)
+        // Both columns END on the same baseline — the pair is related to each
+        // other rather than each centred in the column, which is what made the
+        // first version read as two ragged lists instead of one mark.
+        let leftX = bounds.width * 0.31
+        let rightX = bounds.width * 0.69
+
+        func stack(_ letters: [Character], centredOn x: CGFloat) {
+            for (i, ch) in letters.enumerated() {
+                let fromBottom = CGFloat(letters.count - 1 - i)
+                let str = String(ch) as NSString
+                let w = str.size(withAttributes: attrs).width
+                str.draw(at: NSPoint(x: x - w / 2, y: baseY + fromBottom * rhythm),
+                         withAttributes: attrs)
+            }
         }
-        for (i, ch) in Array("BASE").enumerated() {
-            let s = String(ch) as NSString
-            let w = s.size(withAttributes: attrs).width
-            s.draw(at: NSPoint(x: rightX - w / 2,
-                               y: start - CGFloat(i + 1) * rhythm), withAttributes: attrs)
-        }
+        stack(left, centredOn: leftX)
+        stack(right, centredOn: rightX)
     }
 
     private func drawGlyph(_ glyph: String, in rect: NSRect, color: NSColor) {
