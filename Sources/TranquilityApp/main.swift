@@ -358,7 +358,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ArtifactStore.latest(for: session, root: QueueStore.supportDirectory.path)
         }
         hud.onOpenPage = { page in
-            NSWorkspace.shared.open(URL(fileURLWithPath: page))
+            let url = URL(fileURLWithPath: page)
+            // Focus the tab that already has it, if there is one. Opening a new
+            // tab per click is how twenty agents become a wall of identical
+            // favicons — the state the hub exists to replace.
+            if BrowserFocus.focusExistingTab(url) == .notFound {
+                NSWorkspace.shared.open(url)
+            }
         }
         hud.onBreadcrumbHome = { [weak self] in self?.goHomeFromCard(via: "breadcrumb") }
         hud.onClearLamp = { [weak self] id in
@@ -1756,7 +1762,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // honest answer.
                 if let session, let store,
                    let file = try? HomeBase.write(sessionId: session, store: store) {
-                    NSWorkspace.shared.open(file)
+                    if BrowserFocus.focusExistingTab(file) == .notFound {
+                        NSWorkspace.shared.open(file)
+                    }
                 } else {
                     inviteNewSession(for: ref)
                 }
