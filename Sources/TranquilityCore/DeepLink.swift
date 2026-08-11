@@ -14,9 +14,11 @@ import Foundation
 ///
 /// 1. **No deep link may record, send, or type.** Speaking and raising a panel
 ///    are safe: you can hear what happened and you can see who asked. Opening a
-///    microphone from a URL is a page deciding you had something to say. This
-///    is why `discuss` — the action a generated page carries — resolves to
-///    speech, and never to capture.
+///    microphone from a URL is a page deciding you had something to say, and the
+///    browser's consent sheet is consent to open an app, not consent to be
+///    recorded. `discuss` resolves to speech. `reply` ARMS — it puts the target
+///    in front of you and waits for a gesture you make yourself (ruled 11 Aug).
+///    Neither ever opens the microphone.
 /// 2. **A page's strings never reach a shell.** The invitation builds a command
 ///    out of the subject the page names, which arrives from the URL. It is
 ///    interpolated through AppleScript INTO a shell, so two quoting layers have
