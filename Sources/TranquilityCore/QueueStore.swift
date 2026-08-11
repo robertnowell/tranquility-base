@@ -694,6 +694,21 @@ public final class QueueStore: Sendable {
         }
     }
 
+    /// One session's briefs, newest first — the home base's whole content.
+    ///
+    /// This is the "future retention read" the brief table's comment named. It
+    /// deliberately reads briefs and not events: an event is that a turn ended,
+    /// a brief is what the turn was, and only the second is worth a page.
+    public func briefs(for sessionId: String, limit: Int = 200) throws -> [StoredBrief] {
+        try dbQueue.read { db in
+            try StoredBrief
+                .filter(Column("sessionId") == sessionId)
+                .order(Column("atMs").desc)
+                .limit(limit)
+                .fetchAll(db)
+        }
+    }
+
     /// Newest first, for the lexicon harvest and future retention reads.
     public func recentBriefs(limit: Int = 400) throws -> [StoredBrief] {
         try dbQueue.read { db in
