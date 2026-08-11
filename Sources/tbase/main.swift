@@ -196,11 +196,15 @@ do {
         // Free voices, their quality, and what is one download away. Exists because
         // the picker could not show any of this and the machine looked empty.
         let installed = SystemVoiceCatalog.voices()
-        print("installed (en-US), best first:")
+        let chosen = SystemVoiceCatalog.downloadedNames()
+        print("installed (en-US), best first  [↓ = you downloaded it]:")
         for v in installed.prefix(12) {
             let tier = SystemVoiceCatalog.rank(v.quality) == 3 ? "PREMIUM"
                      : SystemVoiceCatalog.rank(v.quality) == 2 ? "enhanced" : "compact"
-            print("  \(pad(tier, 9)) \(v.name)")
+            let base = (v.name.split(separator: " ").first.map(String.init) ?? v.name).lowercased()
+            let mark = chosen.contains(base) ? "↓" : " "
+            let size = SystemVoiceCatalog.sizeMB(named: v.name).map { String(format: "%.0f MB", $0) } ?? ""
+            print("  \(mark) \(pad(tier, 9)) \(pad(v.name, 22)) \(size)")
         }
         if installed.count > 12 { print("  … and \(installed.count - 12) more") }
         print("")
