@@ -23,10 +23,57 @@ final class CaptureMarkerTests: XCTestCase {
     func testAFreshMarkerMeansCapturing() {
         XCTAssertTrue(CaptureMarker.decide(contents: stamp(secondsAgo: 0), now: now))
         XCTAssertTrue(CaptureMarker.decide(contents: stamp(secondsAgo: 5), now: now))
-        // The longest utterance actually observed was 92 seconds; it must still
-        // be protected, and comfortably.
-        XCTAssertTrue(CaptureMarker.decide(contents: stamp(secondsAgo: 92), now: now))
-        XCTAssertTrue(CaptureMarker.decide(contents: stamp(secondsAgo: 179), now: now))
+        // One missed heartbeat is not death. The window is four of them, so a
+        // stalled write or a busy queue costs nothing.
+        XCTAssertTrue(CaptureMarker.decide(contents: stamp(secondsAgo: 19), now: now))
+    }
+
+    /// This case used to assert the opposite, and the reversal is the fix.
+    ///
+    /// The old marker was stamped once at the start and given a 180-second
+    /// window, so the question it answered was "how long has this capture been
+    /// running". That is the wrong question, and the two readings agree only
+    /// for push-to-talk: hands-free has no length bound at all. On 10 Aug a
+    /// four-minute capture aged past 180s, read as dead, and `relaunch.sh`
+    /// destroyed it.
+    ///
+    /// A live capture now re-stamps every `heartbeat` seconds, so an old stamp
+    /// means the writer stopped — whatever the microphone is doing. Protecting
+    /// a long utterance is the heartbeat's job, and it is no longer this
+    /// function's job to guess at durations.
+    func testAnOldStampIsDeadEvenThoughUtterancesRunLonger() {
+        XCTAssertFalse(CaptureMarker.decide(contents: stamp(secondsAgo: 92), now: now),
+                       "a 92s-old stamp means 92s of silence from the writer")
+        XCTAssertFalse(CaptureMarker.decide(contents: stamp(secondsAgo: 240), now: now),
+                       "the 10 Aug case: four minutes without a heartbeat is a dead process")
+    }
+
+    /// The heartbeat has to fit inside the staleness window with room to spare,
+    /// or a live capture flickers as dead between beats and a relaunch kills it.
+    func testTheHeartbeatFitsComfortablyInsideTheWindow() {
+        XCTAssertLessThan(CaptureMarker.heartbeat * 2, CaptureMarker.staleAfter,
+                          "at least two beats must be missable before the writer is called dead")
+    }
+
+    /// `refresh` is `begin` by another name, and the names carry the meaning.
+    /// If they ever diverge, a refreshed marker would stop reading as capturing.
+    func testRefreshKeepsAMarkerAlive() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("capture-marker-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let marker = dir.appendingPathComponent("capturing")
+
+        // Stamped, then left long enough to be called dead.
+        CaptureMarker.write(to: marker, now: now)
+        let old = try String(contentsOf: marker, encoding: .utf8)
+        let muchLater = now.addingTimeInterval(CaptureMarker.staleAfter + 60)
+        XCTAssertFalse(CaptureMarker.decide(contents: old, now: muchLater))
+
+        // A beat lands. The same capture is alive again, with no restart.
+        CaptureMarker.write(to: marker, now: muchLater)
+        let beaten = try String(contentsOf: marker, encoding: .utf8)
+        XCTAssertTrue(CaptureMarker.decide(contents: beaten, now: muchLater))
     }
 
     /// Trailing newlines are what a shell `echo` or a text editor leaves behind,
@@ -42,7 +89,7 @@ final class CaptureMarkerTests: XCTestCase {
     /// would wait two minutes and then refuse — the app would stop updating and
     /// nothing would say why.
     func testAnAncientMarkerIsIgnored() {
-        XCTAssertFalse(CaptureMarker.decide(contents: stamp(secondsAgo: 180), now: now))
+        XCTAssertFalse(CaptureMarker.decide(contents: stamp(secondsAgo: 20), now: now))
         XCTAssertFalse(CaptureMarker.decide(contents: stamp(secondsAgo: 10_000), now: now))
     }
 

@@ -591,6 +591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // restarts, so calling start() on every tick is safe.
 
     private func startPermissionPolling() {
+        ArrivalChime.clearOldNotifications()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
