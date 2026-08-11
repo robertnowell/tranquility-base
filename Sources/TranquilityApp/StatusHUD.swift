@@ -1666,9 +1666,23 @@ final class StatusHUD: NSObject {
         // nothing to name); it stays in the persisted roster untouched until
         // the user next reorders, which saves exactly what is on screen.
         let cast = face.roster.compactMap { byId[$0] }
+        // Best first, not alphabetical. Sorting by (category, name) put "Compact"
+        // ahead of "Enhanced" ahead of "Premium", so the picker opened on the worst
+        // voices macOS ships and the one you actually want sat at the bottom.
+        // Category is ranked explicitly rather than spelled to sort, because naming a
+        // tier for its first letter is a trap the next tier walks into.
+        func tier(_ category: String) -> Int {
+            if category.contains("Premium") { return 0 }
+            if category.contains("Enhanced") { return 1 }
+            if category.hasPrefix("Free") { return 3 }   // basic/compact, last
+            return 2                                      // paid voices, mid
+        }
         let bench = face.voices
             .filter { !face.roster.contains($0.id) }
-            .sorted { ($0.category, $0.name) < ($1.category, $1.name) }
+            .sorted {
+                let (a, b) = (tier($0.category), tier($1.category))
+                return a == b ? ($0.category, $0.name) < ($1.category, $1.name) : a < b
+            }
         for voice in cast + bench {
             let onRoster = face.roster.contains(voice.id)
             let row = VoiceRowView(

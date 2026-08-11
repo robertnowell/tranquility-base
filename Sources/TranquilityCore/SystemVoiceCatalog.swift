@@ -82,37 +82,88 @@ public enum SystemVoiceCatalog {
 
     // MARK: - Recommendations, for a machine that has none of them
 
-    /// The free voices worth having, named as Settings names them.
-    ///
-    /// A stock Mac has NONE of these: it ships compact Samantha plus forty novelty
-    /// voices, and the route to better ones is five surfaces deep — Accessibility →
-    /// Read & Speak → System voice → Voice → the download cloud. Nobody finds that by
-    /// accident, so an app whose entire product is a voice has to name them out loud.
-    ///
-    /// Curated, not exhaustive, because size is part of the advice: Ava (Enhanced) is
-    /// 264MB and Alex is 912MB, so "download them all" is not a recommendation.
-    public static let recommended: [(name: String, note: String)] = [
-        ("Ava (Premium)",      "the best free voice on macOS"),
-        ("Allison (Enhanced)", "warm — 43MB, the cheapest real upgrade"),
-        ("Evan (Enhanced)",    "male, natural"),
-        ("Ava (Enhanced)",     "264MB, only if Premium is unavailable"),
-    ]
 
-    /// Which recommended voices are here, and which are one download away.
+    /// Voices macOS offers for download, read from its own asset manifests.
     ///
-    /// Matched on NAME rather than identifier, because the identifier is the unstable
-    /// half: premium voices moved from `com.apple.ttsbundle.*` to
-    /// `com.apple.voice.premium.*`, so an identifier allowlist would report every
-    /// voice as missing after an OS upgrade and send users to re-download what they
-    /// already had.
+    /// This is the answer to "can we detect what is NOT installed": there is no public
+    /// API for it — `speechVoices()` returns only what is present — but macOS ships
+    /// the catalogues on disk and they are readable:
+    ///
+    ///   VoiceServices_CombinedVocalizerVoices — the good ones (Allison, Ava, Susan,
+    ///     Tom for en-US) with `_DownloadSize`
+    ///   MacinTalkVoiceAssets — the legacy set: Alex, plus every novelty voice
+    ///
+    /// Reading the manifest rather than hardcoding a list is what lets this keep up:
+    /// when Apple ships a new voice the manifest gains an entry and it appears here
+    /// with no code change. A hardcoded list would have frozen on the day it was
+    /// written, which is exactly what the previous `recommended` constant did.
+    ///
+    /// Novelty voices are excluded by construction: the MacinTalk entries carry a
+    /// `VoiceRelativeDesirability` and Bubbles, Boing, Zarvox and friends simply have
+    /// none. Apple's own ranking does the filtering, so the app is not maintaining a
+    /// blocklist of joke voices.
+    public static func downloadable(language: String = "en-US") -> [(name: String, megabytes: Double)] {
+        var found: [(name: String, megabytes: Double)] = []
+
+        func assets(_ catalogue: String) -> [[String: Any]] {
+            let dir = "/System/Library/AssetsV2/com_apple_MobileAsset_\(catalogue)"
+            let url = URL(fileURLWithPath: dir).appendingPathComponent("com_apple_MobileAsset_\(catalogue).xml")
+            guard let data = try? Data(contentsOf: url),
+                  let plist = try? PropertyListSerialization.propertyList(
+                      from: data, options: [], format: nil) as? [String: Any],
+                  let list = plist["Assets"] as? [[String: Any]]
+            else { return [] }
+            return list
+        }
+
+        for asset in assets("VoiceServices_CombinedVocalizerVoices") {
+            guard let langs = asset["Languages"] as? [String], langs.contains(language),
+                  let name = asset["Name"] as? String else { continue }
+            let bytes = (asset["_DownloadSize"] as? NSNumber)?.doubleValue ?? 0
+            found.append((name, bytes / 1_000_000))
+        }
+        for asset in assets("MacinTalkVoiceAssets") {
+            // Apple ranks its own legacy voices and the numbers are unambiguous:
+            //
+            //   Alex   10100      Vicki 5100   Bruce 5090   Agnes 5080   Kathy 3090
+            //   Bubbles, Boing, Zarvox, …  no score at all
+            //
+            // Only Alex belongs in a recommendation. Taking everything with a score
+            // put Agnes (1MB) and Bruce (2MB) on the list — voices from the 1990s that
+            // sound worse than the compact default this is meant to replace, which
+            // would have made the feature advice-shaped but wrong.
+            let desirability = (asset["VoiceRelativeDesirability"] as? NSNumber)?.intValue ?? 0
+            guard desirability >= 10_000, let name = asset["Name"] as? String else { continue }
+            let bytes = (asset["_DownloadSize"] as? NSNumber)?.doubleValue ?? 0
+            found.append((name, bytes / 1_000_000))
+        }
+        return found.sorted { $0.name < $1.name }
+    }
+
+    /// What is here, and what is a download away.
+    ///
+    /// Matched on NAME, and on a PREFIX at that: installed voices are listed as
+    /// "Ava (Premium)" and "Ava (Enhanced)" while the manifest calls the asset "Ava".
+    /// Comparing whole strings would report Ava as missing on a machine that has two
+    /// copies of it. Identifier matching is worse still — premium voices moved from
+    /// `com.apple.ttsbundle.*` to `com.apple.voice.premium.*`, so an identifier
+    /// allowlist reports everything missing after an OS upgrade.
     public static func recommendationStatus(language: String = "en-US")
         -> (installed: [String], missing: [(name: String, note: String)]) {
-        let present = Set(voices(matching: language).map(\.name))
+        let present = voices(matching: language).map(\.name)
+        func isInstalled(_ assetName: String) -> Bool {
+            present.contains { $0 == assetName || $0.hasPrefix(assetName + " (") }
+        }
         var installed: [String] = []
         var missing: [(name: String, note: String)] = []
-        for entry in recommended {
-            if present.contains(entry.name) { installed.append(entry.name) }
-            else { missing.append(entry) }
+        for entry in downloadable(language: language) {
+            if isInstalled(entry.name) {
+                installed.append(entry.name)
+            } else {
+                let size = entry.megabytes >= 1
+                    ? String(format: "%.0f MB", entry.megabytes) : "small"
+                missing.append((entry.name, size))
+            }
         }
         return (installed, missing)
     }
