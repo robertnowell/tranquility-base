@@ -225,6 +225,29 @@ public enum SystemVoiceCatalog {
     /// Filtered by QUALITY, not by identifier family: Alex is `com.apple.speech.
     /// synthesis.voice.Alex`, the same family as the novelty voices, and is one of
     /// the best. Quality is the thing actually being judged.
+    /// Id prefix marking a row that is NOT installed. Selecting it cannot play
+    /// anything, so the picker turns it into the button that opens Settings — the
+    /// download IS the action, and a row you can act on beats a sentence telling you
+    /// to go somewhere else.
+    public static let downloadPrefix = "download:"
+
+    public static func isDownloadRow(_ id: String) -> Bool { id.hasPrefix(downloadPrefix) }
+
+    /// Voices worth having that are not installed, as rows.
+    ///
+    /// Listing them is the whole point: a picker that shows only what you have cannot
+    /// tell you what you are missing, and the missing ones are the good ones. Big
+    /// only — a download row for a 1MB voice from 1994 is not an offer.
+    public static func downloadRows(language: String = "en-US") -> [Voice] {
+        recommendationStatus(language: language).missing.compactMap { entry in
+            let mb = Double(entry.note.replacingOccurrences(of: " MB", with: "")) ?? 0
+            guard mb >= 100 else { return nil }
+            return Voice(id: downloadPrefix + entry.name,
+                         name: "\(entry.name) — \(entry.note)",
+                         category: "Free · Get")
+        }
+    }
+
     public static func asCatalogueVoices(language: String = "en-US") -> [Voice] {
         let good = voices(matching: language).filter { rank($0.quality) > 1 }
         // A stock Mac has none of these. Rather than an empty pane, show what it will

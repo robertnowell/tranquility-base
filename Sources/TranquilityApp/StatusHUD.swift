@@ -1674,7 +1674,8 @@ final class StatusHUD: NSObject {
         func tier(_ category: String) -> Int {
             if category.contains("Premium") { return 0 }
             if category.contains("Enhanced") { return 1 }
-            if category.hasPrefix("Free") { return 3 }   // basic/compact, last
+            if category == "Free · Get" { return 4 }      // not installed, very last
+            if category.hasPrefix("Free") { return 3 }   // basic/compact
             return 2                                      // paid voices, mid
         }
         let bench = face.voices
