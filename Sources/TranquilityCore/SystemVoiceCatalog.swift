@@ -102,12 +102,25 @@ public enum SystemVoiceCatalog {
     /// `VoiceRelativeDesirability` and Bubbles, Boing, Zarvox and friends simply have
     /// none. Apple's own ranking does the filtering, so the app is not maintaining a
     /// blocklist of joke voices.
-    public static func downloadable(language: String = "en-US") -> [(name: String, megabytes: Double)] {
-        var found: [(name: String, megabytes: Double)] = []
-
+    /// Every voice asset macOS knows about, across ALL of its catalogues.
+    ///
+    /// There are four, not two, and missing half of them left the size column blank
+    /// for Zoe, Evan and Nicky — voices that are installed and whose sizes macOS
+    /// records perfectly well, in files I was not reading:
+    ///
+    ///   VoiceServices_CombinedVocalizerVoices — Allison, Ava, Susan, Tom
+    ///   MacinTalkVoiceAssets                  — Alex and the novelty voices
+    ///   TTSAXResourceModelAssets              — Zoe, Evan
+    ///   VoiceServices_CustomVoice             — Nicky and the Siri voices
+    ///
+    /// A voice appears once per variant (compact, enhanced, premium), so entries are
+    /// collapsed by name taking the LARGEST — the premium build is the one worth
+    /// naming, and it is the number a person comparing voices wants.
+    static func catalogueEntries(language: String) -> [(name: String, megabytes: Double)] {
         func assets(_ catalogue: String) -> [[String: Any]] {
             let dir = "/System/Library/AssetsV2/com_apple_MobileAsset_\(catalogue)"
-            let url = URL(fileURLWithPath: dir).appendingPathComponent("com_apple_MobileAsset_\(catalogue).xml")
+            let url = URL(fileURLWithPath: dir)
+                .appendingPathComponent("com_apple_MobileAsset_\(catalogue).xml")
             guard let data = try? Data(contentsOf: url),
                   let plist = try? PropertyListSerialization.propertyList(
                       from: data, options: [], format: nil) as? [String: Any],
@@ -116,36 +129,37 @@ public enum SystemVoiceCatalog {
             return list
         }
 
-        for asset in assets("VoiceServices_CombinedVocalizerVoices") {
-            guard let langs = asset["Languages"] as? [String], langs.contains(language),
-                  let name = asset["Name"] as? String else { continue }
-            let bytes = (asset["_DownloadSize"] as? NSNumber)?.doubleValue ?? 0
-            found.append((name, bytes / 1_000_000))
+        var largest: [String: Double] = [:]
+        for catalogue in ["VoiceServices_CombinedVocalizerVoices", "MacinTalkVoiceAssets",
+                          "TTSAXResourceModelAssets", "VoiceServices_CustomVoice"] {
+            for asset in assets(catalogue) {
+                guard let name = asset["Name"] as? String else { continue }
+                let langs = (asset["Languages"] as? [String])
+                    ?? (asset["Language"] as? String).map { [$0] } ?? []
+                // MacinTalk entries carry `Language`; the rest carry `Languages`.
+                guard langs.contains(language) || langs.isEmpty && catalogue.hasPrefix("MacinTalk")
+                else { continue }
+                let mb = ((asset["_DownloadSize"] as? NSNumber)?.doubleValue ?? 0) / 1_000_000
+                largest[name] = max(largest[name] ?? 0, mb)
+            }
         }
-        for asset in assets("MacinTalkVoiceAssets") {
-            guard let name = asset["Name"] as? String else { continue }
-            let bytes = (asset["_DownloadSize"] as? NSNumber)?.doubleValue ?? 0
-            // Size is the filter, because size is what a good voice costs. Measured
-            // across both catalogues:
-            //
-            //   Alex 885M   Ava 479M   Tom 411M   Susan 132M   Allison 99M
-            //   Vicki 28M   Bruce 2M   Agnes 1M   every novelty voice 0M
-            //
-            // A concatenative voice carries recorded speech; a formant voice carries a
-            // few kilobytes of rules and sounds like 1994. The megabytes ARE the
-            // quality, so the threshold reads directly on the thing being judged.
-            //
-            // This replaces a `VoiceRelativeDesirability >= 10000` test that only
-            // worked by accident: Ava — the best voice on the machine — carries no
-            // desirability score at all, because the Vocalizer catalogue does not use
-            // that field. The rank existed in one catalogue and the good voices live
-            // in the other.
-            guard bytes >= 50_000_000 else { continue }
-            found.append((name, bytes / 1_000_000))
-        }
-        // Biggest first, which is best first — and it stays true for voices Apple has
-        // not shipped yet, unlike any ordering we could hardcode.
-        return found.sorted { $0.megabytes > $1.megabytes }
+        return largest.map { ($0.key, $0.value) }
+    }
+
+    /// Voices worth offering to download: big ones only.
+    ///
+    /// Size is the filter because size is what a good voice costs — a concatenative
+    /// voice carries recorded speech, a formant voice carries a few kilobytes of rules
+    /// and sounds like 1994. Measured: Alex 885M, Ava 479M, Tom 411M, Susan 132M
+    /// against Agnes 1M, Bruce 2M and every novelty voice at 0M.
+    ///
+    /// This replaced a `VoiceRelativeDesirability >= 10000` test that worked by
+    /// accident: Ava, the best voice here, carries no desirability score at all —
+    /// the field belongs to the legacy catalogue and the good voices are elsewhere.
+    public static func downloadable(language: String = "en-US") -> [(name: String, megabytes: Double)] {
+        catalogueEntries(language: language)
+            .filter { $0.megabytes >= 50 }
+            .sorted { $0.megabytes > $1.megabytes }
     }
 
     /// What is here, and what is a download away.
@@ -258,7 +272,7 @@ public enum SystemVoiceCatalog {
     public static func sizeMB(named voiceName: String) -> Double? {
         // "Ava (Premium)" and "Ava (Enhanced)" are both the "Ava" asset.
         let base = voiceName.split(separator: " ").first.map(String.init) ?? voiceName
-        return downloadable().first { $0.name == base }?.megabytes
+        return catalogueEntries(language: "en-US").first { $0.name == base }?.megabytes
     }
 
     public static func asCatalogueVoices(language: String = "en-US") -> [Voice] {

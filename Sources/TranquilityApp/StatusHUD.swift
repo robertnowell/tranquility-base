@@ -4546,10 +4546,26 @@ private final class VoiceRowView: NSControl {
 
         // The action sits on the right, where an action belongs, rather than in the
         // preview slot where it displaced the name.
-        let get = NSButton(title: "Get", target: self, action: #selector(playTapped))
-        get.bezelStyle = .rounded
-        get.controlSize = .small
-        get.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
+        // Drawn from the panel's own palette, not AppKit's bezel.
+        //
+        // `bezelStyle = .rounded` paints a LIGHT system chrome and a dark title, which
+        // on this dark console rendered as near-black text on near-black fill — the
+        // one control on the pane you are meant to press, and the least visible thing
+        // on it. The panel guarantees its own contrast everywhere else (`surface` is
+        // opaque for exactly this reason); the button now does too.
+        let get = NSButton(title: "", target: self, action: #selector(playTapped))
+        get.isBordered = false
+        get.wantsLayer = true
+        get.layer?.backgroundColor = StateLegend.Palette.hairline.cgColor
+        get.layer?.cornerRadius = 5
+        get.attributedTitle = NSAttributedString(
+            string: "Get",
+            attributes: [
+                // ink on surface is 8.39:1 — the same ink the row names use, so the
+                // action is at least as legible as the thing it acts on.
+                .foregroundColor: StateLegend.Palette.ink,
+                .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .semibold),
+            ])
         get.translatesAutoresizingMaskIntoConstraints = false
         get.isHidden = !isDownload
 
