@@ -1028,11 +1028,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // know that when you need to talk, you can talk", and equally
             // that you can stop. Hands-free is now just the case that also
             // clears its latch.
-            if recorder.isRecording, armedAt == nil {
+            // The decision is made in Core, where it is tested exhaustively
+            // (OptionTapDecisionTests). This handler owns the side effects only.
+            // Both of 10 Aug's ⌥ regressions were decisions taken inside an
+            // untestable file; the rule "while speaking, ⌥ lets you speak" is now
+            // an assertion rather than a sentence in a commit message.
+            let decision = OptionTapDecision.decide(
+                isSpeaking: hud.state.isSpeaking,
+                isRecording: recorder.isRecording,
+                isArmed: armedAt != nil,
+                withinPairWindow: lastOptionTapAt.map { Date().timeIntervalSince($0) < 0.45 } ?? false,
+                micGranted: micGranted)
+            Permissions.log("⌥ tap: \(decision) in \(hud.state)")
+
+            switch decision {
+            case .ignore:
+                return
+            case .armFirstOfPair:
+                lastOptionTapAt = Date()
+                return
+            case .endCapture:
                 if handsFreeListening { handsFreeListening = false }
-                else { Permissions.log("⌥ tap: ending a capture with no key held") }
                 handle(.replyEnded)
                 return
+            case .startListening:
+                break
             }
             // Talking over the announcement is the commonest thing there is, and
             // for a long time it did nothing. Ruled a bug, 10 Aug: "If something
@@ -1051,8 +1071,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // talking and listen. It locks hands-free, which makes the next tap
             // send — the same tap-to-start, tap-to-send pair the double-tap
             // already gave, minus the timing you had to get right.
-            let speakingOverYou = hud.state.isSpeaking
-            if speakingOverYou || (lastOptionTapAt.map { Date().timeIntervalSince($0) < 0.45 } ?? false) {
+            do {
                 lastOptionTapAt = nil
                 guard micGranted else { return }
                 if recorder.isRecording {
@@ -1103,16 +1122,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 updateTitle()
                 hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
                 Permissions.log("hands-free: listening locked")
-            } else {
-                lastOptionTapAt = Date()
-                // Observability for the dead band (06 Aug incident: press
-                // after press arming, reverting, and MEANING nothing — the log
-                // showed the machinery but never the intent). The threshold
-                // that produced those is now 0.20s, and a tap during a live
-                // capture ends it, so this line should be rare. When a storm
-                // of them appears again, that is the user pressing the mic key
-                // and being ignored.
-                Permissions.log("⌥ tap: first of a pair, in \(hud.state)")
             }
 
         case .pauseToggled:
