@@ -59,6 +59,44 @@ final class CollapsedStrip: NSView {
     private(set) var lamps: [StateLegend.SessionRow] = []
     private var hovering = false
 
+    /// The arrival glow: a colour and how much of it is left, 1 → 0.
+    ///
+    /// The lamps are STATE — what is true right now, readable at any moment. The
+    /// glow is an EVENT — this just happened. A user glancing over five minutes
+    /// later should learn the state and nothing about the timing, which is what
+    /// a transient carries and a lamp structurally cannot. It matters more since
+    /// the spoken callsign died: without it, a collapsed strip says nothing at
+    /// all when an agent returns except a lamp quietly changing colour.
+    private var glowColor: NSColor?
+    private var glowStrength: CGFloat = 0
+    private var glowTimer: Timer?
+
+    /// One breath, and it must not be a light show.
+    ///
+    /// `Lamp.working`'s own doc comment is the law here: "solid, never blinking —
+    /// a room full of blinking lamps is the opposite of calm." So: a single
+    /// rise-and-fall, slow enough to read as light rather than as a flash, and
+    /// then gone completely. No loop, no residue, nothing to acknowledge. A glow
+    /// that persists until dismissed is a notification badge, which is the thing
+    /// this product exists to not be.
+    static let glowSeconds: TimeInterval = 1.6
+
+    /// What the drill reads to prove the glow decays rather than lingering.
+    var currentGlowStrength: CGFloat { glowColor == nil ? 0 : glowStrength }
+
+    func flash(_ lamp: StateLegend.Lamp) {
+        glowTimer?.invalidate()
+        glowColor = lamp.fill
+        glowStrength = 1
+        let started = Date()
+        // Timer target/action rather than a closure: the closure form hands the
+        // Timer itself across an isolation boundary, which Swift 6 refuses.
+        let timer = Timer(timeInterval: 1.0 / 30, target: self,
+                          selector: #selector(stepGlow), userInfo: started, repeats: true)
+        glowTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
     func show(rows: [StateLegend.SessionRow]) {
         lamps = rows.filter { $0.lamp != .running }.prefix(8).map { $0 }
         needsDisplay = true
@@ -128,6 +166,7 @@ final class CollapsedStrip: NSView {
         // own rounded, shadowed background — painting an opaque rectangle over
         // it squares off the corners, which is what the first version did.
         // Collapsing morphs the panel; it does not draw a new one.
+        drawGlow()
         drawHeader()
         drawLamps()
 
@@ -136,6 +175,47 @@ final class CollapsedStrip: NSView {
             drawGlyph("+", in: newAgentRect, color: StateLegend.Palette.faint)
         } else if lamps.count <= Self.wordmarkLampLimit {
             drawWordmark()
+        }
+    }
+
+    @objc private func stepGlow(_ timer: Timer) {
+        guard let started = timer.userInfo as? Date else { timer.invalidate(); return }
+        let elapsed = Date().timeIntervalSince(started)
+        guard elapsed < Self.glowSeconds else {
+            glowStrength = 0
+            glowColor = nil
+            timer.invalidate()
+            glowTimer = nil
+            needsDisplay = true
+            return
+        }
+        // Ease in over the first fifth, out over the rest. The slow tail is what
+        // makes it read as calm: an even fade reads as a blink, a fast one as an
+        // alert.
+        let p = elapsed / Self.glowSeconds
+        glowStrength = p < 0.2 ? CGFloat(p / 0.2) : CGFloat(pow(1 - (p - 0.2) / 0.8, 1.7))
+        needsDisplay = true
+    }
+
+    /// A soft halo behind the logo mark, in the returning session's colour.
+    ///
+    /// Behind the LOGO rather than the lamp that changed: the logo is the strip's
+    /// one fixed point, so the event always appears in the same place whatever
+    /// the roster is doing. Lighting the lamp itself would move the announcement
+    /// around the column and make the eye hunt for it, which is the opposite of
+    /// glanceable.
+    private func drawGlow() {
+        guard let glowColor, glowStrength > 0.01 else { return }
+        let centre = NSPoint(x: logoRect.midX, y: logoRect.midY)
+        // Three rings, each fainter and wider — a gradient by hand, because a
+        // real one would need a layer and this is drawn thirty times a second
+        // for a second and a half, twice an hour.
+        for step in stride(from: 3, through: 1, by: -1) {
+            let radius = 9 + CGFloat(step) * 5
+            let alpha = 0.16 * glowStrength / CGFloat(step)
+            glowColor.withAlphaComponent(alpha).setFill()
+            NSBezierPath(ovalIn: NSRect(x: centre.x - radius, y: centre.y - radius,
+                                        width: radius * 2, height: radius * 2)).fill()
         }
     }
 

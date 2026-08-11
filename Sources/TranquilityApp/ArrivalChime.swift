@@ -41,11 +41,18 @@ import UserNotifications
 @MainActor
 enum ArrivalChime {
 
-    /// Asked once, at onboarding, alongside the other permissions.
+    /// Asked once, at LAUNCH.
     ///
-    /// Not at the moment of the first arrival: a permission dialog appearing
-    /// because an agent finished is the interruption this whole feature has spent
-    /// two days trying not to be.
+    /// Onboarding was the first home for this and it was a dead end: the
+    /// permission is deliberately non-blocking, so `allGranted` stays true, so
+    /// the onboarding window never appears, so nothing ever asked. Measured — the
+    /// chime shipped, arrivals fired for hours (`ambient: surfaced` ×4 in eight
+    /// minutes) and not one notification was ever requested.
+    ///
+    /// Launch rather than first-arrival because a permission dialog that appears
+    /// *because an agent finished* is precisely the interruption this feature
+    /// exists to avoid. `requestAuthorization` is a no-op once decided, so
+    /// calling it every launch costs nothing after the first.
     static func requestAuthorization() async {
         guard Bundle.main.bundleIdentifier != nil else { return }
         _ = try? await UNUserNotificationCenter.current()
@@ -80,7 +87,11 @@ enum ArrivalChime {
         let request = UNNotificationRequest(
             identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
-            if let error { Permissions.log("chime: not delivered — \(error)") }
+            // Logged on success too. A feature whose correct behaviour is a
+            // small noise has no visible failure mode — silence is both "it
+            // worked and you were in Do Not Disturb" and "it has never once
+            // run", and the log is the only thing that can tell them apart.
+            Permissions.log(error.map { "chime: not delivered — \($0)" } ?? "chime: posted")
         }
     }
 }
