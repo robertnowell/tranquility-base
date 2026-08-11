@@ -570,11 +570,20 @@ final class StatusHUD: NSObject {
     /// left to do, so it stays until dismissed, titled by the session it is
     /// about — the one displayed identity, in mono.
     func showResult(_ message: String) {
+        // Read BEFORE the transition, which is the only moment that can tell
+        // the two kinds of failure apart: one that arrives while the capture
+        // flow owns the stage happened TO the capture; one that arrives from
+        // idle or a card — the invitation, an orphaned artifact — did not, and
+        // keeps the full card it has always had. Two drills caught this being
+        // applied to both (notice.leak's plainFailureHasNoDoor and
+        // invitation's failureIsStillAmber), which is exactly the overreach
+        // they exist to refuse.
+        let failedDuringCapture = state.ownsStage
         guard transition(to: .result, because: "reply failed") else { return }
         // A failure that happened TO a capture joins the strip, for the same
         // reason the read-back did. Amber either way; the channel does not
         // change, only the slot it speaks from.
-        if face.hasCard {
+        if face.hasCard, failedDuringCapture {
             face.captureFault = message
         } else {
             face = Face(title: currentTarget?.label ?? "", body: message)
