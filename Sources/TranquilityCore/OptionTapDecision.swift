@@ -24,7 +24,8 @@ public enum OptionTapDecision: Sendable, Equatable {
     case startListening
     /// Nothing yet — remember it, in case a second tap follows quickly.
     case armFirstOfPair
-    /// The microphone is not ours to open.
+    /// The microphone is not ours to open — or this tap is the twin of one that
+    /// just opened it, and closing what it opened is never what was meant.
     case ignore
 
     /// - Parameters:
@@ -33,14 +34,31 @@ public enum OptionTapDecision: Sendable, Equatable {
     ///   - isArmed: an arm window is open (a key is physically held), which makes
     ///     this tap part of a hold rather than a gesture in its own right.
     ///   - withinPairWindow: a previous bare tap landed recently enough to pair.
+    ///   - listeningJustStarted: the capture began inside the same pair window,
+    ///     which means this tap is the second half of a ⌥⌥ rather than an intent
+    ///     to send.
     ///   - micGranted: microphone permission.
     public static func decide(
         isSpeaking: Bool,
         isRecording: Bool,
         isArmed: Bool,
         withinPairWindow: Bool,
+        listeningJustStarted: Bool = false,
         micGranted: Bool
     ) -> OptionTapDecision {
+        // THE TWIN. Once a tap while speaking opens the microphone immediately,
+        // the SECOND tap of the user's ⌥⌥ arrives into a live capture and reads
+        // as "send" — so the pair opens the microphone and closes it again
+        // roughly 300ms later, with nothing said. Observed 10 Aug 00:55:11–12:
+        // startListening, then endCapture in the same second, then the silence
+        // gate reporting nothing heard and the panel falling back to the grid.
+        //
+        // Nobody opens a microphone and sends a third of a second later having
+        // said nothing. A tap that lands inside the pair window of the capture
+        // it would be ending is the tail of the gesture that started it, and is
+        // swallowed.
+        if isRecording, !isArmed, listeningJustStarted { return .ignore }
+
         // Ending a live capture comes first and is unconditional — it must work
         // even without permission state being consulted, because the capture it
         // is ending already exists. A capture with no way out is the trust-killer.

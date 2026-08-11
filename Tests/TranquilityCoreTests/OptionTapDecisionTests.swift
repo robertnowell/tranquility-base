@@ -118,4 +118,30 @@ final class OptionTapDecisionTests: XCTestCase {
         XCTAssertTrue(seen.contains("endCapture"))
         XCTAssertTrue(seen.contains("armFirstOfPair"))
     }
+
+    // MARK: - The twin
+
+    /// The regression the ⌥⌥ fix created, named. First tap opens the mic; the
+    /// second half of the same gesture must not close it 300ms later with
+    /// nothing said. Observed 10 Aug 00:55:11–12 on session 2dc2b367.
+    func testTheSecondTapOfADoubleTapDoesNotCloseWhatTheFirstOpened() {
+        XCTAssertEqual(
+            OptionTapDecision.decide(
+                isSpeaking: false, isRecording: true, isArmed: false,
+                withinPairWindow: true, listeningJustStarted: true, micGranted: true),
+            .ignore,
+            "⌥⌥ must not open the microphone and immediately send silence")
+    }
+
+    /// …and the escape hatch still has to work a moment later. Swallowing the
+    /// twin must not become swallowing every tap.
+    func testATapAfterThePairWindowStillEndsTheCapture() {
+        XCTAssertEqual(
+            OptionTapDecision.decide(
+                isSpeaking: false, isRecording: true, isArmed: false,
+                withinPairWindow: false, listeningJustStarted: false, micGranted: true),
+            .endCapture,
+            "once the gesture is over, a tap sends — that is the whole point of tap-to-send")
+    }
+
 }
