@@ -1936,9 +1936,32 @@ final class StatusHUD: NSObject {
         let gearLeft = gearButton.superview.map { view in
             view.convert(gearButton.frame, to: host).minX
         } ?? host.bounds.width - 34
-        chip.frame = CGRect(x: gearLeft - chip.bounds.width - 10,
+        // LEFT edge measured from the placard's ink, for the same reason, and
+        // this half was missing: a long callsign simply grew leftwards until it
+        // was drawing through "A G E N T S". Found by topBandDrill on its first
+        // run — placardClearsReceipt=false — which is the collision the top
+        // band's whole lane rule exists to prevent, sitting in the shipping
+        // build the entire time.
+        //
+        // The chip yields, not the placard: the placard is the face's own name
+        // for itself and is already as short as it goes, while the chip is a
+        // callsign that reads perfectly well truncated, because its first
+        // words are the ones that identify it.
+        var placardRight: CGFloat = 0
+        if !stateLabel.isHidden, stateLabel.attributedStringValue.length > 0,
+           let parent = stateLabel.superview {
+            let box = parent.convert(stateLabel.frame, to: host)
+            let text = stateLabel.attributedStringValue
+            let indent = (text.attribute(.paragraphStyle, at: 0, effectiveRange: nil)
+                            as? NSParagraphStyle)?.firstLineHeadIndent ?? 0
+            placardRight = box.minX + indent + ceil(text.size().width)
+        }
+        let lane = max(40, gearLeft - 10 - (placardRight + 12))
+        let chipWidth = min(chip.bounds.width, lane)
+        chip.lineBreakMode = .byTruncatingTail
+        chip.frame = CGRect(x: gearLeft - chipWidth - 10,
                             y: host.bounds.height - 22,
-                            width: chip.bounds.width, height: chip.bounds.height)
+                            width: chipWidth, height: chip.bounds.height)
         host.addSubview(chip, positioned: .above, relativeTo: nil)
         chip.layer?.removeAnimation(forKey: "receipt")
         chip.alphaValue = 1
@@ -2474,8 +2497,6 @@ final class StatusHUD: NSObject {
                         + "noteW=\(noteWidth) column=\(column) "
                         + "lines=\(StateLegend.controlsNote.count)")
 
-        topBandDrill()
-
         SelfTest.report("strip", [
             ("dontSendKeepsTheMicShut", dontSendKeptMicShut),
             ("faultKeepsTheCard", faultKeepsCard),
@@ -2676,6 +2697,12 @@ final class StatusHUD: NSObject {
         let clearedByCard = !noticeIsShowing
         flashNotice(StateLegend.noWordsNotice)
         let refusedOnCard = !noticeIsShowing
+        // Last, deliberately: it repaints the grid and shows a receipt, and an
+        // animated resize left in flight by an earlier drill is read by the
+        // next one as a wrong frame. It measures geometry, so it goes where
+        // nothing follows it.
+        topBandDrill()
+
         SelfTest.report("notice", [
             ("onGrid", noticedOnGrid),
             ("clearedByCard", clearedByCard),
