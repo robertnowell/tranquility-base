@@ -1,7 +1,9 @@
 # Ruling: no second of user audio is ever lost, and silence never asks a question
 
-Ruled 10 Aug 2026, by the user, against measurement. Supersedes the write-ahead
-paragraph in `Recorder`'s header comment and the current `.pendingSend` flow.
+Ruled 10 Aug 2026, by the user, against measurement. Supersedes the current
+`.pendingSend` flow. On write-ahead it does not supersede but seconds: see the
+correction in §1 — `docs/measurement-audio-must-be-durable-from-the-first-frame.md`
+got there on 08 Aug and the Core half is already built.
 
 ## 1. Audio is durable from the first frame, not from key-up
 
@@ -9,11 +11,16 @@ paragraph in `Recorder`'s header comment and the current `.pendingSend` flow.
 there's ever an app restart or something fucks up, the recording should be
 complete."**
 
-`Recorder`'s header currently says per-chunk write-ahead "was considered and
-rejected: it only buys the crash-mid-utterance case, and the failures that
-actually happen are network and API ones." That reasoning was sound when it was
-written and is now overruled by evidence rather than by argument, which is the
-standard this repo holds reversals to:
+**Correction, made on reading the tree rather than assuming it:** this half was
+already ruled on 08–09 Aug and is largely already built. See
+`docs/measurement-audio-must-be-durable-from-the-first-frame.md` — six recordings
+were lost the same way on 08 Aug, `Recorder`'s header already concedes the point
+("wiring it here is the outstanding half"), and `LiveAudioCapture` in Core is
+written, wired into `AudioStore` and `QueueStore`, and covered by tests. This
+ruling therefore does not overturn that paragraph; it adds a second measurement
+to a case already made, and extends it to reachability (§2) and to the gate (§3).
+
+The new evidence:
 
 - 10 Aug 18:59:41Z — a hands-free capture ran four minutes and was destroyed by
   `scripts/relaunch.sh`. The `capturing` marker exists to prevent exactly that
