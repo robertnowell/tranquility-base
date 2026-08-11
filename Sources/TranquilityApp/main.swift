@@ -1786,19 +1786,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // disk. Everything the invitation goes on to build — a directory, a
         // prompt, a shell command — is derived from a path that got past this,
         // which is why the check lives in Core with tests around it.
-        guard let path = DeepLink.artifact(
+        guard let subject = DeepLink.subject(
             from: ref, exists: { FileManager.default.fileExists(atPath: $0) })
         else {
             Permissions.log("invitation: refused ref \(ref ?? "-")")
             hud.showResult("That page names an agent this Mac has no record of, "
-                           + "and nothing on this disk to open instead.")
+                           + "and nothing this Mac can open instead.")
             return
         }
-        let directory = (path as NSString).deletingLastPathComponent
         hud.showNewSessionInvitation(
-            artifact: (path as NSString).lastPathComponent,
-            directory: abbreviatingHome(directory),
-            ref: path)
+            artifact: subject.name,
+            directory: abbreviatingHome(subject.directory),
+            ref: subject.reference)
     }
 
     /// `~` back, for display only: an absolute home path eats the width the
@@ -2242,8 +2241,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// mangled `do script` is a window full of shell errors as the first thing
     /// a new user sees.
     private func newSession(forArtifact path: String) {
-        let directory = (path as NSString).deletingLastPathComponent
-        let opening = DeepLink.openingPrompt(for: path)
+        // Re-resolved rather than trusted: the card has been on screen for as
+        // long as the user took to decide, and the string that reaches the
+        // shell should be checked at the moment it is used, not the moment it
+        // was displayed.
+        guard let subject = DeepLink.subject(
+            from: path, exists: { FileManager.default.fileExists(atPath: $0) })
+        else {
+            hud.showResult("That page's subject is no longer there. Nothing started.")
+            return
+        }
+        let directory = subject.directory
+        let opening = DeepLink.openingPrompt(for: subject)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(opening, forType: .string)
         let inline = DeepLink.openingCommand(base: SessionLauncher.defaultCommand,
