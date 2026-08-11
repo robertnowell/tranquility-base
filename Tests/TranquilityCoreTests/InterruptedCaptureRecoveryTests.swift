@@ -112,4 +112,29 @@ final class InterruptedCaptureRecoveryTests: XCTestCase {
         }
         XCTAssertEqual(interrupted[0].durationMs(), 12000, "and none of the audio was lost")
     }
+
+    // MARK: - Adoption at key-up
+
+    /// The write-ahead path in one assertion: a capture written while it was
+    /// being spoken becomes the utterance's own recording by rename, and the
+    /// audio survives the trip byte for byte.
+    func testACaptureWrittenWhileSpokenIsAdoptedUnderTheUtteranceId() throws {
+        let capture = try LiveAudioCapture(
+            utteranceId: "capture-abc", sampleRate: 16000, directory: dir)
+        try capture.append(pcm16: pcm(seconds: 7))
+        let written = try capture.finish().url
+        let bytesBefore = try Data(contentsOf: written).count
+
+        // What RecoveryChain does at key-up: move it under the real id.
+        let target = store.url(for: "real-id")
+        try FileManager.default.moveItem(at: written, to: target)
+
+        guard case .finished = store.resolve(utteranceId: "real-id") else {
+            return XCTFail("after adoption it is an ordinary recording")
+        }
+        XCTAssertEqual(try Data(contentsOf: target).count, bytesBefore)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: written.path),
+                       "and nothing is left behind under the capture id")
+    }
+
 }
