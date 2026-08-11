@@ -117,20 +117,31 @@ public enum SystemVoiceCatalog {
         return (installed, missing)
     }
 
-    /// Where to send the user.
+    /// Lands on Read & Speak, one surface deeper than the Accessibility pane.
     ///
-    /// Deliberately the plain pane. Deeper anchors (`?Spoken_Content`, `?Speech`,
-    /// `?ReadAndSpeak`) could not be verified from here — confirming where Settings
-    /// lands needs assistive access the shell does not have — and an anchor that does
-    /// NOT resolve opens Settings wherever it was last left, which reads as a broken
-    /// button. A pane that always lands somewhere real beats a guess that sometimes
-    /// lands nowhere.
+    /// VERIFIED by opening each candidate and reading the resulting window title, with
+    /// System Settings quit between attempts — without that a failed anchor inherits
+    /// whatever pane was last shown and looks like it worked. Of six candidates only
+    /// this one resolves:
+    ///
+    ///     (no anchor)            → Accessibility
+    ///     ?Spoken_Content        → Accessibility
+    ///     ?Speech                → Accessibility
+    ///     ?ReadAndSpeak          → Accessibility
+    ///     ?SpokenContent         → Read & Speak     ✓
+    ///     ?Speech_Spoken_Content → Accessibility
+    ///
+    /// Note the near-miss: `Spoken_Content` and `SpokenContent` differ by an
+    /// underscore and only one works. A plausible-looking anchor that silently lands
+    /// on the parent is worse than no anchor, because it reads as a broken button
+    /// rather than a missing feature.
     public static let settingsURL =
-        "x-apple.systempreferences:com.apple.Accessibility-Settings.extension"
+        "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent"
 
     /// The clicks the deep link cannot skip, so the app can spell them out rather than
-    /// implying the button finishes the job.
-    public static let remainingSteps = "Read & Speak → System voice → Voice → ↓"
+    /// implying the button finishes the job. "System voice" and the voice sheet are
+    /// controls inside the pane, not panes, so no URL can reach them.
+    public static let remainingSteps = "System voice → Voice → ↓"
 
     /// The free voices as catalogue entries, so the picker can list them beside the
     /// paid ones instead of showing an empty pane.
