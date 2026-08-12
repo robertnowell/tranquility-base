@@ -390,7 +390,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // cursor write a played announcement lands on, so nothing new to
             // reconcile.
             if let target = try? coordinator.waiting().first(where: { $0.sessionId == id }) {
-                try? coordinator.markHeard(sessionId: id, through: target.latestId)
+                // Dismiss, not markHeard: the click means "I don't care about
+                // this one" — a decision about attention, not a claim to have
+                // heard it. Dismissal removes the row from waiting() outright;
+                // the announce path never sees it again either.
+                try? coordinator.dismiss(sessionId: id, through: target.latestId)
                 Permissions.log("lamp: cleared \(target.callsign ?? id.prefix(8).description) by click")
             }
             self.showIdleGrid()
@@ -829,30 +833,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the waiting query's brief join — NEVER a prose prefix of summaryText
         // or the raw assistant message (ruled: that derivation produced orphan
         // fragments like "**Voices for lif"). No brief yet = name only.
-        var rows = waiting.map {
-            StateLegend.SessionRow(
-                id: $0.sessionId,
-                name: tabDisplayName(for: $0, live: liveById[$0.sessionId]),
-                callsign: $0.callsign ?? "",
-                // Green says "you have not answered this". While a reply to
-                // this very turn is in flight that is the most misleading thing
-                // the grid can say — the cursor does not advance until the send
-                // confirms, so the row goes on asking for the user seconds after
-                // they spoke to it. A newer turn arriving still wins: see
-                // DeliveryInFlight.supersedesWaiting.
-                lamp: delivering.supersedesWaiting($0.sessionId, latestId: $0.latestId)
+        // Turn boundaries serve BOTH bands now: waiting() keeps a heard-but-
+        // unanswered session in this band, and if the user answered it IN THE
+        // TERMINAL the agent is already chewing — green ("you have not
+        // answered this") would be a lie, so the transcript's verdict wins.
+        let boundaries = (try? store?.latestTurnBoundaries()) ?? [:]
+        var rows = waiting.map { (event: WaitingSession) -> StateLegend.SessionRow in
+            let activity = event.transcriptPath.flatMap {
+                SessionActivity.read(transcriptPath: $0,
+                                     boundary: boundaries[event.sessionId])
+            }
+            // Green says "you have not answered this". While a reply to
+            // this very turn is in flight that is the most misleading thing
+            // the grid can say — the cursor does not advance until the send
+            // confirms, so the row goes on asking for the user seconds after
+            // they spoke to it. A newer turn arriving still wins: see
+            // DeliveryInFlight.supersedesWaiting. A terminal reply wins the
+            // same way: the transcript says working, so the row does too.
+            return StateLegend.SessionRow(
+                id: event.sessionId,
+                name: tabDisplayName(for: event, live: liveById[event.sessionId]),
+                callsign: event.callsign ?? "",
+                lamp: activity == .working
+                    || delivering.supersedesWaiting(event.sessionId, latestId: event.latestId)
                     ? .working : .ready)
         }
         // Live sessions with nothing waiting: quiet rows, so a skipped or heard
         // session stays findable. Walked via `known` — already latestId DESC —
         // so the band is recency-ordered like the waiting band above it, never
         // Dictionary.values hash order (which reshuffled between refreshes).
-        // One query for every row's turn edge (see SessionActivity.classify's
-        // precedence note): the hooks settle working-vs-idle, which the
-        // transcript alone gets wrong 9.8% of the time an agent is working.
-        let boundaries = (try? store?.latestTurnBoundaries()) ?? [:]
+        // (Turn boundaries were computed above the waiting band — see
+        // SessionActivity.classify's precedence note: the hooks settle
+        // working-vs-idle, which the transcript alone gets wrong 9.8% of the
+        // time an agent is working.)
         let waitingIds = Set(waiting.map(\.sessionId))
-        let known = (try? store?.waitingSessionsIncludingHeard()) ?? []
+        let known = (try? store?.allKnownSessions()) ?? []
         var placed = waitingIds
         for stored in known where !placed.contains(stored.sessionId) {
             guard let live = liveById[stored.sessionId] else { continue }
@@ -1812,7 +1827,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // button. Unknown id → say so, never fall back to a guess about
                 // which agent your words belong to.
                 guard let session,
-                      let target = try? store?.waitingSessionsIncludingHeard()
+                      let target = try? store?.allKnownSessions()
                           .first(where: { $0.sessionId == session }) else {
                     hud.showResult("That page's agent isn't in the log.")
                     break

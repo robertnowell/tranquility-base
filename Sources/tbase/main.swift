@@ -119,7 +119,9 @@ do {
         let spoolLines = (try? String(contentsOf: spool, encoding: .utf8))?
             .split(separator: "\n").count ?? 0
         print("spool pending   \(spoolLines)")
-        print("waiting         \(try store.pendingCount())")
+        let open = try store.waitingSessions()
+        print("waiting         \(open.count) on you"
+            + " (\(open.filter { !$0.heard }.count) unannounced)")
         print("events total    \(try store.events(limit: 100_000).count)")
         print("")
         print("waiting sessions:")
@@ -155,7 +157,7 @@ do {
 
     case "cursors":
         // The only mutable state left, so it gets its own command.
-        for w in try store.waitingSessionsIncludingHeard(limit: 100) {
+        for w in try store.allKnownSessions(limit: 100) {
             guard let c = try store.cursor(for: w.sessionId) else { continue }
             let heard = c.heardThrough.map(String.init) ?? "-"
             let dismissed = c.dismissedThrough.map(String.init) ?? "-"
