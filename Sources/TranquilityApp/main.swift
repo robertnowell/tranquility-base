@@ -190,6 +190,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let gateLog = GateObservationLog()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // One instance owns the hotkey and the microphone. Two builds running
+        // at once BOTH receive the global hotkey and both open the mic —
+        // verified 12 Aug: a worktree self-test build launched beside the
+        // installed app and every gesture doubled (two 0.80s captures at
+        // 16:30:31Z, two replies offered). The bash-side guard lives in
+        // relaunch.sh, which a directly-launched worktree build never runs,
+        // so the app now defends itself: the newcomer logs the collision and
+        // exits before touching the status bar, the hotkey, or the microphone.
+        // --allow-second-instance exists for a deliberate side-by-side (none
+        // known today); the self-test path needs no exemption because
+        // relaunch.sh stops the old instance before launching the new one.
+        let myPid = ProcessInfo.processInfo.processIdentifier
+        let bundleId = Bundle.main.bundleIdentifier ?? "com.robertnowell.voice-dispatch"
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
+            .filter { $0.processIdentifier != myPid }
+        if !others.isEmpty, !CommandLine.arguments.contains("--allow-second-instance") {
+            let pids = others.map { String($0.processIdentifier) }.joined(separator: ", ")
+            Permissions.log("launch: REFUSED — instance already running (pid \(pids)); "
+                + "pass --allow-second-instance to override")
+            exit(1)
+        }
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // Position is a durable fact. Without an autosave name, every relaunch —
         // and this app relaunches dozens of times a day — re-adds the item at
