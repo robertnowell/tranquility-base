@@ -2655,36 +2655,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         newSession(directory: directory, command: command)
     }
 
+    /// Off-main like `revive()`: `launch()` drives Terminal through AppleScript
+    /// and then watches the new tab for the trust prompt — its own doc says
+    /// "call off-main". Until 12 Aug this ran on the main actor, and every
+    /// NEW AGENT click beach-balled the app for the watcher's full 30s
+    /// (app.log 22:00:24→22:00:59: launched, then "no trust prompt seen
+    /// within 30s", with the main thread asleep in between).
     private func newSession(directory dir: String, command: String) {
-        let before = Set((ClaudeAgentsCLI().sessions() ?? [])
-            .filter { $0.cwd == dir }.map(\.sessionId))
-        switch SessionLauncher.launch(directory: dir, command: command) {
-        case .success:
-            lastStatusLine = "new session launched"
-            rebuildMenu()
-            // First-run reality (ruled, docs/ws-b-ruling.md): the directory-trust
-            // prompt is a security consent and is NEVER auto-answered. If no new
-            // session registers in the launched cwd within ~30s, say so with a
-            // quiet visual note — a walked-away launch must not be a silently
-            // stillborn investigation.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let before = Set((ClaudeAgentsCLI().sessions() ?? [])
+                .filter { $0.cwd == dir }.map(\.sessionId))
+            let result = SessionLauncher.launch(directory: dir, command: command)
+            await MainActor.run { [weak self] in
                 guard let self else { return }
-                Task { @MainActor in
-                    let after = await Task.detached { ClaudeAgentsCLI().sessions() }.value
-                    let registered = (after ?? []).contains {
-                        $0.cwd == dir && !before.contains($0.sessionId)
+                switch result {
+                case .success:
+                    self.lastStatusLine = "new session launched"
+                    self.rebuildMenu()
+                    // First-run reality (ruled, docs/ws-b-ruling.md): the directory-trust
+                    // prompt is a security consent and is NEVER auto-answered. If no new
+                    // session registers in the launched cwd within ~30s, say so with a
+                    // quiet visual note — a walked-away launch must not be a silently
+                    // stillborn investigation.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+                        guard let self else { return }
+                        Task { @MainActor in
+                            let after = await Task.detached { ClaudeAgentsCLI().sessions() }.value
+                            let registered = (after ?? []).contains {
+                                $0.cwd == dir && !before.contains($0.sessionId)
+                            }
+                            guard !registered else { return }
+                            Permissions.log("launcher: no session registered in \(dir) after 30s")
+                            if self.hud.canSurfaceAmbiently {
+                                self.showIdleGrid(
+                                    note: "New agent is waiting on a prompt in Terminal.")
+                            }
+                        }
                     }
-                    guard !registered else { return }
-                    Permissions.log("launcher: no session registered in \(dir) after 30s")
-                    if self.hud.canSurfaceAmbiently {
-                        self.showIdleGrid(
-                            note: "New agent is waiting on a prompt in Terminal.")
-                    }
+                case .failure(let error):
+                    self.hud.showResult("Couldn't start an agent: \(error.message). "
+                                        + "Terminal automation permission is the usual suspect.")
                 }
             }
-        case .failure(let error):
-            hud.showResult("Couldn't start an agent: \(error.message). "
-                           + "Terminal automation permission is the usual suspect.")
         }
     }
 
