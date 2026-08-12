@@ -3062,9 +3062,52 @@ final class StatusHUD: NSObject {
         closedRowsDrill()
         pastAgentsDrill()
         elasticGridDrill()
+        goToSessionDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
+    }
+
+    /// The go-to-session drill (12 Aug, issue 14). The button's main-thread
+    /// contract is immediacy: paint "Opening…", hand the walk to a background
+    /// task, refuse re-entry — the beach ball was this action doing the walk
+    /// in-line, 465 of 477 spindump samples deep in waitUntilExit while the
+    /// event-tap watchdog took the hotkeys down with it. pid 1 never has a
+    /// controlling terminal, so the background half must come home empty and
+    /// drop the guard; that round trip reports three seconds later, on the
+    /// mic drill's pattern. The label is NOT asserted at +3s — the ambient
+    /// refresh may repaint it at any time, and the guard is the one piece of
+    /// state this drill owns outright.
+    private func goToSessionDrill() {
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("Go to session drill."),
+            sessionId: "goto-drill", pid: 1, project: "promotions copy", cwd: "/tmp")
+        let t0 = Date()
+        goToSession()
+        let returned = Date().timeIntervalSince(t0)
+        let painted = bodyLabel.stringValue
+        let guardUp = goToSessionInFlight
+        goToSession()   // a second tap mid-flight is a no-op, not a queue
+        let secondTapHeld = bodyLabel.stringValue == painted && goToSessionInFlight
+        SelfTest.report("goToSession", [
+            ("returnsImmediately", returned < 0.1),
+            ("paintsOpening", painted.hasPrefix("Opening")),
+            ("guardRaised", guardUp),
+            ("secondTapHeld", secondTapHeld),
+        ])
+        Permissions.log("selftest goToSession: returned in \(Int(returned * 1000))ms")
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            SelfTest.report("goToSession.roundTrip", [
+                ("guardDropped", !self.goToSessionInFlight),
+            ])
+            // The background half painted "no terminal for pid 1" over
+            // whatever the cleanup left up; a deploy's selftest must not
+            // strand that on the live panel.
+            if self.bodyLabel.stringValue.contains("Couldn't find a terminal") {
+                self.showIdle(rows: [])
+            }
+        }
     }
 
     /// Quiet rows sink, and the active band keeps the order it arrived in.
@@ -4079,11 +4122,23 @@ final class StatusHUD: NSObject {
 
     // MARK: - Actions
 
+    /// True while a "go to session" jump is in flight. Re-clicks on a stalled
+    /// jump were how one slow osascript became eleven hang reports (issue 14):
+    /// each click queued another synchronous walk behind the first.
+    private var goToSessionInFlight = false
+
     /// Bring the originating terminal tab to the front.
     ///
     /// Same addressing chain the dispatcher uses — pid to tty to tab — so "go to
     /// session" lands on exactly the tab a reply would be typed into, rather than
     /// merely activating Terminal and leaving you to find it.
+    ///
+    /// Everything that can block — the ps spawn, the Apple events — runs off the
+    /// main actor. A busy Terminal is entitled to sit on an Apple event for up to
+    /// its two-minute default timeout, and a main-thread block past ~1 s trips the
+    /// event-tap watchdog and silently kills the hotkeys; the 12 Aug beach ball
+    /// (issue 14) was this method paying both prices at once. Main only flips the
+    /// in-flight guard and paints labels.
     // AppKit guarantees target/action runs on the main thread. The implicit
     // executor check that Swift emits for an @objc method on a @MainActor class is
     // therefore redundant, and it was not free: it crashed in swift_getObjectType
@@ -4091,39 +4146,48 @@ final class StatusHUD: NSObject {
     // plus assumeIsolated keeps the isolation guarantee without the check.
     @objc nonisolated private func goToSession() {
         MainActor.assumeIsolated {
+            guard !goToSessionInFlight else { return }
             guard let pid = currentTarget?.pid else {
                 bodyLabel.stringValue = "That agent is no longer running, so there's no tab to open."
                 return
             }
-            guard let tty = ProcessProbe.tty(of: pid) else {
-                bodyLabel.stringValue = "Couldn't find a terminal for process \(pid). It may have exited."
-                Permissions.log("goToSession: no tty for pid \(pid)")
-                return
-            }
-            let script = """
-                tell application "Terminal"
-                  activate
-                  repeat with w in windows
-                    repeat with t in tabs of w
-                      if (tty of t) as text is "\(tty)" then
-                        set selected tab of w to t
-                        set index of w to 1
-                        return "ok"
-                      end if
-                    end repeat
-                  end repeat
-                  return "notfound"
-                end tell
-                """
-            switch AppleScript.run(script: script) {
-            case .success(let out) where out.contains("notfound"):
-                bodyLabel.stringValue = "That agent's tab isn't open in Terminal any more (\(tty))."
-                Permissions.log("goToSession: tab not found for \(tty)")
-            case .success:
-                Permissions.log("goToSession: focused \(tty)")
-            case .failure(let error):
-                bodyLabel.stringValue = "Couldn't control Terminal: \(error.message)"
-                Permissions.log("goToSession FAILED: \(error.message)")
+            goToSessionInFlight = true
+            let priorBody = bodyLabel.stringValue
+            bodyLabel.stringValue = "Opening that session's tab…"
+            Task.detached(priority: .userInitiated) { [weak self] in
+                guard let tty = ProcessProbe.tty(of: pid) else {
+                    Permissions.log("goToSession: no tty for pid \(pid)")
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.goToSessionInFlight = false
+                        self.bodyLabel.stringValue =
+                            "Couldn't find a terminal for process \(pid). It may have exited."
+                    }
+                    return
+                }
+                let outcome = await TerminalTabFocus.focus(tty: tty)
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.goToSessionInFlight = false
+                    switch outcome {
+                    case .focused:
+                        // The jump worked; the card says what it said before,
+                        // not a stale "Opening…".
+                        self.bodyLabel.stringValue = priorBody
+                        Permissions.log("goToSession: focused \(tty)")
+                    case .tabGone:
+                        self.bodyLabel.stringValue =
+                            "That agent's tab isn't open in Terminal any more (\(tty))."
+                        Permissions.log("goToSession: tab not found for \(tty)")
+                    case .timedOut(let seconds):
+                        self.bodyLabel.stringValue =
+                            "Terminal didn't answer within \(seconds) seconds — it looks busy. The tab is still there; try again in a moment."
+                        Permissions.log("goToSession TIMEOUT after \(seconds)s for \(tty)")
+                    case .failed(let message):
+                        self.bodyLabel.stringValue = "Couldn't control Terminal: \(message)"
+                        Permissions.log("goToSession FAILED: \(message)")
+                    }
+                }
             }
         }
     }
