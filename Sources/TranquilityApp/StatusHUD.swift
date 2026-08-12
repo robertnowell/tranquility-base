@@ -147,6 +147,7 @@ final class StatusHUD: NSObject {
     private var gearButton: NSButton!
     private var collapseButton: NSButton!
     private var backButton: NSButton!
+    private var pastBackButton: NSButton!
     private var waitingRows: NSStackView!
     var onPickWaiting: ((String) -> Void)?
     /// Wired by the app onto `SessionLauncher.resume`. Only ever called for a
@@ -1271,6 +1272,7 @@ final class StatusHUD: NSObject {
         stripLabel.stringValue = ""
         voiceList.isHidden = true; waitingRows.isHidden = true
         pastList?.isHidden = true
+        pastBackButton?.isHidden = true
         // Key status is a widget like any other, and the baseline owns it: any
         // state that is not the list face gives the keyboard back. Written here
         // rather than at each door out — back button, row pick, dismiss, an
@@ -1441,7 +1443,13 @@ final class StatusHUD: NSObject {
             stateLabel.attributedStringValue = letterspaced(
                 StateLegend.pastAgentsTitle, size: 10, tracking: 3.2,
                 color: StateLegend.Lens.chrome.color)
-            gearButton.isHidden = true; backButton.isHidden = false
+            // One row, like the grid's: chevron, placard, gear. The gear stays
+            // — settings is reachable from here as it is from everywhere — and
+            // the collapse chevron is the one control this face replaces.
+            gearButton.isHidden = false
+            backButton.isHidden = true
+            collapseButton?.isHidden = true
+            pastBackButton?.isHidden = false
             hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
             hintLabel.stringValue = pastList?.summary ?? ""
             pastList?.isHidden = false
@@ -1680,6 +1688,21 @@ final class StatusHUD: NSObject {
     /// from a measured panel rather than summed from constants, because half of
     /// it is intrinsic type height that no constant states.
     private static let gridChromeHeight: CGFloat = 153
+
+    /// The two surfaces PARTITION one ordered list: what the grid draws, and
+    /// everything else. Ruled 12 Aug — "if they're on the main grid, they
+    /// should not appear here, by definition."
+    ///
+    /// Stated as a split of one array rather than as a filter on two queries,
+    /// because a filter can be wrong in both directions at once and a split
+    /// cannot: every session is in exactly one of these, and the proof is that
+    /// they are a prefix and its remainder. A session that leaves the grid
+    /// because something more urgent arrived appears in the list the moment it
+    /// does, with no second rule to keep in agreement.
+    static func pastAgents(_ rows: [StateLegend.SessionRow],
+                           screen: NSScreen? = NSScreen.main) -> ArraySlice<StateLegend.SessionRow> {
+        rows.dropFirst(gridRowsShown(rows, screen: screen))
+    }
 
     /// How many rows to draw right now: your top eight, or every ACTIVE
     /// session, whichever is larger — clamped to what the screen can hold.
@@ -3204,7 +3227,21 @@ final class StatusHUD: NSObject {
         // the same session two different ways.
         let idsMatch = items.allSatisfy { $0.row.aux == String($0.row.id.prefix(8)) }
         let tookKeyboard = panel?.acceptsKey == true
+        // Read WHILE the face is up. Everything below `goHomeFromPastAgents`
+        // is a fact about the grid, which is what the first version of these
+        // two accidentally asserted.
+        let backInPlacardRow = pastBackButton?.isHidden == false
+        let noSecondBack = backButton.isHidden
         let caretColour = pastList.caretColourForTesting
+        // A sample bigger than any screen can draw, so the split is real.
+        let sample = (0..<40).map {
+            StateLegend.SessionRow(id: "s\($0)", name: "s\($0)", aux: "s\($0)",
+                                   lamp: $0 < 3 ? .ready : ($0 < 30 ? .running : .unlit))
+        }
+        let drawn = Array(sample.prefix(Self.gridRowsShown(sample)))
+        let rest = Array(Self.pastAgents(sample))
+        let disjoint = Set(drawn.map(\.id)).isDisjoint(with: Set(rest.map(\.id)))
+        let partitioned = drawn.count + rest.count
         // The verb follows liveness, never the other way round.
         let verbs = items.allSatisfy { $0.revivable == ($0.row.lamp == .unlit) }
         goHomeFromPastAgents()
@@ -3226,6 +3263,14 @@ final class StatusHUD: NSObject {
             // is flipped, so the list opened on its oldest session — which
             // reads as a broken sort rather than as a coordinate system.
             ("opensAtTheTop", pastList.isAtTopForTesting),
+            // The two surfaces partition one list: nothing is in both, nothing
+            // is in neither. Asserted as a split rather than as two filters,
+            // because a filter can be wrong in both directions at once.
+            ("gridAndListAreDisjoint", disjoint),
+            ("nothingIsLost", partitioned == sample.count),
+            // Its header is one row, like the grid's.
+            ("backSitsInThePlacardRow", backInPlacardRow),
+            ("noSecondBackButton", noSecondBack),
             ("idMatchesTheLogs", idsMatch),
             ("verbFollowsLiveness", verbs),
             ("leavesCleanly", { if case .idle = state { return true }; return false }()),
@@ -4096,6 +4141,27 @@ final class StatusHUD: NSObject {
         collapseButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
         collapseButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
         background.addSubview(collapseButton)
+        // The list face's way back, in the SAME lane as the collapse chevron so
+        // its header is one row like the grid's: a chevron, the placard, the
+        // gear. Ruled 12 Aug — the separate "‹ Back" button above the placard
+        // made the list two rows deep where the grid is one, and the two faces
+        // stopped rhyming.
+        pastBackButton = NSButton(
+            image: NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back")!
+                .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))!,
+            target: self, action: #selector(backTapped))
+        pastBackButton.isBordered = false
+        pastBackButton.contentTintColor = StateLegend.Lens.chrome.color
+        pastBackButton.translatesAutoresizingMaskIntoConstraints = false
+        pastBackButton.isHidden = true
+        background.addSubview(pastBackButton)
+        NSLayoutConstraint.activate([
+            pastBackButton.widthAnchor.constraint(equalToConstant: 26),
+            pastBackButton.heightAnchor.constraint(equalToConstant: 26),
+            pastBackButton.centerYAnchor.constraint(equalTo: gearButton.centerYAnchor),
+            pastBackButton.leadingAnchor.constraint(equalTo: background.leadingAnchor,
+                                                    constant: 10),
+        ])
         NSLayoutConstraint.activate([
             collapseButton.centerYAnchor.constraint(equalTo: gearButton.centerYAnchor),
             // FAR LEFT, not beside the gear. The top-right of the panel is the
