@@ -20,6 +20,8 @@ func usage() -> Never {
       tbase hooks               which hooks are wired, broken, or missing
       tbase voices              installed free voices, and what is a download away
       tbase secrets             which credentials are readable, and from where
+      tbase discover [days] [n] every session in the window, awake or not,
+                                with what would bring each dead one back
       tbase cursors             how far you have got with each session
       tbase calls [n]           full input and output of the last n model calls
       tbase dogfood [days]      WS-E counters summary (default 7 days)
@@ -137,6 +139,76 @@ do {
                 if n > 0 { print("  \(pad(s.rawValue, 22)) \(n)") }
             }
         }
+
+    case "discover":
+        // Read-only. Every session on this machine inside the window, awake or
+        // not, because an agent does not stop existing when its process ends.
+        // Nothing here writes to the store or speaks.
+        let days = args.count > 1 ? Double(args[1]) ?? 7 : 7
+        let limit = args.count > 2 ? Int(args[2]) ?? SessionDiscovery.defaultLimit
+                                   : SessionDiscovery.defaultLimit
+        let started = Date()
+        let found = SessionDiscovery.discover(window: days * 86_400, limit: limit)
+        let elapsed = Date().timeIntervalSince(started)
+
+        let candidates = found.scanned
+        print("window \(Int(days))d · \(found.sessions.count) interactive of \(candidates) "
+            + "transcripts (\(found.headless) headless, \(found.unclassifiable) unclassifiable)"
+            + (found.beyondLimit > 0 ? " · \(found.beyondLimit) past the cap" : ""))
+        if found.livenessUnavailable {
+            print("LIVENESS PROBE FAILED — every row reads unknown and none offers a resume")
+        }
+        print("")
+        print("\(pad("STATE", 9))\(pad("LAMP", 9))\(pad("ANSWERED", 10))"
+            + "\(pad("AGE", 8))\(pad("SESSION", 10))\(pad("TITLE", 34))CWD")
+        for s in found.sessions {
+            let lamp: String
+            switch s.activity {
+            case .working: lamp = "working"
+            case .blocked: lamp = "STOPPED"
+            case .idle, nil: lamp = "idle"
+            }
+            let age = Date().timeIntervalSince(s.lastActivityAt)
+            let ageText = age < 3600 ? "\(Int(age / 60))m"
+                        : age < 86_400 ? "\(Int(age / 3600))h" : "\(Int(age / 86_400))d"
+            let state = s.revivable ? "gone ↺" : s.liveness.rawValue
+            print("\(pad(state, 9))\(pad(lamp, 9))\(pad(s.answered ? "yes" : "no", 10))"
+                + "\(pad(ageText, 8))\(pad(String(s.sessionId.prefix(8)), 10))"
+                + "\(pad(truncate(s.title, 32), 34))\(truncate(s.cwd, 40))")
+        }
+
+        // The gate, printed rather than asserted: for sessions the app has been
+        // watching all along, does the disk-derived `answered` agree with the
+        // store's own waiting set?
+        //
+        // Only ONE of the four combinations is a conflict, and reporting a
+        // single "disagreement" count hid that. `waiting` means you have not
+        // HEARD it; `answered` means you have not TYPED at it. A session you
+        // listened to and never replied to is legitimately not-waiting and
+        // unanswered at the same time, and it is the commonest case there is.
+        // The bug worth finding is the other one: the store lighting a row
+        // green for a turn you already answered yourself in the terminal.
+        let waitingIds = Set(try store.waitingSessions(limit: 500).map(\.sessionId))
+        let knownIds = Set(try store.waitingSessionsIncludingHeard(limit: 1000).map(\.sessionId))
+        let overlap = found.sessions.filter { knownIds.contains($0.sessionId) }
+        func count(waiting: Bool, answered: Bool) -> Int {
+            overlap.filter { waitingIds.contains($0.sessionId) == waiting && $0.answered == answered }
+                .count
+        }
+        let conflicts = overlap.filter { waitingIds.contains($0.sessionId) && $0.answered }
+        print("")
+        print("revivable       \(found.sessions.filter(\.revivable).count)")
+        print("known to store  \(overlap.count) of \(found.sessions.count)")
+        print("")
+        print("  waiting + unanswered   \(count(waiting: true, answered: false))   agree: green is right")
+        print("  waiting + ANSWERED     \(conflicts.count)   CONFLICT: green for a turn you answered")
+        print("  quiet + unanswered     \(count(waiting: false, answered: false))   heard, never replied to")
+        print("  quiet + answered       \(count(waiting: false, answered: true))   retired both ways")
+        for s in conflicts.prefix(10) {
+            print("    \(s.sessionId.prefix(8))  \(truncate(s.title, 48))")
+        }
+        print("")
+        print(String(format: "scanned in %.2fs", elapsed))
 
     case "drain":
         let r = try drainer.drain()
