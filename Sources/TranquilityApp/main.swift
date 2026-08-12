@@ -888,7 +888,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return StateLegend.SessionRow(
                 id: event.sessionId,
                 name: tabDisplayName(for: event, live: liveById[event.sessionId]),
-                callsign: event.callsign ?? "",
+                aux: event.callsign ?? "",
                 lamp: activity == .working
                     || delivering.supersedesWaiting(event.sessionId, latestId: event.latestId)
                     ? .working : .ready)
@@ -928,7 +928,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rows.append(StateLegend.SessionRow(
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
-                callsign: activity?.shortReason ?? (stored.callsign ?? ""),
+                aux: activity?.shortReason ?? (stored.callsign ?? ""),
                 lamp: lamp(for: activity, sessionId: stored.sessionId)))
         }
         // Live sessions with no stored events yet: nothing to rank them by,
@@ -952,7 +952,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 name: StateLegend.displayName(
                     liveName: Self.tabTitle(transcriptPath: nil, live: live),
                     callsign: nil, fallback: "session"),
-                callsign: activity?.shortReason ?? "",
+                aux: activity?.shortReason ?? "",
                 lamp: lamp(for: activity, sessionId: live.sessionId)))
         }
         // And the sessions that are not awake (ruled 11 Aug). Everything above
@@ -975,13 +975,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     callsign: closedCallsigns[found.sessionId],
                     fallback: found.cwd.map { ($0 as NSString).lastPathComponent } ?? "session"),
                 // Same precedence as the live band above: a session that died
-                // mid-error says why, and otherwise the column carries the
-                // callsign. A minted callsign outlives the process that earned
-                // it, so a dead row keeps the name you have been calling it —
-                // leaving the column blank made the closed band read as a
-                // different kind of thing rather than the same thing, asleep.
-                callsign: found.activity?.shortReason
-                    ?? closedCallsigns[found.sessionId] ?? "",
+                // mid-error says why, and otherwise the column carries the id.
+                // For a closed row that id is the whole point — it is the
+                // thing you would otherwise be grepping ~/.claude/projects for.
+                aux: found.activity?.shortReason
+                    ?? StateLegend.shortId(found.sessionId),
                 lamp: .unlit,
                 revivable: found.revivable))
         }

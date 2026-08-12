@@ -356,7 +356,7 @@ final class StatusHUD: NSObject {
         // the chevron) under a receipt whose callsign is long enough to reach.
         showIdle(note: nil, rows: [
             .init(id: "t1", name: "Fix hero image binding",
-                  callsign: "promotions copy", lamp: .ready),
+                  aux: "a8323d60", lamp: .ready),
         ])
         showReceipt(.sending("bookmarks provenance track a rebuild"))
         // Not layoutSubtreeIfNeeded alone: expanding out of the collapsed strip
@@ -1327,8 +1327,9 @@ final class StatusHUD: NSObject {
             // empty panel told before closed sessions had rows at all — and
             // closed rows are exactly what makes the cap start biting.
             let total = face.sessionRows.count
-            let placard = total > Self.gridRowCap
-                ? "\(StateLegend.gridStripTitle) · \(Self.gridRowCap) OF \(total)"
+            let drawn = Self.gridRowsShown(face.sessionRows)
+            let placard = total > drawn
+                ? "\(StateLegend.gridStripTitle) · \(drawn) OF \(total)"
                 : StateLegend.gridStripTitle
             let stripTitle = NSMutableAttributedString(attributedString: letterspaced(
                 placard, size: 10, tracking: 3.2,
@@ -1624,9 +1625,63 @@ final class StatusHUD: NSObject {
     /// the key line. Tap = invite that session. Fixed height plus single-line
     /// labels is what kills the orphan fragments and ragged gaps the old
     /// free-height attributed-title rows produced.
-    /// How many rows the grid draws. Named rather than inline because the
-    /// placard now states it when it bites, and two literals drift.
-    static let gridRowCap = 8
+    /// The floor. Eight rows is what the panel has always shown and what it
+    /// shows on a quiet day: enough to hold the work you are actually doing.
+    static let gridRowFloor = 8
+
+    /// The ceiling, and it is a taste decision rather than an arithmetic one.
+    /// A panel holding twenty agents is already at the edge of what reads as an
+    /// instrument rather than a directory, and the graveyard exists for
+    /// everything past it.
+    static let gridRowCeiling = 20
+
+    /// How many rows will FIT, which is a different question on every machine.
+    ///
+    /// Measured across the range, using the panel's own margins and the chrome
+    /// it carries above and below the rows (top band, placard rule, the
+    /// + NEW AGENT row, the key line, the footer — ~153pt):
+    ///
+    ///   13" 1440×900, the oldest baseline   16 rows
+    ///   13.6" MacBook Air, default scaled   18 rows
+    ///   14" MacBook Pro, default scaled     20 rows
+    ///   16" MacBook Pro                     22 rows
+    ///
+    /// So the ceiling binds on every Mac from a 14" up, and the arithmetic
+    /// binds below that. Computed rather than picking one number for all
+    /// screens, because the one number would have to be 16 — and it would then
+    /// be wrong by six rows on the machine this is being built on.
+    static func gridRowCapacity(screen: NSScreen? = NSScreen.main) -> Int {
+        guard let screen else { return gridRowFloor }
+        let usable = screen.visibleFrame.height - 32   // the panel's own margins
+        let forRows = usable - gridChromeHeight
+        let fits = Int(forRows / (GridRowView.height + 1))
+        return max(gridRowFloor, min(gridRowCeiling, fits))
+    }
+
+    /// Everything the grid face draws that is not a session row. Derived once
+    /// from a measured panel rather than summed from constants, because half of
+    /// it is intrinsic type height that no constant states.
+    private static let gridChromeHeight: CGFloat = 153
+
+    /// How many rows to draw right now: your top eight, or every ACTIVE
+    /// session, whichever is larger — clamped to what the screen can hold.
+    ///
+    /// Ruled 12 Aug. Active means the panel is telling you something: green
+    /// (wants you), blue (working), amber (stopped). A session that is merely
+    /// alive with its lamp out is NOT guaranteed a place — it competes for the
+    /// eight, and past that it lives in the list. That is what keeps the
+    /// panel's height a measure of how much is happening rather than a measure
+    /// of how long the machine has been on.
+    static func gridRowsShown(_ rows: [StateLegend.SessionRow],
+                              screen: NSScreen? = NSScreen.main) -> Int {
+        let active = rows.filter {
+            switch $0.lamp {
+            case .ready, .working, .fault: return true
+            case .running, .unlit: return false
+            }
+        }.count
+        return min(gridRowCapacity(screen: screen), max(gridRowFloor, active))
+    }
 
     private func rebuildSessionRows() {
         waitingRows.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -1644,7 +1699,7 @@ final class StatusHUD: NSObject {
 
         // The strip's bottom rule, under "AGENTS ⚙".
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
-        let shown = Array(face.sessionRows.prefix(Self.gridRowCap))
+        let shown = Array(face.sessionRows.prefix(Self.gridRowsShown(face.sessionRows)))
         // ONE callsign column (ruled 05 Aug): sized to the widest callsign on
         // show, capped at 38% of the grid. Per-row widths made every name
         // truncate at its own x and the right side read as a rag, not a
@@ -1653,7 +1708,7 @@ final class StatusHUD: NSObject {
         let auxWidth = min(
             Self.gridWidth * GridRowView.auxFraction,
             shown.map {
-                ceil(($0.callsign as NSString)
+                ceil(($0.aux as NSString)
                     .size(withAttributes: [.font: GridRowView.auxFont]).width)
             }.max() ?? 0)
         for (index, item) in shown.enumerated() {
@@ -1684,7 +1739,7 @@ final class StatusHUD: NSObject {
         let closed = shown.filter { $0.lamp == .unlit }.count
         let revivable = shown.filter(\.revivable).count
         let singleLine = shown.allSatisfy {
-            !$0.name.contains("\n") && !$0.callsign.contains("\n")
+            !$0.name.contains("\n") && !$0.aux.contains("\n")
         }
         Permissions.log("grid: \(shown.count) of \(face.sessionRows.count) rows "
             + "(\(ready) ready, \(closed) closed, \(revivable) revivable) "
@@ -2374,11 +2429,11 @@ final class StatusHUD: NSObject {
             // and rows not yet minted (empty right column).
             ("idleGrid", { self.showIdle(rows: [
                 .init(id: "a", name: "Fix hero image binding across the stack",
-                      callsign: "promotions copy", lamp: .ready),
-                .init(id: "b", name: long, callsign: "syndit citation", lamp: .running),
-                .init(id: "c", name: "tranquility base", callsign: "", lamp: .ready),
+                      aux: "a8323d60", lamp: .ready),
+                .init(id: "b", name: long, aux: "9ca8815c", lamp: .running),
+                .init(id: "c", name: "tranquility base", aux: "", lamp: .ready),
                 .init(id: "d", name: "robertnowell-83",
-                      callsign: "tranquility base synchronization",
+                      aux: "6bfb2087",
                       lamp: .running),
             ]) }),
             ("preparing", { _ = self.showPreparing() }),
@@ -2437,8 +2492,8 @@ final class StatusHUD: NSObject {
         let armPriors: [(String, () -> Void)] = [
             ("grid", { self.showIdle(rows: [
                 .init(id: "a", name: "Fix hero image binding",
-                      callsign: "promotions copy", lamp: .ready),
-                .init(id: "b", name: "tranquility base", callsign: "", lamp: .running),
+                      aux: "a8323d60", lamp: .ready),
+                .init(id: "b", name: "tranquility base", aux: "", lamp: .running),
             ]) }),
             ("speaking", { self.showAnnouncement(
                 spoken: SpokenTextSanitizer().sanitize(long),
@@ -2562,7 +2617,7 @@ final class StatusHUD: NSObject {
         // strip is the whole panel — the behaviour that shipped, unchanged.
         showIdle(note: nil, rows: [
             .init(id: "s1", name: "Fix hero image binding",
-                  callsign: "promotions copy", lamp: .ready),
+                  aux: "a8323d60", lamp: .ready),
         ])
         showArming(target: "promotions copy")
         let gridCaptureIsWholePanel = stripLabel.isHidden && titleLabel.isHidden
@@ -2626,8 +2681,8 @@ final class StatusHUD: NSObject {
         // open over the face that replaced its owner.
         showIdle(note: nil, rows: [
             .init(id: "c1", name: "Fix hero image binding",
-                  callsign: "promotions copy", lamp: .ready),
-            .init(id: "c2", name: "tranquility base", callsign: "", lamp: .running),
+                  aux: "a8323d60", lamp: .ready),
+            .init(id: "c2", name: "tranquility base", aux: "", lamp: .running),
         ])
         panel?.contentView?.layoutSubtreeIfNeeded()
         let footerOnGrid = !gridFooter.isHidden
@@ -2713,8 +2768,8 @@ final class StatusHUD: NSObject {
         // The stomp that froze the app (2026-08-05): a stale idle repaint against a
         // live capture. Must be REFUSED, and the pill must still be on the walls.
         showListening(level: { 0.4 })
-        showIdle(rows: [.init(id: "a", name: "promotions copy", callsign: "", lamp: .ready),
-                        .init(id: "b", name: "syndit", callsign: "", lamp: .ready)])
+        showIdle(rows: [.init(id: "a", name: "promotions copy", aux: "", lamp: .ready),
+                        .init(id: "b", name: "syndit", aux: "", lamp: .ready)])
         let survived = state.isCapturingAudio && !meter.isHidden
         SelfTest.report("legality", [("idleOverListeningRefused", survived)])
         recordingEnded()
@@ -2725,11 +2780,11 @@ final class StatusHUD: NSObject {
 
         // The collapsed strip. Three properties, and the third is the ruling.
         let mixed: [StateLegend.SessionRow] = [
-            .init(id: "a", name: "promotions copy", callsign: "promotions", lamp: .ready),
-            .init(id: "b", name: "syndit", callsign: "syndit", lamp: .running),
-            .init(id: "c", name: "tranquility base", callsign: "tbase", lamp: .working),
-            .init(id: "d", name: "kopi", callsign: "kopi", lamp: .running),
-            .init(id: "e", name: "bookmarks", callsign: "bookmarks", lamp: .fault),
+            .init(id: "a", name: "promotions copy", aux: "a8323d60", lamp: .ready),
+            .init(id: "b", name: "syndit", aux: "9ca8815c", lamp: .running),
+            .init(id: "c", name: "tranquility base", aux: "6bfb2087", lamp: .working),
+            .init(id: "d", name: "kopi", aux: "0f2ea0d4", lamp: .running),
+            .init(id: "e", name: "bookmarks", aux: "bookmarks", lamp: .fault),
         ]
         // The drill must not spend the user's preference. `isCollapsed` is
         // durable, `relaunch.sh` runs the selftests on EVERY deploy, and the
@@ -2780,7 +2835,7 @@ final class StatusHUD: NSObject {
         // the other side — the app does not open the panel for you, and it does
         // not widen it for you either.
         let widthBefore = panel?.frame.width ?? 0
-        showIdle(rows: mixed + [.init(id: "f", name: "new one", callsign: "new", lamp: .ready)])
+        showIdle(rows: mixed + [.init(id: "f", name: "new one", aux: "new", lamp: .ready)])
         let widthHeldOnArrival = abs((panel?.frame.width ?? 0) - widthBefore) < 1
         setCollapsed(false)
         showIdle(rows: mixed)
@@ -2950,7 +3005,7 @@ final class StatusHUD: NSObject {
         // An agent reporting in takes the room back, and the ambient repaint
         // that follows must not inherit the big centred type.
         showIdle(rows: [StateLegend.SessionRow(
-            id: "drill", name: "an agent arrives", callsign: "drill", lamp: .ready)])
+            id: "drill", name: "an agent arrives", aux: "drill", lamp: .ready)])
         let roomTakenBack = !face.gettingStarted && emptySince == nil
             && bodyLabel.alignment == .natural
         SelfTest.report("emptyRoom", [
@@ -2964,6 +3019,7 @@ final class StatusHUD: NSObject {
         titleDoorDrill()
         quietRowsDrill()
         closedRowsDrill()
+        elasticGridDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
@@ -2976,9 +3032,53 @@ final class StatusHUD: NSObject {
     /// bands feeding it are recency-ordered, and a partition that quietly
     /// reshuffled ties would spend that ordering without any visible symptom.
     /// So the drill checks positions, not just the tail.
+    /// The panel breathes with live work, and with nothing else.
+    ///
+    /// Ruled 12 Aug: "it's your top eight or all the active sessions, whichever
+    /// is larger", where active means green, blue or amber. The failure this
+    /// guards is the panel growing for sessions that are merely alive, or for
+    /// dead ones — which would make its height a measure of how long the
+    /// machine has been on rather than of how much is happening.
+    private func elasticGridDrill() {
+        func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
+            StateLegend.SessionRow(id: id, name: id, aux: id, lamp: lamp)
+        }
+        // A generous screen, so the ceiling rather than the arithmetic decides.
+        let big = NSScreen.main
+        let quiet = (0..<30).map { row("q\($0)", .running) }
+        let dead = (0..<30).map { row("d\($0)", .unlit) }
+        let busy = (0..<14).map { row("a\($0)", .working) } + quiet
+        let swamped = (0..<40).map { row("a\($0)", .ready) }
+
+        SelfTest.report("elasticGrid", [
+            ("quietDoesNotGrowIt",
+             Self.gridRowsShown(quiet, screen: big) == Self.gridRowFloor),
+            ("deadDoesNotGrowIt",
+             Self.gridRowsShown(dead, screen: big) == Self.gridRowFloor),
+            ("emptyStaysAtTheFloor",
+             Self.gridRowsShown([], screen: big) == Self.gridRowFloor),
+            ("activeGrowsIt", Self.gridRowsShown(busy, screen: big) == 14),
+            ("neverBelowTheFloor",
+             Self.gridRowsShown([row("a", .ready)], screen: big) == Self.gridRowFloor),
+            ("clampedByTheScreen",
+             Self.gridRowsShown(swamped, screen: big) <= Self.gridRowCapacity(screen: big)),
+            ("capacityIsSane",
+             (Self.gridRowFloor...Self.gridRowCeiling)
+                .contains(Self.gridRowCapacity(screen: big))),
+            // The panel must never be taller than the screen it sits on, which
+            // is the whole point of computing capacity rather than picking one.
+            ("capacityFitsTheScreen", {
+                guard let big else { return true }
+                let rows = CGFloat(Self.gridRowCapacity(screen: big))
+                    * (GridRowView.height + 1)
+                return rows + 153 <= big.visibleFrame.height - 32
+            }()),
+        ])
+    }
+
     private func quietRowsDrill() {
         func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
-            StateLegend.SessionRow(id: id, name: id, callsign: id, lamp: lamp)
+            StateLegend.SessionRow(id: id, name: id, aux: id, lamp: lamp)
         }
         // Deliberately interleaved, and with two of each active lamp, so a
         // comparator that grouped by lamp rather than partitioning would fail.
@@ -3013,7 +3113,7 @@ final class StatusHUD: NSObject {
     private func closedRowsDrill() {
         func row(_ id: String, _ lamp: StateLegend.Lamp,
                  revivable: Bool = false) -> StateLegend.SessionRow {
-            StateLegend.SessionRow(id: id, name: id, callsign: id,
+            StateLegend.SessionRow(id: id, name: id, aux: id,
                                    lamp: lamp, revivable: revivable)
         }
         let unlit = StateLegend.Lamp.unlit
@@ -3244,21 +3344,21 @@ final class StatusHUD: NSObject {
         case "grid":
             showIdle(rows: [
                 .init(id: "s1", name: "Validate hero image binding",
-                      callsign: "promotions copy", lamp: .ready),
+                      aux: "a8323d60", lamp: .ready),
                 .init(id: "s2", name: "Render pose driver states",
-                      callsign: "tranquility base recording", lamp: .ready),
+                      aux: "a8323d60", lamp: .ready),
                 .init(id: "s3", name: "Cite featured report in daily thread",
-                      callsign: "syndit citation", lamp: .running),
+                      aux: "9ca8815c", lamp: .running),
                 .init(id: "s4", name: "Green the hybrid retrieval eval",
-                      callsign: "recall dense", lamp: .running),
+                      aux: "9ca8815c", lamp: .running),
                 .init(id: "s5", name: "Ship Track A provenance fix",
-                      callsign: "bookmarks provenance", lamp: .running),
+                      aux: "6bfb2087", lamp: .running),
                 .init(id: "s6", name: "Stage footer flag migration",
-                      callsign: "kopi footer", lamp: .running),
+                      aux: "0f2ea0d4", lamp: .running),
                 .init(id: "s7", name: "Ship Shopify-only filter",
-                      callsign: "m3-tracker poller", lamp: .running),
+                      aux: "148bb467", lamp: .running),
                 .init(id: "s8", name: "Draft personality prompt criteria",
-                      callsign: "live-hud director", lamp: .running),
+                      aux: "d882f184", lamp: .running),
             ])
 
         case "empty":
@@ -3373,9 +3473,9 @@ final class StatusHUD: NSObject {
         case "collapsed":
             setCollapsed(true)
             showIdle(rows: [
-                .init(id: "a", name: "promotions copy", callsign: "promotions", lamp: .ready),
-                .init(id: "b", name: "tranquility base", callsign: "tbase", lamp: .working),
-                .init(id: "c", name: "bookmarks", callsign: "bookmarks", lamp: .fault),
+                .init(id: "a", name: "promotions copy", aux: "a8323d60", lamp: .ready),
+                .init(id: "b", name: "tranquility base", aux: "6bfb2087", lamp: .working),
+                .init(id: "c", name: "bookmarks", aux: "bookmarks", lamp: .fault),
             ])
             return true
 
@@ -4324,7 +4424,7 @@ private final class GridRowView: NSControl {
         name.translatesAutoresizingMaskIntoConstraints = false
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let callsign = NSTextField(labelWithString: item.callsign)
+        let callsign = NSTextField(labelWithString: item.aux)
         callsign.font = Self.auxFont
         callsign.textColor = (ready ? StateLegend.Palette.secondary : StateLegend.Palette.muted)
             .withAlphaComponent(ink)
