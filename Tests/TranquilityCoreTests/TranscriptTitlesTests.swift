@@ -74,4 +74,54 @@ struct TranscriptTitlesTests {
         let path = TranscriptTitles.defaultPath(cwd: "/Users/x/a.b", sessionId: "abc-123")
         #expect(path.hasSuffix("/.claude/projects/-Users-x-a-b/abc-123.jsonl"))
     }
+
+    // MARK: - The seeded cold read (large transcripts)
+
+    /// Large enough to take the two-window path rather than the full scan.
+    private func bigTranscript(titleAtStart: String?, titleAtEnd: String?) -> String {
+        let filler = String(repeating: "x", count: 900)
+        var lines: [String] = []
+        if let titleAtStart {
+            lines.append(#"{"type":"ai-title","aiTitle":"\#(titleAtStart)","sessionId":"s"}"#)
+        }
+        // ~2.4MB of conversation, comfortably past headWindow + tailWindow.
+        for i in 0..<2600 {
+            lines.append(#"{"type":"assistant","n":\#(i),"message":"\#(filler)"}"#)
+        }
+        if let titleAtEnd {
+            lines.append(#"{"type":"ai-title","aiTitle":"\#(titleAtEnd)","sessionId":"s"}"#)
+        }
+        lines.append(#"{"type":"assistant","message":"last word"}"#)
+        return tempTranscript(lines)
+    }
+
+    /// The measured case: Claude Code re-mints the title as the conversation
+    /// moves, so the answer is within 30KB of the end on every large transcript
+    /// on this machine.
+    @Test func seededReadFindsTheTitleAtTheEnd() {
+        let path = bigTranscript(titleAtStart: "early one", titleAtEnd: "the current tab")
+        #expect(TranscriptTitles().latestTitle(transcriptPath: path) == "the current tab")
+    }
+
+    /// Titled once, early, never again — the case the head window exists for,
+    /// and the reason the original scanner refused to tail-cap.
+    @Test func seededReadFallsBackToTheHeadWhenTheTailHasNone() {
+        let path = bigTranscript(titleAtStart: "named at the start", titleAtEnd: nil)
+        #expect(TranscriptTitles().latestTitle(transcriptPath: path) == "named at the start")
+    }
+
+    @Test func seededReadOfAnUntitledTranscriptIsNil() {
+        let path = bigTranscript(titleAtStart: nil, titleAtEnd: nil)
+        #expect(TranscriptTitles().latestTitle(transcriptPath: path) == nil)
+    }
+
+    /// The cursor must land on a line boundary, or the next append is spliced
+    /// onto half a record and nothing parses again.
+    @Test func appendsAfterASeededReadAreStillPickedUp() {
+        let path = bigTranscript(titleAtStart: nil, titleAtEnd: "before")
+        let titles = TranscriptTitles()
+        #expect(titles.latestTitle(transcriptPath: path) == "before")
+        append(path, #"{"type":"ai-title","aiTitle":"after","sessionId":"s"}"# + "\n")
+        #expect(titles.latestTitle(transcriptPath: path) == "after")
+    }
 }

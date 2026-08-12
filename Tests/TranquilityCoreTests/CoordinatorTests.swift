@@ -123,6 +123,69 @@ final class CoordinatorTests: XCTestCase {
 
     private func silence(seconds: Double = 1) -> Data { Data(count: Int(seconds * 16000) * 2) }
 
+    /// A transcript on disk whose `entrypoint` says who started this session.
+    /// The announcer reads it from the path the hook recorded, so the fixture
+    /// has to be a real file.
+    private func transcript(_ session: String, entrypoint: String?) throws -> String {
+        let path = tmpDir.appendingPathComponent("\(session).jsonl").path
+        let entry = entrypoint.map { #""entrypoint":"\#($0)","# } ?? ""
+        try (#"{"type":"user",\#(entry)"cwd":"/tmp"}"# + "\n"
+            + #"{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}"#
+            + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        return path
+    }
+
+    private func appendWithTranscript(
+        session: String, entrypoint: String?, at ms: Int64 = 1_000
+    ) throws {
+        _ = try store.insert(event: QueuedEvent(
+            createdAtMs: ms, hookEvent: .stop, sessionId: session,
+            promptId: UUID().uuidString, cwd: "/tmp/\(session)",
+            transcriptPath: try transcript(session, entrypoint: entrypoint),
+            lastAssistantMessage: "a turn finished", tty: "ttys001"))
+    }
+
+    // MARK: - Only sessions a person started are announced
+
+    /// Liveness used to do this job by accident, and the accident held only
+    /// while the probe answered. A cron job that finishes is gone from the
+    /// agents API, so it never got announced — but when the probe FAILS the
+    /// announcer falls back to the store's whole set, which on the author's
+    /// machine is 502 sessions a week, 460 of them robots.
+    func testHeadlessSessionsAreNeverAnnouncedEvenWhenTheProbeFails() throws {
+        let coordinator = try makeCoordinator(sessionLive: false)
+        try appendWithTranscript(session: "human", entrypoint: "cli", at: 1_000)
+        try appendWithTranscript(session: "cron", entrypoint: "sdk-cli", at: 2_000)
+
+        let live = try coordinator.waiting().map(\.sessionId)
+        XCTAssertFalse(live.contains("cron"))
+
+        let failing = Coordinator(
+            store: store,
+            summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            transport: RecordingTransport(),
+            enrolment: EnrolmentRegistry(url: tmpDir.appendingPathComponent("e2.json")),
+            agents: FailingAgents(),
+            recovery: RecoveryChain(providers: [FixedTranscript(text: "x")],
+                                    maxAttemptsPerProvider: 1, backoff: [0]))
+        let blind = try failing.waiting().map(\.sessionId)
+        XCTAssertTrue(blind.contains("human"),
+                      "a probe failure must still surface real work")
+        XCTAssertFalse(blind.contains("cron"),
+                       "and must no longer surface machine-started runs")
+    }
+
+    /// The failure the tty filter actually caused was hiding real
+    /// conversations, so an unreadable or unrecognised origin keeps its
+    /// session. Exclusion needs positive evidence.
+    func testAnUnreadableOriginIsStillAnnounced() throws {
+        let coordinator = try makeCoordinator(sessionLive: true)
+        try appendWithTranscript(session: "human", entrypoint: nil, at: 1_000)
+        XCTAssertTrue(try coordinator.waiting().map(\.sessionId).contains("human"))
+    }
+
     // MARK: - The full loop
 
     func testAnnounceThenReplyRoutesBackToTheSessionThatSpoke() async throws {
