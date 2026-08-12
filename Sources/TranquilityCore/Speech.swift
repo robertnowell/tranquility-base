@@ -272,7 +272,12 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
     /// rather than burning the request and re-paying for it at press time.
     public var prefetchDeadline: TimeInterval
 
-    private var player: AVAudioPlayer?
+    // private(set), not private: the truncation tests stage a GENUINE truncation
+    // by stopping the transport mid-play without bumping the generation — which
+    // is what a route change looks like, and the one direction a pure-function
+    // test cannot cover. You cannot stage it with a lying WAV header; the player
+    // recomputes `duration` from the bytes actually present (measured).
+    private(set) var player: AVAudioPlayer?
 
     /// Bumped by `stop()`. Any speak call whose generation is stale drops its audio
     /// on arrival rather than playing it. Without this, tapping to stop during the
@@ -438,20 +443,31 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
             throw SpeechError.synthesisFailed("playback never started")
         }
 
-        // Only poll when there is a highlight to drive, and at a rate matched to
-        // reading rather than to rendering — 40ms was needless CPU for a cosmetic
-        // effect. ~8/second is well past what the eye resolves for word highlighting.
-        guard let starts, let onWord else {
-            while audio.isPlaying || isPaused { try await Task.sleep(nanoseconds: 200_000_000) }
-            try checkForTruncation(audio, generation: mine)
-            return
-        }
-
+        // One loop for both modes, and it MEASURES while it waits.
+        //
+        // Completion is measured while playing, never re-read after the fact —
+        // the same rule as "interruption is caused, not inferred", applied to the
+        // axis it was missing from. AVAudioPlayer's post-terminal state is
+        // bit-identical to its pre-initial state: on natural completion
+        // `currentTime` resets to 0 (measured 08 Aug: a 16.379s archived clip read
+        // 0.000 after finishing), so a check that re-reads the player after the
+        // loop calls every COMPLETED announcement truncated at 0s — under 2s, so
+        // the chain restarted it from the top in the system voice. That is the
+        // ElevenLabs-then-robot double-read, and it was this read, not the 0.25s
+        // tolerance blamed for it on 02 Aug.
+        //
+        // So the loop keeps a high-water mark. `max` rather than last-sampled: a
+        // resetting `currentTime` can only be ignored, never believed. Poll at
+        // 125ms only when there is a highlight to drive; ~8/s is past what the eye
+        // resolves, and 40ms was needless CPU for a cosmetic effect.
+        let interval: UInt64 = (starts != nil && onWord != nil) ? 125_000_000 : 200_000_000
+        var played = 0.0
         var lastIndex = -1
         while audio.isPlaying || isPaused {
-            do {
+            let now = audio.currentTime
+            played = max(played, now)
+            if let starts, let onWord {
                 // Character index whose start time has just passed.
-                let now = audio.currentTime
                 var index = lastIndex
                 while index + 1 < starts.count, starts[index + 1] <= now { index += 1 }
                 if index != lastIndex, index >= 0 {
@@ -460,20 +476,34 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
                     onWord(0..<min(index + 1, text.text.count))
                 }
             }
-            try await Task.sleep(nanoseconds: 125_000_000)
+            try await Task.sleep(nanoseconds: interval)
         }
-        try checkForTruncation(audio, generation: mine)
+        played = max(played, audio.currentTime)
+        try Self.checkForTruncation(
+            played: played, duration: audio.duration,
+            generation: mine, current: currentGeneration())
     }
 
     /// Playback that ends early with the generation unchanged was not stopped by
     /// anyone — that is a failure, and it should not be reported as your choice.
-    private func checkForTruncation(_ audio: AVAudioPlayer, generation mine: Int) throws {
-        guard mine == currentGeneration() else { throw SpeechError.interrupted }
-        // 0.75s, not 0.25s: the poll runs every 125ms and AVAudioPlayer rounds its
-        // duration, so a tighter bound calls a completed announcement truncated.
-        let remaining = audio.duration - audio.currentTime
+    ///
+    /// A pure function of measured facts, deliberately: it takes seconds, not the
+    /// player, so it CANNOT re-read state the player has already reset — and so a
+    /// test can pin both directions without a speaker. `played` must be a
+    /// high-water mark sampled while `isPlaying` was true.
+    static func checkForTruncation(
+        played: Double, duration: Double, generation mine: Int, current: Int
+    ) throws {
+        guard mine == current else { throw SpeechError.interrupted }
+        // 0.75s: must exceed the largest poll interval (200ms, the no-highlight
+        // branch — raising that poll past ~350ms silently erodes this margin),
+        // plus Task.sleep overshoot and format rounding on `duration`. Measured
+        // worst-case shortfall across ten completions, four of them real archived
+        // ElevenLabs MP3s: 0.105s. Loose on purpose — a false truncation is the
+        // double-read, a missed one loses under 0.75s of tail.
+        let remaining = duration - played
         guard remaining > 0.75 else { return }
-        throw SpeechError.truncated(playedSeconds: audio.currentTime, ofSeconds: audio.duration)
+        throw SpeechError.truncated(playedSeconds: played, ofSeconds: duration)
     }
 
     public func stop() {
