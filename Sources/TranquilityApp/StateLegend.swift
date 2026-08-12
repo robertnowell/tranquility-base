@@ -372,12 +372,23 @@ enum StateLegend {
         let id: String
         /// The displayed identity: the tab's string (see displayName).
         let name: String
-        /// The minted callsign — the word the voice speaks. RE-RULED 05 Aug
-        /// (variant C draft): the right column is the callsign, so eye and ear
-        /// share one identity — hear "home sessions", find "home sessions".
-        /// The brief topic is dead here (it told you nothing the name doesn't);
-        /// ⌃⌃ why still carries it. Empty until minted.
-        let callsign: String
+        /// The right column. RE-RULED 12 Aug: the session's own short id, in
+        /// the shape of a commit hash — because the question this column has to
+        /// answer changed. It held the minted callsign so eye and ear shared
+        /// one identity (05 Aug: hear "home sessions", find "home sessions"),
+        /// which is right when every row is a session you are talking to. It is
+        /// not right once the panel and its list are full of sessions you are
+        /// trying to FIND: "there is a workstream I did a week ago and I don't
+        /// know which tab it is in" is answered by an identifier, not a name.
+        ///
+        /// The callsign is not lost — it is still the spoken identity, still
+        /// minted, and still the fallback for `name` when a session has no tab
+        /// title yet. It simply stops being the thing this column shows.
+        ///
+        /// A stopped session shows its REASON here instead. Amber is the
+        /// needs-you channel and the reason is the entire message; an id would
+        /// be the one row where this column says nothing useful.
+        let aux: String
         let lamp: Lamp
         /// Whether tapping this row brings the session back — `claude --resume`
         /// in its own directory.
@@ -392,11 +403,11 @@ enum StateLegend {
         /// toward showing you the work, the verb fails toward doing nothing.
         let revivable: Bool
 
-        init(id: String, name: String, callsign: String, lamp: Lamp,
+        init(id: String, name: String, aux: String, lamp: Lamp,
              revivable: Bool = false) {
             self.id = id
             self.name = name
-            self.callsign = callsign
+            self.aux = aux
             self.lamp = lamp
             self.revivable = revivable
         }
@@ -472,6 +483,14 @@ enum StateLegend {
     /// remains the SPOKEN identity outright — a hyphenated slug is
     /// unspeakable, and spoken attribution now also rides the session's
     /// durable voice.
+    /// A session id in the shape of a commit hash: the leading eight, which is
+    /// what every log line, every trace and `tbase discover` already print, so
+    /// a row on screen and a line in the log name the same thing the same way.
+    /// The leading group rather than the trailing one for exactly that reason —
+    /// GitHub shows a commit's first seven, and this codebase has been printing
+    /// `sessionId.prefix(8)` since before the panel had a grid.
+    static func shortId(_ sessionId: String) -> String { String(sessionId.prefix(8)) }
+
     static func displayName(liveName: String? = nil, callsign: String?, fallback: String) -> String {
         if let liveName, !liveName.isEmpty { return liveName }
         if let callsign, !callsign.isEmpty { return callsign }
