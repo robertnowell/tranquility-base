@@ -436,67 +436,33 @@ case "reconcile":
         }
 
     case "install-hooks":
-    // One command instead of JSON surgery. Merges the three hook entries into
-    // ~/.claude/settings.json, backing it up first; already-installed is a no-op.
-    // A botched settings file silently disables everything in it, which is why
-    // this exists.
-    let hookPath = FileManager.default.currentDirectoryPath + "/hooks/tbase-hook.sh"
-    let visualPath = FileManager.default.currentDirectoryPath + "/hooks/visual-output-hook.sh"
-    let artifactPath = FileManager.default.currentDirectoryPath + "/hooks/artifact-hook.sh"
-    guard FileManager.default.isExecutableFile(atPath: hookPath),
-          FileManager.default.isExecutableFile(atPath: visualPath),
-          FileManager.default.isExecutableFile(atPath: artifactPath) else {
+    // One command instead of JSON surgery, now the same code path the app runs
+    // at launch. Run from the repo root: records the hooks directory, then
+    // repairs settings against the shared manifest — a moved repo's stale
+    // paths are REWRITTEN, not kept (the old presence test matched on the
+    // basename, printed "already installed; nothing changed", and preserved
+    // the dead command — issue 09).
+    let hooksDir = FileManager.default.currentDirectoryPath + "/hooks"
+    let allPresent = HookManifest.expected.map(\.script).allSatisfy {
+        FileManager.default.isExecutableFile(atPath: hooksDir + "/" + $0)
+    }
+    guard allPresent else {
         print("run from the repo root: hooks/*.sh not found or not executable"); exit(1)
     }
-    let settingsURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".claude/settings.json")
-    var root: [String: Any] = [:]
-    if let data = try? Data(contentsOf: settingsURL) {
-        guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            print("~/.claude/settings.json is not valid JSON; fix it first, nothing touched")
-            exit(1)
-        }
-        root = parsed
-        try? data.write(to: settingsURL.appendingPathExtension("tbase-backup"))
+    try? hooksDir.write(to: HookManifest.recordedDirectoryURL,
+                        atomically: true, encoding: .utf8)
+    switch HookManifest.repair() {
+    case .healthy:
+        print("already installed and reachable; nothing changed")
+    case .repaired(let rewired, let added):
+        print("repaired: \(rewired) rewired, \(added) added; "
+              + "backup at settings.json.tbase-backup")
+        print("restart Claude Code sessions (or open /hooks once) to load them")
+    case .unavailable(let reason):
+        print("could not repair: \(reason)"); exit(1)
     }
-    var hooks = root["hooks"] as? [String: Any] ?? [:]
-    var changed = 0
-    // (event, script marker, script path): the spool hook feeds the loop; the
-    // visual-output hook teaches sessions the browser-not-terminal rule for
-    // anything the user must SEE (they hear turns by voice, away from the tab).
-    // The artifact hook needs a matcher, which the other three do not: it runs
-    // after a tool call rather than at a turn boundary, and running it after
-    // every Bash and Read would be thousands of no-op subprocesses a day.
-    let wiring: [(event: String, marker: String, path: String, matcher: String?)] = [
-        ("Stop", "tbase-hook", hookPath, nil),
-        ("Notification", "tbase-hook", hookPath, nil),
-        ("UserPromptSubmit", "tbase-hook", hookPath, nil),
-        ("SessionStart", "visual-output-hook", visualPath, nil),
-        ("PostToolUse", "artifact-hook", artifactPath, "Write"),
-    ]
-    for wire in wiring {
-        var entries = hooks[wire.event] as? [[String: Any]] ?? []
-        let present = entries.contains { entry in
-            ((entry["hooks"] as? [[String: Any]]) ?? [])
-                .contains { ($0["command"] as? String)?.contains(wire.marker) == true }
-        }
-        if !present {
-            var entry: [String: Any] = [
-                "hooks": [["type": "command", "command": wire.path, "timeout": 5]]]
-            if let matcher = wire.matcher { entry["matcher"] = matcher }
-            entries.append(entry)
-            hooks[wire.event] = entries
-            changed += 1
-        }
-    }
-    root["hooks"] = hooks
-    let out = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-    try out.write(to: settingsURL)
-    print(changed == 0 ? "already installed; nothing changed"
-          : "installed on \(changed) event(s); backup at settings.json.tbase-backup")
-    print("restart Claude Code sessions (or open /hooks once) to load them")
 
-case "hook-config":
+    case "hook-config":
         let hookPath = FileManager.default.currentDirectoryPath + "/hooks/tbase-hook.sh"
         let visualPath = FileManager.default.currentDirectoryPath + "/hooks/visual-output-hook.sh"
         let artifactPath = FileManager.default.currentDirectoryPath + "/hooks/artifact-hook.sh"

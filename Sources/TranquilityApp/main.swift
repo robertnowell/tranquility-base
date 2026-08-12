@@ -524,7 +524,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // lamps that would not turn green, and how `artifact-hook` shipped and sat
         // uninstalled without ever being mentioned.
         if let problem = HookManifest.problemSummary() {
+            // Repair, not just report (Robert, 12 Aug: "nobody ever wants to
+            // run a command — we either keep it up to date or give them one
+            // click"). The repair is bounded to entries carrying our markers,
+            // backs the file up first, and its receipt is a re-audit. When it
+            // cannot repair — no healthy entry and no recorded directory to
+            // learn from — noticing remains the floor, said out loud, because
+            // a hook's own contract (exit 0 whatever happens) means nothing
+            // else ever will.
             Permissions.log("startup: \(problem)")
+            switch HookManifest.repair() {
+            case .healthy:
+                Permissions.log("startup: hooks healthy on re-audit")
+            case .repaired(let rewired, let added):
+                Permissions.log("startup: hooks repaired — "
+                    + "\(rewired) rewired, \(added) added")
+                hud.note("Hooks were out of date — fixed. "
+                    + "New Claude Code sessions pick them up automatically.")
+            case .unavailable(let reason):
+                Permissions.log("startup: hooks NOT repaired — \(reason)")
+                hud.note("Hooks need attention: \(reason)")
+            }
         } else {
             Permissions.log("startup: hooks installed and reachable")
         }
