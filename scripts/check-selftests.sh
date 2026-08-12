@@ -32,11 +32,51 @@ else
   CUTOFF=$(date -u -v-120S +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
 fi
 
-if [ -n "$CUTOFF" ]; then
-  RECENT=$(awk -v c="$CUTOFF" '$1 >= c' "$LOG")
-else
-  RECENT=$(cat "$LOG")
-fi
+read_window() {
+  if [ -n "$CUTOFF" ]; then
+    awk -v c="$CUTOFF" '$1 >= c' "$LOG"
+  else
+    cat "$LOG"
+  fi
+}
+
+# Wait for the drills to go QUIET before reading a verdict out of them.
+#
+# Not a longer sleep. One drill reports five seconds after it opens its undo
+# window, and in that gap the launch task's own grid paint is legitimately
+# refused by a stage the drill still owns. Read mid-flight, that refusal is the
+# last line after the last verdict, which is exactly the shape check 1 below
+# treats as a panel stuck holding the stage — so a healthy build failed its
+# deploy, reproducibly, on a machine busy enough to slip past the caller's
+# fixed `sleep`.
+#
+# Quiescence rather than a named drill: waiting for "pendingSend.afterWindow"
+# would work today and would have to be edited by whoever adds the next drill
+# that reports late. Waiting until the verdict count stops moving needs no
+# such knowledge. The ceiling is generous because the cost of waiting is a few
+# seconds on a deploy and the cost of not waiting is a false failure that
+# teaches the operator to ignore this script.
+SETTLE_QUIET_SECONDS=3
+SETTLE_CEILING_SECONDS=45
+settle() {
+  local waited=0 stable=0 last=-1 now
+  while [ "$waited" -lt "$SETTLE_CEILING_SECONDS" ]; do
+    now=$(read_window | grep -cE "selftest .*: (PASS|FAIL|SKIP)" || true)
+    if [ "$now" -eq "$last" ]; then
+      stable=$((stable + 1))
+      [ "$stable" -ge "$SETTLE_QUIET_SECONDS" ] && return 0
+    else
+      stable=0
+      last="$now"
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 0
+}
+settle
+
+RECENT=$(read_window)
 
 VERDICTS=$(printf '%s\n' "$RECENT" | grep -E "selftest .*: (PASS|FAIL|SKIP)|selftest-arm .*(PASS|FAIL)" || true)
 
