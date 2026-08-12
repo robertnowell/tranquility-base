@@ -66,6 +66,23 @@ final class PastAgentsList: NSView {
         scroll.horizontalScrollElasticity = .none
         scroll.documentView = stack
 
+        // Hover is arbitrated HERE, not by each row.
+        //
+        // Per-row tracking areas cannot do this job in a scroll view. They fire
+        // on enter and exit, and scrolling moves the CONTENT under a stationary
+        // cursor — so rows slid under the pointer, took an enter, and never took
+        // an exit. The symptom was every row you had scrolled past staying lit
+        // at once, which is also the proof that no one was arbitrating: two rows
+        // can only be hovered if nothing owns "the hovered row".
+        //
+        // `.inVisibleRect` was not enough on its own: it keeps a tracking rect
+        // aligned with the visible area, and still says nothing about who is
+        // under the mouse after a scroll nobody moved the mouse for.
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(scrolled),
+            name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+
         filterField.onChange = { [weak self] text in
             self?.filter(text)
             self?.onFilterChanged?()
@@ -111,6 +128,7 @@ final class PastAgentsList: NSView {
             ? "\(items.count) session\(items.count == 1 ? "" : "s") · 7 days"
             : "\(shown.count) of \(items.count)"
         rebuild()
+        setHovered(nil)
     }
 
     private func rebuild() {
@@ -131,6 +149,45 @@ final class PastAgentsList: NSView {
                 rule.widthAnchor.constraint(equalTo: row.widthAnchor).isActive = true
             }
         }
+    }
+
+    /// One tracking area over the whole list, so exactly one row can be lit.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self, userInfo: nil))
+    }
+
+    override func mouseMoved(with event: NSEvent) { updateHover() }
+    override func mouseExited(with event: NSEvent) { setHovered(nil) }
+    @objc private func scrolled() { updateHover() }
+
+    /// Who is under the pointer right now, asked of geometry rather than
+    /// remembered from an event. A scroll changes the answer without any event
+    /// at all, which is exactly why this is recomputed rather than tracked.
+    private func updateHover() {
+        guard let window, window.isVisible else { return setHovered(nil) }
+        let inWindow = window.mouseLocationOutsideOfEventStream
+        // Only the visible part of the list can be hovered: a row scrolled out
+        // of view still has a frame, and without this it would light up.
+        let local = convert(inWindow, from: nil)
+        guard bounds.contains(local) else { return setHovered(nil) }
+        let row = stack.arrangedSubviews.compactMap { $0 as? PastRowView }.first {
+            $0.convert($0.bounds, to: self).contains(local)
+        }
+        setHovered(row)
+    }
+
+    private weak var hovered: PastRowView?
+
+    private func setHovered(_ row: PastRowView?) {
+        guard hovered !== row else { return }
+        hovered?.setHovered(false)
+        row?.setHovered(true)
+        hovered = row
     }
 
     @objc private func rowTapped(_ sender: NSControl) {
@@ -200,7 +257,7 @@ private final class FilterRowView: NSView, NSTextFieldDelegate {
 /// rest the row answers "which one is this"; under the pointer it answers "what
 /// happens if I click". A permanent action column would cost ~78pt of name on
 /// every row forever to label something you need on one.
-private final class PastRowView: NSControl {
+final class PastRowView: NSControl {
     private let idLabel: NSTextField
     private let verbLabel: NSTextField
     private let highlight = NSView()
@@ -280,27 +337,13 @@ private final class PastRowView: NSControl {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// `.inVisibleRect` because this row lives in a scroll view: a tracking
-    /// rect pinned to `bounds` does not follow scrolled content, and the
-    /// symptom is a highlight stuck on a row that has scrolled away.
-    /// `CollapsedStrip` already does it this way.
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self, userInfo: nil))
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        highlight.layer?.backgroundColor = StateLegend.Palette.hover.cgColor
-        idLabel.isHidden = true; verbLabel.isHidden = false
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        highlight.layer?.backgroundColor = nil
-        idLabel.isHidden = false; verbLabel.isHidden = true
+    /// Told, not tracked. The list decides who is hovered — see its own note:
+    /// a row cannot know it stopped being under the pointer when the thing that
+    /// moved was the scroll view and not the mouse.
+    func setHovered(_ on: Bool) {
+        highlight.layer?.backgroundColor = on ? StateLegend.Palette.hover.cgColor : nil
+        idLabel.isHidden = on
+        verbLabel.isHidden = !on
     }
 
     override func mouseDown(with event: NSEvent) {}
