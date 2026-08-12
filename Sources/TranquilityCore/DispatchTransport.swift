@@ -264,24 +264,156 @@ public struct TerminalAppTransport: DispatchTransport {
 
 public struct ScriptError: Error, Sendable, CustomStringConvertible {
     public let message: String
+    /// True when the script was killed by our own deadline rather than failing
+    /// on its own — the caller's "Terminal is busy" case, distinct from a
+    /// genuine scripting error.
+    public let timedOut: Bool
     public var description: String { message }
+
+    public init(message: String, timedOut: Bool = false) {
+        self.message = message
+        self.timedOut = timedOut
+    }
 }
 
+/// A Data accumulator that is safe to fill from a GCD drain thread and read
+/// after the drain's group has been waited out.
+private final class PipeBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    func append(_ chunk: Data) { lock.lock(); data.append(chunk); lock.unlock() }
+    var text: String {
+        lock.lock(); defer { lock.unlock() }
+        return String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+}
+
+/// Fires exactly once, from whichever thread gets there first.
+private final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fired = false
+    /// True exactly once.
+    func fire() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if fired { return false }
+        fired = true
+        return true
+    }
+    var didFire: Bool { lock.lock(); defer { lock.unlock() }; return fired }
+}
+
+/// FileHandle is not Sendable; the drain thread is its only user after launch.
+private struct DrainHandle: @unchecked Sendable { let handle: FileHandle }
+
 public enum AppleScript {
-    public static func run(script: String) -> Result<String, ScriptError> {
+    /// Both pipes are drained CONCURRENTLY with the wait, never after it: a
+    /// child that writes more than the 64 KB pipe buffer otherwise blocks on
+    /// the pipe while the parent blocks in waitUntilExit — a permanent
+    /// deadlock (issue 14). The drains run on GCD threads, not the Swift
+    /// cooperative pool.
+    private static func launchDraining(
+        _ p: Process, _ out: Pipe, _ err: Pipe
+    ) throws -> (stdout: PipeBuffer, stderr: PipeBuffer, drained: DispatchGroup) {
+        try p.run()
+        let stdout = PipeBuffer(), stderr = PipeBuffer()
+        let drained = DispatchGroup()
+        for (pipe, buf) in [(out, stdout), (err, stderr)] {
+            let reader = DrainHandle(handle: pipe.fileHandleForReading)
+            drained.enter()
+            DispatchQueue.global(qos: .utility).async {
+                buf.append(reader.handle.readDataToEndOfFile())
+                drained.leave()
+            }
+        }
+        return (stdout, stderr, drained)
+    }
+
+    private static func osascript(_ script: String) -> (Process, Pipe, Pipe) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         p.arguments = ["-e", script]
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
         p.standardError = err
-        do { try p.run() } catch { return .failure(ScriptError(message: "\(error)")) }
+        return (p, out, err)
+    }
+
+    /// Synchronous, unbounded. Only for callers already off the main thread
+    /// whose scripts cannot stall; anything user-facing wants the async
+    /// variant below, which owns a deadline.
+    public static func run(script: String) -> Result<String, ScriptError> {
+        let (p, out, err) = osascript(script)
+        let stdout: PipeBuffer, stderr: PipeBuffer, drained: DispatchGroup
+        do { (stdout, stderr, drained) = try launchDraining(p, out, err) }
+        catch { return .failure(ScriptError(message: "\(error)")) }
         p.waitUntilExit()
-        let stdout = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let stderr = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        drained.wait()
         return p.terminationStatus == 0
-            ? .success(stdout.trimmingCharacters(in: .whitespacesAndNewlines))
-            : .failure(ScriptError(message: stderr.trimmingCharacters(in: .whitespacesAndNewlines)))
+            ? .success(stdout.text)
+            : .failure(ScriptError(message: stderr.text))
+    }
+
+    /// A one-slot promise: the termination handler deposits the exit status
+    /// from its own thread, the async caller collects it — whichever side
+    /// arrives second completes the hand-off, so setting the handler before
+    /// run() can never lose an instant exit.
+    private final class ExitPromise: @unchecked Sendable {
+        private let lock = NSLock()
+        private var status: Int32?
+        private var waiter: CheckedContinuation<Int32, Never>?
+        func exit(_ s: Int32) {
+            lock.lock()
+            if let w = waiter { waiter = nil; lock.unlock(); w.resume(returning: s) }
+            else { status = s; lock.unlock() }
+        }
+        func wait(_ c: CheckedContinuation<Int32, Never>) {
+            lock.lock()
+            if let s = status { lock.unlock(); c.resume(returning: s) }
+            else { waiter = c; lock.unlock() }
+        }
+    }
+
+    /// Bounded and off-thread: awaits the child without blocking any thread,
+    /// and kills it (SIGTERM, then SIGKILL half a second later) when the
+    /// deadline passes. An Apple event against a busy target is entitled to
+    /// block for its full two-minute default timeout; no user-facing surface
+    /// can be made to wait on that (issue 14).
+    public static func run(
+        script: String, timeout: TimeInterval
+    ) async -> Result<String, ScriptError> {
+        let (p, out, err) = osascript(script)
+        let promise = ExitPromise()
+        let exited = OnceFlag(), killed = OnceFlag()
+        p.terminationHandler = { proc in
+            _ = exited.fire()
+            promise.exit(proc.terminationStatus)
+        }
+        let stdout: PipeBuffer, stderr: PipeBuffer, drained: DispatchGroup
+        do { (stdout, stderr, drained) = try launchDraining(p, out, err) }
+        catch { return .failure(ScriptError(message: "\(error)")) }
+
+        let pid = p.processIdentifier
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+            guard !exited.didFire, killed.fire() else { return }
+            kill(pid, SIGTERM)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+                if !exited.didFire { kill(pid, SIGKILL) }
+            }
+        }
+
+        let status = await withCheckedContinuation { promise.wait($0) }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            drained.notify(queue: .global()) { cont.resume() }
+        }
+        if killed.didFire {
+            return .failure(ScriptError(
+                message: "osascript killed after \(Int(timeout))s deadline",
+                timedOut: true))
+        }
+        return status == 0
+            ? .success(stdout.text)
+            : .failure(ScriptError(message: stderr.text))
     }
 }
 
