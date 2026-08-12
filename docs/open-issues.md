@@ -283,6 +283,43 @@ full spindump walk-through in the 12 Aug HQ brief.
 
 ---
 
+## 15. ⌃⌃ ignored during active announcement playback (12 Aug)
+
+**Status:** open, evidence gathered, root cause hypothesized but not proven.
+Reported by Robert on the first minutes of the AUHAL mic build (024d60b era),
+and almost certainly NOT the mic stack: a ⌃⌃ pull involves no microphone, and
+the mic machine sat idle-warm throughout.
+
+**What the log shows (21:12Z, pid 52224):** an announcement was speaking from
+21:12:32 to 21:12:44. Robert pressed ⌃⌃ during it — the log has ZERO trace of
+that press: no `ack: registered (blue)` (the first-tap acknowledgement), no
+refusal, nothing. His second ⌃⌃ at 21:12:45 — one second after the speech
+ended — registered normally and pulled the FINDINGS rung. A press the
+classifier refuses still logs; a press that leaves nothing was never seen.
+
+**Hypothesis (fits the only difference between the two presses):** run-loop
+saturation during playback. The word-highlight pipeline runs a full HUD
+render — `layoutSubtreeIfNeeded`, `boundingRect`, chrome/layout log lines —
+per spoken word, ~15×/second on the main thread, and the CGEvent tap
+delivers on that same run loop. A saturated loop delays the tap callback;
+past the (~1s, undocumented) timeout macOS silently disables the tap with
+`kCGEventTapDisabledByTimeout` and auto-reenables later — a window in which
+key events pass through to nobody, uncounted. The 5s watchdog only logs taps
+found dead at its tick, so a sub-5s silent gap is invisible today. This is
+the "render throttle" item from Robert's own 12 Aug morning note, now with a
+reproduction shape: gestures during speech.
+
+**Fix shape (not started):** two independent halves. (a) Throttle the
+highlight: coalesce word updates to ~10Hz and skip the full resizeToFit
+per word — the label repaint needs none of it; today's per-word HUD layout
+is the audit's item 1 wearing its quietest costume. (b) Make the silent
+window visible: subscribe the tap callback to `kCGEventTapDisabledByTimeout`
+re-enables and LOG them (the revive-and-count is one line in HotkeyMonitor),
+so the next missed gesture has a timestamped culprit instead of an absence.
+Measure before/after with the 21:12 shape: press ⌃⌃ mid-announcement.
+
+---
+
 ## Landed: the state machine
 
 The five independent booleans became `PanelState` + the stage arbiter
