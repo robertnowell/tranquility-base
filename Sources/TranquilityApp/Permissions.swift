@@ -121,26 +121,48 @@ struct Permissions {
 
     /// Stamped once — the pid never changes and the formatter is not free.
     private nonisolated static let pidTag = "[\(ProcessInfo.processInfo.processIdentifier)]"
-
-    nonisolated static func log(_ message: String) {
-        // The pid rides every line: thirteen launches wrote to this one file
-        // on 12 Aug (relaunches + worktree drill builds), and every
-        // log-derived statistic silently mixed instances. With the tag, one
-        // grep separates them — and the mic acceptance run can measure
-        // exactly the process it deployed.
-        let line = "\(ISO8601DateFormatter().string(from: Date())) \(Self.pidTag)  \(message)\n"
+    /// One formatter, cached. Allocating a fresh one per line was the single
+    /// biggest cost of a call — and log() rides hot paths (issue 15: it ran
+    /// twice per spoken word, on the main thread, ~14×/s through every
+    /// announcement). `nonisolated(unsafe)` because the type predates
+    /// Sendable: Apple's NSISO8601DateFormatter documentation states it is
+    /// thread-safe, and this instance is never mutated after init — the
+    /// compiler cannot see that contract, we can cite it.
+    private nonisolated(unsafe) static let iso = ISO8601DateFormatter()
+    /// The log's home, with its directory created ONCE — not re-attempted
+    /// as a syscall on every line, which is what the old body did.
+    private nonisolated static let logURL: URL = {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/VoiceDispatch/app.log")
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let fd = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
-        guard fd >= 0 else { return }
-        _ = line.withCString { write(fd, $0, strlen($0)) }
-        // O_APPEND leaves the offset at end-of-file after the write, so the size
-        // comes free — no stat on the hot path.
-        let size = lseek(fd, 0, SEEK_CUR)
-        close(fd)
-        if size > logSizeLimit { roll(url) }
+        return url
+    }()
+    /// All disk IO for the log serializes here, OFF the calling thread. The
+    /// caller pays string composition and an enqueue — microseconds — and
+    /// never a syscall. Write order is enqueue order, so lines cannot
+    /// interleave; the timestamp is taken at the CALL, so the queue adds
+    /// latency only to the disk, never to the truth. Crash-loss window is
+    /// whatever sits unflushed on this queue — each line is written as it
+    /// drains, so in practice a line or two, which is the price of the main
+    /// thread never blocking on the log again.
+    private nonisolated static let logQueue = DispatchQueue(label: "base.tranquility.app-log")
+
+    nonisolated static func log(_ message: String) {
+        // The pid rides every line: thirteen launches wrote to this one file
+        // on 12 Aug (relaunches + worktree drill builds), and every
+        // log-derived statistic silently mixed instances.
+        let line = "\(iso.string(from: Date())) \(pidTag)  \(message)\n"
+        logQueue.async {
+            let fd = open(logURL.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
+            guard fd >= 0 else { return }
+            _ = line.withCString { write(fd, $0, strlen($0)) }
+            // O_APPEND leaves the offset at end-of-file after the write, so the
+            // size comes free — no stat needed.
+            let size = lseek(fd, 0, SEEK_CUR)
+            close(fd)
+            if size > logSizeLimit { roll(logURL) }
+        }
     }
 
     /// Rename the log aside and let the next write create a fresh one. Rename is
