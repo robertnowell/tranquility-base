@@ -32,7 +32,7 @@ final class PastAgentsList: NSView {
     }
 
     private let scroll = NSScrollView()
-    private let stack = NSStackView()
+    private let stack = FlippedStack()
     private let filterField = FilterRowView()
     private var items: [Item] = []
     private var shown: [Item] = []
@@ -113,7 +113,7 @@ final class PastAgentsList: NSView {
         self.items = items
         filterField.reset()
         filter("")
-        scroll.contentView.scroll(to: .zero)
+        scrollToTop()
     }
 
     /// Case-insensitive substring, over the name, the short id and the project
@@ -129,6 +129,10 @@ final class PastAgentsList: NSView {
             : "\(shown.count) of \(items.count)"
         rebuild()
         setHovered(nil)
+        // Filtering re-answers the question, so it re-answers it from the top:
+        // being left half-way down a list you just narrowed is disorienting in
+        // the same way opening at the bottom was.
+        scrollToTop()
     }
 
     private func rebuild() {
@@ -167,18 +171,36 @@ final class PastAgentsList: NSView {
 
     /// Who is under the pointer right now, asked of geometry rather than
     /// remembered from an event. A scroll changes the answer without any event
-    /// at all, which is exactly why this is recomputed rather than tracked.
+    /// at all, which is why this is recomputed rather than tracked.
+    ///
+    /// It runs on EVERY frame of a live scroll, so it has to cost nothing. The
+    /// first version scanned every arranged subview and converted each one's
+    /// rect — an allocation and forty-five coordinate conversions per frame,
+    /// which is what made the scroll feel like it was snapping rather than
+    /// moving. Rows are a fixed pitch in a flipped stack, so the row under a
+    /// point is one division.
     private func updateHover() {
         guard let window, window.isVisible else { return setHovered(nil) }
-        let inWindow = window.mouseLocationOutsideOfEventStream
-        // Only the visible part of the list can be hovered: a row scrolled out
-        // of view still has a frame, and without this it would light up.
-        let local = convert(inWindow, from: nil)
+        let local = convert(window.mouseLocationOutsideOfEventStream, from: nil)
         guard bounds.contains(local) else { return setHovered(nil) }
-        let row = stack.arrangedSubviews.compactMap { $0 as? PastRowView }.first {
-            $0.convert($0.bounds, to: self).contains(local)
-        }
+        let inStack = convert(local, to: stack)
+        guard let index = rowIndex(at: inStack.y),
+              let row = stack.arrangedSubviews[safe: index * 2] as? PastRowView
+        else { return setHovered(nil) }
         setHovered(row)
+    }
+
+    /// Rows and their separators alternate, so row `i` is arranged subview
+    /// `i * 2` and occupies one pitch from the top of the flipped stack.
+    private func rowIndex(at y: CGFloat) -> Int? {
+        let pitch = GridRowView.height + 1
+        guard y >= 0 else { return nil }
+        let index = Int(y / pitch)
+        // Inside the row itself rather than on the hairline under it: a pointer
+        // resting on a separator belongs to neither row.
+        guard index < shown.count, y - CGFloat(index) * pitch <= GridRowView.height
+        else { return nil }
+        return index
     }
 
     private weak var hovered: PastRowView?
@@ -188,6 +210,15 @@ final class PastAgentsList: NSView {
         hovered?.setHovered(false)
         row?.setHovered(true)
         hovered = row
+    }
+
+    /// The top, in a flipped document view, is y = 0 — and it has to be applied
+    /// AFTER layout, or the clip view clamps the scroll against a content size
+    /// it has not been told about yet and lands wherever it already was.
+    private func scrollToTop() {
+        layoutSubtreeIfNeeded()
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 
     @objc private func rowTapped(_ sender: NSControl) {
@@ -201,6 +232,12 @@ final class PastAgentsList: NSView {
     /// What the caret is actually painted with, read back from the live field
     /// editor rather than from the constant that set it — the drill's job is to
     /// catch AppKit handing back its own accent, which a constant cannot see.
+    /// Whether the list is showing its first row. In a flipped document view
+    /// the top is y = 0, which is also what makes this assertable at all.
+    var isAtTopForTesting: Bool {
+        stack.isFlipped && scroll.contentView.bounds.origin.y <= 0.5
+    }
+
     var caretColourForTesting: NSColor? {
         (filterField.input.currentEditor() as? NSTextView)?.insertionPointColor
     }
@@ -255,6 +292,21 @@ private final class FilterRowView: NSView, NSTextFieldDelegate {
     func reset() { input.stringValue = "" }
 
     func controlTextDidChange(_ obj: Notification) { onChange?(input.stringValue) }
+}
+
+/// A stack that counts from the top.
+///
+/// AppKit's default coordinate origin is the BOTTOM left, so a stack view used
+/// as a scroll view's document view lays its first arranged subview at the
+/// bottom and `scroll(to: .zero)` scrolls to the end of the list. The list
+/// opened on its oldest session every time, which reads as a bug in the sort
+/// rather than as a coordinate system.
+///
+/// Flipping the document view is the whole fix: first row at the top, `.zero`
+/// at the top, and the row index maths in `rowIndex(at:)` become the obvious
+/// arithmetic instead of a subtraction from the total height.
+private final class FlippedStack: NSStackView {
+    override var isFlipped: Bool { true }
 }
 
 /// A text field whose caret belongs to the console.
@@ -490,5 +542,14 @@ private final class PlacardHalf: NSControl {
     override func mouseUp(with event: NSEvent) {
         guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
         sendAction(action, to: target)
+    }
+}
+
+
+private extension Array {
+    /// Index arithmetic on a list that is being rebuilt under a live pointer
+    /// deserves a bounds check rather than a crash.
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

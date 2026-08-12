@@ -3222,6 +3222,10 @@ final class StatusHUD: NSObject {
             ("caretIsNotTheWorkingLamp", caretColour != StateLegend.Palette.working),
             ("caretComesFromThePalette", caretColour == StateLegend.Palette.ink),
             ("itIsTheFaceThatScrolls", scrolls),
+            // A stack view in a scroll view lays out from the BOTTOM unless it
+            // is flipped, so the list opened on its oldest session — which
+            // reads as a broken sort rather than as a coordinate system.
+            ("opensAtTheTop", pastList.isAtTopForTesting),
             ("idMatchesTheLogs", idsMatch),
             ("verbFollowsLiveness", verbs),
             ("leavesCleanly", { if case .idle = state { return true }; return false }()),
