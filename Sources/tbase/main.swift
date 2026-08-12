@@ -182,15 +182,20 @@ do {
         // watching all along, does the disk-derived `answered` agree with the
         // store's own waiting set?
         //
-        // Only ONE of the four combinations is a conflict, and reporting a
-        // single "disagreement" count hid that. `waiting` means you have not
-        // HEARD it; `answered` means you have not TYPED at it. A session you
-        // listened to and never replied to is legitimately not-waiting and
-        // unanswered at the same time, and it is the commonest case there is.
-        // The bug worth finding is the other one: the store lighting a row
-        // green for a turn you already answered yourself in the terminal.
-        let waitingIds = Set(try store.waitingSessions(limit: 500).map(\.sessionId))
-        let knownIds = Set(try store.waitingSessionsIncludingHeard(limit: 1000).map(\.sessionId))
+        // Reworded 12 Aug for the one-list model: `waiting()` now means ON YOU
+        // (latest Stop, live, not dismissed) and carries `heard` as a separate
+        // bit, so "on the list" no longer implies "unheard". `answered` is a
+        // third thing again — whether you TYPED at it, read from the transcript.
+        //
+        // Only one combination is a conflict: the list says a turn is on you
+        // while the disk says you already answered it in the terminal. That is
+        // the case the one-list change handles by consulting SessionActivity
+        // for the lamp; this is an independent read of the same truth from the
+        // other side, which is exactly what a gate is for.
+        let onYou = try store.waitingSessions(limit: 500)
+        let waitingIds = Set(onYou.map(\.sessionId))
+        let unheardIds = Set(onYou.filter { !$0.heard }.map(\.sessionId))
+        let knownIds = Set(try store.allKnownSessions(limit: 1000).map(\.sessionId))
         let overlap = found.sessions.filter { knownIds.contains($0.sessionId) }
         func count(waiting: Bool, answered: Bool) -> Int {
             overlap.filter { waitingIds.contains($0.sessionId) == waiting && $0.answered == answered }
@@ -201,10 +206,12 @@ do {
         print("revivable       \(found.sessions.filter(\.revivable).count)")
         print("known to store  \(overlap.count) of \(found.sessions.count)")
         print("")
-        print("  waiting + unanswered   \(count(waiting: true, answered: false))   agree: green is right")
-        print("  waiting + ANSWERED     \(conflicts.count)   CONFLICT: green for a turn you answered")
-        print("  quiet + unanswered     \(count(waiting: false, answered: false))   heard, never replied to")
-        print("  quiet + answered       \(count(waiting: false, answered: true))   retired both ways")
+        print("  on you + unanswered    \(count(waiting: true, answered: false))   agree: the row is right")
+        print("  on you + ANSWERED      \(conflicts.count)   CONFLICT: on you for a turn you answered")
+        print("  off list + unanswered  \(count(waiting: false, answered: false))   dismissed or gone, never replied to")
+        print("  off list + answered    \(count(waiting: false, answered: true))   retired both ways")
+        print("  of the on-you rows, "
+            + "\(overlap.filter { unheardIds.contains($0.sessionId) }.count) still unannounced")
         for s in conflicts.prefix(10) {
             print("    \(s.sessionId.prefix(8))  \(truncate(s.title, 48))")
         }
