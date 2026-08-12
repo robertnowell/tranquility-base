@@ -193,7 +193,10 @@ final class SessionDiscoveryTests: XCTestCase {
             ("-tmp-a", "robot", [#"{"type":"user","entrypoint":"sdk-cli","cwd":"/tmp"}"#, assistant()]),
             ("-tmp-a", "old", [#"{"type":"user","cwd":"/tmp"}"#, assistant()]),
         ])
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
 
         let result = SessionDiscovery.discover(
             live: StubAgents([]), projects: root, titles: TranscriptTitles())
@@ -213,7 +216,10 @@ final class SessionDiscoveryTests: XCTestCase {
         let root = try makeArchive([
             ("-tmp-a", "human", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
         ])
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
 
         let result = SessionDiscovery.discover(
             live: StubAgents(nil), projects: root, titles: TranscriptTitles())
@@ -228,7 +234,10 @@ final class SessionDiscoveryTests: XCTestCase {
         let root = try makeArchive([
             ("-tmp-a", "awake", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
         ])
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
 
         let live = LiveSession(pid: 42, sessionId: "awake", cwd: "/tmp",
                                status: nil, name: nil, waitingFor: nil)
@@ -244,7 +253,10 @@ final class SessionDiscoveryTests: XCTestCase {
         let root = try makeArchive([
             ("-tmp-a", "closed", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
         ])
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
 
         let result = SessionDiscovery.discover(
             live: StubAgents([]), projects: root, titles: TranscriptTitles())
@@ -261,7 +273,10 @@ final class SessionDiscoveryTests: XCTestCase {
         let root = try makeArchive([
             ("-tmp-a", "recent", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
         ])
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
 
         let result = SessionDiscovery.discover(
             window: 60, now: Date().addingTimeInterval(3600),
@@ -276,7 +291,10 @@ final class SessionDiscoveryTests: XCTestCase {
         let root = try makeArchive((0..<4).map { i in
             ("-tmp-a", "s\(i)", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()])
         })
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
 
         let result = SessionDiscovery.discover(
             limit: 2, live: StubAgents([]), projects: root, titles: TranscriptTitles())
@@ -293,7 +311,10 @@ final class SessionDiscoveryTests: XCTestCase {
             ("-tmp-a/parent/subagents", "agent-abc",
              [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
         ])
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
 
         let result = SessionDiscovery.discover(
             live: StubAgents([]), projects: root, titles: TranscriptTitles())
@@ -311,7 +332,10 @@ final class SessionDiscoveryTests: XCTestCase {
         let root = try makeArchive([
             ("-tmp-a", "s1", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
         ])
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
         let titles = TranscriptTitles()
 
         let live = LiveSession(pid: 7, sessionId: "s1", cwd: "/tmp",
@@ -346,7 +370,10 @@ final class SessionDiscoveryTests: XCTestCase {
             ("-tmp-b", "s2", [
                 #"{"type":"user","entrypoint":"cli","cwd":"\#(cwd.path)"}"#, assistant()]),
         ])
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
         let titles = TranscriptTitles()
 
         let first = SessionDiscovery.discover(
@@ -396,7 +423,10 @@ final class SessionDiscoveryTests: XCTestCase {
         let root = try makeArchive([
             ("-tmp-c", "s3", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
         ])
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
         let titles = TranscriptTitles()
 
         XCTAssertNil(SessionDiscovery.discoverIfScanned(
@@ -425,7 +455,10 @@ final class SessionDiscoveryTests: XCTestCase {
         let root = try makeArchive([
             ("-tmp-d", "s4", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
         ])
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
         let titles = TranscriptTitles()
         let t0 = Date(timeIntervalSince1970: 2_000_000)
 
