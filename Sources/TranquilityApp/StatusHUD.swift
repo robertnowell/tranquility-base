@@ -1327,8 +1327,9 @@ final class StatusHUD: NSObject {
             // empty panel told before closed sessions had rows at all — and
             // closed rows are exactly what makes the cap start biting.
             let total = face.sessionRows.count
-            let placard = total > Self.gridRowCap
-                ? "\(StateLegend.gridStripTitle) · \(Self.gridRowCap) OF \(total)"
+            let drawn = Self.gridRowsShown(face.sessionRows)
+            let placard = total > drawn
+                ? "\(StateLegend.gridStripTitle) · \(drawn) OF \(total)"
                 : StateLegend.gridStripTitle
             let stripTitle = NSMutableAttributedString(attributedString: letterspaced(
                 placard, size: 10, tracking: 3.2,
@@ -1624,9 +1625,63 @@ final class StatusHUD: NSObject {
     /// the key line. Tap = invite that session. Fixed height plus single-line
     /// labels is what kills the orphan fragments and ragged gaps the old
     /// free-height attributed-title rows produced.
-    /// How many rows the grid draws. Named rather than inline because the
-    /// placard now states it when it bites, and two literals drift.
-    static let gridRowCap = 8
+    /// The floor. Eight rows is what the panel has always shown and what it
+    /// shows on a quiet day: enough to hold the work you are actually doing.
+    static let gridRowFloor = 8
+
+    /// The ceiling, and it is a taste decision rather than an arithmetic one.
+    /// A panel holding twenty agents is already at the edge of what reads as an
+    /// instrument rather than a directory, and the graveyard exists for
+    /// everything past it.
+    static let gridRowCeiling = 20
+
+    /// How many rows will FIT, which is a different question on every machine.
+    ///
+    /// Measured across the range, using the panel's own margins and the chrome
+    /// it carries above and below the rows (top band, placard rule, the
+    /// + NEW AGENT row, the key line, the footer — ~153pt):
+    ///
+    ///   13" 1440×900, the oldest baseline   16 rows
+    ///   13.6" MacBook Air, default scaled   18 rows
+    ///   14" MacBook Pro, default scaled     20 rows
+    ///   16" MacBook Pro                     22 rows
+    ///
+    /// So the ceiling binds on every Mac from a 14" up, and the arithmetic
+    /// binds below that. Computed rather than picking one number for all
+    /// screens, because the one number would have to be 16 — and it would then
+    /// be wrong by six rows on the machine this is being built on.
+    static func gridRowCapacity(screen: NSScreen? = NSScreen.main) -> Int {
+        guard let screen else { return gridRowFloor }
+        let usable = screen.visibleFrame.height - 32   // the panel's own margins
+        let forRows = usable - gridChromeHeight
+        let fits = Int(forRows / (GridRowView.height + 1))
+        return max(gridRowFloor, min(gridRowCeiling, fits))
+    }
+
+    /// Everything the grid face draws that is not a session row. Derived once
+    /// from a measured panel rather than summed from constants, because half of
+    /// it is intrinsic type height that no constant states.
+    private static let gridChromeHeight: CGFloat = 153
+
+    /// How many rows to draw right now: your top eight, or every ACTIVE
+    /// session, whichever is larger — clamped to what the screen can hold.
+    ///
+    /// Ruled 12 Aug. Active means the panel is telling you something: green
+    /// (wants you), blue (working), amber (stopped). A session that is merely
+    /// alive with its lamp out is NOT guaranteed a place — it competes for the
+    /// eight, and past that it lives in the list. That is what keeps the
+    /// panel's height a measure of how much is happening rather than a measure
+    /// of how long the machine has been on.
+    static func gridRowsShown(_ rows: [StateLegend.SessionRow],
+                              screen: NSScreen? = NSScreen.main) -> Int {
+        let active = rows.filter {
+            switch $0.lamp {
+            case .ready, .working, .fault: return true
+            case .running, .unlit: return false
+            }
+        }.count
+        return min(gridRowCapacity(screen: screen), max(gridRowFloor, active))
+    }
 
     private func rebuildSessionRows() {
         waitingRows.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -1644,7 +1699,7 @@ final class StatusHUD: NSObject {
 
         // The strip's bottom rule, under "AGENTS ⚙".
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
-        let shown = Array(face.sessionRows.prefix(Self.gridRowCap))
+        let shown = Array(face.sessionRows.prefix(Self.gridRowsShown(face.sessionRows)))
         // ONE callsign column (ruled 05 Aug): sized to the widest callsign on
         // show, capped at 38% of the grid. Per-row widths made every name
         // truncate at its own x and the right side read as a rag, not a
@@ -2964,6 +3019,7 @@ final class StatusHUD: NSObject {
         titleDoorDrill()
         quietRowsDrill()
         closedRowsDrill()
+        elasticGridDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
@@ -2976,6 +3032,50 @@ final class StatusHUD: NSObject {
     /// bands feeding it are recency-ordered, and a partition that quietly
     /// reshuffled ties would spend that ordering without any visible symptom.
     /// So the drill checks positions, not just the tail.
+    /// The panel breathes with live work, and with nothing else.
+    ///
+    /// Ruled 12 Aug: "it's your top eight or all the active sessions, whichever
+    /// is larger", where active means green, blue or amber. The failure this
+    /// guards is the panel growing for sessions that are merely alive, or for
+    /// dead ones — which would make its height a measure of how long the
+    /// machine has been on rather than of how much is happening.
+    private func elasticGridDrill() {
+        func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
+            StateLegend.SessionRow(id: id, name: id, callsign: id, lamp: lamp)
+        }
+        // A generous screen, so the ceiling rather than the arithmetic decides.
+        let big = NSScreen.main
+        let quiet = (0..<30).map { row("q\($0)", .running) }
+        let dead = (0..<30).map { row("d\($0)", .unlit) }
+        let busy = (0..<14).map { row("a\($0)", .working) } + quiet
+        let swamped = (0..<40).map { row("a\($0)", .ready) }
+
+        SelfTest.report("elasticGrid", [
+            ("quietDoesNotGrowIt",
+             Self.gridRowsShown(quiet, screen: big) == Self.gridRowFloor),
+            ("deadDoesNotGrowIt",
+             Self.gridRowsShown(dead, screen: big) == Self.gridRowFloor),
+            ("emptyStaysAtTheFloor",
+             Self.gridRowsShown([], screen: big) == Self.gridRowFloor),
+            ("activeGrowsIt", Self.gridRowsShown(busy, screen: big) == 14),
+            ("neverBelowTheFloor",
+             Self.gridRowsShown([row("a", .ready)], screen: big) == Self.gridRowFloor),
+            ("clampedByTheScreen",
+             Self.gridRowsShown(swamped, screen: big) <= Self.gridRowCapacity(screen: big)),
+            ("capacityIsSane",
+             (Self.gridRowFloor...Self.gridRowCeiling)
+                .contains(Self.gridRowCapacity(screen: big))),
+            // The panel must never be taller than the screen it sits on, which
+            // is the whole point of computing capacity rather than picking one.
+            ("capacityFitsTheScreen", {
+                guard let big else { return true }
+                let rows = CGFloat(Self.gridRowCapacity(screen: big))
+                    * (GridRowView.height + 1)
+                return rows + 153 <= big.visibleFrame.height - 32
+            }()),
+        ])
+    }
+
     private func quietRowsDrill() {
         func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
             StateLegend.SessionRow(id: id, name: id, callsign: id, lamp: lamp)
