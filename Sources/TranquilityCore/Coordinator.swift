@@ -174,12 +174,19 @@ public struct Coordinator: Sendable {
     public func nextToAnnounce(
         excluding inFlight: DeliveryInFlight = DeliveryInFlight()
     ) throws -> WaitingSession? {
+        // `!heard` is the WHOLE difference between the announce queue and the
+        // waiting list: one list, one bit, filtered here at the only site that
+        // cares. A heard session stays in waiting() — still lit, still owed —
+        // it just isn't read out twice.
         try waiting().first {
-            !inFlight.supersedesWaiting($0.sessionId, latestId: $0.latestId)
+            !$0.heard && !inFlight.supersedesWaiting($0.sessionId, latestId: $0.latestId)
         }
     }
 
-    /// Everything waiting, newest first, for a UI that shows rather than describes.
+    /// Everything waiting ON THE USER — undismissed, heard or not — newest
+    /// first, for a UI that shows rather than describes. Each row carries
+    /// `heard`; the announce path (nextToAnnounce) is the only consumer that
+    /// filters on it.
     public func waiting() throws -> [WaitingSession] {
         // Announcing fails OPEN. If the probe cannot answer, every session is
         // treated as live: the worst outcome is announcing a job that already
@@ -434,14 +441,6 @@ public struct Coordinator: Sendable {
     /// The badge. Shares the predicate with what a keypress will play, so the two
     /// cannot disagree.
     public func waitingCount() throws -> Int { try waiting().count }
-
-    /// You heard it through to the end.
-    ///
-    /// Advances the cursor rather than mutating the event. Stopping half way must
-    /// NOT call this: half an announcement tells you half of what happened.
-    public func markHeard(sessionId: String, through eventId: Int64) throws {
-        try store.advanceCursor(sessionId: sessionId, heardThrough: eventId)
-    }
 
     /// You are done with it without hearing it.
     ///
@@ -793,7 +792,7 @@ public struct Coordinator: Sendable {
     ) async throws -> ReplyOutcome {
         let target: WaitingSession?
         if let sessionId {
-            target = try store.waitingSessionsIncludingHeard()
+            target = try store.allKnownSessions()
                 .first { $0.sessionId == sessionId }
         } else {
             target = try replyTarget()
@@ -835,7 +834,7 @@ public struct Coordinator: Sendable {
         guard var utterance = try store.utterances(limit: 500).first(where: { $0.id == utteranceId }),
               let text = utterance.transcriptText,
               let sessionId = utterance.targetSessionId,
-              let target = try store.waitingSessionsIncludingHeard()
+              let target = try store.allKnownSessions()
                   .first(where: { $0.sessionId == sessionId })
         else { return .noTarget }
 
@@ -892,7 +891,11 @@ public struct Coordinator: Sendable {
             utterance.lastError = "queued behind the current turn"
             try store.update(utterance: utterance)
 
-            try store.advanceCursor(sessionId: target.sessionId, heardThrough: target.latestId)
+            // A delivered reply is what answers: both cursors advance, the row
+            // unlights. Hearing alone never does this (read is not answered).
+            try store.advanceCursor(sessionId: target.sessionId,
+                                    heardThrough: target.latestId,
+                                    dismissedThrough: target.latestId)
             return .queued(text: text, sessionId: target.sessionId)
 
         case .confirmed(let latencyMs):
@@ -900,7 +903,9 @@ public struct Coordinator: Sendable {
             utterance.confirmedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             try store.update(utterance: utterance)
 
-            try store.advanceCursor(sessionId: target.sessionId, heardThrough: target.latestId)
+            try store.advanceCursor(sessionId: target.sessionId,
+                                    heardThrough: target.latestId,
+                                    dismissedThrough: target.latestId)
             return .dispatched(text: text, latencyMs: latencyMs, sessionId: target.sessionId)
 
         case .deferred(let readiness):

@@ -478,29 +478,49 @@ public final class QueueStore: Sendable {
     /// latest event's rowid) so the grid can label rows with the 3–6-word
     /// composed field instead of a prose prefix. Per-event, not per-session:
     /// a newer turn with no brief yet is nil, never last turn's label.
+    /// ONE list, ONE predicate: undismissed. Each row carries its own heard
+    /// edge, so "should this be announced" is a filter on the list, not a
+    /// second query.
+    ///
+    /// It used to be `latestId > max(heardThrough, dismissedThrough)`, which
+    /// collapsed two different questions — "has this been told to me" and
+    /// "have I dealt with it" — into one predicate. Right for announcing,
+    /// wrong for the lamp: the act of listening extinguished the row and
+    /// zeroed the badge with the answer still owed (Robert, 12 Aug: "read is
+    /// not the same as idle — it can be read and still waiting on you";
+    /// app.log: "announce: spoke via elevenlabs" → "menubar: count=0
+    /// (quiet)" seconds apart). The same species as isPaused conflating
+    /// paused-with-finished, in SQL.
+    ///
+    /// A session leaves this list three ways, all of them the user's:
+    /// a reply is DELIVERED (the dispatch arms advance dismissedThrough),
+    /// the lamp is clicked ("I don't care about this one"), or the session
+    /// dies and the sweep retires it. Hearing is not on that list: hearing
+    /// only flips `heard`, which stops the re-announcement and nothing else.
     public func waitingSessions(limit: Int = 200) throws -> [WaitingSession] {
         try dbQueue.read { db in
             try WaitingSession.fetchAll(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
                        l.notificationMatcher, l.summaryText, l.hookEvent,
-                       cs.callsign, b.topic AS briefTopic
+                       cs.callsign, b.topic AS briefTopic,
+                       c.heardThrough AS heardThrough
                 FROM latest_per_session l
                 LEFT JOIN session_cursor c ON c.sessionId = l.sessionId
                 LEFT JOIN session_callsign cs ON cs.sessionId = l.sessionId
                 LEFT JOIN brief b ON b.eventRowid = l.latestId
                 WHERE l.hookEvent = ?
-                  AND l.latestId > max(coalesce(c.heardThrough, 0),
-                                       coalesce(c.dismissedThrough, 0))
+                  AND l.latestId > coalesce(c.dismissedThrough, 0)
                 ORDER BY l.latestId DESC
                 LIMIT ?
                 """, arguments: [HookEventKind.stop.rawValue, limit])
         }
     }
 
-    /// How many sessions are waiting. Identical predicate to `waitingSessions`, so
-    /// the badge and the keypress can never disagree — they used to, and the badge
-    /// read "2 waiting" while nothing could be played.
+    /// How many sessions are waiting ON THE USER. Identical predicate to
+    /// `waitingSessions`, so the badge and the keypress can never disagree —
+    /// they used to, and the badge read "2 waiting" while nothing could be
+    /// played.
     public func pendingCount() throws -> Int {
         try waitingSessions().count
     }
@@ -547,10 +567,12 @@ public final class QueueStore: Sendable {
         }
     }
 
-    /// Latest per session regardless of cursors. Used when sending a reply that was
-    /// recorded a moment ago: hearing it advanced the cursor, so the session is no
-    /// longer "waiting", but it is still exactly the session being answered.
-    public func waitingSessionsIncludingHeard(limit: Int = 500) throws -> [WaitingSession] {
+    /// Latest per session regardless of BOTH cursors — dismissed included.
+    /// (Previously "waitingSessionsIncludingHeard", a name that stopped
+    /// meaning anything once waiting() itself included heard rows.) Used by
+    /// the quiet band, which shows even sessions you have dealt with, and by
+    /// reply paths that must find a session you dismissed moments ago.
+    public func allKnownSessions(limit: Int = 500) throws -> [WaitingSession] {
         try dbQueue.read { db in
             try WaitingSession.fetchAll(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,

@@ -222,7 +222,7 @@ final class BriefStoreTests: XCTestCase {
 
         XCTAssertEqual(try store.waitingSessions().first?.briefTopic,
                        "Klaviyo export shipped")
-        XCTAssertEqual(try store.waitingSessionsIncludingHeard().first?.briefTopic,
+        XCTAssertEqual(try store.allKnownSessions().first?.briefTopic,
                        "Klaviyo export shipped",
                        "quiet rows read the same joined topic")
     }
