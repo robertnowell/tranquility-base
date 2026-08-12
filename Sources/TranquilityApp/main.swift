@@ -2565,31 +2565,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Off-main because the scan can walk the archive, then applied on the main
     /// actor in one shot.
     private func openPastAgents() {
-        Task.detached(priority: .userInitiated) {
-            let found = SessionDiscovery.discover().sessions
-            let items = await MainActor.run { found.map { session -> PastAgentsList.Item in
-                let name = StateLegend.displayName(
-                    liveName: session.title, callsign: nil,
-                    fallback: session.cwd.map { ($0 as NSString).lastPathComponent }
-                        ?? "session")
-                // Everything the filter matches, lowercased once: the name you
-                //半 remember, the id you would have grepped for, and the
-                // directory you were working in.
-                let haystack = [name, session.sessionId, session.cwd ?? ""]
-                    .joined(separator: " ").lowercased()
-                return PastAgentsList.Item(
-                    row: StateLegend.SessionRow(
-                        id: session.sessionId, name: name,
-                        aux: StateLegend.shortId(session.sessionId),
-                        lamp: session.liveness == .live ? .running : .unlit,
-                        revivable: session.revivable),
-                    revivable: session.revivable,
-                    haystack: haystack)
-            } }
-            await MainActor.run { [weak self] in
-                self?.hud.showPastAgents(items: items)
-            }
+        // The SAME rows the grid is built from, minus the ones it is showing.
+        // Not a second query: two queries can disagree, and the disagreement
+        // was visible — every live session appeared in both surfaces at once,
+        // and appeared here with a quiet lamp whatever it was actually doing.
+        // A working agent read as idle, which is the lamp lying.
+        let rows = sessionRowsNow()
+        let hidden = Array(StatusHUD.pastAgents(rows))
+        // The directory is the one thing a row does not carry and the filter
+        // wants, so it comes from the scan the rows were built from — already
+        // warm, since sessionRowsNow just used it.
+        let cwds = Dictionary(
+            (SessionDiscovery.discoverIfScanned()?.sessions ?? [])
+                .map { ($0.sessionId, $0.cwd ?? "") },
+            uniquingKeysWith: { first, _ in first })
+        let items = hidden.map { row -> PastAgentsList.Item in
+            // Everything the filter matches, lowercased once: the name you half
+            // remember, the id you would have grepped for, and the directory you
+            // were working in.
+            let haystack = [row.name, row.id, cwds[row.id] ?? ""]
+                .joined(separator: " ").lowercased()
+            // The row's OWN lamp, carried through. A session below the fold is
+            // usually quiet, but it is not quiet by definition — on a small
+            // screen an agent can be working and still not fit — and the lamp
+            // must say which.
+            return PastAgentsList.Item(row: row, revivable: row.revivable,
+                                       haystack: haystack)
         }
+        hud.showPastAgents(items: items)
     }
 
     /// Focus a live session's terminal tab, from the list.
