@@ -40,29 +40,30 @@ AGENT="$HOME/Library/LaunchAgents/$BUNDLE_ID.plist"
 WANT_LOGIN_ITEM=1
 for a in "$@"; do [ "$a" = "--no-login-item" ] && WANT_LOGIN_ITEM=0; done
 
-# Build it rather than refusing.
+# The default source is BUILT, always — never trusted from disk.
 #
-# This used to exit with "Build one first: scripts/relaunch.sh". On a fresh
-# clone that is the whole install path failing at step one, and the remedy it
-# named is the script carrying the pkill fault — so the N+1st user's first
-# instruction was to run the most broken thing in the repo. The default source
-# also lives in /private/tmp, which this file's own header documents as reaped,
-# so an install that worked in the morning could refuse in the afternoon having
-# changed nothing.
+# Two failures taught this, one each way. First (11 Aug): the source was
+# demanded rather than built, so a fresh clone hit an installer that refused
+# and pointed at relaunch.sh — then the script carrying the pkill fault. Then
+# the fix checked `[ ! -d "$SRC" ]` and built only when the bundle was
+# MISSING — and on 12 Aug installed a bundle another session had built two
+# commits earlier: absent was guarded, stale was not, and "✓ installed"
+# deployed the wrong code minutes after a merge. The guard existed and did
+# not cover the path that mattered. build-clean.sh is idempotent and
+# fetches/checks out its target itself, so building unconditionally costs an
+# incremental no-op build when nothing changed and correctness the rest of
+# the time.
 #
-# Only the DEFAULT source is built. An explicit path given as $1 is the caller
-# saying "install exactly this", and silently building something else instead
-# would be worse than failing.
-if [ ! -d "$SRC" ]; then
-  if [ "$SRC" = "$DEFAULT_SRC" ]; then
-    echo "→ no bundle yet — building committed origin/main"
-    SRC=$(scripts/build-clean.sh)
-  else
-    echo "✗ no bundle at $SRC" >&2
-    echo "  That path was given explicitly. Build it, or run with no argument" >&2
-    echo "  to build committed origin/main automatically." >&2
-    exit 1
-  fi
+# An explicit path given as $1 is the caller saying "install exactly this":
+# it is still checked for existence and never rebuilt or substituted.
+if [ "$SRC" = "$DEFAULT_SRC" ]; then
+  echo "→ building committed origin/main"
+  SRC=$(scripts/build-clean.sh)
+elif [ ! -d "$SRC" ]; then
+  echo "✗ no bundle at $SRC" >&2
+  echo "  That path was given explicitly. Build it, or run with no argument" >&2
+  echo "  to build committed origin/main automatically." >&2
+  exit 1
 fi
 
 # --- the signature check, before anything is copied -------------------------
