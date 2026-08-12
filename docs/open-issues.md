@@ -241,12 +241,29 @@ a whisper. Design goes through the render funnel as a transient overlay (like
 
 ## 14. "Go to session" freezes the whole app — beach ball, hard restart (12 Aug)
 
-**Status:** open, root-caused from a spindump. Confirmed NOT covered by the
-mic-capture branch (scope checked with that session, 12 Aug). Damage is top-tier:
-the app beach-balled for minutes, racked up 11 hang reports in one afternoon, and
-Robert hard-restarted it — and because the CGEvent-tap watchdog disables the tap
-after ~1s of main-thread block, every freeze also silently kills the global
-hotkeys while it lasts.
+**Status:** the button half is FIXED — PR #26 (12 Aug), merged and deployed, by
+evidence: `goToSession()` now paints its receipt and returns in 0 ms (drilled on
+every deploy: `goToSession` + `goToSession.roundTrip`, 27/27 verdicts on the
+7bb2fe1 relaunch), the walk runs in a detached task on a 5 s deadline, and the
+per-tab Apple-event loop became ONE batched `tty of tabs of windows` fetch —
+measured against the same 192 live tabs: 3.54 s → 179 ms, ~20×, and no main-thread
+block for the watchdog to punish. Re-clicks are refused in flight; a busy Terminal
+now reads "Terminal didn't answer within 5 seconds", not a beach ball.
+
+Two same-class residents stay OPEN under this number:
+
+- `rebuildMenu()` → `SystemVoiceCatalog` TTS semaphore wait on main (the nested
+  blocker in the same spindump) — untouched by #26;
+- `frontmostSessionTty()` (main.swift) — one sync Apple event to Terminal on the
+  arrival path; small exposure (only when Terminal is frontmost), same disease.
+  The async `AppleScript.run(script:timeout:)` from #26 is the migration path.
+
+Original record, kept because the spindump reading is the reusable part:
+
+Damage was top-tier: the app beach-balled for minutes, racked up 11 hang reports
+in one afternoon, and Robert hard-restarted it — and because the CGEvent-tap
+watchdog disables the tap after ~1s of main-thread block, every freeze also
+silently killed the global hotkeys while it lasted.
 
 **Evidence:** `/Library/Logs/DiagnosticReports/TranquilityApp_2026-08-12-124315_Roberts-Mac-2.spin`
 (pid 42655, 12:39 PT). Main thread pinned for 465 of 477 samples inside
