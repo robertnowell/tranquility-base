@@ -19,7 +19,7 @@ import TranquilityCore
 /// superseded by the next state or explicitly dismissed.
 @MainActor
 final class StatusHUD: NSObject {
-    private var panel: NSPanel?
+    private var panel: ConsolePanel?
     private var titleLabel: DoorLabel!
     private var bodyLabel: NSTextField!
     private var stateLabel: NSTextField!
@@ -1271,6 +1271,13 @@ final class StatusHUD: NSObject {
         stripLabel.stringValue = ""
         voiceList.isHidden = true; waitingRows.isHidden = true
         pastList?.isHidden = true
+        // Key status is a widget like any other, and the baseline owns it: any
+        // state that is not the list face gives the keyboard back. Written here
+        // rather than at each door out — back button, row pick, dismiss, an
+        // arrival — because a door added later would otherwise leave the panel
+        // holding a keyboard it has no face for, which is the away channel's
+        // one unforgivable bug.
+        if case .pastAgents = state {} else { releaseKeyboard() }
         gearButton.isHidden = false; backButton.isHidden = true
         // Only the grid can be collapsed: a card is a conversation in progress
         // and has no second width to go to.
@@ -1790,6 +1797,14 @@ final class StatusHUD: NSObject {
         face = Face()
         pastList.apply(items: items)
         render()
+        // The one face that asks for typing, so the one face that takes key
+        // status — and it takes it only after the face is on screen, so a
+        // failed transition can never leave the panel holding the keyboard.
+        if let panel {
+            panel.acceptsKey = true
+            panel.makeKeyAndOrderFront(nil)
+            pastList.beginFiltering()
+        }
     }
 
     @objc nonisolated private func newSessionRowTapped() {
@@ -3188,12 +3203,18 @@ final class StatusHUD: NSObject {
         // The id shown is the id the logs print, or the row and the log name
         // the same session two different ways.
         let idsMatch = items.allSatisfy { $0.row.aux == String($0.row.id.prefix(8)) }
+        let tookKeyboard = panel?.acceptsKey == true
         // The verb follows liveness, never the other way round.
         let verbs = items.allSatisfy { $0.revivable == ($0.row.lamp == .unlit) }
         goHomeFromPastAgents()
 
         SelfTest.report("pastAgents", [
             ("entersItsOwnState", entered),
+            // The filter is a text field in a panel that is normally unable to
+            // become key. Without this it renders, ignores the click, and looks
+            // broken for a reason nothing on screen explains.
+            ("takesTheKeyboardForFiltering", tookKeyboard),
+            ("givesTheKeyboardBack", panel?.acceptsKey == false),
             ("itIsTheFaceThatScrolls", scrolls),
             ("idMatchesTheLogs", idsMatch),
             ("verbFollowsLiveness", verbs),
@@ -3202,7 +3223,21 @@ final class StatusHUD: NSObject {
     }
 
     private func goHomeFromPastAgents() {
+        releaseKeyboard()
         showIdle(rows: [])
+    }
+
+    /// Give the keyboard back. Called on every door out of the list face, and
+    /// safe to call when it was never taken: a panel that cannot become key
+    /// cannot be holding it.
+    private func releaseKeyboard() {
+        guard let panel, panel.acceptsKey else { return }
+        panel.acceptsKey = false
+        panel.makeFirstResponder(nil)
+        panel.resignKey()
+        // Ordering front without key hands focus back to whatever had it,
+        // rather than leaving a keyboard nobody owns.
+        panel.orderFront(nil)
     }
 
     private func quietRowsDrill() {
@@ -3737,8 +3772,26 @@ final class StatusHUD: NSObject {
         panel.setFrameOrigin(origin)
     }
 
-    private func build() -> NSPanel {
-        let panel = NSPanel(
+    /// The console panel.
+    ///
+    /// `.nonactivatingPanel` + `.borderless` means it never becomes key, which
+    /// is the entire point everywhere except one place: it must never steal a
+    /// keystroke while you are typing in another app. That is also why the
+    /// filter field on the list face could not be clicked into — a text field
+    /// in a window that cannot become key has nowhere to put first responder,
+    /// so the click landed on nothing and the caret never appeared.
+    ///
+    /// So key status is a state, not a property: the panel accepts it only
+    /// while a face has actually asked for typing. Everything else stays
+    /// exactly as unstealable as it was.
+    final class ConsolePanel: NSPanel {
+        var acceptsKey = false
+        override var canBecomeKey: Bool { acceptsKey }
+        override var canBecomeMain: Bool { false }
+    }
+
+    private func build() -> ConsolePanel {
+        let panel = ConsolePanel(
             contentRect: NSRect(x: 0, y: 0, width: 380, height: 150),
             // .nonactivatingPanel is the key flag: the panel can show without the app
             // becoming frontmost, so it never steals a keystroke mid-sentence.
