@@ -128,7 +128,18 @@ struct Permissions {
     /// Sendable: Apple's NSISO8601DateFormatter documentation states it is
     /// thread-safe, and this instance is never mutated after init — the
     /// compiler cannot see that contract, we can cite it.
-    private nonisolated(unsafe) static let iso = ISO8601DateFormatter()
+    private nonisolated(unsafe) static let iso: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        // Milliseconds, because whole seconds hid a bug for a day: six ⌃
+        // taps logged at 21:48:44–49 could not show that the intended pairs
+        // were ~1s apart against a 450ms pairing window — the log could
+        // bound the gap, not state it. Gesture forensics live below 1s;
+        // the log now resolves them. (check-selftests.sh's cutoff compare
+        // is a string prefix match per second — fractional digits only move
+        // lines within the second they belong to.)
+        f.formatOptions.insert(.withFractionalSeconds)
+        return f
+    }()
     /// The log's home, with its directory created ONCE — not re-attempted
     /// as a syscall on every line, which is what the old body did.
     private nonisolated static let logURL: URL = {
