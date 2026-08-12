@@ -314,12 +314,31 @@ public final class HotkeyMonitor: @unchecked Sendable {
         }
     }
 
+    /// In-callback tap revivals, counted and (throttled) logged. The revival
+    /// itself always existed; what never existed was a TRACE — macOS delivers
+    /// keystrokes to nobody between the disable and this callback firing, so
+    /// a gesture lost in that window was indistinguishable from a gesture
+    /// never pressed. Issue 15's ⌃⌃ (21:12Z, zero log trace mid-speech) is
+    /// exactly that shape; from now on the gap has a timestamp and a count.
+    private var tapReEnables = 0
+    private var lastReEnableLogAt = Date.distantPast
+
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // The system disables a tap that times out or is interrupted by user input.
         // Silently re-enabling is the difference between "works" and "worked until
-        // the machine got busy once".
+        // the machine got busy once" — and LOGGING the re-enable is the
+        // difference between a diagnosable lost keystroke and a ghost.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            tapReEnables += 1
+            // Throttled: a genuinely busy stretch can fire this repeatedly,
+            // and the log line must never become its own hot-path cost.
+            if Date().timeIntervalSince(lastReEnableLogAt) > 1.0 {
+                lastReEnableLogAt = Date()
+                let why = type == .tapDisabledByTimeout ? "timeout" : "user input"
+                Permissions.log("hotkey: tap re-enabled in-callback after \(why) "
+                    + "(#\(tapReEnables)) — events during the gap were lost")
+            }
             return Unmanaged.passUnretained(event)
         }
 
