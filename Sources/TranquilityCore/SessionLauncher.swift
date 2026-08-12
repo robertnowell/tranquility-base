@@ -65,6 +65,53 @@ public enum SessionLauncher {
         }
     }
 
+    /// Bring a session that has exited back, in its own directory.
+    ///
+    /// Ruled 11 Aug: an agent does not stop existing when its process ends, and
+    /// its history should be reachable rather than merely readable. `--resume`
+    /// is the whole mechanism — Claude Code keeps the conversation under the
+    /// same id and appends to the same transcript, verified across 30 days of
+    /// this machine's archive (no two transcripts share a message uuid), so the
+    /// row that comes back is the row that left rather than a copy of it.
+    ///
+    /// The caller must have positive evidence the session is GONE. Resuming one
+    /// that is still running leaves the original process alive and adds a
+    /// second live entry under the same id, which crashed the app twice (06 Aug
+    /// 14:35, 07 Aug 17:39, the second eighteen seconds after a resume). The
+    /// guard lives at the call site because that is where liveness is known;
+    /// this function is the mechanism, not the policy.
+    ///
+    /// No trust prompt: the directory was trusted when the session first ran
+    /// there, and this is the same directory by construction.
+    @discardableResult
+    public static func resume(
+        sessionId: String,
+        directory: String,
+        binary: String = "claude"
+    ) -> Result<Void, ScriptError> {
+        // The id comes from a transcript FILENAME, so it cannot contain a
+        // quote or a space — but it is still passed through AppleScript's own
+        // shell quoting rather than trusted, because "cannot" is a property of
+        // today's Claude Code and not of this function.
+        let script = """
+            tell application "Terminal"
+              activate
+              set newTab to do script "cd " & quoted form of "\(directory)" \
+                & " && \(binary) --resume " & quoted form of "\(sessionId)"
+              return tty of newTab
+            end tell
+            """
+        switch AppleScript.run(script: script) {
+        case .success(let tty):
+            let tty = tty.trimmingCharacters(in: .whitespacesAndNewlines)
+            Self.trace?("revive: resumed \(sessionId.prefix(8)) in \(directory) (tty \(tty))")
+            return .success(())
+        case .failure(let error):
+            Self.trace?("revive FAILED for \(sessionId.prefix(8)): \(error.message)")
+            return .failure(error)
+        }
+    }
+
     /// Watch the just-launched tab; if Claude's trust prompt renders, press
     /// Return once (the same bare-Return `do script "" in t` the dispatcher
     /// uses to submit). Stops watching the moment the session looks started.
