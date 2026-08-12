@@ -128,6 +128,47 @@ public enum SessionLauncher {
         }
     }
 
+    /// Bring a LIVE session's terminal tab to the front.
+    ///
+    /// The other half of the list's one click: a session that is still running
+    /// does not need reviving, it needs finding — which is the whole complaint
+    /// the list exists to answer ("I don't know which terminal tab it's in").
+    /// Same AppleScript the card's GO TO AGENT has always used; this one is
+    /// reached from a session id rather than from the card's current target.
+    @discardableResult
+    public static func focus(pid: Int) -> Result<Bool, ScriptError> {
+        guard let tty = ProcessProbe.tty(of: pid) else {
+            Self.trace?("goTo: no tty for pid \(pid)")
+            return .success(false)
+        }
+        let script = """
+            tell application "Terminal"
+              activate
+              repeat with w in windows
+                repeat with t in tabs of w
+                  if (tty of t) as text is "\(tty)" then
+                    set selected tab of w to t
+                    set index of w to 1
+                    return "ok"
+                  end if
+                end repeat
+              end repeat
+              return "notfound"
+            end tell
+            """
+        switch AppleScript.run(script: script) {
+        case .success(let out) where out.contains("notfound"):
+            Self.trace?("goTo: tab not found for \(tty)")
+            return .success(false)
+        case .success:
+            Self.trace?("goTo: focused \(tty)")
+            return .success(true)
+        case .failure(let error):
+            Self.trace?("goTo FAILED: \(error.message)")
+            return .failure(error)
+        }
+    }
+
     /// Watch the just-launched tab; if Claude's trust prompt renders, press
     /// Return once (the same bare-Return `do script "" in t` the dispatcher
     /// uses to submit). Stops watching the moment the session looks started.
