@@ -119,8 +119,16 @@ struct Permissions {
     private nonisolated static let logSizeLimit: off_t = 32 * 1024 * 1024
     private nonisolated static let rollLock = NSLock()
 
+    /// Stamped once — the pid never changes and the formatter is not free.
+    private nonisolated static let pidTag = "[\(ProcessInfo.processInfo.processIdentifier)]"
+
     nonisolated static func log(_ message: String) {
-        let line = "\(ISO8601DateFormatter().string(from: Date()))  \(message)\n"
+        // The pid rides every line: thirteen launches wrote to this one file
+        // on 12 Aug (relaunches + worktree drill builds), and every
+        // log-derived statistic silently mixed instances. With the tag, one
+        // grep separates them — and the mic acceptance run can measure
+        // exactly the process it deployed.
+        let line = "\(ISO8601DateFormatter().string(from: Date())) \(Self.pidTag)  \(message)\n"
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/VoiceDispatch/app.log")
         try? FileManager.default.createDirectory(
