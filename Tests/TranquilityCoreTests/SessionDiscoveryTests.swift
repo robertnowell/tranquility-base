@@ -411,4 +411,79 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertEqual(warm?.sessions.map(\.sessionId), ["s3"])
         XCTAssertEqual(warm?.sessions.first?.liveness, .gone)
     }
+    /// The blink. Reported from the running panel on 12 Aug: the closed band
+    /// emptied for about five seconds every thirty, forever — "where did my
+    /// sessions go". The cache was answering "nothing" the moment its entry
+    /// aged out, and a rescan takes seconds, so every expiry blanked the band
+    /// until it finished.
+    ///
+    /// Serving is not the same question as refreshing. These sessions exited
+    /// hours ago; a stale answer about them is indistinguishable from a fresh
+    /// one, and an empty one is a row vanishing under someone looking at it.
+    @MainActor
+    func testAStaleScanIsStillServedRatherThanBlanked() throws {
+        let root = try makeArchive([
+            ("-tmp-d", "s4", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let titles = TranscriptTitles()
+        let t0 = Date(timeIntervalSince1970: 2_000_000)
+
+        _ = SessionDiscovery.discover(
+            now: t0, live: StubAgents([]), projects: root, titles: titles)
+
+        // Well past the TTL, which is exactly when the band used to empty.
+        let later = t0.addingTimeInterval(SessionDiscovery.scanTTL * 10)
+        let served = SessionDiscovery.discoverIfScanned(
+            now: later, live: StubAgents([]), projects: root, titles: titles)
+
+        XCTAssertEqual(served?.sessions.map(\.sessionId), ["s4"],
+                       "an expired scan must still be served, never blanked")
+        XCTAssertEqual(served?.sessions.first?.liveness, .gone,
+                       "and liveness is still rejoined on the stale rows")
+    }
+
+    // MARK: - One command for every path that starts an agent
+
+    /// Ruled 12 Aug, after revival shipped a second launch path that disagreed
+    /// with the first: a session started from the panel ran unattended, and the
+    /// same session revived from the panel stopped at every tool call.
+    @MainActor
+    func testNewAndRevivedSessionsUseTheSameCommand() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("agent-command-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let previous = AgentCommand.fileURL
+        AgentCommand.fileURL = dir.appendingPathComponent("agent-command.json")
+        defer {
+            AgentCommand.fileURL = previous
+            try? FileManager.default.removeItem(at: dir)
+        }
+
+        XCTAssertEqual(AgentCommand.load(), AgentCommand.fallback)
+        XCTAssertEqual(SessionLauncher.defaultCommand, AgentCommand.load(),
+                       "a new session launches with the configured command")
+
+        AgentCommand.save("codex --yolo")
+        XCTAssertEqual(AgentCommand.load(), "codex --yolo")
+        XCTAssertEqual(SessionLauncher.defaultCommand, "codex --yolo",
+                       "and so does the next one, without a second constant")
+    }
+
+    /// A blank saved by accident would otherwise break every launch on the
+    /// machine, and there is no useful meaning for "start agents with nothing".
+    @MainActor
+    func testABlankCommandFallsBackRatherThanBreakingEveryLaunch() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("agent-command-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let previous = AgentCommand.fileURL
+        AgentCommand.fileURL = dir.appendingPathComponent("agent-command.json")
+        defer {
+            AgentCommand.fileURL = previous
+            try? FileManager.default.removeItem(at: dir)
+        }
+        AgentCommand.save("   ")
+        XCTAssertEqual(AgentCommand.load(), AgentCommand.fallback)
+    }
 }

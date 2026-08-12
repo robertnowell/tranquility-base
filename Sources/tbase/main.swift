@@ -22,6 +22,7 @@ func usage() -> Never {
       tbase secrets             which credentials are readable, and from where
       tbase discover [days] [n] every session in the window, awake or not,
                                 with what would bring each dead one back
+      tbase agent-command [cmd] how new AND revived sessions are launched
       tbase cursors             how far you have got with each session
       tbase calls [n]           full input and output of the last n model calls
       tbase dogfood [days]      WS-E counters summary (default 7 days)
@@ -209,6 +210,21 @@ do {
         }
         print("")
         print(String(format: "scanned in %.2fs", elapsed))
+
+    case "agent-command":
+        // The settings pane does not own this yet (see the branch notes), so
+        // the CLI is how it gets set. One value, read by every path that starts
+        // an agent: the menu item, the grid's "+" row, and revival.
+        if args.count > 1 {
+            AgentCommand.save(args.dropFirst().joined(separator: " "))
+        }
+        print("agent command   \(AgentCommand.load())")
+        print("default         \(AgentCommand.fallback)")
+        print("stored at       \(AgentCommand.fileURL.path)")
+        print("")
+        print("new sessions launch this; revived sessions launch")
+        print("`\(AgentCommand.load()) --resume <id>` — the same agent, pointed at")
+        print("a conversation that already exists.")
 
     case "drain":
         let r = try drainer.drain()

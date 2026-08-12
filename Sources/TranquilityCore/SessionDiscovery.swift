@@ -148,12 +148,16 @@ public enum SessionDiscovery {
         static func key(_ window: TimeInterval, _ limit: Int, _ projects: URL) -> String {
             "\(window)|\(limit)|\(projects.path)"
         }
-        func get(key: String, now: Date, ttl: TimeInterval) -> Result? {
+        /// The last scan for this archive at ANY age, plus whether it is old
+        /// enough to be worth redoing. Serving is not the same question as
+        /// refreshing, and conflating them is what made the closed rows blink:
+        /// returning nothing on expiry emptied the band for the five seconds a
+        /// rescan took, every thirty seconds, forever.
+        func get(key: String, now: Date, ttl: TimeInterval) -> (result: Result, stale: Bool)? {
             lock.lock(); defer { lock.unlock() }
-            guard let value, value.key == key,
-                  now.timeIntervalSince(value.at) < ttl, now >= value.at
-            else { return nil }
-            return value.result
+            guard let value, value.key == key else { return nil }
+            let age = now.timeIntervalSince(value.at)
+            return (value.result, age >= ttl || age < 0)
         }
         func put(key: String, now: Date, result: Result) {
             lock.lock(); value = (key, now, result); lock.unlock()
@@ -201,17 +205,44 @@ public enum SessionDiscovery {
         ttl: TimeInterval = scanTTL
     ) -> Result? {
         let key = ScanCache.key(window, limit, projects)
-        guard let scanned = scans.get(key: key, now: now, ttl: ttl) else {
-            guard scans.beginRefresh(key: key) else { return nil }
+        let held = scans.get(key: key, now: now, ttl: ttl)
+
+        // Refresh whenever there is nothing or the answer has aged out — but
+        // that decision never withholds what we already have.
+        if held == nil || held?.stale == true, scans.beginRefresh(key: key) {
             Task.detached(priority: .utility) {
                 let fresh = scan(window: window, limit: limit, now: Date(),
                                  projects: projects, titles: titles)
                 scans.put(key: key, now: Date(), result: fresh)
                 scans.endRefresh(key: key)
             }
-            return nil
         }
-        return join(scanned, live: live)
+
+        // Stale is fine and nil is not. These are sessions that exited hours
+        // ago: a thirty-second-old answer about them is indistinguishable from
+        // a current one, while an EMPTY answer is a row disappearing out from
+        // under someone who was looking at it. Only a genuinely cold cache —
+        // the first tick after launch — returns nothing.
+        guard let held else { return nil }
+        return join(held.result, live: live)
+    }
+
+    /// Fill the cache off-main so the first painted grid already has its closed
+    /// rows. Without this the panel opens with live sessions alone and they
+    /// arrive a few seconds later, which is the same blink in miniature.
+    public static func warm(
+        window: TimeInterval = defaultWindow,
+        limit: Int = defaultLimit,
+        projects: URL = TranscriptArchive.projectsDirectory,
+        titles: TranscriptTitles = TranscriptTitles.shared
+    ) {
+        let key = ScanCache.key(window, limit, projects)
+        guard scans.get(key: key, now: Date(), ttl: scanTTL) == nil,
+              scans.beginRefresh(key: key) else { return }
+        let result = scan(window: window, limit: limit, now: Date(),
+                          projects: projects, titles: titles)
+        scans.put(key: key, now: Date(), result: result)
+        scans.endRefresh(key: key)
     }
 
     public static func discover(
@@ -224,13 +255,14 @@ public enum SessionDiscovery {
         ttl: TimeInterval = scanTTL
     ) -> Result {
         let key = ScanCache.key(window, limit, projects)
-        let result = scans.get(key: key, now: now, ttl: ttl)
-            ?? {
-                let scanned = scan(window: window, limit: limit, now: now,
-                                   projects: projects, titles: titles)
-                scans.put(key: key, now: now, result: scanned)
-                return scanned
-            }()
+        let held = scans.get(key: key, now: now, ttl: ttl)
+        let result: Result = {
+            if let held, !held.stale { return held.result }
+            let scanned = scan(window: window, limit: limit, now: now,
+                               projects: projects, titles: titles)
+            scans.put(key: key, now: now, result: scanned)
+            return scanned
+        }()
 
         return join(result, live: live)
     }
