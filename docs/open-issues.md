@@ -239,6 +239,50 @@ a whisper. Design goes through the render funnel as a transient overlay (like
 
 ---
 
+## 14. "Go to session" freezes the whole app — beach ball, hard restart (12 Aug)
+
+**Status:** open, root-caused from a spindump. Confirmed NOT covered by the
+mic-capture branch (scope checked with that session, 12 Aug). Damage is top-tier:
+the app beach-balled for minutes, racked up 11 hang reports in one afternoon, and
+Robert hard-restarted it — and because the CGEvent-tap watchdog disables the tap
+after ~1s of main-thread block, every freeze also silently kills the global
+hotkeys while it lasts.
+
+**Evidence:** `/Library/Logs/DiagnosticReports/TranquilityApp_2026-08-12-124315_Roberts-Mac-2.spin`
+(pid 42655, 12:39 PT). Main thread pinned for 465 of 477 samples inside
+`StatusHUD.goToSession()` (StatusHUD.swift:3894) → `AppleScript.run`
+(DispatchTransport.swift:279) → `-[NSConcreteTask waitUntilExit]` on `osascript`.
+The script loops every Terminal window and tab sending one `tty of t` Apple event
+per tab; Apple events to a busy app block up to the 2-minute default timeout *per
+event*, and Terminal was churning a huge Claude scrollback across a dozen tabs.
+Each re-click stacked another hang (Recent hangs went 8 → 11 under observation).
+
+Nested second blocker in the same capture: `waitUntilExit` pumps the run loop, so
+the permission-poll timer fired `AppDelegate.refresh()` → `rebuildMenu()`
+(main.swift:2613) → `SystemVoiceCatalog.voices` → a TextToSpeech semaphore wait —
+a second synchronous wait on main, inside the first.
+
+Latent deadlock in the same helper: `AppleScript.run` drains the child's pipes
+only *after* `waitUntilExit`, so a child writing more than the 64 KB pipe buffer
+blocks forever, both sides waiting on each other.
+
+**Ruled out by measurement:** the "415 GB virtual memory leak" Activity Monitor
+showed during the hang. A 22-second-old fresh instance carries the identical
+415.77 GB VSZ — normal arm64 address-space reservation. Real memory 211 MB,
+footprint 52.8 MB. There is no leak; do not chase it again.
+
+**Fix shape (not started):** the subprocess wait leaves the main thread entirely
+— termination handler or background task, then hop back for the label writes.
+Shortening the wait is not enough; the watchdog fires at ~1s. One targeted Apple
+event (`first tab whose tty = X`) instead of the per-tab loop, a hard timeout in
+`AppleScript.run`, pipes drained concurrently with the wait. `rebuildMenu`'s
+voice-catalog scan leaves the main thread with it. `ProcessProbe.tty/name` have
+the same synchronous shape and follow the same rule. This is a third evidence
+line for the anti-pattern audit's item 1 (synchronous subprocess waits on main);
+full spindump walk-through in the 12 Aug HQ brief.
+
+---
+
 ## Landed: the state machine
 
 The five independent booleans became `PanelState` + the stage arbiter
