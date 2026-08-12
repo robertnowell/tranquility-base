@@ -229,11 +229,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         rebuildMenu()
 
-        // Bind the microphone before anyone can press anything. The first press
-        // would otherwise pay for the device bind on the arm path, where ~46ms
-        // median (85ms at worst) does not fit the instant-arm grace. Here it is
-        // one more thing that happens during launch.
+        // Build and initialize the capture unit before anyone can press
+        // anything, and pre-pay the HAL device start with one start/stop
+        // cycle — off the main thread, on the recorder's own queue. The
+        // first press then finds warm hardware instead of paying a ~730ms
+        // cold start that the old design misclassified as a dead graph.
         recorder.warmUp()
+
+        // An open that died AFTER start() returned optimistically — the
+        // async verification found no audio. The recorder has already torn
+        // the capture down; unwind whatever face believed it was live, so
+        // the world returns to exactly how the press found it (the same
+        // contract the old synchronous throw kept).
+        recorder.onCaptureFault = { [weak self] message in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.armedAt = nil
+                if self.armedVisually { self.hud.revertArming(because: "mic fault") }
+                self.armedVisually = false
+                self.handsFreeListening = false
+                self.isBusy = false
+                self.updateTitle()
+                if self.hud.state.ownsStage { self.hud.endCapture(because: "mic fault") }
+                self.hud.showResult(message)
+            }
+        }
+        // The machine crossed the wedge threshold: per-press retries stop,
+        // start() refuses until the background heal (or a relaunch) proves
+        // audio flows again. One honest line, not a storm.
+        recorder.onWedge = { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.lastStatusLine = "microphone suspended — capture stack wedged, heal scheduled"
+                self.rebuildMenu()
+            }
+        }
 
         // The recogniser was the one unobservable stage — a fallback transcript
         // quietly missing its first nineteen seconds looked identical to a short
@@ -577,6 +607,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--selftest-hud") {
             hud.selfTest()
             hud.selfTestPendingSend()
+            // The mic drill asks the one question a deploy can answer without
+            // opening the real microphone (that boundary is relaunch.sh's,
+            // stated where it excludes --selftest-arm): did warm-up leave the
+            // machine WARM — unit built, initialized, device bound, HAL start
+            // prepaid? Scheduled off the drill path because warmUp runs on
+            // the recorder's own queue; three seconds is far past its worst
+            // case. SKIP (not PASS) without the mic grant: an unauthorized
+            // machine proves nothing either way. The table's own legality is
+            // proven in Core by MicMachineTests, not re-drilled here.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard Recorder.microphoneAuthorized() else {
+                    Permissions.log("selftest mic: SKIP — microphone not granted")
+                    return
+                }
+                SelfTest.report("mic", [
+                    ("warmAtRest", self.recorder.micStateName == "warm"),
+                    ("autoArmOpen", self.recorder.allowsAutoArm),
+                ])
+            }
         }
 
         // Instant-arm evals E2/E4/E5 (docs/instant-arm.md), driven through the
@@ -1479,6 +1529,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Instant-arm (docs/instant-arm.md): bare ⌥ survived the grace.
             // Speculative on purpose — a tap or a chord fully unwinds it.
             guard micGranted else { return }
+            // A wedged machine will refuse the open anyway; refusing here
+            // skips painting an arming face that would only revert.
+            guard recorder.allowsAutoArm else {
+                Permissions.log("arm: skipped, mic machine wedged")
+                return
+            }
             guard armedAt == nil, !recorder.isRecording else {
                 // Hands-free is live (a ⌥ tap will SEND) or a capture is
                 // already running: nothing to arm.
@@ -2327,11 +2383,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lastStatusLine = "mic: \(resolved?.name ?? preference.title)"
         Permissions.log("mic: preference \(preference.rawValue) "
             + "→ \(resolved?.name ?? "engine default")")
-        // Rebind now rather than on the next press, for the same reason launch
-        // does: the rebuild a preference change forces costs ~46ms, and a gesture
-        // is the one place that cannot absorb it. Still the single code path —
-        // warmUp defers to rebindEngine, which stays the only thing that decides
-        // which device is live.
+        // Rebuild now rather than on the next press, for the same reason launch
+        // does: a preference change means a new device, and a gesture is the
+        // one place that cannot absorb the unit rebuild. Still the single code
+        // path — warmUp prepares the unit and remains the only thing that
+        // decides which device is live (and it retires any built-in retreat).
         recorder.warmUp()
         rebuildMenu()
     }
