@@ -21,7 +21,10 @@ public enum SessionLauncher {
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 
     public static let defaultDirectory = NSHomeDirectory()
-    public static let defaultCommand = "claude --dangerously-skip-permissions"
+    /// The configured launch command, one setting for every path that starts an
+    /// agent — see `AgentCommand`. Was a constant until 12 Aug, when revival
+    /// became a second launch path and the two disagreed about permissions.
+    public static var defaultCommand: String { AgentCommand.load() }
 
     /// Opens a new Terminal window in `directory` running `command`, and — by
     /// explicit ruling — clicks through Claude's own directory-trust prompt if
@@ -87,8 +90,20 @@ public enum SessionLauncher {
     public static func resume(
         sessionId: String,
         directory: String,
-        binary: String = "claude"
+        command: String = AgentCommand.load()
     ) -> Result<Void, ScriptError> {
+        // The SAME command a new session gets, plus the conversation to open.
+        // Ruled 12 Aug: "any new or revived session gets launched under the
+        // same parameters." One setting, appended to, rather than two strings
+        // that have to be kept in agreement.
+        //
+        // Terminal is activated on purpose, and the ruling that keeps it is
+        // about what resume actually does: Claude Code asks whether to resume
+        // from the full context or from a summary, so a revived session is
+        // waiting on you the moment it opens. A row that lit itself while a
+        // question sat unanswered in a window you were never shown would be
+        // the lamp lying.
+        //
         // The id comes from a transcript FILENAME, so it cannot contain a
         // quote or a space — but it is still passed through AppleScript's own
         // shell quoting rather than trusted, because "cannot" is a property of
@@ -97,14 +112,15 @@ public enum SessionLauncher {
             tell application "Terminal"
               activate
               set newTab to do script "cd " & quoted form of "\(directory)" \
-                & " && \(binary) --resume " & quoted form of "\(sessionId)"
+                & " && \(command) \(AgentCommand.resumeSuffix()) " & quoted form of "\(sessionId)"
               return tty of newTab
             end tell
             """
         switch AppleScript.run(script: script) {
         case .success(let tty):
             let tty = tty.trimmingCharacters(in: .whitespacesAndNewlines)
-            Self.trace?("revive: resumed \(sessionId.prefix(8)) in \(directory) (tty \(tty))")
+            Self.trace?("revive: resumed \(sessionId.prefix(8)) in \(directory) "
+                + "as `\(command)` (tty \(tty))")
             return .success(())
         case .failure(let error):
             Self.trace?("revive FAILED for \(sessionId.prefix(8)): \(error.message)")

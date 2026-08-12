@@ -269,6 +269,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // UI on every tick and every press — which also risks the CGEvent
                 // tap timing out, and a timed-out tap is dropped keystrokes.
                 await Task.detached { _ = ClaudeAgentsCLI().sessions() }.value
+                // And the disk scan, for the same reason one layer over: the
+                // grid must never walk the archive on the main thread, and a
+                // panel that opens without its closed rows and grows them a
+                // moment later is the blink this warm-up exists to prevent.
+                await Task.detached(priority: .utility) { SessionDiscovery.warm() }.value
 
                 // Write the summary before it is asked for. Doing it on demand meant
                 // every use opened with a model call you had to sit through.
@@ -878,6 +883,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var placed = waitingIds
         for stored in known where !placed.contains(stored.sessionId) {
             guard let live = liveById[stored.sessionId] else { continue }
+            // Ruled 12 Aug: headless is headless whether it is running or not.
+            // Liveness used to hide these by accident — a cron job is gone
+            // before anyone looks — but a LONG one is live and got a row, and
+            // then vanished on exit instead of joining the closed band. One
+            // rule across all four bands now, and it is the same fail-open
+            // predicate the announcer uses.
+            guard !SessionDiscovery.isHeadless(transcriptPath: stored.transcriptPath)
+            else { continue }
             placed.insert(stored.sessionId)
             let activity = stored.transcriptPath.flatMap {
                 SessionActivity.read(transcriptPath: $0,
@@ -892,10 +905,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Live sessions with no stored events yet: nothing to rank them by,
         // so they close the live half of the grid.
         for live in liveById.values where !placed.contains(live.sessionId) {
-            placed.insert(live.sessionId)
             let path = live.cwd.map {
                 TranscriptTitles.defaultPath(cwd: $0, sessionId: live.sessionId)
             }
+            // A session with no stored events has no recorded transcript path,
+            // so this is the one band that has to derive one. `defaultPath`
+            // rebuilds it from the two fields the agents API supplies, and an
+            // unreadable path fails open exactly like everywhere else.
+            guard !SessionDiscovery.isHeadless(transcriptPath: path) else { continue }
+            placed.insert(live.sessionId)
             let activity = path.flatMap {
                 SessionActivity.read(transcriptPath: $0,
                                      boundary: boundaries[live.sessionId])
