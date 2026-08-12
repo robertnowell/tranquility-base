@@ -143,11 +143,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A new announcement resets the walk; wrapping past the end is "say again".
     private var ladderKey: String?
     private var ladderIndex = 0
-    /// Ruling 14: an announcement or ⌃⌃ pull that finishes speaking and draws
-    /// no gesture within ~4s returns the panel to the idle grid — the card has
-    /// said its piece; the grid is the resting face. Cancelled by ANY gesture
-    /// (handle()'s first line) and by every new announcement, so mid-speech and
-    /// mid-conversation remain chord-driven.
+    /// Ruling 14, REVERSED for spoken cards (Robert, 12 Aug): a finished
+    /// announcement or ⌃⌃ pull dwells until a gesture moves it — the reader,
+    /// not a clock, decides when the card has been read. The original ruling
+    /// (8985bbe, 05 Aug: "no gesture within ~4s returns the panel to the
+    /// grid") was made three days after the isPaused hang shipped, so on the
+    /// ElevenLabs path it was never once experienced until the hang was fixed
+    /// on 11 Aug — and the first real exposure reversed it. The dictation
+    /// receipt (ui-pass-7, ruling 5) is a different ruling and still
+    /// auto-returns: it is a passive confirmation with nothing left to act on.
     private var returnToGridWork: DispatchWorkItem?
     private static let returnToGridDelay: TimeInterval = 4
     /// Incremented every time a reply gesture starts.
@@ -939,18 +943,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                      because: "grid from \(caller):\(line)")
     }
 
-    /// Arm ruling 14's return: the card has said its piece, it holds for the
-    /// delay, and if the panel is still on that card — no gesture moved it —
-    /// the grid comes back. Two card states dwell this way: the spoken card
-    /// (ruling 14) and the dictation receipt (ui-pass-7, ruling 5). The state
-    /// check is the guard: any gesture either cancels this work item outright
-    /// or moves the panel off the dwelling state.
+    /// Arm the receipt's return (ui-pass-7, ruling 5): the receipt has said
+    /// its piece, it holds for the delay, and if the panel is still on it —
+    /// no gesture moved it — the grid comes back. ONLY the receipt dwells
+    /// this way now: the spoken card stays until a gesture moves it (ruling
+    /// 14 reversed, 12 Aug), and the `.receipt`-only guard below is the
+    /// backstop — an arm from a speaking path fires into a no-op rather
+    /// than yanking a card someone is still reading.
     private func scheduleReturnToGrid() {
         returnToGridWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             switch self.hud.state {
-            case .speaking, .receipt: break
+            case .receipt: break
             default: return
             }
             Permissions.log("return-to-grid: card done, "
@@ -1013,11 +1018,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handle(_ transition: HotkeyMonitor.Transition) {
         // Any gesture is attention: the panel must not yank itself back to the
-        // grid underneath it (ruling 14's timer dies on contact). The arm
+        // grid underneath it (the receipt's timer dies on contact; the spoken
+        // card has no timer at all — ruling 14 reversed, 12 Aug). The arm
         // window is the one exception — arming is SPECULATION about a hold
         // that may turn out to be a tap or a typing chord, so it must not
-        // consume ruling 14's clock; the abort path restarts the clock when
-        // its revert lands back on a dwelling card.
+        // consume the receipt's clock; the abort path restarts the clock when
+        // its revert lands back on the receipt.
         switch transition {
         case .armWindowOpened, .armAborted: break
         default: returnToGridWork?.cancel()
@@ -1328,19 +1334,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     })
                 hud.highlight(upTo: rung.spoken.text.count)
                 lastStatusLine = "\(rung.kind.rawValue.lowercased()) spoken"
-                // Ruling 14: the pull said its piece; with no gesture in 4s the
-                // grid comes back. Guarded against a superseding gesture — its
-                // cancel of THIS task must not be undone by a late schedule.
-                //
-                // And guarded on `completed`, which this used to discard with
-                // `_ = await`. An unfinished rung must not arm the clock: when the
-                // provider returned early the grid landed four seconds into an
-                // eighteen-second rung that then talked over it for fourteen more.
-                // The root cause was the provider (Speech.swift's keyed continuation),
-                // but a caller that reads the result cannot be lied to twice.
-                if !Task.isCancelled, spoken.completed { scheduleReturnToGrid() }
-                else if !spoken.completed {
-                    Permissions.log("ladder: rung did not complete, grid clock not armed")
+                // Ruling 14 reversed (12 Aug): a finished rung dwells. No clock —
+                // the reader decides when a pull has been read, so the only exits
+                // from this card are gestures. `completed` is still read rather
+                // than discarded (`_ = await` hid a provider lying about early
+                // returns once already); an unfinished rung is still worth a line.
+                if !spoken.completed {
+                    Permissions.log("ladder: rung did not complete")
                 }
                 rebuildMenu()
             }
@@ -1406,12 +1406,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let armedDuration {
                 Permissions.log("arm: discarded, \(Int(armedDuration * 1000))ms audio")
             }
-            // Ruling 14: if the revert landed back on a dwelling card, its
-            // clock — which this gesture deliberately never cancelled, but
-            // whose work item may have fired into the arming window and
-            // consumed itself — restarts.
+            // If the revert landed back on the receipt, its clock — which this
+            // gesture deliberately never cancelled, but whose work item may have
+            // fired into the arming window and consumed itself — restarts. The
+            // spoken card dwells (ruling 14 reversed, 12 Aug), so it re-arms
+            // nothing.
             switch hud.state {
-            case .speaking, .receipt: scheduleReturnToGrid()
+            case .receipt: scheduleReturnToGrid()
             default: break
             }
 
@@ -1708,8 +1709,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             Permissions.log("homebase FAILED: \(error)")
                         }
                     }
-                    // Ruling 14: fully spoken, no gesture in 4s → the grid.
-                    scheduleReturnToGrid()
+                    // Ruling 14 reversed (12 Aug): fully spoken dwells. The card
+                    // stays until a gesture moves it — the grid is one tap away,
+                    // not four seconds away.
                 case .interrupted(let failure):
                     // The announce task reverts an interrupted item to unread. If the
                     // interruption WAS the reply, re-apply the mark — this runs after

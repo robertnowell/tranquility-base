@@ -101,9 +101,16 @@ doc comments, the CountdownBarView, and ruling 14's return-to-grid.
 
 ## Flow
 
-14. **Return to the grid after speech.** When an announcement or ⌃⌃
-    pull finishes speaking and no gesture follows within 4s, the panel
-    returns to the idle grid (`scheduleReturnToGrid` in main.swift).
+14. **Return to the grid after speech.** REVERSED 12 Aug (Robert, live:
+    "it should stay on the agent unless I drive it forward"). This ruling
+    was made three days after the isPaused hang shipped, so on the
+    ElevenLabs path it was never experienced until 11 Aug fixed the hang;
+    first real exposure reversed it. A finished spoken card now dwells
+    until a gesture moves it. The dictation receipt (ruling 5) keeps its
+    auto-return. Original text follows for the record: when an
+    announcement or ⌃⌃ pull finishes speaking and no gesture follows
+    within 4s, the panel returns to the idle grid
+    (`scheduleReturnToGrid` in main.swift).
     Cancelled by ANY gesture (first line of `handle()`) and by every
     new announcement; the work item additionally guards on the panel
     still being `.speaking`, and both schedule sites guard
