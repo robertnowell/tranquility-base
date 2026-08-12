@@ -1,7 +1,0 @@
-```json
-{
-  "recap": "content-engine: Kopi email generation exceeded 28 minutes, still generating.",
-  "proposal": "Check the email directly later when render completes. Resume polling?",
-  "topic": "Kopi email render timeout"
-}
-```

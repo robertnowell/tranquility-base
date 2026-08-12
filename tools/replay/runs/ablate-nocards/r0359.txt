@@ -1,7 +1,0 @@
-```json
-{
-  "recap": "video-essays: Angle C research saved, two verifications pending.",
-  "proposal": "Wait for verification agents to finish, then append results before writing scripts. Proceed?",
-  "topic": "Angle C research & verification gate"
-}
-```

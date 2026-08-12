@@ -1,7 +1,0 @@
-```json
-{
-  "recap": "vd-state-legend-page: callsign mint rule deployed, Phase 1b work complete, audio identity chain end-to-end specified.",
-  "proposal": "Legend at v0.4 is build-complete. Move from spec to code?",
-  "topic": "audio identity chain specification"
-}
-```
