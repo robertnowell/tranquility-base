@@ -371,6 +371,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         hud.onBreadcrumbHome = { [weak self] in self?.goHomeFromCard(via: "breadcrumb") }
+        hud.onPendingSendStopped = { [weak self] cardRestored in
+            // Don't send has landed the panel somewhere alive. A restored card
+            // gets its dwell clock back (ruling 14's shape — same as the arm
+            // revert); a readback that was the whole panel yields to the grid
+            // it was covering.
+            if cardRestored { self?.scheduleReturnToGrid() }
+            else { self?.showIdleGrid() }
+        }
         hud.onClearLamp = { [weak self] id in
             guard let self, let coordinator = self.coordinator else { return }
             // "Mischief managed" (ruled 06 Aug): the lamp click means "I don't

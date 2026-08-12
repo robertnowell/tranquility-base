@@ -550,6 +550,12 @@ final class StatusHUD: NSObject {
         return true
     }
 
+    /// After Don't send has landed the panel somewhere alive: `true` = the card
+    /// under the readback was restored (the host re-arms its dwell clock, ruling
+    /// 14's shape); `false` = the readback was the whole panel, the stage is
+    /// yielded, and the host paints the grid it was covering.
+    var onPendingSendStopped: ((_ cardRestored: Bool) -> Void)?
+
     // AppKit guarantees target/action runs on the main thread. The implicit
     // executor check that Swift emits for an @objc method on a @MainActor class is
     // therefore redundant, and it was not free: it crashed in swift_getObjectType
@@ -562,7 +568,33 @@ final class StatusHUD: NSObject {
         // ask for. Holding ⌥ is how you say it again; that path passes false
         // for the same reason and has always been the only one that should
         // restart a capture.
-        MainActor.assumeIsolated { cancelPendingSend(restartListening: false) }
+        MainActor.assumeIsolated {
+            guard cancelPendingSend(restartListening: false) else { return }
+            // Stopping the send is only half the button's job. Cancelling used
+            // to end here, which stranded the panel: still `.pendingSend`, but
+            // with a dead countdown — so `awaitingConfirm` was false, commit
+            // refused, the legality table refused every repaint, and each ⌃⌥
+            // press dead-ended (12 Aug: "stuck on the read-back screen, and
+            // all inputs are broken"). Land somewhere alive instead.
+            guard case .pendingSend = state else { return }
+            if face.readback != nil, face.hasCard {
+                // The readback rode the strip over a card, and the card never
+                // left the face — title, body, ink all intact. Clear the strip
+                // and give the stage back to the card.
+                face.readback = nil
+                face.countdownSeconds = 0
+                forceTransition(to: .speaking(eventId: currentEventId),
+                                because: "don't send — card restored")
+                render()
+                onPendingSendStopped?(true)
+            } else {
+                // The readback WAS the panel (a capture begun from the grid):
+                // there is nothing here to restore, so yield the stage and let
+                // the host paint the grid it was covering.
+                endCapture(because: "don't send — no card to restore")
+                onPendingSendStopped?(false)
+            }
+        }
     }
 
     @objc nonisolated private func breadcrumbClicked() {
@@ -2502,6 +2534,28 @@ final class StatusHUD: NSObject {
         let dontSendKeptMicShut = dontSendRestartedListening == false
         endCapture(because: "selftest dontSend cleanup")
 
+        // §D2: Don't send from a readback that rode a CARD returns to the card,
+        // alive. The cancel used to stop the countdown and nothing else, which
+        // left `.pendingSend` with no timer — a face whose legality table then
+        // refused every repaint, so the readback never left and every gesture
+        // dead-ended (12 Aug). The drill drives the button's door and asserts
+        // the landing, not just the stop.
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize(stripBody),
+            sessionId: "d2", pid: 1, project: "promotions copy", cwd: "/tmp")
+        let d2Body = bodyLabel.stringValue
+        showListening(level: { 0.1 })
+        showTranscribing("Transcribing your reply…", onCancel: {}, onRetry: {})
+        showPendingSend(text: "stop this one", label: "promotions copy",
+                        seconds: 60, send: {}, cancel: { _ in })
+        cancelPendingSendTapped()
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let dontSendRestoresCard = state.isSpeaking
+            && bodyLabel.stringValue == d2Body
+        let dontSendClearsReadback = !stripLabel.stringValue.contains("stop this one")
+            && dontSendButton.isHidden && countdownBar.isHidden
+        endCapture(because: "selftest dontSend card cleanup")
+
         // A capture failure keeps the card it was about. The one thing you
         // need in order to say it again is the message you were answering.
         _ = showAnnouncement(
@@ -2551,6 +2605,8 @@ final class StatusHUD: NSObject {
 
         SelfTest.report("strip", [
             ("dontSendKeepsTheMicShut", dontSendKeptMicShut),
+            ("dontSendRestoresTheCard", dontSendRestoresCard),
+            ("dontSendClearsTheReadback", dontSendClearsReadback),
             ("faultKeepsTheCard", faultKeepsCard),
             ("faultSpeaksFromTheStrip", faultIsInTheStrip),
             ("cardSurvivesArming", armedKeepsCard),
@@ -3649,11 +3705,24 @@ final class StatusHUD: NSObject {
         // Held, so collapsing can DEACTIVATE them. The stack pins the panel to
         // 380pt through these; leaving them active while narrowing the window is
         // what snapped the frame back to 380 and threw it off the display.
+        // The bottom pin yields; the top pin never does. While the grow
+        // animation is in flight the content is briefly taller than the panel,
+        // and with four REQUIRED pins autolayout must break one — in practice
+        // the top, which shoved the card off the top edge and floated it back
+        // down as the panel caught up (12 Aug, the readback tray landing).
+        // At 500 the bottom pin is the designated loser: the card stays nailed
+        // to the top edge and the new strip content waits below the bottom
+        // edge for the panel to grow over it — the tray slides out from under
+        // the panel instead of displacing the card. 500 still beats the
+        // stack's vertical hugging (250), so a panel taller than its content
+        // stretches the stack to the bottom edge exactly as before.
+        let stackBottom = stack.bottomAnchor.constraint(equalTo: background.bottomAnchor)
+        stackBottom.priority = NSLayoutConstraint.Priority(500)
         stackEdges = [
             stack.topAnchor.constraint(equalTo: background.topAnchor),
             stack.leadingAnchor.constraint(equalTo: background.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+            stackBottom,
         ]
         NSLayoutConstraint.activate(stackEdges + [
             bodyLabel.widthAnchor.constraint(equalToConstant: 348),
