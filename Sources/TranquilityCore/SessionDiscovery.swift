@@ -173,6 +173,9 @@ public enum SessionDiscovery {
         func endRefresh(key: String) {
             lock.lock(); refreshing.remove(key); lock.unlock()
         }
+        var isRefreshing: Bool {
+            lock.lock(); defer { lock.unlock() }; return !refreshing.isEmpty
+        }
     }
     private static let scans = ScanCache()
 
@@ -225,6 +228,20 @@ public enum SessionDiscovery {
         // the first tick after launch — returns nothing.
         guard let held else { return nil }
         return join(held.result, live: live)
+    }
+
+    /// Wait for any background scan to finish. For tests only.
+    ///
+    /// A detached scan that outlives its test keeps doing disk I/O while the
+    /// next suite runs, and the next suite here measures real-time audio
+    /// playback — `SessionDiscoveryTests` sorts immediately before
+    /// `TruncationTests`. That made a timing test fail in a way that looked
+    /// like a defect in speech and was actually this.
+    public static func settleForTesting(timeout: TimeInterval = 5) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while scans.isRefreshing, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
     }
 
     /// Fill the cache off-main so the first painted grid already has its closed
