@@ -423,6 +423,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
         hud.onRevive = { [weak self] id, name in self?.revive(id, name: name) }
+        hud.onOpenPastAgents = { [weak self] in self?.openPastAgents() }
+        // A live session does not need reviving — it needs finding, which is
+        // the same door the card's GO TO AGENT opens.
+        hud.onGoToSession = { [weak self] id in self?.goToSession(id) }
         hud.onNewSessionForArtifact = { [weak self] ref in
             self?.newSession(forArtifact: ref)
         }
@@ -960,7 +964,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return StateLegend.SessionRow(
                 id: event.sessionId,
                 name: tabDisplayName(for: event, live: liveById[event.sessionId]),
-                aux: event.callsign ?? "",
+                // The id, not the callsign — ruled 12 Aug, and the same in
+                // every band so a row means the same thing wherever it sits.
+                aux: StateLegend.shortId(event.sessionId),
                 lamp: activity == .working
                     || delivering.supersedesWaiting(event.sessionId, latestId: event.latestId)
                     ? .working : .ready)
@@ -1000,7 +1006,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rows.append(StateLegend.SessionRow(
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
-                aux: activity?.shortReason ?? (stored.callsign ?? ""),
+                aux: activity?.shortReason ?? StateLegend.shortId(stored.sessionId),
                 lamp: lamp(for: activity, sessionId: stored.sessionId)))
         }
         // Live sessions with no stored events yet: nothing to rank them by,
@@ -1024,7 +1030,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 name: StateLegend.displayName(
                     liveName: Self.tabTitle(transcriptPath: nil, live: live),
                     callsign: nil, fallback: "session"),
-                aux: activity?.shortReason ?? "",
+                aux: activity?.shortReason ?? StateLegend.shortId(live.sessionId),
                 lamp: lamp(for: activity, sessionId: live.sessionId)))
         }
         // And the sessions that are not awake (ruled 11 Aug). Everything above
@@ -2548,6 +2554,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// AGAIN here, on a fresh probe, at the moment of the act.
     ///
     /// Off-main because it drives Terminal through AppleScript.
+    /// The graveyard, built once and handed over whole.
+    ///
+    /// Every interactive session in the window, live ones included: the job is
+    /// "I don't know which tab that workstream is in", and a session you left
+    /// running in a tab you have lost is exactly as hard to find as a dead one.
+    /// The verb differs — a live row goes to its tab, a dead one comes back —
+    /// and the row already knows which it is.
+    ///
+    /// Off-main because the scan can walk the archive, then applied on the main
+    /// actor in one shot.
+    private func openPastAgents() {
+        Task.detached(priority: .userInitiated) {
+            let found = SessionDiscovery.discover().sessions
+            let items = await MainActor.run { found.map { session -> PastAgentsList.Item in
+                let name = StateLegend.displayName(
+                    liveName: session.title, callsign: nil,
+                    fallback: session.cwd.map { ($0 as NSString).lastPathComponent }
+                        ?? "session")
+                // Everything the filter matches, lowercased once: the name you
+                //半 remember, the id you would have grepped for, and the
+                // directory you were working in.
+                let haystack = [name, session.sessionId, session.cwd ?? ""]
+                    .joined(separator: " ").lowercased()
+                return PastAgentsList.Item(
+                    row: StateLegend.SessionRow(
+                        id: session.sessionId, name: name,
+                        aux: StateLegend.shortId(session.sessionId),
+                        lamp: session.liveness == .live ? .running : .unlit,
+                        revivable: session.revivable),
+                    revivable: session.revivable,
+                    haystack: haystack)
+            } }
+            await MainActor.run { [weak self] in
+                self?.hud.showPastAgents(items: items)
+            }
+        }
+    }
+
+    /// Focus a live session's terminal tab, from the list.
+    private func goToSession(_ sessionId: String) {
+        Task.detached {
+            guard let live = (ClaudeAgentsCLI().sessions() ?? [])
+                .first(where: { $0.sessionId == sessionId }) else {
+                Permissions.log("goTo: \(sessionId.prefix(8)) is not live any more")
+                return
+            }
+            _ = SessionLauncher.focus(pid: live.pid)
+        }
+    }
+
     private func revive(_ sessionId: String, name: String) {
         hud.showReceipt(.reviving(name))
         Task.detached {

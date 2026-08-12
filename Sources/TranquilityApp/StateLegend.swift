@@ -612,6 +612,9 @@ enum StateLegend {
     /// The quiet placard row above the hint. "AGENT", not "SESSION" (ui-pass-7,
     /// ruling 1): every user-facing noun on the panel says agent.
     static let newAgentTitle = "NEW AGENT"
+    /// The other half of the same row: not starting an agent, but bringing one
+    /// back. Ruled 12 Aug.
+    static let pastAgentsTitle = "PAST AGENTS"
 
     /// The empty room's one sentence (ruled 08 Aug). It replaces the grid
     /// outright rather than joining it: with nothing to list, the panel's job is

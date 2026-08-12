@@ -141,6 +141,7 @@ final class StatusHUD: NSObject {
     private var countdownBar: CountdownBarView!
     private var meter: LevelMeterView!
     private var voiceList: NSScrollView!
+    private var pastList: PastAgentsList!
     private var voiceStack: NSStackView!
     private var voiceListHeight: NSLayoutConstraint!
     private var gearButton: NSButton!
@@ -1184,7 +1185,7 @@ final class StatusHUD: NSObject {
         case .pendingSend: return nil
         case .result: return .needsYou
         case .receipt: return .delivered
-        case .settings: return .settings
+        case .settings, .pastAgents: return .settings
         }
     }
 
@@ -1269,6 +1270,7 @@ final class StatusHUD: NSObject {
         gridFooter.isHidden = true; controlsSticky.isHidden = true
         stripLabel.stringValue = ""
         voiceList.isHidden = true; waitingRows.isHidden = true
+        pastList?.isHidden = true
         gearButton.isHidden = false; backButton.isHidden = true
         // Only the grid can be collapsed: a card is a conversation in progress
         // and has no second width to go to.
@@ -1322,17 +1324,12 @@ final class StatusHUD: NSObject {
             // left. Without this the icon draws straight through the "AG" of
             // AGENTS — the two were competing for the same 24pt, and the label
             // won on paint order and lost on legibility.
-            // The cap says so when it bites. A list that silently stops at
-            // eight reads as "that is all of them", which is the same lie the
-            // empty panel told before closed sessions had rows at all — and
-            // closed rows are exactly what makes the cap start biting.
-            let total = face.sessionRows.count
-            let drawn = Self.gridRowsShown(face.sessionRows)
-            let placard = total > drawn
-                ? "\(StateLegend.gridStripTitle) · \(drawn) OF \(total)"
-                : StateLegend.gridStripTitle
+            // No count here. It said "8 OF 45" and shared a lane with the send
+            // receipt, so "✓ SENT" and the count fought for the same pixels —
+            // and the count was answering a question the list face now owns
+            // outright. The placard is a placard again.
             let stripTitle = NSMutableAttributedString(attributedString: letterspaced(
-                placard, size: 10, tracking: 3.2,
+                StateLegend.gridStripTitle, size: 10, tracking: 3.2,
                 color: StateLegend.Lens.chrome.color))
             let indent = NSMutableParagraphStyle()
             indent.firstLineHeadIndent = 24
@@ -1427,6 +1424,20 @@ final class StatusHUD: NSObject {
             // The invitation's door out is a door IN: it starts the agent that
             // this page no longer has.
             newSessionButton.isHidden = !face.offersNewSession
+
+        case .pastAgents:
+            // Built on OPEN and never repainted while you read it. That is not
+            // an optimisation, it is what makes this the one face that may
+            // scroll: the grid tears its rows down on every content change, and
+            // a list that did that under a scroll offset would throw you back
+            // to the top every time a lamp somewhere changed colour.
+            stateLabel.attributedStringValue = letterspaced(
+                StateLegend.pastAgentsTitle, size: 10, tracking: 3.2,
+                color: StateLegend.Lens.chrome.color)
+            gearButton.isHidden = true; backButton.isHidden = false
+            hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
+            hintLabel.stringValue = pastList?.summary ?? ""
+            pastList?.isHidden = false
 
         case .settings:
             stateLabel.stringValue = ""
@@ -1615,7 +1626,7 @@ final class StatusHUD: NSObject {
     }
 
     /// The grid's content width: the 380 panel minus the stack's 14pt insets.
-    private static let gridWidth: CGFloat = 352
+    static let gridWidth: CGFloat = 352
 
     /// The ruled grid (draft variant C, ruled 05 Aug): 26px lamp, then the
     /// session NAME (the tab's string) owning the row, the minted callsign
@@ -1724,9 +1735,15 @@ final class StatusHUD: NSObject {
             }
         }
         // The proactive half (ruled 05 Aug addendum): the "+" placard kicks off
-        // a fresh session — same code path as the menu item.
+        // a fresh session — same code path as the menu item. Ruled 12 Aug it
+        // shares its row with PAST AGENTS: both are ways of putting an agent on
+        // this list, one by starting it and one by bringing it back, and two
+        // 32pt rows for two halves of one idea was a row too many.
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
-        let newRow = PlacardRowView(target: self, action: #selector(newSessionRowTapped))
+        let newRow = SplitPlacardRowView(
+            width: Self.gridWidth, target: self,
+            leading: (StateLegend.newAgentTitle, "+", #selector(newSessionRowTapped)),
+            trailing: (StateLegend.pastAgentsTitle, "↺", #selector(pastAgentsRowTapped)))
         waitingRows.addArrangedSubview(newRow)
         newRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
         // The key line's top rule; the hint label follows in the outer stack.
@@ -1750,6 +1767,30 @@ final class StatusHUD: NSObject {
 
     /// Wired by the app onto SessionLauncher.launch().
     var onNewSession: (() -> Void)?
+
+    /// Wired by the app: build the list and show it.
+    var onOpenPastAgents: (() -> Void)?
+    /// Wired by the app: focus a LIVE session's terminal tab.
+    var onGoToSession: ((String) -> Void)?
+
+    /// The name a picked row was showing, for the receipt.
+    private func pastListName(_ id: String) -> String {
+        face.sessionRows.first { $0.id == id }?.name ?? StateLegend.shortId(id)
+    }
+
+    @objc nonisolated private func pastAgentsRowTapped() {
+        MainActor.assumeIsolated { onOpenPastAgents?() }
+    }
+
+    /// Enter the list face. The rows are handed in whole and applied once —
+    /// see `PastAgentsList`: this face does not refresh while it is read.
+    func showPastAgents(items: [PastAgentsList.Item]) {
+        guard transition(to: .pastAgents, because: "past agents opened") else { return }
+        currentTarget = nil
+        face = Face()
+        pastList.apply(items: items)
+        render()
+    }
 
     @objc nonisolated private func newSessionRowTapped() {
         MainActor.assumeIsolated { onNewSession?() }
@@ -3019,6 +3060,7 @@ final class StatusHUD: NSObject {
         titleDoorDrill()
         quietRowsDrill()
         closedRowsDrill()
+        pastAgentsDrill()
         elasticGridDrill()
 
         endCapture(because: "selftest cleanup")
@@ -3074,6 +3116,50 @@ final class StatusHUD: NSObject {
                 return rows + 153 <= big.visibleFrame.height - 32
             }()),
         ])
+    }
+
+    /// The list face: the one surface that scrolls, and the only one that may.
+    ///
+    /// Two properties carry it. The verb has to match the row — offering
+    /// REVIVE on a session that is still running is how the app crashed twice
+    /// — and the filter has to be a plain predictable substring, because a
+    /// filter you cannot predict is one you stop trusting.
+    private func pastAgentsDrill() {
+        func item(_ id: String, _ name: String, live: Bool, cwd: String)
+            -> PastAgentsList.Item {
+            PastAgentsList.Item(
+                row: StateLegend.SessionRow(
+                    id: id, name: name, aux: StateLegend.shortId(id),
+                    lamp: live ? .running : .unlit, revivable: !live),
+                revivable: !live,
+                haystack: [name, id, cwd].joined(separator: " ").lowercased())
+        }
+        let items = [
+            item("a285f0a9-1111", "Plan Mirai campaign", live: false, cwd: "/tmp/kopi"),
+            item("c53ce6f5-2222", "Review PR", live: true, cwd: "/tmp/kopi"),
+            item("381c643c-3333", "Compare apartments", live: false, cwd: "/tmp/home"),
+        ]
+        showPastAgents(items: items)
+        let entered = state == .pastAgents
+        let scrolls = pastList.subviews.contains { $0 is NSScrollView }
+        // The id shown is the id the logs print, or the row and the log name
+        // the same session two different ways.
+        let idsMatch = items.allSatisfy { $0.row.aux == String($0.row.id.prefix(8)) }
+        // The verb follows liveness, never the other way round.
+        let verbs = items.allSatisfy { $0.revivable == ($0.row.lamp == .unlit) }
+        goHomeFromPastAgents()
+
+        SelfTest.report("pastAgents", [
+            ("entersItsOwnState", entered),
+            ("itIsTheFaceThatScrolls", scrolls),
+            ("idMatchesTheLogs", idsMatch),
+            ("verbFollowsLiveness", verbs),
+            ("leavesCleanly", { if case .idle = state { return true }; return false }()),
+        ])
+    }
+
+    private func goHomeFromPastAgents() {
+        showIdle(rows: [])
     }
 
     private func quietRowsDrill() {
@@ -3835,6 +3921,19 @@ final class StatusHUD: NSObject {
             voiceListHeight,
         ])
 
+        pastList = PastAgentsList(width: Self.gridWidth, height: 420)
+        pastList.isHidden = true
+        // One tap, the row's own verb. Dead comes back; live gets its tab.
+        pastList.onPick = { [weak self] id, revivable in
+            guard let self else { return }
+            let name = pastListName(id)
+            onBreadcrumbHome?()
+            if revivable { onRevive?(id, name) } else { onGoToSession?(id) }
+        }
+        pastList.onFilterChanged = { [weak self] in
+            guard let self, case .pastAgents = state else { return }
+            hintLabel.stringValue = pastList.summary
+        }
         waitingRows = NSStackView()
         waitingRows.orientation = .vertical
         waitingRows.alignment = .leading
@@ -3846,7 +3945,7 @@ final class StatusHUD: NSObject {
         // inserting above"). The panel already grows this way — `position`
         // anchors the top edge — so the strip costs no geometry work.
         let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
-                                        waitingRows, bodyLabel,
+                                        waitingRows, pastList, bodyLabel,
                                         stripRule, stripLabel, gridFooter,
                                         countdownBar, meter, voiceList, hintLabel, buttons])
         stack.orientation = .vertical
@@ -4300,7 +4399,7 @@ private func placardText(
     return out
 }
 
-private func letterspaced(_ text: String, size: CGFloat, tracking: CGFloat,
+func letterspaced(_ text: String, size: CGFloat, tracking: CGFloat,
                           color: NSColor) -> NSAttributedString {
     NSAttributedString(string: text, attributes: [
         .font: NSFont.systemFont(ofSize: size),
@@ -4348,7 +4447,7 @@ private final class DoorLabel: NSTextField {
     }
 }
 
-private final class GridRowView: NSControl {
+final class GridRowView: NSControl {
     // Variant C metrics (ruled 05 Aug, from the accepted draft render, scaled
     // from its 640px frame to the panel's 352): taller rows, the name in the
     // larger mono with NO added tracking, the callsign right-aligned and
