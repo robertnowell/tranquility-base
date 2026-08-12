@@ -119,7 +119,8 @@ do {
         let spoolLines = (try? String(contentsOf: spool, encoding: .utf8))?
             .split(separator: "\n").count ?? 0
         print("spool pending   \(spoolLines)")
-        print("waiting         \(try store.pendingCount())")
+        print("waiting         \(try store.attentionCount()) on you"
+            + " (\(try store.pendingCount()) unannounced)")
         print("events total    \(try store.events(limit: 100_000).count)")
         print("")
         print("waiting sessions:")

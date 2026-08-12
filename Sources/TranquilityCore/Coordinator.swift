@@ -209,6 +209,21 @@ public struct Coordinator: Sendable {
         return all.filter { live.contains($0.sessionId) }
     }
 
+    /// Sessions still on the user: undismissed, heard or not. Same fail-open
+    /// probe rule and the same liveness filter as `waiting()` — the split is
+    /// only in which cursor gates the list (see QueueStore.needsAttention).
+    /// `waiting()` is the announce queue; this is the grid, the lamp and the
+    /// badge, so hearing an announcement stops the re-announcement and changes
+    /// NOTHING about who is owed an answer.
+    public func needsAttention() throws -> [WaitingSession] {
+        guard let sessions = agents.sessions() else {
+            Coordinator.noteProbeFailure()
+            return try store.needsAttention()
+        }
+        let live = Set(sessions.map(\.sessionId))
+        return try store.needsAttention().filter { live.contains($0.sessionId) }
+    }
+
     // MARK: - The sweep
 
     /// What is gone, what is retired, and what is worth saying about it.
@@ -892,7 +907,11 @@ public struct Coordinator: Sendable {
             utterance.lastError = "queued behind the current turn"
             try store.update(utterance: utterance)
 
-            try store.advanceCursor(sessionId: target.sessionId, heardThrough: target.latestId)
+            // A delivered reply is the dismissal: answered is the only thing
+            // that turns the lamp off (read never does — 12 Aug).
+            try store.advanceCursor(sessionId: target.sessionId,
+                                    heardThrough: target.latestId,
+                                    dismissedThrough: target.latestId)
             return .queued(text: text, sessionId: target.sessionId)
 
         case .confirmed(let latencyMs):
@@ -900,7 +919,9 @@ public struct Coordinator: Sendable {
             utterance.confirmedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             try store.update(utterance: utterance)
 
-            try store.advanceCursor(sessionId: target.sessionId, heardThrough: target.latestId)
+            try store.advanceCursor(sessionId: target.sessionId,
+                                    heardThrough: target.latestId,
+                                    dismissedThrough: target.latestId)
             return .dispatched(text: text, latencyMs: latencyMs, sessionId: target.sessionId)
 
         case .deferred(let readiness):

@@ -377,8 +377,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // care about this one" — heard, not announced, not invited. Same
             // cursor write a played announcement lands on, so nothing new to
             // reconcile.
-            if let target = try? coordinator.waiting().first(where: { $0.sessionId == id }) {
-                try? coordinator.markHeard(sessionId: id, through: target.latestId)
+            if let target = try? coordinator.needsAttention()
+                .first(where: { $0.sessionId == id }) {
+                // Dismiss, not markHeard: the click means "I don't care about
+                // this one", which is a decision about ATTENTION, not a claim
+                // to have heard it. Dismissal clears both queues (the announce
+                // predicate takes the max of the cursors), so a clicked lamp is
+                // also never announced.
+                try? coordinator.dismiss(sessionId: id, through: target.latestId)
                 Permissions.log("lamp: cleared \(target.callsign ?? id.prefix(8).description) by click")
             }
             self.showIdleGrid()
@@ -728,7 +734,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Dismiss whatever the panel is showing, through its latest event.
     private func dismissCurrent(_ sessionId: String) {
         guard let coordinator else { return }
-        guard let latest = try? coordinator.waiting().first(where: { $0.sessionId == sessionId })
+        guard let latest = try? coordinator.needsAttention()
+            .first(where: { $0.sessionId == sessionId })
         else { return }
         try? coordinator.dismiss(sessionId: sessionId, through: latest.latestId)
         Permissions.log("dismissed \(sessionId.prefix(8)) through event \(latest.latestId)")
@@ -786,7 +793,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (or live session name) as fallback until minted.
     private func sessionRowsNow() -> [StateLegend.SessionRow] {
         guard let coordinator else { return [] }
-        let waiting = (try? coordinator.waiting()) ?? []
+        // needsAttention, not waiting(): the band shows who is OWED, and
+        // hearing an announcement pays nothing (read is not answered — 12 Aug).
+        let waiting = (try? coordinator.needsAttention()) ?? []
         // One probe serves every row; the name shown is Claude's own (re-ruled
         // 05 Aug — the terminal tab's string, verbatim), callsign as fallback.
         //
@@ -817,28 +826,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the waiting query's brief join — NEVER a prose prefix of summaryText
         // or the raw assistant message (ruled: that derivation produced orphan
         // fragments like "**Voices for lif"). No brief yet = name only.
-        var rows = waiting.map {
-            StateLegend.SessionRow(
-                id: $0.sessionId,
-                name: tabDisplayName(for: $0, live: liveById[$0.sessionId]),
-                callsign: $0.callsign ?? "",
-                // Green says "you have not answered this". While a reply to
-                // this very turn is in flight that is the most misleading thing
-                // the grid can say — the cursor does not advance until the send
-                // confirms, so the row goes on asking for the user seconds after
-                // they spoke to it. A newer turn arriving still wins: see
-                // DeliveryInFlight.supersedesWaiting.
-                lamp: delivering.supersedesWaiting($0.sessionId, latestId: $0.latestId)
+        // One query for every row's turn edge, needed by BOTH bands now: a
+        // heard-but-unanswered session stays in this band, and if the user
+        // answered it IN THE TERMINAL the agent is already chewing — green
+        // ("you have not answered this") would be a lie, so activity wins.
+        let boundaries = (try? store?.latestTurnBoundaries()) ?? [:]
+        var rows = waiting.map { (event: WaitingSession) -> StateLegend.SessionRow in
+            let activity = event.transcriptPath.flatMap {
+                SessionActivity.read(transcriptPath: $0,
+                                     boundary: boundaries[event.sessionId])
+            }
+            // Green says "you have not answered this". While a reply to
+            // this very turn is in flight that is the most misleading thing
+            // the grid can say — the cursor does not advance until the send
+            // confirms, so the row goes on asking for the user seconds after
+            // they spoke to it. A newer turn arriving still wins: see
+            // DeliveryInFlight.supersedesWaiting. A terminal reply wins the
+            // same way: the transcript says working, so the row does too.
+            let answeredOtherwise = activity == .working
+            return StateLegend.SessionRow(
+                id: event.sessionId,
+                name: tabDisplayName(for: event, live: liveById[event.sessionId]),
+                callsign: event.callsign ?? "",
+                lamp: answeredOtherwise
+                    || delivering.supersedesWaiting(event.sessionId, latestId: event.latestId)
                     ? .working : .ready)
         }
         // Live sessions with nothing waiting: quiet rows, so a skipped or heard
         // session stays findable. Walked via `known` — already latestId DESC —
         // so the band is recency-ordered like the waiting band above it, never
         // Dictionary.values hash order (which reshuffled between refreshes).
-        // One query for every row's turn edge (see SessionActivity.classify's
-        // precedence note): the hooks settle working-vs-idle, which the
-        // transcript alone gets wrong 9.8% of the time an agent is working.
-        let boundaries = (try? store?.latestTurnBoundaries()) ?? [:]
+        // (Turn boundaries were computed above the waiting band — see
+        // SessionActivity.classify's precedence note: the hooks settle
+        // working-vs-idle, which the transcript alone gets wrong 9.8% of the
+        // time an agent is working.)
         let waitingIds = Set(waiting.map(\.sessionId))
         let known = (try? store?.waitingSessionsIncludingHeard()) ?? []
         var placed = waitingIds
@@ -2042,7 +2063,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // row DURING the wait, and a turn that lands while the user is
                 // still talking must not be swallowed by their reply to the
                 // previous one.
-                let answering = (try? coordinator.waiting())?
+                let answering = (try? coordinator.needsAttention())?
                     .first { $0.sessionId == spokenTo }?.latestId
                 delivering.began(sessionId: spokenTo, answering: answering)
                 // One clear-site, not eight. Every exit below closes the window

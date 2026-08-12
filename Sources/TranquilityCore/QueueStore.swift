@@ -505,6 +505,46 @@ public final class QueueStore: Sendable {
         try waitingSessions().count
     }
 
+    /// Sessions still ON YOU: undismissed, regardless of heard.
+    ///
+    /// The two cursors answer two different questions and this is the split
+    /// (Robert, 12 Aug: "read is not the same as idle — it can be read and
+    /// still waiting on you"). `heardThrough` answers "has this been told to
+    /// me" and gates the ANNOUNCE queue only, so nothing is read twice.
+    /// `dismissedThrough` answers "have I dealt with it" and gates THIS query
+    /// — the grid band, the lamp, the badge. `waitingSessions` collapses the
+    /// two with max(), which is right for announcing and was wrong everywhere
+    /// else: the act of listening extinguished the lamp, so a session that had
+    /// just asked a question went visually idle the moment you heard it ask.
+    ///
+    /// A session leaves this list three ways, all of them YOURS: a reply is
+    /// delivered (the dispatch arms advance both cursors), the lamp is clicked
+    /// ("mischief managed"), or the session dies and the sweep retires it.
+    public func needsAttention(limit: Int = 200) throws -> [WaitingSession] {
+        try dbQueue.read { db in
+            try WaitingSession.fetchAll(db, sql: """
+                SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
+                       l.promptId, l.transcriptPath, l.lastAssistantMessage,
+                       l.notificationMatcher, l.summaryText, l.hookEvent,
+                       cs.callsign, b.topic AS briefTopic
+                FROM latest_per_session l
+                LEFT JOIN session_cursor c ON c.sessionId = l.sessionId
+                LEFT JOIN session_callsign cs ON cs.sessionId = l.sessionId
+                LEFT JOIN brief b ON b.eventRowid = l.latestId
+                WHERE l.hookEvent = ?
+                  AND l.latestId > coalesce(c.dismissedThrough, 0)
+                ORDER BY l.latestId DESC
+                LIMIT ?
+                """, arguments: [HookEventKind.stop.rawValue, limit])
+        }
+    }
+
+    /// Identical predicate to `needsAttention`, same badge/keypress rule as
+    /// `pendingCount`.
+    public func attentionCount() throws -> Int {
+        try needsAttention().count
+    }
+
     /// Advance a cursor. The only write in the model, and therefore the only thing
     /// that can be wrong, so it says what it did.
     public func advanceCursor(
