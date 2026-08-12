@@ -293,4 +293,115 @@ final class SessionDiscoveryTests: XCTestCase {
 
         XCTAssertEqual(result.sessions.map(\.sessionId), ["parent"])
     }
+
+    // MARK: - The split: disk facts cached, process facts never
+
+    /// The whole reason liveness is a column rather than a gate. The grid
+    /// refreshes on every intake tick and cannot re-walk 500 transcripts each
+    /// time, but "is a process behind this" must never be one tick stale.
+    @MainActor
+    func testLivenessIsRejoinedEvenWhenTheScanIsCached() throws {
+        let root = try makeArchive([
+            ("-tmp-a", "s1", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let titles = TranscriptTitles()
+
+        let live = LiveSession(pid: 7, sessionId: "s1", cwd: "/tmp",
+                               status: nil, name: nil, waitingFor: nil)
+        let first = SessionDiscovery.discover(
+            live: StubAgents([live]), projects: root, titles: titles)
+        XCTAssertEqual(first.sessions.first?.liveness, .live)
+        XCTAssertFalse(first.sessions.first?.revivable ?? true)
+
+        // Delete the transcript. A cached scan still lists it, which is what
+        // proves the second call did no disk walk — and the liveness join still
+        // runs, which is what this is all for.
+        try FileManager.default.removeItem(
+            at: root.appendingPathComponent("-tmp-a/s1.jsonl"))
+
+        let second = SessionDiscovery.discover(
+            live: StubAgents([]), projects: root, titles: titles)
+        XCTAssertEqual(second.sessions.first?.sessionId, "s1", "the scan should be cached")
+        XCTAssertEqual(second.sessions.first?.liveness, .gone, "liveness must not be cached")
+        XCTAssertTrue(second.sessions.first?.revivable ?? false)
+    }
+
+    /// A directory can vanish between two ticks, and an offer must never
+    /// outlive its target — so revivability is resolved on every call rather
+    /// than baked into the cached scan.
+    @MainActor
+    func testRevivabilityIsResolvedPerCallNotPerScan() throws {
+        let cwd = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("discover-cwd-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
+        let root = try makeArchive([
+            ("-tmp-b", "s2", [
+                #"{"type":"user","entrypoint":"cli","cwd":"\#(cwd.path)"}"#, assistant()]),
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let titles = TranscriptTitles()
+
+        let first = SessionDiscovery.discover(
+            live: StubAgents([]), projects: root, titles: titles)
+        XCTAssertTrue(first.sessions.first?.revivable ?? false)
+        XCTAssertNotNil(first.sessions.first?.reviveCommand)
+
+        try FileManager.default.removeItem(at: cwd)
+
+        let second = SessionDiscovery.discover(
+            live: StubAgents([]), projects: root, titles: titles)
+        XCTAssertEqual(second.sessions.first?.liveness, .gone)
+        XCTAssertFalse(second.sessions.first?.revivable ?? true,
+                       "a directory that vanished must withdraw the offer")
+        XCTAssertNil(second.sessions.first?.reviveCommand)
+    }
+
+    /// Two archives, one process. Without the directory in the cache key a test
+    /// archive answers for the real one, and the bug gets blamed on the
+    /// classifier.
+    @MainActor
+    func testTheCacheIsKeyedByArchive() throws {
+        let a = try makeArchive([
+            ("-tmp-a", "from-a", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
+        ])
+        let b = try makeArchive([
+            ("-tmp-b", "from-b", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
+        ])
+        defer {
+            try? FileManager.default.removeItem(at: a)
+            try? FileManager.default.removeItem(at: b)
+        }
+        let titles = TranscriptTitles()
+        XCTAssertEqual(SessionDiscovery.discover(
+            live: StubAgents([]), projects: a, titles: titles).sessions.map(\.sessionId),
+            ["from-a"])
+        XCTAssertEqual(SessionDiscovery.discover(
+            live: StubAgents([]), projects: b, titles: titles).sessions.map(\.sessionId),
+            ["from-b"])
+    }
+
+    /// The grid refresh runs on the main thread, so it must never be the thing
+    /// that walks the archive. A cold call returns nothing and starts the walk
+    /// behind it; the rows arrive on a later tick.
+    @MainActor
+    func testTheNonBlockingPathReturnsNothingUntilAScanExists() throws {
+        let root = try makeArchive([
+            ("-tmp-c", "s3", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let titles = TranscriptTitles()
+
+        XCTAssertNil(SessionDiscovery.discoverIfScanned(
+            live: StubAgents([]), projects: root, titles: titles),
+            "a cold cache must not block the caller")
+
+        // Prime it the way the background refresh would.
+        _ = SessionDiscovery.discover(live: StubAgents([]), projects: root, titles: titles)
+
+        let warm = SessionDiscovery.discoverIfScanned(
+            live: StubAgents([]), projects: root, titles: titles)
+        XCTAssertEqual(warm?.sessions.map(\.sessionId), ["s3"])
+        XCTAssertEqual(warm?.sessions.first?.liveness, .gone)
+    }
 }

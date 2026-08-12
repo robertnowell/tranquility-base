@@ -324,6 +324,18 @@ enum StateLegend {
         /// Amber: stopped on something it cannot pass on its own — a usage
         /// limit, a dead API. Amber is the needs-you channel.
         case fault
+        /// No lamp at all: the session exited, or the liveness probe could not
+        /// say. Ruled 11 Aug — an agent does not stop existing when its process
+        /// ends, so it keeps its row; but nothing is running behind that lens,
+        /// so nothing lights it.
+        ///
+        /// Deliberately NOT a fifth colour. v1.1 ruled against a "we don't
+        /// know" hue and that stands: this is the ABSENCE of one, an empty
+        /// socket against `running`'s unlit-but-seated lamp. That is also the
+        /// distinction asked for on 11 Aug between an idle session and an
+        /// exited one, and it is drawn in the one channel that cannot be
+        /// confused with a state — presence.
+        case unlit
 
         /// Lamp diameter — 9px circle, ruled.
         static let diameter: CGFloat = 9
@@ -334,6 +346,7 @@ enum StateLegend {
             case .working: return Palette.working
             case .running: return Palette.socket
             case .fault: return Palette.fault
+            case .unlit: return .clear
             }
         }
 
@@ -342,8 +355,14 @@ enum StateLegend {
             switch self {
             case .ready, .fault, .working: return nil
             case .running: return Palette.hairline
+            // Fainter than the seated lamp's ring, and with nothing inside it.
+            case .unlit: return Palette.hairlineSoft
             }
         }
+
+        /// A row whose session is gone reads at reduced ink. The lamp says
+        /// "not running"; the type says "and not now".
+        var rowAlpha: CGFloat { self == .unlit ? 0.55 : 1 }
     }
 
     /// One row of the idle grid: a session, its lamp, and its callsign.
@@ -360,6 +379,27 @@ enum StateLegend {
         /// ⌃⌃ why still carries it. Empty until minted.
         let callsign: String
         let lamp: Lamp
+        /// Whether tapping this row brings the session back — `claude --resume`
+        /// in its own directory.
+        ///
+        /// NOT simply "the lamp is unlit". It requires POSITIVE evidence the
+        /// process is gone, plus a directory that still exists. A probe that
+        /// failed proves nothing, and resuming a session that is still running
+        /// leaves the original process alive and adds a second live entry under
+        /// the same id, which crashed the app twice (06 Aug 14:35, 07 Aug
+        /// 17:39). So an unproven row shows unlit and offers nothing, and the
+        /// two failure directions are opposite ON PURPOSE: the display fails
+        /// toward showing you the work, the verb fails toward doing nothing.
+        let revivable: Bool
+
+        init(id: String, name: String, callsign: String, lamp: Lamp,
+             revivable: Bool = false) {
+            self.id = id
+            self.name = name
+            self.callsign = callsign
+            self.lamp = lamp
+            self.revivable = revivable
+        }
     }
 
     /// Quiet rows sink (ruled 10 Aug). A session that is merely alive never
@@ -380,8 +420,46 @@ enum StateLegend {
     /// Only `.running` moves. Whether `.fault` should outrank `.working` is a
     /// real question and not this ruling's: nothing here claims the active band
     /// is correctly ordered, only that the quiet band is not part of it.
+    /// What a tap on a row does. One tap, two verbs, and a third case that is
+    /// the whole safety story.
+    ///
+    /// Stated as a function rather than as a branch inside the click handler so
+    /// it can be asserted by a drill without a window server, which is the only
+    /// evidence the panel layer has.
+    enum RowAction: Equatable {
+        /// Live: hear what it has to say.
+        case announce
+        /// Proven gone, and its directory is still there: bring it back.
+        case revive
+        /// Unlit but unproven — the probe could not answer, or the directory is
+        /// gone. Doing nothing is the correct outcome, NOT falling through to
+        /// announce: a `--resume` against a session that is actually alive puts
+        /// two processes under one id, and that crashed the app twice.
+        case none
+    }
+
+    static func action(for row: SessionRow) -> RowAction {
+        switch row.lamp {
+        case .ready, .working, .running, .fault: return .announce
+        case .unlit: return row.revivable ? .revive : .none
+        }
+    }
+
+    /// Three bands now, not two. Sessions doing something, then sessions merely
+    /// alive, then sessions that have exited — which sink below both, because
+    /// a row you cannot speak to must never sit between two you can.
+    ///
+    /// Order WITHIN each band is untouched: the caller has already established
+    /// recency, and a stable partition keeps it.
     static func quietRowsLast(_ rows: [SessionRow]) -> [SessionRow] {
-        rows.filter { $0.lamp != .running } + rows.filter { $0.lamp == .running }
+        func band(_ lamp: Lamp) -> Int {
+            switch lamp {
+            case .ready, .working, .fault: return 0
+            case .running: return 1
+            case .unlit: return 2
+            }
+        }
+        return (0...2).flatMap { rank in rows.filter { band($0.lamp) == rank } }
     }
 
     /// The one DISPLAYED identity — RE-RULED 05 Aug (twice): the terminal
