@@ -29,19 +29,40 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. "$(dirname "$0")/lib/app-process.sh"
 
-SRC="${1:-/private/tmp/tb-clean/.build/debug/Tranquility Base.app}"
-[ "${1:-}" = "--no-login-item" ] && SRC="/private/tmp/tb-clean/.build/debug/Tranquility Base.app"
+DEFAULT_SRC="/private/tmp/tb-clean/.build/debug/Tranquility Base.app"
+SRC="${1:-$DEFAULT_SRC}"
+[ "${1:-}" = "--no-login-item" ] && SRC="$DEFAULT_SRC"
 DEST="/Applications/Tranquility Base.app"
 BUNDLE_ID="com.robertnowell.voice-dispatch"
 AGENT="$HOME/Library/LaunchAgents/$BUNDLE_ID.plist"
 WANT_LOGIN_ITEM=1
 for a in "$@"; do [ "$a" = "--no-login-item" ] && WANT_LOGIN_ITEM=0; done
 
+# Build it rather than refusing.
+#
+# This used to exit with "Build one first: scripts/relaunch.sh". On a fresh
+# clone that is the whole install path failing at step one, and the remedy it
+# named is the script carrying the pkill fault — so the N+1st user's first
+# instruction was to run the most broken thing in the repo. The default source
+# also lives in /private/tmp, which this file's own header documents as reaped,
+# so an install that worked in the morning could refuse in the afternoon having
+# changed nothing.
+#
+# Only the DEFAULT source is built. An explicit path given as $1 is the caller
+# saying "install exactly this", and silently building something else instead
+# would be worse than failing.
 if [ ! -d "$SRC" ]; then
-  echo "✗ no bundle at $SRC" >&2
-  echo "  Build one first: scripts/relaunch.sh (or scripts/bundle.sh debug)" >&2
-  exit 1
+  if [ "$SRC" = "$DEFAULT_SRC" ]; then
+    echo "→ no bundle yet — building committed origin/main"
+    SRC=$(scripts/build-clean.sh)
+  else
+    echo "✗ no bundle at $SRC" >&2
+    echo "  That path was given explicitly. Build it, or run with no argument" >&2
+    echo "  to build committed origin/main automatically." >&2
+    exit 1
+  fi
 fi
 
 # --- the signature check, before anything is copied -------------------------
@@ -68,11 +89,7 @@ fi
 # app draws its interface programmatically and loads nothing from disk after
 # launch) but leaving the OLD process running against the NEW install is not:
 # two instances race for one global hotkey, which is its own documented bug.
-if pgrep -f "TranquilityApp" >/dev/null 2>&1; then
-  echo "→ stopping the running instance"
-  pkill -f "TranquilityApp" || true
-  sleep 1
-fi
+app_stop
 
 echo "→ installing to $DEST"
 rm -rf "$DEST"
@@ -144,7 +161,7 @@ fi
 # reproduced it. So: give launchd a moment to answer before deciding.
 started=0
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if pgrep -f "TranquilityApp" >/dev/null 2>&1; then started=1; break; fi
+  if app_running; then started=1; break; fi
   sleep 0.5
 done
 if [ "$started" -eq 1 ]; then
@@ -157,14 +174,14 @@ sleep 3
 
 # One instance, always. Belt and braces: if anything above still managed to
 # produce two, say so loudly rather than leaving a hotkey race running.
-COUNT=$(pgrep -f "TranquilityApp" | wc -l | tr -d ' ')
+COUNT=$(app_count)
 if [ "$COUNT" -gt 1 ]; then
   echo "✗ $COUNT instances are running — they will fight over the global hotkey." >&2
-  echo "  pkill -f TranquilityApp && open \"$DEST\"" >&2
+  echo "  pkill -f \"$APP_PROC_PATTERN\" && open \"$DEST\"" >&2
   exit 1
 fi
 
-if pgrep -f "TranquilityApp" >/dev/null; then
+if app_running; then
   echo "✓ installed at $DEST"
   echo "  Spotlight, Raycast and the Dock can see it now, and Quit is recoverable."
   [ "$WANT_LOGIN_ITEM" -eq 1 ] && echo "  Starts at login. Turn it off in System Settings › General › Login Items."
