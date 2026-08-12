@@ -269,6 +269,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // UI on every tick and every press — which also risks the CGEvent
                 // tap timing out, and a timed-out tap is dropped keystrokes.
                 await Task.detached { _ = ClaudeAgentsCLI().sessions() }.value
+                // And the disk scan, for the same reason one layer over: the
+                // grid must never walk the archive on the main thread, and a
+                // panel that opens without its closed rows and grows them a
+                // moment later is the blink this warm-up exists to prevent.
+                await Task.detached(priority: .utility) { SessionDiscovery.warm() }.value
 
                 // Write the summary before it is asked for. Doing it on demand meant
                 // every use opened with a model call you had to sit through.
@@ -356,6 +361,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
+        hud.onRevive = { [weak self] id, name in self?.revive(id, name: name) }
         hud.onNewSessionForArtifact = { [weak self] ref in
             self?.newSession(forArtifact: ref)
         }
@@ -868,9 +874,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // time an agent is working.)
         let waitingIds = Set(waiting.map(\.sessionId))
         let known = (try? store?.allKnownSessions()) ?? []
+        // Minted callsigns outlive the process that earned them, so a dead row
+        // keeps the name you have been calling it. The store is the only place
+        // this exists — nothing on disk records what we named a session.
+        let closedCallsigns = Dictionary(
+            known.compactMap { row in row.callsign.map { (row.sessionId, $0) } },
+            uniquingKeysWith: { first, _ in first })
         var placed = waitingIds
         for stored in known where !placed.contains(stored.sessionId) {
             guard let live = liveById[stored.sessionId] else { continue }
+            // Ruled 12 Aug: headless is headless whether it is running or not.
+            // Liveness used to hide these by accident — a cron job is gone
+            // before anyone looks — but a LONG one is live and got a row, and
+            // then vanished on exit instead of joining the closed band. One
+            // rule across all four bands now, and it is the same fail-open
+            // predicate the announcer uses.
+            guard !SessionDiscovery.isHeadless(transcriptPath: stored.transcriptPath)
+            else { continue }
             placed.insert(stored.sessionId)
             let activity = stored.transcriptPath.flatMap {
                 SessionActivity.read(transcriptPath: $0,
@@ -883,11 +903,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 lamp: lamp(for: activity, sessionId: stored.sessionId)))
         }
         // Live sessions with no stored events yet: nothing to rank them by,
-        // so they close the grid.
+        // so they close the live half of the grid.
         for live in liveById.values where !placed.contains(live.sessionId) {
             let path = live.cwd.map {
                 TranscriptTitles.defaultPath(cwd: $0, sessionId: live.sessionId)
             }
+            // A session with no stored events has no recorded transcript path,
+            // so this is the one band that has to derive one. `defaultPath`
+            // rebuilds it from the two fields the agents API supplies, and an
+            // unreadable path fails open exactly like everywhere else.
+            guard !SessionDiscovery.isHeadless(transcriptPath: path) else { continue }
+            placed.insert(live.sessionId)
             let activity = path.flatMap {
                 SessionActivity.read(transcriptPath: $0,
                                      boundary: boundaries[live.sessionId])
@@ -899,6 +925,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     callsign: nil, fallback: "session"),
                 callsign: activity?.shortReason ?? "",
                 lamp: lamp(for: activity, sessionId: live.sessionId)))
+        }
+        // And the sessions that are not awake (ruled 11 Aug). Everything above
+        // this line is enumerated from PROCESSES, which is why a machine
+        // restart used to empty the panel; everything below is enumerated from
+        // the transcripts on disk, which outlive the process.
+        //
+        // Deliberately ADDITIVE rather than a replacement of the bands above.
+        // The live half already agrees with the store and with the announcer;
+        // rebuilding it from disk would give the same rows by a second route,
+        // and two routes to one answer is how they start disagreeing. Disk
+        // enumerates only the population the process list cannot: the dead.
+        for found in (SessionDiscovery.discoverIfScanned()?.sessions ?? [])
+        where !placed.contains(found.sessionId) && found.liveness != .live {
+            placed.insert(found.sessionId)
+            rows.append(StateLegend.SessionRow(
+                id: found.sessionId,
+                name: StateLegend.displayName(
+                    liveName: found.title,
+                    callsign: closedCallsigns[found.sessionId],
+                    fallback: found.cwd.map { ($0 as NSString).lastPathComponent } ?? "session"),
+                // Same precedence as the live band above: a session that died
+                // mid-error says why, and otherwise the column carries the
+                // callsign. A minted callsign outlives the process that earned
+                // it, so a dead row keeps the name you have been calling it —
+                // leaving the column blank made the closed band read as a
+                // different kind of thing rather than the same thing, asleep.
+                callsign: found.activity?.shortReason
+                    ?? closedCallsigns[found.sessionId] ?? "",
+                lamp: .unlit,
+                revivable: found.revivable))
         }
         // Last, and after every band has been appended: a session that is merely
         // alive drops below the ones doing something, without disturbing the
@@ -2375,6 +2431,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func newSession() {
         newSession(directory: SessionLauncher.defaultDirectory,
                    command: SessionLauncher.defaultCommand)
+    }
+
+    /// Bring back a session whose process has ended.
+    ///
+    /// The row already checked that this session is gone and that its directory
+    /// exists — but that check is as old as the last grid refresh, and the one
+    /// thing that must not happen is resuming a session that came back to life
+    /// in between. `claude --resume` on a live session adds a second process
+    /// under the same id, and that crashed the app twice. So the guard is taken
+    /// AGAIN here, on a fresh probe, at the moment of the act.
+    ///
+    /// Off-main because it drives Terminal through AppleScript.
+    private func revive(_ sessionId: String, name: String) {
+        hud.showReceipt(.reviving(name))
+        Task.detached {
+            let fresh = SessionDiscovery.discover(ttl: 0).sessions
+                .first { $0.sessionId == sessionId }
+            guard let fresh, let command = fresh.reviveCommand else {
+                Permissions.log("revive: refused \(sessionId.prefix(8)) — "
+                    + (fresh.map { "liveness \($0.liveness.rawValue)" } ?? "no longer on disk"))
+                await MainActor.run { [weak self] in
+                    self?.hud.showReceipt(.alreadyAwake)
+                }
+                return
+            }
+            _ = SessionLauncher.resume(sessionId: sessionId, directory: command.cwd)
+        }
     }
 
     /// The invitation's other half: a fresh agent in the artifact's own

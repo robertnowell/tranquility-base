@@ -148,6 +148,9 @@ final class StatusHUD: NSObject {
     private var backButton: NSButton!
     private var waitingRows: NSStackView!
     var onPickWaiting: ((String) -> Void)?
+    /// Wired by the app onto `SessionLauncher.resume`. Only ever called for a
+    /// row that proved its session is gone and its directory still exists.
+    var onRevive: ((_ id: String, _ name: String) -> Void)?
 
     /// Clicking the ◀ breadcrumb goes home (ruled 06 Aug: "there's no reason
     /// it shouldn't be clickable — voiced first while allowing a keyboard
@@ -1319,8 +1322,16 @@ final class StatusHUD: NSObject {
             // left. Without this the icon draws straight through the "AG" of
             // AGENTS — the two were competing for the same 24pt, and the label
             // won on paint order and lost on legibility.
+            // The cap says so when it bites. A list that silently stops at
+            // eight reads as "that is all of them", which is the same lie the
+            // empty panel told before closed sessions had rows at all — and
+            // closed rows are exactly what makes the cap start biting.
+            let total = face.sessionRows.count
+            let placard = total > Self.gridRowCap
+                ? "\(StateLegend.gridStripTitle) · \(Self.gridRowCap) OF \(total)"
+                : StateLegend.gridStripTitle
             let stripTitle = NSMutableAttributedString(attributedString: letterspaced(
-                StateLegend.gridStripTitle, size: 10, tracking: 3.2,
+                placard, size: 10, tracking: 3.2,
                 color: StateLegend.Lens.chrome.color))
             let indent = NSMutableParagraphStyle()
             indent.firstLineHeadIndent = 24
@@ -1613,6 +1624,10 @@ final class StatusHUD: NSObject {
     /// the key line. Tap = invite that session. Fixed height plus single-line
     /// labels is what kills the orphan fragments and ragged gaps the old
     /// free-height attributed-title rows produced.
+    /// How many rows the grid draws. Named rather than inline because the
+    /// placard now states it when it bites, and two literals drift.
+    static let gridRowCap = 8
+
     private func rebuildSessionRows() {
         waitingRows.arrangedSubviews.forEach { $0.removeFromSuperview() }
         waitingRows.spacing = 0
@@ -1629,7 +1644,7 @@ final class StatusHUD: NSObject {
 
         // The strip's bottom rule, under "AGENTS ⚙".
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
-        let shown = Array(face.sessionRows.prefix(8))
+        let shown = Array(face.sessionRows.prefix(Self.gridRowCap))
         // ONE callsign column (ruled 05 Aug): sized to the widest callsign on
         // show, capped at 38% of the grid. Per-row widths made every name
         // truncate at its own x and the right side read as a rag, not a
@@ -1666,10 +1681,13 @@ final class StatusHUD: NSObject {
         // singleLine proves the labels can never recreate the orphan fragments
         // ("**Voices for lif") between rows.
         let ready = shown.filter { $0.lamp == .ready }.count
+        let closed = shown.filter { $0.lamp == .unlit }.count
+        let revivable = shown.filter(\.revivable).count
         let singleLine = shown.allSatisfy {
             !$0.name.contains("\n") && !$0.callsign.contains("\n")
         }
-        Permissions.log("grid: \(shown.count) rows (\(ready) ready) "
+        Permissions.log("grid: \(shown.count) of \(face.sessionRows.count) rows "
+            + "(\(ready) ready, \(closed) closed, \(revivable) revivable) "
             + "rowH=\(Int(GridRowView.height)) "
             + "cols=\(Int(GridRowView.lampColumn))/flex/aux\(Int(auxWidth)) "
             + "lamps=circular singleLine=\(singleLine)")
@@ -1954,9 +1972,41 @@ final class StatusHUD: NSObject {
         case sending(String)
         case sent
         case queued
+        /// Tapping a row whose session has exited. A receipt rather than a card
+        /// for the same reason a send is: it is an event, not state, and a
+        /// Terminal window is about to appear and say the rest.
+        case reviving(String)
+        /// The refusal that keeps the app alive. Between the last grid refresh
+        /// and the tap, the session came back on its own — resuming it now
+        /// would put two processes under one id, which crashed the app twice.
+        case alreadyAwake
+
+        /// Green is for a thing that landed. Reviving is in flight, and a
+        /// refusal did not land at all.
+        var landed: Bool {
+            switch self {
+            case .sent, .queued: return true
+            case .sending, .reviving, .alreadyAwake: return false
+            }
+        }
+
+        /// Still happening, so the chip gets the longer ceiling and logs if no
+        /// outcome ever replaces it. A refusal is an outcome already.
+        var inFlight: Bool {
+            switch self {
+            case .sending, .reviving: return true
+            case .sent, .queued, .alreadyAwake: return false
+            }
+        }
 
         var text: String {
             switch self {
+            case .reviving(let target):
+                let name = target.count > 18
+                    ? target.prefix(17).trimmingCharacters(in: .whitespaces) + "…"
+                    : target
+                return "↺ \(name.uppercased()) · RESUMING"
+            case .alreadyAwake: return "ALREADY RUNNING"
             case .sending(let target):
                 // The chip shares the top band with the placard and the gear;
                 // a long callsign would run into both.
@@ -1994,11 +2044,9 @@ final class StatusHUD: NSObject {
             host.addSubview(chip)
             receiptChip = chip
         }
-        let sent: Bool
-        if case .sending = receipt { sent = false } else { sent = true }
         chip.attributedStringValue = letterspaced(
             receipt.text, size: 9, tracking: 1.4,
-            color: sent ? StateLegend.Palette.ready : StateLegend.Palette.secondary)
+            color: receipt.landed ? StateLegend.Palette.ready : StateLegend.Palette.secondary)
         chip.sizeToFit()
         // Right edge measured from the gear itself rather than a guessed
         // margin, so the two never collide whatever the panel width.
@@ -2055,10 +2103,10 @@ final class StatusHUD: NSObject {
         // sitting there indefinitely asserting something it no longer knows.
         // A dispatch that has neither landed nor failed by then has a bigger
         // problem than its receipt, and the failure card owns that.
-        let linger: TimeInterval = sent ? 4.0 : 12.0
+        let linger: TimeInterval = receipt.inFlight ? 12.0 : 4.0
         let fade = DispatchWorkItem { [weak self, weak chip] in
             guard let chip else { return }
-            if !sent { Permissions.log("receipt: sending timed out on screen") }
+            if receipt.inFlight { Permissions.log("receipt: \(receipt.text) timed out on screen") }
             self?.receiptFade = nil
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.5
@@ -2915,6 +2963,7 @@ final class StatusHUD: NSObject {
         contrastDrill()
         titleDoorDrill()
         quietRowsDrill()
+        closedRowsDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
@@ -2933,18 +2982,67 @@ final class StatusHUD: NSObject {
         }
         // Deliberately interleaved, and with two of each active lamp, so a
         // comparator that grouped by lamp rather than partitioning would fail.
-        let mixed = [row("w1", .working), row("i1", .running), row("r1", .ready),
-                     row("i2", .running), row("f1", .fault), row("w2", .working)]
+        // The closed rows are seeded in the MIDDLE for the same reason: they
+        // have to sink past the quiet band, not merely past the active one.
+        let mixed = [row("w1", .working), row("i1", .running), row("d1", .unlit),
+                     row("r1", .ready), row("i2", .running), row("d2", .unlit),
+                     row("f1", .fault), row("w2", .working)]
         let sorted = StateLegend.quietRowsLast(mixed).map(\.id)
 
         SelfTest.report("quietRows", [
-            ("quietLast", sorted.suffix(2) == ["i1", "i2"]),
+            ("closedLast", sorted.suffix(2) == ["d1", "d2"]),
+            ("quietAboveClosed", Array(sorted[4...5]) == ["i1", "i2"]),
             ("activeKeepsArrivalOrder", Array(sorted.prefix(4)) == ["w1", "r1", "f1", "w2"]),
             ("nothingLost", sorted.count == mixed.count),
             ("allQuietIsStillAllQuiet",
              StateLegend.quietRowsLast([row("i1", .running), row("i2", .running)])
                 .map(\.id) == ["i1", "i2"]),
         ])
+    }
+
+    /// A session that is not awake is still a row, and tapping it is a
+    /// different verb — or, when nothing was proven, no verb at all.
+    ///
+    /// Ruled 11 Aug: "They are equally valid agents whether or not they are
+    /// awake." The dangerous half is the third case. `claude --resume` against
+    /// a session that is actually still running leaves the original process
+    /// alive and adds a second live entry under the same id, which crashed the
+    /// app twice (06 Aug 14:35, 07 Aug 17:39). An unlit row whose liveness
+    /// could not be proven must therefore do NOTHING on tap rather than fall
+    /// through to the announce path it used to share.
+    private func closedRowsDrill() {
+        func row(_ id: String, _ lamp: StateLegend.Lamp,
+                 revivable: Bool = false) -> StateLegend.SessionRow {
+            StateLegend.SessionRow(id: id, name: id, callsign: id,
+                                   lamp: lamp, revivable: revivable)
+        }
+        let unlit = StateLegend.Lamp.unlit
+
+        // The row is drawn by presence, not by a fifth colour: nothing in the
+        // socket, a fainter ring than the seated lamp, and stepped-back ink.
+        let noFill = unlit.fill.alphaComponent == 0
+        let fainterRing = (unlit.ring?.alphaComponent ?? 1)
+            < (StateLegend.Lamp.running.ring?.alphaComponent ?? 0)
+
+        // Every drill row goes through showIdle so the grid actually builds
+        // one — a row that sorts correctly and then fails to render is the
+        // failure this layer exists to catch.
+        showIdle(rows: [row("live", .ready), row("dead", unlit, revivable: true),
+                        row("unproven", unlit)])
+        let built = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
+
+        SelfTest.report("closedRows", [
+            ("unlitHasNoFill", noFill),
+            ("unlitRingIsFainterThanQuiet", fainterRing),
+            ("unlitDimsTheRow", unlit.rowAlpha < 1 && StateLegend.Lamp.running.rowAlpha == 1),
+            ("liveRowAnnounces", StateLegend.action(for: row("live", .ready)) == .announce),
+            ("revivableRowRevives",
+             StateLegend.action(for: row("dead", unlit, revivable: true)) == .revive),
+            ("unprovenRowDoesNothing",
+             StateLegend.action(for: row("unproven", unlit)) == StateLegend.RowAction.none),
+            ("closedRowsStillRender", built.count == 3),
+        ])
+        showIdle(rows: [])
     }
 
     /// The identity opens the tab — but only when there is a tab.
@@ -4016,10 +4114,26 @@ final class StatusHUD: NSObject {
     // so showWaitingList/onOpenWaitingList and the clickable count pill went
     // with it — one face, not two near-identical lists.
 
+    /// One tap, two verbs, and the row decides which.
+    ///
+    /// A live row is answered; a row whose session has exited is brought back.
+    /// The branch is on the ROW rather than on the lamp alone, because
+    /// `revivable` carries the guard that matters: an unlit row whose liveness
+    /// was merely unprovable offers nothing, and tapping it must do nothing
+    /// rather than announce a session that is not there.
     @objc nonisolated private func sessionRowTapped(_ sender: NSControl) {
         MainActor.assumeIsolated {
             guard let id = sender.identifier?.rawValue else { return }
-            onPickWaiting?(id)
+            guard let row = face.sessionRows.first(where: { $0.id == id }) else {
+                onPickWaiting?(id); return
+            }
+            switch StateLegend.action(for: row) {
+            case .announce: onPickWaiting?(id)
+            case .revive: onRevive?(id, row.name)
+            case .none:
+                Permissions.log("grid: tap on \(id.prefix(8)) — unlit and not revivable, "
+                    + "no action (liveness unproven, or its directory is gone)")
+            }
         }
     }
 
@@ -4196,16 +4310,24 @@ private final class GridRowView: NSControl {
 
         // The type ramp: both columns monospaced (one family, two sizes — the
         // callsign is an identity, not prose), semibold name only when ready.
+        //
+        // A row whose session has exited is drawn at reduced ink (ruled 11 Aug:
+        // "they should be shown that they are not alive"). The dimming is the
+        // second half of a two-channel statement, and both channels are about
+        // presence rather than state: an empty socket where a lamp would be,
+        // and type that has stepped back. No new colour is spent on it.
+        let ink = item.lamp.rowAlpha
         let name = NSTextField(labelWithString: item.name)
         name.font = .monospacedSystemFont(ofSize: 13, weight: ready ? .semibold : .medium)
-        name.textColor = StateLegend.Palette.ink
+        name.textColor = StateLegend.Palette.ink.withAlphaComponent(ink)
         name.lineBreakMode = .byTruncatingTail
         name.translatesAutoresizingMaskIntoConstraints = false
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let callsign = NSTextField(labelWithString: item.callsign)
         callsign.font = Self.auxFont
-        callsign.textColor = ready ? StateLegend.Palette.secondary : StateLegend.Palette.muted
+        callsign.textColor = (ready ? StateLegend.Palette.secondary : StateLegend.Palette.muted)
+            .withAlphaComponent(ink)
         callsign.lineBreakMode = .byTruncatingTail
         callsign.alignment = .right
         callsign.translatesAutoresizingMaskIntoConstraints = false
