@@ -90,11 +90,16 @@ final class SessionDiscoveryTests: XCTestCase {
 
     // MARK: - entrypoint: the filter that replaces the tty
 
-    func testInteractiveIsExactlyCli() {
-        XCTAssertTrue(SessionDiscovery.isInteractive("cli"))
-        XCTAssertFalse(SessionDiscovery.isInteractive("sdk-cli"))
-        XCTAssertFalse(SessionDiscovery.isInteractive(nil))
-        XCTAssertFalse(SessionDiscovery.isInteractive(""))
+    /// Exclusion needs POSITIVE evidence, in both directions of the asymmetry.
+    /// A stray robot row costs one glance; a hidden session costs the work,
+    /// which is the failure the tty filter actually caused.
+    func testOnlyAPositiveSdkCliIsHeadless() {
+        XCTAssertTrue(SessionDiscovery.isHeadless("sdk-cli"))
+        XCTAssertFalse(SessionDiscovery.isHeadless("cli"))
+        XCTAssertFalse(SessionDiscovery.isHeadless(nil), "unreadable is not evidence")
+        XCTAssertFalse(SessionDiscovery.isHeadless(""))
+        XCTAssertFalse(SessionDiscovery.isHeadless("some-future-entrypoint"),
+                       "a value a later Claude Code invents must not hide a session")
     }
 
     /// A transcript can open with bookkeeping that carries no entrypoint.
@@ -182,7 +187,7 @@ final class SessionDiscoveryTests: XCTestCase {
         return root
     }
 
-    func testHeadlessSessionsAreCountedAndExcluded() throws {
+    func testHeadlessAreExcludedAndUnreadableAreKept() throws {
         let root = try makeArchive([
             ("-tmp-a", "human", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
             ("-tmp-a", "robot", [#"{"type":"user","entrypoint":"sdk-cli","cwd":"/tmp"}"#, assistant()]),
@@ -193,7 +198,9 @@ final class SessionDiscoveryTests: XCTestCase {
         let result = SessionDiscovery.discover(
             live: StubAgents([]), projects: root, titles: TranscriptTitles())
 
-        XCTAssertEqual(result.sessions.map(\.sessionId), ["human"])
+        // The entrypoint-less transcript is KEPT, and counted so the drop is
+        // never silent either way.
+        XCTAssertEqual(result.sessions.map(\.sessionId).sorted(), ["human", "old"])
         XCTAssertEqual(result.scanned, 3)
         XCTAssertEqual(result.headless, 1)
         XCTAssertEqual(result.unclassifiable, 1)
