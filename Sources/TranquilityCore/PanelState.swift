@@ -42,6 +42,11 @@ public enum PanelState: Equatable {
     /// reply-send success stays silent as ruled; ONLY dictation gets a receipt.
     case receipt
     case settings
+    /// The list of everything this machine has run lately — the graveyard, and
+    /// the one surface that scrolls. A face rather than a mode: it is opened
+    /// deliberately, read, and left, and it does NOT refresh under you while
+    /// you are reading it (which is what makes scrolling it safe).
+    case pastAgents
 
     /// Short, stable name for logs. Deliberately excludes ids so a transition line
     /// reads as a state change rather than a data dump.
@@ -58,6 +63,7 @@ public enum PanelState: Equatable {
         case .result: return "result.failed"
         case .receipt: return "receipt"
         case .settings: return "settings"
+        case .pastAgents: return "pastAgents"
         }
     }
 
@@ -109,7 +115,7 @@ public enum PanelState: Equatable {
         switch self {
         case .speaking, .pendingSend, .result, .receipt: return true
         case .hidden, .idle, .preparing, .arming, .listening, .transcribing,
-             .settings: return false
+             .settings, .pastAgents: return false
         }
     }
 
@@ -182,7 +188,8 @@ public enum PanelState: Equatable {
         // receipt over live speech" guard died with the Sent face: the
         // dictation receipt can only arrive out of `.transcribing`, its own
         // flow's stage, so it can never paint over live speech.
-        case .hidden, .idle, .preparing, .speaking, .result, .receipt, .settings:
+        case .hidden, .idle, .preparing, .speaking, .result, .receipt, .settings,
+             .pastAgents:
             return true
         }
     }
