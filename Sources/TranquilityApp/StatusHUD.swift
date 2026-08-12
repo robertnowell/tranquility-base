@@ -3204,6 +3204,7 @@ final class StatusHUD: NSObject {
         // the same session two different ways.
         let idsMatch = items.allSatisfy { $0.row.aux == String($0.row.id.prefix(8)) }
         let tookKeyboard = panel?.acceptsKey == true
+        let caretColour = pastList.caretColourForTesting
         // The verb follows liveness, never the other way round.
         let verbs = items.allSatisfy { $0.revivable == ($0.row.lamp == .unlit) }
         goHomeFromPastAgents()
@@ -3215,6 +3216,11 @@ final class StatusHUD: NSObject {
             // broken for a reason nothing on screen explains.
             ("takesTheKeyboardForFiltering", tookKeyboard),
             ("givesTheKeyboardBack", panel?.acceptsKey == false),
+            // The caret is the one AppKit-coloured thing on this face, and the
+            // colour it reaches for by default is the WORKING lamp's blue —
+            // blinking, on a panel where blue means an agent has work in hand.
+            ("caretIsNotTheWorkingLamp", caretColour != StateLegend.Palette.working),
+            ("caretComesFromThePalette", caretColour == StateLegend.Palette.ink),
             ("itIsTheFaceThatScrolls", scrolls),
             ("idMatchesTheLogs", idsMatch),
             ("verbFollowsLiveness", verbs),
