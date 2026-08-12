@@ -197,6 +197,13 @@ final class PastAgentsList: NSView {
     }
 
     func beginFiltering() { window?.makeFirstResponder(filterField.input) }
+
+    /// What the caret is actually painted with, read back from the live field
+    /// editor rather than from the constant that set it — the drill's job is to
+    /// catch AppKit handing back its own accent, which a constant cannot see.
+    var caretColourForTesting: NSColor? {
+        (filterField.input.currentEditor() as? NSTextView)?.insertionPointColor
+    }
 }
 
 /// The filter, as a ROW rather than a box.
@@ -207,7 +214,7 @@ final class PastAgentsList: NSView {
 /// and the panel is an instrument, not a form.
 private final class FilterRowView: NSView, NSTextFieldDelegate {
     static let height: CGFloat = 36
-    let input = NSTextField()
+    let input = FilterField()
     var onChange: ((String) -> Void)?
 
     override init(frame: NSRect) {
@@ -248,6 +255,27 @@ private final class FilterRowView: NSView, NSTextFieldDelegate {
     func reset() { input.stringValue = "" }
 
     func controlTextDidChange(_ obj: Notification) { onChange?(input.stringValue) }
+}
+
+/// A text field whose caret belongs to the console.
+///
+/// AppKit paints the insertion point in the system accent colour, which on this
+/// panel is a saturated blue against a dark olive console — the loudest thing on
+/// a face whose whole job is calm, blinking, for a control you are not even
+/// using yet. It is also the one colour the palette reserves for something else
+/// entirely: blue is the WORKING lamp, and a blinking blue mark on the panel
+/// means an agent has work in hand.
+///
+/// The caret takes the colour of the text it is placing, which is what a caret
+/// is: the position of the next glyph, not an announcement.
+final class FilterField: NSTextField {
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted, let editor = currentEditor() as? NSTextView {
+            editor.insertionPointColor = StateLegend.Palette.ink
+        }
+        return accepted
+    }
 }
 
 /// A row in the list: the grid's row, plus a verb that appears under the
@@ -366,9 +394,13 @@ final class SplitPlacardRowView: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
-        let left = PlacardHalf(title: leading.0, glyph: leading.1,
+        // Each half hugs its own outer edge — the left one reads from the
+        // panel's left margin, the right one lands on its right. Left-aligning
+        // both put PAST AGENTS in the middle of the row with a hole beside it,
+        // which reads as a mistake rather than as a column.
+        let left = PlacardHalf(title: leading.0, glyph: leading.1, alignment: .leading,
                                target: target, action: leading.2)
-        let right = PlacardHalf(title: trailing.0, glyph: trailing.1,
+        let right = PlacardHalf(title: trailing.0, glyph: trailing.1, alignment: .trailing,
                                 target: target, action: trailing.2)
         addSubview(left); addSubview(right)
         NSLayoutConstraint.activate([
@@ -391,7 +423,8 @@ final class SplitPlacardRowView: NSView {
 private final class PlacardHalf: NSControl {
     private let highlight = NSView()
 
-    init(title: String, glyph: String, target: AnyObject, action: Selector) {
+    init(title: String, glyph: String, alignment: NSLayoutConstraint.Attribute,
+         target: AnyObject, action: Selector) {
         super.init(frame: .zero)
         self.target = target
         self.action = action
@@ -418,11 +451,23 @@ private final class PlacardHalf: NSControl {
             highlight.trailingAnchor.constraint(equalTo: trailingAnchor, constant: 4),
             highlight.topAnchor.constraint(equalTo: topAnchor, constant: 1),
             highlight.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -1),
-            mark.leadingAnchor.constraint(equalTo: leadingAnchor),
             mark.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+        // The glyph keeps the lamp column's 20pt offset from the label either
+        // way, so both halves read as the same control mirrored rather than as
+        // two controls that happen to share a row.
+        if alignment == .trailing {
+            NSLayoutConstraint.activate([
+                label.trailingAnchor.constraint(equalTo: trailingAnchor),
+                mark.trailingAnchor.constraint(equalTo: label.leadingAnchor, constant: -11),
+            ])
+        } else {
+            NSLayoutConstraint.activate([
+                mark.leadingAnchor.constraint(equalTo: leadingAnchor),
+                label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            ])
+        }
     }
 
     @available(*, unavailable)
