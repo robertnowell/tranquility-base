@@ -273,7 +273,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // grid must never walk the archive on the main thread, and a
                 // panel that opens without its closed rows and grows them a
                 // moment later is the blink this warm-up exists to prevent.
-                await Task.detached(priority: .utility) { SessionDiscovery.warm() }.value
+                //
+                // NOT awaited. The liveness probe above is awaited because the
+                // very next thing wants an answer from it; this one exists to
+                // fill a cache that nothing is blocked on, and awaiting a ~1.4s
+                // archive walk here delays everything after it in launch —
+                // including the first grid paint, which then lands inside the
+                // pendingSend drill's five-second window and gets legitimately
+                // refused. The deploy check reads that refusal as a panel stuck
+                // holding the stage.
+                Task.detached(priority: .utility) { SessionDiscovery.warm() }
 
                 // Write the summary before it is asked for. Doing it on demand meant
                 // every use opened with a model call you had to sit through.
