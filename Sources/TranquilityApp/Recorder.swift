@@ -395,23 +395,8 @@ public final class Recorder: @unchecked Sendable {
             lock.unlock()
         }
 
-        // Cold machine: build the unit now, on the audio queue, synchronously
-        // from the caller's point of view. This is the rare path (first press
-        // before warmUp finished, or a rebuild window) — build+initialize is
-        // tens of milliseconds, and the expensive HAL start is still async.
-        if micStateName == "cold" {
-            let built = audioQueue.sync { prepareUnit(preferring: nil, because: "open on cold") }
-            guard built else {
-                throw RecorderError.engineFailed("no usable input device")
-            }
-        }
-
-        let open = submit(.openRequested, because: "capture requested")
-        guard open.accepted, case .opening(let generation) = open.state else {
-            throw RecorderError.engineFailed("open refused from \(micStateName)")
-        }
-
-        // Capture bookkeeping, exactly as the engine era did it.
+        // Capture bookkeeping, exactly as the engine era did it. Everything
+        // here is lock-and-local-disk work — the HAL is not consulted.
         lock.lock()
         buffer.removeAll(keepingCapacity: true)
         peakLevel = 0
@@ -439,12 +424,38 @@ public final class Recorder: @unchecked Sendable {
         // first render callback, which may precede any verification.
         beginMarkerHeartbeat()
 
-        // The hardware start happens off the caller's thread. A press never
-        // waits on the HAL again — that wait is what blocked the main thread
-        // past the event-tap watchdog on 12 Aug.
+        // EVERYTHING hardware-shaped happens off the caller's thread —
+        // including the cold-path prepare. The 20:30 beach-ball (sampled
+        // live, old binary) was not the retry loop: it was a synchronous
+        // HAL format query inside inputNode access that never returned
+        // while a config change was pending. The gesture path therefore
+        // contains no HAL call at all, not even behind a `sync` — a hung
+        // HAL wedges the audio queue, and the verdict below (which runs on
+        // a DIFFERENT queue for exactly that reason) reports the dead press
+        // instead of a frozen app.
         audioQueue.async { [weak self] in
-            guard let self, let unit = self.unit else {
-                self?.failOpen(generation: generation, why: "unit vanished before start")
+            guard let self else { return }
+            self.lock.lock()
+            let stillWanted = self.awaitingFirstBuffer
+            let state = self.machine.state
+            self.lock.unlock()
+            // The press may have been superseded (stop/abandon/verdict fired
+            // while this waited behind a slow queue) — a capture must never
+            // start for a press nobody is holding any more.
+            guard stillWanted else { return }
+            if case .cold = state {
+                guard self.prepareUnit(preferring: nil, because: "open on cold") else {
+                    self.failPress(why: "no usable input device")
+                    return
+                }
+            }
+            let open = self.submit(.openRequested, because: "capture requested")
+            guard open.accepted, case .opening(let generation) = open.state else {
+                self.failPress(why: "open refused from \(self.micStateName)")
+                return
+            }
+            guard let unit = self.unit else {
+                self.failOpen(generation: generation, why: "unit vanished before start")
                 return
             }
             do { try unit.start() } catch {
@@ -453,20 +464,50 @@ public final class Recorder: @unchecked Sendable {
             }
         }
 
-        // The verdict, scheduled — never slept. If no buffer lands inside
-        // the window the open failed, whatever the start call returned.
+        // The verdict, scheduled on its OWN queue — never the audio queue,
+        // whose hang is one of the failure modes being judged. If no buffer
+        // lands inside the window, the press is dead whatever the hardware
+        // eventually says.
         let verdict = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.lock.lock()
             let delivered = self.tapBuffersDelivered
+            let pending = self.awaitingFirstBuffer
+            let state = self.machine.state
             self.lock.unlock()
-            if delivered == 0 {
+            guard delivered == 0, pending else { return }
+            if case .opening(let generation) = state {
                 self.failOpen(generation: generation,
                               why: "started but no audio in \(Int(Self.verifyWindow * 1000))ms")
+            } else {
+                // The open never reached the hardware — the audio queue is
+                // stuck in a HAL call. Off-main now, so it reads as one
+                // honest fault instead of a beach-ball.
+                self.failPress(why: "audio stack unresponsive — the open never reached the hardware")
             }
         }
         verification = verdict
-        audioQueue.asyncAfter(deadline: .now() + Self.verifyWindow, execute: verdict)
+        DispatchQueue.global(qos: .userInitiated)
+            .asyncAfter(deadline: .now() + Self.verifyWindow, execute: verdict)
+    }
+
+    /// A press died before the machine ever accepted an open (no generation
+    /// exists to fail): unwind the bookkeeping and tell the host. Any thread.
+    private func failPress(why: String) {
+        lock.lock()
+        guard awaitingFirstBuffer else { lock.unlock(); return }
+        awaitingFirstBuffer = false
+        let discarding = liveCapture
+        liveCapture = nil
+        buffer.removeAll(keepingCapacity: false)
+        openedAt = nil
+        lock.unlock()
+        discarding?.abandon()
+        endMarkerHeartbeat()
+        level = 0
+        Permissions.log("mic: press failed — \(why)")
+        let message = "Couldn't open the microphone — \(why)."
+        DispatchQueue.main.async { [weak self] in self?.onCaptureFault?(message) }
     }
 
     /// An open died after `start()` returned. Tear the capture down, tell
@@ -566,6 +607,16 @@ public final class Recorder: @unchecked Sendable {
             lock.unlock()
             return
         }
+        // Only a live open may append. The stop is asynchronous now, so a
+        // few render callbacks can trail the machine leaving `capturing` —
+        // and audio for a capture nobody owns must vanish, not leak into
+        // the counters or the next press's buffer.
+        switch machine.state {
+        case .opening, .capturing: break
+        default:
+            lock.unlock()
+            return
+        }
         tapBuffersDelivered += 1
         var liveStream: StreamedUtterance?
         if let converted {
@@ -632,16 +683,39 @@ public final class Recorder: @unchecked Sendable {
     public func stop() throws -> Capture {
         let ended = submit(.captureEnded, because: "key-up")
         guard ended.accepted else {
-            lock.lock(); lastOpenSeconds = 0; lock.unlock()
+            // Nothing was ever recording — either no press was live, or the
+            // press is still stuck behind an unresponsive audio queue. Unwind
+            // whatever bookkeeping the press left so the marker and the
+            // write-ahead file cannot outlive it.
+            lock.lock()
+            lastOpenSeconds = 0
+            let hadPress = awaitingFirstBuffer
+            awaitingFirstBuffer = false
+            let discarding = liveCapture
+            liveCapture = nil
+            buffer.removeAll(keepingCapacity: false)
+            openedAt = nil
+            lock.unlock()
+            if hadPress {
+                discarding?.abandon()
+                endMarkerHeartbeat()
+                verification?.cancel(); verification = nil
+            }
             throw RecorderError.nothingRecorded
         }
         lock.lock()
         lastOpenSeconds = openedAt.map { Date().timeIntervalSince($0) } ?? 0
         openedAt = nil
+        awaitingFirstBuffer = false
         lock.unlock()
 
         verification?.cancel(); verification = nil
-        audioQueue.sync { unit?.stop() }
+        // Async, never sync: AudioOutputUnitStop is a HAL call, and a HAL
+        // mid-config-change can sit on any of its calls (the 20:30 sample).
+        // The machine has already left `capturing`, so late render callbacks
+        // are dropped by deliver()'s state check — the snapshot below cannot
+        // be contaminated while the stop drains.
+        audioQueue.async { [weak self] in self?.unit?.stop() }
         endMarkerHeartbeat()
         level = 0
         rebuildIfDeferred()
@@ -671,14 +745,16 @@ public final class Recorder: @unchecked Sendable {
         lock.lock()
         lastOpenSeconds = openedAt.map { Date().timeIntervalSince($0) } ?? 0
         openedAt = nil
+        awaitingFirstBuffer = false
         let discarding = liveCapture
         liveCapture = nil
         buffer.removeAll(keepingCapacity: false)
         lock.unlock()
         discarding?.abandon()
+        verification?.cancel(); verification = nil
         if ended.accepted {
-            verification?.cancel(); verification = nil
-            audioQueue.sync { unit?.stop() }
+            // Async for the same reason stop() is: no gesture waits on the HAL.
+            audioQueue.async { [weak self] in self?.unit?.stop() }
         }
         endMarkerHeartbeat()
         level = 0
