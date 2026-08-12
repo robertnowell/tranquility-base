@@ -195,7 +195,7 @@ public struct Coordinator: Sendable {
         // silently gone, which is the one failure this app must never have.
         guard let sessions = agents.sessions() else {
             Coordinator.noteProbeFailure()
-            return try store.waitingSessions()
+            return yours(try store.waitingSessions())
         }
         // Machine-driven runs exit the moment they finish, so by the time we
         // would announce, they are gone from the agents API. An interactive
@@ -211,9 +211,37 @@ public struct Coordinator: Sendable {
         // job could be announced. That is noise, and noise is recoverable —
         // unlike the tty filter this replaces, which hid real conversations.
         let live = Set(sessions.map(\.sessionId))
-        let all = try store.waitingSessions()
+        let all = yours(try store.waitingSessions())
         Coordinator.sweep(all, live: live)
         return all.filter { live.contains($0.sessionId) }
+    }
+
+    /// Sessions a person started, which is the only kind worth announcing.
+    ///
+    /// Liveness used to do this job by accident and the comment above says so:
+    /// "machine-driven runs exit the moment they finish, so by the time we
+    /// would announce, they are gone from the agents API." That works right up
+    /// until the probe fails — and then the guard above returns the store's set
+    /// UNFILTERED, which on this machine is 502 sessions over a week, 460 of
+    /// them cron jobs and replay runs. One CLI hiccup and the panel reads a
+    /// syndit worker out loud.
+    ///
+    /// `entrypoint` is the honest instrument for the question liveness was
+    /// standing in for. It is written into the transcript by Claude Code, it
+    /// never changes, and it survives the process — so it answers the same way
+    /// whether the session is running, finished, or long gone, which is exactly
+    /// what stops the announcer and the grid from telling different stories.
+    ///
+    /// Fails OPEN by construction: only a positive `sdk-cli` excludes anything.
+    /// See `SessionDiscovery.isHeadless`.
+    ///
+    /// Applied BEFORE the sweep on purpose. The sweep's own header records what
+    /// the unfiltered population cost: "dead sessions accumulate forever — 200
+    /// here, 157 of them from a single afternoon of prompt-replay runs" and
+    /// 2.3GB of log in five days. Those 157 were headless. They stop being
+    /// swept at all now.
+    private func yours(_ sessions: [WaitingSession]) -> [WaitingSession] {
+        sessions.filter { !SessionDiscovery.isHeadless(transcriptPath: $0.transcriptPath) }
     }
 
     // MARK: - The sweep

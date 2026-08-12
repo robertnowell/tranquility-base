@@ -87,9 +87,10 @@ public enum SessionDiscovery {
         public var scanned = 0
         /// Excluded as headless: `entrypoint` is `sdk-cli` rather than `cli`.
         public var headless = 0
-        /// Excluded because the transcript carries no `entrypoint` at all.
-        /// Zero on every file on this machine as of 11 Aug; counted anyway,
-        /// because a silent zero and a silent thousand look identical.
+        /// The transcript carries no `entrypoint` at all, so it was KEPT rather
+        /// than dropped — exclusion needs positive evidence. Zero on every file
+        /// on this machine as of 11 Aug; counted anyway, because a silent zero
+        /// and a silent thousand look identical.
         public var unclassifiable = 0
         /// Dropped by `limit` after ranking, so the caller can say "and more".
         public var beyondLimit = 0
@@ -223,7 +224,7 @@ public enum SessionDiscovery {
         ttl: TimeInterval = scanTTL
     ) -> Result {
         let key = ScanCache.key(window, limit, projects)
-        var result = scans.get(key: key, now: now, ttl: ttl)
+        let result = scans.get(key: key, now: now, ttl: ttl)
             ?? {
                 let scanned = scan(window: window, limit: limit, now: now,
                                    projects: projects, titles: titles)
@@ -300,8 +301,8 @@ public enum SessionDiscovery {
             // The one field that separates a person's session from a robot's,
             // and unlike the tty it is on disk, so it survives the process.
             let entry = entrypoint(head: head)
-            guard let entry else { result.unclassifiable += 1; continue }
-            guard isInteractive(entry) else { result.headless += 1; continue }
+            if entry == nil { result.unclassifiable += 1 }
+            guard !isHeadless(entry) else { result.headless += 1; continue }
 
             guard result.sessions.count < limit else { result.beyondLimit += 1; continue }
 
@@ -328,15 +329,49 @@ public enum SessionDiscovery {
 
     // MARK: - The classifiers, taking lines so every rule is testable
 
-    /// `cli` is a terminal someone is sitting at. `sdk-cli` is a headless or
-    /// SDK run: `claude -p`, a cron job, our own replay harness.
+    /// POSITIVE evidence that a session was started by a machine rather than by
+    /// a person: `sdk-cli` is `claude -p`, a cron job, our own replay harness.
+    /// `cli` is a terminal someone is sitting at.
     ///
     /// Measured over 400 recent transcripts: every cron transcript is
     /// `sdk-cli`, and no cron transcript is `cli`. In a raw 7-day walk of this
     /// machine 460 of 504 transcripts are `sdk-cli` — which is what liveness
-    /// used to filter out by accident, since a headless run exits the instant
+    /// used to filter out by ACCIDENT, since a headless run exits the instant
     /// it finishes and never appears in `claude agents --json`.
-    public static func isInteractive(_ entrypoint: String?) -> Bool { entrypoint == "cli" }
+    ///
+    /// The asymmetry is the whole design. Anything else — `cli`, a value a
+    /// later Claude Code invents, a file we could not read — is treated as
+    /// yours. Excluding on an absence is exactly the mistake the tty filter
+    /// made when it "inferred 'nobody is here' from a proxy, and hid real
+    /// conversations", and a stray robot row costs one glance where a hidden
+    /// session costs the work.
+    public static func isHeadless(_ entrypoint: String?) -> Bool { entrypoint == "sdk-cli" }
+
+    /// The same question asked of a transcript on disk, for callers that hold a
+    /// path rather than a parsed head — the announcer, in particular.
+    ///
+    /// Memoised without expiry, because a session's entrypoint is fixed the
+    /// moment it starts: it cannot become interactive later. One 64KB read per
+    /// session for the life of the process.
+    public static func isHeadless(transcriptPath: String?) -> Bool {
+        guard let transcriptPath else { return false }
+        if let known = origins.get(transcriptPath) { return known }
+        let verdict = isHeadless(classifiableHead(of: transcriptPath).flatMap { entrypoint(head: $0) })
+        origins.put(transcriptPath, verdict)
+        return verdict
+    }
+
+    private final class OriginCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var known: [String: Bool] = [:]
+        func get(_ path: String) -> Bool? {
+            lock.lock(); defer { lock.unlock() }; return known[path]
+        }
+        func put(_ path: String, _ headless: Bool) {
+            lock.lock(); known[path] = headless; lock.unlock()
+        }
+    }
+    private static let origins = OriginCache()
 
     static func entrypoint(head lines: [String]) -> String? {
         for line in lines {
