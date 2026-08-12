@@ -33,6 +33,14 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    origin/main, refuses a dirty worktree, and stops the old instance before
    building, because two instances race for one global hotkey. It now also reads
    the launch self-tests and exits non-zero if any failed.
+   **A relaunch is announced to the other sessions the moment it runs, with the
+   ref it deployed.** There is one installed app; relaunching REPLACES whatever
+   build is live, including a branch build another session's user is mid-way
+   through acceptance-testing. Earned 12 Aug: a main relaunch (7bb2fe1) silently
+   swapped out the ⌃⌃-fix branch build minutes before its dogfooding session —
+   caught only because the deploying session sent a deploy note. Silent
+   relaunches make the other session's evidence about a binary that is no
+   longer running.
 7. **`swift test` is not evidence about the panel.** `Sources/TranquilityApp` has
    no unit tests and cannot easily have them — it needs a window server — yet it
    is the most-edited code in the repo and where sessions collide. Its evidence
