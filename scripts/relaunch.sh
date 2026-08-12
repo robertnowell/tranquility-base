@@ -17,6 +17,7 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. "$(dirname "$0")/lib/app-process.sh"
 
 REF="${1:-origin/main}"
 CLEAN_WORKTREE="/private/tmp/tb-clean"
@@ -34,7 +35,7 @@ APP_PATH="$CLEAN_WORKTREE/.build/debug/$APP"
 # Being one build behind is recoverable. Being gone is the failure this whole
 # script exists to prevent, so put back whatever is on disk before leaving.
 restore_if_down() {
-  if ! pgrep -f TranquilityApp >/dev/null 2>&1 && [ -d "$APP_PATH" ]; then
+  if ! app_running && [ -d "$APP_PATH" ]; then
     echo "→ interrupted mid-relaunch; bringing the app back up" >&2
     open "$APP_PATH" 2>/dev/null || true
   fi
@@ -47,34 +48,13 @@ git fetch -q origin
 TARGET=$(git rev-parse --short "$REF")
 echo "→ target: $TARGET  $(git log -1 --format=%s "$REF")"
 
-# The clean worktree may not exist yet (fresh clone), or may be the pre-rename
-# /tmp/vd-clean from before 023f201. Either way, create what is missing rather
-# than failing on it.
-if [ ! -d "$CLEAN_WORKTREE" ]; then
-  # Prune first. /private/tmp is reaped — install.sh's own header names this as a
-  # routine occurrence — and the reaper takes the directory while leaving git's
-  # registration behind. `worktree add` then refuses:
-  #
-  #   fatal: '/private/tmp/tb-clean' is a missing but already registered worktree
-  #
-  # which broke the ONLY sanctioned relaunch path on 11 Aug, after a documented and
-  # entirely expected event. Pruning is a no-op when nothing is stale, so it costs
-  # nothing on the healthy path.
-  git worktree prune
-  echo "→ creating $CLEAN_WORKTREE"
-  git worktree add --detach "$CLEAN_WORKTREE" "$REF" >/dev/null
-else
-  git -C "$CLEAN_WORKTREE" fetch -q origin
-  git -C "$CLEAN_WORKTREE" checkout -q --detach "$TARGET"
-fi
-
-# Rule 3 is a hard rule for a reason: a dirty-tree binary once shipped a
-# half-built feature that silently killed all audio. Refuse rather than warn.
-if [ -n "$(git -C "$CLEAN_WORKTREE" status --porcelain)" ]; then
-  echo "✗ $CLEAN_WORKTREE is dirty — refusing to build. Inspect it first." >&2
-  git -C "$CLEAN_WORKTREE" status --short >&2
-  exit 1
-fi
+# Creating and validating the clean worktree now lives in scripts/build-clean.sh,
+# so install.sh can do it too — it could not before, which is why a fresh clone
+# hit an installer that refused and pointed back here. One copy, one behaviour.
+# The dirty-tree refusal therefore lands after the capture-marker wait below
+# rather than before it: on a dirty tree you now wait for the microphone before
+# being told no. Refusing later is the acceptable half of not maintaining this
+# block in two scripts.
 
 # Never kill a live microphone.
 #
@@ -131,8 +111,7 @@ done
 # running process; that is safe here because this app loads nothing from its
 # bundle after launch — it draws its whole interface programmatically — and the
 # process is replaced seconds later anyway.
-echo "→ building"
-( cd "$CLEAN_WORKTREE" && ./scripts/bundle.sh debug >/dev/null )
+APP_PATH=$(scripts/build-clean.sh "$REF")
 
 # Deploy INTO the installed copy when there is one.
 #
@@ -161,11 +140,7 @@ fi
 
 # Only now. Two instances racing for one global hotkey is its own bug, so the old
 # one goes down immediately before the new one comes up, not before the build.
-if pgrep -f TranquilityApp >/dev/null; then
-  echo "→ stopping running instance"
-  pkill -f TranquilityApp || true
-  sleep 1
-fi
+app_stop
 
 echo "→ launching (with panel self-tests)"
 LAUNCHED_AT=$(date +%s)
@@ -180,7 +155,7 @@ LAUNCHED_AT=$(date +%s)
 open "$APP_PATH" --args --selftest-hud
 sleep 4
 
-if pgrep -f TranquilityApp >/dev/null; then
+if app_running; then
   echo "✓ running $TARGET"
 else
   echo "✗ did not stay up — check ~/Library/Application Support/VoiceDispatch/app.log" >&2
