@@ -1,7 +1,0 @@
-```json
-{
-  "recap": "vd-state-legend-page: plan live at v0.5, five workstreams ranked and ruled.",
-  "proposal": "Start WS-C structure work plus A5 replay harness build. Go?",
-  "topic": "Build plan: workstreams and replay harness"
-}
-```

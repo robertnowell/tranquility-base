@@ -1,7 +1,0 @@
-```json
-{
-  "recap": "video-essays: Bible and rubric loaded, visual plans required before scripts.",
-  "proposal": "Await six hook-research agents, then write scripts. Proceed?",
-  "topic": "Gate compliance and hook research staging"
-}
-```
