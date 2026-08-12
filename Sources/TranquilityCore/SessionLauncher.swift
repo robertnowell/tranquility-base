@@ -39,7 +39,9 @@ public enum SessionLauncher {
     /// dispatcher's rule — never type into unregistered sessions — is intact
     /// everywhere else; this tab is not "some session", it is our own launch.
     ///
-    /// Blocks up to ~30s while watching for the prompt; call off-main.
+    /// Blocks while watching for the prompt — ~4s in the common case (two
+    /// settled polls), up to ~30s if the tab never looks started; call
+    /// off-main.
     @discardableResult
     public static func launch(
         directory: String = defaultDirectory,
@@ -172,7 +174,18 @@ public enum SessionLauncher {
     /// Watch the just-launched tab; if Claude's trust prompt renders, press
     /// Return once (the same bare-Return `do script "" in t` the dispatcher
     /// uses to submit). Stops watching the moment the session looks started.
+    ///
+    /// "Started" was `? for shortcuts` until 12 Aug — Claude Code's old idle
+    /// hint line, which v2.1.x no longer prints. The stale sentinel meant the
+    /// watcher never exited early and every launch paid the full 30s (and,
+    /// with the caller then on the main thread, beach-balled the app). The
+    /// sentinel is now the banner word "Claude" — capital C, so the lowercase
+    /// `claude` in the echoed launch command cannot satisfy it — which every
+    /// version to date has printed once interactive. Two consecutive
+    /// sightings, because a single read can catch the tab mid-boot one frame
+    /// before the trust prompt would have rendered.
     private static func acceptTrustPromptIfShown(tty: String) {
+        var settled = 0
         for _ in 0..<15 {
             usleep(2_000_000)
             guard case .success(let text) = AppleScript.run(script: """
@@ -202,8 +215,15 @@ public enum SessionLauncher {
                 Self.trace?("newSession: accepted the trust prompt in \(tty) — user-commanded launch")
                 return
             }
-            // The prompt line Claude shows once it is interactive: nothing to accept.
+            // Interactive without a trust prompt: nothing to accept. Kept
+            // alongside the banner check, not instead of it — an old CLI on
+            // this machine would still exit on its hint line.
             if text.contains("? for shortcuts") { return }
+            if text.contains("Claude") { settled += 1 } else { settled = 0 }
+            if settled >= 2 {
+                Self.trace?("newSession: started with no trust prompt in \(tty); watcher done")
+                return
+            }
         }
         Self.trace?("newSession: no trust prompt seen in \(tty) within 30s; leaving it be")
     }
