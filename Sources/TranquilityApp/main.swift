@@ -927,10 +927,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     liveName: found.title,
                     callsign: closedCallsigns[found.sessionId],
                     fallback: found.cwd.map { ($0 as NSString).lastPathComponent } ?? "session"),
-                // A session that died mid-error still says why. Everything else
-                // that is gone has nothing to add, and the row's own dimness
-                // already says it is not running.
-                callsign: found.activity?.shortReason ?? "",
+                // Same precedence as the live band above: a session that died
+                // mid-error says why, and otherwise the column carries the
+                // callsign. A minted callsign outlives the process that earned
+                // it, so a dead row keeps the name you have been calling it —
+                // leaving the column blank made the closed band read as a
+                // different kind of thing rather than the same thing, asleep.
+                callsign: found.activity?.shortReason
+                    ?? closedCallsigns[found.sessionId] ?? "",
                 lamp: .unlit,
                 revivable: found.revivable))
         }

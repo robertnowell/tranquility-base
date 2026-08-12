@@ -1681,10 +1681,13 @@ final class StatusHUD: NSObject {
         // singleLine proves the labels can never recreate the orphan fragments
         // ("**Voices for lif") between rows.
         let ready = shown.filter { $0.lamp == .ready }.count
+        let closed = shown.filter { $0.lamp == .unlit }.count
+        let revivable = shown.filter(\.revivable).count
         let singleLine = shown.allSatisfy {
             !$0.name.contains("\n") && !$0.callsign.contains("\n")
         }
-        Permissions.log("grid: \(shown.count) rows (\(ready) ready) "
+        Permissions.log("grid: \(shown.count) of \(face.sessionRows.count) rows "
+            + "(\(ready) ready, \(closed) closed, \(revivable) revivable) "
             + "rowH=\(Int(GridRowView.height)) "
             + "cols=\(Int(GridRowView.lampColumn))/flex/aux\(Int(auxWidth)) "
             + "lamps=circular singleLine=\(singleLine)")
