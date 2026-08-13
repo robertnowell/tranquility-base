@@ -644,21 +644,30 @@ final class StatusHUD: NSObject {
     }
 
     /// One audio event the pane can show: a capture over a second, with the
-    /// transcript it has (nil = none — a row that failed every provider, or
-    /// was cancelled before one answered). Both kinds carry the same retry.
+    /// FULL transcript it has (nil = none — a row that failed every provider,
+    /// or was cancelled before one answered). Full, not pre-truncated: the
+    /// label truncates visually, and the ⋯ menu's Copy hands over the whole
+    /// thing — the pane is where a clipped transcript gets un-clipped.
     struct AudioEventRow {
         let id: String
         let timeLabel: String
         let durationLabel: String
-        let snippet: String?
+        let transcript: String?
+        var playing = false
         var retrying = false
     }
 
     /// The host answers the voices pane's "Recent audio ▸" row by assembling
     /// events and calling `showRecentAudio` — the pane never reads the store.
     var onShowRecentAudio: (() -> Void)?
-    /// A row's ↻. The host retries, then re-renders with `updateRecentAudio`.
+    /// A row's ⋯ → Retry. The host retries, then `updateRecentAudio`.
     var onRetryAudioEvent: ((String) -> Void)?
+    /// A row's ▶/■ — toggle. Play sits on the row, not in the menu, because
+    /// it has state a menu cannot show (ruled 13 Aug).
+    var onPlayAudioEvent: ((String) -> Void)?
+    /// A row's ⋯ → Show in Finder: the audio file, where "download" means
+    /// "it was always yours, here it is".
+    var onRevealAudioEvent: ((String) -> Void)?
 
     /// The settings state's second pane (ruled 13 Aug): the log of recent
     /// captures over a second, transcript or its absence, per-row retry.
@@ -1556,7 +1565,7 @@ final class StatusHUD: NSObject {
             if let events = face.audioEvents {
                 bodyLabel.stringValue = face.body
                 hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
-                hintLabel.stringValue = "↻ retries transcription · newest first"
+                hintLabel.stringValue = "▶ plays the capture · ⋯ copy, retry, reveal"
                 rebuildAudioRows(events)
             } else {
                 bodyLabel.stringValue =
@@ -1995,16 +2004,18 @@ final class StatusHUD: NSObject {
     private func rebuildAudioRows(_ events: [AudioEventRow]) {
         voiceStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for event in events {
-            let row = AudioEventRowView(event: event) { [weak self] in
-                self?.onRetryAudioEvent?(event.id)
-            }
+            let row = AudioEventRowView(
+                event: event,
+                onPlay: { [weak self] in self?.onPlayAudioEvent?(event.id) },
+                onRetry: { [weak self] in self?.onRetryAudioEvent?(event.id) },
+                onReveal: { [weak self] in self?.onRevealAudioEvent?(event.id) })
             voiceStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
         }
         voiceListHeight.constant = min(
             CGFloat(voiceStack.arrangedSubviews.count) * AudioEventRowView.height, 340)
         Permissions.log("recent-audio pane: \(events.count) row(s), "
-            + "\(events.filter { $0.snippet == nil }.count) without a transcript")
+            + "\(events.filter { $0.transcript == nil }.count) without a transcript")
     }
 
     var audioEventRowCount: Int {
@@ -2712,37 +2723,57 @@ final class StatusHUD: NSObject {
                                 + "back=\(!self.backButtonHidden) gear=\(!self.gearHidden) "
                                 + "actions=\(!self.actionRowHidden)")
             }),
-            // The settings state's second pane: a transcriptless row must
-            // still offer its retry (that row IS the pane's reason to exist),
-            // a tap on ↻ must reach the host callback, and a retrying row's
-            // control must be spent. Worst cases on the record: a 27-minute
-            // duration label and a snippet long enough to force truncation.
+            // The settings state's second pane. What must hold: a
+            // transcriptless row still offers its retry (that row IS the
+            // pane's reason to exist) but not a copy of nothing; play carries
+            // its state on the row (■ while playing); taps reach the host;
+            // a retrying row's menu item is spent; and no control sits in
+            // the scroller's gutter — the 13 Aug report was a ↻ parked
+            // exactly under the scroll bar, unclickable. Worst cases on the
+            // record: a 27-minute duration label and a transcript long
+            // enough to force truncation.
             ("recentAudio", {
-                var tapped: String?
-                self.onRetryAudioEvent = { tapped = $0 }
+                var retried: String?
+                var played: String?
+                self.onRetryAudioEvent = { retried = $0 }
+                self.onPlayAudioEvent = { played = $0 }
                 self.showRecentAudio(events: [
                     .init(id: "e1", timeLabel: "Aug 13 07:05", durationLabel: "39s",
-                          snippet: "I'm not sure I fully understand, but please recommend "
-                              + "what the specific course of action should be."),
+                          transcript: "I'm not sure I fully understand, but please "
+                              + "recommend what the specific course of action should be.",
+                          playing: true),
                     .init(id: "e2", timeLabel: "Aug 12 20:52", durationLabel: "27m14s",
-                          snippet: nil),
+                          transcript: nil),
                     .init(id: "e3", timeLabel: "Aug 12 14:26", durationLabel: "2s",
-                          snippet: String(repeating: "a snippet that cannot fit ", count: 12),
+                          transcript: String(repeating: "a transcript that cannot fit ",
+                                             count: 12),
                           retrying: true),
                 ], note: "Captures over a second.")
                 self.panel?.contentView?.layoutSubtreeIfNeeded()
                 let rows = self.voiceStack.arrangedSubviews
                     .compactMap { $0 as? AudioEventRowView }
-                rows.first { $0.eventId == "e2" }?.tapRetryForSelfTest()
+                func row(_ id: String) -> AudioEventRowView? {
+                    rows.first { $0.eventId == id }
+                }
+                row("e2")?.performRetryForSelfTest()
+                row("e2")?.tapPlayForSelfTest()
                 SelfTest.report("recentAudio", [
                     ("threeRowsRendered", rows.count == 3),
-                    ("transcriptlessRowOffersRetry",
-                     rows.first { $0.eventId == "e2" }?.retryEnabled == true),
-                    ("retryTapReachesTheHost", tapped == "e2"),
-                    ("retryingRowIsSpent",
-                     rows.first { $0.eventId == "e3" }?.retryEnabled == false),
+                    ("transcriptlessRowOffersRetryNotCopy",
+                     row("e2")?.menuTitlesForSelfTest ==
+                        ["Retry transcription", "Show audio in Finder"]),
+                    ("transcribedRowOffersCopy",
+                     row("e1")?.menuTitlesForSelfTest.first == "Copy transcript"),
+                    ("retryReachesTheHost", retried == "e2"),
+                    ("playReachesTheHost", played == "e2"),
+                    ("playingRowShowsStop", row("e1")?.playButtonTitle == "■"),
+                    ("stoppedRowShowsPlay", row("e2")?.playButtonTitle == "▶"),
+                    ("retryingRowIsSpent", row("e3")?.retryEnabled == false),
+                    ("controlsClearTheScroller",
+                     rows.allSatisfy(\.controlsClearTheScroller)),
                 ])
                 self.onRetryAudioEvent = nil
+                self.onPlayAudioEvent = nil
             }),
         ] as [(String, () -> Void)] {
             Permissions.log("selftest state=\(label)")
@@ -3864,14 +3895,15 @@ final class StatusHUD: NSObject {
         case "recent-audio":
             showRecentAudio(events: [
                 .init(id: "e1", timeLabel: "Aug 13 07:05", durationLabel: "39s",
-                      snippet: "I'm not sure I fully understand, but please recommend "
-                          + "what the specific course of action should be."),
+                      transcript: "I'm not sure I fully understand, but please recommend "
+                          + "what the specific course of action should be.",
+                      playing: true),
                 .init(id: "e2", timeLabel: "Aug 12 20:52", durationLabel: "27m14s",
-                      snippet: nil),
+                      transcript: nil),
                 .init(id: "e3", timeLabel: "Aug 12 14:26", durationLabel: "2s",
-                      snippet: "Okay, proceed."),
+                      transcript: "Okay, proceed."),
                 .init(id: "e4", timeLabel: "Aug 12 14:09", durationLabel: "1m36s",
-                      snippet: "So, something else that I basically want to see is, "
+                      transcript: "So, something else that I basically want to see is, "
                           + "for Mirai, for every major decision.", retrying: true),
             ], note: "Captures over a second, newest first.")
 
@@ -5314,22 +5346,46 @@ private final class PaneLinkRowView: NSControl {
 }
 
 /// One capture in the recent-audio log: when, how long, what it said — or
-/// that it said nothing the chain could hear — and the ↻ that asks again.
-/// The retry is the row's whole reason to exist (ruled 13 Aug: humans retry,
-/// the machine does not), so it is present on every row, transcript or not.
-private final class AudioEventRowView: NSControl {
+/// that it said nothing the chain could hear. Play sits on the row because
+/// it has state a menu cannot show (▶ while stopped, ■ while playing —
+/// ruled 13 Aug); everything stateless lives behind ⋯ — Copy transcript,
+/// Retry transcription, Show in Finder.
+private final class AudioEventRowView: NSControl, NSMenuDelegate {
     static let height: CGFloat = 34
+    /// Trailing gutter the row's controls never enter. `scrollerStyle` is
+    /// `.overlay` on the list, but macOS substitutes legacy bars when a mouse
+    /// is connected or "Show scroll bars: Always" is set — which parked a
+    /// scroller exactly on top of the old ↻ (reported 13 Aug, unclickable).
+    /// The gutter is reserved unconditionally; against an overlay bar it is
+    /// just breathing room.
+    static let scrollerGutter: CGFloat = 16
 
     let eventId: String
+    private let event: StatusHUD.AudioEventRow
+    private let onPlay: () -> Void
     private let onRetry: () -> Void
+    private let onReveal: () -> Void
     private let hairline = CALayer()
-    private var retryButton: NSButton!
+    private var playButton: NSButton!
+    private var menuButton: NSButton!
 
-    var retryEnabled: Bool { !retryButton.isHidden && retryButton.isEnabled }
+    var playButtonTitle: String { playButton.title }
+    var controlsClearTheScroller: Bool {
+        menuButton.frame.maxX <= bounds.width - Self.scrollerGutter
+    }
+    /// The ⋯ menu's Retry item state, for the drill: present unless the row
+    /// is already retrying.
+    var retryEnabled: Bool { !event.retrying }
 
-    init(event: StatusHUD.AudioEventRow, onRetry: @escaping () -> Void) {
+    init(event: StatusHUD.AudioEventRow,
+         onPlay: @escaping () -> Void,
+         onRetry: @escaping () -> Void,
+         onReveal: @escaping () -> Void) {
         self.eventId = event.id
+        self.event = event
+        self.onPlay = onPlay
         self.onRetry = onRetry
+        self.onReveal = onReveal
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
@@ -5350,23 +5406,29 @@ private final class AudioEventRowView: NSControl {
         // The transcript is the row's name; its absence is stated in the
         // hint colour rather than left as a blank, because an empty slot
         // reads as a rendering bug and a stated absence reads as a fact.
-        let snippet = NSTextField(labelWithString: event.snippet ?? "no transcript")
+        let snippet = NSTextField(labelWithString: event.transcript ?? "no transcript")
         snippet.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        snippet.textColor = event.snippet == nil
+        snippet.textColor = event.transcript == nil
             ? StateLegend.Palette.hint : StateLegend.Palette.ink
         snippet.lineBreakMode = .byTruncatingTail
         snippet.translatesAutoresizingMaskIntoConstraints = false
         snippet.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        retryButton = NSButton(title: event.retrying ? "…" : "↻",
-                               target: self, action: #selector(retryTapped))
-        retryButton.isBordered = false
-        retryButton.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-        retryButton.contentTintColor = StateLegend.Palette.secondary
-        retryButton.isEnabled = !event.retrying
-        retryButton.translatesAutoresizingMaskIntoConstraints = false
+        playButton = NSButton(title: event.playing ? "■" : "▶",
+                              target: self, action: #selector(playTapped))
+        playButton.isBordered = false
+        playButton.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        playButton.contentTintColor = event.playing
+            ? StateLegend.Palette.ink : StateLegend.Palette.secondary
+        playButton.translatesAutoresizingMaskIntoConstraints = false
 
-        for view in [when, duration, snippet, retryButton!] { addSubview(view) }
+        menuButton = NSButton(title: "⋯", target: self, action: #selector(menuTapped))
+        menuButton.isBordered = false
+        menuButton.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
+        menuButton.contentTintColor = StateLegend.Palette.secondary
+        menuButton.translatesAutoresizingMaskIntoConstraints = false
+
+        for view in [when, duration, snippet, playButton!, menuButton!] { addSubview(view) }
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.height),
             when.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
@@ -5377,10 +5439,14 @@ private final class AudioEventRowView: NSControl {
             duration.centerYAnchor.constraint(equalTo: centerYAnchor),
             snippet.leadingAnchor.constraint(equalTo: duration.trailingAnchor, constant: 8),
             snippet.centerYAnchor.constraint(equalTo: centerYAnchor),
-            retryButton.leadingAnchor.constraint(
+            playButton.leadingAnchor.constraint(
                 greaterThanOrEqualTo: snippet.trailingAnchor, constant: 6),
-            retryButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            retryButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            playButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            menuButton.leadingAnchor.constraint(
+                equalTo: playButton.trailingAnchor, constant: 8),
+            menuButton.trailingAnchor.constraint(
+                equalTo: trailingAnchor, constant: -Self.scrollerGutter),
+            menuButton.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
@@ -5391,11 +5457,60 @@ private final class AudioEventRowView: NSControl {
         hairline.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 1)
     }
 
-    @objc nonisolated private func retryTapped() {
+    /// The stateless verbs. Built fresh per click so the items reflect the
+    /// row as it is now, not as it was rendered.
+    func rowMenu() -> NSMenu {
+        let menu = NSMenu()
+        if event.transcript != nil {
+            menu.addItem({ let i = NSMenuItem(
+                title: "Copy transcript", action: #selector(copyTranscript),
+                keyEquivalent: ""); i.target = self; return i }())
+        }
+        let retry = NSMenuItem(
+            title: event.retrying ? "Retrying…" : "Retry transcription",
+            action: event.retrying ? nil : #selector(retryFromMenu), keyEquivalent: "")
+        retry.target = event.retrying ? nil : self
+        menu.addItem(retry)
+        menu.addItem({ let i = NSMenuItem(
+            title: "Show audio in Finder", action: #selector(revealFromMenu),
+            keyEquivalent: ""); i.target = self; return i }())
+        return menu
+    }
+
+    var menuTitlesForSelfTest: [String] { rowMenu().items.map(\.title) }
+    func performRetryForSelfTest() { retryFromMenu() }
+    func tapPlayForSelfTest() { playButton.performClick(nil) }
+
+    @objc nonisolated private func playTapped() {
+        MainActor.assumeIsolated { onPlay() }
+    }
+
+    @objc nonisolated private func menuTapped() {
+        MainActor.assumeIsolated {
+            let menu = rowMenu()
+            menu.popUp(positioning: nil,
+                       at: NSPoint(x: menuButton.frame.minX,
+                                   y: menuButton.frame.minY - 4),
+                       in: self)
+        }
+    }
+
+    @objc nonisolated private func copyTranscript() {
+        MainActor.assumeIsolated {
+            guard let text = event.transcript else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            Permissions.log("recent-audio: copied \(text.count) chars from \(eventId.prefix(8))")
+        }
+    }
+
+    @objc nonisolated private func retryFromMenu() {
         MainActor.assumeIsolated { onRetry() }
     }
 
-    func tapRetryForSelfTest() { retryButton.performClick(nil) }
+    @objc nonisolated private func revealFromMenu() {
+        MainActor.assumeIsolated { onReveal() }
+    }
 }
 
 private final class VoiceRowView: NSControl {
