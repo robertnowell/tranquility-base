@@ -21,9 +21,11 @@
 # Claude Code moved underneath SessionLauncher, and the sentinel strings or
 # the agents JSON parsing need re-verifying by hand.
 #
-# Side effects, small and accepted: one Terminal window opens and closes
-# (~10-20s), and ~/.claude.json gains a trust entry for a throwaway
-# /tmp/tb-canary.* directory that is deleted immediately after.
+# Side effects: one Terminal window opens and closes (~10-20s). Everything
+# else is swept — the temp directory, the probe session's processes, and the
+# ~/.claude.json project entry Claude Code registers for the throwaway
+# directory (see sweep_leftovers; it runs at start and end, so even a killed
+# run leaves at most one entry, healed by the next run).
 #
 # Skip in an emergency with TB_SKIP_CANARY=1 (relaunch.sh honours it).
 
@@ -49,6 +51,51 @@ resolve_claude() {
 
 CLAUDE_BIN=$(resolve_claude) || { echo "✗ canary: no claude binary found" >&2; exit 1; }
 echo "→ canary: probing $CLAUDE_BIN ($("$CLAUDE_BIN" --version 2>/dev/null | head -1 || echo 'version unknown'))"
+
+# ── Sweep this canary's own species ──────────────────────────────────────────
+# Every probe launch makes Claude Code register a project entry for its
+# throwaway /tmp/tb-canary.* directory in ~/.claude.json the moment the trust
+# screen renders — even though the session is killed seconds later and never
+# writes a transcript (verified 13 Aug: zero bytes under ~/.claude/projects,
+# entries only in .claude.json). One ~400-byte entry per deploy is unbounded
+# growth for zero benefit, and a bloated .claude.json slows every claude
+# startup. So the canary cleans up after its own kind: at START, so a run
+# killed mid-flight is healed by the next one, and again at the END, so a
+# green run leaves the machine exactly as it found it.
+#
+# The rewrite is surgical and atomic: only keys matching the canary's own
+# /tmp/tb-canary.* namespace are dropped, the previous file is kept at
+# ~/.claude.json.tb-canary-bak, and the swap is os.replace. If the file is
+# unreadable it is left strictly alone.
+sweep_leftovers() {
+  rm -rf /tmp/tb-canary.* /private/tmp/tb-canary.* 2>/dev/null || true
+  python3 - <<'PY'
+import json, os, shutil
+p = os.path.expanduser('~/.claude.json')
+try:
+    with open(p) as f:
+        d = json.load(f)
+except Exception:
+    raise SystemExit(0)  # unreadable or absent: never touch it
+proj = d.get('projects')
+if not isinstance(proj, dict):
+    raise SystemExit(0)
+doomed = [k for k in proj
+          if k.startswith(('/tmp/tb-canary.', '/private/tmp/tb-canary.'))]
+if not doomed:
+    raise SystemExit(0)
+shutil.copy2(p, p + '.tb-canary-bak')
+for k in doomed:
+    del proj[k]
+tmp = p + '.tb-canary-tmp'
+with open(tmp, 'w') as f:
+    json.dump(d, f, indent=2)
+os.replace(tmp, p)
+n = len(doomed)
+print(f"  ⌂ swept {n} tb-canary project entr{'y' if n == 1 else 'ies'} from ~/.claude.json")
+PY
+}
+sweep_leftovers
 
 # ── Probe 1: the liveness backbone still speaks JSON ─────────────────────────
 if ! "$CLAUDE_BIN" agents --json 2>/dev/null | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
@@ -96,6 +143,9 @@ end run
 OSA
 fi
 rm -rf "$TMPDIR_CANARY"
+# Leave the machine as found: the probe session's .claude.json entry dies with
+# the run that made it, on every verdict path.
+sweep_leftovers
 
 case "$STATUS" in
   PASS)
