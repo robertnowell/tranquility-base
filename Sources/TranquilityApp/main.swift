@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var permissionTimer: Timer?
     private var intakeTimer: Timer?
     private let onboarding = OnboardingWindow()
+    private let utterancePlayer = UtterancePlayer()
     private let hud = StatusHUD()
 
     private var lastStatusLine = "starting…"
@@ -549,6 +550,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         hud.onShowRecentAudio = { [weak self] in self?.showRecentAudio() }
+
+        // Play carries its state on the row (▶/■), so the player reports
+        // every change and the pane re-renders from the store + playingId —
+        // one source of truth, no view-side state.
+        utterancePlayer.onStateChange = { [weak self] in
+            guard let self else { return }
+            self.hud.updateRecentAudio(events: self.recentAudioEvents())
+        }
+        hud.onPlayAudioEvent = { [weak self] id in
+            guard let self, let store = self.store,
+                  let row = try? store.utterances(limit: 200).first(where: { $0.id == id }),
+                  let path = row.audioPath, FileManager.default.fileExists(atPath: path)
+            else {
+                Permissions.log("recent-audio: no audio on disk to play")
+                return
+            }
+            self.utterancePlayer.toggle(id: id, path: path)
+        }
+
+        hud.onRevealAudioEvent = { [weak self] id in
+            guard let self, let store = self.store,
+                  let row = try? store.utterances(limit: 200).first(where: { $0.id == id }),
+                  let path = row.audioPath, FileManager.default.fileExists(atPath: path)
+            else {
+                Permissions.log("recent-audio: no audio on disk to reveal")
+                return
+            }
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            Permissions.log("recent-audio: revealed \(id.prefix(8)) in Finder")
+        }
 
         // A row's ↻ — the ONLY path that retries a transcription (ruled
         // 13 Aug: humans retry, the machine does not). Mark the row spent,
@@ -2698,7 +2729,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     durationLabel: seconds >= 60
                         ? "\(seconds / 60)m\(String(format: "%02d", seconds % 60))s"
                         : "\(seconds)s",
-                    snippet: (text?.isEmpty ?? true) ? nil : text,
+                    transcript: (text?.isEmpty ?? true) ? nil : text,
+                    playing: u.id == utterancePlayer.playingId,
                     retrying: u.id == retrying)
             }
     }
