@@ -223,6 +223,11 @@ final class AssemblyAIStreamingTests: XCTestCase {
 
     // MARK: - Handshake
 
+    /// 100ms of 16 kHz PCM16 — the wire target every audio message is cut to.
+    private var targetChunk: Int { 3200 }
+    /// 50ms — the v3 minimum below which the server hangs up (Error 3007).
+    private var minChunk: Int { 1600 }
+
     func testRequestFinalSendsForceEndpointThenTerminate() async throws {
         let socket = FakeSocket()
         let sink = Sink()
@@ -235,11 +240,70 @@ final class AssemblyAIStreamingTests: XCTestCase {
         for _ in 0..<40 where socket.sentTexts.count < 2 {
             try? await Task.sleep(nanoseconds: 25_000_000)
         }
-        XCTAssertEqual(socket.sentData, [Data([1, 2, 3, 4])], "audio goes over as binary")
+        var padded = Data([1, 2, 3, 4])
+        padded.append(Data(count: minChunk - 4))
+        XCTAssertEqual(socket.sentData, [padded],
+                       "the tail flushes as binary, padded with silence to the "
+                       + "50ms wire minimum — an undersized message kills the session (3007)")
         XCTAssertEqual(socket.sentTexts,
                        [#"{"type":"ForceEndpoint"}"#, #"{"type":"Terminate"}"#],
                        "flush the buffered tail into a final turn, then close")
         session.cancel()
+    }
+
+    func testRenderCallbackSizedChunksBatchToTheWireTarget() async throws {
+        // The 12 Aug outage in miniature: the AUHAL render callback delivers
+        // ~10.7ms (342-byte) buffers, and relaying them 1:1 got every session
+        // killed by `Error 3007: Input Duration Violation`. The session — not
+        // the microphone — owns the 50–1000ms wire contract.
+        let socket = FakeSocket()
+        let sink = Sink()
+        let session = try await openSession(socket: socket, sink: sink)
+
+        for i in 0..<10 {  // 3420 bytes: one full wire chunk plus a remainder
+            session.append(pcm16: Data(repeating: UInt8(i), count: 342))
+        }
+        for _ in 0..<40 where socket.sentData.isEmpty {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertEqual(socket.sentData.map(\.count), [targetChunk],
+                       "nothing below the minimum ever reaches the socket; "
+                       + "audio goes out in target-sized messages")
+
+        session.requestFinal()
+        for _ in 0..<40 where socket.sentData.count < 2 {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertEqual(socket.sentData.count, 2, "the 220-byte remainder flushes at final")
+        XCTAssertEqual(socket.sentData[1].count, minChunk,
+                       "padded to the wire minimum, not sent undersized")
+        // Order and content survive the re-chunking: concatenating what was
+        // sent reproduces what was fed, plus the trailing silence pad.
+        let fed = (0..<10).flatMap { Array(repeating: UInt8($0), count: 342) }
+        let sent = socket.sentData.flatMap { [UInt8]($0) }
+        XCTAssertEqual(Array(sent.prefix(fed.count)), fed)
+        XCTAssertTrue(sent.suffix(sent.count - fed.count).allSatisfy { $0 == 0 })
+        session.cancel()
+    }
+
+    func testServerErrorFrameConcludesAsFailureNotSilence() async throws {
+        // The frame the 12 Aug outage sent seven hours of, into a reducer that
+        // returned `.none`: the server names its reason, the session must die
+        // reporting it — never loop on in silence.
+        let socket = FakeSocket()
+        let sink = Sink()
+        let session = try await openSession(socket: socket, sink: sink)
+        defer { session.cancel() }
+
+        socket.emit(#"{"type":"Begin","id":"abc"}"#)
+        socket.emit(#"{"type":"Error","error_code":3007,"error":"Input Duration Violation: 10.0 ms. Expected between 50 and 1000 ms"}"#)
+
+        await fulfillment(of: [sink.concluded], timeout: 2)
+        guard case .providerUnavailable(let reason)? = sink.failure else {
+            return XCTFail("expected providerUnavailable, got \(String(describing: sink.failure))")
+        }
+        XCTAssertTrue(reason.contains("3007"), "the server's own code survives into the failure")
+        XCTAssertTrue(socket.closed, "a fatal server error closes the socket")
     }
 
     func testKeytermsAreCappedAndOversizedTermsDropped() async throws {
@@ -400,12 +464,18 @@ final class AssemblyAIStreamingTests: XCTestCase {
         stream.feed(pcm16: Data([9, 9]))  // before start() has run at all
         await stream.start()
         stream.feed(pcm16: Data([7, 7]))
+        // Both chunks are below the wire minimum, so nothing may hit the
+        // socket until the final flush — where they arrive as ONE padded
+        // message, pre-open audio first.
+        _ = await stream.finish(timeout: 0.5)
 
-        for _ in 0..<40 where socket.sentData.count < 2 {
+        for _ in 0..<40 where socket.sentData.isEmpty {
             try? await Task.sleep(nanoseconds: 25_000_000)
         }
-        XCTAssertEqual(socket.sentData, [Data([9, 9]), Data([7, 7])],
-                       "pre-open audio arrives first, order preserved")
+        var expected = Data([9, 9, 7, 7])
+        expected.append(Data(count: minChunk - expected.count))
+        XCTAssertEqual(socket.sentData, [expected],
+                       "pre-open audio arrives first, order preserved through batching")
         stream.cancel()
     }
 }

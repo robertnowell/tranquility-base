@@ -270,6 +270,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // reply (PR #1 harvest). app.log therefore contains what you dictated
         // when the Apple floor runs; README discloses this beside model-calls.
         AppleSpeechRecovery.trace = { Permissions.log("apple-speech: \($0)") }
+        // The streaming path's first log lines ever: it failed silently for
+        // seven hours on 12 Aug (every session killed by the same server
+        // error) and app.log did not contain "assembly" once.
+        AssemblyAIStreaming.trace = { Permissions.log("assemblyai: \($0)") }
+        StreamedUtterance.trace = { Permissions.log("stream: \($0)") }
 
         do {
             let store = try QueueStore()
