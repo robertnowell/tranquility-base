@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import TranquilityCore
 
@@ -798,6 +799,52 @@ case "reconcile":
         // recording. A rung you cannot exercise alone is a rung you know
         // nothing about.
         AssemblyAIFileRecovery.trace = { print("  assemblyai-file: \($0)") }
+
+        // --churn recreates the 12 Aug interference in-process while the
+        // chain runs: brief (~120ms) input-engine opens on a cadence — the
+        // arm window's mic, which opened twice during the incident's
+        // recognition — over a continuously rendering silent output, which
+        // is what the TTS was doing. The recogniser stopped at 60.21s of
+        // 1690.86s under two such opens in 27 minutes; this cycles every 8
+        // SECONDS, so a floor that survives here has survived far worse
+        // than the field. The lab for "can't we force that fallback?".
+        var churn: Task<Void, Never>?
+        if args.contains("--churn") {
+            let out = try? AVAudioPlayer(contentsOf: URL(fileURLWithPath: args[1]))
+            out?.volume = 0
+            out?.numberOfLoops = -1
+            out?.play()
+            print("churn: silent output \(out == nil ? "FAILED" : "rendering"), "
+                + "input engine cycling every 8s")
+            churn = Task.detached {
+                var cycles = 0
+                while !Task.isCancelled {
+                    // No tap: installTap races the very format churn this
+                    // harness generates and aborts the process on the ObjC
+                    // exception (crashed cycle 4 of the first run). Opening
+                    // the input HAL device is the churn; a muted passthrough
+                    // is enough to make the engine start it.
+                    let engine = AVAudioEngine()
+                    let input = engine.inputNode
+                    if input.outputFormat(forBus: 0).sampleRate > 0 {
+                        engine.connect(input, to: engine.mainMixerNode, format: nil)
+                        engine.mainMixerNode.outputVolume = 0
+                        try? engine.start()
+                        try? await Task.sleep(nanoseconds: 120_000_000)
+                        engine.stop()
+                        cycles += 1
+                        print("  churn: input engine cycle \(cycles)")
+                    } else {
+                        print("  churn: input unavailable")
+                        try? await Task.sleep(nanoseconds: 30_000_000_000)
+                    }
+                    try? await Task.sleep(nanoseconds: 8_000_000_000)
+                }
+                _ = out
+            }
+        }
+        defer { churn?.cancel() }
+
         let chain: RecoveryChain
         if args.contains("--apple-only") {
             chain = RecoveryChain(providers: [AppleSpeechRecovery()])
