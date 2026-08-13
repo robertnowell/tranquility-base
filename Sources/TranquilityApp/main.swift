@@ -626,6 +626,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--selftest-hud") {
             hud.selfTest()
             hud.selfTestPendingSend()
+            // The voice-menu cache drill (issue 14, nested blocker). Three
+            // seconds is far past the off-thread loader's worst case, so by
+            // now the snapshot must be warm, the menu must carry the Voice
+            // submenu, and a rebuild must be quick even with the catalogue
+            // populated — the tick never again pays the TTS daemon's price.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                let warm = !SystemVoiceCatalog.cachedRows().catalogue.isEmpty
+                let t0 = Date()
+                self.rebuildMenu()
+                let ms = Date().timeIntervalSince(t0) * 1000
+                SelfTest.report("voiceMenu.cacheWarm", [
+                    ("snapshotLoaded", warm),
+                    ("voiceSubmenuBuilt",
+                     self.statusItem?.menu?.items.contains { $0.title == "Voice" } ?? false),
+                    ("warmRebuildIsQuick", ms < 50),
+                ])
+                Permissions.log("selftest voiceMenu: warm rebuild \(Int(ms))ms")
+            }
             // The mic drill asks the one question a deploy can answer without
             // opening the real microphone (that boundary is relaunch.sh's,
             // stated where it excludes --selftest-arm): did warm-up leave the
@@ -2465,15 +2484,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // run against the session you just answered rather than the one that
         // actually arrived — the same defect as ⌃⌥, wearing a different symptom.
         let target = try? coordinator?.nextToAnnounce(excluding: delivering)
-        if let front = frontmostSessionTty(), let target,
-           let pid = (ClaudeAgentsCLI().sessions() ?? []).first(where: { $0.sessionId == target.sessionId })?.pid,
-           ProcessProbe.tty(of: pid) == front {
-            // You are looking straight at the tab that just finished. Announcing it
-            // is telling you something you can already see — no panel, no hail:
-            // showing up is enough, and here you are already there.
-            Permissions.log("ambient: skipped, that session is the frontmost tab")
+        // The frontmost-tab skip needs three subprocesses (osascript, the
+        // claude CLI, ps), and it used to run them ON MAIN, synchronously —
+        // issue 14's smaller resident: with Terminal frontmost AND busy, one
+        // Apple event here could hold the app for minutes, on every arrival.
+        // Terminal-not-frontmost is the common case and stays fully
+        // synchronous: no probe, no reordering, identical behavior.
+        let terminalIsFront = NSWorkspace.shared.frontmostApplication?
+            .bundleIdentifier == "com.apple.Terminal"
+        guard terminalIsFront, let target else {
+            finishArrival(rows: rows, waiting: waiting)
             return
         }
+        // Terminal IS frontmost: probe off-main, newest arrival wins. A newer
+        // call bumps the generation, so a stale probe returns to find its
+        // moment gone and stays silent — the newer one carries the chime.
+        arrivalProbeGeneration += 1
+        let generation = arrivalProbeGeneration
+        pendingArrival = (rows, waiting)
+        let sessionId = target.sessionId
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let front = await Self.frontmostTerminalTabTty()
+            let pid = front == nil ? nil : (ClaudeAgentsCLI().sessions() ?? [])
+                .first(where: { $0.sessionId == sessionId })?.pid
+            let onScreen = pid.flatMap { ProcessProbe.tty(of: $0) }
+            let skip = front != nil && onScreen == front
+            await MainActor.run { [weak self] in
+                guard let self, generation == self.arrivalProbeGeneration,
+                      let pending = self.pendingArrival else { return }
+                self.pendingArrival = nil
+                if skip {
+                    // You are looking straight at the tab that just finished.
+                    // Announcing it is telling you something you can already
+                    // see — no panel, no hail: showing up is enough, and here
+                    // you are already there.
+                    Permissions.log("ambient: skipped, that session is the frontmost tab")
+                    return
+                }
+                self.finishArrival(rows: pending.rows, waiting: pending.waiting)
+            }
+        }
+    }
+
+    /// One probe in flight, newest wins; the pending rows never cross an
+    /// isolation boundary — they wait here for the probe's verdict.
+    private var arrivalProbeGeneration = 0
+    private var pendingArrival: (rows: [StateLegend.SessionRow], waiting: Int)?
+
+    /// The away-channel tail of an arrival, after the gates have spoken.
+    private func finishArrival(rows: [StateLegend.SessionRow], waiting: Int) {
         // RULING 1: an arrival changes what the panel SAYS, never whether it is
         // on screen or how wide it is. A panel you put away stays away.
         //
@@ -2505,12 +2564,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
 
-    /// The tty of the frontmost Terminal tab, or nil if Terminal is not in front.
-    private func frontmostSessionTty() -> String? {
-        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.Terminal"
-        else { return nil }
+    /// The tty of Terminal's selected tab. One Apple event, bounded: against a
+    /// busy Terminal an unbounded event blocks its thread for up to the
+    /// two-minute default timeout, so the deadline is what keeps this callable
+    /// at all. Callers check who is frontmost first — that part is free.
+    nonisolated private static func frontmostTerminalTabTty() async -> String? {
         let script = "tell application \"Terminal\" to return tty of selected tab of front window"
-        guard case .success(let out) = AppleScript.run(script: script) else { return nil }
+        guard case .success(let out) = await AppleScript.run(script: script, timeout: 2)
+        else { return nil }
         let tty = out.trimmingCharacters(in: .whitespacesAndNewlines)
         return tty.isEmpty ? nil : tty
     }
@@ -2533,8 +2594,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // that shows only what you have cannot tell you what you are missing, and
         // what you are missing is the best of them.
         let paid = VoiceCatalog.cached()
-        let free = SystemVoiceCatalog.asCatalogueVoices()
-        let getMore = SystemVoiceCatalog.downloadRows()
+        // The cached snapshot, same as the menu tick. The 1.5 s tick keeps it
+        // no staler than ~15 s, and a sync read here is the same TTS-daemon
+        // semaphore that froze the tick (issue 14) — a pane open must not
+        // gamble on the daemon's mood either.
+        let rows = SystemVoiceCatalog.cachedRows()
+        let free = rows.catalogue
+        let getMore = rows.downloads
 
         // One line. This was four sentences of explanation — a wall of prose where a
         // control belonged. The "Free · Get" rows below ARE the instruction now, so
@@ -2772,8 +2838,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // whole Voice menu silently vanished — the same fault as the pane, on the
         // other of the two surfaces. Fixing one and not the other is why the change
         // looked like it had not landed.
-        let voices = VoiceCatalog.cached() + SystemVoiceCatalog.asCatalogueVoices()
-            + SystemVoiceCatalog.downloadRows()
+        // The snapshot read is instant by contract: this runs on the MAIN
+        // thread every 1.5 s poll tick, and the direct catalogue walk here —
+        // a TextToSpeech semaphore plus four plists — is the nested blocker
+        // in issue 14's spindump. The cache revalidates off-thread; the next
+        // tick paints whatever it found.
+        let rows = SystemVoiceCatalog.cachedRows()
+        let voices = VoiceCatalog.cached() + rows.catalogue + rows.downloads
         if !voices.isEmpty {
             let item = NSMenuItem(title: "Voice", action: nil, keyEquivalent: "")
             let submenu = NSMenu()
