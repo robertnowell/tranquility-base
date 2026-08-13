@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: Coordinator?
     private var permissionTimer: Timer?
     private var intakeTimer: Timer?
+    private var retrySweepTimer: Timer?
     private let onboarding = OnboardingWindow()
     private let hud = StatusHUD()
 
@@ -270,6 +271,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // reply (PR #1 harvest). app.log therefore contains what you dictated
         // when the Apple floor runs; README discloses this beside model-calls.
         AppleSpeechRecovery.trace = { Permissions.log("apple-speech: \($0)") }
+        // The streaming path's first log lines ever: it failed silently for
+        // seven hours on 12 Aug (every session killed by the same server
+        // error) and app.log did not contain "assembly" once.
+        AssemblyAIStreaming.trace = { Permissions.log("assemblyai: \($0)") }
+        AssemblyAIFileRecovery.trace = { Permissions.log("assemblyai-file: \($0)") }
+        StreamedUtterance.trace = { Permissions.log("stream: \($0)") }
 
         do {
             let store = try QueueStore()
@@ -289,6 +296,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 : "\(report.needsDeliveryCheck.count) reply/replies need checking"
         } catch {
             lastStatusLine = "queue unavailable: \(error)"
+        }
+
+        // A transcriptionFailed row used to wait for a relaunch or a menu
+        // click; on 12 Aug that meant a failure could sit invisible for
+        // hours. Every five minutes, if any exist, run the same sweep as the
+        // "Retry failed transcriptions" menu item — recover text, dispatch
+        // nothing (recovered rows surface exactly as the menu path leaves
+        // them), and say so in the log.
+        retrySweepTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let store = self.store,
+                      let failed = try? store.utterances(status: .transcriptionFailed),
+                      !failed.isEmpty
+                else { return }
+                Permissions.log("retry sweep: \(failed.count) failed transcription(s), retrying")
+                let recovered = (try? await store.retryFailedTranscriptions()) ?? []
+                Permissions.log("retry sweep: recovered \(recovered.count) of \(failed.count)")
+                if !recovered.isEmpty { self.rebuildMenu() }
+            }
         }
 
         // Pull spooled hook events in on a timer. The hook only appends to a file,
@@ -670,6 +696,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            flag + 1 < CommandLine.arguments.count {
             let name = CommandLine.arguments[flag + 1]
             intakeTimer?.invalidate(); intakeTimer = nil
+            retrySweepTimer?.invalidate(); retrySweepTimer = nil
             if hud.pose(name) {
                 Permissions.log("pose: holding \(name) until killed")
             } else {
@@ -747,6 +774,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         permissionTimer?.invalidate()
         intakeTimer?.invalidate()
+        retrySweepTimer?.invalidate()
         hotkey?.stop()
         if recorder.isRecording { recorder.abandon() }
     }

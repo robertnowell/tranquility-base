@@ -184,14 +184,24 @@ final class InstantArmTests: XCTestCase {
         stream.feed(pcm16: live1)
         stream.feed(pcm16: live2)
 
-        for _ in 0..<40 where socket.sentData.count < 3 {
+        // 14,400 bytes fed; the session re-cuts them to its 3,200-byte wire
+        // chunks (the v3 50–1000ms contract — see the 12 Aug outage note in
+        // AssemblyAIStreaming.swift), so four go out live and the 1,600-byte
+        // remainder flushes at finish.
+        for _ in 0..<40 where socket.sentData.count < 4 {
             try? await Task.sleep(nanoseconds: 25_000_000)
         }
-        XCTAssertEqual(socket.sentData, [backlog, live1, live2],
-                       "arm-window audio arrives first; order and content survive")
-        let sentBytes = socket.sentData.reduce(0) { $0 + $1.count }
-        XCTAssertEqual(sentBytes, backlog.count + live1.count + live2.count,
-                       "byte accounting: nothing captured during the arm window is dropped")
+        XCTAssertEqual(socket.sentData.map(\.count), [3_200, 3_200, 3_200, 3_200],
+                       "audio leaves in wire-sized chunks, none below the 50ms minimum")
+        _ = await stream.finish(timeout: 0.5)
+        for _ in 0..<40 where socket.sentData.count < 5 {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let sent = socket.sentData.flatMap { [UInt8]($0) }
+        let fed = [UInt8](backlog) + [UInt8](live1) + [UInt8](live2)
+        XCTAssertEqual(sent, fed,
+                       "arm-window audio arrives first; order, content, and byte "
+                       + "accounting survive the re-chunking — nothing dropped, nothing padded")
         stream.cancel()
     }
 
