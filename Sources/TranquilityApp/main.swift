@@ -17,7 +17,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: Coordinator?
     private var permissionTimer: Timer?
     private var intakeTimer: Timer?
-    private var retrySweepTimer: Timer?
     private let onboarding = OnboardingWindow()
     private let hud = StatusHUD()
 
@@ -298,24 +297,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             lastStatusLine = "queue unavailable: \(error)"
         }
 
-        // A transcriptionFailed row used to wait for a relaunch or a menu
-        // click; on 12 Aug that meant a failure could sit invisible for
-        // hours. Every five minutes, if any exist, run the same sweep as the
-        // "Retry failed transcriptions" menu item — recover text, dispatch
-        // nothing (recovered rows surface exactly as the menu path leaves
-        // them), and say so in the log.
-        retrySweepTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, let store = self.store,
-                      let failed = try? store.utterances(status: .transcriptionFailed),
-                      !failed.isEmpty
-                else { return }
-                Permissions.log("retry sweep: \(failed.count) failed transcription(s), retrying")
-                let recovered = (try? await store.retryFailedTranscriptions()) ?? []
-                Permissions.log("retry sweep: recovered \(recovered.count) of \(failed.count)")
-                if !recovered.isEmpty { self.rebuildMenu() }
-            }
-        }
+        // NO automatic transcription retry — ruled 13 Aug, one sweep firing
+        // after it shipped. The 5-minute retry sweep lasted exactly one
+        // deploy: its first run recovered 1 of 4 failed rows and would have
+        // re-uploaded the other three — recordings that genuinely transcribe
+        // to nothing — every five minutes forever, because noSpeechDetected
+        // leaves a row transcriptionFailed. Failed rows are surfaced for a
+        // HUMAN to retry (the menu item, and the recent-audio pane that
+        // ruling asked for); the machine does not spend on them unasked.
 
         // Pull spooled hook events in on a timer. The hook only appends to a file,
         // so nothing is lost while the app is closed — this just moves them across.
@@ -696,7 +685,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            flag + 1 < CommandLine.arguments.count {
             let name = CommandLine.arguments[flag + 1]
             intakeTimer?.invalidate(); intakeTimer = nil
-            retrySweepTimer?.invalidate(); retrySweepTimer = nil
             if hud.pose(name) {
                 Permissions.log("pose: holding \(name) until killed")
             } else {
@@ -774,7 +762,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         permissionTimer?.invalidate()
         intakeTimer?.invalidate()
-        retrySweepTimer?.invalidate()
         hotkey?.stop()
         if recorder.isRecording { recorder.abandon() }
     }
