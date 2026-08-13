@@ -376,4 +376,76 @@ public enum SystemVoiceCatalog {
     /// voice: the chain did not recognise it, fell through to the one system provider,
     /// and that provider spoke in its own configured voice every time.
     public static func isSystemVoice(_ id: String) -> Bool { id.hasPrefix("com.apple.") }
+
+    // MARK: - The tick's snapshot
+
+    /// Everything the menu needs from the catalogues, computed in one pass.
+    public struct RowsSnapshot: Sendable, Equatable {
+        public let catalogue: [Voice]
+        public let downloads: [Voice]
+        public static let empty = RowsSnapshot(catalogue: [], downloads: [])
+        public init(catalogue: [Voice], downloads: [Voice]) {
+            self.catalogue = catalogue
+            self.downloads = downloads
+        }
+    }
+
+    private static let rowsCache = RowsCache { language in
+        RowsSnapshot(catalogue: asCatalogueVoices(language: language),
+                     downloads: downloadRows(language: language))
+    }
+
+    /// The instant read for the menu tick. `asCatalogueVoices` +
+    /// `downloadRows` walk the TextToSpeech daemon (a semaphore wait) and four
+    /// asset plists on disk; `rebuildMenu()` was paying that on the MAIN thread
+    /// every 1.5 s poll tick, which is the nested blocker in issue 14's
+    /// spindump — a stalled TTS daemon froze the app with no click involved.
+    ///
+    /// This returns whatever was last computed, instantly (empty on the very
+    /// first call of a launch), and revalidates off-thread when the snapshot
+    /// is stale. The 1.5 s tick that created the exposure is also what makes
+    /// staleness invisible: the next tick repaints from the refreshed cache.
+    public static func cachedRows(language: String = "en") -> RowsSnapshot {
+        rowsCache.rows(language: language)
+    }
+
+    /// Stale-while-revalidate with a single in-flight refresh. Every reader
+    /// gets the previous snapshot immediately; nobody ever waits on the loader.
+    final class RowsCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private let maxAge: TimeInterval
+        private let loader: @Sendable (String) -> RowsSnapshot
+        private var snapshot = RowsSnapshot.empty
+        private var language = ""
+        private var stamp: Date?
+        private var refreshing = false
+
+        init(maxAge: TimeInterval = 15,
+             loader: @escaping @Sendable (String) -> RowsSnapshot) {
+            self.maxAge = maxAge
+            self.loader = loader
+        }
+
+        func rows(language: String) -> RowsSnapshot {
+            lock.lock()
+            let current = snapshot
+            let fresh = language == self.language
+                && (stamp.map { Date().timeIntervalSince($0) <= maxAge } ?? false)
+            let claimed = !fresh && !refreshing
+            if claimed { refreshing = true }
+            lock.unlock()
+            if claimed {
+                DispatchQueue.global(qos: .utility).async { [self] in
+                    let loaded = loader(language)
+                    lock.lock()
+                    snapshot = loaded
+                    self.language = language
+                    stamp = Date()
+                    refreshing = false
+                    lock.unlock()
+                }
+            }
+            return current
+        }
+    }
 }
