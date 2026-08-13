@@ -56,3 +56,14 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    tests, green is necessary and not sufficient. Move `main` with `git branch -f`
    rather than `git checkout` — the ref moves without touching a working tree
    another session may be editing.
+9. **The main actor draws; everything else is off-main.** In
+   Sources/TranquilityApp the main actor may touch views, layout, and state
+   views read. Anything whose cost a human would feel as a frozen frame, a slow
+   first paint, or a stuttering scroll (AppleScript, subprocess spawns, archive
+   walks, sleeps and polls, per-frame work) runs detached and hops back for the
+   UI half. Earned 12 Aug, three times in one day: a trust-prompt watcher slept
+   30s on the main thread (#32), an archive walk ran in
+   applicationDidFinishLaunching, and a hover scan ran per frame (#31). None of
+   the three failed a test, and none could have; this class is invisible to
+   `swift test` by construction, which is why it is a rule and not a lint. A doc
+   comment saying "call off-main" is not enforcement; the call site is.

@@ -196,18 +196,35 @@ public enum SessionLauncher {
     }
 
     /// Watch the just-launched tab; if Claude's trust prompt renders, press
-    /// Return once (the same bare-Return `do script "" in t` the dispatcher
-    /// uses to submit). Stops watching the moment the session looks started.
+    /// Return once and STOP. The single press and immediate return are
+    /// load-bearing (ruled 12 Aug, PR #34): on a resume, the screen after
+    /// trust offers "resume from summary / full", and the full option is a
+    /// usage-limit spend that stays with the user. Answering once and leaving
+    /// is what keeps this watcher safe on both the launch and revive paths.
     ///
-    /// "Started" was `? for shortcuts` until 12 Aug — Claude Code's old idle
-    /// hint line, which v2.1.x no longer prints. The stale sentinel meant the
-    /// watcher never exited early and every launch paid the full 30s (and,
-    /// with the caller then on the main thread, beach-balled the app). The
-    /// sentinel is now the banner word "Claude" — capital C, so the lowercase
-    /// `claude` in the echoed launch command cannot satisfy it — which every
-    /// version to date has printed once interactive. Two consecutive
-    /// sightings, because a single read can catch the tab mid-boot one frame
-    /// before the trust prompt would have rendered.
+    /// Twice-rotted and re-verified against a live v2.1.229 tab on 12 Aug
+    /// (scripts/canary.sh caught both; it replays this exact contract at
+    /// every deploy):
+    ///
+    /// 1. WORDING. "Do you trust" was the pre-2.1 prompt; v2.1.x renders
+    ///    "Quick safety check: … ❯ 1. Yes, I trust this folder". Matched on
+    ///    "trust this folder", with the old needle kept for older CLIs. The
+    ///    started-sentinel was `? for shortcuts` (also gone); it is now the
+    ///    banner word "Claude" — capital C, so the lowercase `claude` in the
+    ///    echoed launch command cannot satisfy it. Two consecutive sightings,
+    ///    because a single read can catch the tab mid-boot. (The v2.1.229
+    ///    trust screen itself contains "Claude", which is why the trust check
+    ///    runs FIRST in every poll — reorder these and the watcher will call
+    ///    an unanswered trust prompt "started".)
+    ///
+    /// 2. ADDRESSING. `contents of t` where t is a repeat variable is
+    ///    AppleScript's DEREFERENCE operator, not Terminal's `contents`
+    ///    property: it returns the tab object, which stringifies as
+    ///    "tab 1 of window id N", so every needle missed against nine words
+    ///    of specifier text. Only a directly typed specifier
+    ///    (`contents of tab i of window id wid`) reads the screen. The same
+    ///    trap applies to `do script "" in t`, so both scripts address
+    ///    directly.
     private static func acceptTrustPromptIfShown(tty: String) {
         var settled = 0
         for _ in 0..<15 {
@@ -215,20 +232,26 @@ public enum SessionLauncher {
             guard case .success(let text) = AppleScript.run(script: """
                 tell application "Terminal"
                   repeat with w in windows
-                    repeat with t in tabs of w
-                      if (tty of t) as text is "\(tty)" then return contents of t
+                    set wid to id of w
+                    set n to count of tabs of w
+                    repeat with i from 1 to n
+                      if (tty of tab i of window id wid) as text is "\(tty)" then
+                        return contents of tab i of window id wid
+                      end if
                     end repeat
                   end repeat
                   return ""
                 end tell
                 """) else { continue }
-            if text.contains("Do you trust") {
+            if text.contains("trust this folder") || text.contains("Do you trust") {
                 _ = AppleScript.run(script: """
                     tell application "Terminal"
                       repeat with w in windows
-                        repeat with t in tabs of w
-                          if (tty of t) as text is "\(tty)" then
-                            do script "" in t
+                        set wid to id of w
+                        set n to count of tabs of w
+                        repeat with i from 1 to n
+                          if (tty of tab i of window id wid) as text is "\(tty)" then
+                            do script "" in tab i of window id wid
                             return "ok"
                           end if
                         end repeat
