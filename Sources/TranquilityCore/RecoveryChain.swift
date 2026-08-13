@@ -196,6 +196,45 @@ extension QueueStore {
         return utterance
     }
 
+    /// Re-run the chain over ONE utterance's saved audio, whatever its
+    /// current status — the manual retry behind the recent-audio pane, and
+    /// deliberately nothing more. Ruled 13 Aug: the machine does not retry
+    /// transcriptions unasked, so this runs exactly when a human taps ↻.
+    ///
+    /// On success the transcript fields are rewritten in place and a row that
+    /// had no transcript (`recorded`, `transcriptionFailed`) becomes
+    /// `transcribed`; a row that already moved past transcription (confirmed,
+    /// discarded, mid-dispatch) keeps its status — the retry improves the
+    /// record, it must never rewind a lifecycle. On failure only `lastError`
+    /// is touched. Nothing is ever dispatched from here.
+    ///
+    /// Nil when the utterance does not exist or its audio file is gone —
+    /// "nothing to retry", which the caller surfaces as such.
+    public func retryTranscription(
+        utteranceId: String, chain: RecoveryChain = RecoveryChain()
+    ) async throws -> Utterance? {
+        guard var utterance = try utterances(limit: 10_000)
+            .first(where: { $0.id == utteranceId }),
+            let path = utterance.audioPath,
+            FileManager.default.fileExists(atPath: path)
+        else { return nil }
+
+        let outcome = await chain.transcribe(fileAt: URL(fileURLWithPath: path))
+        if let result = outcome.result {
+            utterance.transcriptText = result.text
+            utterance.transcriptProvider = result.provider
+            utterance.transcriptFinality = result.finality
+            utterance.lastError = nil
+            if utterance.status == .recorded || utterance.status == .transcriptionFailed {
+                utterance.status = .transcribed
+            }
+        } else {
+            utterance.lastError = outcome.attempts.joined(separator: "; ")
+        }
+        try update(utterance: utterance)
+        return utterance
+    }
+
     /// Retry every utterance whose transcription failed, from disk.
     public func retryFailedTranscriptions(
         audioStore: AudioStore = AudioStore(),

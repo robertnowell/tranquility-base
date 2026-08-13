@@ -548,6 +548,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.log("roster: reordered to \(ids.count) entries")
         }
 
+        hud.onShowRecentAudio = { [weak self] in self?.showRecentAudio() }
+
+        // A row's ↻ — the ONLY path that retries a transcription (ruled
+        // 13 Aug: humans retry, the machine does not). Mark the row spent,
+        // run the chain over its saved audio, re-render with whatever the
+        // store now says. The heavy halves (decode, network, recognition)
+        // are nonisolated async — rule 9 holds.
+        hud.onRetryAudioEvent = { [weak self] id in
+            guard let self, let store = self.store else { return }
+            self.hud.updateRecentAudio(events: self.recentAudioEvents(retrying: id))
+            Task { @MainActor in
+                do {
+                    if let updated = try await store.retryTranscription(utteranceId: id) {
+                        Permissions.log("recent-audio: retried \(id.prefix(8)) → "
+                            + "\(updated.transcriptText.map { "\($0.count) chars" } ?? "no transcript") "
+                            + "(\(updated.transcriptProvider ?? "no provider"))")
+                    } else {
+                        Permissions.log("recent-audio: \(id.prefix(8)) has no audio to retry")
+                    }
+                } catch {
+                    Permissions.log("recent-audio: retry \(id.prefix(8)) failed: \(error)")
+                }
+                self.hud.updateRecentAudio(events: self.recentAudioEvents())
+            }
+        }
+
         hud.onDismiss = { [weak self] in
             guard let self else { return }
             self.coordinator?.speech.stop()
@@ -709,6 +735,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 Permissions.log("pose: unknown name '\(name)'")
             }
+            return
+        }
+
+        // One-shot: pose a face, photograph it FROM the view hierarchy, exit.
+        // No Screen Recording grant, no awake display — the pose renders its
+        // own pixels, so this works from a lidded laptop or a headless agent.
+        if let flag = CommandLine.arguments.firstIndex(of: "--pose-shot"),
+           flag + 2 < CommandLine.arguments.count {
+            let name = CommandLine.arguments[flag + 1]
+            let path = CommandLine.arguments[flag + 2]
+            intakeTimer?.invalidate(); intakeTimer = nil
+            if hud.pose(name), let png = hud.poseSnapshot() {
+                do {
+                    try png.write(to: URL(fileURLWithPath: path))
+                    Permissions.log("pose-shot: \(name) → \(path) (\(png.count) bytes)")
+                } catch {
+                    Permissions.log("pose-shot: write failed: \(error)")
+                }
+            } else {
+                Permissions.log("pose-shot: nothing rendered for '\(name)'")
+            }
+            NSApp.terminate(nil)
             return
         }
 
@@ -2611,6 +2659,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hud.showSettings(voices: paid + free + getMore,
                          roster: VoiceRoster.load(), note: note)
+    }
+
+    /// The settings state's second pane (ruled 13 Aug): every capture over a
+    /// second, newest first, with the transcript it has or the absence it
+    /// doesn't, and a per-row manual retry. The log IS the utterances table;
+    /// this only projects it.
+    private func showRecentAudio() {
+        hud.showRecentAudio(events: recentAudioEvents(),
+                            note: "Captures over a second, newest first.")
+    }
+
+    /// A second is the noise floor: shorter rows are key-slips and arm
+    /// discards, and a log that lists them buries the recordings a human
+    /// might actually want back.
+    private static let recentAudioFloorMs: Int64 = 1_000
+    private static let recentAudioRowCap = 12
+
+    private func recentAudioEvents(retrying: String? = nil) -> [StatusHUD.AudioEventRow] {
+        guard let store else { return [] }
+        let stamp = DateFormatter()
+        stamp.dateFormat = "MMM d HH:mm"
+        return ((try? store.utterances(limit: 200)) ?? [])
+            .filter { ($0.audioDurationMs ?? 0) >= Self.recentAudioFloorMs }
+            .prefix(Self.recentAudioRowCap)
+            .map { u in
+                let seconds = Int((u.audioDurationMs ?? 0) / 1000)
+                let text = u.transcriptText?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return StatusHUD.AudioEventRow(
+                    id: u.id,
+                    timeLabel: stamp.string(
+                        from: Date(timeIntervalSince1970: Double(u.createdAtMs) / 1000)),
+                    durationLabel: seconds >= 60
+                        ? "\(seconds / 60)m\(String(format: "%02d", seconds % 60))s"
+                        : "\(seconds)s",
+                    snippet: (text?.isEmpty ?? true) ? nil : text,
+                    retrying: u.id == retrying)
+            }
     }
 
     @objc private func showPanel() {
