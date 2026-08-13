@@ -40,7 +40,42 @@ restore_if_down() {
     open "$APP_PATH" 2>/dev/null || true
   fi
 }
-trap restore_if_down EXIT INT TERM PIPE
+
+# One deployer at a time (ruled 13 Aug, after the 05:06 race).
+#
+# Two concurrent relaunches interleave worse than they collide: one script's
+# app_stop killed the other's freshly-drilled instance, and the other's
+# restore_if_down then resurrected the app WITHOUT --selftest-hud — so the
+# correct build ran unverified behind a log full of true lines from an
+# instance that was already dead. The hotkey race is loud; this one is
+# silent, which is why the second deployer is refused outright rather than
+# queued. mkdir is the atomic primitive (macOS ships no flock); the pid
+# inside lets a crashed deployer's lock be stolen instead of wedging
+# deploys forever.
+LOCKDIR="/tmp/tb-relaunch.lock"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  HOLDER=$(cat "$LOCKDIR/pid" 2>/dev/null || echo "")
+  if [ -n "$HOLDER" ] && kill -0 "$HOLDER" 2>/dev/null; then
+    echo "✗ another relaunch (pid $HOLDER) is mid-flight — refusing to stack a second." >&2
+    echo "  Wait for its deploy note, then rerun if your ref still is not live." >&2
+    exit 1
+  fi
+  echo "→ clearing a stale relaunch lock (holder ${HOLDER:-unknown} is gone)"
+  rm -rf "$LOCKDIR"
+  if ! mkdir "$LOCKDIR" 2>/dev/null; then
+    echo "✗ lost the lock race to another relaunch that started this instant." >&2
+    exit 1
+  fi
+fi
+echo $$ > "$LOCKDIR/pid"
+
+# The lock releases on ANY exit, and restore_if_down still runs: holding the
+# lock must never become a way to leave the app down.
+cleanup_and_restore() {
+  rm -rf "$LOCKDIR"
+  restore_if_down
+}
+trap cleanup_and_restore EXIT INT TERM PIPE
 
 # Resolve against the remote, not the local branch: a session that has merged but
 # not pulled would otherwise relaunch the commit it already had.

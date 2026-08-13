@@ -41,6 +41,15 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    caught only because the deploying session sent a deploy note. Silent
    relaunches make the other session's evidence about a binary that is no
    longer running.
+   **The note precedes the act, and one deployer runs at a time.** relaunch.sh
+   holds a lockfile; a second concurrent run is refused outright, never
+   interleaved. Earned 13 Aug at 05:06: two relaunches raced, one script's
+   app_stop killed the other's freshly-drilled instance, and the other's
+   restore trap resurrected the app bare, with no drills. The result was the
+   correct build running unverified behind a green-looking log, which is
+   quieter and therefore worse than a loud collision. Both times that race
+   stayed visible, it was because the deploying session announced before
+   acting, not after.
 7. **`swift test` is not evidence about the panel.** `Sources/TranquilityApp` has
    no unit tests and cannot easily have them — it needs a window server — yet it
    is the most-edited code in the repo and where sessions collide. Its evidence
@@ -67,3 +76,12 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    the three failed a test, and none could have; this class is invisible to
    `swift test` by construction, which is why it is a rule and not a lint. A doc
    comment saying "call off-main" is not enforcement; the call site is.
+10. **Every commit carries its session's `Claude-Session` trailer.** Code
+    outlives the session that wrote it, and drills fail days later in files
+    whose author has moved to another repo and another cwd, where no cwd
+    sweep can find them. A trailer makes ownership a ten-second `git log`
+    lookup. Earned 13 Aug: 8e7d1ae shipped without one, and while its
+    voiceMenu drill held every deploy's gate red, attributing it took
+    transcript forensics across three sessions to find an author who was
+    alive the whole time. Hand-written commit messages are not exempt; if
+    the trailer is missing, add it before landing.
