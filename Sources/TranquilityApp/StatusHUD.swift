@@ -643,6 +643,43 @@ final class StatusHUD: NSObject {
         render()
     }
 
+    /// One audio event the pane can show: a capture over a second, with the
+    /// transcript it has (nil = none — a row that failed every provider, or
+    /// was cancelled before one answered). Both kinds carry the same retry.
+    struct AudioEventRow {
+        let id: String
+        let timeLabel: String
+        let durationLabel: String
+        let snippet: String?
+        var retrying = false
+    }
+
+    /// The host answers the voices pane's "Recent audio ▸" row by assembling
+    /// events and calling `showRecentAudio` — the pane never reads the store.
+    var onShowRecentAudio: (() -> Void)?
+    /// A row's ↻. The host retries, then re-renders with `updateRecentAudio`.
+    var onRetryAudioEvent: ((String) -> Void)?
+
+    /// The settings state's second pane (ruled 13 Aug): the log of recent
+    /// captures over a second, transcript or its absence, per-row retry.
+    /// Reached from the voices pane; back exits to the grid, as settings
+    /// always has.
+    func showRecentAudio(events: [AudioEventRow], note: String) {
+        guard transition(to: .settings, because: "recent audio opened") else { return }
+        currentTarget = nil
+        face = Face(title: "Recent audio", body: note, audioEvents: events)
+        render()
+    }
+
+    /// Re-render with fresh rows without re-entering the state — a retry
+    /// round-trips through the host's store and back here, exactly as the
+    /// voice roster's toggle does.
+    func updateRecentAudio(events: [AudioEventRow]) {
+        guard case .settings = state, face.audioEvents != nil else { return }
+        face.audioEvents = events
+        render()
+    }
+
     /// Re-render the pane with a new roster without re-entering the state —
     /// the toggle round-trips through the host's persistence and back here.
     func updateSettings(roster: [String]) {
@@ -1099,6 +1136,12 @@ final class StatusHUD: NSObject {
         var sessionRows: [StateLegend.SessionRow] = []
         var voices: [Voice] = []
         var roster: [String] = []
+        /// Non-nil switches the settings state to its second pane: the
+        /// recent-audio log (ruled 13 Aug — every capture over a second, its
+        /// transcript or its absence, and a per-row manual retry). Same
+        /// `.settings` state, a different face payload: the pane is a
+        /// projection, not a new place the machine can be.
+        var audioEvents: [AudioEventRow]? = nil
         var transcription: (cancel: () -> Void, retry: () -> Void)?
         /// The failure card carries a way out to the microphone pane. True only
         /// for a device fault — the one failure in this app whose fix is a
@@ -1458,11 +1501,18 @@ final class StatusHUD: NSObject {
             stateLabel.stringValue = ""
             gearButton.isHidden = true; backButton.isHidden = false
             voiceList.isHidden = false
-            bodyLabel.stringValue =
-                "\(face.roster.count) of \(face.voices.count) on roster. \(face.body)"
-            hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
-            hintLabel.stringValue = "check = on roster · ▶ preview · drag ≡ to reorder"
-            rebuildVoiceRows()
+            if let events = face.audioEvents {
+                bodyLabel.stringValue = face.body
+                hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
+                hintLabel.stringValue = "↻ retries transcription · newest first"
+                rebuildAudioRows(events)
+            } else {
+                bodyLabel.stringValue =
+                    "\(face.roster.count) of \(face.voices.count) on roster. \(face.body)"
+                hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
+                hintLabel.stringValue = "check = on roster · ▶ preview · drag ≡ to reorder"
+                rebuildVoiceRows()
+            }
         }
 
         // The notice owns the strip while it lives. It can only exist on idle at
@@ -1874,9 +1924,39 @@ final class StatusHUD: NSObject {
             voiceStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
         }
+        // The door to the settings state's other pane, as a last row rather
+        // than masthead chrome: the placard band's lanes are drilled and
+        // spoken for (see the lane comment above), and a row costs nothing.
+        let recentAudio = PaneLinkRowView(title: "Recent audio ▸") { [weak self] in
+            self?.onShowRecentAudio?()
+        }
+        voiceStack.addArrangedSubview(recentAudio)
+        recentAudio.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
         voiceListHeight.constant = min(
             CGFloat(voiceStack.arrangedSubviews.count) * VoiceRowView.height, 340)
         Permissions.log("roster pane: \(cast.count) cast + \(bench.count) bench rows")
+    }
+
+    /// The recent-audio pane's rows, into the same stack the roster pane uses
+    /// — one list slot, whichever pane owns the face. Rows draw their own
+    /// hairline, same as the roster's.
+    private func rebuildAudioRows(_ events: [AudioEventRow]) {
+        voiceStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for event in events {
+            let row = AudioEventRowView(event: event) { [weak self] in
+                self?.onRetryAudioEvent?(event.id)
+            }
+            voiceStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+        }
+        voiceListHeight.constant = min(
+            CGFloat(voiceStack.arrangedSubviews.count) * AudioEventRowView.height, 340)
+        Permissions.log("recent-audio pane: \(events.count) row(s), "
+            + "\(events.filter { $0.snippet == nil }.count) without a transcript")
+    }
+
+    var audioEventRowCount: Int {
+        voiceStack.arrangedSubviews.compactMap { $0 as? AudioEventRowView }.count
     }
 
     /// Move a roster row by whole-row steps during a ≡ drag, clamped inside
@@ -2556,6 +2636,38 @@ final class StatusHUD: NSObject {
                 Permissions.log("settings chrome: rows=\(self.voiceRowCount) "
                                 + "back=\(!self.backButtonHidden) gear=\(!self.gearHidden) "
                                 + "actions=\(!self.actionRowHidden)")
+            }),
+            // The settings state's second pane: a transcriptless row must
+            // still offer its retry (that row IS the pane's reason to exist),
+            // a tap on ↻ must reach the host callback, and a retrying row's
+            // control must be spent. Worst cases on the record: a 27-minute
+            // duration label and a snippet long enough to force truncation.
+            ("recentAudio", {
+                var tapped: String?
+                self.onRetryAudioEvent = { tapped = $0 }
+                self.showRecentAudio(events: [
+                    .init(id: "e1", timeLabel: "Aug 13 07:05", durationLabel: "39s",
+                          snippet: "I'm not sure I fully understand, but please recommend "
+                              + "what the specific course of action should be."),
+                    .init(id: "e2", timeLabel: "Aug 12 20:52", durationLabel: "27m14s",
+                          snippet: nil),
+                    .init(id: "e3", timeLabel: "Aug 12 14:26", durationLabel: "2s",
+                          snippet: String(repeating: "a snippet that cannot fit ", count: 12),
+                          retrying: true),
+                ], note: "Captures over a second.")
+                self.panel?.contentView?.layoutSubtreeIfNeeded()
+                let rows = self.voiceStack.arrangedSubviews
+                    .compactMap { $0 as? AudioEventRowView }
+                rows.first { $0.eventId == "e2" }?.tapRetryForSelfTest()
+                SelfTest.report("recentAudio", [
+                    ("threeRowsRendered", rows.count == 3),
+                    ("transcriptlessRowOffersRetry",
+                     rows.first { $0.eventId == "e2" }?.retryEnabled == true),
+                    ("retryTapReachesTheHost", tapped == "e2"),
+                    ("retryingRowIsSpent",
+                     rows.first { $0.eventId == "e3" }?.retryEnabled == false),
+                ])
+                self.onRetryAudioEvent = nil
             }),
         ] as [(String, () -> Void)] {
             Permissions.log("selftest state=\(label)")
@@ -3666,6 +3778,28 @@ final class StatusHUD: NSObject {
             panel?.contentView?.layoutSubtreeIfNeeded()
             countdownBar.freeze(fraction: 0.4)
 
+        case "settings":
+            showSettings(
+                voices: [Voice(id: "a", name: "Archer", category: "professional"),
+                         Voice(id: "b", name: "My Clone", category: "cloned"),
+                         Voice(id: "c", name: "Sarah", category: "premade")],
+                roster: ["c"],
+                note: "Checked voices are the cast agents speak with.")
+
+        case "recent-audio":
+            showRecentAudio(events: [
+                .init(id: "e1", timeLabel: "Aug 13 07:05", durationLabel: "39s",
+                      snippet: "I'm not sure I fully understand, but please recommend "
+                          + "what the specific course of action should be."),
+                .init(id: "e2", timeLabel: "Aug 12 20:52", durationLabel: "27m14s",
+                      snippet: nil),
+                .init(id: "e3", timeLabel: "Aug 12 14:26", durationLabel: "2s",
+                      snippet: "Okay, proceed."),
+                .init(id: "e4", timeLabel: "Aug 12 14:09", durationLabel: "1m36s",
+                      snippet: "So, something else that I basically want to see is, "
+                          + "for Mirai, for every major decision.", retrying: true),
+            ], note: "Captures over a second, newest first.")
+
         case "needsyou":
             adopt()
             showResult("promotions copy's tab is gone — copied your words to the clipboard.")
@@ -3741,6 +3875,19 @@ final class StatusHUD: NSObject {
                         + "screenFrame=\(NSScreen.main?.frame ?? .zero) "
                         + "window=\(panel?.windowNumber ?? -1)")
         return true
+    }
+
+    /// The posed panel, rendered from its own view hierarchy — the capture
+    /// path that needs no Screen Recording grant and no awake display
+    /// (screencapture returned solid black against a sleeping panel lid,
+    /// 13 Aug, which is how this came to exist). PNG bytes, or nil when no
+    /// panel is up.
+    func poseSnapshot() -> Data? {
+        guard let view = panel?.contentView else { return nil }
+        view.layoutSubtreeIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        return rep.representation(using: .png, properties: [:])
     }
 
     /// Every widget's visibility in one line, so the selftest log IS the render
@@ -5055,6 +5202,127 @@ private final class FlippedDocumentView: NSView {
 /// lamps and the two must not read as the same species. The grip lives in the
 /// left gutter so the check column is the pane's left alignment line, and it
 /// exists only on roster rows: the bench below is sorted, not ordered.
+/// A full-width row that is only a door to another pane. Styled like a row,
+/// not a button, because it lives among rows.
+private final class PaneLinkRowView: NSControl {
+    private let onTap: () -> Void
+    private let hairline = CALayer()
+
+    init(title: String, onTap: @escaping () -> Void) {
+        self.onTap = onTap
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        hairline.backgroundColor = StateLegend.Palette.hairlineSoft.cgColor
+        layer?.addSublayer(hairline)
+
+        let label = NSTextField(labelWithString: title)
+        label.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        label.textColor = StateLegend.Palette.secondary
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: VoiceRowView.height),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: VoiceRowView.gripWidth),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        hairline.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 1)
+    }
+
+    override func mouseDown(with event: NSEvent) { onTap() }
+}
+
+/// One capture in the recent-audio log: when, how long, what it said — or
+/// that it said nothing the chain could hear — and the ↻ that asks again.
+/// The retry is the row's whole reason to exist (ruled 13 Aug: humans retry,
+/// the machine does not), so it is present on every row, transcript or not.
+private final class AudioEventRowView: NSControl {
+    static let height: CGFloat = 34
+
+    let eventId: String
+    private let onRetry: () -> Void
+    private let hairline = CALayer()
+    private var retryButton: NSButton!
+
+    var retryEnabled: Bool { !retryButton.isHidden && retryButton.isEnabled }
+
+    init(event: StatusHUD.AudioEventRow, onRetry: @escaping () -> Void) {
+        self.eventId = event.id
+        self.onRetry = onRetry
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        hairline.backgroundColor = StateLegend.Palette.hairlineSoft.cgColor
+        layer?.addSublayer(hairline)
+
+        let when = NSTextField(labelWithString: event.timeLabel)
+        when.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        when.textColor = StateLegend.Palette.secondary
+        when.translatesAutoresizingMaskIntoConstraints = false
+
+        let duration = NSTextField(labelWithString: event.durationLabel)
+        duration.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        duration.textColor = StateLegend.Palette.faint
+        duration.alignment = .right
+        duration.translatesAutoresizingMaskIntoConstraints = false
+
+        // The transcript is the row's name; its absence is stated in the
+        // hint colour rather than left as a blank, because an empty slot
+        // reads as a rendering bug and a stated absence reads as a fact.
+        let snippet = NSTextField(labelWithString: event.snippet ?? "no transcript")
+        snippet.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        snippet.textColor = event.snippet == nil
+            ? StateLegend.Palette.hint : StateLegend.Palette.ink
+        snippet.lineBreakMode = .byTruncatingTail
+        snippet.translatesAutoresizingMaskIntoConstraints = false
+        snippet.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        retryButton = NSButton(title: event.retrying ? "…" : "↻",
+                               target: self, action: #selector(retryTapped))
+        retryButton.isBordered = false
+        retryButton.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        retryButton.contentTintColor = StateLegend.Palette.secondary
+        retryButton.isEnabled = !event.retrying
+        retryButton.translatesAutoresizingMaskIntoConstraints = false
+
+        for view in [when, duration, snippet, retryButton!] { addSubview(view) }
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: Self.height),
+            when.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            when.widthAnchor.constraint(equalToConstant: 74),
+            when.centerYAnchor.constraint(equalTo: centerYAnchor),
+            duration.leadingAnchor.constraint(equalTo: when.trailingAnchor, constant: 2),
+            duration.widthAnchor.constraint(equalToConstant: 44),
+            duration.centerYAnchor.constraint(equalTo: centerYAnchor),
+            snippet.leadingAnchor.constraint(equalTo: duration.trailingAnchor, constant: 8),
+            snippet.centerYAnchor.constraint(equalTo: centerYAnchor),
+            retryButton.leadingAnchor.constraint(
+                greaterThanOrEqualTo: snippet.trailingAnchor, constant: 6),
+            retryButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            retryButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        hairline.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 1)
+    }
+
+    @objc nonisolated private func retryTapped() {
+        MainActor.assumeIsolated { onRetry() }
+    }
+
+    func tapRetryForSelfTest() { retryButton.performClick(nil) }
+}
+
 private final class VoiceRowView: NSControl {
     static let height: CGFloat = 34
     static let gripWidth: CGFloat = 16
