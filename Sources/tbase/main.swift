@@ -23,6 +23,8 @@ func usage() -> Never {
       tbase discover [days] [n] every session in the window, awake or not,
                                 with what would bring each dead one back
       tbase agent-command [cmd] how new AND revived sessions are launched
+      tbase revive <id> [--dry-run]
+                                bring a dead session back, same path as the panel
       tbase cursors             how far you have got with each session
       tbase calls [n]           full input and output of the last n model calls
       tbase dogfood [days]      WS-E counters summary (default 7 days)
@@ -217,6 +219,46 @@ do {
         }
         print("")
         print(String(format: "scanned in %.2fs", elapsed))
+
+    case "revive":
+        // The SAME path the panel's row takes, so exercising this exercises
+        // what ships rather than a reimplementation of it: the fresh liveness
+        // probe, the directory check, then SessionLauncher.resume.
+        guard args.count > 1 else {
+            print("usage: tbase revive <sessionId>   (8 chars is enough)")
+            exit(1)
+        }
+        let needle = args[1]
+        let found = SessionDiscovery.discover(ttl: 0).sessions
+        guard let session = found.first(where: { $0.sessionId.hasPrefix(needle) }) else {
+            print("no session in the window starts with \(needle)")
+            print("(tbase discover 7 lists them)")
+            exit(1)
+        }
+        print("session    \(session.sessionId)")
+        print("title      \(truncate(session.title, 60))")
+        print("cwd        \(session.cwd ?? "—")")
+        print("liveness   \(session.liveness.rawValue)")
+        guard let command = session.reviveCommand else {
+            // The refusal that keeps the app alive: resuming a session that is
+            // still running puts two processes under one id.
+            print("")
+            print(session.liveness == .live
+                ? "REFUSED — it is already running. Go to its tab instead."
+                : "REFUSED — its directory is gone, so --resume would land nowhere.")
+            exit(2)
+        }
+        print("would run  \(AgentCommand.load()) \(command.arguments.joined(separator: " "))")
+        print("in         \(command.cwd)")
+        if args.contains("--dry-run") { print(""); print("dry run — nothing launched"); break }
+        print("")
+        switch SessionLauncher.resume(sessionId: session.sessionId, directory: command.cwd) {
+        case .success:
+            print("launched — Terminal should be opening it now")
+        case .failure(let error):
+            print("failed — \(error.message)")
+            exit(3)
+        }
 
     case "agent-command":
         // The settings pane does not own this yet (see the branch notes), so

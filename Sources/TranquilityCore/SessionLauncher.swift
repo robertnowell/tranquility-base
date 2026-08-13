@@ -86,13 +86,36 @@ public enum SessionLauncher {
     /// guard lives at the call site because that is where liveness is known;
     /// this function is the mechanism, not the policy.
     ///
-    /// No trust prompt: the directory was trusted when the session first ran
-    /// there, and this is the same directory by construction.
+    /// Accepts the directory-trust prompt, exactly as `launch` does.
+    ///
+    /// This function used to say the opposite — "no trust prompt: the directory
+    /// was trusted when the session first ran there, and this is the same
+    /// directory by construction" — which was reasoned rather than measured,
+    /// and wrong. Run against a real six-day-old session on 12 Aug: Claude Code
+    /// asks the workspace-trust question on a RESUME too, and the window then
+    /// sat on it doing nothing. Clicking REVIVE opened a terminal that needed
+    /// you to go and find it, which is precisely the hunt this whole feature
+    /// exists to end.
+    ///
+    /// The consent argument is `launch`'s, unchanged: the prompt is asking
+    /// permission for the thing the user just pressed a button to do, in a
+    /// directory their own session already ran in.
+    ///
+    /// What it does NOT answer is the question that comes next. A resume of a
+    /// long session offers "resume from summary" or "resume full session as-is"
+    /// and says the full one "will consume a substantial portion of your usage
+    /// limits". That is a spend, and a preference — it stays with the user, and
+    /// it is why Terminal is brought to the front rather than left behind.
+    /// `acceptTrustPromptIfShown` returns the moment it presses once, so it
+    /// cannot walk into it.
+    ///
+    /// Blocks up to ~30s while watching; call off-main.
     @discardableResult
     public static func resume(
         sessionId: String,
         directory: String,
-        command: String = AgentCommand.load()
+        command: String = AgentCommand.load(),
+        acceptTrustPrompt: Bool = true
     ) -> Result<Void, ScriptError> {
         // The SAME command a new session gets, plus the conversation to open.
         // Ruled 12 Aug: "any new or revived session gets launched under the
@@ -123,6 +146,7 @@ public enum SessionLauncher {
             let tty = tty.trimmingCharacters(in: .whitespacesAndNewlines)
             Self.trace?("revive: resumed \(sessionId.prefix(8)) in \(directory) "
                 + "as `\(command)` (tty \(tty))")
+            if acceptTrustPrompt { acceptTrustPromptIfShown(tty: tty) }
             return .success(())
         case .failure(let error):
             Self.trace?("revive FAILED for \(sessionId.prefix(8)): \(error.message)")
