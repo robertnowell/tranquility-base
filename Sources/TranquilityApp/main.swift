@@ -665,8 +665,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let ms = Date().timeIntervalSince(t0) * 1000
                 SelfTest.report("voiceMenu.cacheWarm", [
                     ("snapshotLoaded", warm),
+                    // statusMenu, not statusItem.menu: the item's menu slot is
+                    // deliberately nil except during a right-click, so the
+                    // built menu lives in the property (caught by this drill's
+                    // own first deploy reading the wrong one).
                     ("voiceSubmenuBuilt",
-                     self.statusItem?.menu?.items.contains { $0.title == "Voice" } ?? false),
+                     self.statusMenu?.items.contains { $0.title == "Voice" } ?? false),
                     ("warmRebuildIsQuick", ms < 50),
                 ])
                 Permissions.log("selftest voiceMenu: warm rebuild \(Int(ms))ms")
