@@ -61,6 +61,15 @@ public struct AssemblyAIStreaming: LiveTranscriptionProvider {
     /// which is also the app's capture format after `BuddyPCM16Converter`.
     public var sampleRate: Int
 
+    /// Per-event visibility into the one path that had none.
+    ///
+    /// The 12 Aug outage proved the cost of silence here: every streaming
+    /// session died at the same server error for seven hours, the DB was the
+    /// only witness, and the app's log did not contain the string "assembly"
+    /// once. Session open, conclusion, and server Error frames now say so —
+    /// same pattern and same disclosure line as `AppleSpeechRecovery.trace`.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
     /// Test seams: a key source instead of Secrets (so tests neither depend on
     /// nor mutate the machine's real credential file), and a socket factory
     /// instead of a real connection. Production uses neither.
@@ -134,8 +143,9 @@ public struct AssemblyAIStreaming: LiveTranscriptionProvider {
         request.setValue(key, forHTTPHeaderField: "Authorization")
 
         let socket = socketFactory?(request) ?? URLSessionStreamingSocket(request: request)
+        Self.trace?("session open: sample_rate=\(sampleRate), \(terms.count) keyterm(s)")
         return AssemblyAIStreamingSession(
-            socket: socket, providerName: name,
+            socket: socket, providerName: name, sampleRate: sampleRate,
             onPartial: onPartial, onFinal: onFinal, onFailure: onFailure)
     }
 }
@@ -165,6 +175,14 @@ struct AssemblyAITurnReducer {
         /// The session closed without finalizing everything. `partial` carries
         /// whatever text existed — suspect, never to be treated as final.
         case endedWithoutFinal(partial: String?)
+        /// The server said why it is about to hang up.
+        ///
+        /// This case exists because its absence cost seven hours of silent
+        /// fallbacks (12 Aug): every session died at `Error 3007: Input
+        /// Duration Violation`, the unknown type fell into `.none`, and the
+        /// only observable symptom was the recovery chain quietly answering
+        /// every utterance. An error the server spells out must reach a log.
+        case serverError(String)
     }
 
     var hasAnyTranscript: Bool {
@@ -204,6 +222,11 @@ struct AssemblyAITurnReducer {
             }
             return .endedWithoutFinal(partial: hasAnyTranscript ? accumulated : nil)
 
+        case "Error":
+            let code = (object["error_code"] as? Int).map { "\($0): " } ?? ""
+            let message = (object["error"] as? String) ?? "unspecified"
+            return .serverError(code + message)
+
         default:
             return .none
         }
@@ -219,6 +242,22 @@ final class AssemblyAIStreamingSession: LiveTranscriptionSession, @unchecked Sen
     private let onFinal: @Sendable (TranscriptionResult) -> Void
     private let onFailure: @Sendable (TranscriptionFailure) -> Void
 
+    /// The v3 API accepts 50–1000ms of audio per message and hangs up on less
+    /// (`Error 3007: Input Duration Violation`). The caller's cadence is
+    /// whatever the audio stack delivers — the AVAudioEngine tap fed ~102ms
+    /// buffers and streaming worked; the AUHAL rewrite fed the render
+    /// callback's ~10.7ms buffers and every session died at the first chunks
+    /// (12 Aug, seven silent hours). The wire contract is this session's to
+    /// keep, not the microphone's: audio accumulates here and goes out in
+    /// `targetChunkMs` messages, whatever size it arrives in.
+    static let minChunkMs = 50
+    static let targetChunkMs = 100
+
+    private let minChunkBytes: Int
+    private let targetChunkBytes: Int
+    /// Audio accumulated toward the next wire message, guarded by `lock`.
+    private var pending = Data()
+
     private let lock = NSLock()
     private var reducer = AssemblyAITurnReducer()
     /// Callbacks stop for good once the session concludes (final, failure, or
@@ -231,13 +270,16 @@ final class AssemblyAIStreamingSession: LiveTranscriptionSession, @unchecked Sen
     private var receiveTask: Task<Void, Never>?
 
     init(
-        socket: any StreamingSocket, providerName: String,
+        socket: any StreamingSocket, providerName: String, sampleRate: Int = 16000,
         onPartial: @escaping @Sendable (String) -> Void,
         onFinal: @escaping @Sendable (TranscriptionResult) -> Void,
         onFailure: @escaping @Sendable (TranscriptionFailure) -> Void
     ) {
         self.socket = socket
         self.providerName = providerName
+        let bytesPerMs = sampleRate * 2 / 1000  // PCM16 mono
+        self.minChunkBytes = Self.minChunkMs * bytesPerMs
+        self.targetChunkBytes = Self.targetChunkMs * bytesPerMs
         self.onPartial = onPartial
         self.onFinal = onFinal
         self.onFailure = onFailure
@@ -272,13 +314,33 @@ final class AssemblyAIStreamingSession: LiveTranscriptionSession, @unchecked Sen
 
     func append(pcm16: Data) {
         guard !pcm16.isEmpty else { return }
-        outbox.yield(.audio(pcm16))
+        lock.lock()
+        pending.append(pcm16)
+        var ready: [Data] = []
+        while pending.count >= targetChunkBytes {
+            ready.append(pending.subdata(in: 0..<targetChunkBytes))
+            pending = pending.subdata(in: targetChunkBytes..<pending.count)
+        }
+        lock.unlock()
+        for chunk in ready { outbox.yield(.audio(chunk)) }
     }
 
-    /// The user finished speaking: force the buffered tail into a final turn,
-    /// then terminate. The server answers with the remaining Turn message(s)
-    /// and a Termination, which is where the final is decided.
+    /// The user finished speaking: flush the accumulated tail, force it into a
+    /// final turn, then terminate. The server answers with the remaining Turn
+    /// message(s) and a Termination, which is where the final is decided.
     func requestFinal() {
+        lock.lock()
+        var tail = pending
+        pending = Data()
+        lock.unlock()
+        if !tail.isEmpty {
+            // A tail shorter than the wire minimum is padded with silence
+            // rather than dropped: 3007 hangs up the whole session over one
+            // undersized message, and the padding is at most 50ms of quiet
+            // after the last thing said — the endpointer's food, not speech.
+            if tail.count < minChunkBytes { tail.append(Data(count: minChunkBytes - tail.count)) }
+            outbox.yield(.audio(tail))
+        }
         outbox.yield(.text(#"{"type":"ForceEndpoint"}"#))
         outbox.yield(.text(#"{"type":"Terminate"}"#))
         outbox.yield(.end)
@@ -328,6 +390,12 @@ final class AssemblyAIStreamingSession: LiveTranscriptionSession, @unchecked Sen
                     return .failure(.noSpeechDetected)
                 }
                 return
+            case .serverError(let message):
+                conclude { hadPartial in
+                    _ = hadPartial
+                    return .failure(.providerUnavailable("server error \(message)"))
+                }
+                return
             }
         }
     }
@@ -356,8 +424,12 @@ final class AssemblyAIStreamingSession: LiveTranscriptionSession, @unchecked Sen
 
         socket.close()
         switch decide(hadPartial) {
-        case .final(let result): onFinal(result)
-        case .failure(let failure): onFailure(failure)
+        case .final(let result):
+            AssemblyAIStreaming.trace?("session final: \(result.text.count) chars")
+            onFinal(result)
+        case .failure(let failure):
+            AssemblyAIStreaming.trace?("session failed: \(failure)")
+            onFailure(failure)
         }
     }
 }
@@ -372,6 +444,12 @@ final class AssemblyAIStreamingSession: LiveTranscriptionSession, @unchecked Sen
 // the (always-saved) audio file to the RecoveryChain as it does today.
 
 public final class StreamedUtterance: @unchecked Sendable {
+    /// The nil at `finish` is a designed outcome, but it must not be a silent
+    /// one: for seven hours on 12 Aug every stream died the same way and the
+    /// app's log never said so. One line per utterance, stating which way the
+    /// stream concluded, is what turns the next such outage into a grep.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
     private let provider: any LiveTranscriptionProvider
     private let lexicon: [String]
     private let onPartial: (@Sendable (String) -> Void)?
@@ -478,14 +556,22 @@ public final class StreamedUtterance: @unchecked Sendable {
         while Date() < deadline {
             switch currentOutcome() {
             case .final(let result):
-                return result.finality == .explicitEndOfTurn ? result : nil
-            case .failed:
+                if result.finality == .explicitEndOfTurn {
+                    Self.trace?("finish: final accepted, \(result.text.count) chars")
+                    return result
+                }
+                Self.trace?("finish: nil — final arrived without explicit "
+                    + "end-of-turn (\(result.finality.rawValue)); file chain answers")
+                return nil
+            case .failed(let failure):
+                Self.trace?("finish: nil — stream failed (\(failure)); file chain answers")
                 return nil
             case .pending:
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
         }
         current?.cancel()
+        Self.trace?("finish: nil — no conclusion within \(timeout)s; file chain answers")
         return nil
     }
 
