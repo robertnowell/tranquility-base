@@ -182,3 +182,24 @@ if ! ./scripts/check-selftests.sh "" "$LAUNCHED_AT"; then
   echo "  Fix or revert before landing this — the panel has no other coverage." >&2
   exit 1
 fi
+
+# The Claude Code contract, checked while we are already being loud.
+#
+# The app scrapes surfaces Claude Code never promised anyone (rendered TUI
+# text, `agents --json`), and that coupling rots silently: the watcher's old
+# "? for shortcuts" sentinel was dead for an unknown number of releases before
+# anyone felt it as a 35s beach ball (12 Aug, PR #32). scripts/canary.sh
+# re-verifies the contract at every deploy, so the next rot is a red line in
+# this terminal rather than a symptom a human has to feel first.
+#
+# Same posture as the self-tests: reporting, not refusing. The app is already
+# up; a moved contract means degraded launches, not a bad build. Exit 2 keeps
+# it distinguishable from a self-test failure. TB_SKIP_CANARY=1 skips it in an
+# emergency (e.g. Terminal automation unavailable in this context).
+if [ "${TB_SKIP_CANARY:-0}" != "1" ]; then
+  if ! ./scripts/canary.sh; then
+    echo "✗ the build is fine, but Claude Code's contract moved — see above." >&2
+    echo "  Re-verify SessionLauncher's sentinels / ClaudeAgentsCLI parsing." >&2
+    exit 2
+  fi
+fi
