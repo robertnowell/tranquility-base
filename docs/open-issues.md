@@ -239,24 +239,34 @@ a whisper. Design goes through the render funnel as a transient overlay (like
 
 ---
 
-## 14. "Go to session" freezes the whole app — beach ball, hard restart (12 Aug)
+## 14. "Go to session" freezes the whole app — beach ball, hard restart (12 Aug) — CLOSED
 
-**Status:** the button half is FIXED — PR #26 (12 Aug), merged and deployed, by
-evidence: `goToSession()` now paints its receipt and returns in 0 ms (drilled on
-every deploy: `goToSession` + `goToSession.roundTrip`, 27/27 verdicts on the
-7bb2fe1 relaunch), the walk runs in a detached task on a 5 s deadline, and the
-per-tab Apple-event loop became ONE batched `tty of tabs of windows` fetch —
-measured against the same 192 live tabs: 3.54 s → 179 ms, ~20×, and no main-thread
-block for the watchdog to punish. Re-clicks are refused in flight; a busy Terminal
-now reads "Terminal didn't answer within 5 seconds", not a beach ball.
+**Status:** CLOSED 13 Aug, all three carriers, each by evidence.
 
-Two same-class residents stay OPEN under this number:
+- The button — PR #26: `goToSession()` paints its receipt and returns in 0 ms
+  (drilled on every deploy: `goToSession` + `goToSession.roundTrip`), the walk
+  runs in a detached task on a 5 s deadline, and the per-tab Apple-event loop
+  became ONE batched `tty of tabs of windows` fetch — measured against the same
+  192 live tabs: 3.54 s → 179 ms, ~20×. Confirmed in the wild: real clicks log
+  `focused` on the new path.
+- The tick (the nested blocker in the same spindump) — PR #40: `rebuildMenu()`
+  and the settings pane read `SystemVoiceCatalog.cachedRows()`, a
+  stale-while-revalidate snapshot that refreshes off-thread, single-flight;
+  no reader ever waits on the TTS daemon or the four asset plists again.
+  Drilled every deploy (`voiceMenu.cacheWarm`; warm rebuild measured 19 ms),
+  and proven the way rule 4 likes it: a 5 s `sample` of the deployed build
+  mid-ticking — 3,980 main-thread samples, `rebuildMenu` present, ZERO frames
+  of `speechVoices` / `SystemVoiceCatalog` / `semaphore_wait` / `waitUntilExit`
+  on any thread.
+- The arrival path — PR #40: the frontmost-tab skip's three subprocesses
+  (osascript, claude CLI, ps) run detached with a 2 s Apple-event deadline,
+  generation-guarded so the newest arrival wins; Terminal-not-frontmost keeps
+  the fully synchronous path, byte-identical behavior.
 
-- `rebuildMenu()` → `SystemVoiceCatalog` TTS semaphore wait on main (the nested
-  blocker in the same spindump) — untouched by #26;
-- `frontmostSessionTty()` (main.swift) — one sync Apple event to Terminal on the
-  arrival path; small exposure (only when Terminal is frontmost), same disease.
-  The async `AppleScript.run(script:timeout:)` from #26 is the migration path.
+One drill lesson paid for along the way (PR #43): the first `voiceMenu` drill
+read `statusItem.menu`, which is deliberately nil outside a right-click — the
+deploy gate refused two relaunches on a passing feature. Assert against where
+state actually lives (`statusMenu`), and thank the gate for catching it.
 
 Original record, kept because the spindump reading is the reusable part:
 
