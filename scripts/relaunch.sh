@@ -176,8 +176,19 @@ fi
 #
 # The drills are asynchronous (one reports five seconds after the undo window),
 # so give them room before reading.
+# The verification scripts run from $CLEAN_WORKTREE, NOT from this script's
+# own directory. This script executes from the shared checkout, which sits on
+# whatever branch someone last left it on, while the app is built from the
+# pinned ref in $CLEAN_WORKTREE — so "./scripts/…" verifies a deploy with
+# tooling from an unrelated branch. That skew bit twice on 12 Aug: a stale
+# check-selftests.sh produced a false "panel is stuck", and a checkout parked
+# on an old branch silently skipped the freshly-landed canary. build-clean.sh
+# has already put $CLEAN_WORKTREE on $REF by this point, so these copies are
+# the deployed ref's own. (Residual gap, accepted: THIS file still runs from
+# the checkout, so a change to relaunch.sh itself needs the checkout current —
+# but the blast radius is now one file instead of every script it calls.)
 sleep 6
-if ! ./scripts/check-selftests.sh "" "$LAUNCHED_AT"; then
+if ! "$CLEAN_WORKTREE/scripts/check-selftests.sh" "" "$LAUNCHED_AT"; then
   echo "✗ the build is running, but its self-tests did not pass." >&2
   echo "  Fix or revert before landing this — the panel has no other coverage." >&2
   exit 1
@@ -197,7 +208,7 @@ fi
 # it distinguishable from a self-test failure. TB_SKIP_CANARY=1 skips it in an
 # emergency (e.g. Terminal automation unavailable in this context).
 if [ "${TB_SKIP_CANARY:-0}" != "1" ]; then
-  if ! ./scripts/canary.sh; then
+  if ! "$CLEAN_WORKTREE/scripts/canary.sh"; then
     echo "✗ the build is fine, but Claude Code's contract moved — see above." >&2
     echo "  Re-verify SessionLauncher's sentinels / ClaudeAgentsCLI parsing." >&2
     exit 2
