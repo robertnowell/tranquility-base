@@ -1077,7 +1077,59 @@ final class StatusHUD: NSObject {
     /// Anything mid-conversation says no: speech, a recording, a send countdown, or
     /// a failure still waiting to be read. Everything else, hidden included, is a
     /// moment where showing up is welcome rather than an interruption.
-    var canSurfaceAmbiently: Bool { state.allowsAmbientSurface }
+    /// The drills own the panel while they run.
+    ///
+    /// Earned 13 Aug, and it had been lying in both directions for a day. The
+    /// launch drills paint synthetic faces and then measure their geometry —
+    /// but the intake timer paints the REAL grid on its own schedule, and
+    /// `allowsAmbientSurface` is true for `.idle`, which is the state the
+    /// drills spend almost all of their time in. So a repaint carrying the
+    /// machine's actual sessions could land between a drill's setup and its
+    /// assertion.
+    ///
+    /// The symptom was a deploy gate that changed its mind with the session
+    /// census: 3a8e143 passed 27 verdicts twice one day and failed
+    /// `collapsedWidthReal`, `collapseClearsPlacard` and `lanesAreInOrder` the
+    /// next, on the same screen, with no code between the two runs. The
+    /// collapse drill's own log shows the intruder — "grid: 3 of 3 rows
+    /// (1 ready, 2 closed, 1 revivable)", a REVIVABLE row inside a drill whose
+    /// fixture has no such thing — and a collapsed frame of 380pt wide, because
+    /// `resizeToFit` only morphs to the strip while the state is idle and the
+    /// ambient repaint had moved it.
+    ///
+    /// False FAILs are the loud half. The quiet half is worse: the same race
+    /// can hand a drill a real grid that happens to satisfy it, which is a PASS
+    /// that proves nothing. Rule 7 makes these drills the panel's only
+    /// evidence, so evidence that varies with how many agents you had open is
+    /// not evidence.
+    var canSurfaceAmbiently: Bool { !drillsHoldThePanel && state.allowsAmbientSurface }
+
+    /// Set for the length of the launch drills and nothing else.
+    private var drillsHoldThePanel = false
+    private var drillRelease: DispatchWorkItem?
+
+    /// Take the panel. Idempotent, and it always arms a release.
+    private func beginDrills() {
+        drillsHoldThePanel = true
+        drillRelease?.cancel()
+        // A hard ceiling, because relaunch.sh passes --selftest-hud on EVERY
+        // deploy: a flag that stuck would leave the panel permanently deaf to
+        // its own sessions, and it would do it quietly, on every machine, after
+        // every merge. The drills take well under this; the timeout exists to
+        // be wrong in the safe direction.
+        let release = DispatchWorkItem { [weak self] in self?.endDrills() }
+        drillRelease = release
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: release)
+        Permissions.log("selftest: drills hold the panel — ambient repaints suspended")
+    }
+
+    private func endDrills() {
+        guard drillsHoldThePanel else { return }
+        drillsHoldThePanel = false
+        drillRelease?.cancel()
+        drillRelease = nil
+        Permissions.log("selftest: drills released the panel")
+    }
 
     var isOnScreen: Bool { panel?.isVisible ?? false }
 
@@ -2468,7 +2520,13 @@ final class StatusHUD: NSObject {
             // is for — and it is also what cancels the countdown and drops the
             // send/cancel closures. A bare showIdle here logs a second REFUSED
             // and changes nothing; measured 08 Aug before this line existed.
-            guard let self, case .pendingSend = self.state else { return }
+            guard let self else { return }
+            // The last drill, so the panel goes back to its owner here —
+            // before the fixture is stood down, so the first ambient repaint
+            // lands on a panel that is already idle rather than racing the
+            // teardown it was suspended for.
+            defer { self.endDrills() }
+            guard case .pendingSend = self.state else { return }
             self.endCapture(because: "selftest pendingSend cleanup")
             self.showIdle(rows: [])
         }
@@ -2484,10 +2542,26 @@ final class StatusHUD: NSObject {
         // another session was building, measuring a frame still in flight. A
         // drill that fails on machine load teaches people to re-run it until it
         // passes, which is worse than not having it.
+        // …and it did not, because "stopped moving" and "has not started yet"
+        // are the same reading. `stableReads` began at zero, so two samples
+        // taken BEFORE the animator's first tick satisfied it: the loop
+        // returned after ~0.1s, the 0.16s animation then ran, and the drill
+        // measured a frame in flight. The failure it produced is verbatim the
+        // one this function's own comment documents as mid-flight —
+        // `collapse=10..36 placard=26..87` — which is how it was found.
+        //
+        // So stability is necessary and not sufficient: nothing may conclude
+        // before one whole animation could have started AND finished. The
+        // minimum covers the animator's start latency plus the 0.16s frame
+        // animation; the stability check then catches anything slower, and the
+        // deadline catches a frame that never settles at all.
+        let start = Date()
+        let minimum: TimeInterval = 0.35
         var last = panel?.frame ?? .zero
         var stableReads = 0
-        let deadline = Date().addingTimeInterval(2)
-        while Date() < deadline, stableReads < 2 {
+        let deadline = start.addingTimeInterval(2)
+        while Date() < deadline,
+              stableReads < 2 || Date().timeIntervalSince(start) < minimum {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             let now = panel?.frame ?? .zero
             stableReads = now.equalTo(last) ? stableReads + 1 : 0
@@ -2500,6 +2574,7 @@ final class StatusHUD: NSObject {
     /// Render every state with worst-case text and confirm nothing is clipped.
     /// Run with `--selftest-hud`.
     func selfTest() {
+        beginDrills()
         let long = String(repeating: "Product image binding is fixed across the stack. ", count: 8)
         currentTarget = ("selftest", 1, "promotions")
         for (label, block) in [
