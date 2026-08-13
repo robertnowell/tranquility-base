@@ -27,12 +27,18 @@ public struct RecoveryChain: Sendable {
         backoff: [TimeInterval] = [2, 8, 20],
         lexicon: [String] = []
     ) {
-        // Cloud first for quality, on-device last because it can never be unavailable.
-        // A7: the shared lexicon reaches BOTH default providers — OpenAI as the
-        // Whisper `prompt` field, the Apple floor as contextualStrings; ignored
-        // when explicit providers are passed, which own their own config.
+        // Cloud first for quality, on-device last because it can never be
+        // unavailable — and a second, independent cloud vendor between them,
+        // because on 12 Aug the two-rung chain's rungs failed for unrelated
+        // reasons on the same recording and the floor's mistake became the
+        // transcript. A7: the shared lexicon reaches the Whisper `prompt` and
+        // the Apple floor's contextualStrings; the AssemblyAI rung takes none
+        // (its file API's vocabulary params are unverified — see its header).
+        // All ignored when explicit providers are passed, which own their own
+        // config.
         self.providers = providers
-            ?? [OpenAIRecovery(lexicon: lexicon), AppleSpeechRecovery(lexicon: lexicon)]
+            ?? [OpenAIRecovery(lexicon: lexicon), AssemblyAIFileRecovery(),
+                AppleSpeechRecovery(lexicon: lexicon)]
         self.maxAttemptsPerProvider = maxAttemptsPerProvider
         self.backoff = backoff
     }

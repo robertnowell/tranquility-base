@@ -30,7 +30,7 @@ func usage() -> Never {
       tbase dogfood [days]      WS-E counters summary (default 7 days)
       tbase dogfood record <kind> [note...]
                                 append a dogfood event by hand (e.g. attribution_error)
-      tbase transcribe <wav> [--apple-only|--openai-only]
+      tbase transcribe <wav> [--apple-only|--openai-only|--assemblyai-only]
                                 run the file-based recovery chain, optionally
                                 pinned to one rung so it can be probed alone
       tbase transcribe-stream <wav> [--chunk-ms N]
@@ -797,11 +797,14 @@ case "reconcile":
         // once seen until it was the last rung standing under a 27-minute
         // recording. A rung you cannot exercise alone is a rung you know
         // nothing about.
+        AssemblyAIFileRecovery.trace = { print("  assemblyai-file: \($0)") }
         let chain: RecoveryChain
         if args.contains("--apple-only") {
             chain = RecoveryChain(providers: [AppleSpeechRecovery()])
         } else if args.contains("--openai-only") {
             chain = RecoveryChain(providers: [OpenAIRecovery()])
+        } else if args.contains("--assemblyai-only") {
+            chain = RecoveryChain(providers: [AssemblyAIFileRecovery()])
         } else {
             chain = RecoveryChain()
         }

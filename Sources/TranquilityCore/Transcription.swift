@@ -188,6 +188,7 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
         let collected = Utterances()
         var cursor: Double = 0
         var passes = 0
+        var retriedEmptyPass = false
 
         while duration - cursor > Self.coverageSlack, passes < Self.maxPasses {
             passes += 1
@@ -232,7 +233,22 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
             AppleSpeechRecovery.trace?(String(
                 format: "pass %d: %d utterance(s), settled through %.2fs of the %.2fs after %.2fs",
                 passes, pass.count, pass.lastEnd, duration - cursor, cursor))
-            guard pass.lastEnd > 0 else { break }  // silence to the end: done
+            guard pass.lastEnd > 0 else {
+                // Nothing settled in this remainder. Usually that IS the
+                // answer — trailing silence to the end of the file — but a
+                // recogniser refusing under churn looks identical, so the
+                // first empty pass per file gets one retry over the same
+                // audio. The retry's cost is one redundant recognition of a
+                // silent tail; its value is that "no speech" is only ever
+                // declared twice.
+                if !retriedEmptyPass {
+                    retriedEmptyPass = true
+                    AppleSpeechRecovery.trace?(
+                        "pass \(passes) settled nothing; retrying that span once")
+                    continue
+                }
+                break
+            }
             cursor += pass.lastEnd
         }
 
