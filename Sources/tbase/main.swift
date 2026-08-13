@@ -30,9 +30,14 @@ func usage() -> Never {
       tbase dogfood [days]      WS-E counters summary (default 7 days)
       tbase dogfood record <kind> [note...]
                                 append a dogfood event by hand (e.g. attribution_error)
-      tbase transcribe-stream <wav>
+      tbase transcribe <wav> [--apple-only|--openai-only]
+                                run the file-based recovery chain, optionally
+                                pinned to one rung so it can be probed alone
+      tbase transcribe-stream <wav> [--chunk-ms N]
                                 replay a saved recording through the AssemblyAI
-                                streaming provider in pseudo-realtime
+                                streaming provider in pseudo-realtime; --chunk-ms
+                                replays a capture stack's real feed cadence
+                                (the AUHAL render callback delivers ~10)
 
     interruption gate:
       tbase gate                what the interrupt gate would decide right now
@@ -786,7 +791,20 @@ case "reconcile":
         guard args.count > 1 else { usage() }
         let url = URL(fileURLWithPath: args[1])
         AppleSpeechRecovery.trace = { print("  apple-speech: \($0)") }
-        let chain = RecoveryChain()
+        // Provider filters, born of the 12 Aug truncation: the chain's order
+        // hid each rung's individual behaviour — OpenAI answered every probe
+        // short enough to check, so the Apple floor's 60-second stop was never
+        // once seen until it was the last rung standing under a 27-minute
+        // recording. A rung you cannot exercise alone is a rung you know
+        // nothing about.
+        let chain: RecoveryChain
+        if args.contains("--apple-only") {
+            chain = RecoveryChain(providers: [AppleSpeechRecovery()])
+        } else if args.contains("--openai-only") {
+            chain = RecoveryChain(providers: [OpenAIRecovery()])
+        } else {
+            chain = RecoveryChain()
+        }
         print("providers: " + chain.providers
             .map { "\($0.name)\($0.isConfigured ? "" : " (unconfigured)")" }
             .joined(separator: " → "))
@@ -824,6 +842,8 @@ case "reconcile":
         // The file-based chain is untouched by design: in the app this provider
         // only ever runs ALONGSIDE the always-saved audio file.
         guard args.count > 1 else { usage() }
+        AssemblyAIStreaming.trace = { print("  assemblyai: \($0)") }
+        StreamedUtterance.trace = { print("  stream: \($0)") }
         let provider = AssemblyAIStreaming()
         guard provider.isConfigured else {
             print("assemblyai key is not configured — run: tbase set-key assemblyai")
@@ -848,15 +868,21 @@ case "reconcile":
             onPartial: { print("  partial: \($0)") })
         await stream.start()
 
-        // 100ms chunks (v3 accepts 50–1000ms), paced near realtime as the API
-        // asks for pre-recorded audio — faster makes Turn boundaries unreliable.
-        let chunkBytes = 3200
+        // 100ms feeds by default, paced near realtime as the API asks for
+        // pre-recorded audio — faster makes Turn boundaries unreliable.
+        // `--chunk-ms N` overrides the FEED cadence to replay a capture
+        // stack's real delivery (the AUHAL render callback hands ~10ms — the
+        // 12 Aug outage's cadence); whatever is fed, the session owns the
+        // wire's 50–1000ms contract and re-chunks before sending.
+        let chunkMs = args.firstIndex(of: "--chunk-ms")
+            .flatMap { args.indices.contains($0 + 1) ? Int(args[$0 + 1]) : nil } ?? 100
+        let chunkBytes = max(2, chunkMs * 32)  // 16kHz PCM16: 32 bytes/ms
         var offset = 0
         while offset < pcm.count {
             let end = min(offset + chunkBytes, pcm.count)
             stream.feed(pcm16: pcm.subdata(in: offset..<end))
             offset = end
-            try? await Task.sleep(nanoseconds: 90_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(chunkMs) * 900_000)
         }
         let finalStarted = Date()
         if let result = await stream.finish(timeout: 15) {
