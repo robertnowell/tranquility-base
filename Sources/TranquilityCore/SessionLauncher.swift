@@ -202,6 +202,17 @@ public enum SessionLauncher {
     /// usage-limit spend that stays with the user. Answering once and leaving
     /// is what keeps this watcher safe on both the launch and revive paths.
     ///
+    /// Measured on a real revive (12 Aug, session bd28a0a1, 753k tokens, so
+    /// the stakes were live, not hypothetical):
+    /// - Registration and the first transcript append happen BEFORE the
+    ///   resume-choice prompt is answered, so a revived session reads LIVE in
+    ///   `claude agents --json` while it is actually blocked on that
+    ///   question. The trust prompt is the opposite: nothing registers until
+    ///   it is answered. Liveness is not evidence the tab needs no attention.
+    /// - A second Return on the resume prompt would pick "summary
+    ///   (recommended)", the cheap option — wrong owner, not catastrophe.
+    ///   The early return below is what keeps that press from happening.
+    ///
     /// Twice-rotted and re-verified against a live v2.1.229 tab on 12 Aug
     /// (scripts/canary.sh caught both; it replays this exact contract at
     /// every deploy):
