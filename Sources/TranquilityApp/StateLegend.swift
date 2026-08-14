@@ -402,14 +402,21 @@ enum StateLegend {
         /// two failure directions are opposite ON PURPOSE: the display fails
         /// toward showing you the work, the verb fails toward doing nothing.
         let revivable: Bool
+        /// Whether a ready row's turn has not been OPENED yet (ruled 13 Aug:
+        /// bold unread, regular once opened — the iOS Messages weight, except
+        /// the lamp stays lit because read is not answered). Meaningful only
+        /// on the waiting band; defaults to true so a ready row nobody
+        /// classified still renders at the attention weight it always had.
+        let unread: Bool
 
         init(id: String, name: String, aux: String, lamp: Lamp,
-             revivable: Bool = false) {
+             revivable: Bool = false, unread: Bool = true) {
             self.id = id
             self.name = name
             self.aux = aux
             self.lamp = lamp
             self.revivable = revivable
+            self.unread = unread
         }
     }
 
