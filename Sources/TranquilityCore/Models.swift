@@ -383,11 +383,14 @@ public struct WaitingSession: Codable, FetchableRecord, Sendable {
     /// direction, since the worst outcome is announcing something once more.
     public var heardThrough: Int64? = nil
 
-    /// Has this event been told to the user? Derived, never stored per row:
-    /// one bit on one list, so "should this be announced" is `!heard` at the
-    /// announce site rather than a second SQL predicate the next reader has
-    /// to choose between. Heard stops the re-announcement and NOTHING else —
-    /// read is not answered (12 Aug).
+    /// Has this event been OPENED — any audio reached the user and either
+    /// played out or was stopped by them (re-ruled 13 Aug; before that it
+    /// meant played-to-the-end, which almost nothing was: "honestly I never
+    /// listen to the whole thing"). Derived, never stored per row: one bit on
+    /// one list, so "should this be announced" is `!heard` at the announce
+    /// site rather than a second SQL predicate the next reader has to choose
+    /// between. Heard stops the re-announcement and NOTHING else — read is
+    /// not answered (12 Aug).
     public var heard: Bool { latestId <= (heardThrough ?? 0) }
 
     /// Same derivation the old QueuedEvent used, kept so the summarizer is unchanged.

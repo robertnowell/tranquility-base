@@ -183,6 +183,21 @@ public struct Coordinator: Sendable {
         }
     }
 
+    /// What ⌃⌥ plays when nothing is unopened: the newest waiting row, opened
+    /// or not. Anything green always plays (ruled 13 Aug) — a registered press
+    /// that silently returns to the grid is indistinguishable from a dead app,
+    /// and it shipped: with every waiting row already opened, four ⌃⌥ presses
+    /// in a row visibly did nothing (app.log 13 Aug 14:26, each one `preparing
+    /// -> idle` inside a second). The delivery overlay still applies — a turn
+    /// you are mid-reply to must not be read back at you even as a replay.
+    public func nextToReplay(
+        excluding inFlight: DeliveryInFlight = DeliveryInFlight()
+    ) throws -> WaitingSession? {
+        try waiting().first {
+            !inFlight.supersedesWaiting($0.sessionId, latestId: $0.latestId)
+        }
+    }
+
     /// Everything waiting ON THE USER — undismissed, heard or not — newest
     /// first, for a UI that shows rather than describes. Each row carries
     /// `heard`; the announce path (nextToAnnounce) is the only consumer that
@@ -507,8 +522,10 @@ public struct Coordinator: Sendable {
         /// The gate said not now. The item stays queued — a veto can only delay.
         case held(reason: String)
         case nothingWaiting
-        /// Never made a sound, so it is still unread. `failure` is nil when you
-        /// stopped it before it started and set when it stopped itself.
+        /// The audio did not reach its natural end. Whether the turn still
+        /// counts as read is the cursor's business, settled in `speak`: any
+        /// audio plus a user stop is OPENED and advances it; `failure` set
+        /// (it stopped itself) or no sound at all leaves it unread.
         case interrupted(failure: String?)
     }
 
@@ -737,19 +754,29 @@ public struct Coordinator: Sendable {
         let spoken = await speech.speak(
             summary.spoken, voice: voiceId(for: session.sessionId), onWord: onWord)
 
-        // Hearing it through is the only thing that advances the cursor. Anything
-        // short of that leaves the session waiting, because it still is: half an
-        // announcement tells you half of what happened.
+        // OPENED advances the cursor, not heard-to-the-end (re-ruled 13 Aug:
+        // "honestly I never listen to the whole thing"). Audio started and the
+        // user stopped it — they triaged the turn, and the next ⌃⌥ must move
+        // on, not read the same message at someone who already walked out of
+        // it. `heardAny` has carried exactly this distinction since it was
+        // written ("starting to talk counts as read"); this is the first
+        // consumer to honor it. Audio that never made a sound, or that stopped
+        // itself (`failure` set), stays unread — a silent failure must not
+        // consume a turn, which is the safety the old completed-only rule
+        // existed for and the part of it that survives.
         //
-        // There is nothing to revert. Nothing was written before the audio, so a
-        // stopped announcement needs no undo — which is what makes the resurrection
-        // bug unrepresentable rather than fixed.
+        // Still nothing written BEFORE the audio, so a refusal or a pre-audio
+        // stop needs no undo — the resurrection bug stays unrepresentable.
+        if spoken.heardAny && spoken.failure == nil {
+            try store.advanceCursor(sessionId: session.sessionId, heardThrough: session.latestId)
+        }
         guard spoken.completed else {
+            // Back into `prepared` either way: an opened turn is still
+            // replayable on request (a grid-row tap, or ⌃⌥ once nothing is
+            // unopened), and the replay must not pay for a second model call.
             await prepared.put(summary, for: session.sessionId, latest: session.latestId)
             return .interrupted(failure: spoken.failure)
         }
-
-        try store.advanceCursor(sessionId: session.sessionId, heardThrough: session.latestId)
         return .spoke(Announcement(
             event: session, brief: summary.brief, spoken: summary.spoken,
             via: spoken.provider, degraded: spoken.degraded))
@@ -772,16 +799,20 @@ public struct Coordinator: Sendable {
     /// answering — as the target, and your words were typed into it.
     ///
     /// The rule now: take the most recent announcement ATTEMPT, whether or not it
-    /// succeeded, and offer it only if it was heard through to the end. A failed
-    /// attempt therefore blocks replies rather than deferring to a stale one.
-    /// Refusing is recoverable; typing into the wrong session is not.
+    /// succeeded, and offer it only if it was OPENED — audio reached you and
+    /// either finished or you stopped it (13 Aug; "to the end" before that).
+    /// Stopping part-way and replying is the normal gesture, and the session
+    /// you just walked out of is exactly the one your words belong to. A
+    /// failed attempt — no sound, or audio that stopped itself — still blocks
+    /// replies rather than deferring to a stale one. Refusing is recoverable;
+    /// typing into the wrong session is not.
     public func replyTarget() throws -> WaitingSession? {
         // The session you last heard from, and only while that is still true.
         //
         // This used to scan for the most recent `announced` row, which silently
         // stepped over a NEWER announcement that had failed — and routed a reply
         // into a terminal the user was not talking to. Now it is the cursor: the
-        // last thing heard through to the end, valid only while it is still that
+        // last thing opened, valid only while it is still that
         // session's latest event. If a newer turn has arrived since, there is no
         // target, because you have not heard the thing you would be answering.
         let cutoff = Int64(Date().addingTimeInterval(-replyWindow).timeIntervalSince1970 * 1000)

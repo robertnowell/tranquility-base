@@ -43,7 +43,13 @@ final class CoordinatorTests: XCTestCase {
         var spoken: [String] = []
         /// Makes every announcement stop part-way, as a stray keypress does.
         var interrupt = false
+        /// Makes every announcement die on its own — a synth failure, not a
+        /// choice. Distinct from `interrupt` because the cursor treats them
+        /// oppositely: a user stop opens the turn, a fault never does.
+        var fail = false
+        struct SynthDied: Error {}
         func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
+            if fail { throw SynthDied() }
             if interrupt { throw SpeechError.interrupted }
             spoken.append(text.text)
         }
@@ -305,10 +311,14 @@ final class CoordinatorTests: XCTestCase {
                        "the next turn revives the session by construction")
     }
 
-    /// Stopping half way must not consume the turn: half an announcement tells you
-    /// half of what happened. Nothing is written before the audio, so there is no
-    /// stale copy for a later handler to write back over a dismissal.
-    func testStoppingPartWayLeavesItWaitingAndWritesNothing() async throws {
+    /// Stopping part-way OPENS the turn (re-ruled 13 Aug, reversing "hearing
+    /// it through is the only thing that advances the cursor" — measured
+    /// against use, not argued: almost no announcement is played to the end,
+    /// so the old rule replayed nearly everything and ⌃⌥ could never move
+    /// on). Audio started and the user stopped it: the cursor advances, the
+    /// automatic path skips it, and it stays waiting — read is not answered —
+    /// so the grid keeps it and a replay stays one row-tap away.
+    func testStoppingPartWayOpensTheTurnButLeavesItWaiting() async throws {
         let speech = SilentSpeech()
         speech.interrupt = true
         let coordinator = try makeCoordinator(speech: speech)
@@ -317,9 +327,30 @@ final class CoordinatorTests: XCTestCase {
         guard case .interrupted = try await coordinator.announceNext() else {
             return XCTFail("expected an interrupted announcement")
         }
-        XCTAssertNotNil(try coordinator.nextToAnnounce(), "still waiting")
+        XCTAssertNotNil(try store.cursor(for: "sess-1")?.heardThrough,
+                        "audio you stopped yourself counts as opened")
+        XCTAssertNil(try coordinator.nextToAnnounce(), "opened, so not re-announced")
+        XCTAssertEqual(try coordinator.nextToReplay()?.sessionId, "sess-1",
+                       "still waiting: green always has something to play")
+        XCTAssertEqual(try coordinator.replyTarget()?.sessionId, "sess-1",
+                       "the session you just walked out of takes the reply")
+    }
+
+    /// The half of the old rule that survives: audio that stopped ITSELF is a
+    /// fault, not a choice, and a silent failure must not consume the turn.
+    func testAFailedAnnouncementStaysUnread() async throws {
+        let speech = SilentSpeech()
+        speech.fail = true
+        let coordinator = try makeCoordinator(speech: speech)
+        try append()
+
+        guard case .interrupted(let failure) = try await coordinator.announceNext() else {
+            return XCTFail("expected an interrupted announcement")
+        }
+        XCTAssertNotNil(failure, "a fault is surfaced, never respected quietly")
         XCTAssertNil(try store.cursor(for: "sess-1")?.heardThrough,
-                     "hearing it through is the only thing that advances the cursor")
+                     "no sound reached anyone, so nothing was opened")
+        XCTAssertNotNil(try coordinator.nextToAnnounce(), "still first in line")
     }
 
     /// Two hooks in the same millisecond used to flip the state, because bare-column
