@@ -1086,7 +1086,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 aux: StateLegend.shortId(event.sessionId),
                 lamp: activity == .working
                     || delivering.supersedesWaiting(event.sessionId, latestId: event.latestId)
-                    ? .working : .ready)
+                    ? .working : .ready,
+                // The weight carries the read state (ruled 13 Aug): the lamp
+                // stays lit — read is not answered — but an opened turn stops
+                // rendering at the unread weight.
+                unread: !event.heard)
         }
         // Live sessions with nothing waiting: quiet rows, so a skipped or heard
         // session stays findable. Walked via `known` — already latestId DESC —
@@ -1905,10 +1909,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Same overlay as the selection below, or this emptiness check
             // says "something is waiting" about the very turn we are about to
             // refuse to announce, and the grid never gets shown.
+            //
+            // Nothing unopened does NOT mean nothing to play (ruled 13 Aug):
+            // anything green always plays. When every waiting row has been
+            // opened, ⌃⌥ replays the newest one through the explicit path —
+            // the one a row tap uses — instead of bouncing to the grid. The
+            // silent bounce shipped, and it read as a dead app: four green
+            // presses in a row, each `preparing -> idle` within a second,
+            // nothing said (app.log 13 Aug 14:26 — a low-connectivity spell
+            // had stalled every agent, so no new turns were arriving to mask
+            // the unheard filter). Only a grid with nothing green left —
+            // nothing waiting at all — shows the grid.
+            var replayId: String?
             if eventId == nil,
                (try? coordinator.nextToAnnounce(excluding: self.delivering)) == nil {
-                showIdleGrid()
-                return
+                replayId = ((try? coordinator.nextToReplay(excluding: self.delivering)) ?? nil)?
+                    .sessionId
+                guard let replayId else {
+                    showIdleGrid()
+                    return
+                }
+                Permissions.log("announce: all opened — replaying \(replayId.prefix(8))")
             }
             Permissions.log("announce: starting")
             do {
@@ -1916,7 +1937,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // interruptibility gate does not apply — you cannot interrupt
                 // someone who just asked.
                 let outcome = try await coordinator.announceNext(
-                    only: eventId,
+                    only: eventId ?? replayId,
                     ignoringGate: true,
                     excluding: self.delivering,
                     onWillSpeak: { [weak self] announcement in
@@ -2020,19 +2041,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // stays until a gesture moves it — the grid is one tap away,
                     // not four seconds away.
                 case .interrupted(let failure):
-                    // The announce task reverts an interrupted item to unread. If the
-                    // interruption WAS the reply, re-apply the mark — this runs after
-                    // the revert, so ordering is settled rather than raced.
                     if let failure {
                         // Nobody asked for this one. Say so, rather than letting a
                         // dropped connection masquerade as something you chose.
+                        // A failure writes no cursor, so "still unread" is true.
                         lastStatusLine = "playback failed, still unread"
                         hud.showResult(
                             "Playback failed (\(failure)). It's still waiting. "
                             + "tap ⌃⌥ to hear it again.")
                     } else {
-                        lastStatusLine = "stopped, still unread"
-                        showIdleGrid(note: "Stopped, still unread.")
+                        // No read-state claim here: stopping it yourself OPENS
+                        // the turn (13 Aug), stopping it before any audio does
+                        // not, and the grid's row weight now shows which one
+                        // happened — copy that guessed would lie half the time.
+                        lastStatusLine = "stopped"
+                        showIdleGrid(note: "Stopped.")
                     }
                 case .held(let reason):
                     lastStatusLine = "held: \(reason)"

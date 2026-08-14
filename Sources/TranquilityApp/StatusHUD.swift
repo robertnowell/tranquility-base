@@ -3316,6 +3316,7 @@ final class StatusHUD: NSObject {
         titleDoorDrill()
         quietRowsDrill()
         closedRowsDrill()
+        readWeightDrill()
         pastAgentsDrill()
         elasticGridDrill()
         goToSessionDrill()
@@ -3578,6 +3579,32 @@ final class StatusHUD: NSObject {
             ("unprovenRowDoesNothing",
              StateLegend.action(for: row("unproven", unlit)) == StateLegend.RowAction.none),
             ("closedRowsStillRender", built.count == 3),
+        ])
+        showIdle(rows: [])
+    }
+
+    /// The weight IS the read state (ruled 13 Aug): an unread ready row is
+    /// semibold, an opened one drops to medium, the lamp identical in both —
+    /// read is not answered. A drill because the mapping lives in a view
+    /// initializer no unit test can reach, and a weight that quietly stopped
+    /// varying would put the grid back to two states it cannot tell apart.
+    private func readWeightDrill() {
+        showIdle(rows: [
+            StateLegend.SessionRow(id: "unread", name: "unread", aux: "u",
+                                   lamp: .ready, unread: true),
+            StateLegend.SessionRow(id: "opened", name: "opened", aux: "o",
+                                   lamp: .ready, unread: false),
+        ])
+        let built = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
+        let font = { (id: String) in
+            built.first { $0.identifier?.rawValue == id }?.nameLabel.font
+        }
+        SelfTest.report("readWeight", [
+            ("unreadIsSemibold",
+             font("unread") == .monospacedSystemFont(ofSize: 13, weight: .semibold)),
+            ("openedIsMedium",
+             font("opened") == .monospacedSystemFont(ofSize: 13, weight: .medium)),
+            ("bothRendered", built.count == 2),
         ])
         showIdle(rows: [])
     }
@@ -4933,6 +4960,7 @@ final class GridRowView: NSControl {
 
     init(item: StateLegend.SessionRow, auxWidth: CGFloat,
          target: AnyObject, action: Selector) {
+        nameLabel = NSTextField(labelWithString: item.name)
         super.init(frame: .zero)
         self.target = target
         self.action = action
@@ -4955,7 +4983,11 @@ final class GridRowView: NSControl {
         }
 
         // The type ramp: both columns monospaced (one family, two sizes — the
-        // callsign is an identity, not prose), semibold name only when ready.
+        // callsign is an identity, not prose). Semibold is the UNREAD weight
+        // (ruled 13 Aug): a ready row drops to medium once its turn has been
+        // opened, the iOS Messages move — the lamp stays lit because read is
+        // not answered, but the weight stops claiming there is something you
+        // have not been told.
         //
         // A row whose session has exited is drawn at reduced ink (ruled 11 Aug:
         // "they should be shown that they are not alive"). The dimming is the
@@ -4963,8 +4995,9 @@ final class GridRowView: NSControl {
         // presence rather than state: an empty socket where a lamp would be,
         // and type that has stepped back. No new colour is spent on it.
         let ink = item.lamp.rowAlpha
-        let name = NSTextField(labelWithString: item.name)
-        name.font = .monospacedSystemFont(ofSize: 13, weight: ready ? .semibold : .medium)
+        let name = nameLabel
+        name.font = .monospacedSystemFont(
+            ofSize: 13, weight: ready && item.unread ? .semibold : .medium)
         name.textColor = StateLegend.Palette.ink.withAlphaComponent(ink)
         name.lineBreakMode = .byTruncatingTail
         name.translatesAutoresizingMaskIntoConstraints = false
@@ -5030,6 +5063,12 @@ final class GridRowView: NSControl {
     /// The hover pill. Held so hover can paint it rather than the row's layer,
     /// which could only ever be exactly as wide as the content.
     private let highlight = NSView()
+
+    /// Held so the launch drill can read the weight back off a built row —
+    /// the weight IS the read state now (unread semibold, opened medium),
+    /// and a drill that cannot see it would be asserting a sort order about
+    /// pixels it never checks.
+    let nameLabel: NSTextField
 
     override func mouseEntered(with event: NSEvent) {
         highlight.layer?.backgroundColor = StateLegend.Palette.hover.cgColor
