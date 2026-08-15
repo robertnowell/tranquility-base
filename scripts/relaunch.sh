@@ -69,6 +69,21 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
 fi
 echo $$ > "$LOCKDIR/pid"
 
+# The deploy ledger: every run records WHO invoked it, before it does anything.
+# Rule 6's announcement is a promise a session makes; this line is a fact the
+# script makes, and the two must eventually agree. Earned 14 Aug: a deploy
+# fired four seconds after a merge landed, no session claimed it, and
+# attributing it required reflog forensics against dead pids — the same
+# archaeology rule 10's commit trailers killed for code. $PPID's command line
+# names a human shell or a Claude session's harness; CLAUDE_SESSION_ID names
+# the session outright when the harness exports it.
+LEDGER="$(dirname "$0")/../logs/deploys.log"
+mkdir -p "$(dirname "$LEDGER")"
+printf '%s pid=%s ppid=%s invoker=%q session=%s\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$PPID" \
+  "$(ps -o command= -p "$PPID" 2>/dev/null | head -c 120)" \
+  "${CLAUDE_SESSION_ID:-unset}" >> "$LEDGER"
+
 # The lock releases on ANY exit, and restore_if_down still runs: holding the
 # lock must never become a way to leave the app down.
 cleanup_and_restore() {
@@ -82,6 +97,8 @@ trap cleanup_and_restore EXIT INT TERM PIPE
 git fetch -q origin
 TARGET=$(git rev-parse --short "$REF")
 echo "→ target: $TARGET  $(git log -1 --format=%s "$REF")"
+# Second ledger line, same pid: what the run above actually resolved to.
+printf '%s pid=%s ref=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$TARGET" >> "$LEDGER"
 
 # Creating and validating the clean worktree now lives in scripts/build-clean.sh,
 # so install.sh can do it too — it could not before, which is why a fresh clone
