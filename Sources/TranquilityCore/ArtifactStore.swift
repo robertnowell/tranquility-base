@@ -196,9 +196,16 @@ public extension ArtifactStore {
     /// path from this; the transcript is mined best-effort, and a missed page
     /// surfaces the moment anything touches it through a real file tool.
     static func htmlPaths(in command: String) -> [String] {
+        // Shell text spells home three ways; the transcript keeps whichever
+        // the session typed. All three normalize to the absolute form before
+        // the prefix test, because "~/Documents/…" is exactly how the
+        // measured miss (15 Aug) wrote its post-mortem.
+        let home = NSHomeDirectory()
         var out: [String] = []
         for token in command.split(whereSeparator: { " \t\n\"'`;)(<>|&".contains($0) }) {
-            let t = String(token)
+            var t = String(token)
+            if t.hasPrefix("~/") { t = home + t.dropFirst(1) }
+            if t.hasPrefix("$HOME/") { t = home + t.dropFirst(5) }
             if t.hasPrefix("/"), t.hasSuffix(".html"), !out.contains(t) { out.append(t) }
         }
         return out
