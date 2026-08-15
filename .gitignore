@@ -49,3 +49,4 @@ courtesy-eval-results.tsv
 # Claude Code harness state (session worktrees live under .claude/worktrees/;
 # each is another session's isolated checkout, never this repo's content).
 /.claude/
+logs/

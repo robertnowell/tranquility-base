@@ -67,9 +67,11 @@ public struct RecoveryChain: Sendable {
                 } catch let failure as TranscriptionFailure {
                     attempts.append("\(provider.name): \(failure)")
                     lastFailure = failure
-                    // Retrying a bad key or an empty recording accomplishes nothing.
+                    // Retrying a bad key, an empty recording, or a machine
+                    // with no network route accomplishes nothing.
                     switch failure {
-                    case .authenticationFailed, .notConfigured, .fileUnreadable, .noSpeechDetected:
+                    case .authenticationFailed, .notConfigured, .fileUnreadable,
+                         .noSpeechDetected, .offline:
                         break
                     default:
                         if attempt + 1 < maxAttemptsPerProvider {

@@ -91,8 +91,7 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
         } catch let failure as TranscriptionFailure {
             throw failure
         } catch {
-            throw TranscriptionFailure.providerUnavailable(
-                "transport: \(error.localizedDescription)")
+            throw TranscriptionFailure.fromTransport(error)
         }
         Self.trace?("uploaded \(audio.count) bytes")
 
@@ -126,8 +125,7 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
         } catch let failure as TranscriptionFailure {
             throw failure
         } catch {
-            throw TranscriptionFailure.providerUnavailable(
-                "transport: \(error.localizedDescription)")
+            throw TranscriptionFailure.fromTransport(error)
         }
 
         // 3. Poll to a terminal state.
