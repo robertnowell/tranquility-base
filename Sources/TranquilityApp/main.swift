@@ -439,6 +439,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
         hud.onRevive = { [weak self] id, name in self?.revive(id, name: name) }
+        // Ruled 13 Aug: right-click Terminate on a live Past Agents row. SIGTERM,
+        // not SIGKILL — a Claude session dies clean and stays resumable. Probe
+        // and signal off-main (rule 9); the log carries the receipt either way.
+        hud.onTerminateSession = { id, name in
+            Task.detached {
+                guard let live = (ClaudeAgentsCLI().sessions() ?? [])
+                    .first(where: { $0.sessionId == id }) else {
+                    Permissions.log("terminate: \(name) (\(id.prefix(8))) not in agents — already gone")
+                    return
+                }
+                let pid = live.pid
+                let rc = kill(pid_t(pid), SIGTERM)
+                Permissions.log(rc == 0
+                    ? "terminate: SIGTERM sent to \(name) (pid \(pid)) — resumable via claude resume"
+                    : "terminate: SIGTERM to pid \(pid) FAILED errno \(errno)")
+            }
+        }
         hud.onOpenPastAgents = { [weak self] in self?.openPastAgents() }
         // A live session does not need reviving — it needs finding, which is
         // the same door the card's GO TO AGENT opens.
