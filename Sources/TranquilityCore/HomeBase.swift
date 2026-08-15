@@ -107,7 +107,11 @@ public enum HomeBase {
     /// for trouble one way or another" (Berners-Lee). The name goes ON the page,
     /// where it can change freely.
     public static func slug(for model: Model) -> String {
-        model.sessionId.split(separator: "-").first.map(String.init) ?? model.sessionId
+        slug(forSessionId: model.sessionId)
+    }
+
+    public static func slug(forSessionId id: String) -> String {
+        id.split(separator: "-").first.map(String.init) ?? id
     }
 
     static func escape(_ s: String) -> String {
@@ -362,6 +366,15 @@ public extension HomeBase {
     static var root: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Documents/agents", isDirectory: true)
+    }
+
+    /// The page already on disk for a session, if any turn ever wrote one.
+    /// An existence check and nothing more — cheap enough for the panel to ask
+    /// on every render. Writing stays with the store; asking does not need it.
+    static func existingPage(sessionId: String) -> String? {
+        let path = root.appendingPathComponent(slug(forSessionId: sessionId))
+            .appendingPathComponent("index.html").path
+        return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 }
 

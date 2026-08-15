@@ -172,22 +172,25 @@ final class StatusHUD: NSObject {
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
 
-    /// The page the agent on stage most recently wrote, if it still exists.
+    /// The hub page of the agent on stage, if one has ever been written.
     ///
     /// Derived from `currentTarget` rather than stored beside it. Storing it
     /// would mean clearing it at all four sites that clear the target, and the
     /// one that got missed would leave a button pointing at the previous
-    /// agent's page — the exact confusion this feature exists to end. It is the
-    /// other half of what the footer starts: the page links back to its agent,
-    /// and the agent's card links out to its page.
-    private var currentArtifact: String? {
-        currentTarget.flatMap { artifactForSession?($0.sessionId) }
+    /// agent's hub — the exact confusion this feature exists to end. The hub
+    /// carries the artifact list and the discuss link, so this one door is the
+    /// address of everything the agent made (ruled 15 Aug, superseding "the
+    /// last thing it made" from the door's first landing).
+    private var currentHub: String? {
+        currentTarget.flatMap { hubForSession?($0.sessionId) }
     }
-    /// Wired by the app onto ArtifactStore. Nil until then, and nil is a
-    /// complete answer — most sessions have written no page at all.
-    var artifactForSession: ((String) -> String?)?
-    /// Wired by the app onto the workspace's "open this file" call.
-    var onOpenPage: ((String) -> Void)?
+    /// Wired by the app onto HomeBase. Nil until then, and nil is a complete
+    /// answer — a session never summarized has no hub to open.
+    var hubForSession: ((String) -> String?)?
+    /// Wired by the app; receives the session id, because the app rewrites the
+    /// hub fresh before opening it, and the write needs the store the panel
+    /// deliberately does not hold.
+    var onOpenHub: ((String) -> Void)?
 
     // MARK: - Public surface
 
@@ -843,11 +846,11 @@ final class StatusHUD: NSObject {
     /// Wired by the app onto SessionLauncher, with the artifact in hand.
     var onNewSessionForArtifact: ((String) -> Void)?
 
-    @objc nonisolated private func openPageTapped() {
+    @objc nonisolated private func openHubTapped() {
         MainActor.assumeIsolated {
-            guard let page = currentArtifact else { return }
-            Permissions.log("openPage: \(page)")
-            onOpenPage?(page)
+            guard currentHub != nil, let id = currentTarget?.sessionId else { return }
+            Permissions.log("openHub: \(id.prefix(8))")
+            onOpenHub?(id)
         }
     }
 
@@ -1360,9 +1363,10 @@ final class StatusHUD: NSObject {
         goButton.isHidden = currentTarget?.pid == nil
         // The card's second door. It rides the same rule as "Go to agent" —
         // shown wherever an agent is named — because the two are one pair: this
-        // agent, and the last thing it made. A session that has written no page
-        // simply has one door, and most do.
-        openPageButton.isHidden = currentArtifact == nil
+        // agent, and its hub. A session never summarized has no hub yet and
+        // keeps one door; every announcement writes the hub, so the door
+        // appears with the agent's first spoken turn.
+        openPageButton.isHidden = currentHub == nil
         dontSendButton.isHidden = true
         micSettingsButton.isHidden = true
         newSessionButton.isHidden = true
@@ -3263,21 +3267,21 @@ final class StatusHUD: NSObject {
         let failureIsStillAmber =
             stateLabel.textColor == StateLegend.Palette.fault
         // The card's second door. The drill that matters is the ABSENCE one:
-        // most sessions have written no page, and a door to nothing would be on
-        // every card in the app.
-        let priorResolver = artifactForSession
-        artifactForSession = { _ in nil }
+        // a session never summarized has no hub, and a door to nothing would
+        // be on every card in the app.
+        let priorResolver = hubForSession
+        hubForSession = { _ in nil }
         _ = showAnnouncement(
             spoken: SpokenTextSanitizer().sanitize("Finished the poller. Go?"),
             sessionId: "drill", pid: 1, project: "promotions copy", cwd: "/tmp")
-        let noPageNoDoor = openPageButton.isHidden
-        artifactForSession = { _ in "/tmp/tb-drill-page.html" }
+        let noHubNoDoor = openPageButton.isHidden
+        hubForSession = { _ in "/tmp/tb-drill-hub/index.html" }
         render()
-        let pageOpensADoor = !openPageButton.isHidden
-        artifactForSession = priorResolver
-        SelfTest.report("openPage", [
-            ("noPageNoDoor", noPageNoDoor),
-            ("pageOpensADoor", pageOpensADoor),
+        let hubOpensADoor = !openPageButton.isHidden
+        hubForSession = priorResolver
+        SelfTest.report("openHub", [
+            ("noHubNoDoor", noHubNoDoor),
+            ("hubOpensADoor", hubOpensADoor),
         ])
 
         SelfTest.report("invitation", [
@@ -4254,10 +4258,12 @@ final class StatusHUD: NSObject {
         // destination: one is a terminal tab, the other a browser. It sits at
         // the row's LEADING edge rather than beside it: the two doors bracket
         // the card, so neither reads as the primary and a mis-click lands on
-        // nothing. Named for the file it opens rather than for "page", which
-        // named nothing the user had a word for.
+        // nothing. It opens the agent's HUB — the page that lists everything
+        // the agent made and carries "Discuss with agent" — not the last
+        // artifact alone (ruled 15 Aug: the hub is the agent's address, and
+        // the artifacts are one click past it).
         openPageButton = NSButton(title: "Open HTML", target: self,
-                                  action: #selector(openPageTapped))
+                                  action: #selector(openHubTapped))
         openPageButton.isBordered = false
         openPageButton.attributedTitle = letterspaced(
             "OPEN HTML \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
