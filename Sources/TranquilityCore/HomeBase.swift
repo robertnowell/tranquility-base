@@ -153,8 +153,17 @@ public enum HomeBase {
         // a word.
         var head = ""
         if let n = newest {
-            let deck = n.question.map { "\(e(n.happened)) \(e($0))" }
-                ?? (n.nextStep.map { "\(e(n.happened)) Proposing: \(e($0))" }
+            // The deck joins two sentences the brief stored separately, and a
+            // brief's `happened` often arrives without terminal punctuation —
+            // joined bare it read "…merged to production Proceed with the
+            // review?" (seen 15 Aug). The join supplies the full stop the
+            // field is missing; one that already ends a sentence keeps it.
+            let sentence = { (s: String) -> String in
+                guard let last = s.last, !".!?…".contains(last) else { return s }
+                return s + "."
+            }
+            let deck = n.question.map { "\(e(sentence(n.happened))) \(e($0))" }
+                ?? (n.nextStep.map { "\(e(sentence(n.happened))) Proposing: \(e($0))" }
                     ?? e(n.happened))
             var byline = model.callsign.map { "Agent \(e($0))" } ?? "Agent \(e(String(model.sessionId.prefix(8))))"
             if let dir = (model.cwd as NSString?)?.lastPathComponent, !dir.isEmpty {
@@ -224,7 +233,10 @@ public enum HomeBase {
                 // undated one — a wrong fact where a missing one was honest.
                 let on = page.at > Date(timeIntervalSince1970: 0)
                     ? "<span class=\"on\">\(e(dayStamp.string(from: page.at)))</span>" : ""
-                return "<li><a class=\"page\" href=\"file://\(e(page.path))\"\(blurb)>"
+                // A new tab, deliberately: the hub is the reader's index and
+                // stays open while its artifacts are visited (ruled 15 Aug).
+                return "<li><a class=\"page\" href=\"file://\(e(page.path))\""
+                    + " target=\"_blank\" rel=\"noopener\"\(blurb)>"
                     + "\(e(name))</a>\(on)</li>"
             }.joined()
             let count = model.pages.count

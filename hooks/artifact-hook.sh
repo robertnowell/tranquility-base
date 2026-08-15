@@ -77,26 +77,12 @@ EOF
 mkdir -p "$ARTIFACTS" 2>/dev/null || exit 0
 printf '%s\t%s\n' "$(($(date +%s) * 1000))" "$FILE" >> "$ARTIFACTS/$SESSION" 2>/dev/null
 
-# 2. OFFER. The callsign is the app's, minted at the session's first summary, so
-#    it is read from the app's own store — read-only, with a short timeout, and
-#    every failure falls through to the session id alone. A hook that hangs on a
-#    locked database would stall a real turn, which is worse than an unnamed
-#    footer.
-CALLSIGN=""
-if [ -r "$DB" ] && command -v sqlite3 >/dev/null 2>&1; then
-  CALLSIGN=$(sqlite3 -cmd ".timeout 400" \
-    "file:$DB?mode=ro&immutable=0" \
-    "select callsign from session_callsign where sessionId='$SESSION' limit 1;" \
-    2>/dev/null | head -1)
-fi
-[ -z "$CALLSIGN" ] && CALLSIGN="this agent"
-
-# The session's OTHER name, and the one the user recognizes first: the string
-# Claude Code puts in the terminal tab, which is also the identity the grid
-# shows. It is not the callsign and must not be confused with it — the callsign
-# is minted here, to be SAID, and stays frozen; the title is written by the
-# harness, describes the work, and changes as the work does. A footer with only
-# one of them makes the reader do a lookup, so it carries both.
+# 2. OFFER. The footer's name is the session TITLE alone — the string Claude
+#    Code puts in the terminal tab, the identity the grid shows, the one the
+#    user recognizes first. The callsign was here too and was killed by ruling
+#    (15 Aug): it is a voice, minted to be SAID, and on a page it read as a
+#    second confusing name. The session id rides the same line as the title;
+#    the id is what survives when neither app is installed.
 #
 # Same source the app uses (TranscriptTitles): the last `ai-title` record in the
 # session transcript. Read straight from the file so this needs nothing running.
@@ -128,12 +114,12 @@ PY
 SHORT="${SESSION%%-*}"
 TODAY=$(date "+%d %b %Y")
 
-python3 - "$FILE" "$SESSION" "$SHORT" "$CALLSIGN" "$TODAY" "$TITLE" <<'PY' 2>/dev/null || true
+python3 - "$FILE" "$SESSION" "$SHORT" "$TODAY" "$TITLE" <<'PY' 2>/dev/null || true
 import html as htmllib
 import json, sys
 
-path, session, short, callsign, today = sys.argv[1:6]
-title = sys.argv[6] if len(sys.argv) > 6 else ""
+path, session, short, today = sys.argv[1:5]
+title = sys.argv[5] if len(sys.argv) > 5 else ""
 
 # The way UP: every artifact links its agent's hub — the page that lists
 # everything this agent made — so the correlation runs both directions even
@@ -143,21 +129,21 @@ title = sys.argv[6] if len(sys.argv) > 6 else ""
 import os
 hub = os.path.expanduser("~/Documents/agents/{}/index.html".format(short))
 
-# Both names, in the order the reader resolves them: the tab title says WHAT
-# the session is doing, the callsign says which voice speaks it, the id is what
-# survives when neither app is installed.
-who = "Created by <b>{title}</b> &middot; callsign <b>{callsign}</b>".format(
-    title=htmllib.escape(title), callsign=htmllib.escape(callsign)
-) if title else "Created by <b>{callsign}</b>".format(callsign=htmllib.escape(callsign))
+# One name and one number: the tab title says WHAT the session did, the id
+# beside it is the durable handle. The date closes the line.
+who = ("Created by <b>{title}</b> &middot; session {short} &middot; {today}"
+       .format(title=htmllib.escape(title), short=short, today=today)
+       if title else
+       "Created by session {short} &middot; {today}".format(short=short, today=today))
 
 snippet = (
     '<footer style="margin-top:64px;padding-top:20px;border-top:1px solid #ddd8cc;'
     'font:13px/1.5 ui-monospace,Menlo,monospace;color:#8f8a7c;'
-    'display:flex;flex-wrap:wrap;gap:14px;align-items:center">\n'
-    '  <div style="flex:1;min-width:220px">{who}<br>session {short} &middot; {today}</div>\n'
+    'display:flex;flex-wrap:wrap;gap:10px;align-items:center">\n'
+    '  <div style="flex:1;min-width:220px">{who}</div>\n'
     '  <a href="file://{hub}" '
-    'style="text-decoration:none;color:#8f8a7c;padding:8px 0">'
-    'All this agent&#8217;s pages</a>\n'
+    'style="text-decoration:none;color:#5d5a51;border:1px solid #ddd8cc;'
+    'padding:7px 13px;border-radius:7px;font-weight:640">Open hub</a>\n'
     '  <a href="tranquilitybase://discuss?session={session}&amp;ref={path}" '
     'style="text-decoration:none;background:#1f4f8f;color:#fbfaf8;padding:8px 14px;'
     'border-radius:7px;font-weight:640">Discuss with agent</a>\n'
@@ -173,12 +159,10 @@ context = (
     "the contract; the styling is yours):\n\n"
     "{snippet}\n\n"
     "It exists so the user can get back to the agent that made the page: the "
-    "button opens this session in Tranquility Base, the quiet link opens this "
-    "agent's hub (the page listing everything it made), and the session id "
-    "correlates the artifact to the conversation even with no app installed. "
-    "It carries BOTH of this session's names, which are different things — the "
-    "title is what your harness calls this conversation, the callsign is what "
-    "Tranquility Base says out loud.\n\n"
+    "primary button opens this session in Tranquility Base, the secondary "
+    "button opens this agent's hub (the page listing everything it made), and "
+    "the session id on the title line correlates the artifact to the "
+    "conversation even with no app installed.\n\n"
     "The footer states facts and nothing else. No commentary about the footer, "
     "no note about what it demonstrates, no aside to the reader.\n\n"
     "Name no coding agent anywhere in it. Which agent wrote the page is a fact "
