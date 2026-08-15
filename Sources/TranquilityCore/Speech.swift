@@ -48,6 +48,25 @@ public enum SpeechError: Error, Sendable {
 
 // MARK: - System (default)
 
+/// The slice of `AVSpeechSynthesizer` the provider actually touches, as a seam.
+///
+/// Exists so the completion tests can install a continuation without owning the
+/// speakers: with the engine hard-coded, the only way to exercise `speak`'s
+/// bookkeeping was to start real system speech, which made every `swift test`
+/// audibly announce its test phrases and made the stop-before-start test a 20ms
+/// race against engine startup. The bugs those tests pin live in the
+/// continuation logic, not in the acoustics, so a silent spy is the honest
+/// fidelity. (Compare TruncationTests, where playback TIMING is the property
+/// under test and a real-but-silent WAV is the right level instead.)
+protocol SpeechSynthesizing: AnyObject {
+    var delegate: AVSpeechSynthesizerDelegate? { get set }
+    var isSpeaking: Bool { get }
+    func speak(_ utterance: AVSpeechUtterance)
+    @discardableResult func stopSpeaking(at boundary: AVSpeechBoundary) -> Bool
+}
+
+extension AVSpeechSynthesizer: SpeechSynthesizing {}
+
 /// `AVSpeechSynthesizer`. Free, offline, and the fastest to first audio — the
 /// guaranteed floor, used whenever the network provider is unconfigured or fails.
 /// It is not the default: see `SpeechChain` for why that changed after listening.
@@ -55,7 +74,7 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
     public let name = "system"
     public let isConfigured = true
 
-    private let synthesizer = AVSpeechSynthesizer()
+    private let synthesizer: SpeechSynthesizing
 
     /// The continuation is keyed to the utterance it is waiting on.
     ///
@@ -81,9 +100,16 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
     public var rate: Float
     public var voiceIdentifier: String?
 
-    public init(rate: Float = 0.52, voiceIdentifier: String? = nil) {
+    public convenience init(rate: Float = 0.52, voiceIdentifier: String? = nil) {
+        self.init(rate: rate, voiceIdentifier: voiceIdentifier, synthesizer: AVSpeechSynthesizer())
+    }
+
+    /// Internal: tests pass a silent synthesizer here. Production always gets
+    /// the real one via the convenience initializer above.
+    init(rate: Float, voiceIdentifier: String?, synthesizer: SpeechSynthesizing) {
         self.rate = rate
         self.voiceIdentifier = voiceIdentifier
+        self.synthesizer = synthesizer
         super.init()
         synthesizer.delegate = self
     }
