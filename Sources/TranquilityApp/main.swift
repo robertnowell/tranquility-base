@@ -465,18 +465,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // The card's second door, and the other direction of the same
         // correlation the footer opens: the page links back to its agent, and
-        // the agent's card opens its page.
-        hud.artifactForSession = { session in
-            ArtifactStore.latest(for: session, root: QueueStore.supportDirectory.path)
+        // the agent's card opens its hub — the address of everything it made,
+        // with the artifact list and "Discuss with agent" one click past it
+        // (ruled 15 Aug, superseding the last-artifact door).
+        hud.hubForSession = { session in
+            HomeBase.existingPage(sessionId: session)
         }
-        hud.onOpenPage = { page in
-            let url = URL(fileURLWithPath: page)
-            // Focus the tab that already has it, if there is one. Opening a new
-            // tab per click is how twenty agents become a wall of identical
-            // favicons — the state the hub exists to replace.
-            if BrowserFocus.focusExistingTab(url) == .notFound {
-                NSWorkspace.shared.open(url)
-            }
+        hud.onOpenHub = { [weak self] session in
+            _ = self?.openHub(session: session)
         }
         hud.onBreadcrumbHome = { [weak self] in self?.goHomeFromCard(via: "breadcrumb") }
         hud.onPendingSendStopped = { [weak self] cardRestored in
@@ -2176,12 +2172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // for any session that has ever been summarized; for one that
                 // has not, there is nothing to show and the invitation is the
                 // honest answer.
-                if let session, let store,
-                   let file = try? HomeBase.write(sessionId: session, store: store) {
-                    if BrowserFocus.focusExistingTab(file) == .notFound {
-                        NSWorkspace.shared.open(file)
-                    }
-                } else {
+                if session.map({ openHub(session: $0) }) != true {
                     inviteNewSession(for: ref)
                 }
             case "show":
@@ -2190,6 +2181,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("deeplink: unknown action \(action)")
             }
         }
+    }
+
+    /// The hub, rewritten fresh and then shown. One code path for both of its
+    /// doors — the card's OPEN HTML and the `home` deep link — so the page the
+    /// button opens and the page the link opens cannot drift. Returns false
+    /// when the session has no briefs yet, and the caller decides what an
+    /// absent hub means (the card hides the door; the deep link invites).
+    @discardableResult
+    private func openHub(session: String) -> Bool {
+        guard let store,
+              let file = try? HomeBase.write(sessionId: session, store: store)
+        else {
+            Permissions.log("openHub: no briefs for \(session.prefix(8))")
+            return false
+        }
+        if BrowserFocus.focusExistingTab(file) == .notFound {
+            NSWorkspace.shared.open(file)
+        }
+        return true
     }
 
     /// "Discuss with agent", from a page that agent wrote.
