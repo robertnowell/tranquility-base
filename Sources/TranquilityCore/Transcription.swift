@@ -35,6 +35,24 @@ public enum TranscriptionFailure: Error, Sendable, Equatable {
     case truncatedNoFinality(partial: String)
     case fileUnreadable
     case providerUnavailable(String)
+    /// The machine has no route to the provider at all — airplane mode, no
+    /// DNS. Distinct from providerUnavailable because retrying is pure
+    /// wait: on a plane (14 Aug) the two cloud rungs spent ~40 seconds
+    /// backing off against "hostname could not be found" before the one
+    /// rung that works offline got its turn on a 2-second clip.
+    case offline
+
+    /// Classify a thrown transport error: certainly-offline URLError codes
+    /// map to `.offline` (fail the rung once, immediately); anything else
+    /// stays a retryable providerUnavailable.
+    static func fromTransport(_ error: Error) -> TranscriptionFailure {
+        if let urlError = error as? URLError,
+           [.notConnectedToInternet, .cannotFindHost, .dnsLookupFailed,
+            .internationalRoamingOff, .dataNotAllowed].contains(urlError.code) {
+            return .offline
+        }
+        return .providerUnavailable("transport: \(error.localizedDescription)")
+    }
 }
 
 // MARK: - Protocols
@@ -185,12 +203,29 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
             throw TranscriptionFailure.fileUnreadable
         }
         let duration = Double(pcm.count) / 2.0 / Self.sampleRate
+        AppleSpeechRecovery.trace?(String(format:
+            "starting: %.2fs of audio, onDevice=%@",
+            duration, recognizer.supportsOnDeviceRecognition ? "true" : "false"))
         let collected = Utterances()
         var cursor: Double = 0
         var passes = 0
         var retriedEmptyPass = false
+        // Set when an empty pass earns its one retry: the retry must re-enter
+        // the loop even for a clip too short to owe continuation coverage.
+        var retryPassOwed = false
 
-        while duration - cursor > Self.coverageSlack, passes < Self.maxPasses {
+        // The first pass ALWAYS runs; the slack governs only whether a
+        // CONTINUATION pass is owed. Folding both into one `remaining >
+        // slack` test silently declared every recording shorter than the
+        // slack "no speech" without ever recognizing it — which is exactly
+        // what happened to four short dictations on a plane (14 Aug): the
+        // cloud rungs were offline, the floor got a 1.9s clip, the loop
+        // never entered, and the one rung that works offline threw the
+        // recording out untried. Online the bug was invisible because
+        // Whisper answered every short clip first.
+        while passes < Self.maxPasses,
+              passes == 0 || retryPassOwed || duration - cursor > Self.coverageSlack {
+            retryPassOwed = false
             passes += 1
             // The first pass reads the original file; a continuation pass
             // slices the remainder to a temp WAV so the recogniser restarts
@@ -243,6 +278,7 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
                 // declared twice.
                 if !retriedEmptyPass {
                     retriedEmptyPass = true
+                    retryPassOwed = true
                     AppleSpeechRecovery.trace?(
                         "pass \(passes) settled nothing; retrying that span once")
                     continue
@@ -575,7 +611,7 @@ public struct OpenAIRecovery: RecoveryTranscriptionProvider {
         do {
             (data, response) = try await URLSession.shared.upload(for: request, from: body)
         } catch {
-            throw TranscriptionFailure.providerUnavailable("transport: \(error.localizedDescription)")
+            throw TranscriptionFailure.fromTransport(error)
         }
         guard let http = response as? HTTPURLResponse else {
             throw TranscriptionFailure.providerUnavailable("no response")
