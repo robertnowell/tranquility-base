@@ -94,3 +94,19 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
     transcript forensics across three sessions to find an author who was
     alive the whole time. Hand-written commit messages are not exempt; if
     the trailer is missing, add it before landing.
+11. **Cross-session messages are a fire alarm, not a chat channel.** Ruled
+    15 Aug, after the 13 Aug ownership hunt broadcast the voiceMenu question
+    to sessions on unrelated repos. Three conditions, enforced machine-wide
+    by a global PreToolUse guard (~/.claude/hooks/cross-session-guard.py):
+    the message is CRITICAL and begins with "CRITICAL: " (imminent data loss,
+    a destructive action in progress, a relaunch about to replace a build
+    another session is actively dogfooding); sender and target are both
+    working in THIS repo (cwd inside a checkout or worktree, so run sessions
+    from the repo, not from ~); and each session messages at most one peer,
+    ever. No broadcasts, no fan-out, no interrogation. Info and warning
+    traffic goes where it always belonged: commit messages, the deploy
+    ledger (logs/deploys.log), and rule 10 trailers. Ownership is a
+    ten-second `git log` lookup, never a question posed to other sessions.
+    Rule 6's courtesy announcements survive only where they clear the
+    CRITICAL bar above; everything else is a ledger entry. A session that
+    cannot meet all three conditions surfaces the issue to its user.
