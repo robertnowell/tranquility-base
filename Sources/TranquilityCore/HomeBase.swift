@@ -219,8 +219,13 @@ public enum HomeBase {
                 let blurb = summary.blurb.map {
                     " data-blurb=\"\(e($0))\""
                 } ?? ""
+                // No stamp survived anywhere (log undated, file unreadable):
+                // say nothing. A page dated "31 Dec" of 1969 is worse than an
+                // undated one — a wrong fact where a missing one was honest.
+                let on = page.at > Date(timeIntervalSince1970: 0)
+                    ? "<span class=\"on\">\(e(dayStamp.string(from: page.at)))</span>" : ""
                 return "<li><a class=\"page\" href=\"file://\(e(page.path))\"\(blurb)>"
-                    + "\(e(name))</a><span class=\"on\">\(e(dayStamp.string(from: page.at)))</span></li>"
+                    + "\(e(name))</a>\(on)</li>"
             }.joined()
             let count = model.pages.count
             pages = """
