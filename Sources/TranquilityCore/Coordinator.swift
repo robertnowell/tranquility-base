@@ -644,6 +644,21 @@ public struct Coordinator: Sendable {
                 summary.brief, sessionId: event.sessionId, eventRowid: event.latestId,
                 provider: summary.provider,
                 callsign: event.callsign ?? ((try? store.callsign(for: event.sessionId)) ?? nil))
+            // The hub catches up the moment the brief exists, not the moment a
+            // turn is SPOKEN. Riding the announcement path alone meant a
+            // session whose turns were read but never played kept a stale hub
+            // — or none at all — and its card never grew the OPEN HTML door
+            // (measured 15 Aug: this very repo's investigating session, four
+            // briefs stored, zero hub writes). Preparation already runs off
+            // the main actor, and a failure here is logged and dropped for
+            // the same reason as at announcement: the page must never cost a
+            // turn.
+            do {
+                _ = try HomeBase.write(sessionId: event.sessionId, store: store)
+            } catch {
+                Coordinator.trace?("homebase at persist failed for "
+                    + "\(event.sessionId.prefix(8)): \(error)")
+            }
         } catch {
             Coordinator.trace?("brief persist failed for event \(event.latestId): \(error)")
         }

@@ -67,11 +67,15 @@ EOF
 [ -z "${SESSION:-}" ] && exit 0
 [ -z "${FILE:-}" ] && exit 0
 
-# 1. RECORD. Write beside it and rename, so a reader sees one path or the other
-#    and never half of one.
+# 1. RECORD. Append `ms<TAB>path`, the same line ArtifactStore.record writes —
+#    the file stopped being "the latest page" the day the hub grew a page LIST,
+#    and this hook kept replacing it: one truncating printf clobbered a
+#    session's whole history down to a single undated line, which the hub then
+#    rendered as "31 Dec" (epoch zero) until backfill re-mined the transcript.
+#    An O_APPEND write of one short line is atomic; duplicates are fine — the
+#    reader dedupes by path and keeps the first stamp.
 mkdir -p "$ARTIFACTS" 2>/dev/null || exit 0
-printf '%s\n' "$FILE" > "$ARTIFACTS/$SESSION.tmp" 2>/dev/null \
-  && mv -f "$ARTIFACTS/$SESSION.tmp" "$ARTIFACTS/$SESSION" 2>/dev/null
+printf '%s\t%s\n' "$(($(date +%s) * 1000))" "$FILE" >> "$ARTIFACTS/$SESSION" 2>/dev/null
 
 # 2. OFFER. The callsign is the app's, minted at the session's first summary, so
 #    it is read from the app's own store — read-only, with a short timeout, and
@@ -131,6 +135,14 @@ import json, sys
 path, session, short, callsign, today = sys.argv[1:6]
 title = sys.argv[6] if len(sys.argv) > 6 else ""
 
+# The way UP: every artifact links its agent's hub — the page that lists
+# everything this agent made — so the correlation runs both directions even
+# from a page found weeks later in a browser tab. The hub's address is the
+# slug alone (ruled: nothing but the id in the name), so it is computable
+# here with nothing running.
+import os
+hub = os.path.expanduser("~/Documents/agents/{}/index.html".format(short))
+
 # Both names, in the order the reader resolves them: the tab title says WHAT
 # the session is doing, the callsign says which voice speaks it, the id is what
 # survives when neither app is installed.
@@ -143,11 +155,15 @@ snippet = (
     'font:13px/1.5 ui-monospace,Menlo,monospace;color:#8f8a7c;'
     'display:flex;flex-wrap:wrap;gap:14px;align-items:center">\n'
     '  <div style="flex:1;min-width:220px">{who}<br>session {short} &middot; {today}</div>\n'
+    '  <a href="file://{hub}" '
+    'style="text-decoration:none;color:#8f8a7c;padding:8px 0">'
+    'All this agent&#8217;s pages</a>\n'
     '  <a href="tranquilitybase://discuss?session={session}&amp;ref={path}" '
     'style="text-decoration:none;background:#1f4f8f;color:#fbfaf8;padding:8px 14px;'
     'border-radius:7px;font-weight:640">Discuss with agent</a>\n'
     '</footer>'
-).format(who=who, short=short, today=today, session=session, path=path)
+).format(who=who, short=short, today=today, session=session, path=path,
+         hub=hub)
 
 context = (
     "You just wrote an HTML file: {path}\n\n"
@@ -157,7 +173,8 @@ context = (
     "the contract; the styling is yours):\n\n"
     "{snippet}\n\n"
     "It exists so the user can get back to the agent that made the page: the "
-    "button opens this session in Tranquility Base, and the session id "
+    "button opens this session in Tranquility Base, the quiet link opens this "
+    "agent's hub (the page listing everything it made), and the session id "
     "correlates the artifact to the conversation even with no app installed. "
     "It carries BOTH of this session's names, which are different things — the "
     "title is what your harness calls this conversation, the callsign is what "
