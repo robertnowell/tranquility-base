@@ -39,6 +39,10 @@ final class PastAgentsList: NSView {
 
     var onPick: ((_ id: String, _ revivable: Bool) -> Void)?
     var onFilterChanged: (() -> Void)?
+    /// Right-click → "Terminate" on a LIVE row (ruled 13 Aug). Dead sessions
+    /// have no process to end and get no menu — an empty menu would promise a
+    /// verb this row cannot perform.
+    var onTerminate: ((_ id: String, _ name: String) -> Void)?
 
     /// What the key line says: how much you are looking at, and out of what.
     private(set) var summary = ""
@@ -140,6 +144,19 @@ final class PastAgentsList: NSView {
         for (index, item) in shown.enumerated() {
             let row = PastRowView(item: item, target: self,
                                   action: #selector(rowTapped(_:)))
+            // The menu item NAMES its target — "Terminate “promotions-f9”" —
+            // which is the confirmation: a right-click then a click on a
+            // sentence containing the right name. No dialog after that.
+            if !item.revivable {
+                let menu = NSMenu()
+                let terminate = NSMenuItem(
+                    title: "Terminate \u{201C}\(item.row.name)\u{201D}",
+                    action: #selector(terminatePicked(_:)), keyEquivalent: "")
+                terminate.target = self
+                terminate.representedObject = item.row.id
+                menu.addItem(terminate)
+                row.menu = menu
+            }
             stack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalToConstant: frame.width == 0
                 ? StatusHUD.gridWidth : frame.width).isActive = true
@@ -225,6 +242,22 @@ final class PastAgentsList: NSView {
         guard let id = sender.identifier?.rawValue,
               let item = shown.first(where: { $0.row.id == id }) else { return }
         onPick?(id, item.revivable)
+    }
+
+    @objc private func terminatePicked(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let item = shown.first(where: { $0.row.id == id }) else { return }
+        onTerminate?(id, item.row.name)
+    }
+
+    /// For the launch drill: which rows exist and whether each carries the
+    /// terminate menu — asserted against liveness, never assumed from it.
+    var rowsForTesting: [(id: String, hasMenu: Bool)] {
+        stack.arrangedSubviews.compactMap {
+            guard let row = $0 as? PastRowView, let id = row.identifier?.rawValue
+            else { return nil }
+            return (id, row.menu != nil)
+        }
     }
 
     func beginFiltering() { window?.makeFirstResponder(filterField.input) }

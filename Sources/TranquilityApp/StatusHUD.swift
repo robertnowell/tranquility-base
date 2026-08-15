@@ -153,6 +153,9 @@ final class StatusHUD: NSObject {
     /// Wired by the app onto `SessionLauncher.resume`. Only ever called for a
     /// row that proved its session is gone and its directory still exists.
     var onRevive: ((_ id: String, _ name: String) -> Void)?
+    /// Right-click → Terminate on a live Past Agents row. The kill itself is
+    /// the app layer's job (a process signal is not a paint).
+    var onTerminateSession: ((_ id: String, _ name: String) -> Void)?
 
     /// Clicking the ◀ breadcrumb goes home (ruled 06 Aug: "there's no reason
     /// it shouldn't be clickable — voiced first while allowing a keyboard
@@ -1544,9 +1547,12 @@ final class StatusHUD: NSObject {
             // scroll: the grid tears its rows down on every content change, and
             // a list that did that under a scroll offset would throw you back
             // to the top every time a lamp somewhere changed colour.
+            // Indented clear of the back chevron sharing this row (x 10–36;
+            // the stack's left inset is 14, so 30 puts the "P" at x 44 with an
+            // 8pt gap). The placardClearsChevron drill holds this geometry.
             stateLabel.attributedStringValue = letterspaced(
                 StateLegend.pastAgentsTitle, size: 10, tracking: 3.2,
-                color: StateLegend.Lens.chrome.color)
+                color: StateLegend.Lens.chrome.color, headIndent: 30)
             // One row, like the grid's: chevron, placard, gear. The gear stays
             // — settings is reachable from here as it is from everywhere — and
             // the collapse chevron is the one control this face replaces.
@@ -3463,6 +3469,24 @@ final class StatusHUD: NSObject {
         let partitioned = drawn.count + rest.count
         // The verb follows liveness, never the other way round.
         let verbs = items.allSatisfy { $0.revivable == ($0.row.lamp == .unlit) }
+        // The placard's text starts clear of the chevron sharing its row —
+        // measured in window space, because the two live in different parents
+        // and comparing raw minX across parents compares nothing (the original
+        // overlap shipped precisely because nothing measured this).
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let indent = (stateLabel.attributedStringValue.length > 0
+            ? stateLabel.attributedStringValue.attribute(
+                .paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+            : nil)?.firstLineHeadIndent ?? 0
+        let chevronMaxX = pastBackButton.convert(pastBackButton.bounds, to: nil).maxX
+        let placardTextMinX = stateLabel.convert(stateLabel.bounds, to: nil).minX + indent
+        let placardClearsChevron = placardTextMinX >= chevronMaxX - 1
+        // Terminate rides the right-click, on exactly the rows that have a
+        // process to end: live rows carry the menu, dead rows carry none.
+        let menuByRow = Dictionary(uniqueKeysWithValues: pastList.rowsForTesting)
+        let terminateFollowsLiveness = items.allSatisfy {
+            menuByRow[$0.row.id] == !$0.revivable
+        }
         goHomeFromPastAgents()
 
         SelfTest.report("pastAgents", [
@@ -3492,6 +3516,8 @@ final class StatusHUD: NSObject {
             ("noSecondBackButton", noSecondBack),
             ("idMatchesTheLogs", idsMatch),
             ("verbFollowsLiveness", verbs),
+            ("placardClearsChevron", placardClearsChevron),
+            ("terminateFollowsLiveness", terminateFollowsLiveness),
             ("leavesCleanly", { if case .idle = state { return true }; return false }()),
         ])
     }
@@ -4362,6 +4388,9 @@ final class StatusHUD: NSObject {
             onBreadcrumbHome?()
             if revivable { onRevive?(id, name) } else { onGoToSession?(id) }
         }
+        pastList.onTerminate = { [weak self] id, name in
+            self?.onTerminateSession?(id, name)
+        }
         pastList.onFilterChanged = { [weak self] in
             guard let self, case .pastAgents = state else { return }
             hintLabel.stringValue = pastList.summary
@@ -4874,12 +4903,25 @@ private func placardText(
 }
 
 func letterspaced(_ text: String, size: CGFloat, tracking: CGFloat,
-                          color: NSColor) -> NSAttributedString {
-    NSAttributedString(string: text, attributes: [
+                          color: NSColor, headIndent: CGFloat = 0) -> NSAttributedString {
+    var attributes: [NSAttributedString.Key: Any] = [
         .font: NSFont.systemFont(ofSize: size),
         .kern: tracking,
         .foregroundColor: color,
-    ])
+    ]
+    // For a placard that shares its row with a control to its LEFT (the list
+    // face's back chevron): the label's frame still spans the row, but the
+    // text starts clear of the control. An indent in the string rather than a
+    // second leading constraint, because the label lives in the content stack
+    // and its frame is not this call's to move (observed 13 Aug: the chevron
+    // painted over "PAST AGENTS"'s first glyphs).
+    if headIndent > 0 {
+        let style = NSMutableParagraphStyle()
+        style.firstLineHeadIndent = headIndent
+        style.headIndent = headIndent
+        attributes[.paragraphStyle] = style
+    }
+    return NSAttributedString(string: text, attributes: attributes)
 }
 
 /// One grid row, in the ruled three-column geometry: a 26px lamp column, a
