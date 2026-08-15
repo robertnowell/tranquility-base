@@ -85,7 +85,14 @@ public enum ArtifactStore {
             let path = String(parts.count == 2 ? parts[1] : parts[0])
             guard path.hasPrefix("/"), seen[path] == nil else { continue }
             let ms = parts.count == 2 ? Double(parts[0]) ?? 0 : 0
-            seen[path] = Date(timeIntervalSince1970: ms / 1000)
+            // A line with no stamp (the hook wrote path-only lines for a
+            // while) is not "31 Dec 1969" — epoch zero rendered as a date is
+            // the page claiming knowledge it does not have. The file's own
+            // mtime is the honest substitute; only when the file cannot answer
+            // either does the page get no date at all.
+            seen[path] = ms > 0 ? Date(timeIntervalSince1970: ms / 1000)
+                : (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate]
+                    as? Date ?? .distantPast
             order.append(path)
         }
         return order.filter(exists).map { Page(path: $0, at: seen[$0] ?? .distantPast) }
