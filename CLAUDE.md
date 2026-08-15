@@ -25,31 +25,40 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    sessions cannot arbitrate two arguments, only an argument against evidence.
 5. **One session in the app layer at a time** (Sources/TranquilityApp/). Core
    and tools/ parallelize safely; the panel does not.
-6. **Every merge to main is followed by `scripts/relaunch.sh`.** Merging is not
-   deploying: the app is built locally into /private/tmp/tb-clean, so main can be
-   correct while the thing in the menu bar is several merges behind. That gap is
-   how a merged microphone fix sat unrunning while the microphone kept failing
-   (07 Aug). The script is the only relaunch path — it resolves against
-   origin/main, refuses a dirty worktree, and stops the old instance before
-   building, because two instances race for one global hotkey. It now also reads
-   the launch self-tests and exits non-zero if any failed.
-   **A relaunch is announced to the other sessions the moment it runs, with the
-   ref it deployed.** There is one installed app; relaunching REPLACES whatever
-   build is live, including a branch build another session's user is mid-way
-   through acceptance-testing. Earned 12 Aug: a main relaunch (7bb2fe1) silently
-   swapped out the ⌃⌃-fix branch build minutes before its dogfooding session —
-   caught only because the deploying session sent a deploy note. Silent
-   relaunches make the other session's evidence about a binary that is no
-   longer running.
-   **The note precedes the act, and one deployer runs at a time.** relaunch.sh
-   holds a lockfile; a second concurrent run is refused outright, never
-   interleaved. Earned 13 Aug at 05:06: two relaunches raced, one script's
-   app_stop killed the other's freshly-drilled instance, and the other's
-   restore trap resurrected the app bare, with no drills. The result was the
-   correct build running unverified behind a green-looking log, which is
-   quieter and therefore worse than a loud collision. Both times that race
-   stayed visible, it was because the deploying session announced before
-   acting, not after.
+6. **Merges to main deploy AUTOMATICALLY; the merging session verifies, and
+   deploys by hand only when the robot didn't.** A global PostToolUse hook
+   (`~/.claude/settings.json`) runs `scripts/relaunch.sh` when it sees a merge —
+   discovered 14 Aug after a week of "phantom" deploys firing seconds after
+   every merge with no session claiming them: the hook rode every session's
+   merges and, being a shell script, could not announce. Ruled 14 Aug ("one
+   deployer", the same single-writer principle as the panel arbiter): the hook
+   IS the deployer. Do not run relaunch.sh reflexively after your merge — that
+   is how the 14 Aug lock collisions happened, twice in one day, and most
+   likely the 13 Aug 05:06 race too (hook vs session, not session vs session).
+   Instead, after merging: within ~a minute, check `logs/deploys.log` gained
+   your ref and /private/tmp/tb-clean sits on it, and the launch self-tests
+   report PASS. Only if the ledger shows nothing did the hook miss — then run
+   relaunch.sh yourself, with a note.
+   Mechanics that still hold: merging is not deploying (a merged microphone
+   fix once sat unrunning while the microphone kept failing, 07 Aug); the
+   script is the only relaunch path — resolves against origin/main, refuses a
+   dirty worktree, stops the old instance (two instances race for one global
+   hotkey), gates on the launch self-tests.
+   **Every deploy is on the record.** relaunch.sh writes `logs/deploys.log` at
+   lock-take (invoker, ppid, session id when exported) and at ref-resolve —
+   the ledger is the script's fact where the old announcement was a session's
+   promise; attributing a deploy is a grep, not pid forensics. Announcements
+   to other sessions remain the courtesy for anything UNUSUAL — a branch
+   build, a manual deploy, a rollback — because a relaunch REPLACES whatever
+   build is live, including a branch build mid-acceptance (earned 12 Aug:
+   7bb2fe1 silently swapped out the ⌃⌃-fix build minutes before its dogfooding
+   session; only a deploy note caught it).
+   **One deployer runs at a time**, enforced by relaunch.sh's lockfile: a
+   second concurrent run is refused outright, never interleaved. Earned 13 Aug
+   at 05:06: two relaunches raced, one script's app_stop killed the other's
+   freshly-drilled instance, and the restore trap resurrected the app bare,
+   with no drills — the correct build running unverified behind a
+   green-looking log, quieter and therefore worse than a loud collision.
 7. **`swift test` is not evidence about the panel.** `Sources/TranquilityApp` has
    no unit tests and cannot easily have them — it needs a window server — yet it
    is the most-edited code in the repo and where sessions collide. Its evidence
