@@ -160,16 +160,48 @@ public extension ArtifactStore {
             for block in (message?["content"] as? [[String: Any]]) ?? [] {
                 guard block["type"] as? String == "tool_use",
                       let tool = block["name"] as? String,
-                      ["Write", "Edit", "NotebookEdit"].contains(tool),
-                      let input = block["input"] as? [String: Any],
-                      let path = input["file_path"] as? String,
-                      path.hasSuffix(".html"), path.hasPrefix("/"),
-                      !known.contains(path), !seen.contains(path) else { continue }
-                seen.insert(path)
-                if record(path, session: session, root: root, at: stamp) { added += 1 }
+                      let input = block["input"] as? [String: Any] else { continue }
+                var paths: [String] = []
+                if ["Write", "Edit", "NotebookEdit"].contains(tool),
+                   let path = input["file_path"] as? String {
+                    paths = [path]
+                } else if tool == "Bash", let command = input["command"] as? String,
+                          command.contains(".html") {
+                    // Pages born in a heredoc or a cp are pages too. A session
+                    // that writes its report via Bash left no file_path for
+                    // the hook, and its hub listed nothing (measured 15 Aug:
+                    // a post-mortem written by heredoc, invisible on the
+                    // hub). Mine the command text for absolute .html paths,
+                    // and let the existence check below keep out the noise a
+                    // command line can carry.
+                    paths = Self.htmlPaths(in: command)
+                }
+                for path in paths {
+                    guard path.hasSuffix(".html"), path.hasPrefix("/"),
+                          !known.contains(path), !seen.contains(path),
+                          tool != "Bash"
+                            || FileManager.default.fileExists(atPath: path)
+                    else { continue }
+                    seen.insert(path)
+                    if record(path, session: session, root: root, at: stamp) { added += 1 }
+                }
             }
         }
         return added
+    }
+
+    /// Absolute .html paths inside a shell command. Deliberately dumb: split on
+    /// the characters that end a path in shell text, keep what parses as an
+    /// absolute path to an .html file. Quoting and expansion games can hide a
+    /// path from this; the transcript is mined best-effort, and a missed page
+    /// surfaces the moment anything touches it through a real file tool.
+    static func htmlPaths(in command: String) -> [String] {
+        var out: [String] = []
+        for token in command.split(whereSeparator: { " \t\n\"'`;)(<>|&".contains($0) }) {
+            let t = String(token)
+            if t.hasPrefix("/"), t.hasSuffix(".html"), !out.contains(t) { out.append(t) }
+        }
+        return out
     }
 
     /// Transcript stamps are UTC. Parsing them as local time put every page
