@@ -286,3 +286,19 @@ if [ "${TB_SKIP_CANARY:-0}" != "1" ]; then
     exit 2
   fi
 fi
+
+# ---------------------------------------------------------------------------
+# The seam check. Unit tests cover each piece of the artifact→hub chain and
+# every failure this month still slipped through, because each bug lived
+# BETWEEN a hook, a log, a file and a rendered page. This asks the archive
+# whether the pieces still add up: a page a session made is on that session's
+# hub, a hub names its session, a page carries exactly one agent footer.
+#
+# Reporting, not refusing — same posture as the self-tests and the canary. It
+# runs against real data that other sessions are writing while this runs, so a
+# transient miss must not fail a good build; a persistent one shows up on
+# every deploy until someone looks.
+if ! "$CLEAN_WORKTREE/.build/debug/tbase" doctor; then
+  echo "✗ the build is fine, but the archive and the hubs disagree — see above." >&2
+  echo "  \`tbase homebase <session-id>\` rewrites one hub; \`tbase doctor\` re-checks." >&2
+fi

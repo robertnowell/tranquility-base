@@ -310,7 +310,7 @@ public enum HomeBase {
 
     public static func render(_ model: Model, now: Date = Date()) -> String {
         let e = escape
-        let name = model.title ?? model.callsign ?? "Agent \(model.sessionId.prefix(8))"
+        let name = model.title ?? "Agent \(model.sessionId.prefix(8))"
         let newest = model.turns.first          // turns arrive newest-first
         let ordered = model.turns
         let theme = Theme.forProject(cwd: model.cwd)
@@ -347,9 +347,20 @@ public enum HomeBase {
                 ?? n.question.map { "\(e(sentence(n.happened))) \(e($0))" }
                 ?? (n.nextStep.map { "\(e(sentence(n.happened))) Proposing: \(e($0))" }
                     ?? e(n.happened))
-            var byline = model.callsign.map { "Agent \(e($0))" } ?? "Agent \(e(String(model.sessionId.prefix(8))))"
+            // WHO WROTE THIS, above the fold, in the two names a reader can
+            // act on: the session's title — the string the grid and the
+            // terminal tab both show — and the id, which is what survives when
+            // the title changes and what every log, path and deep link uses.
+            //
+            // The callsign used to sit here and was the only identity on the
+            // page: "Agent home contamination" names nothing a reader has ever
+            // seen (ruled 16 Aug). It is a SPOKEN name, minted to be said out
+            // loud once in an announcement, and on a page it read as a third
+            // identity competing with the two real ones.
+            var byline = "\(e(model.title ?? "Untitled session")) · session "
+                + "\(e(String(model.sessionId.prefix(8))))"
             if let dir = (model.cwd as NSString?)?.lastPathComponent, !dir.isEmpty {
-                byline += ", working in \(e(dir))"
+                byline += " · in \(e(dir))"
             }
             if let last = model.lastActive {
                 byline += " · last moved \(e(stamp.string(from: last)))"
