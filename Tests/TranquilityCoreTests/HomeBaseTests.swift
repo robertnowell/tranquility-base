@@ -134,19 +134,18 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertTrue(html.contains("last moved"))
     }
 
-    /// A count belongs over the thing it counts, where the list already proves
-    /// it — never in a strip at the top restating what is visible below.
-    func testTheCountSitsWithThePagesAndNotInTheHeader() {
+    /// The list speaks for itself (ruled 16 Aug, superseding "a count belongs
+    /// over the thing it counts"). The subline counted what was visible one
+    /// line below and explained what clicking a link does; the heading and the
+    /// list are the whole section now.
+    func testThePageListCarriesNoSubline() {
         let pages = [ArtifactStore.Page(path: "/tmp/a/index.html", at: Date()),
                      ArtifactStore.Page(path: "/tmp/b/index.html", at: Date())]
         let html = HomeBase.render(model(turns: [turn(1)], pages: pages))
-        let heading = html.range(of: "What it has made")!
-        let count = html.range(of: "2 pages")!
-        XCTAssertTrue(count.lowerBound > heading.lowerBound)
-        // And nothing of the sort above the fold.
-        let byline = html.range(of: "class=\"byline\"")!
-        XCTAssertTrue(count.lowerBound > byline.lowerBound)
-        XCTAssertTrue(HomeBase.render(model(turns: [turn(1)], pages: [pages[0]]))
+        XCTAssertTrue(html.contains("What it has made"))
+        XCTAssertFalse(html.contains("This page summarises"))
+        XCTAssertFalse(html.contains("2 pages"))
+        XCTAssertFalse(HomeBase.render(model(turns: [turn(1)], pages: [pages[0]]))
             .contains("1 page."))
     }
 
