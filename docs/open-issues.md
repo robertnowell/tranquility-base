@@ -347,31 +347,42 @@ Measure before/after with the 21:12 shape: press ⌃⌃ mid-announcement.
 
 ---
 
-## 16. `TruncationTests.testPauseThenResumeToCompletionIsNotTruncation` is flaky (15 Aug)
+## 16. `TruncationTests` was flaky — CLOSED (16 Aug), and it was hiding a real bug
 
-**Suite-wide, and load-dependent (16 Aug):** it is not one test.
-`testTransportStopMidPlayIsStillTruncation` and
-`testDeliberateStopIsInterruptedNotTruncated` join it under a busy machine
-(`XCTAssertGreaterThan failed: ("0.12275") is not greater than ("0.2")`),
-and the whole suite passes when run with `--filter TruncationTests` on an
-idle one — on this branch and on pristine main alike. So the trigger is
-wall-clock starvation during a full run, which is the condition every real
-`preflight.sh` invocation has.
+**Resolved, and the flake was not the whole story.** Two causes, one of them
+in shipping code.
 
-Fails roughly two runs in three, on pristine `origin/main` as much as on any
-branch — measured 2-of-3 both sides while landing the ⌃⌥ walk, which is the
-only reason it is recorded rather than chased: it was briefly mistaken for
-that branch's regression. Always the same shape:
-`truncated(playedSeconds: 0.485, ofSeconds: 2.0)` — real playback timing
-asserted against a wall-clock expectation, so a loaded machine reads as a
-truncation.
+**(a) The tests raced the wall clock.** Each wired test started
+`Task { play(...) }` and then `Task.sleep`'d for its offset before acting —
+assuming N seconds of wall clock buys N seconds of PLAYBACK. It does not:
+the play Task has to be scheduled, `AVAudioPlayer(data:)` and
+`prepareToPlay()` have to run, and `play()` returns before `isPlaying` flips
+(the provider waits up to 500ms for that itself). Under a full-suite run
+those costs land inside the test's sleep, so "stop it at 0.5s" stopped it at
+0.12s. Passing alone and failing in the suite is what made it read as
+nondeterminism rather than a missing barrier. Fixed with `awaitPlayback(_:
+reaches:)`, which waits on the player's own `currentTime`; the wall-clock
+deadline that remains exists only to fail a HUNG test.
 
-**Why it matters more than a red line:** `scripts/preflight.sh` gates a
-landing on `swift test`. A test that fails two times in three teaches the
-next session to re-run until green, and that habit is exactly what will wave
-through a REAL failure some evening. Either the test gets a deterministic
-clock (inject the playback clock, as the mic machine already does) or it
-moves behind a `--stress` filter and stops standing in the gate.
+**(b) `resume()` had a real race, and the flaky test was reporting it.**
+It cleared the pause latch and then restarted the player. Since `play()`
+returns before `isPlaying` flips, a loop poll landing in between saw neither
+a playing player nor a paused one, exited, and called a clip the user was
+still listening to `truncated` at the pause point. Under the 13 Aug read
+ruling a truncation is a `failure`, so a pause-and-resume would have left the
+turn unread and painted "Playback failed" over an announcement that never
+stopped. `resume()` now only restarts the player and the playback loop drops
+the latch once it OBSERVES playback running — measured, not assumed, the same
+rule the truncation check itself is built on. Pinned by
+`testResumeDoesNotBrieflyLookStopped`.
+
+Full suite: 6 consecutive clean runs (495 tests), where it had been failing
+about two in three.
+
+**The standing lesson:** a test that fails two runs in three teaches the next
+session to re-run until green — and this one had a genuine defect inside it
+the whole time. The habit did not just risk waving through a future failure;
+it was already waving through this one.
 
 ---
 

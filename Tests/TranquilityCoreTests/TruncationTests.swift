@@ -107,6 +107,46 @@ final class TruncationTests: XCTestCase {
         SpokenTextSanitizer().sanitize("truncation test tone \(n)")
     }
 
+    // MARK: - Synchronising on PLAYBACK, not on the wall clock
+
+    /// Wait until the player has actually reached `seconds` of audio.
+    ///
+    /// Every wired test below used to `Task.sleep` for its offset and then act,
+    /// which quietly assumes that N seconds of wall clock buys N seconds of
+    /// PLAYBACK. It does not, and under a full-suite run it routinely does not:
+    /// the play Task has to be scheduled at all, `AVAudioPlayer(data:)` and
+    /// `prepareToPlay()` have to run, and `play()` returns before `isPlaying`
+    /// flips (the provider itself waits up to 500ms for that). On a loaded
+    /// machine those costs land inside the test's sleep, so "stop it at 0.5s"
+    /// stopped it at 0.12s and the suite failed roughly two runs in three —
+    /// while passing every time it was run alone, which is what made it look
+    /// like nondeterminism instead of a missing barrier (issue 16).
+    ///
+    /// The deadline is wall clock and deliberately generous: it exists to fail
+    /// a HUNG test, not to time a fast one. Nothing here asserts on it.
+    @discardableResult
+    private func awaitPlayback(
+        _ provider: ElevenLabsSpeechProvider, reaches seconds: Double,
+        deadline: Double = 20, file: StaticString = #filePath, line: UInt = #line
+    ) async throws -> Double {
+        let start = Date()
+        while Date().timeIntervalSince(start) < deadline {
+            let now = provider.player?.currentTime ?? 0
+            if now >= seconds { return now }
+            // Finished early: the clip ran out before reaching the mark, which
+            // is a real answer for the caller, not a timeout.
+            if let p = provider.player, !p.isPlaying, p.currentTime == 0, now == 0,
+               Date().timeIntervalSince(start) > 1 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let reached = provider.player?.currentTime ?? 0
+        XCTAssertGreaterThanOrEqual(
+            reached, seconds,
+            "playback never reached \(seconds)s within \(deadline)s — hung, not slow",
+            file: file, line: line)
+        return reached
+    }
+
     /// THE regression test: a clip that plays to natural completion must
     /// return, not throw. Fails on the pre-fix code with `truncated(0, 1.5)` —
     /// this is the no-highlight branch, the one every real announcement takes.
@@ -138,17 +178,22 @@ final class TruncationTests: XCTestCase {
         let playing = Task {
             try await provider.play(c, text: t, onWord: nil)
         }
-        try await Task.sleep(nanoseconds: 500_000_000)
+        try await awaitPlayback(provider, reaches: 0.5)
+        // Sampled immediately before the stop, so the assertion below compares
+        // the payload against where playback ACTUALLY was rather than against
+        // where a sleep hoped it would be.
+        let atStop = provider.player?.currentTime ?? 0
         // The player, not the provider: provider.stop() bumps the generation,
         // which is a recorded intent. This is the unasked-for stop.
         provider.player?.stop()
         do {
             try await playing.value
-            XCTFail("an unasked-for stop at 0.5s of 3.0s must throw .truncated")
+            XCTFail("an unasked-for stop at \(atStop)s of 3.0s must throw .truncated")
         } catch SpeechError.truncated(let played, let total) {
             XCTAssertEqual(total, 3.0, accuracy: 0.1)
             XCTAssertGreaterThan(played, 0.2, "the high-water mark must have seen real progress")
-            XCTAssertLessThan(played, 1.2, "playedSeconds must be the stop point, not the duration")
+            XCTAssertEqual(played, atStop, accuracy: 0.35,
+                           "playedSeconds is the stop point, not the duration")
         }
     }
 
@@ -161,10 +206,41 @@ final class TruncationTests: XCTestCase {
         let playing = Task {
             try await provider.play(c, text: t, onWord: nil)
         }
-        try await Task.sleep(nanoseconds: 500_000_000)
+        try await awaitPlayback(provider, reaches: 0.5)
         provider.pause()
+        // Wall clock is the right unit HERE: the claim is that time passing
+        // while paused does not count against the clip, so the test has to
+        // spend real time not playing.
         try await Task.sleep(nanoseconds: 1_500_000_000)
         provider.resume()
+        try await playing.value
+    }
+
+    /// The resume window, pinned directly rather than as a side effect of the
+    /// pause test.
+    ///
+    /// `resume()` used to clear the pause latch and THEN restart the player.
+    /// `play()` returns before `isPlaying` flips, so a loop poll landing in
+    /// between saw neither playing nor paused, exited, and reported a clip you
+    /// were still listening to as truncated at the pause point. This resumes
+    /// and immediately hammers the observable state, which is where the race
+    /// lived; the clip must still finish clean.
+    func testResumeDoesNotBrieflyLookStopped() async throws {
+        let provider = ElevenLabsSpeechProvider()
+        let c = clip(seconds: 2.0), t = text(6)
+        let playing = Task { try await provider.play(c, text: t, onWord: nil) }
+        try await awaitPlayback(provider, reaches: 0.4)
+        provider.pause()
+        XCTAssertTrue(provider.isPaused, "a pause the user asked for is recorded")
+        provider.resume()
+        // The latch may only drop once playback is genuinely running again —
+        // never in the gap that produced the false truncation.
+        for _ in 0..<50 {
+            if provider.player?.isPlaying == true { break }
+            XCTAssertTrue(provider.isPaused,
+                          "the latch must hold until the player is observed running")
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
         try await playing.value
     }
 
@@ -176,7 +252,12 @@ final class TruncationTests: XCTestCase {
         let playing = Task {
             try await provider.play(c, text: t, onWord: nil)
         }
-        try await Task.sleep(nanoseconds: 400_000_000)
+        // Waiting for real playback is what makes the "never started" outcome
+        // impossible: this test used to stop a player that, on a loaded
+        // machine, had not begun, and got synthesisFailed("playback never
+        // started") — a genuine fault surfacing where the test expected a
+        // choice, and indistinguishable in the log from the bug it guards.
+        try await awaitPlayback(provider, reaches: 0.3)
         provider.stop()
         do {
             try await playing.value
