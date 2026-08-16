@@ -221,13 +221,17 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertFalse(html.lowercased().contains("where this stands"))
     }
 
-    /// The byline is the one place metadata belongs, and it is prose: the
-    /// agent's name, where it works, when it last moved. Not a strip of counts.
-    func testTheBylineIsPlainLanguage() {
+    /// The byline says WHO WROTE THIS in the two names a reader can act on:
+    /// the session title the grid shows, and the id every log and link uses.
+    /// The callsign is gone from it (ruled 16 Aug) — a spoken name, minted to
+    /// be said once, named nothing the reader had ever seen.
+    func testTheBylineNamesTheSession() {
         let html = HomeBase.render(model(turns: [turn(1)]))
-        XCTAssertTrue(html.contains("Agent tranquility base discuss"))
-        XCTAssertTrue(html.contains("working in tranquility-base"))
+        XCTAssertTrue(html.contains("Add the discuss button"))
+        XCTAssertTrue(html.contains("session 489b4804"))
+        XCTAssertTrue(html.contains("in tranquility-base"))
         XCTAssertTrue(html.contains("last moved"))
+        XCTAssertFalse(html.contains("tranquility base discuss"))
     }
 
     /// The list speaks for itself (ruled 16 Aug, superseding "a count belongs
@@ -264,12 +268,42 @@ final class HomeBaseTests: XCTestCase {
             "tranquilitybase://discuss?session=489b4804-8d64-4a91-a63c-5e493141c772"))
     }
 
-    /// Both names, always — they are different things and the page is where a
-    /// reader reconciles them.
-    func testBothNamesAppear() {
-        let html = HomeBase.render(model(turns: [turn(1)]))
-        XCTAssertTrue(html.contains("Add the discuss button"))
-        XCTAssertTrue(html.contains("tranquility base discuss"))
+    /// A session with no title still says which session it is: the id is the
+    /// identity that always exists.
+    func testAnUntitledSessionStillNamesItself() {
+        let html = HomeBase.render(model(turns: [turn(1)], title: nil))
+        XCTAssertTrue(html.contains("session 489b4804"))
+        XCTAssertTrue(html.contains("Untitled session"))
+    }
+
+    /// The seam check catches what unit tests structurally cannot: a page
+    /// recorded for a session that never reached that session's hub.
+    func testTheDoctorNoticesAPageMissingFromItsHub() throws {
+        let root = NSTemporaryDirectory() + "tb-doctor-" + UUID().uuidString
+        let hubs = URL(fileURLWithPath: root + "/hubs")
+        try FileManager.default.createDirectory(at: hubs, withIntermediateDirectories: true)
+        let session = "489b4804-8d64-4a91-a63c-5e493141c772"
+        let page = "/Users/x/Documents/deep-research/2026-08-16-made/index.html"
+        ArtifactStore.record(page, session: session, root: root)
+
+        // A hub that names its session but omits the page it made.
+        let slug = HomeBase.slug(forSessionId: session)
+        let dir = hubs.appendingPathComponent(slug)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try "<html>session \(slug)</html>".write(
+            to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+
+        let problems = HubIntegrity.check(artifactRoot: root, hubRoot: hubs,
+                                          pageExists: { _ in true })
+        XCTAssertTrue(problems.contains { $0.detail.contains("does not list it") })
+
+        // And the healthy case is silent.
+        try "<html>session \(slug) \(page)</html>".write(
+            to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        XCTAssertTrue(HubIntegrity.check(artifactRoot: root, hubRoot: hubs,
+                                         pageExists: { _ in true })
+            .filter { $0.detail.contains("does not list it") }.isEmpty)
+        try? FileManager.default.removeItem(atPath: root)
     }
 
     /// The URL is keyed on the id alone. A callsign is minted at the agent's
