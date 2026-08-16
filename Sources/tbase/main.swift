@@ -334,6 +334,9 @@ do {
             switch s.state {
             case .installed: state = "ok"
             case .brokenPath(let p): state = "BROKEN — \(p) does not exist"
+            case .staleMatcher(let found):
+                state = "STALE MATCHER — fires on \(found ?? "everything"), "
+                    + "should be \(s.hook.matcher ?? "everything")"
             case .missing: state = "NOT INSTALLED — \(s.hook.purpose)"
             }
             print("\(pad(s.hook.event, 18))  \(pad(s.hook.script, 20))  \(state)")
