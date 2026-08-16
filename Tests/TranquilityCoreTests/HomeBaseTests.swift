@@ -163,6 +163,38 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertTrue(shelf.lowerBound > done.lowerBound)
     }
 
+    /// The page declares its brand; the directory only guesses. A session
+    /// fixing Tranquility Base from a promotions checkout was themed Kopi and
+    /// titled "KOPI · PROMOTIONS" while every page it wrote said otherwise.
+    func testTheDeclaredBrandBeatsTheDirectory() throws {
+        let dir = NSTemporaryDirectory() + "tb-brand-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let page = dir + "/index.html"
+        try """
+        <html><head><meta name="intranet:brand" content="Tranquility Base"></head></html>
+        """.write(toFile: page, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(HomeBase.declaredBrand(
+            pages: [ArtifactStore.Page(path: page, at: Date())]), "Tranquility Base")
+        XCTAssertEqual(HomeBase.Theme.forBrand("Tranquility Base")?.id, "editorial")
+        XCTAssertEqual(HomeBase.Theme.forBrand("Kopi")?.id, "kopi")
+        XCTAssertNil(HomeBase.Theme.forBrand("U Vape"))
+        // The directory still answers when nothing has been written yet.
+        XCTAssertEqual(HomeBase.Theme.forProject(cwd: "/Users/x/Projects/promotions").id, "kopi")
+    }
+
+    /// A brand that sets in its own faces loads them from one shared local
+    /// sheet: taking only the palette is the brand's colours on somebody
+    /// else's type.
+    func testABrandBringsItsOwnFaces() {
+        XCTAssertEqual(HomeBase.Theme.kopi.fontSheet, "kopi.css")
+        XCTAssertTrue(HomeBase.Theme.kopi.serif.contains("Bricolage Grotesque"))
+        XCTAssertTrue(HomeBase.Theme.kopi.sans.contains("Plus Jakarta Sans"))
+        // The house style names no face it cannot render.
+        XCTAssertNil(HomeBase.Theme.editorial.fontSheet)
+    }
+
     /// Every agent gets its own ink, derived from its id so it never changes
     /// and never needs storing. A brand keeps its own accent: Kopi's orange is
     /// the identity, and an agent is not one.
