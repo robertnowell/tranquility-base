@@ -336,6 +336,43 @@ final class CoordinatorTests: XCTestCase {
                        "the session you just walked out of takes the reply")
     }
 
+    /// ⌃⌥ over an all-opened stack WALKS it. The first fix replayed
+    /// `waiting().first`, a constant function, so the key welded itself to one
+    /// session — five presses, five `replaying 4394c0ec` (app.log 16 Aug
+    /// 01:04). Reported as "hitting Control-Option again goes back to the same
+    /// session as was playing before".
+    func testReplayWalksTheStackRatherThanRepeatingOneRow() async throws {
+        let coordinator = try makeCoordinator()
+        // Newest first is the stack's order, so: new, human, old.
+        try append(session: "old", at: 1_000)
+        try append(session: "human", at: 2_000)
+        try append(session: "new", at: 3_000)
+
+        XCTAssertEqual(try coordinator.nextToReplay()?.sessionId, "new",
+                       "no walk in progress opens at the top")
+        XCTAssertEqual(try coordinator.nextToReplay(after: "new")?.sessionId, "human")
+        XCTAssertEqual(try coordinator.nextToReplay(after: "human")?.sessionId, "old")
+        XCTAssertEqual(try coordinator.nextToReplay(after: "old")?.sessionId, "new",
+                       "the end wraps — a dead end is the silent press again")
+    }
+
+    /// One green row replays itself, because that is genuinely all there is.
+    /// The wrap must not turn a single-row stack into nothing to play.
+    func testAOneRowStackReplaysItself() async throws {
+        let coordinator = try makeCoordinator()
+        try append(session: "sess-1", at: 1_000)
+        XCTAssertEqual(try coordinator.nextToReplay(after: "sess-1")?.sessionId, "sess-1")
+    }
+
+    /// A walk marker for a session that has since left the stack — dismissed,
+    /// died, swept — restarts at the top rather than returning nothing.
+    func testAStaleWalkMarkerFallsBackToTheTop() async throws {
+        let coordinator = try makeCoordinator()
+        try append(session: "old", at: 1_000)
+        try append(session: "new", at: 2_000)
+        XCTAssertEqual(try coordinator.nextToReplay(after: "gone-session")?.sessionId, "new")
+    }
+
     /// The half of the old rule that survives: audio that stopped ITSELF is a
     /// fault, not a choice, and a silent failure must not consume the turn.
     func testAFailedAnnouncementStaysUnread() async throws {

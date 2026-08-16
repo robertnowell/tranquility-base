@@ -3778,14 +3778,28 @@ final class StatusHUD: NSObject {
                                    lamp: .ready, unread: false),
         ])
         let built = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
-        let font = { (id: String) in
-            built.first { $0.identifier?.rawValue == id }?.nameLabel.font
+        let label = { (id: String) in
+            built.first { $0.identifier?.rawValue == id }?.nameLabel
         }
+        // The ink channel is asserted by LUMINANCE, not by identity with a
+        // palette constant: the claim this drill has to defend is "you can
+        // see which rows you have opened", and only a measured gap says that.
+        // The weight-only version passed its own assertion and failed the
+        // user on sight (13 Aug), so the assertion moved to the quantity the
+        // eye actually uses.
+        let unreadL = label("unread")?.textColor.map(StateLegend.Measure.relativeLuminance) ?? 0
+        let openedL = label("opened")?.textColor.map(StateLegend.Measure.relativeLuminance) ?? 0
         SelfTest.report("readWeight", [
             ("unreadIsSemibold",
-             font("unread") == .monospacedSystemFont(ofSize: 13, weight: .semibold)),
+             label("unread")?.font == .monospacedSystemFont(ofSize: 13, weight: .semibold)),
             ("openedIsMedium",
-             font("opened") == .monospacedSystemFont(ofSize: 13, weight: .medium)),
+             label("opened")?.font == .monospacedSystemFont(ofSize: 13, weight: .medium)),
+            ("openedIsDimmer", openedL < unreadL),
+            // 12% of the unread row's luminance. Enough to read down a column
+            // and see two groups; short of the 45% step that marks a session
+            // as GONE, which an opened live row must never impersonate.
+            ("dimmingIsVisible", unreadL > 0 && (unreadL - openedL) / unreadL > 0.10),
+            ("openedIsNotDead", unreadL > 0 && (unreadL - openedL) / unreadL < 0.40),
             ("bothRendered", built.count == 2),
         ])
         showIdle(rows: [])
@@ -4005,6 +4019,23 @@ final class StatusHUD: NSObject {
                       aux: "148bb467", lamp: .running),
                 .init(id: "s8", name: "Draft personality prompt criteria",
                       aux: "d882f184", lamp: .running),
+            ])
+
+        // The read state, both halves on one stage: two unread rows against
+        // two opened ones, same lamp, so the only difference on screen is the
+        // one being claimed. Weight-only failed exactly here — it looked like
+        // four identical rows — and a pose is the cheapest way to be told so
+        // before shipping rather than after.
+        case "read-state":
+            showIdle(rows: [
+                .init(id: "u1", name: "Validate hero image binding",
+                      aux: "a8323d60", lamp: .ready, unread: true),
+                .init(id: "u2", name: "Render pose driver states",
+                      aux: "9ca8815c", lamp: .ready, unread: true),
+                .init(id: "o1", name: "Ship Track A provenance fix",
+                      aux: "6bfb2087", lamp: .ready, unread: false),
+                .init(id: "o2", name: "Stage footer flag migration",
+                      aux: "0f2ea0d4", lamp: .ready, unread: false),
             ])
 
         case "empty":
@@ -5215,9 +5246,21 @@ final class GridRowView: NSControl {
         // and type that has stepped back. No new colour is spent on it.
         let ink = item.lamp.rowAlpha
         let name = nameLabel
-        name.font = .monospacedSystemFont(
-            ofSize: 13, weight: ready && item.unread ? .semibold : .medium)
-        name.textColor = StateLegend.Palette.ink.withAlphaComponent(ink)
+        // Unread is BRIGHT AND HEAVY; opened steps back on both channels.
+        //
+        // Weight alone shipped on 13 Aug and could not be seen: semibold
+        // against medium at 13pt mono is a few hundredths of a stem width,
+        // and the report was immediate — "it doesn't decrease the brightness
+        // of the text or anything". Brightness is the channel a person
+        // actually reads a list by, so the ink steps `ink -> secondary` (a
+        // Palette step the callsign column already uses, not a new colour and
+        // not an alpha fade — a fade is how a LIVE opened row would start
+        // impersonating a dead one, which `rowAlpha` owns).
+        let unreadHere = ready && item.unread
+        name.font = .monospacedSystemFont(ofSize: 13, weight: unreadHere ? .semibold : .medium)
+        name.textColor = (unreadHere || !ready
+                          ? StateLegend.Palette.ink
+                          : StateLegend.Palette.secondary).withAlphaComponent(ink)
         name.lineBreakMode = .byTruncatingTail
         name.translatesAutoresizingMaskIntoConstraints = false
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)

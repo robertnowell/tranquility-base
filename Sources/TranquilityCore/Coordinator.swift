@@ -183,19 +183,37 @@ public struct Coordinator: Sendable {
         }
     }
 
-    /// What ⌃⌥ plays when nothing is unopened: the newest waiting row, opened
-    /// or not. Anything green always plays (ruled 13 Aug) — a registered press
-    /// that silently returns to the grid is indistinguishable from a dead app,
-    /// and it shipped: with every waiting row already opened, four ⌃⌥ presses
-    /// in a row visibly did nothing (app.log 13 Aug 14:26, each one `preparing
-    /// -> idle` inside a second). The delivery overlay still applies — a turn
-    /// you are mid-reply to must not be read back at you even as a replay.
+    /// What ⌃⌥ plays when nothing is unopened: the next waiting row AFTER the
+    /// one you just heard, wrapping at the end. Anything green always plays
+    /// (ruled 13 Aug) — a registered press that silently returns to the grid
+    /// is indistinguishable from a dead app, and it shipped: with every
+    /// waiting row already opened, four ⌃⌥ presses in a row visibly did
+    /// nothing (app.log 13 Aug 14:26).
+    ///
+    /// `after` is what makes this a WALK rather than a constant function, and
+    /// its absence was the second bug on the same keypress: the first fix
+    /// replayed `waiting().first`, which is the same session every time — five
+    /// presses, five `replaying 4394c0ec` (app.log 16 Aug 01:04). ⌃⌥ means
+    /// "next", so an opened stack advances through itself; the wrap is what
+    /// keeps the LAST row from being a dead end, which is the same silent
+    /// press wearing a different hat.
+    ///
+    /// The delivery overlay still applies — a turn you are mid-reply to must
+    /// not be read back at you even as a replay — and a wrap that lands back
+    /// on `after` is honest: one green row replays itself, because that is
+    /// genuinely the only thing there is to play.
     public func nextToReplay(
+        after: String? = nil,
         excluding inFlight: DeliveryInFlight = DeliveryInFlight()
     ) throws -> WaitingSession? {
-        try waiting().first {
+        let stack = try waiting().filter {
             !inFlight.supersedesWaiting($0.sessionId, latestId: $0.latestId)
         }
+        guard let after, let mark = stack.firstIndex(where: { $0.sessionId == after })
+        else { return stack.first }
+        // Rotate: everything after the mark, then everything up to it. The
+        // mark itself lands last, so it replays only when nothing else can.
+        return (stack[(mark + 1)...] + stack[..<mark]).first ?? stack[mark]
     }
 
     /// Everything waiting ON THE USER — undismissed, heard or not — newest
