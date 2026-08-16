@@ -3996,11 +3996,23 @@ final class StatusHUD: NSObject {
                                    lamp: .ready, unread: true),
             StateLegend.SessionRow(id: "opened", name: "opened", aux: "o",
                                    lamp: .ready, unread: false),
+            StateLegend.SessionRow(id: "w-unread", name: "working unread", aux: "wu",
+                                   lamp: .working, unread: true),
+            StateLegend.SessionRow(id: "w-opened", name: "working opened", aux: "wo",
+                                   lamp: .working, unread: false),
         ])
         let built = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
         let label = { (id: String) in
             built.first { $0.identifier?.rawValue == id }?.nameLabel
         }
+        let lampFill = { (id: String) -> CGColor? in
+            built.first { $0.identifier?.rawValue == id }?.lampLayer?.backgroundColor
+        }
+        // Hollow == no fill. Read off the layer the row actually built, not
+        // recomputed from the item, or the drill would be asserting its own
+        // arithmetic rather than the panel's.
+        func hollow(_ id: String) -> Bool { (lampFill(id)?.alpha ?? 1) == 0 }
+        func solid(_ id: String) -> Bool { (lampFill(id)?.alpha ?? 0) > 0 }
         // The ink channel is asserted by LUMINANCE, not by identity with a
         // palette constant: the claim this drill has to defend is "you can
         // see which rows you have opened", and only a measured gap says that.
@@ -4009,6 +4021,10 @@ final class StatusHUD: NSObject {
         // eye actually uses.
         let unreadL = label("unread")?.textColor.map(StateLegend.Measure.relativeLuminance) ?? 0
         let openedL = label("opened")?.textColor.map(StateLegend.Measure.relativeLuminance) ?? 0
+        let workingUnreadL = label("w-unread")?.textColor
+            .map(StateLegend.Measure.relativeLuminance) ?? 0
+        let workingOpenedL = label("w-opened")?.textColor
+            .map(StateLegend.Measure.relativeLuminance) ?? 0
         SelfTest.report("readWeight", [
             ("unreadIsSemibold",
              label("unread")?.font == .monospacedSystemFont(ofSize: 13, weight: .semibold)),
@@ -4018,9 +4034,17 @@ final class StatusHUD: NSObject {
             // 12% of the unread row's luminance. Enough to read down a column
             // and see two groups; short of the 45% step that marks a session
             // as GONE, which an opened live row must never impersonate.
-            ("dimmingIsVisible", unreadL > 0 && (unreadL - openedL) / unreadL > 0.10),
             ("openedIsNotDead", unreadL > 0 && (unreadL - openedL) / unreadL < 0.40),
-            ("bothRendered", built.count == 2),
+            // The lamp is the channel that actually carries the read state
+            // (16 Aug), so it is the one this drill must not let rot: solid
+            // while unread, hollow once opened, and NEVER hollow for a gone
+            // row — a grey ring and a green ring are different sentences.
+            ("unreadLampIsSolid", solid("unread") && solid("w-unread")),
+            ("openedLampIsHollow", hollow("opened") && hollow("w-opened")),
+            ("workingRowsStepToo", workingOpenedL > 0 && workingOpenedL < workingUnreadL),
+            ("workingStaysCalm",
+             label("w-unread")?.font == .monospacedSystemFont(ofSize: 13, weight: .medium)),
+            ("bothRendered", built.count == 4),
         ])
         showIdle(rows: [])
     }
@@ -4247,6 +4271,21 @@ final class StatusHUD: NSObject {
         // four identical rows — and a pose is the cheapest way to be told so
         // before shipping rather than after.
         case "read-state":
+            showIdle(rows: [
+                .init(id: "u0", name: "Unread — full ink, semibold",
+                      aux: "unread", lamp: .ready, unread: true),
+                .init(id: "o0", name: "Opened — read, still owed",
+                      aux: "opened", lamp: .ready, unread: false),
+                .init(id: "w0", name: "Working, unread",
+                      aux: "working", lamp: .working, unread: true),
+                .init(id: "w1", name: "Working, opened",
+                      aux: "working", lamp: .working, unread: false),
+                .init(id: "d0", name: "Gone — turned off is turned off",
+                      aux: "closed", lamp: .unlit, unread: true),
+            ])
+            return true
+
+        case "read-state-old":
             showIdle(rows: [
                 .init(id: "u1", name: "Validate hero image binding",
                       aux: "a8323d60", lamp: .ready, unread: true),
@@ -5744,9 +5783,28 @@ final class GridRowView: NSControl {
         let lamp = NSView()
         lamp.translatesAutoresizingMaskIntoConstraints = false
         lamp.wantsLayer = true
-        lamp.layer?.backgroundColor = item.lamp.fill.cgColor
+        // READ STATE GETS ITS OWN CHANNEL: a lit lamp is SOLID while unread
+        // and a RING once opened, in the same state colour (16 Aug).
+        //
+        // Brightness alone could not do this job. Measured on the rendered
+        // panel: unread ink 199, a gone row 129, and any opened step strong
+        // enough to see lands on top of the gone row — so read would have been
+        // borrowing the death channel, which is the collision behind "turned
+        // off is turned off". Fill-vs-ring is orthogonal: colour still says
+        // WHICH state (green ready, blue working), the fill says whether you
+        // have heard it, and a gone row is a grey socket, a different colour
+        // entirely. It is also the oldest unread idiom there is — a solid dot
+        // that hollows out once you have looked.
+        let hollow = !item.unread && item.lamp != .unlit
+        lampLayer = lamp.layer
+        lamp.layer?.backgroundColor = hollow ? NSColor.clear.cgColor : item.lamp.fill.cgColor
         lamp.layer?.cornerRadius = StateLegend.Lamp.diameter / 2
-        if let ring = item.lamp.ring {
+        if hollow {
+            // 1.5pt, not the quiet ring's 1pt: at 9px a hairline ring reads as
+            // a smudge rather than a deliberate outline.
+            lamp.layer?.borderWidth = 1.5
+            lamp.layer?.borderColor = item.lamp.fill.cgColor
+        } else if let ring = item.lamp.ring {
             lamp.layer?.borderWidth = 1
             lamp.layer?.borderColor = ring.cgColor
         }
@@ -5775,11 +5833,23 @@ final class GridRowView: NSControl {
         // Palette step the callsign column already uses, not a new colour and
         // not an alpha fade — a fade is how a LIVE opened row would start
         // impersonating a dead one, which `rowAlpha` owns).
+        // WEIGHT is ready-only; BRIGHTNESS follows the read state on every row
+        // that has one (16 Aug). The two channels answer different questions
+        // and were wrongly welded together: semibold means "this one wants
+        // you", which is the ready lamp's business, and a working row must
+        // NOT gain it — working is deliberately the calm state (09 Aug: seven
+        // bright dots is a lit-up panel, not a hierarchy). But a working row
+        // has been read or it has not, exactly like a ready one, so it steps
+        // on the ink channel. Before this, only ready rows could show read at
+        // all, which is why a grid of blue rows never dimmed a single line.
+        //
+        // A row with no read state to show — quiet, closed — keeps full ink
+        // and is dimmed, if at all, by `rowAlpha`, the gone-session channel.
         let unreadHere = ready && item.unread
         name.font = .monospacedSystemFont(ofSize: 13, weight: unreadHere ? .semibold : .medium)
-        name.textColor = (unreadHere || !ready
+        name.textColor = (item.unread
                           ? StateLegend.Palette.ink
-                          : StateLegend.Palette.secondary).withAlphaComponent(ink)
+                          : StateLegend.Palette.openedInk).withAlphaComponent(ink)
         name.lineBreakMode = .byTruncatingTail
         name.translatesAutoresizingMaskIntoConstraints = false
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -5844,6 +5914,10 @@ final class GridRowView: NSControl {
     /// The hover pill. Held so hover can paint it rather than the row's layer,
     /// which could only ever be exactly as wide as the content.
     private let highlight = NSView()
+
+    /// Held so the drill can read the read-state channel back off a built
+    /// row: fill present means unread, absent means opened.
+    private(set) var lampLayer: CALayer?
 
     /// Held so the launch drill can read the weight back off a built row —
     /// the weight IS the read state now (unread semibold, opened medium),

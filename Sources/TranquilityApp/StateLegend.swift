@@ -98,6 +98,20 @@ enum StateLegend {
         /// run, which is the entire argument for having one: every token passed
         /// its individual floor, and the hierarchy was still wrong.
         static let muted = hex(0xA09F96)
+        /// The ink of a row you have OPENED — read, still owed an answer.
+        ///
+        /// It stays a MODEST step, and that is the ruling rather than an
+        /// oversight (16 Aug). Brightness cannot carry the read state alone:
+        /// measured off the rendered panel, unread ink is 199 and a row whose
+        /// session is GONE is 129, so any dimming strong enough to notice
+        /// lands on top of the gone row and the panel starts telling you a
+        /// live agent has exited — "turned off is turned off". The visible
+        /// half of the read state is therefore the LAMP (solid unread, hollow
+        /// opened, see GridRowView), which is orthogonal to death; this ink
+        /// step only seconds it. Turning this token down the ladder is the
+        /// wrong lever — it was tried at `muted` and rendered a live opened
+        /// row dimmer than a dead one.
+        static let openedInk = secondary
         /// The hint line and placards — small text, so it owes the 4.5:1 text
         /// floor and now meets it at 4.57:1. Split out of `faint` (09 Aug):
         /// one token was being asked to be both a legible hint and a recessive

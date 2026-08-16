@@ -395,16 +395,37 @@ final class PastRowView: NSControl {
         let lamp = NSView()
         lamp.translatesAutoresizingMaskIntoConstraints = false
         lamp.wantsLayer = true
-        lamp.layer?.backgroundColor = item.row.lamp.fill.cgColor
+        // Same fill-vs-ring read channel as the grid (16 Aug): solid unread,
+        // hollow once opened, in the state's own colour. One rule in both
+        // lists, or "have I heard this" would mean something different
+        // depending on which face you were looking at.
+        let hollow = !item.row.unread && item.row.lamp != .unlit
+        lamp.layer?.backgroundColor = hollow ? NSColor.clear.cgColor
+                                             : item.row.lamp.fill.cgColor
         lamp.layer?.cornerRadius = StateLegend.Lamp.diameter / 2
-        if let ring = item.row.lamp.ring {
+        if hollow {
+            lamp.layer?.borderWidth = 1.5
+            lamp.layer?.borderColor = item.row.lamp.fill.cgColor
+        } else if let ring = item.row.lamp.ring {
             lamp.layer?.borderWidth = 1
             lamp.layer?.borderColor = ring.cgColor
         }
 
+        // The read state travels with the row (16 Aug: "idle should have our
+        // read text treatment too"). This list is where you come to FIND a
+        // session, so "have I already heard this one" is worth as much here
+        // as it is on the grid — and the row has carried the flag all along,
+        // it was simply the grid that read it.
+        //
+        // It composes with `rowAlpha` rather than competing: alpha says
+        // running-or-gone, the token says read-or-not, so a dead row you had
+        // opened is dimmed once by each and still cannot be mistaken for a
+        // live one.
         let name = NSTextField(labelWithString: item.row.name)
         name.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
-        name.textColor = StateLegend.Palette.ink.withAlphaComponent(ink)
+        name.textColor = (item.row.unread
+                          ? StateLegend.Palette.ink
+                          : StateLegend.Palette.openedInk).withAlphaComponent(ink)
         name.lineBreakMode = .byTruncatingTail
         name.translatesAutoresizingMaskIntoConstraints = false
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
