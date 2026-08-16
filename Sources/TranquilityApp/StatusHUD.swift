@@ -5738,6 +5738,25 @@ final class DropOverlayView: NSView {
         label.lineBreakMode = .byWordWrapping
         label.cell?.wraps = true
         label.cell?.usesSingleLineMode = false
+        // The sentence may never set the panel's width.
+        //
+        // Pinning both edges stopped the text running off the side and handed
+        // the problem to the other end of the same wire: a label that refuses to
+        // be narrower than its own text, inside an overlay pinned to all four
+        // edges of the panel, is a required FLOOR under the window's width. A
+        // window whose content view carries one does not go below it whatever
+        // frame it is handed — so the 40pt collapsed column came out 200pt wide,
+        // measured, within an hour of the invitation shipping (16 Aug). Hiding
+        // the overlay does not help: a hidden view still holds its constraints,
+        // and the label keeps its last string forever.
+        //
+        // Dropping the resistance rather than clearing the string on hide: the
+        // width must not depend on remembering to blank a label, and with
+        // wrapping already on, "too narrow" resolves as more lines instead of a
+        // wider panel. The panel sizes the label; the label never sizes the
+        // panel.
+        label.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        label.setContentHuggingPriority(.init(1), for: .horizontal)
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         // Pinned on BOTH sides, not centred against one. A single
