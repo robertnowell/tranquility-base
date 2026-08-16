@@ -64,6 +64,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var repliedToEventId: String?
     /// The one announcement allowed to exist. See `announceNext`.
     private var announceTask: Task<Void, Never>?
+    /// Where the ⌃⌥ walk over an all-opened stack has got to. Nil means start
+    /// at the top. In memory only, and reset by any fresh or named
+    /// announcement — a walk is a gesture in progress, not durable state.
+    private var lastReplayed: String?
     /// The session this recording is addressed to, captured at the moment the
     /// microphone opens and consumed by the send.
     ///
@@ -1936,24 +1940,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             //
             // Nothing unopened does NOT mean nothing to play (ruled 13 Aug):
             // anything green always plays. When every waiting row has been
-            // opened, ⌃⌥ replays the newest one through the explicit path —
-            // the one a row tap uses — instead of bouncing to the grid. The
-            // silent bounce shipped, and it read as a dead app: four green
-            // presses in a row, each `preparing -> idle` within a second,
-            // nothing said (app.log 13 Aug 14:26 — a low-connectivity spell
-            // had stalled every agent, so no new turns were arriving to mask
-            // the unheard filter). Only a grid with nothing green left —
-            // nothing waiting at all — shows the grid.
+            // opened, ⌃⌥ WALKS them — the next one after whatever it played
+            // last, wrapping — through the explicit path a row tap uses.
+            //
+            // Two bugs on this keypress, in order. First it bounced to the
+            // grid in silence, which read as a dead app (13 Aug 14:26). The
+            // fix replayed `waiting().first`, which is the same row every
+            // time, so ⌃⌥ welded itself to one session: five presses, five
+            // `replaying 4394c0ec` (16 Aug 01:04). ⌃⌥ means "next", and it
+            // has to mean that on the opened stack too.
+            //
+            // `lastReplayed` is the walk's only state and it is deliberately
+            // in-memory: a restart should open at the top of the stack, not
+            // resume a walk nobody remembers taking.
             var replayId: String?
             if eventId == nil,
                (try? coordinator.nextToAnnounce(excluding: self.delivering)) == nil {
-                replayId = ((try? coordinator.nextToReplay(excluding: self.delivering)) ?? nil)?
-                    .sessionId
+                replayId = ((try? coordinator.nextToReplay(
+                    after: self.lastReplayed, excluding: self.delivering)) ?? nil)?.sessionId
                 guard let replayId else {
+                    lastReplayed = nil
                     showIdleGrid()
                     return
                 }
-                Permissions.log("announce: all opened — replaying \(replayId.prefix(8))")
+                lastReplayed = replayId
+                Permissions.log("announce: all opened — replaying \(replayId.prefix(8))"
+                    + " (walk)")
+            } else {
+                // A fresh unopened turn, or an explicitly named session, ends
+                // the walk: the next ⌃⌥ over an all-opened stack starts from
+                // the top rather than continuing a walk the user interrupted.
+                lastReplayed = eventId
             }
             Permissions.log("announce: starting")
             do {

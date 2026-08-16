@@ -347,6 +347,25 @@ Measure before/after with the 21:12 shape: press ⌃⌃ mid-announcement.
 
 ---
 
+## 16. `TruncationTests.testPauseThenResumeToCompletionIsNotTruncation` is flaky (15 Aug)
+
+Fails roughly two runs in three, on pristine `origin/main` as much as on any
+branch — measured 2-of-3 both sides while landing the ⌃⌥ walk, which is the
+only reason it is recorded rather than chased: it was briefly mistaken for
+that branch's regression. Always the same shape:
+`truncated(playedSeconds: 0.485, ofSeconds: 2.0)` — real playback timing
+asserted against a wall-clock expectation, so a loaded machine reads as a
+truncation.
+
+**Why it matters more than a red line:** `scripts/preflight.sh` gates a
+landing on `swift test`. A test that fails two times in three teaches the
+next session to re-run until green, and that habit is exactly what will wave
+through a REAL failure some evening. Either the test gets a deterministic
+clock (inject the playback clock, as the mic machine already does) or it
+moves behind a `--stress` filter and stops standing in the gate.
+
+---
+
 ## Landed: the state machine
 
 The five independent booleans became `PanelState` + the stage arbiter
