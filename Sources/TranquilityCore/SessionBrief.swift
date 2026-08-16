@@ -48,6 +48,15 @@ public struct SessionBrief: Codable, Sendable, Equatable {
     /// proposed.
     public var solution: String?
 
+    /// The hub page's header, model-written (A/B'd 11 Aug, "Should the
+    /// summariser write the hub's headline?"; shipped 15 Aug when four days of
+    /// derived headers answered the page's own "wait and look" verdict). The
+    /// headline names the FINDING, not the topic; the deck says where things
+    /// stand and what is left. Read, never spoken. Nil means the derived
+    /// header renders exactly as before — the floor never moves.
+    public var headline: String?
+    public var deck: String?
+
     // Deterministic — never written by the model.
     public var branch: String?
 
@@ -69,7 +78,8 @@ public struct SessionBrief: Codable, Sendable, Equatable {
         topic: String, goal: String? = nil, happened: String, nextStep: String? = nil,
         question: String? = nil, risk: String? = nil, rationale: String? = nil,
         findings: String? = nil, solution: String? = nil,
-        branch: String? = nil, recap: String? = nil, proposal: String? = nil
+        branch: String? = nil, recap: String? = nil, proposal: String? = nil,
+        headline: String? = nil, deck: String? = nil
     ) {
         self.recap = recap
         self.proposal = proposal
@@ -79,6 +89,8 @@ public struct SessionBrief: Codable, Sendable, Equatable {
         self.nextStep = nextStep
         self.question = question
         self.risk = risk
+        self.headline = headline
+        self.deck = deck
         self.rationale = rationale
         self.findings = findings
         self.solution = solution

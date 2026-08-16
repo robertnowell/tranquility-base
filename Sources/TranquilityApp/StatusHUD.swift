@@ -172,25 +172,31 @@ final class StatusHUD: NSObject {
 
     private var currentTarget: (sessionId: String, pid: Int?, label: String)?
 
-    /// The hub page of the agent on stage, if one has ever been written.
-    ///
+    /// What the card's second door opens: the agent's hub, or the one report
+    /// this turn just wrote. A door that says one thing and opens another is
+    /// worse than no door, so the LABEL follows the destination (ruled 15 Aug,
+    /// refining the hub-door ruling of the same day: a fresh report outranks
+    /// the hub, and the hub is one click past it via the report's footer).
+    enum SecondDoor: Equatable {
+        case hub
+        case report(String)
+    }
     /// Derived from `currentTarget` rather than stored beside it. Storing it
     /// would mean clearing it at all four sites that clear the target, and the
     /// one that got missed would leave a button pointing at the previous
-    /// agent's hub — the exact confusion this feature exists to end. The hub
-    /// carries the artifact list and the discuss link, so this one door is the
-    /// address of everything the agent made (ruled 15 Aug, superseding "the
-    /// last thing it made" from the door's first landing).
-    private var currentHub: String? {
-        currentTarget.flatMap { hubForSession?($0.sessionId) }
+    /// agent's page — the exact confusion this feature exists to end.
+    private var currentDoor: SecondDoor? {
+        currentTarget.flatMap { doorForSession?($0.sessionId) }
     }
-    /// Wired by the app onto HomeBase. Nil until then, and nil is a complete
-    /// answer — a session never summarized has no hub to open.
-    var hubForSession: ((String) -> String?)?
+    /// Wired by the app. Nil is a complete answer — a session never
+    /// summarized has no hub and no report to open.
+    var doorForSession: ((String) -> SecondDoor?)?
     /// Wired by the app; receives the session id, because the app rewrites the
     /// hub fresh before opening it, and the write needs the store the panel
     /// deliberately does not hold.
     var onOpenHub: ((String) -> Void)?
+    /// Wired by the app onto the workspace's focus-or-open call.
+    var onOpenReport: ((String) -> Void)?
 
     // MARK: - Public surface
 
@@ -848,9 +854,15 @@ final class StatusHUD: NSObject {
 
     @objc nonisolated private func openHubTapped() {
         MainActor.assumeIsolated {
-            guard currentHub != nil, let id = currentTarget?.sessionId else { return }
-            Permissions.log("openHub: \(id.prefix(8))")
-            onOpenHub?(id)
+            guard let id = currentTarget?.sessionId, let door = currentDoor else { return }
+            switch door {
+            case .hub:
+                Permissions.log("openHub: \(id.prefix(8))")
+                onOpenHub?(id)
+            case .report(let path):
+                Permissions.log("openReport: \(path)")
+                onOpenReport?(path)
+            }
         }
     }
 
@@ -1362,11 +1374,18 @@ final class StatusHUD: NSObject {
         hintLabel.stringValue = ""
         goButton.isHidden = currentTarget?.pid == nil
         // The card's second door. It rides the same rule as "Go to agent" —
-        // shown wherever an agent is named — because the two are one pair: this
-        // agent, and its hub. A session never summarized has no hub yet and
-        // keeps one door; every announcement writes the hub, so the door
-        // appears with the agent's first spoken turn.
-        openPageButton.isHidden = currentHub == nil
+        // shown wherever an agent is named. The label follows the destination:
+        // a report this turn just wrote, or the hub. Retitled per render
+        // because the same button serves both and a stale label would lie.
+        let door = currentDoor
+        openPageButton.isHidden = door == nil
+        if let door {
+            let label = { if case .report = door { return "OPEN REPORT" }
+                          return "OPEN HUB" }()
+            openPageButton.attributedTitle = letterspaced(
+                "\(label) \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
+                color: StateLegend.Palette.accent)
+        }
         dontSendButton.isHidden = true
         micSettingsButton.isHidden = true
         newSessionButton.isHidden = true
@@ -3268,20 +3287,28 @@ final class StatusHUD: NSObject {
             stateLabel.textColor == StateLegend.Palette.fault
         // The card's second door. The drill that matters is the ABSENCE one:
         // a session never summarized has no hub, and a door to nothing would
-        // be on every card in the app.
-        let priorResolver = hubForSession
-        hubForSession = { _ in nil }
+        // be on every card in the app. The label drills matter almost as
+        // much: a door that says one thing and opens another is the lie this
+        // ruling exists to prevent.
+        let priorResolver = doorForSession
+        doorForSession = { _ in nil }
         _ = showAnnouncement(
             spoken: SpokenTextSanitizer().sanitize("Finished the poller. Go?"),
             sessionId: "drill", pid: 1, project: "promotions copy", cwd: "/tmp")
         let noHubNoDoor = openPageButton.isHidden
-        hubForSession = { _ in "/tmp/tb-drill-hub/index.html" }
+        doorForSession = { _ in .hub }
         render()
         let hubOpensADoor = !openPageButton.isHidden
-        hubForSession = priorResolver
+            && openPageButton.attributedTitle.string.contains("OPEN HUB")
+        doorForSession = { _ in .report("/tmp/tb-drill-report.html") }
+        render()
+        let reportNamesItself = !openPageButton.isHidden
+            && openPageButton.attributedTitle.string.contains("OPEN REPORT")
+        doorForSession = priorResolver
         SelfTest.report("openHub", [
             ("noHubNoDoor", noHubNoDoor),
             ("hubOpensADoor", hubOpensADoor),
+            ("reportNamesItself", reportNamesItself),
         ])
 
         SelfTest.report("invitation", [
@@ -4253,20 +4280,19 @@ final class StatusHUD: NSObject {
         goButton.attributedTitle = letterspaced(
             "GO TO AGENT \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
             color: StateLegend.Palette.accent)
-        // "Open HTML" shares "Go to agent"'s treatment — same kind of move,
-        // leave this panel and go to the thing — and differs only in
+        // The second door shares "Go to agent"'s treatment — same kind of
+        // move, leave this panel and go to the thing — and differs only in
         // destination: one is a terminal tab, the other a browser. It sits at
         // the row's LEADING edge rather than beside it: the two doors bracket
         // the card, so neither reads as the primary and a mis-click lands on
-        // nothing. It opens the agent's HUB — the page that lists everything
-        // the agent made and carries "Discuss with agent" — not the last
-        // artifact alone (ruled 15 Aug: the hub is the agent's address, and
-        // the artifacts are one click past it).
-        openPageButton = NSButton(title: "Open HTML", target: self,
+        // nothing. The title here is a placeholder; render() sets the real
+        // label per card — OPEN REPORT when this turn wrote a page, OPEN HUB
+        // otherwise — because the label follows the destination (ruled 15 Aug).
+        openPageButton = NSButton(title: "Open hub", target: self,
                                   action: #selector(openHubTapped))
         openPageButton.isBordered = false
         openPageButton.attributedTitle = letterspaced(
-            "OPEN HTML \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
+            "OPEN HUB \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
             color: StateLegend.Palette.accent)
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
         // The device-fault card's way out. Quiet like its row-mates: it is a
