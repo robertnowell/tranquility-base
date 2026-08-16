@@ -49,8 +49,13 @@ public enum HookManifest {
               purpose: "retire a turn you answered yourself", matcher: nil),
         .init(event: "SessionStart", marker: "visual-output-hook", script: "visual-output-hook.sh",
               purpose: "show visual output in a browser, not the tab", matcher: nil),
+        // Write|Edit|Bash, not Write alone. Keying the record to ONE tool made
+        // authorship depend on how a file happened to be written: a page built
+        // by a heredoc, a python one-liner, or an Edit was invisible to the
+        // hub, which is how a session's own research report failed to appear
+        // on its page while the session was still looking at it (16 Aug).
         .init(event: "PostToolUse", marker: "artifact-hook", script: "artifact-hook.sh",
-              purpose: "collect artifacts a session writes", matcher: "Write"),
+              purpose: "collect artifacts a session writes", matcher: "Write|Edit|Bash"),
     ]
 
     public enum State: Sendable, Equatable {

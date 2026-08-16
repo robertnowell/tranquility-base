@@ -51,8 +51,29 @@ try:
     p = json.loads(sys.argv[1])
 except Exception:
     sys.exit(0)
-path = (p.get("tool_input") or {}).get("file_path") or ""
 session = p.get("session_id") or ""
+path = (p.get("tool_input") or {}).get("file_path") or ""
+
+# THE ARCHIVE ANSWERS, NOT THE TOOL.
+#
+# Keying authorship to file_path made it depend on HOW a page happened to be
+# written: a heredoc, a python one-liner, or a `cp` produced no file_path, so
+# the page existed, was published, was read — and was invisible to its own
+# agent's hub (measured 16 Aug, on a session's own research report). A tool is
+# an implementation detail of writing; the file is the fact.
+#
+# So when the call carries no path, ask the archive instead: any page under
+# the HQ that changed in the last few minutes was changed by the turn that is
+# ending right now. Cross-attribution between two simultaneous sessions is
+# possible and cheap — a wrong link on a hub, fixed by the next write — where
+# the failure it replaces was total silence.
+if not path:
+    import glob, os, time
+    hq = os.path.expanduser("~/Documents/deep-research")
+    recent = [f for f in glob.glob(os.path.join(hq, "*", "*.html"))
+              if time.time() - os.path.getmtime(f) < 180]
+    path = max(recent, key=os.path.getmtime) if recent else ""
+
 # Only pages. A .md report becomes a page later, through a different tool, and
 # that write is the one that matters.
 if not path.lower().endswith((".html", ".htm")):
