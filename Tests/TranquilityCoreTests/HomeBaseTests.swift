@@ -193,6 +193,17 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertTrue(HomeBase.Theme.kopi.sans.contains("Plus Jakarta Sans"))
         // The house style names no face it cannot render.
         XCTAssertNil(HomeBase.Theme.editorial.fontSheet)
+
+        // And the sheet is actually LOADED — naming the family without the
+        // file renders system sans and claims the identity anyway, which is
+        // what shipped for one deploy (16 Aug).
+        let kopi = HomeBase.render(HomeBase.Model(
+            sessionId: "25f7945a-x", title: "A send", callsign: nil,
+            cwd: "/Users/x/Projects/kopi-promotions", goal: nil,
+            turns: [turn(1)], pages: []))
+        XCTAssertTrue(kopi.contains("hq-fonts/kopi.css"))
+        XCTAssertTrue(kopi.contains("rel=\"stylesheet\""))
+        XCTAssertFalse(HomeBase.render(model(turns: [turn(1)])).contains("hq-fonts"))
     }
 
     /// Every agent gets its own ink, derived from its id so it never changes
