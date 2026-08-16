@@ -3863,8 +3863,19 @@ final class StatusHUD: NSObject {
         dropSurface?.onDragTargetChanged?("promotions copy")
         panel?.contentView?.layoutSubtreeIfNeeded()
         let overlayShows = !dropOverlay.isHidden
-        let overlayNamesTheAgent =
-            dropOverlay.messageForTesting == "Drop file here for promotions copy"
+        let overlaySaysOneThing =
+            dropOverlay.messageForTesting == "Drop file for agent here"
+        // The sentence stays INSIDE the panel. Asserted as geometry rather
+        // than as a length limit on the string: the first version printed the
+        // destination's name and ran off the right edge, and a rule that says
+        // "keep the text short" is a rule the next edit forgets. Measured
+        // against a deliberately absurd string, so the constraint is what
+        // holds the line and not the wording.
+        dropOverlay.showForTesting(String(repeating: "wide ", count: 40))
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let sentenceFits = dropOverlay.textFitsForTesting
+        dropSurface?.onDragTargetChanged?("promotions copy")
+        panel?.contentView?.layoutSubtreeIfNeeded()
         // A drag must not resize the window under the pointer: the overlay is
         // parented outside the content stack precisely so the panel holds
         // still while you are aiming at it.
@@ -3905,7 +3916,8 @@ final class StatusHUD: NSObject {
             ("noOtherSessionsChips", noOtherSessionsChips),
             ("overlayHiddenAtRest", overlayHiddenAtRest),
             ("overlayShowsOnDrag", overlayShows),
-            ("overlayNamesTheAgent", overlayNamesTheAgent),
+            ("overlaySaysOneThing", overlaySaysOneThing),
+            ("sentenceStaysInsideThePanel", sentenceFits),
             ("panelHeldStillUnderTheDrag", panelHeldStill),
             ("overlayLeavesWithTheDrag", overlayLeaves),
             ("refusesWithNoTarget", refusesWithNoTarget),
@@ -5688,26 +5700,72 @@ final class DropOverlayView: NSView {
         label.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         label.textColor = StateLegend.Lens.content.color
         label.alignment = .center
+        // Wraps rather than clips. With both edges pinned, wrapping is what
+        // turns "too long" into "two lines" instead of "cut off mid-word" —
+        // the shipped sentence never needs it, and that is the point: the
+        // layout stops depending on the sentence.
+        label.maximumNumberOfLines = 0
+        label.lineBreakMode = .byWordWrapping
+        label.cell?.wraps = true
+        label.cell?.usesSingleLineMode = false
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
+        // Pinned on BOTH sides, not centred against one. A single
+        // greater-than-or-equal leading pin lets a label wider than the panel
+        // grow off the right edge while its centre stays put, which is
+        // precisely what shipped: the destination's name ran past the corner
+        // radius with no way to read the end of it. Two pins plus wrapping
+        // make an overflowing string impossible by construction rather than
+        // by keeping the text short enough — the text can now be anything.
         NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: centerXAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 12),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
         ])
         isHidden = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// Names the destination, because a drop that goes to the wrong agent is
-    /// this feature's one unrecoverable failure: the sentence you read while
-    /// deciding to let go is the last chance to catch it.
+    /// One fixed sentence, no destination name (ruled 16 Aug, from seeing it:
+    /// "the message of the current agent is unnecessary in the drop screen
+    /// and goes off the side").
+    ///
+    /// The name was here to catch a drop aimed at the wrong agent. In
+    /// practice it could not do that job: the invitation covers the card, so
+    /// the name it printed was the only identity on screen and there was
+    /// nothing to check it against — an assertion, not a confirmation. The
+    /// check that works is the one after the drop, where the chip sits under
+    /// the card whose title names the agent, and the readback says what is
+    /// riding before anything is sent.
+    ///
+    /// `target` is still taken and still required to be non-nil upstream: a
+    /// drag with nowhere to go shows nothing at all, which is the part of the
+    /// invitation that was ever load-bearing.
     func show(target: String) {
-        label.stringValue = "Drop file here for \(target)"
+        label.stringValue = "Drop file for agent here"
         isHidden = false
     }
 
     var messageForTesting: String { label.stringValue }
+
+    /// Force an arbitrary string in, so the drill can prove the CONSTRAINTS
+    /// hold rather than proving the shipped wording happens to be short.
+    func showForTesting(_ text: String) {
+        label.stringValue = text
+        isHidden = false
+    }
+
+    /// Does the text sit inside the panel, both edges? The ink, not the
+    /// frame: a label frame can be clipped to bounds while the glyphs it
+    /// draws still run past them.
+    var textFitsForTesting: Bool {
+        let ink = label.attributedStringValue.boundingRect(
+            with: NSSize(width: label.bounds.width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading])
+        return label.frame.minX >= 0
+            && label.frame.maxX <= bounds.width + 0.5
+            && ink.width <= label.bounds.width + 0.5
+    }
 
     /// Invisible to the mouse: an overlay that hit-tests would swallow the
     /// drag it exists to advertise.
