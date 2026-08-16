@@ -254,7 +254,7 @@ do {
                 : "REFUSED — its directory is gone, so --resume would land nowhere.")
             exit(2)
         }
-        print("would run  \(AgentCommand.load()) \(command.arguments.joined(separator: " "))")
+        print("would run  \(AgentDefaults.load()) \(command.arguments.joined(separator: " "))")
         print("in         \(command.cwd)")
         if args.contains("--dry-run") { print(""); print("dry run — nothing launched"); break }
         print("")
@@ -271,14 +271,18 @@ do {
         // the CLI is how it gets set. One value, read by every path that starts
         // an agent: the menu item, the grid's "+" row, and revival.
         if args.count > 1 {
-            AgentCommand.save(args.dropFirst().joined(separator: " "))
+            AgentDefaults.save(args.dropFirst().joined(separator: " "))
         }
-        print("agent command   \(AgentCommand.load())")
-        print("default         \(AgentCommand.fallback)")
-        print("stored at       \(AgentCommand.fileURL.path)")
+        print("agent command   \(AgentDefaults.load())")
+        print("start directory \(AgentDefaults.directory())"
+            + (AgentDefaults.directoryAsTyped().isEmpty ? "  (unset — home)" : ""))
+        print("default         \(AgentDefaults.fallback)")
+        print("stored at       \(AgentDefaults.fileURL.path)")
+        print("")
+        print("both are editable in the panel: gear → LAUNCH / DIRECTORY")
         print("")
         print("new sessions launch this; revived sessions launch")
-        print("`\(AgentCommand.load()) --resume <id>` — the same agent, pointed at")
+        print("`\(AgentDefaults.load()) --resume <id>` — the same agent, pointed at")
         print("a conversation that already exists.")
 
     case "drain":
