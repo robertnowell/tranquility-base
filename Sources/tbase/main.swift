@@ -455,6 +455,38 @@ case "reconcile":
             print("(Terminal automation permission is the usual suspect)")
         }
 
+    case "end":
+        // The grid's right-click, headless — and the same code path, for the
+        // same reason `tbase new` exists beside the launcher's menu item: the
+        // panel has no unit tests (rule 7), so the only way to exercise the
+        // ladder against a REAL process without deploying a build is to give it
+        // a door that is not the GUI. What this proves and the drill cannot:
+        // that the group signal takes the MCP children, and that the terminal
+        // tab is still sitting at its shell prompt afterwards.
+        guard args.count > 1 else {
+            print("usage: tbase end <sessionId | id-prefix | name>")
+            print("       SIGTERM first, SIGKILL only if it has to; never touches the tab")
+            break
+        }
+        let needle = args[1]
+        SessionTermination.trace = { print($0) }
+        guard let live = (ClaudeAgentsCLI().sessions() ?? []).first(where: {
+            $0.sessionId == needle || $0.sessionId.hasPrefix(needle) || $0.name == needle
+        }) else {
+            print("no live session matching \(needle) — `tbase status` lists them")
+            break
+        }
+        let label = live.name ?? String(live.sessionId.prefix(8))
+        switch SessionTermination.end(pid: live.pid, named: label,
+                                      expectedTty: ProcessProbe.tty(of: live.pid)) {
+        case .alreadyGone:      print("\(label) was already gone")
+        case .died(let rung, let ms, let target):
+            print("\(label) died on \(rung.rawValue) after \(ms)ms "
+                + "(\(SessionTermination.describe(target)))")
+        case .survived:         print("\(label) SURVIVED both signals")
+        case .refused(let why): print("refused: \(why)")
+        }
+
     case "homebase":
         // One page per agent, generated from the briefs that every turn already
         // writes. Nothing is narrated and nothing is asked of the session: the

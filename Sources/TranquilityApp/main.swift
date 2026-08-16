@@ -460,21 +460,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
         hud.onRevive = { [weak self] id, name in self?.revive(id, name: name) }
-        // Ruled 13 Aug: right-click Terminate on a live Past Agents row. SIGTERM,
-        // not SIGKILL — a Claude session dies clean and stays resumable. Probe
-        // and signal off-main (rule 9); the log carries the receipt either way.
-        hud.onTerminateSession = { id, name in
+        // Ruled 13 Aug on the Past Agents face, moved to the grid 16 Aug: the
+        // right-click ends the session. SIGTERM first — a Claude session dies
+        // clean and stays resumable — escalating only if it has to, and never
+        // touching the terminal tab, which stays open at its shell prompt
+        // because the shell is in a different process group and we address the
+        // agent's own (see SessionTermination).
+        //
+        // The old shape sent one signal and logged that it had sent it, which is
+        // a receipt for a signal rather than for a death. Everything below the
+        // ladder is about the row: the six-second liveness cache is dropped and
+        // the grid rebuilt, so the lamp goes out while the user's hand is still
+        // on the mouse instead of up to six seconds later, which reads as a
+        // click that did nothing.
+        //
+        // Probe, signal and poll off-main (rule 9); only the repaint hops back.
+        hud.onTerminateSession = { [weak self] id, name in
             Task.detached {
                 guard let live = (ClaudeAgentsCLI().sessions() ?? [])
                     .first(where: { $0.sessionId == id }) else {
                     Permissions.log("terminate: \(name) (\(id.prefix(8))) not in agents — already gone")
+                    await MainActor.run { self?.refreshGridAfterTerminate() }
                     return
                 }
-                let pid = live.pid
-                let rc = kill(pid_t(pid), SIGTERM)
-                Permissions.log(rc == 0
-                    ? "terminate: SIGTERM sent to \(name) (pid \(pid)) — resumable via claude resume"
-                    : "terminate: SIGTERM to pid \(pid) FAILED errno \(errno)")
+                // The tty the session was seen on, handed to the ladder as the
+                // second half of its identity guard.
+                let outcome = SessionTermination.end(
+                    pid: live.pid, named: name,
+                    expectedTty: ProcessProbe.tty(of: live.pid))
+                switch outcome {
+                case .refused(let why):
+                    Permissions.log("terminate: \(name) NOT ended — \(why)")
+                case .survived:
+                    Permissions.log("terminate: \(name) (pid \(live.pid)) survived "
+                        + "SIGTERM and SIGKILL — it is wedged, and nothing else can be sent")
+                case .alreadyGone, .died:
+                    break   // SessionTermination.trace has already said it
+                }
+                await MainActor.run { self?.refreshGridAfterTerminate() }
             }
         }
         hud.onOpenPastAgents = { [weak self] in self?.openPastAgents() }
@@ -752,6 +775,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Coordinator.trace = { Permissions.log("routing: \($0)") }
         ClaudeAgentsCLI.trace = { Permissions.log("liveness: \($0)") }
         SessionLauncher.trace = { Permissions.log("launcher: \($0)") }
+        SessionTermination.trace = { Permissions.log($0) }
         Secrets.trace = { Permissions.log("secrets: \($0)") }
         QueueStore.trace = { Permissions.log("queue: \($0)") }
         Permissions.log("args=\(CommandLine.arguments)")
@@ -1401,6 +1425,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               caller: String = #function, line: Int = #line) {
         hud.showIdle(note: note, rows: sessionRowsNow(),
                      because: "grid from \(caller):\(line)")
+    }
+
+    /// Redraw the grid against a liveness answer taken AFTER the kill.
+    ///
+    /// `sessionRowsNow()` reads the same cached probe as everything else, and
+    /// that cache is six seconds deep — long enough that a row for a session the
+    /// user has just ended would keep its lamp lit, offer to announce, and read
+    /// as a control that ignored a click. Dropping the cache first is the whole
+    /// difference between "ended" and "ended, eventually".
+    ///
+    /// Only ever called with the grid as the destination, so a card the user is
+    /// reading is not yanked out from under them: this repaints the face the
+    /// right-click happened on.
+    private func refreshGridAfterTerminate() {
+        ClaudeAgentsCLI.invalidate()
+        guard case .idle = hud.state else { return }
+        showIdleGrid()
     }
 
     /// Arm the receipt's return (ui-pass-7, ruling 5): the receipt has said

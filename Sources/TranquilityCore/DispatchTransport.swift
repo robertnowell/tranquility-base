@@ -534,8 +534,22 @@ public struct ClaudeAgentsCLI: ClaudeAgentsReading {
         func put(_ sessions: [LiveSession]) {
             lock.lock(); value = sessions; at = Date(); lock.unlock()
         }
+        func clear() {
+            lock.lock(); value = nil; at = .distantPast; lock.unlock()
+        }
     }
     private static let cache = Cache()
+
+    /// Drop the cached answer, so the next `sessions()` asks the CLI.
+    ///
+    /// Six seconds of staleness is right for the badge and the ambient refresh,
+    /// which ask constantly and can afford to be a tick behind. It is wrong
+    /// either side of a kill: before one, a cached pid can already belong to
+    /// somebody else (which is why `SessionTermination` re-reads `ps` rather
+    /// than trusting this at all); after one, the grid would keep drawing a lit
+    /// lamp for a session the user just ended, and a row that ignores a click
+    /// for six seconds reads as a broken control rather than a cached one.
+    public static func invalidate() { cache.clear() }
 
     public func sessions() -> [LiveSession]? {
         if let cached = Self.cache.get(maxAge: 6) { return cached }

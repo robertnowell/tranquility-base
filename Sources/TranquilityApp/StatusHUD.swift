@@ -2032,6 +2032,14 @@ final class StatusHUD: NSObject {
             if item.lamp == .ready {
                 row.onLampTap = { [weak self] in self?.onClearLamp?(item.id) }
             }
+            // END SESSION rides the right-click, on exactly the rows that have a
+            // process to end — the same grammar the Past Agents face has used
+            // since 13 Aug, now on the face people actually look at. The item
+            // NAMES its target, and that IS the confirmation: a right-click, then
+            // a click on a sentence containing the right name. No dialog after
+            // that, and none here either — the grid would otherwise be the only
+            // surface in the app that asks twice.
+            row.menu = terminateMenu(for: item)
             waitingRows.addArrangedSubview(row)
             row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
             if index < shown.count - 1 {
@@ -3558,6 +3566,7 @@ final class StatusHUD: NSObject {
         quietRowsDrill()
         closedRowsDrill()
         readIntensityDrill()
+        terminateDrill()
         pastAgentsDrill()
         launchSettingsDrill()
         dropTrayDrill()
@@ -3608,6 +3617,48 @@ final class StatusHUD: NSObject {
                 self.showIdle(rows: [])
             }
         }
+    }
+
+    /// End session is on the grid, and only where there is something to end.
+    ///
+    /// The panel has no unit tests (rule 7), so this is the whole evidence that
+    /// the menu follows liveness — and it is asserted as a PARTITION rather than
+    /// as "the live one has a menu", because the failure that matters is a menu
+    /// appearing on a row whose process is already gone. That row's verb is
+    /// REVIVE, and a kill offered next to it would be a control that can only
+    /// lie. The unlit-but-unprovable row is the third case and the reason this
+    /// asks `StateLegend.action` rather than reading the lamp: liveness we could
+    /// not establish is not liveness.
+    private func terminateDrill() {
+        func row(_ id: String, _ lamp: StateLegend.Lamp,
+                 revivable: Bool = false) -> StateLegend.SessionRow {
+            StateLegend.SessionRow(id: id, name: "agent-\(id)", aux: id,
+                                   lamp: lamp, revivable: revivable)
+        }
+        let rows = [
+            row("ready", .ready), row("working", .working), row("running", .running),
+            row("fault", .fault),
+            row("exited", .unlit, revivable: true),   // REVIVE's row: no kill
+            row("unproven", .unlit),                  // liveness unknown: no kill
+        ]
+        showIdle(rows: rows)
+        let menus = Dictionary(uniqueKeysWithValues: gridRowsForTesting)
+        let liveCarry = ["ready", "working", "running", "fault"]
+            .allSatisfy { menus[$0] == true }
+        let deadDoNot = ["exited", "unproven"].allSatisfy { menus[$0] == false }
+        let everyRowDrawn = rows.allSatisfy { menus[$0.id] != nil }
+        // The menu names its target, because the name IS the confirmation.
+        let named = (waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
+            .first { $0.identifier?.rawValue == "ready" }?
+            .menu?.items.first?.title) ?? ""
+        showIdle(rows: [])
+
+        SelfTest.report("terminate", [
+            ("everyRowDrawn", everyRowDrawn),
+            ("liveRowsCarryIt", liveCarry),
+            ("deadRowsDoNot", deadDoNot),
+            ("theItemNamesItsTarget", named == "End session \u{201C}agent-ready\u{201D}"),
+        ])
     }
 
     /// Quiet rows sink, and the active band keeps the order it arrived in.
@@ -5397,6 +5448,49 @@ final class StatusHUD: NSObject {
                 Permissions.log("grid: tap on \(id.prefix(8)) — unlit and not revivable, "
                     + "no action (liveness unproven, or its directory is gone)")
             }
+        }
+    }
+
+    /// The right-click menu for a grid row, or nil for a row with nothing to
+    /// end.
+    ///
+    /// Liveness decides, not the lamp's colour: an unlit row is either a session
+    /// that has already exited (REVIVE is its verb) or one whose liveness could
+    /// not be proven, and offering to kill a process we cannot see is a control
+    /// that can only lie. This is the same partition `StateLegend.action(for:)`
+    /// makes for the left-click, asked the same way so the two can never drift.
+    private func terminateMenu(for item: StateLegend.SessionRow) -> NSMenu? {
+        guard StateLegend.action(for: item) == .announce else { return nil }
+        let menu = NSMenu()
+        let end = NSMenuItem(title: "End session \u{201C}\(item.name)\u{201D}",
+                             action: #selector(terminateGridRowPicked(_:)),
+                             keyEquivalent: "")
+        end.target = self
+        end.representedObject = item.id
+        menu.addItem(end)
+        return menu
+    }
+
+    @objc nonisolated private func terminateGridRowPicked(_ sender: NSMenuItem) {
+        // The id is lifted out of the menu item BEFORE the hop. Handing the
+        // NSMenuItem itself to a main-actor closure is what the compiler calls a
+        // data race, and it is right: the item is task-isolated here. A String
+        // is Sendable and carries everything this needs.
+        let picked = sender.representedObject as? String
+        MainActor.assumeIsolated {
+            guard let id = picked,
+                  let row = face.sessionRows.first(where: { $0.id == id }) else { return }
+            onTerminateSession?(id, row.name)
+        }
+    }
+
+    /// For the launch drill: which grid rows exist and whether each carries the
+    /// End session menu — asserted against liveness, never assumed from it.
+    var gridRowsForTesting: [(id: String, hasMenu: Bool)] {
+        waitingRows.arrangedSubviews.compactMap {
+            guard let row = $0 as? GridRowView, let id = row.identifier?.rawValue
+            else { return nil }
+            return (id, row.menu != nil)
         }
     }
 
