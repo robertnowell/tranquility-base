@@ -109,7 +109,10 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertTrue(kopi.contains("class=\"kicker\""))
 
         let house = HomeBase.render(model(turns: [turn(1)]))
-        XCTAssertTrue(house.contains("#a32c28"))
+        // The accent is the agent's own ink now, so assert it is one of them
+        // rather than restating which; the house structure ink is unchanged.
+        XCTAssertTrue(HomeBase.Theme.agentInks.contains { house.contains("--accent:\($0)") })
+        XCTAssertTrue(house.contains("--brand:#1a1a1a"))
         XCTAssertTrue(house.contains("prefers-color-scheme:dark"))
     }
 
@@ -158,6 +161,42 @@ final class HomeBaseTests: XCTestCase {
         let done = html.range(of: "What it has done")!
         let shelf = html.range(of: "Earlier pages")!
         XCTAssertTrue(shelf.lowerBound > done.lowerBound)
+    }
+
+    /// Every agent gets its own ink, derived from its id so it never changes
+    /// and never needs storing. A brand keeps its own accent: Kopi's orange is
+    /// the identity, and an agent is not one.
+    func testEachAgentGetsItsOwnInk() {
+        let a = HomeBase.Theme.editorial.forAgent(sessionId: "489b4804-8d64-4a91")
+        let b = HomeBase.Theme.editorial.forAgent(sessionId: "45525e92-d6a1-4a68")
+        XCTAssertNotEqual(a.accent, b.accent)
+        // Stable across calls, and across processes: no hashValue anywhere.
+        XCTAssertEqual(a.accent,
+                       HomeBase.Theme.editorial.forAgent(sessionId: "489b4804-8d64-4a91").accent)
+        XCTAssertTrue(HomeBase.Theme.agentInks.contains(a.accent))
+        // Only the accent moves; the house style is still the house style.
+        XCTAssertEqual(a.bg, HomeBase.Theme.editorial.bg)
+        XCTAssertEqual(a.brand, HomeBase.Theme.editorial.brand)
+        // A brand theme is untouched.
+        XCTAssertEqual(HomeBase.Theme.kopi.forAgent(sessionId: "489b4804").accent,
+                       HomeBase.Theme.kopi.accent)
+    }
+
+    /// A published page says so and links the copy other people can open; the
+    /// local file stays the primary link.
+    func testAPublishedPageLinksItsPublicCopy() {
+        let page = ArtifactStore.Page(
+            path: "/Users/x/Documents/deep-research/2026-08-16-governance/index.html",
+            at: Date(timeIntervalSince1970: 1_000_000))
+        let html = HomeBase.pageItems(
+            [page], e: HomeBase.escape,
+            published: ["2026-08-16-governance": "https://example.test/2026-08-16-governance/"])
+        XCTAssertTrue(html.contains("https://example.test/2026-08-16-governance/"))
+        XCTAssertTrue(html.contains(">published</a>"))
+        XCTAssertTrue(html.contains("file:///Users/x/Documents/deep-research"))
+        // An unpublished page says nothing at all.
+        XCTAssertFalse(HomeBase.pageItems([page], e: HomeBase.escape, published: [:])
+            .contains("published"))
     }
 
     /// Site furniture is what repeats. One title cannot say which half is the
