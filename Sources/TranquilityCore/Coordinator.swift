@@ -16,6 +16,10 @@ public struct Coordinator: Sendable {
     /// loop without touching the network. Left implicit, the coordinator's own tests
     /// were quietly uploading silence to a paid transcription API.
     public let recovery: RecoveryChain
+    /// Files staged by drag-and-drop to ride the next voice reply (the drop
+    /// tray). A reference alongside a value-type Coordinator, like
+    /// PreparedSummaries — the panel reads chips synchronously in render().
+    public let attachments: AttachmentStore
 
     /// How long after speaking a session stays the reply target. Long enough to
     /// think, short enough that a reply can't land somewhere you've forgotten about.
@@ -30,6 +34,7 @@ public struct Coordinator: Sendable {
         enrolment: EnrolmentRegistry = EnrolmentRegistry(),
         agents: ClaudeAgentsReading = ClaudeAgentsCLI(),
         recovery: RecoveryChain = RecoveryChain(),
+        attachments: AttachmentStore = AttachmentStore(),
         replyWindow: TimeInterval = 15 * 60
     ) {
         self.store = store
@@ -41,6 +46,7 @@ public struct Coordinator: Sendable {
         self.enrolment = enrolment
         self.agents = agents
         self.recovery = recovery
+        self.attachments = attachments
         self.replyWindow = replyWindow
     }
 
@@ -911,8 +917,21 @@ public struct Coordinator: Sendable {
         Coordinator.trace?(
             "replyTarget resolved: session=\(target.sessionId) label=\(target.projectLabel) "
             + "cwd=\(target.cwd ?? "-") event=\(target.latestId)")
+        // The drop tray's capture close: staged files bind to THIS utterance
+        // and leave the chips. The text the undo window shows is the text
+        // that will be typed — quoted paths included — so the disclosure IS
+        // the message. Composed here and again at confirm, never by mutating
+        // the transcript: transcriptText stays the record of what was heard,
+        // and a cancel has nothing to restore because nothing was overwritten.
+        let carrying = attachments.snapshot(
+            session: target.sessionId, utteranceId: utterance.id)
+        if !carrying.isEmpty {
+            Coordinator.trace?("tray: \(carrying.count) file(s) riding \(utterance.id.prefix(8))")
+        }
         return .readyToSend(
-            utteranceId: utterance.id, text: text, label: target.projectLabel,
+            utteranceId: utterance.id,
+            text: AttachmentTray.compose(transcript: text, paths: carrying),
+            label: target.projectLabel,
             sessionId: target.sessionId)
     }
 
@@ -928,15 +947,27 @@ public struct Coordinator: Sendable {
               let sessionId = utterance.targetSessionId,
               let target = try store.allKnownSessions()
                   .first(where: { $0.sessionId == sessionId })
-        else { return .noTarget }
+        else {
+            // A confirm with nowhere to go: whatever this utterance was
+            // carrying goes back to the chips rather than riding a ghost.
+            attachments.resolve(utteranceId: utteranceId, landed: false)
+            return .noTarget
+        }
 
         try enrolment.enrol(sessionId: target.sessionId)
-        return try await dispatch(utterance: &utterance, text: text, target: target)
+        // Same composition as readyToSend showed, from the same riding set —
+        // the user confirms exactly the text that dispatches.
+        let outgoing = AttachmentTray.compose(
+            transcript: text, paths: attachments.riding(utteranceId: utteranceId))
+        return try await dispatch(utterance: &utterance, text: outgoing, target: target)
     }
 
     /// The user said no. Keep the audio and transcript — they are evidence of what
     /// was heard — but take it out of the sendable set so nothing resends it later.
     public func cancelSend(utteranceId: String) throws {
+        // The message definitely did not land, so its files return to the
+        // chips untouched (ruled 15 Aug: not sending never clobbers).
+        attachments.resolve(utteranceId: utteranceId, landed: false)
         guard var utterance = try store.utterances(limit: 500).first(where: { $0.id == utteranceId })
         else { return }
         utterance.status = .discarded
@@ -952,6 +983,10 @@ public struct Coordinator: Sendable {
             .first(where: { $0.sessionId == target.sessionId }) else {
             // Absent from `claude agents --json` means blocked on a dialog or gone.
             // Injecting would answer the dialog, so we refuse and keep the audio.
+            // The files did not land either; back to the chips. A later
+            // re-confirm of this utterance therefore goes without them — they
+            // ride the next reply instead, which can never duplicate.
+            attachments.resolve(utteranceId: utterance.id, landed: false)
             utterance.status = .ready
             try store.update(utterance: utterance)
             return .sessionNotReady(.notRegistered)
@@ -973,11 +1008,15 @@ public struct Coordinator: Sendable {
         utterance.lastDispatchAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         try store.update(utterance: utterance)
 
+        // The tray's fate rides the same exhaustive switch as the utterance's
+        // status — one clear-site, not five. Landed (or possibly landed)
+        // clears; everything else returns the files to the chips.
         switch await transport.send(text: text, to: dispatchTarget) {
         case .queued:
             // Delivered into a session that is mid-turn. It will send itself when
             // that turn ends. Treated as answered, because it is: the words are in
             // the tab and nobody has to do anything else.
+            attachments.resolve(utteranceId: utterance.id, landed: true)
             utterance.status = .confirmed
             utterance.confirmedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             utterance.lastError = "queued behind the current turn"
@@ -991,6 +1030,7 @@ public struct Coordinator: Sendable {
             return .queued(text: text, sessionId: target.sessionId)
 
         case .confirmed(let latencyMs):
+            attachments.resolve(utteranceId: utterance.id, landed: true)
             utterance.status = .confirmed
             utterance.confirmedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             try store.update(utterance: utterance)
@@ -1001,6 +1041,7 @@ public struct Coordinator: Sendable {
             return .dispatched(text: text, latencyMs: latencyMs, sessionId: target.sessionId)
 
         case .deferred(let readiness):
+            attachments.resolve(utteranceId: utterance.id, landed: false)
             utterance.status = .ready
             try store.update(utterance: utterance)
             return .sessionNotReady(readiness)
@@ -1008,6 +1049,11 @@ public struct Coordinator: Sendable {
         case .failed(let failure):
             // Verification timeouts stay `dispatchedUnconfirmed`: the text may have
             // landed, and a retry could duplicate it. A human decides.
+            // The tray follows the same doctrine: a timeout's files count as
+            // landed (keeping them staged would make the next reply a
+            // possible double-send, and a duplicate is worse than a drop).
+            attachments.resolve(utteranceId: utterance.id,
+                                landed: failure == .verificationTimedOut)
             utterance.status = failure == .verificationTimedOut ? .dispatchedUnconfirmed : .dispatchFailed
             utterance.lastError = "\(failure)"
             try store.update(utterance: utterance)
