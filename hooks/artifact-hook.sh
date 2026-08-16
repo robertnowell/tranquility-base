@@ -89,8 +89,21 @@ if not path:
                 tail = fh.read().decode("utf-8", "replace")
         except Exception:
             tail = ""
+        # A MENTION IS NOT A WRITE. Naming a slug in a grep claimed the page:
+        # this session cleaned up false claims, named the slug while doing it,
+        # and re-acquired the page four times (16 Aug). The record must show
+        # the session WRITING it — a Write/Edit call, or a shell command that
+        # redirects, copies, or opens it for writing — so the slug and the act
+        # have to appear in the same transcript record.
+        writes = ('"Write"', '"Edit"', '"NotebookEdit"',
+                  ">", "cp ", "mv ", "tee ", "'w'", '\\"w\\"')
+        def authored(slug):
+            for line in tail.splitlines():
+                if slug in line and any(w in line for w in writes):
+                    return True
+            return False
         mine = [f for f in recent
-                if os.path.basename(os.path.dirname(f)) in tail]
+                if authored(os.path.basename(os.path.dirname(f)))]
         path = max(mine, key=os.path.getmtime) if mine else ""
     else:
         path = ""
