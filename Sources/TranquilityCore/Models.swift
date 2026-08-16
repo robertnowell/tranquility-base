@@ -330,6 +330,10 @@ public struct StoredBrief: Codable, FetchableRecord, PersistableRecord, Sendable
     public var solution: String?
     public var recap: String?
     public var proposal: String?
+    /// The hub's written header (v11). Nil on rows written before the columns
+    /// existed; the page renders its derived header instead.
+    public var headline: String?
+    public var deck: String?
     /// The minted callsign at generation time; nil when not yet minted.
     public var callsign: String?
     /// Which provider generated it ("anthropic", "anthropic+digit-scrubbed", …)
@@ -344,7 +348,8 @@ public struct StoredBrief: Codable, FetchableRecord, PersistableRecord, Sendable
             topic: topic, goal: goal, happened: happened, nextStep: nextStep,
             question: question, risk: risk, rationale: rationale,
             findings: findings, solution: solution, branch: nil,
-            recap: recap, proposal: proposal)
+            recap: recap, proposal: proposal,
+            headline: headline, deck: deck)
     }
 }
 

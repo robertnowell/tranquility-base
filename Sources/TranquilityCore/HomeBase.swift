@@ -46,12 +46,20 @@ public enum HomeBase {
         public let nextStep: String?
         public let question: String?
         public let risk: String?
+        /// The written header (v11): the headline names the finding, the deck
+        /// names what is left. Nil on turns from before the field existed, or
+        /// when the summariser judged the turn pure plumbing; the derived
+        /// header is the floor.
+        public let headline: String?
+        public let deck: String?
 
         public init(at: Date, topic: String, happened: String,
                     nextStep: String? = nil, question: String? = nil,
-                    risk: String? = nil) {
+                    risk: String? = nil, headline: String? = nil,
+                    deck: String? = nil) {
             self.at = at; self.topic = topic; self.happened = happened
             self.nextStep = nextStep; self.question = question; self.risk = risk
+            self.headline = headline; self.deck = deck
         }
     }
 
@@ -162,7 +170,11 @@ public enum HomeBase {
                 guard let last = s.last, !".!?…".contains(last) else { return s }
                 return s + "."
             }
-            let deck = n.question.map { "\(e(sentence(n.happened))) \(e($0))" }
+            // The written header wins when the summariser supplied one: the
+            // headline names the finding, the deck names what is left
+            // (A/B'd 11 Aug; shipped 15 Aug). The derived join is the floor.
+            let deck = n.deck.map(e)
+                ?? n.question.map { "\(e(sentence(n.happened))) \(e($0))" }
                 ?? (n.nextStep.map { "\(e(sentence(n.happened))) Proposing: \(e($0))" }
                     ?? e(n.happened))
             var byline = model.callsign.map { "Agent \(e($0))" } ?? "Agent \(e(String(model.sessionId.prefix(8))))"
@@ -173,7 +185,7 @@ public enum HomeBase {
                 byline += " · last moved \(e(stamp.string(from: last)))"
             }
             head = """
-                <h1>\(e(n.topic))</h1>
+                <h1>\(e(n.headline ?? n.topic))</h1>
                 <p class="deck">\(deck)</p>
                 <p class="byline">\(byline)</p>
                 """
@@ -203,7 +215,7 @@ public enum HomeBase {
             }
             rows += """
                 <li class="\(cls)"><div class="when">\(e(stamp.string(from: turn.at)))</div>
-                <div class="what"><h3>\(e(turn.topic))</h3>\(body)</div></li>
+                <div class="what"><h3>\(e(turn.headline ?? turn.topic))</h3>\(body)</div></li>
                 """
         }
 
@@ -431,7 +443,8 @@ public extension HomeBase {
             turns: briefs.map {
                 Turn(at: Date(timeIntervalSince1970: Double($0.atMs) / 1000),
                      topic: $0.topic, happened: $0.happened,
-                     nextStep: $0.nextStep, question: $0.question, risk: $0.risk)
+                     nextStep: $0.nextStep, question: $0.question, risk: $0.risk,
+                     headline: $0.headline, deck: $0.deck)
             },
             pages: ArtifactStore.history(for: sessionId,
                                          root: QueueStore.supportDirectory.path))

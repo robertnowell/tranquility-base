@@ -39,7 +39,8 @@ public enum ArtifactStore {
     @discardableResult
     public static func record(_ path: String, session: String, root: String,
                               at: Date = Date()) -> Bool {
-        guard isPlausibleSession(session), path.hasPrefix("/") else { return false }
+        guard isPlausibleSession(session), path.hasPrefix("/"),
+              !excluded(path) else { return false }
         let dir = directory(root: root)
         try? FileManager.default.createDirectory(atPath: dir,
                                                  withIntermediateDirectories: true)
@@ -83,7 +84,8 @@ public enum ArtifactStore {
         for raw in text.split(separator: "\n") {
             let parts = raw.split(separator: "\t", maxSplits: 1)
             let path = String(parts.count == 2 ? parts[1] : parts[0])
-            guard path.hasPrefix("/"), seen[path] == nil else { continue }
+            guard path.hasPrefix("/"), seen[path] == nil,
+                  !excluded(path) else { continue }
             let ms = parts.count == 2 ? Double(parts[0]) ?? 0 : 0
             // A line with no stamp (the hook wrote path-only lines for a
             // while) is not "31 Dec 1969" — epoch zero rendered as a date is
@@ -188,6 +190,21 @@ public extension ArtifactStore {
             }
         }
         return added
+    }
+
+    /// Paths that are never artifacts, wherever they were seen: render probes
+    /// in a session scratchpad (wiped, and a probe by definition), anything in
+    /// the system temp trees, and the harness's own library (~/.claude skills,
+    /// templates, plugins — editing a template fired the hook and put the
+    /// blank template on a hub as "page.html"; measured 15 Aug). One choke
+    /// point, applied on write AND on read, so logs that already carry these
+    /// heal without a rewrite.
+    static func excluded(_ path: String) -> Bool {
+        path.contains("/scratchpad/")
+            || path.hasPrefix("/tmp/")
+            || path.hasPrefix("/private/tmp/")
+            || path.hasPrefix("/var/folders/")
+            || path.contains("/.claude/")
     }
 
     /// Absolute .html paths inside a shell command. Deliberately dumb: split on
