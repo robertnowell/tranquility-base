@@ -300,10 +300,13 @@ public enum HomeBase {
                     + " target=\"_blank\" rel=\"noopener\"\(blurb)>"
                     + "\(e(name))</a>\(on)</li>"
             }.joined()
-            let count = model.pages.count
+            // No subline. It counted what the list below it already shows and
+            // explained a relationship the reader had just used — "this page
+            // summarises; those hold the detail" is the hub telling you what
+            // clicking a link does (ruled 16 Aug). The heading and the list
+            // are the whole section.
             pages = """
                 <h2>What it has made</h2>
-                <p class="sub">\(count) page\(count == 1 ? "" : "s"). This page summarises; those hold the detail.</p>
                 <ul class="pages">\(items)</ul>
                 """
         }
@@ -346,7 +349,9 @@ public enum HomeBase {
           h2{font-size:26px;line-height:1.2;letter-spacing:-.015em;font-weight:600;
              margin:48px 0 6px}
           .sub{font-family:var(--sans);font-size:13px;color:var(--faint);margin:0 0 14px}
-          ul.pages{list-style:none;padding:0;margin:0}
+          /* The list carries the gap its deleted subline used to hold, so the
+             first rule does not crowd the heading. */
+          ul.pages{list-style:none;padding:0;margin:14px 0 0}
           ul.pages li{display:flex;align-items:baseline;gap:14px;padding:12px 0;
                       border-top:1px solid var(--rule)}
           ul.pages .page{color:var(--fg);text-decoration:none;font-size:18px;flex:1;
