@@ -651,6 +651,18 @@ final class StatusHUD: NSObject {
     /// The full roster order after a ≡ drag lands.
     var onRosterReordered: (([String]) -> Void)?
 
+    /// The agents pane: no host data at all, it reads AgentDefaults. Given its
+    /// own entry point so it cannot inherit the title and body of whichever
+    /// pane happened to be open before it.
+    func showAgentSettings() {
+        guard transition(to: .settings, because: "settings opened") else { return }
+        currentTarget = nil
+        face = Face(title: "Agents", body: "How every agent starts — new ones here, "
+                    + "revived ones in their own directory.")
+        face.settingsTab = .agents
+        render()
+    }
+
     func showSettings(voices: [Voice], roster: [String], note: String,
                       tab: SettingsTab = .agents) {
         guard transition(to: .settings, because: "settings opened") else { return }
@@ -673,6 +685,10 @@ final class StatusHUD: NSObject {
         var playing = false
         var retrying = false
     }
+
+    /// Wired by the app: hand back the data for a tab, then show it. One door
+    /// per pane, so no pane can be drawn against another's payload.
+    var onOpenSettingsTab: ((SettingsTab) -> Void)?
 
     /// The host answers the voices pane's "Recent audio ▸" row by assembling
     /// events and calling `showRecentAudio` — the pane never reads the store.
@@ -717,11 +733,17 @@ final class StatusHUD: NSObject {
     /// so the panel keeps knowing nothing about where anything lives.
     func showSettingsTab(_ tab: SettingsTab) {
         guard case .settings = state else { return }
-        face.settingsTab = tab
-        // The keyboard belongs to the agents tab alone; leaving it must hand
-        // the keyboard back, or the panel keeps typing rights it is not using.
+        // EVERY tab asks the host for its own data. The first version asked
+        // only for RECENT and re-rendered the others in place, which left the
+        // previous pane's `face` underneath: clicking VOICES after RECENT drew
+        // the title "Recent audio" over an empty roster reading "0 of 0", with
+        // the voices hint under it. Three panes' worth of state in one frame,
+        // and every individual line of it true.
+        //
+        // A pane is its data. Switching to one and not fetching it is the same
+        // bug as a grid row keeping a lamp from the session it used to show.
         if tab != .agents { releaseKeyboard() }
-        if tab == .recent { onShowRecentAudio?() } else { render() }
+        onOpenSettingsTab?(tab)
     }
 
     /// The settings state's second pane (ruled 13 Aug): the log of recent
@@ -1655,8 +1677,7 @@ final class StatusHUD: NSObject {
                 launchRow.isHidden = false; directoryRow.isHidden = false
                 launchRow.show(AgentDefaults.load())
                 directoryRow.show(AgentDefaults.directoryAsTyped())
-                bodyLabel.stringValue = "How every agent starts — new ones here, "
-                    + "revived ones in their own directory."
+                bodyLabel.stringValue = face.body
                 hintLabel.stringValue = "return to save · choose… picks a folder"
                 // Settings is the second face that asks for typing, so it takes
                 // the keyboard the way the list does, and gives it back through
@@ -3558,6 +3579,25 @@ final class StatusHUD: NSObject {
         let keyboardHandedBack = panel?.acceptsKey == false
         showSettingsTab(.agents)
         let backOnAgents = launchRow?.isHidden == false
+
+        // THE REGRESSION, pinned: RECENT then VOICES used to draw the title
+        // "Recent audio" over an empty roster with the voices hint beneath it,
+        // because only RECENT asked the host for anything.
+        showSettingsTab(.recent)
+        let recentTitle = face.title
+        showSettingsTab(.voices)
+        let voicesAfterRecent = face.title == "Voices" && face.audioEvents == nil
+        showSettingsTab(.agents)
+        let agentsAfterVoices = face.title == "Agents" && face.voices.isEmpty
+
+        SelfTest.report("settingsPanes", [
+            ("recentIsItsOwnPane", recentTitle == "Recent audio"),
+            ("voicesAfterRecentIsClean", voicesAfterRecent),
+            ("agentsAfterVoicesIsClean", agentsAfterVoices),
+            // The face carries one pane's payload, never two.
+            ("noPaneInheritsAnother",
+             !(face.audioEvents != nil && !face.voices.isEmpty)),
+        ])
 
         SelfTest.report("settingsTabs", [
             ("tabBarIsShown", tabsShown),

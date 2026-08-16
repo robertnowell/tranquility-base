@@ -438,7 +438,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The panel can drive a recording itself, so answering never depends on
         // knowing a hotkey that is invisible in the UI.
-        hud.onOpenSettings = { [weak self] in self?.openSettings() }
+        // The gear lands on the first tab. Settings is a tabbed pane now, and
+        // opening on the tab that is not first is the kind of small lie that
+        // makes a tab bar feel decorative.
+        hud.onOpenSettings = { [weak self] in self?.hud.showAgentSettings() }
         // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
@@ -578,6 +581,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         hud.onShowRecentAudio = { [weak self] in self?.showRecentAudio() }
+        // One door per pane. The panel asks for a tab; the host assembles that
+        // tab's data and shows it. Nothing re-renders a pane it has not fed.
+        hud.onOpenSettingsTab = { [weak self] tab in
+            guard let self else { return }
+            switch tab {
+            case .agents: hud.showAgentSettings()
+            case .voices: openSettings(tab: .voices)
+            case .recent: showRecentAudio()
+            }
+        }
 
         // Play carries its state on the row (▶/■), so the player reports
         // every change and the pane re-renders from the store + playingId —
@@ -2763,7 +2776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             + "reading nothing in particular."
     }
 
-    private func openSettings() {
+    private func openSettings(tab: SettingsTab = .voices) {
         // Paid voices first, then the free ones the machine already has. Without the
         // second half this pane read "15 of 0 on roster" whenever no ElevenLabs key
         // was configured — an empty list on a Mac with forty voices installed, and no
@@ -2788,7 +2801,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             : "Checked voices are the cast; agents draw one in roster order."
 
         hud.showSettings(voices: paid + free + getMore,
-                         roster: VoiceRoster.load(), note: note)
+                         roster: VoiceRoster.load(), note: note, tab: tab)
     }
 
     /// The settings state's second pane (ruled 13 Aug): every capture over a
