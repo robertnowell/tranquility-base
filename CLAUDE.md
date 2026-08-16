@@ -23,8 +23,43 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    required permissions reasoned better than four, and `d0cf0ac` put it back
    nineteen hours later — "required after all, measured not reasoned". Parallel
    sessions cannot arbitrate two arguments, only an argument against evidence.
-5. **One session in the app layer at a time** (Sources/TranquilityApp/). Core
-   and tools/ parallelize safely; the panel does not.
+5. **Work in your own worktree. The main checkout is for reading and
+   deploying, never for editing.** Ruled 16 Aug. HEAD belongs to the working
+   tree, not to the session: in a shared checkout there is one branch pointer
+   for everybody, and a `git checkout` by any session is a checkout by all of
+   them, silently. Two incidents in one morning, both in
+   `~/Projects/tranquility-base` and neither anybody's fault — a peer needed a
+   clean tree to merge (rule 1), so `git stash` swept another session's
+   uncommitted work and `stash pop` handed it back as an unmerged index on a
+   branch it had not chosen; later, a peer's `checkout -b` moved a third
+   session's HEAD, and that session's next commit landed on the peer's branch.
+   Sessions already working in worktrees collided with nothing all day.
+
+       git worktree add -b <branch> .claude/worktrees/<slug> origin/main
+
+   Under `.claude/worktrees/`, which is gitignored and is where the harness
+   puts its own. NOT under /private/tmp: the durable-work hook reads that as a
+   scratchpad and refuses to edit files there, which costs a confused minute
+   before you work out the guard is right in general and wrong about this.
+
+   **Close it when the work merges; make a new one when new work starts.**
+   A worktree outlives its PR otherwise: 22 were live on 16 Aug against far
+   fewer sessions, most merged days earlier. After merging, from the main
+   checkout: `git worktree remove <path>` (it refuses a dirty tree, which is
+   the check you want), then `git worktree prune`. Never remove a worktree you
+   did not create without evidence it is idle — merged AND clean AND no
+   process with its cwd inside AND untouched for a day or more; "clean right
+   now" alone is not evidence, it is a session between edits.
+
+   `/private/tmp/tb-clean` is infrastructure, not workspace: it belongs to
+   relaunch.sh and is never removed.
+
+   **A worktree isolates the working tree, not the file.** Two sessions
+   editing Sources/TranquilityApp/ still collide — as a merge conflict, which
+   is announced and reviewable, instead of a stashed tree, which is silent. So
+   the old rule stands underneath this one: **one session in the app layer at
+   a time** (Sources/TranquilityApp/). Core and tools/ parallelize safely; the
+   panel does not.
 6. **Merges to main deploy AUTOMATICALLY; the merging session verifies, and
    deploys by hand only when the robot didn't.** A global PostToolUse hook
    (`~/.claude/settings.json`) runs `scripts/relaunch.sh` when it sees a merge —
