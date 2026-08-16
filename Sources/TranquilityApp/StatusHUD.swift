@@ -3527,7 +3527,7 @@ final class StatusHUD: NSObject {
         titleDoorDrill()
         quietRowsDrill()
         closedRowsDrill()
-        readWeightDrill()
+        readIntensityDrill()
         pastAgentsDrill()
         launchSettingsDrill()
         dropTrayDrill()
@@ -3990,16 +3990,18 @@ final class StatusHUD: NSObject {
     /// read is not answered. A drill because the mapping lives in a view
     /// initializer no unit test can reach, and a weight that quietly stopped
     /// varying would put the grid back to two states it cannot tell apart.
-    private func readWeightDrill() {
+    private func readIntensityDrill() {
         showIdle(rows: [
             StateLegend.SessionRow(id: "unread", name: "unread", aux: "u",
-                                   lamp: .ready, unread: true),
+                                   lamp: .ready, read: .unread),
             StateLegend.SessionRow(id: "opened", name: "opened", aux: "o",
-                                   lamp: .ready, unread: false),
+                                   lamp: .ready, read: .opened),
             StateLegend.SessionRow(id: "w-unread", name: "working unread", aux: "wu",
-                                   lamp: .working, unread: true),
+                                   lamp: .working, read: .unread),
             StateLegend.SessionRow(id: "w-opened", name: "working opened", aux: "wo",
-                                   lamp: .working, unread: false),
+                                   lamp: .working, read: .opened),
+            StateLegend.SessionRow(id: "idle", name: "idle, nothing waiting", aux: "i",
+                                   lamp: .running, read: .none),
         ])
         let built = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
         let label = { (id: String) in
@@ -4025,26 +4027,28 @@ final class StatusHUD: NSObject {
             .map(StateLegend.Measure.relativeLuminance) ?? 0
         let workingOpenedL = label("w-opened")?.textColor
             .map(StateLegend.Measure.relativeLuminance) ?? 0
-        SelfTest.report("readWeight", [
-            ("unreadIsSemibold",
-             label("unread")?.font == .monospacedSystemFont(ofSize: 13, weight: .semibold)),
-            ("openedIsMedium",
-             label("opened")?.font == .monospacedSystemFont(ofSize: 13, weight: .medium)),
-            ("openedIsDimmer", openedL < unreadL),
-            // 12% of the unread row's luminance. Enough to read down a column
-            // and see two groups; short of the 45% step that marks a session
-            // as GONE, which an opened live row must never impersonate.
+        let idleL = label("idle")?.textColor
+            .map(StateLegend.Measure.relativeLuminance) ?? 0
+        _ = workingOpenedL
+        SelfTest.report("readIntensity", [
+            // The AmberConsole law, asserted so it cannot rot back: NO row
+            // is bold. The panel broke this quietly for the grid's whole
+            // life and nobody noticed until it was asked to carry meaning.
+            ("nothingIsBold", built.allSatisfy {
+                $0.nameLabel.font == .monospacedSystemFont(ofSize: 13, weight: .medium) }),
+            ("unreadIsBrightest", unreadL > openedL && unreadL > idleL),
+            // Idle and opened rest at ONE level — "the idle sessions should
+            // not be brighter than read active sessions" (16 Aug). Equality
+            // is the claim, so equality is what is measured.
+            ("idleRestsWithOpened", abs(idleL - openedL) < 0.0001),
+            ("dimmingIsVisible", unreadL > 0 && (unreadL - openedL) / unreadL > 0.15),
             ("openedIsNotDead", unreadL > 0 && (unreadL - openedL) / unreadL < 0.40),
-            // The lamp is the channel that actually carries the read state
-            // (16 Aug), so it is the one this drill must not let rot: solid
-            // while unread, hollow once opened, and NEVER hollow for a gone
-            // row — a grey ring and a green ring are different sentences.
             ("unreadLampIsSolid", solid("unread") && solid("w-unread")),
             ("openedLampIsHollow", hollow("opened") && hollow("w-opened")),
-            ("workingRowsStepToo", workingOpenedL > 0 && workingOpenedL < workingUnreadL),
-            ("workingStaysCalm",
-             label("w-unread")?.font == .monospacedSystemFont(ofSize: 13, weight: .medium)),
-            ("bothRendered", built.count == 4),
+            // An idle row keeps its own lamp: hollowing it would claim it had
+            // been read, which is a thing that never happened to it.
+            ("idleLampIsUntouched", solid("idle")),
+            ("allRendered", built.count == 5),
         ])
         showIdle(rows: [])
     }
@@ -4272,29 +4276,31 @@ final class StatusHUD: NSObject {
         // before shipping rather than after.
         case "read-state":
             showIdle(rows: [
-                .init(id: "u0", name: "Unread — full ink, semibold",
-                      aux: "unread", lamp: .ready, unread: true),
-                .init(id: "o0", name: "Opened — read, still owed",
-                      aux: "opened", lamp: .ready, unread: false),
+                .init(id: "u0", name: "Unread — full ink, solid lamp",
+                      aux: "unread", lamp: .ready, read: .unread),
+                .init(id: "o0", name: "Opened — resting ink, hollow",
+                      aux: "opened", lamp: .ready, read: .opened),
                 .init(id: "w0", name: "Working, unread",
-                      aux: "working", lamp: .working, unread: true),
+                      aux: "working", lamp: .working, read: .unread),
                 .init(id: "w1", name: "Working, opened",
-                      aux: "working", lamp: .working, unread: false),
+                      aux: "working", lamp: .working, read: .opened),
+                .init(id: "i0", name: "Idle — alive, asking nothing",
+                      aux: "idle", lamp: .running, read: .none),
                 .init(id: "d0", name: "Gone — turned off is turned off",
-                      aux: "closed", lamp: .unlit, unread: true),
+                      aux: "closed", lamp: .unlit, read: .none),
             ])
             return true
 
         case "read-state-old":
             showIdle(rows: [
                 .init(id: "u1", name: "Validate hero image binding",
-                      aux: "a8323d60", lamp: .ready, unread: true),
+                      aux: "a8323d60", lamp: .ready, read: .unread),
                 .init(id: "u2", name: "Render pose driver states",
-                      aux: "9ca8815c", lamp: .ready, unread: true),
+                      aux: "9ca8815c", lamp: .ready, read: .unread),
                 .init(id: "o1", name: "Ship Track A provenance fix",
-                      aux: "6bfb2087", lamp: .ready, unread: false),
+                      aux: "6bfb2087", lamp: .ready, read: .opened),
                 .init(id: "o2", name: "Stage footer flag migration",
-                      aux: "0f2ea0d4", lamp: .ready, unread: false),
+                      aux: "0f2ea0d4", lamp: .ready, read: .opened),
             ])
 
         case "empty":
@@ -5795,7 +5801,7 @@ final class GridRowView: NSControl {
         // have heard it, and a gone row is a grey socket, a different colour
         // entirely. It is also the oldest unread idiom there is — a solid dot
         // that hollows out once you have looked.
-        let hollow = !item.unread && item.lamp != .unlit
+        let hollow = item.read == .opened && item.lamp != .unlit
         lampLayer = lamp.layer
         lamp.layer?.backgroundColor = hollow ? NSColor.clear.cgColor : item.lamp.fill.cgColor
         lamp.layer?.cornerRadius = StateLegend.Lamp.diameter / 2
@@ -5833,23 +5839,25 @@ final class GridRowView: NSControl {
         // Palette step the callsign column already uses, not a new colour and
         // not an alpha fade — a fade is how a LIVE opened row would start
         // impersonating a dead one, which `rowAlpha` owns).
-        // WEIGHT is ready-only; BRIGHTNESS follows the read state on every row
-        // that has one (16 Aug). The two channels answer different questions
-        // and were wrongly welded together: semibold means "this one wants
-        // you", which is the ready lamp's business, and a working row must
-        // NOT gain it — working is deliberately the calm state (09 Aug: seven
-        // bright dots is a lit-up panel, not a hierarchy). But a working row
-        // has been read or it has not, exactly like a ready one, so it steps
-        // on the ink channel. Before this, only ready rows could show read at
-        // all, which is why a grid of blue rows never dimmed a single line.
+        // NO BOLD. Hierarchy is intensity plus the lamp, never weight.
         //
-        // A row with no read state to show — quiet, closed — keeps full ink
-        // and is dimmed, if at all, by `rowAlpha`, the gone-session channel.
-        let unreadHere = ready && item.unread
-        name.font = .monospacedSystemFont(ofSize: 13, weight: unreadHere ? .semibold : .medium)
-        name.textColor = (item.unread
+        // This is the AmberConsole law the MOCR research adopted and the panel had
+        // been quietly breaking since the grid was built: "single hue at
+        // multiple intensities; hierarchy via size/intensity/inverse-video,
+        // NO BOLD; flat by philosophy" (2026-08-04-mocr-brand-aesthetic,
+        // Established). Ready rows were semibold, and the 13 Aug read state
+        // made it worse by recruiting weight to mean unread as well. A
+        // console does not shout in a heavier cut of the same face; it
+        // burns brighter.
+        //
+        // So intensity answers one question — is this row asking for you —
+        // and it is the SAME answer on every face. A row that is merely
+        // alive rests at the same level as one you have already heard,
+        // because neither is asking; only their lamps differ.
+        name.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
+        name.textColor = (item.read.isAsking
                           ? StateLegend.Palette.ink
-                          : StateLegend.Palette.openedInk).withAlphaComponent(ink)
+                          : StateLegend.Palette.restingInk).withAlphaComponent(ink)
         name.lineBreakMode = .byTruncatingTail
         name.translatesAutoresizingMaskIntoConstraints = false
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
