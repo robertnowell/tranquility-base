@@ -240,6 +240,47 @@ public enum HomeBase {
             if path.contains("kopi") || path.contains("promotions") { return .kopi }
             return .editorial
         }
+
+        /// Every agent gets its own ink.
+        ///
+        /// Twenty hubs in the house style are twenty pages a reader cannot
+        /// tell apart at a glance, and "which agent am I looking at" is the
+        /// question the page exists to answer (ruled 16 Aug). One colour moves
+        /// and nothing else, so the house style stays the house style.
+        ///
+        /// Derived from the session id, never assigned: the same agent is the
+        /// same colour forever, on every page it writes, with no state to keep
+        /// and nothing to collide over. The palette is chosen, not computed —
+        /// eight inks that all hold their weight as a hairline on warm paper,
+        /// which a hue rotation does not.
+        ///
+        /// A BRAND theme keeps its own accent. Kopi's orange is the identity
+        /// and an agent is not one; there, the mark of the agent is its
+        /// nameplate and byline.
+        static let agentInks = [
+            "#a32c28",  // house red
+            "#1f4f8f",  // ink blue
+            "#3d7048",  // field green
+            "#8a5a2b",  // umber
+            "#6b4a8f",  // aubergine
+            "#1f6f6b",  // teal
+            "#96432c",  // rust
+            "#4a5a2b",  // olive
+        ]
+
+        public func forAgent(sessionId: String) -> Theme {
+            guard id == Theme.editorial.id else { return self }
+            // FNV-1a over the id: stable across machines and launches, which a
+            // hashValue is explicitly not.
+            var hash: UInt64 = 0xcbf29ce484222325
+            for byte in sessionId.utf8 {
+                hash = (hash ^ UInt64(byte)) &* 0x100000001b3
+            }
+            let ink = Theme.agentInks[Int(hash % UInt64(Theme.agentInks.count))]
+            return Theme(id: id, nameplate: nameplate, bg: bg, paper: paper, ink: self.ink,
+                         heading: heading, muted: muted, faint: faint, line: line,
+                         accent: ink, brand: brand, amber: amber, hasDark: hasDark)
+        }
     }
 
     /// "Kopi · promotions", but never "Tranquility Base · tranquility-base".
@@ -263,11 +304,42 @@ public enum HomeBase {
         return "\(brand) · \(project)"
     }
 
+    /// Slug → public URL, for the pages that have been published.
+    ///
+    /// A hosted page is the version other people can actually open, and the
+    /// hub knew nothing about it: a report could be live on the web while its
+    /// own agent's page linked only to a file:// path (ruled 16 Aug). The
+    /// publisher already records the answer in the HQ catalogue, so this reads
+    /// it rather than deriving a URL — a derived one would be a guess that
+    /// looks like a fact, and would keep looking like one after the host
+    /// changes.
+    ///
+    /// Missing or unreadable catalogue is not a fault; the hub simply shows
+    /// the local page, exactly as before.
+    public static var catalogURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Projects/intranet/catalog.json")
+    }
+
+    static func publishedURLs(catalog: URL = catalogURL) -> [String: String] {
+        guard let data = try? Data(contentsOf: catalog),
+              let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return [:] }
+        var map: [String: String] = [:]
+        for item in items where (item["visibility"] as? String) == "hosted" {
+            if let slug = item["slug"] as? String, let url = item["url"] as? String {
+                map[slug] = url
+            }
+        }
+        return map
+    }
+
     /// One `<li>` per page: the document's own title, its day, and a hover
     /// blurb. Shared by the inline list under a turn and the shelf at the
     /// bottom, so a page looks the same wherever it is filed.
     static func pageItems(_ pages: [ArtifactStore.Page],
-                          e: (String) -> String) -> String {
+                          e: (String) -> String,
+                          published: [String: String] = publishedURLs()) -> String {
         let newestFirst = pages.sorted { $0.at > $1.at }
         let summaries = newestFirst.map { ArtifactStore.summarize(path: $0.path) }
         // The siblings name the brand. A single title cannot say which of
@@ -285,9 +357,16 @@ public enum HomeBase {
                 ? "<span class=\"on\">\(e(dayStamp.string(from: page.at)))</span>" : ""
             // A new tab, deliberately: the hub is the reader's index and stays
             // open while its artifacts are visited (ruled 15 Aug).
+            // Published pages say so, and link to the copy other people can
+            // open. The local file stays the primary link: it is the one that
+            // works with no network and is always current.
+            let slug = (page.path as NSString).deletingLastPathComponent
+            let live = published[(slug as NSString).lastPathComponent].map {
+                "<a class=\"live\" href=\"\(e($0))\" target=\"_blank\" rel=\"noopener\">published</a>"
+            } ?? ""
             return "<li><a class=\"page\" href=\"file://\(e(page.path))\""
                 + " target=\"_blank\" rel=\"noopener\"\(blurb)>"
-                + "\(e(name))</a>\(on)</li>"
+                + "\(e(name))</a>\(live)\(on)</li>"
         }.joined()
     }
 
@@ -313,7 +392,7 @@ public enum HomeBase {
         let name = model.title ?? "Agent \(model.sessionId.prefix(8))"
         let newest = model.turns.first          // turns arrive newest-first
         let ordered = model.turns
-        let theme = Theme.forProject(cwd: model.cwd)
+        let theme = Theme.forProject(cwd: model.cwd).forAgent(sessionId: model.sessionId)
 
         // ---- the top of the page --------------------------------------------
         // What sits here is decided by subtraction. The eyebrow is gone: a
@@ -565,6 +644,13 @@ public enum HomeBase {
           ul.pages .page:hover{color:var(--accent)}
           ul.pages .on{font-family:var(--sans);font-size:12.5px;color:var(--faint);
                        white-space:nowrap}
+          /* "published" — the copy other people can open. Quiet, in the
+             agent's own ink, because it is a fact about the page rather than
+             a second name for it. */
+          .live{font-family:var(--sans);font-size:11px;font-weight:700;
+                letter-spacing:.08em;text-transform:uppercase;color:var(--accent);
+                text-decoration:none;white-space:nowrap;margin-left:2px}
+          .live:hover{text-decoration:underline}
           ol{list-style:none;padding:0;margin:0}
           ol li{display:flex;gap:20px;padding:16px 0;border-top:1px solid var(--rule)}
           .when{flex:0 0 84px;font-family:var(--sans);font-size:12.5px;line-height:1.9;
