@@ -54,10 +54,19 @@ final class DocumentSummaryTests: XCTestCase {
         XCTAssertEqual(ArtifactStore.summarize(path: p).title, "The capture strip ruling")
     }
 
-    /// Trimming must not eat a title that merely contains a dash.
-    func testAShortHeadIsNotTrimmedAway() {
-        let p = write("<html><head><title>Kopi — the whole brief</title></head></html>")
-        XCTAssertEqual(ArtifactStore.summarize(path: p).title, "Kopi — the whole brief")
+    /// The specific half survives, whichever end it sits on.
+    ///
+    /// This reverses "a short head is never trimmed away", and cites a
+    /// measurement rather than an argument (CLAUDE.md rule 4): one hub listed
+    /// four different documents as "Intranet", "Tranquility Base",
+    /// "Tranquility Base", "Tranquility Base", because the house writes
+    /// "Site — Page" and the old rule always kept the head. A brand repeated
+    /// down a list names nothing.
+    func testTheSpecificHalfSurvivesEitherEnd() {
+        let lead = write("<html><head><title>Kopi — the whole brief</title></head></html>")
+        XCTAssertEqual(ArtifactStore.summarize(path: lead).title, "the whole brief")
+        let trail = write("<html><head><title>The capture strip ruling — Tranquility Base</title></head></html>")
+        XCTAssertEqual(ArtifactStore.summarize(path: trail).title, "The capture strip ruling")
     }
 
     /// The hover card's text: the meta description if there is one, else the

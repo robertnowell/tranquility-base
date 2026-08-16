@@ -168,7 +168,7 @@ public extension ArtifactStore {
                    let path = input["file_path"] as? String {
                     paths = [path]
                 } else if tool == "Bash", let command = input["command"] as? String,
-                          command.contains(".html") {
+                          command.contains(".html"), Self.writesAFile(command) {
                     // Pages born in a heredoc or a cp are pages too. A session
                     // that writes its report via Bash left no file_path for
                     // the hook, and its hub listed nothing (measured 15 Aug:
@@ -205,6 +205,35 @@ public extension ArtifactStore {
             || path.hasPrefix("/private/tmp/")
             || path.hasPrefix("/var/folders/")
             || path.contains("/.claude/")
+            // A HUB IS NOT AN ARTIFACT. It is the index over them, and it is
+            // rewritten on every turn, so recording one makes the newest
+            // "report" of any session that so much as regenerated a page the
+            // hub of some OTHER agent — which is what the card's OPEN REPORT
+            // opened on 15 Aug. Hubs are reached by the door and the footer,
+            // never by the list.
+            || path.contains("/Documents/agents/")
+    }
+
+    /// Does this shell command WRITE a file, or merely mention one?
+    ///
+    /// The first version of the Bash miner asked only whether a command
+    /// contained an .html path, so `grep`, `open`, and `ls` all filed pages as
+    /// this session's work — including other agents' hubs, which is how the
+    /// card's OPEN REPORT came to open a stranger's page (15 Aug). Reading is
+    /// not authorship. This is a coarse allowlist of the ways a page is
+    /// actually made in a shell; anything it misses is caught the moment a
+    /// real file tool touches the page.
+    static func writesAFile(_ command: String) -> Bool {
+        if command.contains(">") { return true }   // redirect, heredoc, append
+        for verb in ["cp ", "mv ", "tee ", "install ", "rsync ", "curl -o",
+                     "wget ", "sed -i"] {
+            if command.contains(verb) { return true }
+        }
+        // Interpreters are deliberately absent. `python3 -c "open(page).read()"`
+        // is a read, and admitting the interpreter filed three of another
+        // agent's pages as this session's work (15 Aug). A script that really
+        // writes almost always redirects or copies as well.
+        return false
     }
 
     /// Absolute .html paths inside a shell command. Deliberately dumb: split on
@@ -281,9 +310,16 @@ public extension ArtifactStore {
         let titleTag = firstMatch(in: html, #"(?s)<title[^>]*>(.*?)</title>"#)
             .map(trimSiteSuffix)
         let heading = firstMatch(in: html, #"(?s)<h1[^>]*>(.*?)</h1>"#).map(stripTags)
+        // The headline the reader sees is the page's real name, so it wins
+        // whenever it is specific enough to be one. A `<title>` is written for
+        // a browser tab and carries site furniture; an `<h1>` is written for
+        // the page. Falling back the other way produced a hub listing three
+        // different documents as "Tranquility Base".
         let candidate = og ?? titleTag
         let title: String?
-        if let candidate, candidate.count >= 15, candidate.count <= 150 {
+        if let heading, heading.count >= 15, heading.count <= 150 {
+            title = heading
+        } else if let candidate, candidate.count >= 15, candidate.count <= 150 {
             title = candidate
         } else {
             title = heading ?? candidate
@@ -300,14 +336,24 @@ public extension ArtifactStore {
 
     /// "Plan — Tranquility Base" is one title with a site name stapled on. The
     /// separators are Readability's list.
+    /// Drop the site name from a `<title>`, whichever END it sits on.
+    ///
+    /// The old rule always kept the HEAD, which is correct for "Page — Site"
+    /// and exactly backwards for "Site — Page" — the convention this house
+    /// actually writes. Four pages on one hub read "Tranquility Base",
+    /// "Tranquility Base", "Tranquility Base" because the brand won every
+    /// time (measured 15 Aug). Keep the more specific side instead: the
+    /// longer segment, which is the one carrying the page's own subject.
     private static func trimSiteSuffix(_ text: String) -> String {
         let cleaned = stripTags(text)
         for separator in [" — ", " – ", " | ", " · ", " \\ ", " / ", " » ", " > "] {
-            if let range = cleaned.range(of: separator, options: .backwards) {
-                let head = String(cleaned[..<range.lowerBound])
-                // Only when what remains is still a title rather than a word.
-                if head.count >= 15 { return head }
-            }
+            guard let range = cleaned.range(of: separator, options: .backwards)
+            else { continue }
+            let head = String(cleaned[..<range.lowerBound])
+            let tail = String(cleaned[range.upperBound...])
+            let keep = tail.count > head.count ? tail : head
+            // Only when what remains is still a title rather than a word.
+            if keep.count >= 15 { return keep }
         }
         return cleaned
     }
