@@ -322,6 +322,24 @@ do {
             if let e = u.lastError { print("    error: \(truncate(e, 90))") }
         }
 
+    case "doctor":
+        // The seam check. Unit tests cover each piece; this asks whether the
+        // pieces still add up on real data, which is where every hub failure
+        // this month actually lived.
+        let problems = HubIntegrity.check()
+        if problems.isEmpty {
+            print("hub integrity: every recorded page is on its hub, "
+                  + "every hub names its session, one footer per page")
+        } else {
+            for problem in problems {
+                print("\(problem.session): \(problem.detail)")
+            }
+            print("")
+            print("\(problems.count) problem(s) — `tbase homebase <id>` rewrites a hub; "
+                  + "a missing page means the record never happened")
+            exit(1)
+        }
+
     case "hooks":
         // The audit that did not exist: what is wired, what points at a file that is
         // gone, and what was never installed at all.

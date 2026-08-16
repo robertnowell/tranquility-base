@@ -239,11 +239,19 @@ if stamp == "1":
         else:
             stamped = cleaned + "\n" + snippet + "\n"
         if stamped != page:
+            import os as _os
+            # Keep the file's own mtime. Stamping rewrites the page, and a
+            # fresh mtime made it look "just written" to the NEXT hook run,
+            # which re-stamped it, which refreshed the mtime again: a page
+            # that stayed permanently recent and attached itself to whichever
+            # session happened to run a shell command (caught 16 Aug, minutes
+            # after the archive fallback shipped).
+            before = _os.stat(path)
             tmp = path + ".tb-footer"
             with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(stamped)
-            import os as _os
             _os.replace(tmp, path)
+            _os.utime(path, (before.st_atime, before.st_mtime))
     except Exception:
         pass
     print(json.dumps({"hookSpecificOutput": {
