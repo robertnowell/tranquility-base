@@ -21,11 +21,12 @@
 # Claude Code moved underneath SessionLauncher, and the sentinel strings or
 # the agents JSON parsing need re-verifying by hand.
 #
-# Side effects: one Terminal window opens and closes (~10-20s). Everything
-# else is swept — the temp directory, the probe session's processes, and the
-# ~/.claude.json project entry Claude Code registers for the throwaway
-# directory (see sweep_leftovers; it runs at start and end, so even a killed
-# run leaves at most one entry, healed by the next run).
+# Side effects: one Terminal window opens (~10-20s) and is LEFT OPEN as a dead
+# tab — see the cleanup block for why closing it is not worth the hazard.
+# Everything that costs something is swept: the probe session's processes, the
+# temp directory, and the ~/.claude.json project entry Claude Code registers
+# for the throwaway directory (see sweep_leftovers; it runs at start and end,
+# so even a killed run leaves at most one entry, healed by the next run).
 #
 # Skip in an emergency with TB_SKIP_CANARY=1 (relaunch.sh honours it).
 
@@ -120,27 +121,31 @@ VERDICT=$(osascript "$(dirname "$0")/lib/canary-probe.applescript" "$TMPDIR_CANA
 STATUS="${VERDICT%%|*}"
 TTY_PATH="${VERDICT##*|}"
 
-# Cleanup, regardless of verdict: kill whatever runs on the canary tty, close
-# its window, drop the temp dir. Never leave a stray claude running.
+# Cleanup, regardless of verdict: kill whatever runs on the canary tty and
+# drop the temp dir. Never leave a stray claude running.
+#
+# It does NOT close the Terminal window, deliberately (ruled 16 Aug). The
+# window is a dead tab costing nothing; the stray PROCESS was always the only
+# thing here worth cleaning up, and the tty is the right handle for that
+# because a tty names a device with live processes on it.
+#
+# Closing the window needs a handle on the window, and there isn't one that
+# holds up. A tty is recycled the instant a shell exits — four windows were
+# measured claiming /dev/ttys007 at once, three dead canaries and one LIVE
+# coding session — so the search-and-close this replaced could match somebody
+# else's work. That is a real hazard traded for tidiness, and tidiness lost.
+# Five other handles were tried and are recorded in docs/open-issues.md #17
+# so nobody spends another morning on it.
+#
+# The windows persist at all because Terminal is configured that way:
+# shellExitAction = 2 ("Don't close the window") on every profile here. The
+# old cleanup was fighting a user preference from the outside. If they ever
+# need to go, the safe mechanism is the inverse — give the canary its own
+# Terminal profile set to close on exit and kill only the claude process, so
+# the window closes ITSELF and nothing has to go hunting for it.
 if [ -n "$TTY_PATH" ] && [ "$TTY_PATH" != "$VERDICT" ]; then
   PIDS=$(ps -t "${TTY_PATH#/dev/}" -o pid= 2>/dev/null || true)
   [ -n "$PIDS" ] && kill $PIDS 2>/dev/null || true
-  sleep 1
-  osascript - "$TTY_PATH" <<'OSA' >/dev/null 2>&1 || true
-on run argv
-  set theTTY to item 1 of argv
-  tell application "Terminal"
-    repeat with w in windows
-      repeat with t in tabs of w
-        if (tty of t) as text is theTTY then
-          close w saving no
-          return
-        end if
-      end repeat
-    end repeat
-  end tell
-end run
-OSA
 fi
 rm -rf "$TMPDIR_CANARY"
 # Leave the machine as found: the probe session's .claude.json entry dies with

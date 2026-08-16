@@ -298,6 +298,14 @@ fi
 # runs against real data that other sessions are writing while this runs, so a
 # transient miss must not fail a good build; a persistent one shows up on
 # every deploy until someone looks.
+#
+# The deploy builds ONLY the app product (bundle.sh: `--product TranquilityApp`),
+# so `tbase` in the clean worktree is whatever a previous build happened to
+# leave there — or absent. This gate shipped reading that stale binary, which
+# printed the usage text and exited non-zero, so every deploy reported "the
+# archive and the hubs disagree" while the archive was fine. Build the tool
+# the gate runs, next to the gate that runs it.
+( cd "$CLEAN_WORKTREE" && swift build --configuration debug --product tbase >/dev/null 2>&1 ) || true
 if ! "$CLEAN_WORKTREE/.build/debug/tbase" doctor; then
   echo "✗ the build is fine, but the archive and the hubs disagree — see above." >&2
   echo "  \`tbase homebase <session-id>\` rewrites one hub; \`tbase doctor\` re-checks." >&2
