@@ -142,6 +142,8 @@ final class StatusHUD: NSObject {
     private var meter: LevelMeterView!
     private var voiceList: NSScrollView!
     private var pastList: PastAgentsList!
+    private var launchRow: SettingRowView!
+    private var directoryRow: SettingRowView!
     private var voiceStack: NSStackView!
     private var voiceListHeight: NSLayoutConstraint!
     private var gearButton: NSButton!
@@ -1384,13 +1386,19 @@ final class StatusHUD: NSObject {
         voiceList.isHidden = true; waitingRows.isHidden = true
         pastList?.isHidden = true
         pastBackButton?.isHidden = true
+        launchRow?.isHidden = true; directoryRow?.isHidden = true
         // Key status is a widget like any other, and the baseline owns it: any
         // state that is not the list face gives the keyboard back. Written here
         // rather than at each door out — back button, row pick, dismiss, an
         // arrival — because a door added later would otherwise leave the panel
         // holding a keyboard it has no face for, which is the away channel's
         // one unforgivable bug.
-        if case .pastAgents = state {} else { releaseKeyboard() }
+        // Two faces ask for typing now — the list's filter and settings'
+        // launch/directory rows — and every other one gives the keyboard back.
+        switch state {
+        case .pastAgents, .settings: break
+        default: releaseKeyboard()
+        }
         gearButton.isHidden = false; backButton.isHidden = true
         // Only the grid can be collapsed: a card is a conversation in progress
         // and has no second width to go to.
@@ -1578,6 +1586,18 @@ final class StatusHUD: NSObject {
                 hintLabel.stringValue = "▶ plays the capture · ⋯ copy, retry, reveal"
                 rebuildAudioRows(events)
             } else {
+                // Shown with the voices, not with the audio log: this pane has
+                // two halves and only one of them is about how the app behaves.
+                launchRow.isHidden = false; directoryRow.isHidden = false
+                launchRow.show(AgentDefaults.load())
+                directoryRow.show(AgentDefaults.directoryAsTyped())
+                // Settings is the second face that asks for typing, so it takes
+                // the keyboard the same way the list does — and gives it back
+                // through the same baseline door.
+                if let panel = panel as ConsolePanel?, !panel.acceptsKey {
+                    panel.acceptsKey = true
+                    panel.makeKeyAndOrderFront(nil)
+                }
                 bodyLabel.stringValue =
                     "\(face.roster.count) of \(face.voices.count) on roster. \(face.body)"
                 hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
@@ -3328,6 +3348,7 @@ final class StatusHUD: NSObject {
         closedRowsDrill()
         readWeightDrill()
         pastAgentsDrill()
+        launchSettingsDrill()
         elasticGridDrill()
         goToSessionDrill()
 
@@ -3434,6 +3455,37 @@ final class StatusHUD: NSObject {
     /// REVIVE on a session that is still running is how the app crashed twice
     /// — and the filter has to be a plain predictable substring, because a
     /// filter you cannot predict is one you stop trusting.
+    /// How agents start is editable where settings live.
+    ///
+    /// The two failures worth guarding: rows that render but cannot be typed
+    /// into (the panel is `.nonactivatingPanel`, so a field in a window that
+    /// cannot become key has nowhere to put first responder — this cost a day
+    /// on the list's filter), and a keyboard the pane forgets to give back.
+    private func launchSettingsDrill() {
+        showSettings(voices: [], roster: [], note: "drill")
+        let shown = launchRow?.isHidden == false && directoryRow?.isHidden == false
+        let tookKeyboard = panel?.acceptsKey == true
+        // What the fields SHOW is the stored value, not the resolved one — a
+        // directory that has gone missing must be visible as itself.
+        let showsStored = launchRow?.input.stringValue == AgentDefaults.load()
+            && directoryRow?.input.stringValue == AgentDefaults.directoryAsTyped()
+        showIdle(rows: [])
+        let released = panel?.acceptsKey == false
+        let hiddenOnGrid = launchRow?.isHidden == true && directoryRow?.isHidden == true
+
+        SelfTest.report("launchSettings", [
+            ("rowsAppearInSettings", shown),
+            ("takesTheKeyboard", tookKeyboard),
+            ("fieldsShowWhatIsStored", showsStored),
+            ("givesTheKeyboardBack", released),
+            ("goneFromEveryOtherFace", hiddenOnGrid),
+            // The whole point of one setting: every launch path reads it.
+            ("oneSettingDrivesEveryLaunch",
+             SessionLauncher.defaultCommand == AgentDefaults.load()
+                && SessionLauncher.defaultDirectory == AgentDefaults.directory()),
+        ])
+    }
+
     private func pastAgentsDrill() {
         func item(_ id: String, _ name: String, live: Bool, cwd: String)
             -> PastAgentsList.Item {
@@ -4385,6 +4437,18 @@ final class StatusHUD: NSObject {
             voiceListHeight,
         ])
 
+        // How agents start, in the pane where settings live (ruled 15 Aug).
+        // One pair of values for the whole machine — "a global setting for now
+        // and see if we need more granular later" — read by every path that
+        // starts an agent: the menu item, the grid's + row, and revival.
+        launchRow = SettingRowView(width: Self.gridWidth, label: "LAUNCH",
+                                   placeholder: AgentDefaults.fallback)
+        launchRow.onCommit = { AgentDefaults.save($0) }
+        directoryRow = SettingRowView(width: Self.gridWidth, label: "DIRECTORY",
+                                      placeholder: AgentDefaults.fallbackDirectory)
+        directoryRow.onCommit = { AgentDefaults.save(directory: $0) }
+        launchRow.isHidden = true; directoryRow.isHidden = true
+
         pastList = PastAgentsList(width: Self.gridWidth, height: 420)
         pastList.isHidden = true
         // One tap, the row's own verb. Dead comes back; live gets its tab.
@@ -4414,7 +4478,9 @@ final class StatusHUD: NSObject {
         let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
                                         waitingRows, pastList, bodyLabel,
                                         stripRule, stripLabel, gridFooter,
-                                        countdownBar, meter, voiceList, hintLabel, buttons])
+                                        countdownBar, meter,
+                                        launchRow, directoryRow,
+                                        voiceList, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6

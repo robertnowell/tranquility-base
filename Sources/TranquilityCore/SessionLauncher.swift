@@ -20,11 +20,12 @@ public enum SessionLauncher {
     /// unless a host wires the log in.
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 
-    public static let defaultDirectory = NSHomeDirectory()
+    /// Where a NEW agent starts. A setting since 15 Aug — see AgentDefaults.
+    public static var defaultDirectory: String { AgentDefaults.directory() }
     /// The configured launch command, one setting for every path that starts an
     /// agent — see `AgentCommand`. Was a constant until 12 Aug, when revival
     /// became a second launch path and the two disagreed about permissions.
-    public static var defaultCommand: String { AgentCommand.load() }
+    public static var defaultCommand: String { AgentDefaults.load() }
 
     /// Opens a new Terminal window in `directory` running `command`, and — by
     /// explicit ruling — clicks through Claude's own directory-trust prompt if
@@ -114,7 +115,7 @@ public enum SessionLauncher {
     public static func resume(
         sessionId: String,
         directory: String,
-        command: String = AgentCommand.load(),
+        command: String = AgentDefaults.load(),
         acceptTrustPrompt: Bool = true
     ) -> Result<Void, ScriptError> {
         // The SAME command a new session gets, plus the conversation to open.
@@ -137,7 +138,7 @@ public enum SessionLauncher {
             tell application "Terminal"
               activate
               set newTab to do script "cd " & quoted form of "\(directory)" \
-                & " && \(command) \(AgentCommand.resumeSuffix()) " & quoted form of "\(sessionId)"
+                & " && \(command) \(AgentDefaults.resumeSuffix()) " & quoted form of "\(sessionId)"
               return tty of newTab
             end tell
             """
