@@ -379,6 +379,23 @@ enum StateLegend {
         /// A row whose session is gone reads at reduced ink. The lamp says
         /// "not running"; the type says "and not now".
         var rowAlpha: CGFloat { self == .unlit ? 0.55 : 1 }
+
+        /// Whether this lamp's row is ASKING the user for something — and so
+        /// whether the read state is worth showing on it at all.
+        ///
+        /// The read state answers "have I heard this thing I owe an answer
+        /// to". A row that owes nothing has no such question, and painting one
+        /// on it is noise: `working` is defined two dozen lines up as
+        /// MIL-STD-411's ADVISORY channel, "news, nothing for you to do", so a
+        /// hollow blue ring was the panel contradicting its own legend — an
+        /// advisory lamp cannot be read or unread, it is just news. Same for
+        /// `running` (alive, nothing in flight) and `unlit` (gone).
+        ///
+        /// Green and amber are the two channels that ask: `ready` is "waiting
+        /// on you", `fault` is the needs-you channel. Only they carry it.
+        /// Ruled 16 Aug — "idk that blue should be empty circle?" — and the
+        /// legend had said so all along.
+        var asksForYou: Bool { self == .ready || self == .fault }
     }
 
     /// Has this row's turn been heard — and does it even HAVE a turn?
