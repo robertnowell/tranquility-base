@@ -98,7 +98,9 @@ enum StateLegend {
         /// run, which is the entire argument for having one: every token passed
         /// its individual floor, and the hierarchy was still wrong.
         static let muted = hex(0xA09F96)
-        /// The ink of a row you have OPENED — read, still owed an answer.
+        /// The RESTING intensity: any row that is not asking for you — heard,
+        /// or with no waiting turn at all. `ink` is reserved for the rows
+        /// that are, and that is the whole hierarchy (16 Aug).
         ///
         /// It stays a MODEST step, and that is the ruling rather than an
         /// oversight (16 Aug). Brightness cannot carry the read state alone:
@@ -111,7 +113,7 @@ enum StateLegend {
         /// step only seconds it. Turning this token down the ladder is the
         /// wrong lever — it was tried at `muted` and rendered a live opened
         /// row dimmer than a dead one.
-        static let openedInk = secondary
+        static let restingInk = secondary
         /// The hint line and placards — small text, so it owes the 4.5:1 text
         /// floor and now meets it at 4.57:1. Split out of `faint` (09 Aug):
         /// one token was being asked to be both a legible hint and a recessive
@@ -379,6 +381,33 @@ enum StateLegend {
         var rowAlpha: CGFloat { self == .unlit ? 0.55 : 1 }
     }
 
+    /// Has this row's turn been heard — and does it even HAVE a turn?
+    ///
+    /// This was a `Bool` named `unread`, defaulting to true, and the default
+    /// was a lie with a visible consequence (16 Aug). A row with no waiting
+    /// turn at all — an idle session, a past agent just sitting there — is
+    /// not "unread"; it is asking nothing. Defaulting it to unread rendered
+    /// it at full attention intensity, so an idle session in Past Agents
+    /// outshone an ACTIVE session you had already heard: "the idle sessions
+    /// should not be brighter than read active sessions". Two states could
+    /// not say that, because the question has three answers.
+    enum ReadState {
+        /// A turn is waiting and you have not heard it. The only tier that
+        /// gets full ink, because it is the only one asking for you.
+        case unread
+        /// Heard, still owed an answer (read is not answered, 12 Aug).
+        case opened
+        /// No waiting turn. Renders at the SAME intensity as `opened` — both
+        /// mean "nothing new here" — and is separated from it by the lamp
+        /// alone, which is the channel that already says what a session is
+        /// doing.
+        case none
+
+        /// Intensity is a two-tier question even though the state is three:
+        /// are you being asked for, or not.
+        var isAsking: Bool { self == .unread }
+    }
+
     /// One row of the idle grid: a session, its lamp, and its callsign.
     /// Equatable so the intake timer can refresh the grid only when content
     /// actually changed, not on every poll.
@@ -416,21 +445,17 @@ enum StateLegend {
         /// two failure directions are opposite ON PURPOSE: the display fails
         /// toward showing you the work, the verb fails toward doing nothing.
         let revivable: Bool
-        /// Whether a ready row's turn has not been OPENED yet (ruled 13 Aug:
-        /// bold unread, regular once opened — the iOS Messages weight, except
-        /// the lamp stays lit because read is not answered). Meaningful only
-        /// on the waiting band; defaults to true so a ready row nobody
-        /// classified still renders at the attention weight it always had.
-        let unread: Bool
+        /// Where this row sits in the read ladder.
+        let read: ReadState
 
         init(id: String, name: String, aux: String, lamp: Lamp,
-             revivable: Bool = false, unread: Bool = true) {
+             revivable: Bool = false, read: ReadState = .none) {
             self.id = id
             self.name = name
             self.aux = aux
             self.lamp = lamp
             self.revivable = revivable
-            self.unread = unread
+            self.read = read
         }
     }
 
