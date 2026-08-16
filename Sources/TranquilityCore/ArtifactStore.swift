@@ -264,18 +264,55 @@ public extension ArtifactStore {
     /// absolute path to an .html file. Quoting and expansion games can hide a
     /// path from this; the transcript is mined best-effort, and a missed page
     /// surfaces the moment anything touches it through a real file tool.
+    /// The pages a shell command WRITES: redirect targets, and the final
+    /// argument of a copying verb. Nothing else.
+    ///
+    /// The previous rule took every .html path anywhere in a command that
+    /// wrote anything, which is how a `grep -v '…agent-hub-design…' log > log`
+    /// filed the very page it was pruning (measured 16 Aug — the prune
+    /// command re-added its own argument). A path inside a pattern, a flag, or
+    /// a grep is not authorship; only the destination is.
     static func htmlPaths(in command: String) -> [String] {
         // Shell text spells home three ways; the transcript keeps whichever
         // the session typed. All three normalize to the absolute form before
         // the prefix test, because "~/Documents/…" is exactly how the
         // measured miss (15 Aug) wrote its post-mortem.
         let home = NSHomeDirectory()
-        var out: [String] = []
-        for token in command.split(whereSeparator: { " \t\n\"'`;)(<>|&".contains($0) }) {
-            var t = String(token)
+        func normalize(_ raw: String) -> String? {
+            var t = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`;|&)("))
             if t.hasPrefix("~/") { t = home + t.dropFirst(1) }
             if t.hasPrefix("$HOME/") { t = home + t.dropFirst(5) }
-            if t.hasPrefix("/"), t.hasSuffix(".html"), !out.contains(t) { out.append(t) }
+            guard t.hasPrefix("/"), t.hasSuffix(".html") else { return nil }
+            return t
+        }
+
+        var out: [String] = []
+        func add(_ raw: String) {
+            if let path = normalize(raw), !out.contains(path) { out.append(path) }
+        }
+
+        // Redirect targets: "> page", ">>page", "2> page". The operator may be
+        // glued to its destination, which is why the tail is inspected too.
+        let tokens = command.split(whereSeparator: { " \t\n".contains($0) }).map(String.init)
+        for (i, token) in tokens.enumerated() {
+            guard let opRange = token.range(of: ">", options: .backwards) else { continue }
+            let head = String(token[..<opRange.lowerBound])
+            // Skip a regex or an arrow: a redirect's operator is the token's
+            // own tail, optionally behind one file-descriptor digit.
+            guard head.isEmpty || head.allSatisfy({ $0 == ">" || $0.isNumber }) else { continue }
+            let tail = String(token[opRange.upperBound...])
+            if tail.isEmpty {
+                if i + 1 < tokens.count { add(tokens[i + 1]) }
+            } else if tail != "&1", tail != "&2" {
+                add(tail)
+            }
+        }
+
+        // Copying verbs write their LAST argument, and only that one.
+        for verb in ["cp", "mv", "tee", "install", "rsync"] {
+            guard let start = tokens.firstIndex(of: verb) else { continue }
+            let segment = tokens[(start + 1)...].prefix { !$0.contains("&&") && !$0.contains(";") }
+            if let destination = segment.last { add(destination) }
         }
         return out
     }

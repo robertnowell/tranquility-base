@@ -96,6 +96,32 @@ final class ArtifactStoreTests: XCTestCase {
             "cp template.html /Users/x/a/index.html"))
     }
 
+    /// Only the destination counts. A path inside a pattern, a flag, or a
+    /// grep is not authorship — the prune command that mentioned a page in
+    /// its own -v pattern re-recorded that page (16 Aug).
+    func testOnlyTheDestinationOfACommandCounts() {
+        let home = NSHomeDirectory()
+        XCTAssertEqual(
+            ArtifactStore.htmlPaths(in: "grep -v '/Users/x/Documents/a/index.html' log > log2"),
+            [])
+        XCTAssertEqual(
+            ArtifactStore.htmlPaths(in: "cat body > /Users/x/Documents/a/index.html"),
+            ["/Users/x/Documents/a/index.html"])
+        XCTAssertEqual(
+            ArtifactStore.htmlPaths(in: "cat body >/Users/x/Documents/a/index.html"),
+            ["/Users/x/Documents/a/index.html"])
+        XCTAssertEqual(
+            ArtifactStore.htmlPaths(in: "cp ~/tpl/base.html ~/Documents/a/index.html"),
+            [home + "/Documents/a/index.html"])
+        // The source of a copy is read, not written.
+        XCTAssertFalse(
+            ArtifactStore.htmlPaths(in: "cp /Users/x/tpl/base.html /Users/x/a/out.html")
+                .contains("/Users/x/tpl/base.html"))
+        XCTAssertEqual(
+            ArtifactStore.htmlPaths(in: "python3 -c \"re.sub(r'<[^>]+>','',open('/Users/x/a/index.html').read())\""),
+            [])
+    }
+
     /// A regex is not a redirect. `re.sub(r'<[^>]+>', ...)` carries two
     /// greater-than signs and writes nothing; treating them as redirects put
     /// three read-only pages back on a hub minutes after they were pruned.
