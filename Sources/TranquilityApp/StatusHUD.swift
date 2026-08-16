@@ -3381,6 +3381,35 @@ final class StatusHUD: NSObject {
         showIdle(rows: mixed)
         settleAnimations()
 
+        // The invitation must not fatten the strip.
+        //
+        // A HIDDEN view still holds its constraints. The drop overlay is pinned
+        // to all four edges of the background, and its label is pinned to both
+        // of the overlay's — so the label refusing to be narrower than its own
+        // text puts a required floor under the window's width, and a window
+        // whose content view has one does not go below it whatever frame it is
+        // handed. Seen within the hour of shipping the invitation on 16 Aug: the
+        // first drag left a sentence in the label, and every collapse after it
+        // landed ~197pt wide with the lamps floating in the middle of a column
+        // that is supposed to be 40.
+        //
+        // Collapsed AFTER a drag has populated the invitation, because that is
+        // the only state that reproduces it — the label is empty until the first
+        // drag, and every drill above this one collapsed against an empty label
+        // and passed all morning while the panel on screen was chubby.
+        dropOverlay.show(target: "promotions copy")
+        setCollapsed(false)
+        showIdle(rows: mixed)
+        settleAnimations()
+        setCollapsed(true)
+        showIdle(rows: mixed)
+        settleAnimations()
+        let thinAfterInvitation =
+            abs((panel?.frame.width ?? 0) - CollapsedStrip.width) < 1
+        Permissions.log("collapse drill: after invitation "
+            + (panel.map { NSStringFromRect($0.frame) } ?? "-"))
+        dropOverlay.isHidden = true
+
         SelfTest.report("collapsed", [
             ("idleLampsOmitted", idleLampsOmitted),
             ("stripShown", stripShown),
@@ -3395,6 +3424,7 @@ final class StatusHUD: NSObject {
             ("glowOnlyWhenCollapsed", glowIgnoredWhenExpanded),
             ("dismissTakesItAway", wentAway && dismissedAgain),
             ("showIdleWouldRaise", showIdleDoesRaise),
+            ("thinAfterTheInvitation", thinAfterInvitation),
         ])
         showIdle(rows: [])
 
