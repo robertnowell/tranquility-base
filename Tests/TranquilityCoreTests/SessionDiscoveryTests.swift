@@ -486,21 +486,71 @@ final class SessionDiscoveryTests: XCTestCase {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("agent-command-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let previous = AgentCommand.fileURL
-        AgentCommand.fileURL = dir.appendingPathComponent("agent-command.json")
+        let previous = AgentDefaults.fileURL
+        AgentDefaults.fileURL = dir.appendingPathComponent("agent-command.json")
         defer {
-            AgentCommand.fileURL = previous
+            AgentDefaults.fileURL = previous
             try? FileManager.default.removeItem(at: dir)
         }
 
-        XCTAssertEqual(AgentCommand.load(), AgentCommand.fallback)
-        XCTAssertEqual(SessionLauncher.defaultCommand, AgentCommand.load(),
+        XCTAssertEqual(AgentDefaults.load(), AgentDefaults.fallback)
+        XCTAssertEqual(SessionLauncher.defaultCommand, AgentDefaults.load(),
                        "a new session launches with the configured command")
 
-        AgentCommand.save("codex --yolo")
-        XCTAssertEqual(AgentCommand.load(), "codex --yolo")
+        AgentDefaults.save("codex --yolo")
+        XCTAssertEqual(AgentDefaults.load(), "codex --yolo")
         XCTAssertEqual(SessionLauncher.defaultCommand, "codex --yolo",
                        "and so does the next one, without a second constant")
+    }
+
+    /// Ruled 15 Aug: the start directory is a setting too, global for now.
+    /// A path that does not exist falls back rather than being honoured — it is
+    /// typed by hand, and a launch into a missing directory fails in Terminal
+    /// where the panel cannot see it.
+    @MainActor
+    func testDirectoryFallsBackWhenUnsetOrMissing() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("agent-dir-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let previous = AgentDefaults.fileURL
+        AgentDefaults.fileURL = dir.appendingPathComponent("agent-command.json")
+        defer {
+            AgentDefaults.fileURL = previous
+            try? FileManager.default.removeItem(at: dir)
+        }
+
+        XCTAssertEqual(AgentDefaults.directory(), AgentDefaults.fallbackDirectory,
+                       "unset means home")
+        AgentDefaults.save(directory: "/definitely/not/here")
+        XCTAssertEqual(AgentDefaults.directory(), AgentDefaults.fallbackDirectory,
+                       "a missing path must not be handed to Terminal")
+        XCTAssertEqual(AgentDefaults.directoryAsTyped(), "/definitely/not/here",
+                       "but the pane shows what was typed, not what it resolved to")
+
+        let real = dir.path
+        AgentDefaults.save(directory: real)
+        XCTAssertEqual(AgentDefaults.directory(), real)
+        XCTAssertEqual(SessionLauncher.defaultDirectory, real,
+                       "a new session starts where the setting says")
+    }
+
+    /// The two settings share one file and must not overwrite each other.
+    @MainActor
+    func testCommandAndDirectoryAreIndependent() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("agent-both-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let previous = AgentDefaults.fileURL
+        AgentDefaults.fileURL = dir.appendingPathComponent("agent-command.json")
+        defer {
+            AgentDefaults.fileURL = previous
+            try? FileManager.default.removeItem(at: dir)
+        }
+        AgentDefaults.save("codex --yolo")
+        AgentDefaults.save(directory: dir.path)
+        XCTAssertEqual(AgentDefaults.load(), "codex --yolo", "saving a directory kept the command")
+        AgentDefaults.save("claude --resume-nothing")
+        XCTAssertEqual(AgentDefaults.directory(), dir.path, "saving a command kept the directory")
     }
 
     /// A blank saved by accident would otherwise break every launch on the
@@ -510,13 +560,13 @@ final class SessionDiscoveryTests: XCTestCase {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("agent-command-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let previous = AgentCommand.fileURL
-        AgentCommand.fileURL = dir.appendingPathComponent("agent-command.json")
+        let previous = AgentDefaults.fileURL
+        AgentDefaults.fileURL = dir.appendingPathComponent("agent-command.json")
         defer {
-            AgentCommand.fileURL = previous
+            AgentDefaults.fileURL = previous
             try? FileManager.default.removeItem(at: dir)
         }
-        AgentCommand.save("   ")
-        XCTAssertEqual(AgentCommand.load(), AgentCommand.fallback)
+        AgentDefaults.save("   ")
+        XCTAssertEqual(AgentDefaults.load(), AgentDefaults.fallback)
     }
 }

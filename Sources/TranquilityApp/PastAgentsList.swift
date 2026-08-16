@@ -586,3 +586,62 @@ private extension Array {
         indices.contains(index) ? self[index] : nil
     }
 }
+
+/// One editable setting, as a row.
+///
+/// Same grammar as the list's filter and the + NEW AGENT placard: a small caps
+/// label, then the value in the panel's own mono, no bezel and no focus ring.
+/// A bordered NSTextField would be the only form control in the app, and the
+/// panel is an instrument — the console's own answer to "type here" is a lit
+/// field on a dark ground, not a box drawn around one.
+///
+/// Commits on Return and on losing focus, never per keystroke: this is the
+/// command that starts your agents, and saving `claude --dangerous` halfway
+/// through typing is a setting that is briefly wrong in a way that matters.
+final class SettingRowView: NSView, NSTextFieldDelegate {
+    static let height: CGFloat = 34
+    let input = FilterField()
+    var onCommit: ((String) -> Void)?
+
+    init(width: CGFloat, label: String, placeholder: String) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        let caption = NSTextField(labelWithString: "")
+        caption.attributedStringValue = letterspaced(
+            label, size: 9.5, tracking: 1.33, color: StateLegend.Palette.hint)
+        caption.translatesAutoresizingMaskIntoConstraints = false
+
+        input.isBordered = false
+        input.drawsBackground = false
+        input.focusRingType = .none
+        input.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        input.textColor = StateLegend.Palette.ink
+        input.lineBreakMode = .byTruncatingHead
+        input.placeholderAttributedString = NSAttributedString(
+            string: placeholder,
+            attributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+                         .foregroundColor: StateLegend.Palette.faint])
+        input.delegate = self
+        input.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(caption); addSubview(input)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: width),
+            heightAnchor.constraint(equalToConstant: Self.height),
+            caption.leadingAnchor.constraint(equalTo: leadingAnchor),
+            caption.centerYAnchor.constraint(equalTo: centerYAnchor),
+            caption.widthAnchor.constraint(equalToConstant: 74),
+            input.leadingAnchor.constraint(equalTo: caption.trailingAnchor, constant: 8),
+            input.trailingAnchor.constraint(equalTo: trailingAnchor),
+            input.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func show(_ value: String) { input.stringValue = value }
+
+    func controlTextDidEndEditing(_ obj: Notification) { onCommit?(input.stringValue) }
+}
