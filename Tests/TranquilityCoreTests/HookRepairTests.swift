@@ -85,6 +85,24 @@ final class HookRepairTests: XCTestCase {
     /// The shipped-but-never-installed case (issue 35's shape): the hook is
     /// added, and artifact-hook keeps its Write matcher — matcherless it would
     /// be thousands of no-op subprocesses a day.
+    /// The matcher is part of the contract. Repair reconciled only the path,
+    /// so widening artifact-hook to Write|Edit|Bash left the installed hook
+    /// firing on Write alone while the installer said "nothing changed".
+    func testAStaleMatcherIsReconciled() throws {
+        let want = HookManifest.expected.first { $0.marker == "artifact-hook" }!
+        var hooks = healthyHooks()
+        hooks["PostToolUse"] = [entry(
+            hooksDir.appendingPathComponent("artifact-hook.sh").path, matcher: "Write")]
+        try write(["hooks": hooks])
+
+        XCTAssertEqual(HookManifest.repair(settings: settings, record: record),
+                       .repaired(rewired: 1, added: 0))
+        let post = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: settings)) as? [String: Any]
+        let entries = (post?["hooks"] as? [String: Any])?["PostToolUse"] as? [[String: Any]]
+        XCTAssertEqual(entries?.first?["matcher"] as? String, want.matcher)
+    }
+
     func testMissingHookIsAddedWithItsMatcher() throws {
         var hooks = healthyHooks()
         hooks["PostToolUse"] = nil
