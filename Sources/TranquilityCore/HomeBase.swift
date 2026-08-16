@@ -198,6 +198,14 @@ public enum HomeBase {
         public let brand: String
         /// Amber is the risk tag and nothing else, in every theme.
         public let amber: String
+        /// The brand's own faces, and the local stylesheet that carries them.
+        /// A hub that only takes the palette is not the brand, it is the
+        /// brand's colours on somebody else's type (ruled 16 Aug). Hubs are
+        /// local-only by design, so the faces are referenced from one file on
+        /// disk rather than embedded per page — one copy, not 400KB a hub.
+        public let serif: String
+        public let sans: String
+        public let fontSheet: String?
         /// Whether a dark palette is offered. Brand light-stock designs say no
         /// on purpose: their tokens are specified for paper, and a machine-
         /// darkened brand colour is an invented one.
@@ -209,7 +217,10 @@ public enum HomeBase {
             id: "editorial", nameplate: "Tranquility Base",
             bg: "#fcfbf8", paper: "#f4f2ec", ink: "#1f1e1c", heading: "#141312",
             muted: "#57534c", faint: "#6e6a63", line: "#ddd9cf",
-            accent: "#a32c28", brand: "#1a1a1a", amber: "#a8762a", hasDark: true)
+            accent: "#a32c28", brand: "#1a1a1a", amber: "#a8762a",
+            serif: "'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif",
+            sans: "ui-sans-serif,-apple-system,'Helvetica Neue',sans-serif",
+            fontSheet: nil, hasDark: true)
 
         /// Kopi, "The Press": navy carries structure, orange only punctuates.
         /// Tokens rung 2, references/brands.md. The brand's own faces
@@ -221,7 +232,13 @@ public enum HomeBase {
             id: "kopi", nameplate: "Kopi",
             bg: "#fcfbf8", paper: "#f4f2ec", ink: "#1f1e1c", heading: "#1e3a52",
             muted: "#57534c", faint: "#6e6a63", line: "#ddd9cf",
-            accent: "#ff6b4a", brand: "#1e3a52", amber: "#a8762a", hasDark: false)
+            accent: "#ff6b4a", brand: "#1e3a52", amber: "#a8762a",
+            // The Press sets in Bricolage Grotesque over Plus Jakarta Sans,
+            // and a page claiming Kopi in system serif was claiming an
+            // identity it did not carry.
+            serif: "'Bricolage Grotesque',ui-sans-serif,-apple-system,sans-serif",
+            sans: "'Plus Jakarta Sans',ui-sans-serif,-apple-system,sans-serif",
+            fontSheet: "kopi.css", hasDark: false)
 
         /// Mirai. Only two tokens are recorded (#F57C00 on #F0F8FF, from the
         /// brand record via Kopi's get_context), so only those two move; the
@@ -230,10 +247,34 @@ public enum HomeBase {
             id: "mirai", nameplate: "Mirai",
             bg: "#f0f8ff", paper: "#e6f1fb", ink: "#1f1e1c", heading: "#14304a",
             muted: "#4f5b66", faint: "#69737d", line: "#cddeee",
-            accent: "#f57c00", brand: "#14304a", amber: "#a8762a", hasDark: false)
+            accent: "#f57c00", brand: "#14304a", amber: "#a8762a",
+            // Mirai's faces (Abril Fatface, DM Sans) are recorded but not yet
+            // on disk here; naming them without the file renders system sans
+            // and claims what the page has not got, so the stack stays honest
+            // until someone drops the woff2 into hq-fonts.
+            serif: "'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif",
+            sans: "ui-sans-serif,-apple-system,'Helvetica Neue',sans-serif",
+            fontSheet: nil, hasDark: false)
 
-        /// The project decides. A directory is the only brand signal a hub
-        /// has, and it is a good one: the work happens where the brand lives.
+        /// THE PAGE DECLARES ITS BRAND, and the directory is only the guess
+        /// of last resort.
+        ///
+        /// A directory says where a terminal happens to sit, not what the work
+        /// is about: a session fixing Tranquility Base from a promotions
+        /// checkout was themed as Kopi and titled "KOPI · PROMOTIONS" while
+        /// every page it wrote declared Tranquility Base (measured 16 Aug).
+        /// Every HQ page carries `intranet:brand` because share-as-page
+        /// requires it, so the agent's own artifacts are the honest signal —
+        /// they are the thing the brand is FOR.
+        public static func forBrand(_ name: String?) -> Theme? {
+            guard let key = name?.lowercased() else { return nil }
+            if key.contains("mirai") { return .mirai }
+            if key.contains("kopi") { return .kopi }
+            if key.contains("tranquility") { return .editorial }
+            return nil
+        }
+
+        /// The project decides only when nothing has been written yet.
         public static func forProject(cwd: String?) -> Theme {
             let path = (cwd ?? "").lowercased()
             if path.contains("mirai") { return .mirai }
@@ -279,7 +320,9 @@ public enum HomeBase {
             let ink = Theme.agentInks[Int(hash % UInt64(Theme.agentInks.count))]
             return Theme(id: id, nameplate: nameplate, bg: bg, paper: paper, ink: self.ink,
                          heading: heading, muted: muted, faint: faint, line: line,
-                         accent: ink, brand: brand, amber: amber, hasDark: hasDark)
+                         accent: ink, brand: brand, amber: amber,
+                         serif: serif, sans: sans, fontSheet: fontSheet,
+                         hasDark: hasDark)
         }
     }
 
@@ -316,6 +359,35 @@ public enum HomeBase {
     ///
     /// Missing or unreadable catalogue is not a fault; the hub simply shows
     /// the local page, exactly as before.
+    /// The brand an agent's own pages declare, newest first. Reading the meta
+    /// tag rather than trusting a directory is what makes the theme follow the
+    /// work instead of the terminal.
+    static func declaredBrand(pages: [ArtifactStore.Page]) -> String? {
+        for page in pages.sorted(by: { $0.at > $1.at }) {
+            guard let head = try? String(contentsOfFile: page.path, encoding: .utf8)
+                .prefix(4_000) else { continue }
+            if let range = head.range(
+                of: #"<meta[^>]+name=["']intranet:brand["'][^>]+content=["']([^"']+)["']"#,
+                options: .regularExpression) {
+                let tag = String(head[range])
+                if let value = tag.range(of: #"content=["']([^"']+)["']"#,
+                                         options: .regularExpression) {
+                    return String(tag[value])
+                        .replacingOccurrences(of: "content=", with: "")
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Where brand faces live, shared by every local page rather than
+    /// embedded in each one.
+    public static var fontSheetRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/hq-fonts", isDirectory: true)
+    }
+
     public static var catalogURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Projects/intranet/catalog.json")
@@ -392,7 +464,10 @@ public enum HomeBase {
         let name = model.title ?? "Agent \(model.sessionId.prefix(8))"
         let newest = model.turns.first          // turns arrive newest-first
         let ordered = model.turns
-        let theme = Theme.forProject(cwd: model.cwd).forAgent(sessionId: model.sessionId)
+        // The pages say what this work is; the directory only guesses.
+        let theme = (Theme.forBrand(declaredBrand(pages: model.pages))
+                     ?? Theme.forProject(cwd: model.cwd))
+            .forAgent(sessionId: model.sessionId)
 
         // ---- the top of the page --------------------------------------------
         // What sits here is decided by subtraction. The eyebrow is gone: a
@@ -588,8 +663,7 @@ public enum HomeBase {
           :root{--bg:\(theme.bg);--fg:\(theme.ink);--dim:\(theme.muted);--faint:\(theme.faint);
                 --rule:\(theme.line);--amber:\(theme.amber);--card:\(theme.paper);
                 --accent:\(theme.accent);--brand:\(theme.brand);
-                --serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;
-                --sans:ui-sans-serif,-apple-system,'Helvetica Neue',sans-serif}
+                --serif:\(theme.serif);--sans:\(theme.sans)}
           \(theme.hasDark ? """
           @media(prefers-color-scheme:dark){:root{--bg:#131310;--fg:#eceae2;--dim:#a5a196;
                 --faint:#6a6558;--rule:#2e2c26;--amber:#d9a441;--card:#1e1d19;
