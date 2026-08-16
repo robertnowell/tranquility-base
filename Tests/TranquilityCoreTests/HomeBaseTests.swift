@@ -113,6 +113,53 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertTrue(house.contains("prefers-color-scheme:dark"))
     }
 
+    /// A page is filed under the turn that made it, and the newest turn
+    /// prints the whole ladder — "what just happened" is the question a hub is
+    /// opened to answer (ruled 16 Aug).
+    func testEachTurnShowsTheWorkItMade() {
+        let older = HomeBase.Turn(at: Date(timeIntervalSince1970: 1_000_000),
+                                  topic: "the poller", happened: "Landed it.")
+        let newest = HomeBase.Turn(at: Date(timeIntervalSince1970: 1_002_000),
+                                   topic: "the report", happened: "Wrote it up.",
+                                   nextStep: "Ship it.", question: "Go?",
+                                   findings: "Twelve defects across four seams.",
+                                   solution: "An alias index closes the family.",
+                                   rationale: "Because collisions are undetectable today.")
+        let duringNewest = ArtifactStore.Page(
+            path: "/Users/x/Documents/deep-research/a/index.html",
+            at: Date(timeIntervalSince1970: 1_001_500))
+        let html = HomeBase.render(model(turns: [newest, older], pages: [duringNewest]))
+
+        // The ladder, on the newest turn only.
+        XCTAssertTrue(html.contains("Twelve defects across four seams."))
+        XCTAssertTrue(html.contains("An alias index closes the family."))
+        XCTAssertTrue(html.contains("Because collisions are undetectable today."))
+
+        // The page sits inline, and no shelf is needed.
+        XCTAssertTrue(html.contains("ul class=\"made\""))
+        XCTAssertFalse(html.contains("Earlier pages"))
+
+        // The work comes before any list of pages, always.
+        let done = html.range(of: "What it has done")!
+        let made = html.range(of: "ul class=\"made\"")!
+        XCTAssertTrue(made.lowerBound > done.lowerBound)
+    }
+
+    /// A page whose turn has been compacted past the cap falls to the shelf,
+    /// and the shelf sits BELOW the stack — older work never outranks the work
+    /// you just did.
+    func testCompactedPagesFallToTheShelfBelow() {
+        // 20 turns: everything past the 3+6 cap is digest, so a page made
+        // during turn 15 has no block to sit under.
+        let turns = (1...20).reversed().map { turn($0) }   // newest first
+        let ancient = ArtifactStore.Page(path: "/Users/x/Documents/old/index.html",
+                                         at: turns[15].at)
+        let html = HomeBase.render(model(turns: turns, pages: [ancient]))
+        let done = html.range(of: "What it has done")!
+        let shelf = html.range(of: "Earlier pages")!
+        XCTAssertTrue(shelf.lowerBound > done.lowerBound)
+    }
+
     /// Site furniture is what repeats. One title cannot say which half is the
     /// brand; a list can.
     func testTheSharedAffixIsStrippedFromPageTitles() {
@@ -191,7 +238,6 @@ final class HomeBaseTests: XCTestCase {
         let pages = [ArtifactStore.Page(path: "/tmp/a/index.html", at: Date()),
                      ArtifactStore.Page(path: "/tmp/b/index.html", at: Date())]
         let html = HomeBase.render(model(turns: [turn(1)], pages: pages))
-        XCTAssertTrue(html.contains("What it has made"))
         XCTAssertFalse(html.contains("This page summarises"))
         XCTAssertFalse(html.contains("2 pages"))
         XCTAssertFalse(HomeBase.render(model(turns: [turn(1)], pages: [pages[0]]))
