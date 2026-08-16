@@ -95,7 +95,8 @@ final class HookRepairTests: XCTestCase {
         let root = try JSONSerialization.jsonObject(
             with: Data(contentsOf: settings)) as? [String: Any]
         let post = (root?["hooks"] as? [String: Any])?["PostToolUse"] as? [[String: Any]]
-        XCTAssertEqual(post?.first?["matcher"] as? String, "Write")
+        XCTAssertEqual(post?.first?["matcher"] as? String, HookManifest.expected
+            .first { $0.marker == "artifact-hook" }?.matcher)
     }
 
     /// The whole repo moved: every path broke at once, so no healthy entry can

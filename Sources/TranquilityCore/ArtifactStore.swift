@@ -84,18 +84,23 @@ public enum ArtifactStore {
         for raw in text.split(separator: "\n") {
             let parts = raw.split(separator: "\t", maxSplits: 1)
             let path = String(parts.count == 2 ? parts[1] : parts[0])
-            guard path.hasPrefix("/"), seen[path] == nil,
-                  !excluded(path) else { continue }
+            guard path.hasPrefix("/"), !excluded(path) else { continue }
             let ms = parts.count == 2 ? Double(parts[0]) ?? 0 : 0
             // A line with no stamp (the hook wrote path-only lines for a
             // while) is not "31 Dec 1969" — epoch zero rendered as a date is
             // the page claiming knowledge it does not have. The file's own
             // mtime is the honest substitute; only when the file cannot answer
             // either does the page get no date at all.
-            seen[path] = ms > 0 ? Date(timeIntervalSince1970: ms / 1000)
+            let at = ms > 0 ? Date(timeIntervalSince1970: ms / 1000)
                 : (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate]
                     as? Date ?? .distantPast
-            order.append(path)
+            // LATEST wins. Keeping the first sighting pinned a page to the turn
+            // that started it, so a report worked on across three turns stayed
+            // filed under the oldest one and never appeared beside the work
+            // that finished it (measured 16 Aug on a research page rewritten
+            // twice). A page's date is when it last became what it is.
+            if let already = seen[path] { seen[path] = max(already, at) }
+            else { seen[path] = at; order.append(path) }
         }
         return order.filter(exists).map { Page(path: $0, at: seen[$0] ?? .distantPast) }
     }

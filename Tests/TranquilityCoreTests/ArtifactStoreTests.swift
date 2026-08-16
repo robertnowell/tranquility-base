@@ -122,6 +122,20 @@ final class ArtifactStoreTests: XCTestCase {
             [])
     }
 
+    /// A page worked on across several turns is dated by its LATEST write, so
+    /// it appears beside the work that finished it rather than pinned to the
+    /// turn that started it (measured 16 Aug).
+    func testAPageIsDatedByItsLatestWrite() {
+        let page = "/Users/x/Documents/deep-research/a/index.html"
+        ArtifactStore.record(page, session: session, root: root,
+                             at: Date(timeIntervalSince1970: 1_000))
+        ArtifactStore.record(page, session: session, root: root,
+                             at: Date(timeIntervalSince1970: 9_000))
+        let pages = ArtifactStore.history(for: session, root: root, exists: { _ in true })
+        XCTAssertEqual(pages.count, 1)
+        XCTAssertEqual(pages.first?.at, Date(timeIntervalSince1970: 9_000))
+    }
+
     /// A regex is not a redirect. `re.sub(r'<[^>]+>', ...)` carries two
     /// greater-than signs and writes nothing; treating them as redirects put
     /// three read-only pages back on a hub minutes after they were pruned.
