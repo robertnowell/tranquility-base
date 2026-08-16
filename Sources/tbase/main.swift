@@ -26,6 +26,10 @@ func usage() -> Never {
       tbase agent-command [cmd] how new AND revived sessions are launched
       tbase revive <id> [--dry-run]
                                 bring a dead session back, same path as the panel
+      tbase end <id|prefix|name>
+                                end a live session, same path as the grid's
+                                right-click: SIGTERM to its process group, and
+                                SIGKILL only if it has to. Never touches the tab
       tbase cursors             how far you have got with each session
       tbase calls [n]           full input and output of the last n model calls
       tbase dogfood [days]      WS-E counters summary (default 7 days)
