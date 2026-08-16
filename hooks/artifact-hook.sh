@@ -73,6 +73,7 @@ EOF
 # the blank template on a hub as "page.html" (15 Aug).
 case "$FILE" in
   */scratchpad/*|/tmp/*|/private/tmp/*|/var/folders/*|*/.claude/*) exit 0;;
+  */Documents/agents/*) exit 0;;   # a hub is the index over artifacts, not one
 esac
 
 # 1. RECORD. Append `ms<TAB>path`, the same line ArtifactStore.record writes —

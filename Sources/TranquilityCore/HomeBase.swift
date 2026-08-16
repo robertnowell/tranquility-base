@@ -347,7 +347,7 @@ public enum HomeBase {
         <ol>\(rows)</ol>
         \(digest)\(empty)
         <footer>Created by <b>\(e(model.title ?? "—"))</b> &middot;
-        callsign <b>\(e(model.callsign ?? "—"))</b> &middot; agent \(e(String(model.sessionId.prefix(8))))
+        session \(e(String(model.sessionId.prefix(8))))
         <a class="discuss" href="tranquilitybase://discuss?session=\(e(model.sessionId))">Discuss with agent</a>
         </footer></div>
         <div id="card" role="tooltip"></div>
