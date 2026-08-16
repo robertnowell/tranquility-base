@@ -315,6 +315,16 @@ public final class QueueStore: Sendable {
                 """)
         }
 
+        // The hub's written header (A/B'd 11 Aug, shipped 15 Aug): the
+        // headline names the finding, the deck names what is left. Old rows
+        // stay null and render the derived header, exactly as before.
+        m.registerMigration("v11_brief_headline") { db in
+            try db.alter(table: "brief") { t in
+                t.add(column: "headline", .text)
+                t.add(column: "deck", .text)
+            }
+        }
+
         return m
     }
 
@@ -701,6 +711,7 @@ public final class QueueStore: Sendable {
             rationale: brief.rationale,
             findings: brief.findings, solution: brief.solution,
             recap: brief.recap, proposal: brief.proposal,
+            headline: brief.headline, deck: brief.deck,
             callsign: callsign, provider: provider)
         try dbQueue.write { db in try row.save(db) }
     }

@@ -67,6 +67,14 @@ EOF
 [ -z "${SESSION:-}" ] && exit 0
 [ -z "${FILE:-}" ] && exit 0
 
+# Never an artifact, and never worth a footer: render probes in a session
+# scratchpad, anything in the system temp trees, and the harness's own
+# library. Mirrors ArtifactStore.excluded — editing a skill template once put
+# the blank template on a hub as "page.html" (15 Aug).
+case "$FILE" in
+  */scratchpad/*|/tmp/*|/private/tmp/*|/var/folders/*|*/.claude/*) exit 0;;
+esac
+
 # 1. RECORD. Append `ms<TAB>path`, the same line ArtifactStore.record writes —
 #    the file stopped being "the latest page" the day the hub grew a page LIST,
 #    and this hook kept replacing it: one truncating printf clobbered a
