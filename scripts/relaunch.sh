@@ -77,7 +77,27 @@ echo $$ > "$LOCKDIR/pid"
 # archaeology rule 10's commit trailers killed for code. $PPID's command line
 # names a human shell or a Claude session's harness; CLAUDE_SESSION_ID names
 # the session outright when the harness exports it.
-LEDGER="$(dirname "$0")/../logs/deploys.log"
+# ONE ledger, wherever the script was invoked from. `logs/` is gitignored, so
+# a path relative to the script is a path relative to the WORKTREE — and with
+# a worktree per session (rule 5) that turns "every deploy is on the record"
+# into "on one of N records", each holding only the deploys nobody else made.
+# Measured 16 Aug, before the rule landed: 48 lines in the main checkout and
+# zero in all 21 worktrees, because deploying had happened to be done from the
+# same place every time. The lock above is already absolute for exactly this
+# reason; the record it guards has to be too.
+#
+# Resolved through the COMMON git dir, which every worktree shares, so the
+# ledger stays exactly where it has always been — the main checkout's
+# logs/deploys.log, with its existing history — and every worktree appends to
+# that one file instead of quietly starting its own.
+#
+# TB_DEPLOY_LEDGER overrides it for tests; never set it in normal use.
+if [ -z "${TB_DEPLOY_LEDGER:-}" ]; then
+  _common=$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")
+  case "$_common" in /*) ;; *) _common="$PWD/$_common" ;; esac
+  TB_DEPLOY_LEDGER="$(cd "$(dirname "$_common")" && pwd)/logs/deploys.log"
+fi
+LEDGER="$TB_DEPLOY_LEDGER"
 mkdir -p "$(dirname "$LEDGER")"
 printf '%s pid=%s ppid=%s invoker=%q session=%s\n' \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$PPID" \
