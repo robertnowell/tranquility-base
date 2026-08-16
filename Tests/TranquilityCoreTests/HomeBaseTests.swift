@@ -64,6 +64,26 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertTrue(html2.contains("It shipped! Review it?"))
     }
 
+    /// Site furniture is what repeats. One title cannot say which half is the
+    /// brand; a list can.
+    func testTheSharedAffixIsStrippedFromPageTitles() {
+        let leading = HomeBase.strippingSharedAffix([
+            "Tranquility Base — roadmap ahead",
+            "Tranquility Base — Console palette experiments",
+            "Kopi — the whole brief"])
+        XCTAssertEqual(leading, ["roadmap ahead", "Console palette experiments",
+                                 "Kopi — the whole brief"])
+
+        let trailing = HomeBase.strippingSharedAffix([
+            "The capture strip ruling — Tranquility Base",
+            "Issue triage — Tranquility Base"])
+        XCTAssertEqual(trailing, ["The capture strip ruling", "Issue triage"])
+
+        // One page proves nothing about furniture, so nothing is stripped.
+        XCTAssertEqual(HomeBase.strippingSharedAffix(["Tranquility Base — roadmap ahead"]),
+                       ["Tranquility Base — roadmap ahead"])
+    }
+
     /// Topics and goals are model-written and land in markup unescaped
     /// otherwise.
     func testModelWrittenTextIsEscaped() {
