@@ -58,6 +58,15 @@ final class StatusHUD: NSObject {
     private var controlsSticky: ControlsNoteView!
     private var stripLabel: NSTextField!
     private var stripRule: NSView!
+    /// The drop tray's chips: what would ride the next voice reply to the
+    /// session currently addressed. A row in the content stack like any other
+    /// — it extends the panel downward rather than displacing the card, the
+    /// same geometry the capture strip already uses.
+    private var trayRow: TrayRowView!
+    /// The whole-surface drop invitation, parented to `background` so it
+    /// covers every face without joining the stack (a row would resize the
+    /// panel mid-drag, which is reflow under the pointer).
+    private var dropOverlay: DropOverlayView!
     private var contentStack: NSStackView?
     /// The collapsed column. Built once, hidden until the width changes.
     private var strip: CollapsedStrip?
@@ -1462,6 +1471,10 @@ final class StatusHUD: NSObject {
         // funnel exists to close, and it would draw a line across a card that
         // has nothing under it.
         stripLabel.isHidden = true; stripRule.isHidden = true
+        // The chips are baselined off like every other widget and re-derived
+        // below. Never left standing from a previous face: a chip belongs to
+        // one session, and a face that addresses nobody must not show one.
+        trayRow.isHidden = true
         // The footer belongs to the grid alone, and the sticky dies with it: a
         // note left open while the face changes underneath is exactly the
         // residue class render()'s baseline exists to make impossible.
@@ -1711,6 +1724,30 @@ final class StatusHUD: NSObject {
             stateLabel.isHidden = false
             stateLabel.textColor = noticeLens.color
             stateLabel.attributedStringValue = placardText(notice, color: noticeLens.color)
+        }
+
+        // The drop tray's chips, derived rather than stored: whatever Core
+        // has staged for the session THIS panel would send to. One resolution
+        // answers "who gets a drop" and "whose chips are these", so the files
+        // you can see are exactly the files that would ride — the invariant
+        // the whole feature rests on, held by construction instead of by two
+        // call sites agreeing.
+        //
+        // Suppressed on the faces that address nobody: the list and the
+        // settings panes are not conversations, and chips there would name a
+        // session the face does not show. If the chips cannot be rendered,
+        // the files do not ride — the disclosure IS the license to attach.
+        switch state {
+        case .settings, .pastAgents, .hidden:
+            break
+        default:
+            if let target = replyTargetForDrop?() {
+                let staged = stagedFiles?(target.sessionId) ?? []
+                trayRow.apply(staged)
+                trayRow.isHidden = staged.isEmpty
+            } else {
+                trayRow.apply([])
+            }
         }
 
         // The action row exists exactly when a quiet action is visible. (The
@@ -2039,6 +2076,44 @@ final class StatusHUD: NSObject {
     var onOpenPastAgents: (() -> Void)?
     /// Wired by the app: focus a LIVE session's terminal tab.
     var onGoToSession: ((String) -> Void)?
+
+    // MARK: - The drop tray's three wires
+
+    /// What is staged for a session right now, asked at render time rather
+    /// than pushed and cached. The chips are then a PROJECTION of Core's tray
+    /// — they cannot go stale, and there is no second copy of the truth to
+    /// keep in step (the five-booleans lesson, applied to data instead of
+    /// state).
+    var stagedFiles: ((String) -> [String])?
+    /// A drop landed on the panel. The app resolves the target, persists
+    /// image data that has no file behind it, and stages. Returns false when
+    /// it could not be taken, so the surface can say so instead of eating it.
+    var onFilesDropped: (([DroppedItem]) -> Bool)?
+    /// One chip's ✕: unstage that path for this session.
+    var onUnstage: ((_ session: String, _ path: String) -> Void)?
+
+    /// Who a drop would go to, and whose chips are therefore on screen. Nil
+    /// refuses the drag outright — no overlay, no promise the app cannot keep
+    /// (a "drop here" that then reports "nothing to reply to" is worse than a
+    /// cursor that never invited you).
+    ///
+    /// ONE closure answers both questions on purpose. The invariant this
+    /// feature lives or dies by is that the chips you can see are exactly the
+    /// files that will ride; two resolutions could disagree, and the failure
+    /// would be a file riding to a session the panel never named.
+    ///
+    /// Must be CHEAP — render() calls it on every repaint, and rule 9 says
+    /// the main actor never waits. The app answers from a value it refreshes
+    /// on its own tick, never by probing `claude agents --json` here.
+    var replyTargetForDrop: (() -> (sessionId: String, label: String)?)?
+
+    /// One dragged item, already resolved to something durable. A file drag
+    /// carries a path; a drag out of a browser carries bitmap data with no
+    /// file behind it, which the app writes to disk before this reaches Core.
+    enum DroppedItem {
+        case file(String)
+        case imageData(Data, suggestedName: String)
+    }
 
     /// The name a picked row was showing, for the receipt.
     private func pastListName(_ id: String) -> String {
@@ -4408,7 +4483,25 @@ final class StatusHUD: NSObject {
         // Opaque light console surface, panel-wide (ruled — the blur is dead: an
         // instrument guarantees its own contrast, a blur borrowed the desktop's).
         // Same corner radius, shadow, and non-activating behavior as before.
-        let background = NSView(frame: panel.contentView!.bounds)
+        // A drag destination rather than a plain view: the whole surface takes
+        // files (ruled 15 Aug). Dragging needs no key status, so the panel is
+        // exactly as non-activating as it ever was.
+        let background = DropSurfaceView(frame: panel.contentView!.bounds)
+        background.registerForDraggedTypes(DropSurfaceView.acceptedTypes)
+        background.canAccept = { [weak self] in self?.replyTargetForDrop?()?.label }
+        background.onDragTargetChanged = { [weak self] target in
+            guard let self else { return }
+            if let target { dropOverlay.show(target: target) }
+            else { dropOverlay.isHidden = true }
+        }
+        background.onDrop = { [weak self] items in
+            guard let self, let accepted = onFilesDropped?(items) else { return false }
+            // Repaint on the way out: the chips the drop just created are a
+            // render-time read of Core's tray, so the surface only has to say
+            // "something changed".
+            if accepted { render() }
+            return accepted
+        }
         background.autoresizingMask = [.width, .height]
         background.wantsLayer = true
         background.layer?.backgroundColor = StateLegend.Palette.surface.cgColor
@@ -4568,6 +4661,14 @@ final class StatusHUD: NSObject {
         stripRule.translatesAutoresizingMaskIntoConstraints = false
         stripRule.heightAnchor.constraint(equalToConstant: 1).isActive = true
 
+        trayRow = TrayRowView()
+        trayRow.onRemove = { [weak self] path in
+            guard let self, let session = currentTarget?.sessionId else { return }
+            onUnstage?(session, path)
+            Permissions.log("tray: unstaged \((path as NSString).lastPathComponent)")
+            render()
+        }
+
         gridFooter = GridFooterView(width: Self.gridWidth)
         controlsSticky = ControlsNoteView()
         controlsSticky.isHidden = true
@@ -4651,9 +4752,14 @@ final class StatusHUD: NSObject {
         // move (ruled 10 Aug: "extend below, not move everything down by
         // inserting above"). The panel already grows this way — `position`
         // anchors the top edge — so the strip costs no geometry work.
+        // The tray sits UNDER the capture strip and above the countdown: the
+        // strip is what the microphone is doing, the chips are what will go
+        // with it, and the readback that names them both renders in the strip
+        // directly above. Same downward-growth as the strip — a drop extends
+        // the panel, it never moves the card.
         let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
                                         waitingRows, pastList, bodyLabel,
-                                        stripRule, stripLabel, gridFooter,
+                                        stripRule, stripLabel, trayRow, gridFooter,
                                         countdownBar, meter,
                                         settingsTabs, launchRow, directoryRow,
                                         voiceList, hintLabel, buttons])
@@ -4674,6 +4780,20 @@ final class StatusHUD: NSObject {
             controlsSticky.leadingAnchor.constraint(equalTo: gridFooter.leadingAnchor),
             controlsSticky.bottomAnchor.constraint(equalTo: gridFooter.topAnchor,
                                                    constant: -8),
+        ])
+
+        // Above everything, pinned to the panel's own edges rather than to the
+        // stack: it covers whatever face is up, and — like the sticky — it is
+        // outside the stack, so it contributes nothing to the fitting size
+        // resizeToFit measures. The panel does not change size when a drag
+        // arrives, which is the whole point of an overlay over a row.
+        dropOverlay = DropOverlayView()
+        background.addSubview(dropOverlay, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            dropOverlay.topAnchor.constraint(equalTo: background.topAnchor),
+            dropOverlay.leadingAnchor.constraint(equalTo: background.leadingAnchor),
+            dropOverlay.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+            dropOverlay.bottomAnchor.constraint(equalTo: background.bottomAnchor),
         ])
 
         // Collapse lives on the panel, left of the gear. It was in the menu bar
@@ -5190,6 +5310,259 @@ func letterspaced(_ text: String, size: CGFloat, tracking: CGFloat,
 /// `isADoor` is false whenever there is no live target — the app's own name on
 /// the empty room rides this same label, and a name that offers to open nothing
 /// is worse than a name that offers nothing.
+/// The panel's whole surface, as a drag destination.
+///
+/// The surface, not a well: ruled 15 Aug — "the whole UI should be
+/// draggable". A target zone would be one more thing to aim at on a panel
+/// whose entire premise is that you are not looking at it carefully, and the
+/// panel has nothing else a drag could mean.
+///
+/// Dragging needs neither key status nor activation, which is why this
+/// feature costs the away-channel nothing: `.nonactivatingPanel` stays
+/// exactly as unstealable as it was, and no gesture changes meaning.
+final class DropSurfaceView: NSView {
+    /// Who would receive a drop right now, or nil to refuse the drag. Asked
+    /// on entry rather than assumed: a drag invited onto a panel with no
+    /// resolvable session is a promise the app cannot keep, and "drop here"
+    /// followed by "nothing to reply to" is worse than no invitation at all.
+    var canAccept: (() -> String?)?
+    var onDrop: (([StatusHUD.DroppedItem]) -> Bool)?
+    /// Nil = the drag left or landed; non-nil = it is over us, addressed to
+    /// this label.
+    var onDragTargetChanged: ((String?) -> Void)?
+
+    /// Everything a drop can carry that we know what to do with. Registered
+    /// once at build; `.fileURL` covers Finder and most apps, the image types
+    /// cover a drag straight out of a browser, which carries no file at all.
+    static let acceptedTypes: [NSPasteboard.PasteboardType] =
+        [.fileURL, .tiff, .png]
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard let target = canAccept?(), !items(from: sender).isEmpty else {
+            onDragTargetChanged?(nil)
+            return []
+        }
+        onDragTargetChanged?(target)
+        return .copy
+    }
+
+    /// AppKit asks this repeatedly while the pointer moves inside us. It must
+    /// keep returning `.copy` or the cursor reverts to the no-drop badge
+    /// halfway across the panel, which reads as "this bit is not a target".
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        canAccept?() == nil ? [] : .copy
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        onDragTargetChanged?(nil)
+    }
+
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        // The overlay's one guaranteed teardown. `draggingExited` does NOT
+        // fire when a drop is performed, and a dropped file that left the
+        // invitation on screen would look like the drop never took.
+        onDragTargetChanged?(nil)
+    }
+
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        canAccept?() != nil && !items(from: sender).isEmpty
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let dropped = items(from: sender)
+        guard !dropped.isEmpty else { return false }
+        return onDrop?(dropped) ?? false
+    }
+
+    /// Files first, bitmap second. A Finder drag advertises both a file URL
+    /// and a preview image; taking the image would copy a file that already
+    /// has a perfectly good path, and hand the session a name like
+    /// "pasted-3f2a.png" instead of its own.
+    private func items(from sender: any NSDraggingInfo) -> [StatusHUD.DroppedItem] {
+        let board = sender.draggingPasteboard
+        if let urls = board.readObjects(forClasses: [NSURL.self],
+                                        options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           !urls.isEmpty {
+            return urls.map { .file($0.path) }
+        }
+        // A drag with no file behind it: PNG if offered, else the TIFF every
+        // AppKit drag carries, re-encoded so what lands on disk is a format
+        // anything downstream can open.
+        if let png = board.data(forType: .png) {
+            return [.imageData(png, suggestedName: "png")]
+        }
+        if let tiff = board.data(forType: .tiff),
+           let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            return [.imageData(png, suggestedName: "png")]
+        }
+        return []
+    }
+}
+
+/// The drop tray's chips: one row per staged file, above the action row.
+///
+/// A vertical list rather than wrapped pills, for the reason the grid is a
+/// list: filenames are long and a wrapped row reflows unpredictably as the
+/// set changes, while rows only ever grow downward — the geometry the panel
+/// already handles by anchoring its top edge.
+final class TrayRowView: NSStackView {
+    /// Per-path, never clear-all (a cross that took files you did not point
+    /// at is the surprise this whole feature exists to avoid).
+    var onRemove: ((String) -> Void)?
+
+    /// What is drawn right now, so `apply` can skip identical repaints —
+    /// render() runs on every tick and rebuilding subviews under the pointer
+    /// would kill the hover state on the ✕ you are reaching for.
+    private(set) var paths: [String] = []
+
+    init() {
+        super.init(frame: .zero)
+        orientation = .vertical
+        alignment = .leading
+        spacing = 3
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func apply(_ next: [String]) {
+        guard next != paths else { return }
+        paths = next
+        arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for path in next {
+            let row = ChipRow(path: path)
+            row.onRemove = { [weak self] in self?.onRemove?(path) }
+            addArrangedSubview(row)
+            row.widthAnchor.constraint(equalToConstant: 348).isActive = true
+        }
+    }
+
+    /// For the drill: the names as drawn, not the paths handed in.
+    var displayedNamesForTesting: [String] {
+        arrangedSubviews.compactMap { ($0 as? ChipRow)?.displayName }
+    }
+
+    var removeButtonsForTesting: [NSButton] {
+        arrangedSubviews.compactMap { ($0 as? ChipRow)?.removeButton }
+    }
+
+    private final class ChipRow: NSView {
+        var onRemove: (() -> Void)?
+        let displayName: String
+        let removeButton: NSButton
+
+        init(path: String) {
+            displayName = (path as NSString).lastPathComponent
+            removeButton = NSButton(title: StateLegend.Glyph.denied, target: nil, action: nil)
+            super.init(frame: .zero)
+            translatesAutoresizingMaskIntoConstraints = false
+
+            // The paperclip is the one glyph here that is not from the state
+            // legend: the legend's marks all mean something about a SESSION,
+            // and a staged file is a fact about the message instead.
+            let mark = NSTextField(labelWithString: "▣")
+            mark.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+            mark.textColor = StateLegend.Lens.chrome.color
+            mark.translatesAutoresizingMaskIntoConstraints = false
+
+            let name = NSTextField(labelWithString: displayName)
+            name.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+            name.textColor = StateLegend.Lens.content.color
+            name.lineBreakMode = .byTruncatingMiddle
+            name.maximumNumberOfLines = 1
+            // Middle truncation, and it must actually happen: a long filename
+            // otherwise stretches the row past the panel and the ✕ leaves the
+            // screen — the control you need most when a drop was wrong.
+            name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            name.translatesAutoresizingMaskIntoConstraints = false
+
+            removeButton.isBordered = false
+            removeButton.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
+            removeButton.contentTintColor = StateLegend.Lens.chrome.color
+            removeButton.attributedTitle = NSAttributedString(
+                string: StateLegend.Glyph.denied,
+                attributes: [.font: NSFont.monospacedSystemFont(ofSize: 10, weight: .medium),
+                             .foregroundColor: StateLegend.Lens.chrome.color])
+            removeButton.target = self
+            removeButton.action = #selector(removeTapped)
+            removeButton.translatesAutoresizingMaskIntoConstraints = false
+
+            addSubview(mark); addSubview(name); addSubview(removeButton)
+            NSLayoutConstraint.activate([
+                heightAnchor.constraint(equalToConstant: 16),
+                mark.leadingAnchor.constraint(equalTo: leadingAnchor),
+                mark.centerYAnchor.constraint(equalTo: centerYAnchor),
+                name.leadingAnchor.constraint(equalTo: mark.trailingAnchor, constant: 6),
+                name.centerYAnchor.constraint(equalTo: centerYAnchor),
+                name.trailingAnchor.constraint(lessThanOrEqualTo: removeButton.leadingAnchor,
+                                               constant: -6),
+                removeButton.trailingAnchor.constraint(equalTo: trailingAnchor),
+                removeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+                removeButton.widthAnchor.constraint(equalToConstant: 16),
+            ])
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        @objc private func removeTapped() { onRemove?() }
+
+        override func resetCursorRects() {
+            super.resetCursorRects()
+            addCursorRect(removeButton.frame, cursor: .pointingHand)
+        }
+    }
+}
+
+/// The drop invitation: the whole surface, one sentence, shown only while a
+/// drag is actually over the panel.
+///
+/// It covers the panel rather than joining the content stack on purpose. A
+/// row appearing mid-drag would resize the window under the pointer, which
+/// is reflow-on-hover — the same thing the collapsed strip's sticky note is
+/// forbidden from doing, and worse here because the drag would land
+/// somewhere other than where it was aimed.
+final class DropOverlayView: NSView {
+    private let label = NSTextField(labelWithString: "")
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        // The console surface at near-full opacity, so the card underneath
+        // reads as covered rather than as competing with the message.
+        layer?.backgroundColor = StateLegend.Palette.surface.withAlphaComponent(0.94).cgColor
+        layer?.cornerRadius = 8
+        layer?.borderWidth = 1
+        layer?.borderColor = StateLegend.Palette.hairline.cgColor
+
+        label.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+        label.textColor = StateLegend.Lens.content.color
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 12),
+        ])
+        isHidden = true
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Names the destination, because a drop that goes to the wrong agent is
+    /// this feature's one unrecoverable failure: the sentence you read while
+    /// deciding to let go is the last chance to catch it.
+    func show(target: String) {
+        label.stringValue = "Drop file here for \(target)"
+        isHidden = false
+    }
+
+    var messageForTesting: String { label.stringValue }
+
+    /// Invisible to the mouse: an overlay that hit-tests would swallow the
+    /// drag it exists to advertise.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 private final class DoorLabel: NSTextField {
     var isADoor = false {
         didSet {
