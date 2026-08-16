@@ -1241,10 +1241,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 lamp: activity == .working
                     || delivering.supersedesWaiting(event.sessionId, latestId: event.latestId)
                     ? .working : .ready,
-                // The weight carries the read state (ruled 13 Aug): the lamp
-                // stays lit — read is not answered — but an opened turn stops
-                // rendering at the unread weight.
-                unread: !event.heard)
+                // This band is the only one with a real read state: these
+                // rows HAVE a waiting turn. Everywhere else the answer is
+                // `.none`, which rests at the same intensity as `.opened`
+                // (16 Aug) — an idle session is not asking for you either.
+                read: event.heard ? .opened : .unread)
         }
         // Live sessions with nothing waiting: quiet rows, so a skipped or heard
         // session stays findable. Walked via `known` — already latestId DESC —
