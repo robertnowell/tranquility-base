@@ -393,43 +393,64 @@ The five independent booleans became `PanelState` + the stage arbiter
 Issues 5, 6 and 7 above were closed by exactly the mechanism this section promised.
 History: `docs/state-architecture.html`, `docs/3a-collapse.md`.
 
-## 17. The canary leaves its Terminal window behind — OPEN, six dead ends recorded
+## 17. The canary leaves its Terminal window behind — CLOSED BY DECISION
 
 Reported 16 Aug with a screenshot: three windows piled up, each showing
-"[Process was terminated by signal 15]". `scripts/canary.sh` has always had a
-cleanup block; it has never worked. An attempt to fix it on 16 Aug failed and
-was reverted, so this records what is already ruled out. **Do not re-try these
-in this order.**
+"[Process was terminated by signal 15]". `scripts/canary.sh` had a cleanup
+block that had never worked. It was rewritten several times, never fixed, and
+then **removed**, which is the resolution.
 
-The problem is naming the canary's own Terminal window at cleanup time, on a
-machine where several sessions run canaries concurrently.
+**The question that closed it was "what are we actually trying to do here?"**
+The canary's one real obligation is to leave no stray `claude` process running
+against a throwaway directory. That always worked, and works now: the kill goes
+by tty, which is the right handle because a tty names a device with live
+processes on it. Verified after the change — no stray processes, no leftover
+temp dirs. A dead Terminal tab costs no memory and no CPU.
+
+So the cure was more dangerous than the disease. Closing the window requires a
+handle on the window, and the shipped code used the tty, which macOS recycles
+the instant a shell exits: four windows were measured claiming `/dev/ttys007`
+simultaneously, three dead canaries and one LIVE coding session. Searching for
+the first tty match and closing it could close the window somebody is working
+in. That is a real hazard accepted in exchange for tidiness, and tidiness is
+not worth it.
+
+The windows persist at all because Terminal is configured to keep them:
+`shellExitAction = 2` ("Don't close the window") on every profile on this
+machine. The cleanup was fighting a user preference from the outside.
+
+**If they ever must go, invert it.** Do not hunt the window. Give the canary
+its own Terminal profile whose shell-exit action closes the window, launch
+into that profile, and kill only the `claude` process so the shell exits on its
+own. The window then closes itself and nothing has to identify it.
+
+### What does not identify a Terminal window (so nobody re-tries these)
 
 | handle | why it fails |
 |---|---|
-| tty, at cleanup | Not a handle. macOS recycles the device number the moment a shell exits. Measured: FOUR windows reporting `/dev/ttys007` at once — three dead canaries and one LIVE coding session. The shipped code closes the first match, so it can close somebody's work. |
-| `id of front window`, at creation | `do script` does not reliably front the new window before the next statement runs. Under load this captures the PREVIOUS canary's window, so each run closes its predecessor's and leaks its own — while reporting a clean close. |
+| tty, at cleanup | Recycled the moment a shell exits. Four windows on `/dev/ttys007` at once, three dead canaries and one live session. |
+| `id of front window`, at creation | `do script` does not reliably front the new window before the next statement, so this names the PREVIOUS canary's window; each run then closes its predecessor's and leaks its own while reporting a clean close. |
 | the window that appeared (set-difference) | Other sessions deploy concurrently, so the new window can be theirs. Leaked one run in three. |
-| tab `contents` containing the run's temp dir | Matches any window that merely PRINTED the path — **including the session driving the canary**. Observed selecting the driver's own window; only its being busy prevented the close. |
+| tab `contents` containing the run's temp dir | Matches any window that merely PRINTED the path, **including the session driving the canary**. Observed selecting the driver's own window; only its being busy prevented the close. |
 | `custom title` on the tab | Settable without error, did not read back. |
-| tty + busy at creation, then close by id | The soundest of the six and still unresolved: the captured id reported `NOTOURS` at cleanup (marker absent from that window). Not fully diagnosed. |
-
-Two traps that hid the failures and cost more time than the bug:
-
-- **`before` is an AppleScript reserved word.** Using it as a variable is a
-  syntax error reported as *"Expected expression but found `to`"* pointing at
-  the assignment. The probe died before opening any window, so a leak test that
-  only counted leftover windows saw zero and passed. A green that means
-  "nothing ran" looks exactly like a green that means "nothing leaked".
-- **bash 3.2 cannot parse a heredoc inside command substitution.** The
-  cleanup written inline that way assigned an empty string on every iteration
-  while `bash -n` reported the script fine. The probe already lives in its own
-  file for this exact reason; the cleanup must too.
+| tty + busy at creation, close by id | Soundest of the six; returned `NOTOURS` at cleanup and was never fully diagnosed. Best hypothesis: the tab is not yet `busy` immediately after `do script`, so the scan matches nothing and falls through to a racy fallback. Poll for busy before capturing, if anyone resumes this. |
 
 Iterating `windows` while other sessions open and close theirs also raises
 "Can't get item 32 of every window" — snapshot the ids and address
 `window id N` directly, with a `try` per window.
 
-**Whatever comes next must verify the canary PASSES, not merely that no window
-leaked**, and must count leftovers with a predicate proven against a known
-leftover first. Two separate false greens in this attempt came from measuring
-the wrong thing.
+### Two traps that cost more than the bug
+
+- **`before` is an AppleScript reserved word.** Using it as a variable is a
+  syntax error reported as *"Expected expression but found `to`"* pointing at
+  the assignment. The probe died before opening any window, so a leak test that
+  only counted leftover windows saw zero and passed. A green meaning "nothing
+  ran" is indistinguishable from one meaning "nothing leaked".
+- **bash 3.2 cannot parse a heredoc inside command substitution.** A cleanup
+  written that way assigned an empty string every iteration while `bash -n`
+  called the script fine. The probe already lives in its own file for exactly
+  this reason.
+
+Any future work here must assert the canary **PASSES**, not merely that no
+window leaked, and must prove its leftover-count predicate against a known
+leftover first. Two separate false greens came from measuring the wrong thing.
