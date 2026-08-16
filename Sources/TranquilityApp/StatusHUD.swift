@@ -2397,6 +2397,10 @@ final class StatusHUD: NSObject {
     /// in-flight animation cannot be mistaken for a settled size.
     private var intendedHeight: CGFloat?
     private var surfaceView: NSView?
+    /// The same view as `surfaceView`, typed: the drill drives the drag
+    /// callbacks directly, since a synthetic NSDraggingInfo is not something
+    /// a launch drill can conjure.
+    private var dropSurface: DropSurfaceView?
 
     /// The bar, positioned and ready. Builds the panel if a gesture arrives
     /// before the first paint — "I should never question whether my control
@@ -3526,6 +3530,7 @@ final class StatusHUD: NSObject {
         readWeightDrill()
         pastAgentsDrill()
         launchSettingsDrill()
+        dropTrayDrill()
         elasticGridDrill()
         goToSessionDrill()
 
@@ -3809,6 +3814,106 @@ final class StatusHUD: NSObject {
         // Ordering front without key hands focus back to whatever had it,
         // rather than leaving a keyboard nobody owns.
         panel.orderFront(nil)
+    }
+
+    /// The drop tray, on a real panel.
+    ///
+    /// Everything here is invisible to `swift test` by construction: whether
+    /// a drag is refused, whether the chips on screen belong to the session
+    /// the panel is addressing, and whether a drag resizes the window are
+    /// facts about views. The tray's LOGIC is unit-tested in Core
+    /// (AttachmentTrayTests); this asserts the half that draws.
+    private func dropTrayDrill() {
+        let priorTarget = replyTargetForDrop
+        let priorStaged = stagedFiles
+        let priorUnstage = onUnstage
+        defer {
+            replyTargetForDrop = priorTarget
+            stagedFiles = priorStaged
+            onUnstage = priorUnstage
+        }
+
+        // A tray with two files for A, one for B — so a face addressing A can
+        // be caught showing B's.
+        var tray = ["A": ["/tmp/one.png", "/tmp/two.pdf"], "B": ["/tmp/other.png"]]
+        var unstaged: (session: String, path: String)?
+        stagedFiles = { tray[$0] ?? [] }
+        onUnstage = { session, path in unstaged = (session, path) }
+
+        // Addressing A, on a card.
+        replyTargetForDrop = { (sessionId: "A", label: "promotions copy") }
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("A card with files attached."),
+            sessionId: "A", pid: 1, project: "promotions copy", cwd: "/tmp")
+        let chipsShowOnTheCard = !trayRow.isHidden
+        let chipsAreTheStagedFiles =
+            trayRow.displayedNamesForTesting == ["one.png", "two.pdf"]
+
+        // The SEV 1, on the surface this time: the panel is addressing A, so
+        // B's file must be nowhere on it. Core makes the wrong-session RIDE
+        // impossible; this asserts the panel cannot even SHOW it, because the
+        // chips are what licenses the attachment.
+        let noOtherSessionsChips =
+            !trayRow.displayedNamesForTesting.contains("other.png")
+
+        // The invitation names its destination, and appears only while a drag
+        // is actually over the panel.
+        let overlayHiddenAtRest = dropOverlay.isHidden
+        let heightBefore = panel?.frame.height ?? 0
+        dropSurface?.onDragTargetChanged?("promotions copy")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let overlayShows = !dropOverlay.isHidden
+        let overlayNamesTheAgent =
+            dropOverlay.messageForTesting == "Drop file here for promotions copy"
+        // A drag must not resize the window under the pointer: the overlay is
+        // parented outside the content stack precisely so the panel holds
+        // still while you are aiming at it.
+        let panelHeldStill = abs((panel?.frame.height ?? 0) - heightBefore) < 1
+        dropSurface?.onDragTargetChanged?(nil)
+        let overlayLeaves = dropOverlay.isHidden
+
+        // No target, no invitation. A "drop here" the app cannot honour is
+        // worse than a cursor that never invited you.
+        replyTargetForDrop = { nil }
+        let refusesWithNoTarget = dropSurface?.canAccept?() == nil
+        render()
+        let noChipsWithNoTarget = trayRow.isHidden
+
+        // Back to A, then the chip's ✕: per path, and it names the session it
+        // came from — a cross that cleared the other file would be the same
+        // surprise the whole feature exists to avoid.
+        replyTargetForDrop = { (sessionId: "A", label: "promotions copy") }
+        render()
+        trayRow.removeButtonsForTesting.first.map {
+            _ = $0.target?.perform($0.action, with: $0)
+        }
+        let crossUnstagesOnePath = unstaged?.path == "/tmp/one.png"
+        let crossNamesItsSession = unstaged?.session == "A"
+
+        // The faces that address nobody: a list and a settings pane are not
+        // conversations, and a chip there would name a session the face does
+        // not show.
+        tray["A"] = ["/tmp/one.png"]
+        showPastAgents(items: [])
+        let noChipsOnTheList = trayRow.isHidden
+        goHomeFromPastAgents()
+        render()
+
+        SelfTest.report("dropTray", [
+            ("chipsShowOnTheCard", chipsShowOnTheCard),
+            ("chipsAreTheStagedFiles", chipsAreTheStagedFiles),
+            ("noOtherSessionsChips", noOtherSessionsChips),
+            ("overlayHiddenAtRest", overlayHiddenAtRest),
+            ("overlayShowsOnDrag", overlayShows),
+            ("overlayNamesTheAgent", overlayNamesTheAgent),
+            ("panelHeldStillUnderTheDrag", panelHeldStill),
+            ("overlayLeavesWithTheDrag", overlayLeaves),
+            ("refusesWithNoTarget", refusesWithNoTarget),
+            ("noChipsWithNoTarget", noChipsWithNoTarget),
+            ("crossUnstagesOnePath", crossUnstagesOnePath),
+            ("crossNamesItsSession", crossNamesItsSession),
+            ("noChipsOnTheList", noChipsOnTheList),
+        ])
     }
 
     private func quietRowsDrill() {
@@ -4515,6 +4620,7 @@ final class StatusHUD: NSObject {
         // same rounded mask as the console itself, so its ends taper with the
         // corner instead of colliding with it.
         surfaceView = background
+        dropSurface = background
 
         // Widgets carry no initial visibility: build() is only reached from
         // render(), which writes every widget's visibility before the panel is

@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import TranquilityCore
 
@@ -158,6 +159,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// receipt (ui-pass-7, ruling 5) is a different ruling and still
     /// auto-returns: it is a passive confirmation with nothing left to act on.
     private var returnToGridWork: DispatchWorkItem?
+    /// Who a dropped file would be staged for, and whose chips the panel is
+    /// therefore showing. One value answers both, so what you can see is
+    /// always exactly what would ride.
+    ///
+    /// Cached, and deliberately NOT `resolveReplyContext()`: that probe
+    /// shells out for a pid, and this is read on every repaint. Refreshed on
+    /// the tick and at every moment that changes the addressee.
+    private var dropTarget: (sessionId: String, label: String)?
     private static let returnToGridDelay: TimeInterval = 4
     /// Incremented every time a reply gesture starts.
     ///
@@ -372,6 +381,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // an expired entry is already invisible to the lamp. This just
                 // stops the map growing across a long-lived app.
                 self.delivering.prune()
+                // Who a dropped file would go to, refreshed on the tick and
+                // read synchronously by render(). Cached rather than resolved
+                // per paint because the panel must never wait, and stale by at
+                // most one tick is exactly as stale as the grid beside it.
+                self.refreshDropTarget()
                 let rows = self.sessionRowsNow()
                 let waiting = rows.filter { $0.lamp == .ready }.count
                 // The menu-bar annunciator refreshes every tick, so its count can
@@ -491,6 +505,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if BrowserFocus.focusExistingTab(url) == .notFound {
                 NSWorkspace.shared.open(url)
             }
+        }
+        // The drop tray's three wires (docs: the panel takes files).
+        //
+        // Answered from a CACHED tuple, never a live probe: render() calls
+        // this on every repaint, and resolveReplyContext shells out to
+        // `claude agents --json` for a pid the tray does not need. Rule 9 —
+        // the main actor draws, it does not wait on a subprocess.
+        hud.replyTargetForDrop = { [weak self] in self?.dropTarget }
+        hud.stagedFiles = { [weak self] session in
+            self?.coordinator?.attachments.staged(for: session) ?? []
+        }
+        hud.onUnstage = { [weak self] session, path in
+            self?.coordinator?.attachments.unstage(path, session: session)
+        }
+        hud.onFilesDropped = { [weak self] items in
+            guard let self, let coordinator, let target = dropTarget else {
+                // Refused rather than swallowed. The overlay never appears
+                // without a target, so this is the race where the last
+                // session died mid-drag — say so instead of eating the file.
+                self?.lastStatusLine = "nothing to attach to yet"
+                Permissions.log("drop: refused, no reply target")
+                return false
+            }
+            var staged = 0
+            for item in items {
+                switch item {
+                case .file(let path):
+                    if coordinator.attachments.stage(path, session: target.sessionId) {
+                        staged += 1
+                    }
+                case .imageData(let data, let ext):
+                    // A drag out of a browser has no file behind it. It goes
+                    // to disk BEFORE it is staged — a chip pointing at bytes
+                    // that live only in a pasteboard would break the moment
+                    // the drag ended, and the session needs a path it can
+                    // actually open. Content-hashed, so re-dropping the same
+                    // image is the same chip rather than a second copy.
+                    guard let path = Self.persistDroppedImage(data, ext: ext) else {
+                        Permissions.log("drop: could not persist \(data.count) bytes")
+                        continue
+                    }
+                    if coordinator.attachments.stage(path, session: target.sessionId) {
+                        staged += 1
+                    }
+                }
+            }
+            guard staged > 0 else {
+                lastStatusLine = "already attached"
+                return true    // taken, just nothing new — never an error badge
+            }
+            let total = coordinator.attachments.staged(for: target.sessionId).count
+            lastStatusLine = "\(staged) file\(staged == 1 ? "" : "s") attached to \(target.label)"
+            Permissions.log("drop: staged \(staged) for "
+                            + "\(target.sessionId.prefix(8)) (\(total) total)")
+            rebuildMenu()
+            return true
         }
         hud.onBreadcrumbHome = { [weak self] in self?.goHomeFromCard(via: "breadcrumb") }
         hud.onPendingSendStopped = { [weak self] cardRestored in
@@ -1042,6 +1112,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // checkable at a glance — see tabDisplayName.
         let name = tabDisplayName(for: target, live: live)
         return (target.sessionId, live?.pid, name, target.cwd)
+    }
+
+    /// Recompute who a dropped file would go to.
+    ///
+    /// The same ladder `resolveReplyContext` walks — the conversation you are
+    /// in, else the session that last spoke — minus the pid probe, which is a
+    /// subprocess and which a staged file does not need. Deliberately the
+    /// same ladder: a file must land where your voice would, or the panel is
+    /// naming one destination and using another.
+    private func refreshDropTarget() {
+        if let conversation = activeConversation {
+            dropTarget = (conversation.sessionId, conversation.label)
+            return
+        }
+        guard let target = try? coordinator?.replyTarget() ?? nil else {
+            dropTarget = nil
+            return
+        }
+        dropTarget = (target.sessionId, target.callsign ?? target.projectLabel)
+    }
+
+    /// A dragged image with no file behind it, written somewhere durable.
+    ///
+    /// Content-hashed rather than timestamped: dropping the same screenshot
+    /// twice is one chip and one file, and a session that reads the path
+    /// later finds the bytes it was told about. Beside the audio archive,
+    /// under app support — a temp dir would be swept out from under a
+    /// session that had not read it yet.
+    private static func persistDroppedImage(_ data: Data, ext: String) -> String? {
+        let dir = QueueStore.supportDirectory.appendingPathComponent("dropped",
+                                                                     isDirectory: true)
+        try? PrivateStorage.createDirectory(at: dir)
+        let digest = SHA256.hash(data: data).compactMap { String(format: "%02x", $0) }
+            .joined().prefix(16)
+        let url = dir.appendingPathComponent("drop-\(digest).\(ext)")
+        if FileManager.default.fileExists(atPath: url.path) { return url.path }
+        do {
+            try data.write(to: url, options: .atomic)
+            return url.path
+        } catch {
+            Permissions.log("drop: write failed — \(error)")
+            return nil
+        }
     }
 
     /// The badge, from the same predicate a keypress uses.
