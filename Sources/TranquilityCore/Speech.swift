@@ -492,6 +492,12 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         while audio.isPlaying || isPaused {
             let now = audio.currentTime
             played = max(played, now)
+            // The resume half of the pause latch: `resume()` only restarts the
+            // player, and the latch drops HERE, once playback is observed
+            // running again. See `resume()` for the window this closes.
+            if isPaused, audio.isPlaying {
+                generationQueue.sync { pausedByUser = false }
+            }
             if let starts, let onWord {
                 // Character index whose start time has just passed.
                 var index = lastIndex
@@ -564,8 +570,25 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         player?.pause()
     }
 
+    /// Restart the player, and leave the pause latch to the playback loop.
+    ///
+    /// Clearing `pausedByUser` here — which is what this did — opens a window
+    /// the loop can wake inside: `play()` returns before `isPlaying` flips (the
+    /// same lag `play(_:text:onWord:)` already waits out at the start), so for
+    /// a few milliseconds the loop sees neither a playing player nor a paused
+    /// one, exits, and calls a clip you are still listening to `truncated` at
+    /// wherever you paused it. Under the read ruling that is a `failure`, so a
+    /// pause-and-resume would leave the turn unread and paint "Playback
+    /// failed" over an announcement that never stopped.
+    ///
+    /// Found by a test that had been flaky for days (issue 16) and only became
+    /// diagnostic once it stopped racing on the wall clock: the payload was
+    /// always exactly the pause point.
+    ///
+    /// So the latch stays TRUE across the whole transition and the loop clears
+    /// it the moment it observes playback actually running — the same
+    /// "measured, not assumed" rule the truncation check itself is built on.
     public func resume() {
-        generationQueue.sync { pausedByUser = false }
         player?.play()
     }
 }
