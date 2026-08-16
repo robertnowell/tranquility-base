@@ -52,14 +52,25 @@ public enum HomeBase {
         /// header is the floor.
         public let headline: String?
         public let deck: String?
+        /// The ⌃⌃ ladder, already generated for the voice and already stored:
+        /// what the work turned up, the shape of what is proposed, and why.
+        /// The newest turn prints all three, because the question a hub is
+        /// opened to answer is "what just happened", and the fields that
+        /// answer it were being written and thrown away (ruled 16 Aug).
+        public let findings: String?
+        public let solution: String?
+        public let rationale: String?
 
         public init(at: Date, topic: String, happened: String,
                     nextStep: String? = nil, question: String? = nil,
                     risk: String? = nil, headline: String? = nil,
-                    deck: String? = nil) {
+                    deck: String? = nil, findings: String? = nil,
+                    solution: String? = nil, rationale: String? = nil) {
             self.at = at; self.topic = topic; self.happened = happened
             self.nextStep = nextStep; self.question = question; self.risk = risk
             self.headline = headline; self.deck = deck
+            self.findings = findings; self.solution = solution
+            self.rationale = rationale
         }
     }
 
@@ -252,6 +263,34 @@ public enum HomeBase {
         return "\(brand) · \(project)"
     }
 
+    /// One `<li>` per page: the document's own title, its day, and a hover
+    /// blurb. Shared by the inline list under a turn and the shelf at the
+    /// bottom, so a page looks the same wherever it is filed.
+    static func pageItems(_ pages: [ArtifactStore.Page],
+                          e: (String) -> String) -> String {
+        let newestFirst = pages.sorted { $0.at > $1.at }
+        let summaries = newestFirst.map { ArtifactStore.summarize(path: $0.path) }
+        // The siblings name the brand. A single title cannot say which of
+        // "Tranquility Base — roadmap ahead" is furniture and which is the
+        // subject; a LIST can, because furniture is what repeats.
+        let names = strippingSharedAffix(summaries.map(\.title))
+        return zip(newestFirst, zip(names, summaries)).map { page, pair -> String in
+            let (stripped, summary) = pair
+            let name = stripped ?? summary.title ?? page.label
+            let blurb = summary.blurb.map { " data-blurb=\"\(e($0))\"" } ?? ""
+            // No stamp survived anywhere (log undated, file unreadable): say
+            // nothing. A page dated "31 Dec" of 1969 is worse than an undated
+            // one — a wrong fact where a missing one was honest.
+            let on = page.at > Date(timeIntervalSince1970: 0)
+                ? "<span class=\"on\">\(e(dayStamp.string(from: page.at)))</span>" : ""
+            // A new tab, deliberately: the hub is the reader's index and stays
+            // open while its artifacts are visited (ruled 15 Aug).
+            return "<li><a class=\"page\" href=\"file://\(e(page.path))\""
+                + " target=\"_blank\" rel=\"noopener\"\(blurb)>"
+                + "\(e(name))</a>\(on)</li>"
+        }.joined()
+    }
+
     static func escape(_ s: String) -> String {
         s.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
@@ -331,6 +370,34 @@ public enum HomeBase {
                 """
         }
 
+        // ---- the pages, filed under the turn that made them ------------------
+        //
+        // A page belongs to the turn it was written during: newer than the
+        // turn before it, no newer than the turn itself. Filing them this way
+        // is the whole point — a turn that produced a report should SHOW the
+        // report, not leave it in a separate list above the work (ruled
+        // 16 Aug: "what it has made shows first, and that's not the most
+        // recent turn"). Anything that lands under no shown turn falls to the
+        // shelf at the bottom of the page.
+        var pagesByTurn: [Int: [ArtifactStore.Page]] = [:]
+        var shelved: [ArtifactStore.Page] = []
+        for page in model.pages {
+            // `ordered` is newest-first, so the first turn at or after the
+            // page's stamp is the turn that was running when it was written.
+            let owner = ordered.indices.last { index in
+                // The newest turn's window has no ceiling: a page written
+                // after the last brief belongs to the work in flight, not to
+                // a shelf underneath older turns.
+                (index == 0 || page.at <= ordered[index].at)
+                    && (index + 1 >= ordered.count || page.at > ordered[index + 1].at)
+            }
+            if let owner, owner < fullTurns + lineTurns {
+                pagesByTurn[owner, default: []].append(page)
+            } else {
+                shelved.append(page)
+            }
+        }
+
         // ---- the stack, downsampled by age ----------------------------------
         var rows = ""
         for (i, turn) in ordered.enumerated() {
@@ -338,6 +405,17 @@ public enum HomeBase {
             var cls = "line"
             if i < fullTurns {
                 cls = "full"
+                // The newest turn prints the whole ladder, because "what just
+                // happened" is the question the page is opened to answer.
+                if i == 0 {
+                    for (label, text) in [("found", turn.findings),
+                                          ("proposes", turn.solution),
+                                          ("why", turn.rationale)] {
+                        if let text, !text.isEmpty {
+                            body += "<p class=\"m\"><span>\(label)</span> \(e(text))</p>"
+                        }
+                    }
+                }
                 if let next = turn.nextStep, !next.isEmpty {
                     body += "<p class=\"m\"><span>next</span> \(e(next))</p>"
                 }
@@ -352,6 +430,11 @@ public enum HomeBase {
             // the failure this page exists to prevent.
             if let risk = turn.risk, !risk.isEmpty {
                 body += "<p class=\"m risky\"><span>risk</span> \(e(risk))</p>"
+            }
+            // The turn's own work, under the turn: a made thing reads as a
+            // result here and as an orphan in a list somewhere else.
+            if let made = pagesByTurn[i], !made.isEmpty {
+                body += "<ul class=\"made\">" + pageItems(made, e: e) + "</ul>"
             }
             rows += """
                 <li class="\(cls)"><div class="when">\(e(stamp.string(from: turn.at)))</div>
@@ -371,44 +454,17 @@ public enum HomeBase {
                 + e(shown) + (topics.count > 14 ? "…" : ".") + "</div>"
         }
 
-        // ---- what it made: the documents' own titles, not their filenames ----
+        // ---- the shelf: pages no shown turn accounts for --------------------
+        //
+        // Everything a shown turn made is printed with that turn. What is left
+        // is older work, and older work belongs BELOW the stack, not above it
+        // (ruled 16 Aug). An agent whose every page is inline has no shelf at
+        // all, which is the healthy case.
         var pages = ""
-        if !model.pages.isEmpty {
-            let ordered = model.pages.reversed()
-            let summaries = ordered.map { ArtifactStore.summarize(path: $0.path) }
-            // The siblings name the brand. A single title cannot say which of
-            // "Tranquility Base — roadmap ahead" is furniture and which is the
-            // subject; a LIST can, because furniture is what repeats. Any
-            // segment heading or trailing two or more titles is dropped from
-            // all of them, which is how five hubs stopped listing their pages
-            // as "Tranquility Base" (measured 16 Aug).
-            let names = strippingSharedAffix(summaries.map(\.title))
-            let items = zip(ordered, zip(names, summaries)).map {
-                page, pair -> String in
-                let (stripped, summary) = pair
-                let name = stripped ?? summary.title ?? page.label
-                let blurb = summary.blurb.map {
-                    " data-blurb=\"\(e($0))\""
-                } ?? ""
-                // No stamp survived anywhere (log undated, file unreadable):
-                // say nothing. A page dated "31 Dec" of 1969 is worse than an
-                // undated one — a wrong fact where a missing one was honest.
-                let on = page.at > Date(timeIntervalSince1970: 0)
-                    ? "<span class=\"on\">\(e(dayStamp.string(from: page.at)))</span>" : ""
-                // A new tab, deliberately: the hub is the reader's index and
-                // stays open while its artifacts are visited (ruled 15 Aug).
-                return "<li><a class=\"page\" href=\"file://\(e(page.path))\""
-                    + " target=\"_blank\" rel=\"noopener\"\(blurb)>"
-                    + "\(e(name))</a>\(on)</li>"
-            }.joined()
-            // No subline. It counted what the list below it already shows and
-            // explained a relationship the reader had just used — "this page
-            // summarises; those hold the detail" is the hub telling you what
-            // clicking a link does (ruled 16 Aug). The heading and the list
-            // are the whole section.
+        if !shelved.isEmpty {
             pages = """
-                <h2>What it has made</h2>
-                <ul class="pages">\(items)</ul>
+                <h2>Earlier pages</h2>
+                <ul class="pages">\(pageItems(shelved, e: e))</ul>
                 """
         }
 
@@ -482,6 +538,15 @@ public enum HomeBase {
           /* The list carries the gap its deleted subline used to hold, so the
              first rule does not crowd the heading. */
           ul.pages{list-style:none;padding:0;margin:14px 0 0}
+          /* A page made by a turn, printed under it: indented off the accent
+             so it reads as this turn's output rather than a sibling claim. */
+          ul.made{list-style:none;padding:0 0 0 13px;margin:10px 0 2px;
+                  border-left:2px solid var(--accent)}
+          ul.made li{padding:4px 0}
+          ul.made .page{color:var(--fg);text-decoration:none;font-size:16px;
+                        border-bottom:1px solid var(--rule)}
+          ul.made .page:hover{color:var(--accent)}
+          ul.made .on{display:none}
           ul.pages li{display:flex;align-items:baseline;gap:14px;padding:12px 0;
                       border-top:1px solid var(--rule)}
           ul.pages .page{color:var(--fg);text-decoration:none;font-size:18px;flex:1;
@@ -525,11 +590,11 @@ public enum HomeBase {
           @media(hover:none),(pointer:coarse){#card{display:none}}
         </style></head><body><div class="wrap">
         \(head)
-        \(pages)
         <h2>What it has done</h2>
         <p class="sub">Newest first. Older turns lose resolution, never their links.</p>
         <ol>\(rows)</ol>
         \(digest)\(empty)
+        \(pages)
         <footer>Created by <b>\(e(model.title ?? "—"))</b> &middot;
         session \(e(String(model.sessionId.prefix(8))))
         <a class="discuss" href="tranquilitybase://discuss?session=\(e(model.sessionId))">Discuss with agent</a>
@@ -628,7 +693,9 @@ public extension HomeBase {
                 Turn(at: Date(timeIntervalSince1970: Double($0.atMs) / 1000),
                      topic: $0.topic, happened: $0.happened,
                      nextStep: $0.nextStep, question: $0.question, risk: $0.risk,
-                     headline: $0.headline, deck: $0.deck)
+                     headline: $0.headline, deck: $0.deck,
+                     findings: $0.findings, solution: $0.solution,
+                     rationale: $0.rationale)
             },
             pages: ArtifactStore.history(for: sessionId,
                                          root: QueueStore.supportDirectory.path))
