@@ -161,6 +161,97 @@ public enum HomeBase {
         }
     }
 
+    /// The page's palette and nameplate, chosen by the project the agent is
+    /// working in — the same discipline the share-as-page skill applies to a
+    /// document: a brand with RECORDED tokens gets its colours, everything
+    /// else gets the house editorial default, and nothing is ever invented to
+    /// make a page feel branded.
+    ///
+    /// Structure never varies. The masthead rule, the tracked eyebrow, the
+    /// serif headline over a dek, the hairline byline and the short accent
+    /// rule above each section are the house's own engineering-notes layout
+    /// (adopted 16 Aug from the App Store brief). Only the inks move.
+    public struct Theme: Sendable, Equatable {
+        public let id: String
+        /// What the eyebrow says before the project name.
+        public let nameplate: String
+        public let bg: String
+        public let paper: String
+        public let ink: String
+        public let heading: String
+        public let muted: String
+        public let faint: String
+        public let line: String
+        public let accent: String
+        /// Structural ink: nameplate, masthead rule, headings.
+        public let brand: String
+        /// Amber is the risk tag and nothing else, in every theme.
+        public let amber: String
+        /// Whether a dark palette is offered. Brand light-stock designs say no
+        /// on purpose: their tokens are specified for paper, and a machine-
+        /// darkened brand colour is an invented one.
+        public let hasDark: Bool
+
+        /// House editorial. Rung 5 in the skill's ladder: a deliberate
+        /// unbranded look, never a guess at somebody's identity.
+        public static let editorial = Theme(
+            id: "editorial", nameplate: "Tranquility Base",
+            bg: "#fcfbf8", paper: "#f4f2ec", ink: "#1f1e1c", heading: "#141312",
+            muted: "#57534c", faint: "#6e6a63", line: "#ddd9cf",
+            accent: "#a32c28", brand: "#1a1a1a", amber: "#a8762a", hasDark: true)
+
+        /// Kopi, "The Press": navy carries structure, orange only punctuates.
+        /// Tokens rung 2, references/brands.md. The brand's own faces
+        /// (Bricolage Grotesque, Plus Jakarta Sans) are NOT here: naming a
+        /// font without embedding it renders system sans and quietly claims an
+        /// identity the page does not carry, and a page rewritten every turn
+        /// cannot afford 400KB of embedded faces.
+        public static let kopi = Theme(
+            id: "kopi", nameplate: "Kopi",
+            bg: "#fcfbf8", paper: "#f4f2ec", ink: "#1f1e1c", heading: "#1e3a52",
+            muted: "#57534c", faint: "#6e6a63", line: "#ddd9cf",
+            accent: "#ff6b4a", brand: "#1e3a52", amber: "#a8762a", hasDark: false)
+
+        /// Mirai. Only two tokens are recorded (#F57C00 on #F0F8FF, from the
+        /// brand record via Kopi's get_context), so only those two move; the
+        /// neutrals stay editorial rather than being invented around them.
+        public static let mirai = Theme(
+            id: "mirai", nameplate: "Mirai",
+            bg: "#f0f8ff", paper: "#e6f1fb", ink: "#1f1e1c", heading: "#14304a",
+            muted: "#4f5b66", faint: "#69737d", line: "#cddeee",
+            accent: "#f57c00", brand: "#14304a", amber: "#a8762a", hasDark: false)
+
+        /// The project decides. A directory is the only brand signal a hub
+        /// has, and it is a good one: the work happens where the brand lives.
+        public static func forProject(cwd: String?) -> Theme {
+            let path = (cwd ?? "").lowercased()
+            if path.contains("mirai") { return .mirai }
+            if path.contains("kopi") || path.contains("promotions") { return .kopi }
+            return .editorial
+        }
+    }
+
+    /// "Kopi · promotions", but never "Tranquility Base · tranquility-base".
+    /// A nameplate that says the same thing twice reads as a template that
+    /// forgot to fill itself in.
+    static func nameplate(brand: String, project: String?) -> String {
+        func key(_ s: String) -> String {
+            s.lowercased().filter { $0.isLetter || $0.isNumber }
+        }
+        guard var project, !project.isEmpty else { return brand }
+        let brandKey = key(brand)
+        // "kopi-promotions" under the Kopi plate is "promotions": a directory
+        // named after its brand says the brand twice, and the second half is
+        // the part that identifies the work.
+        while key(project).hasPrefix(brandKey), key(project) != brandKey {
+            guard let cut = project.firstIndex(where: { $0 == "-" || $0 == "_" || $0 == " " })
+            else { break }
+            project = String(project[project.index(after: cut)...])
+        }
+        guard key(project) != brandKey, !project.isEmpty else { return brand }
+        return "\(brand) · \(project)"
+    }
+
     static func escape(_ s: String) -> String {
         s.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
@@ -183,6 +274,7 @@ public enum HomeBase {
         let name = model.title ?? model.callsign ?? "Agent \(model.sessionId.prefix(8))"
         let newest = model.turns.first          // turns arrive newest-first
         let ordered = model.turns
+        let theme = Theme.forProject(cwd: model.cwd)
 
         // ---- the top of the page --------------------------------------------
         // What sits here is decided by subtraction. The eyebrow is gone: a
@@ -223,7 +315,16 @@ public enum HomeBase {
             if let last = model.lastActive {
                 byline += " · last moved \(e(stamp.string(from: last)))"
             }
+            // The masthead: a thick rule, the nameplate tracked in sans on the
+            // left, the date on the right — the engineering-notes shape this
+            // house already uses for its briefs. Then the accent kicker, the
+            // serif headline, the dek, and the byline between hairlines.
+            let project = (model.cwd as NSString?)?.lastPathComponent
+            let plate = nameplate(brand: theme.nameplate, project: project)
+            let dateline = model.lastActive.map { dayStamp.string(from: $0) } ?? ""
             head = """
+                <header class="plate"><span>\(e(plate))</span><span>\(e(dateline))</span></header>
+                <p class="kicker">Agent</p>
                 <h1>\(e(n.headline ?? n.topic))</h1>
                 <p class="deck">\(deck)</p>
                 <p class="byline">\(byline)</p>
@@ -330,24 +431,53 @@ public enum HomeBase {
              ones were doing badly. Colour is the weakest tool in Butterick's
              list — "position, size, font, and sometimes color" — so amber is
              spent in exactly one place: the risk tag. */
-          :root{--bg:#fbfaf8;--fg:#16150f;--dim:#5d5a51;--faint:#94908a;--rule:#ddd8cc;
-                --amber:#a8762a;--card:#f2efe8;--accent:#1f4f8f;
+          /* PROVENANCE — theme \(theme.id). Editorial tokens are rung 5, the
+             house default; Kopi is rung 2 (share-as-page references/brands.md);
+             Mirai's two recorded tokens are rung 3 (the brand record), and its
+             neutrals stay editorial rather than being invented around them.
+             Type is the system serif/sans stack, NOT the brands' own faces:
+             naming a face without embedding it renders system sans and claims
+             an identity the page has not got, and a page rewritten every turn
+             cannot carry embedded fonts. */
+          :root{--bg:\(theme.bg);--fg:\(theme.ink);--dim:\(theme.muted);--faint:\(theme.faint);
+                --rule:\(theme.line);--amber:\(theme.amber);--card:\(theme.paper);
+                --accent:\(theme.accent);--brand:\(theme.brand);
                 --serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;
                 --sans:ui-sans-serif,-apple-system,'Helvetica Neue',sans-serif}
+          \(theme.hasDark ? """
           @media(prefers-color-scheme:dark){:root{--bg:#131310;--fg:#eceae2;--dim:#a5a196;
-                --faint:#6a6558;--rule:#2e2c26;--amber:#d9a441;--card:#1e1d19;--accent:#7fb0e8}}
+                --faint:#6a6558;--rule:#2e2c26;--amber:#d9a441;--card:#1e1d19;
+                --accent:#e0645f;--brand:#eceae2}}
+          """ : "/* light stock only: this brand's tokens are specified for paper. */")
           *{box-sizing:border-box}html{background:var(--bg)}
           body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--serif);
                font-size:18px;line-height:1.62;-webkit-font-smoothing:antialiased}
           /* 66 characters is Bringhurst's ideal; 45–75 the acceptable band. */
-          .wrap{max-width:660px;margin:0 auto;padding:78px 26px 56px}
-          h1{font-size:40px;line-height:1.08;letter-spacing:-.02em;font-weight:600;
-             margin:0 0 18px;max-width:17ch}
+          .wrap{max-width:660px;margin:0 auto;padding:0 26px 56px}
+          /* The masthead: a thick rule the width of the measure, the nameplate
+             tracked in sans on the left, the dateline on the right. It is the
+             one place caps belong on this page, because a nameplate is a
+             label and not prose. */
+          .plate{display:flex;justify-content:space-between;align-items:baseline;gap:16px;
+                 margin-top:44px;padding:14px 0 12px;border-top:3px solid var(--brand);
+                 border-bottom:1px solid var(--rule);
+                 font-family:var(--sans);font-size:12px;font-weight:600;
+                 letter-spacing:.12em;text-transform:uppercase;color:var(--brand)}
+          .plate span:last-child{color:var(--faint);font-weight:500;white-space:nowrap}
+          .kicker{font-family:var(--sans);font-size:12px;font-weight:700;letter-spacing:.12em;
+                  text-transform:uppercase;color:var(--accent);margin:34px 0 10px}
+          h1{font-size:44px;line-height:1.06;letter-spacing:-.022em;font-weight:600;
+             margin:0 0 18px;max-width:17ch;color:var(--brand)}
           .deck{font-size:20px;line-height:1.5;color:var(--dim);margin:0 0 22px;max-width:60ch}
-          .byline{font-family:var(--sans);font-size:13.5px;line-height:1.5;color:var(--faint);
-                  margin:0 0 42px;padding-bottom:22px;border-bottom:1px solid var(--rule)}
+          .byline{font-family:var(--sans);font-size:12.5px;line-height:1.55;color:var(--faint);
+                  letter-spacing:.02em;
+                  margin:0 0 44px;padding:16px 0 0;border-top:1px solid var(--rule)}
+          /* A short accent rule over each section: the second ink's whole job,
+             rationed to a hairline so it punctuates rather than fills. */
           h2{font-size:26px;line-height:1.2;letter-spacing:-.015em;font-weight:600;
-             margin:48px 0 6px}
+             margin:52px 0 6px;padding-top:14px;position:relative;color:var(--brand)}
+          h2::before{content:"";position:absolute;top:0;left:0;width:46px;height:3px;
+                     background:var(--accent)}
           .sub{font-family:var(--sans);font-size:13px;color:var(--faint);margin:0 0 14px}
           /* The list carries the gap its deleted subline used to hold, so the
              first rule does not crowd the heading. */
