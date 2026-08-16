@@ -74,6 +74,44 @@ final class ArtifactStoreTests: XCTestCase {
         XCTAssertEqual(pages.map(\.path), ["/Users/x/Documents/real.html"])
     }
 
+    /// A hub is the index over artifacts, not one of them. Recording one made
+    /// the card's OPEN REPORT open a stranger's hub (15 Aug).
+    func testAHubIsNeverAnArtifact() {
+        XCTAssertFalse(ArtifactStore.record(
+            "/Users/x/Documents/agents/da5d6fff/index.html",
+            session: session, root: root))
+    }
+
+    /// Reading a page is not writing one. The first Bash miner filed every
+    /// path a grep mentioned, including other agents' work.
+    func testOnlyWritingCommandsCount() {
+        XCTAssertFalse(ArtifactStore.writesAFile(
+            "grep -c foo /Users/x/Documents/deep-research/a/index.html"))
+        XCTAssertFalse(ArtifactStore.writesAFile(
+            "python3 -c \"print(open('/Users/x/a/index.html').read())\""))
+        XCTAssertFalse(ArtifactStore.writesAFile("open /Users/x/a/index.html"))
+        XCTAssertTrue(ArtifactStore.writesAFile(
+            "cat <<PY > /Users/x/a/index.html"))
+        XCTAssertTrue(ArtifactStore.writesAFile(
+            "cp template.html /Users/x/a/index.html"))
+    }
+
+    /// The site name sits on either end of a title, and keeping the wrong side
+    /// listed three different documents as "Tranquility Base".
+    func testTheSpecificHalfOfATitleSurvives() {
+        let dir = NSTemporaryDirectory() + "tb-title-" + UUID().uuidString
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let page = dir + "/index.html"
+        try? """
+        <html><head><title>Tranquility Base — The capture is a strip under the card</title></head>
+        <body><h1>The capture is a strip under the card, not a screen instead of it</h1></body></html>
+        """.write(toFile: page, atomically: true, encoding: .utf8)
+        let summary = ArtifactStore.summarize(path: page)
+        XCTAssertEqual(summary.title,
+                       "The capture is a strip under the card, not a screen instead of it")
+    }
+
     func testRelativePathsAreNotRecorded() {
         XCTAssertFalse(ArtifactStore.record("notes.html", session: session, root: root))
     }
