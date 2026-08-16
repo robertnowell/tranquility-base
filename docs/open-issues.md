@@ -349,6 +349,15 @@ Measure before/after with the 21:12 shape: press ⌃⌃ mid-announcement.
 
 ## 16. `TruncationTests.testPauseThenResumeToCompletionIsNotTruncation` is flaky (15 Aug)
 
+**Suite-wide, and load-dependent (16 Aug):** it is not one test.
+`testTransportStopMidPlayIsStillTruncation` and
+`testDeliberateStopIsInterruptedNotTruncated` join it under a busy machine
+(`XCTAssertGreaterThan failed: ("0.12275") is not greater than ("0.2")`),
+and the whole suite passes when run with `--filter TruncationTests` on an
+idle one — on this branch and on pristine main alike. So the trigger is
+wall-clock starvation during a full run, which is the condition every real
+`preflight.sh` invocation has.
+
 Fails roughly two runs in three, on pristine `origin/main` as much as on any
 branch — measured 2-of-3 both sides while landing the ⌃⌥ walk, which is the
 only reason it is recorded rather than chased: it was briefly mistaken for
