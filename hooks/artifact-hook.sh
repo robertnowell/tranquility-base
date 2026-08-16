@@ -10,12 +10,16 @@
 #      private to this Mac, and the worst case of recording the wrong file is a
 #      button you don't click.
 #
-#   2. OFFER (judged). The agent is handed the footer snippet — its own session
-#      id, its callsign, the deep link — and decides whether this file should
-#      carry it. That judgment CANNOT be automated, because the cost is
-#      asymmetric: a missing footer is a shrug, and a footer on a client's slide
-#      deck is a disaster. The hook supplies the facts; the agent supplies the
-#      decision.
+#   2. STAMP (deterministic, inside the HQ). A page under ~/Documents/deep-research
+#      is Robert's own reading archive by construction — never a client
+#      deliverable — so its footer is written INTO the file here, identical on
+#      every page. The judged version failed four times in one day (16 Aug):
+#      pages shipped with no footer, with a hand-rolled one, and with neither
+#      door. A contract that depends on remembering is not a contract.
+#
+#   3. OFFER (judged, everywhere else). Outside the HQ the cost is asymmetric —
+#      a missing footer is a shrug, a footer on a client's slide deck is a
+#      disaster — so the hook still supplies the facts and the agent decides.
 #
 # Contract (same as the other two hooks):
 #   1. NEVER block. This runs inside a real Claude Code turn, after every Write.
@@ -123,12 +127,19 @@ PY
 SHORT="${SESSION%%-*}"
 TODAY=$(date "+%d %b %Y")
 
-python3 - "$FILE" "$SESSION" "$SHORT" "$TODAY" "$TITLE" <<'PY' 2>/dev/null || true
-import html as htmllib
-import json, sys
+# The HQ is Robert's own archive: everything under it is a page he reads, so
+# the footer is stamped rather than requested. Anything else keeps the offer.
+STAMP=0
+case "$FILE" in
+  "$HOME"/Documents/deep-research/*.html) STAMP=1;;
+esac
 
-path, session, short, today = sys.argv[1:5]
-title = sys.argv[5] if len(sys.argv) > 5 else ""
+python3 - "$FILE" "$SESSION" "$SHORT" "$TODAY" "$STAMP" "$TITLE" <<'PY' 2>/dev/null || true
+import html as htmllib
+import json, re, sys
+
+path, session, short, today, stamp = sys.argv[1:6]
+title = sys.argv[6] if len(sys.argv) > 6 else ""
 
 # The way UP: every artifact links its agent's hub — the page that lists
 # everything this agent made — so the correlation runs both directions even
@@ -145,8 +156,11 @@ who = ("Created by <b>{title}</b> &middot; session {short} &middot; {today}"
        if title else
        "Created by session {short} &middot; {today}".format(short=short, today=today))
 
+# data-tb-agent marks it as ours: the stamp replaces its own previous block
+# and never touches a footer somebody else wrote.
 snippet = (
-    '<footer style="margin-top:64px;padding-top:20px;border-top:1px solid #ddd8cc;'
+    '<footer data-tb-agent="{short}" style="margin-top:64px;padding-top:20px;'
+    'border-top:1px solid #ddd8cc;'
     'font:13px/1.5 ui-monospace,Menlo,monospace;color:#8f8a7c;'
     'display:flex;flex-wrap:wrap;gap:10px;align-items:center">\n'
     '  <div style="flex:1;min-width:220px">{who}</div>\n'
@@ -181,10 +195,40 @@ context = (
     "human as a report."
 ).format(path=path, snippet=snippet)
 
-print(json.dumps({"hookSpecificOutput": {
-    "hookEventName": "PostToolUse",
-    "additionalContext": context,
-}}))
+if stamp == "1":
+    # Write it in, once, idempotently. Never fail: a footer is worth less than
+    # the file it sits on, so any surprise leaves the page exactly as written.
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            page = fh.read()
+        cleaned = re.sub(r"<footer data-tb-agent=.*?</footer>", "", page,
+                         flags=re.S)
+        if "</body>" in cleaned:
+            head, _, tail = cleaned.rpartition("</body>")
+            stamped = head + snippet + "\n</body>" + tail
+        else:
+            stamped = cleaned + "\n" + snippet + "\n"
+        if stamped != page:
+            tmp = path + ".tb-footer"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(stamped)
+            import os as _os
+            _os.replace(tmp, path)
+    except Exception:
+        pass
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PostToolUse",
+        "additionalContext": (
+            "The agent footer was stamped into {path} automatically: session "
+            "id, Open hub, and Discuss with agent. Do not add another one, and "
+            "do not hand-roll a footer of your own on HQ pages."
+        ).format(path=path),
+    }}))
+else:
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PostToolUse",
+        "additionalContext": context,
+    }}))
 PY
 
 exit 0
