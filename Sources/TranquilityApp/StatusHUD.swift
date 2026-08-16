@@ -142,6 +142,7 @@ final class StatusHUD: NSObject {
     private var meter: LevelMeterView!
     private var voiceList: NSScrollView!
     private var pastList: PastAgentsList!
+    private var settingsTabs: SettingsTabBar!
     private var launchRow: SettingRowView!
     private var directoryRow: SettingRowView!
     private var voiceStack: NSStackView!
@@ -650,10 +651,12 @@ final class StatusHUD: NSObject {
     /// The full roster order after a ≡ drag lands.
     var onRosterReordered: (([String]) -> Void)?
 
-    func showSettings(voices: [Voice], roster: [String], note: String) {
+    func showSettings(voices: [Voice], roster: [String], note: String,
+                      tab: SettingsTab = .agents) {
         guard transition(to: .settings, because: "settings opened") else { return }
         currentTarget = nil
         face = Face(title: "Voices", body: note, voices: voices, roster: roster)
+        face.settingsTab = tab
         render()
     }
 
@@ -683,6 +686,44 @@ final class StatusHUD: NSObject {
     /// "it was always yours, here it is".
     var onRevealAudioEvent: ((String) -> Void)?
 
+    /// Choose the start directory with the picker rather than by spelling it.
+    ///
+    /// NSOpenPanel is modal and needs the app frontmost, which this panel
+    /// deliberately is not — `.nonactivatingPanel` exists so the app never
+    /// steals a keystroke. So the app is activated for the length of the
+    /// choice and the panel takes key alongside it, exactly as the typing
+    /// faces already do, and both are handed back when the sheet closes.
+    private func pickAgentDirectory() {
+        let picker = NSOpenPanel()
+        picker.canChooseDirectories = true
+        picker.canChooseFiles = false
+        picker.allowsMultipleSelection = false
+        picker.prompt = "Use folder"
+        picker.message = "Where new agents start"
+        // Open on what is configured, so the picker begins where the setting
+        // points rather than wherever AppKit last left someone.
+        picker.directoryURL = URL(fileURLWithPath: AgentDefaults.directory())
+        NSApp.activate(ignoringOtherApps: true)
+        guard picker.runModal() == .OK, let url = picker.url else { return }
+        AgentDefaults.save(directory: url.path)
+        directoryRow.show(url.path)
+        Permissions.log("settings: agent directory set to \(url.path)")
+    }
+
+    /// Switch tabs without leaving `.settings`.
+    ///
+    /// The host is asked for the data a tab needs rather than the pane reading
+    /// a store — same rule the audio log already had, now applied to all three,
+    /// so the panel keeps knowing nothing about where anything lives.
+    func showSettingsTab(_ tab: SettingsTab) {
+        guard case .settings = state else { return }
+        face.settingsTab = tab
+        // The keyboard belongs to the agents tab alone; leaving it must hand
+        // the keyboard back, or the panel keeps typing rights it is not using.
+        if tab != .agents { releaseKeyboard() }
+        if tab == .recent { onShowRecentAudio?() } else { render() }
+    }
+
     /// The settings state's second pane (ruled 13 Aug): the log of recent
     /// captures over a second, transcript or its absence, per-row retry.
     /// Reached from the voices pane; back exits to the grid, as settings
@@ -691,6 +732,7 @@ final class StatusHUD: NSObject {
         guard transition(to: .settings, because: "recent audio opened") else { return }
         currentTarget = nil
         face = Face(title: "Recent audio", body: note, audioEvents: events)
+        face.settingsTab = .recent
         render()
     }
 
@@ -1223,6 +1265,7 @@ final class StatusHUD: NSObject {
         /// `.settings` state, a different face payload: the pane is a
         /// projection, not a new place the machine can be.
         var audioEvents: [AudioEventRow]? = nil
+        var settingsTab: SettingsTab = .agents
         var transcription: (cancel: () -> Void, retry: () -> Void)?
         /// The failure card carries a way out to the microphone pane. True only
         /// for a device fault — the one failure in this app whose fix is a
@@ -1405,6 +1448,7 @@ final class StatusHUD: NSObject {
         voiceList.isHidden = true; waitingRows.isHidden = true
         pastList?.isHidden = true
         pastBackButton?.isHidden = true
+        settingsTabs?.isHidden = true
         launchRow?.isHidden = true; directoryRow?.isHidden = true
         // Key status is a widget like any other, and the baseline owns it: any
         // state that is not the list face gives the keyboard back. Written here
@@ -1596,32 +1640,44 @@ final class StatusHUD: NSObject {
             pastList?.isHidden = false
 
         case .settings:
+            // A TAB BAR, as the design always had it. One scrolling column
+            // holding voices, an audio log behind a link row, and launch
+            // settings stacked on top was three unrelated concerns in one
+            // list — which is how a pane stops being navigable.
             stateLabel.stringValue = ""
             gearButton.isHidden = true; backButton.isHidden = false
-            voiceList.isHidden = false
-            if let events = face.audioEvents {
-                bodyLabel.stringValue = face.body
-                hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
-                hintLabel.stringValue = "▶ plays the capture · ⋯ copy, retry, reveal"
-                rebuildAudioRows(events)
-            } else {
-                // Shown with the voices, not with the audio log: this pane has
-                // two halves and only one of them is about how the app behaves.
+            settingsTabs.isHidden = false
+            settingsTabs.select(face.settingsTab)
+            hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
+
+            switch face.settingsTab {
+            case .agents:
                 launchRow.isHidden = false; directoryRow.isHidden = false
                 launchRow.show(AgentDefaults.load())
                 directoryRow.show(AgentDefaults.directoryAsTyped())
+                bodyLabel.stringValue = "How every agent starts — new ones here, "
+                    + "revived ones in their own directory."
+                hintLabel.stringValue = "return to save · choose… picks a folder"
                 // Settings is the second face that asks for typing, so it takes
-                // the keyboard the same way the list does — and gives it back
-                // through the same baseline door.
+                // the keyboard the way the list does, and gives it back through
+                // the same baseline door.
                 if let panel = panel as ConsolePanel?, !panel.acceptsKey {
                     panel.acceptsKey = true
                     panel.makeKeyAndOrderFront(nil)
                 }
+
+            case .voices:
+                voiceList.isHidden = false
                 bodyLabel.stringValue =
                     "\(face.roster.count) of \(face.voices.count) on roster. \(face.body)"
-                hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
                 hintLabel.stringValue = "check = on roster · ▶ preview · drag ≡ to reorder"
                 rebuildVoiceRows()
+
+            case .recent:
+                voiceList.isHidden = false
+                bodyLabel.stringValue = face.body
+                hintLabel.stringValue = "▶ plays the capture · ⋯ copy, retry, reveal"
+                rebuildAudioRows(face.audioEvents ?? [])
             }
         }
 
@@ -2037,11 +2093,9 @@ final class StatusHUD: NSObject {
         // The door to the settings state's other pane, as a last row rather
         // than masthead chrome: the placard band's lanes are drilled and
         // spoken for (see the lane comment above), and a row costs nothing.
-        let recentAudio = PaneLinkRowView(title: "Recent audio ▸") { [weak self] in
-            self?.onShowRecentAudio?()
-        }
-        voiceStack.addArrangedSubview(recentAudio)
-        recentAudio.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+        // The "Recent audio ▸" link row is gone: it is a TAB now, so the voices
+        // list stops carrying a door to somewhere else in the middle of itself.
+        // That row was the whole reason this pane read as one long column.
         voiceListHeight.constant = min(
             CGFloat(voiceStack.arrangedSubviews.count) * VoiceRowView.height, 340)
         Permissions.log("roster pane: \(cast.count) cast + \(bench.count) bench rows")
@@ -3496,6 +3550,25 @@ final class StatusHUD: NSObject {
         // directory that has gone missing must be visible as itself.
         let showsStored = launchRow?.input.stringValue == AgentDefaults.load()
             && directoryRow?.input.stringValue == AgentDefaults.directoryAsTyped()
+        // The tabs, which is what this pane was supposed to have all along.
+        let tabsShown = settingsTabs?.isHidden == false
+        showSettingsTab(.voices)
+        let voicesPane = voiceList?.isHidden == false
+            && launchRow?.isHidden == true && directoryRow?.isHidden == true
+        let keyboardHandedBack = panel?.acceptsKey == false
+        showSettingsTab(.agents)
+        let backOnAgents = launchRow?.isHidden == false
+
+        SelfTest.report("settingsTabs", [
+            ("tabBarIsShown", tabsShown),
+            ("everyTabHasAPane", SettingsTab.allCases.count == 3),
+            ("switchingLeavesTheOtherPaneBehind", voicesPane),
+            // The keyboard belongs to one tab, not to the pane.
+            ("leavingAgentsHandsTheKeyboardBack", keyboardHandedBack),
+            ("comingBackRestoresIt", backOnAgents),
+            ("stillInSettings", { if case .settings = state { return true }; return false }()),
+        ])
+
         showIdle(rows: [])
         let released = panel?.acceptsKey == false
         let hiddenOnGrid = launchRow?.isHidden == true && directoryRow?.isHidden == true
@@ -4467,12 +4540,18 @@ final class StatusHUD: NSObject {
         // One pair of values for the whole machine — "a global setting for now
         // and see if we need more granular later" — read by every path that
         // starts an agent: the menu item, the grid's + row, and revival.
+        settingsTabs = SettingsTabBar(width: Self.gridWidth)
+        settingsTabs.isHidden = true
+        settingsTabs.onSelect = { [weak self] tab in self?.showSettingsTab(tab) }
+
         launchRow = SettingRowView(width: Self.gridWidth, label: "LAUNCH",
                                    placeholder: AgentDefaults.fallback)
         launchRow.onCommit = { AgentDefaults.save($0) }
         directoryRow = SettingRowView(width: Self.gridWidth, label: "DIRECTORY",
-                                      placeholder: AgentDefaults.fallbackDirectory)
+                                      placeholder: AgentDefaults.fallbackDirectory,
+                                      browsable: true)
         directoryRow.onCommit = { AgentDefaults.save(directory: $0) }
+        directoryRow.onBrowse = { [weak self] in self?.pickAgentDirectory() }
         launchRow.isHidden = true; directoryRow.isHidden = true
 
         pastList = PastAgentsList(width: Self.gridWidth, height: 420)
@@ -4505,7 +4584,7 @@ final class StatusHUD: NSObject {
                                         waitingRows, pastList, bodyLabel,
                                         stripRule, stripLabel, gridFooter,
                                         countdownBar, meter,
-                                        launchRow, directoryRow,
+                                        settingsTabs, launchRow, directoryRow,
                                         voiceList, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
