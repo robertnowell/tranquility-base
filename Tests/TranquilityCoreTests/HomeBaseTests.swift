@@ -64,6 +64,55 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertTrue(html2.contains("It shipped! Review it?"))
     }
 
+    /// The project decides the palette, and only brands with recorded tokens
+    /// have one. Everything else is the house editorial default, never a
+    /// guess at an identity.
+    func testTheProjectChoosesTheTheme() {
+        XCTAssertEqual(HomeBase.Theme.forProject(cwd: "/Users/x/Projects/kopi").id, "kopi")
+        XCTAssertEqual(HomeBase.Theme.forProject(cwd: "/Users/x/Projects/kopi-promotions").id, "kopi")
+        XCTAssertEqual(HomeBase.Theme.forProject(cwd: "/Users/x/Projects/mirai-pitch").id, "mirai")
+        XCTAssertEqual(HomeBase.Theme.forProject(cwd: "/Users/x/Projects/tranquility-base").id,
+                       "editorial")
+        XCTAssertEqual(HomeBase.Theme.forProject(cwd: nil).id, "editorial")
+        // A brand designed for paper does not get a machine-darkened variant.
+        XCTAssertFalse(HomeBase.Theme.kopi.hasDark)
+        XCTAssertTrue(HomeBase.Theme.editorial.hasDark)
+    }
+
+    /// A nameplate that says the same thing twice reads as an unfilled
+    /// template.
+    func testTheNameplateDoesNotRepeatItself() {
+        XCTAssertEqual(HomeBase.nameplate(brand: "Tranquility Base",
+                                          project: "tranquility-base"),
+                       "Tranquility Base")
+        XCTAssertEqual(HomeBase.nameplate(brand: "Kopi", project: "promotions"),
+                       "Kopi · promotions")
+        XCTAssertEqual(HomeBase.nameplate(brand: "Kopi", project: "kopi-promotions"),
+                       "Kopi · promotions")
+        XCTAssertEqual(HomeBase.nameplate(brand: "Mirai", project: "kopi-mirai-pitch"),
+                       "Mirai · kopi-mirai-pitch")
+        XCTAssertEqual(HomeBase.nameplate(brand: "Kopi", project: nil), "Kopi")
+    }
+
+    /// The theme reaches the page: tokens, and the masthead the App Store
+    /// brief established as the house shape (adopted 16 Aug).
+    func testTheThemeAndMastheadReachThePage() {
+        let kopi = HomeBase.render(HomeBase.Model(
+            sessionId: "489b4804-x", title: "A send", callsign: "promotions rebuild",
+            cwd: "/Users/x/Projects/kopi-promotions", goal: nil,
+            turns: [turn(1)], pages: []))
+        XCTAssertTrue(kopi.contains("#ff6b4a"))        // Ink 1 punctuates
+        XCTAssertTrue(kopi.contains("#1e3a52"))        // navy carries structure
+        XCTAssertTrue(kopi.contains("Kopi · promotions"))
+        XCTAssertFalse(kopi.contains("prefers-color-scheme:dark"))
+        XCTAssertTrue(kopi.contains("class=\"plate\""))
+        XCTAssertTrue(kopi.contains("class=\"kicker\""))
+
+        let house = HomeBase.render(model(turns: [turn(1)]))
+        XCTAssertTrue(house.contains("#a32c28"))
+        XCTAssertTrue(house.contains("prefers-color-scheme:dark"))
+    }
+
     /// Site furniture is what repeats. One title cannot say which half is the
     /// brand; a list can.
     func testTheSharedAffixIsStrippedFromPageTitles() {
