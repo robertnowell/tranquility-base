@@ -122,6 +122,45 @@ public enum HomeBase {
         id.split(separator: "-").first.map(String.init) ?? id
     }
 
+    /// Drop the segment that repeats at the same end of two or more titles.
+    ///
+    /// Site furniture is invisible in one title and obvious in a list: it is
+    /// the part that does not change. Position is not the signal — this house
+    /// writes "Site — Page" and the wider web writes "Page — Site" — so the
+    /// repeated segment is stripped from whichever end it holds. A title left
+    /// with nothing keeps its original, because a blank name is worse than a
+    /// repeated one.
+    static let titleSeparators = [" — ", " – ", " | ", " · ", " » ", " > "]
+
+    static func strippingSharedAffix(_ titles: [String?]) -> [String?] {
+        let present = titles.compactMap { $0 }
+        guard present.count >= 2 else { return titles }
+
+        func split(_ title: String) -> (head: String, tail: String)? {
+            for separator in titleSeparators {
+                if let range = title.range(of: separator) {
+                    return (String(title[..<range.lowerBound]),
+                            String(title[range.upperBound...]))
+                }
+            }
+            return nil
+        }
+
+        let parts = present.compactMap(split)
+        guard parts.count >= 2 else { return titles }
+        let heads = Dictionary(grouping: parts, by: \.head).filter { $0.value.count >= 2 }
+        let tails = Dictionary(grouping: parts, by: \.tail).filter { $0.value.count >= 2 }
+        let sharedHead = heads.keys.sorted().first
+        let sharedTail = tails.keys.sorted().first
+
+        return titles.map { title -> String? in
+            guard let title, let (head, tail) = split(title) else { return title }
+            if let sharedHead, head == sharedHead, !tail.isEmpty { return tail }
+            if let sharedTail, tail == sharedTail, !head.isEmpty { return head }
+            return title
+        }
+    }
+
     static func escape(_ s: String) -> String {
         s.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
@@ -234,9 +273,19 @@ public enum HomeBase {
         // ---- what it made: the documents' own titles, not their filenames ----
         var pages = ""
         if !model.pages.isEmpty {
-            let items = model.pages.reversed().map { page -> String in
-                let summary = ArtifactStore.summarize(path: page.path)
-                let name = summary.title ?? page.label
+            let ordered = model.pages.reversed()
+            let summaries = ordered.map { ArtifactStore.summarize(path: $0.path) }
+            // The siblings name the brand. A single title cannot say which of
+            // "Tranquility Base — roadmap ahead" is furniture and which is the
+            // subject; a LIST can, because furniture is what repeats. Any
+            // segment heading or trailing two or more titles is dropped from
+            // all of them, which is how five hubs stopped listing their pages
+            // as "Tranquility Base" (measured 16 Aug).
+            let names = strippingSharedAffix(summaries.map(\.title))
+            let items = zip(ordered, zip(names, summaries)).map {
+                page, pair -> String in
+                let (stripped, summary) = pair
+                let name = stripped ?? summary.title ?? page.label
                 let blurb = summary.blurb.map {
                     " data-blurb=\"\(e($0))\""
                 } ?? ""
