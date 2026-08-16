@@ -644,6 +644,13 @@ public enum HomeBase {
         <title>\(e(name)) — agent</title>
         <meta name="intranet:type" content="agent">
         <meta name="intranet:visibility" content="local">
+        \(theme.fontSheet.map {
+            // The brand's faces, from one shared file on disk. A hub is local
+            // by ruling, so a file:// stylesheet is the honest way to set in a
+            // brand's own type without embedding 400KB in a page that is
+            // rewritten every turn.
+            "<link rel=\"stylesheet\" href=\"file://\(fontSheetRoot.path)/\($0)\">"
+        } ?? "")
         <style>
           /* Two families, one job each — the newspaper's own division of labour.
              The serif carries the story; the sans carries facts ABOUT the story
