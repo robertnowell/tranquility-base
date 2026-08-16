@@ -603,7 +603,10 @@ final class SettingRowView: NSView, NSTextFieldDelegate {
     let input = FilterField()
     var onCommit: ((String) -> Void)?
 
-    init(width: CGFloat, label: String, placeholder: String) {
+    /// Set when this row picks a folder instead of taking a typed path.
+    var onBrowse: (() -> Void)?
+
+    init(width: CGFloat, label: String, placeholder: String, browsable: Bool = false) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
@@ -633,9 +636,28 @@ final class SettingRowView: NSView, NSTextFieldDelegate {
             caption.centerYAnchor.constraint(equalTo: centerYAnchor),
             caption.widthAnchor.constraint(equalToConstant: 74),
             input.leadingAnchor.constraint(equalTo: caption.trailingAnchor, constant: 8),
-            input.trailingAnchor.constraint(equalTo: trailingAnchor),
             input.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+
+        // A path is chosen, not spelled. Typing one is possible and it is the
+        // fallback, not the affordance: the field truncates from the HEAD so a
+        // long path shows the part that identifies it, and the button opens the
+        // picker that already knows what a folder is.
+        if browsable {
+            let browse = NSButton(title: "", target: self, action: #selector(browseTapped))
+            browse.isBordered = false
+            browse.attributedTitle = letterspaced(
+                "CHOOSE…", size: 9.5, tracking: 1.33, color: StateLegend.Palette.accent)
+            browse.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(browse)
+            NSLayoutConstraint.activate([
+                browse.trailingAnchor.constraint(equalTo: trailingAnchor),
+                browse.centerYAnchor.constraint(equalTo: centerYAnchor),
+                input.trailingAnchor.constraint(equalTo: browse.leadingAnchor, constant: -10),
+            ])
+        } else {
+            input.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+        }
     }
 
     @available(*, unavailable)
@@ -643,5 +665,99 @@ final class SettingRowView: NSView, NSTextFieldDelegate {
 
     func show(_ value: String) { input.stringValue = value }
 
+    @objc private func browseTapped() { onBrowse?() }
+
     func controlTextDidEndEditing(_ obj: Notification) { onCommit?(input.stringValue) }
+}
+
+/// The settings pane's tabs.
+///
+/// Restored from the design (docs/settings-recent.html v3,
+/// docs/settings-microphone.html v1), which drew Settings as a tab bar from the
+/// start. The build had drifted into one scrolling column with a
+/// "Recent audio ▸" link buried among the voices, and then grew launch settings
+/// on top of that — three unrelated concerns in one list, which is how a pane
+/// stops being navigable.
+///
+/// Only the tabs with panes behind them are here. The design also names
+/// Microphone, Permissions and Keys; those are proposals, and a tab that opens
+/// an empty pane is worse than a tab that is not there yet.
+enum SettingsTab: String, CaseIterable {
+    case agents = "AGENTS"
+    case voices = "VOICES"
+    case recent = "RECENT"
+}
+
+/// A row of tabs: the current one in ink, the rest in hint, a hairline beneath.
+///
+/// Not NSSegmentedControl — its bezel is the same AppKit chrome the rest of
+/// this panel refuses, and on a dark console it reads as a foreign object. Caps
+/// are the instrument voice, so tabs wear them: these are controls, not prose.
+final class SettingsTabBar: NSView {
+    static let height: CGFloat = 30
+    private var buttons: [SettingsTab: NSButton] = [:]
+    private let rule = NSView()
+    var onSelect: ((SettingsTab) -> Void)?
+    private(set) var selected: SettingsTab = .agents
+
+    init(width: CGFloat) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        rule.wantsLayer = true
+        rule.layer?.backgroundColor = StateLegend.Palette.hairline.cgColor
+        rule.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(rule)
+
+        var previous: NSView?
+        for tab in SettingsTab.allCases {
+            let button = NSButton(title: "", target: self, action: #selector(tapped(_:)))
+            button.isBordered = false
+            button.identifier = NSUserInterfaceItemIdentifier(tab.rawValue)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(button)
+            buttons[tab] = button
+            NSLayoutConstraint.activate([
+                button.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -2),
+                button.leadingAnchor.constraint(
+                    equalTo: previous?.trailingAnchor ?? leadingAnchor,
+                    constant: previous == nil ? 0 : 18),
+            ])
+            previous = button
+        }
+
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: width),
+            heightAnchor.constraint(equalToConstant: Self.height),
+            rule.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rule.widthAnchor.constraint(equalToConstant: width),
+            rule.heightAnchor.constraint(equalToConstant: 1),
+            rule.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        paint()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func select(_ tab: SettingsTab) {
+        selected = tab
+        paint()
+    }
+
+    private func paint() {
+        for (tab, button) in buttons {
+            let lit = tab == selected
+            button.attributedTitle = letterspaced(
+                tab.rawValue, size: 9.5, tracking: 1.33,
+                color: lit ? StateLegend.Palette.ink : StateLegend.Palette.hint)
+        }
+    }
+
+    @objc private func tapped(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue,
+              let tab = SettingsTab(rawValue: raw) else { return }
+        select(tab)
+        onSelect?(tab)
+    }
 }
