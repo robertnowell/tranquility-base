@@ -465,14 +465,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // The card's second door, and the other direction of the same
         // correlation the footer opens: the page links back to its agent, and
-        // the agent's card opens its hub — the address of everything it made,
-        // with the artifact list and "Discuss with agent" one click past it
-        // (ruled 15 Aug, superseding the last-artifact door).
-        hud.hubForSession = { session in
-            HomeBase.existingPage(sessionId: session)
+        // the agent's card opens what the turn calls for — the report this
+        // turn just wrote when there is one, the hub otherwise. The label
+        // follows the destination (ruled 15 Aug, refining the hub-door ruling
+        // of the same day); the hub stays one click away either way, via the
+        // report's own "Open hub" footer button.
+        hud.doorForSession = { [weak self] session in
+            if let report = self?.freshReport(session: session) {
+                return .report(report)
+            }
+            return HomeBase.existingPage(sessionId: session) != nil ? .hub : nil
         }
         hud.onOpenHub = { [weak self] session in
             _ = self?.openHub(session: session)
+        }
+        hud.onOpenReport = { page in
+            let url = URL(fileURLWithPath: page)
+            if BrowserFocus.focusExistingTab(url) == .notFound {
+                NSWorkspace.shared.open(url)
+            }
         }
         hud.onBreadcrumbHome = { [weak self] in self?.goHomeFromCard(via: "breadcrumb") }
         hud.onPendingSendStopped = { [weak self] cardRestored in
@@ -2183,11 +2194,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The one report this turn just wrote, if any: the newest recorded
+    /// artifact, on disk, stamped after the PREVIOUS turn's brief — which is
+    /// when this turn began. An artifact from an earlier turn is the hub's
+    /// job; an artifact re-touched but first recorded long ago keeps its
+    /// first stamp and stays with the hub too, deliberately.
+    private func freshReport(session: String) -> String? {
+        guard let store,
+              let latest = ArtifactStore.history(
+                  for: session, root: QueueStore.supportDirectory.path).last
+        else { return nil }
+        let briefs = (try? store.briefs(for: session, limit: 2)) ?? []
+        let turnBegan = briefs.count > 1
+            ? Date(timeIntervalSince1970: Double(briefs[1].atMs) / 1000)
+            : .distantPast
+        return latest.at > turnBegan ? latest.path : nil
+    }
+
     /// The hub, rewritten fresh and then shown. One code path for both of its
-    /// doors — the card's OPEN HTML and the `home` deep link — so the page the
-    /// button opens and the page the link opens cannot drift. Returns false
-    /// when the session has no briefs yet, and the caller decides what an
-    /// absent hub means (the card hides the door; the deep link invites).
+    /// doors — the card's second door and the `home` deep link — so the page
+    /// the button opens and the page the link opens cannot drift. Returns
+    /// false when the session has no briefs yet, and the caller decides what
+    /// an absent hub means (the card hides the door; the deep link invites).
     @discardableResult
     private func openHub(session: String) -> Bool {
         guard let store,

@@ -169,7 +169,9 @@ public struct AnthropicSummaryProvider: SummaryProvider {
           "happened": "what just concluded, one clause",
           "nextStep": "the proposed next action, or null",
           "question": "the decision being put to the user, or null",
-          "risk":     "a risk worth knowing before deciding, or null"
+          "risk":     "a risk worth knowing before deciding, or null",
+          "headline": "the agent's page headline: the FINDING, not the topic, 12 words max, or null",
+          "deck":     "the page's standfirst: where things stand and what is left, 25 words max, or null"
         }
 
 
@@ -265,6 +267,19 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         each; these MAY name symbols and paths precisely because they are read, not \
         heard. Use null when a field genuinely does not apply. Never invent a \
         question or a risk.
+
+        ── "headline" + "deck": the agent's page header, read, never spoken ──
+
+        The headline names the FINDING, not the topic: "Input Monitoring is required \
+        after all" beats "permission validation". Never a verb the turn did not earn; \
+        if the turn only continued earlier work, say that plainly. The deck says \
+        where things stand and what is left, including the cost of agreeing when \
+        there is one. Both null when the turn was pure plumbing with nothing to \
+        promote; the page then falls back to the card fields, which is the floor, \
+        not a failure. Like card fields, these may name symbols and paths precisely.
+
+        Never use an em dash in any field, spoken or displayed (ruled 11 Aug); use a \
+        period, comma, or colon and split the sentence.
 
         ── GROUNDING: overrides everything above ──
 
@@ -429,7 +444,9 @@ public struct AnthropicSummaryProvider: SummaryProvider {
             solution: field("solution"),
             branch: request.gitBranch,
             recap: field("recap"),
-            proposal: field("proposal"))
+            proposal: field("proposal"),
+            headline: field("headline"),
+            deck: field("deck"))
     }
 }
 

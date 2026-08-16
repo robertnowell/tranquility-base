@@ -30,6 +30,40 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertTrue(html.contains("Before that — 51 turns."))
     }
 
+    /// The written header wins when present, and the derived header is the
+    /// floor: a turn without one renders exactly as before (v11).
+    func testTheWrittenHeadlineOutranksTheTopic() {
+        let written = HomeBase.Turn(at: Date(timeIntervalSince1970: 1_000_600),
+                                    topic: "permission validation",
+                                    happened: "Measured it.",
+                                    headline: "Input Monitoring is required after all",
+                                    deck: "Accessibility alone fails. Cleanup is irreversible.")
+        let html = HomeBase.render(model(turns: [written, turn(1)]))
+        XCTAssertTrue(html.contains("<h1>Input Monitoring is required after all</h1>"))
+        XCTAssertTrue(html.contains("Accessibility alone fails. Cleanup is irreversible."))
+        // The older, unwritten turn keeps its derived row header.
+        XCTAssertTrue(html.contains("<h3>the poller</h3>"))
+        let bare = HomeBase.render(model(turns: [turn(1)]))
+        XCTAssertTrue(bare.contains("<h1>the poller</h1>"))
+    }
+
+    /// The deck joins two stored sentences; the join supplies the full stop
+    /// the first field is missing, and keeps one it already has.
+    func testTheDeckJoinTerminatesItsFirstSentence() {
+        let jammed = HomeBase.Turn(at: Date(timeIntervalSince1970: 1_000_600),
+                                   topic: "hub visibility",
+                                   happened: "four bugs were fixed and merged to production",
+                                   question: "Proceed with the page review?")
+        let html = HomeBase.render(model(turns: [jammed]))
+        XCTAssertTrue(html.contains("merged to production. Proceed with the page review?"))
+        let punctuated = HomeBase.Turn(at: Date(timeIntervalSince1970: 1_000_600),
+                                       topic: "hub visibility",
+                                       happened: "It shipped!",
+                                       question: "Review it?")
+        let html2 = HomeBase.render(model(turns: [punctuated]))
+        XCTAssertTrue(html2.contains("It shipped! Review it?"))
+    }
+
     /// Topics and goals are model-written and land in markup unescaped
     /// otherwise.
     func testModelWrittenTextIsEscaped() {
