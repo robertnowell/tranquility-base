@@ -4122,7 +4122,6 @@ final class StatusHUD: NSObject {
             .map(StateLegend.Measure.relativeLuminance) ?? 0
         let idleL = label("idle")?.textColor
             .map(StateLegend.Measure.relativeLuminance) ?? 0
-        _ = workingOpenedL
         SelfTest.report("readIntensity", [
             // The AmberConsole law, asserted so it cannot rot back: NO row
             // is bold. The panel broke this quietly for the grid's whole
@@ -4137,7 +4136,13 @@ final class StatusHUD: NSObject {
             ("dimmingIsVisible", unreadL > 0 && (unreadL - openedL) / unreadL > 0.15),
             ("openedIsNotDead", unreadL > 0 && (unreadL - openedL) / unreadL < 0.40),
             ("unreadLampIsSolid", solid("unread") && solid("w-unread")),
-            ("openedLampIsHollow", hollow("opened") && hollow("w-opened")),
+            ("openedLampIsHollow", hollow("opened")),
+            // Advisory blue carries NO read state: never hollow, never at
+            // attention ink, whichever side of read it is on. The legend
+            // calls it "news, nothing for you to do"; the panel has to agree.
+            ("advisoryIsNeverHollow", solid("w-unread") && solid("w-opened")),
+            ("advisoryAlwaysRests",
+             abs(workingUnreadL - openedL) < 0.0001 && abs(workingOpenedL - openedL) < 0.0001),
             // An idle row keeps its own lamp: hollowing it would claim it had
             // been read, which is a thing that never happened to it.
             ("idleLampIsUntouched", solid("idle")),
@@ -6002,7 +6007,7 @@ final class GridRowView: NSControl {
         // have heard it, and a gone row is a grey socket, a different colour
         // entirely. It is also the oldest unread idiom there is — a solid dot
         // that hollows out once you have looked.
-        let hollow = item.read == .opened && item.lamp != .unlit
+        let hollow = item.read == .opened && item.lamp.asksForYou
         lampLayer = lamp.layer
         lamp.layer?.backgroundColor = hollow ? NSColor.clear.cgColor : item.lamp.fill.cgColor
         lamp.layer?.cornerRadius = StateLegend.Lamp.diameter / 2
@@ -6056,7 +6061,17 @@ final class GridRowView: NSControl {
         // alive rests at the same level as one you have already heard,
         // because neither is asking; only their lamps differ.
         name.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
-        name.textColor = (item.read.isAsking
+        // FULL INK IS RESERVED FOR ROWS THAT WANT YOU, and after this change
+        // that is exactly the green and amber ones you have not heard.
+        //
+        // Dark-cockpit doctrine, which this palette already states: the panel
+        // is dark when all is nominal and a lit lamp always means deviation.
+        // An advisory row rendered at full attention ink broke it — the agent
+        // is working, there is nothing to do, and the brightest thing on the
+        // panel was saying otherwise. It comes back the moment the agent
+        // stops: the lamp returns to green, the turn is still unread, and the
+        // row lights up on its own.
+        name.textColor = (item.read.isAsking && item.lamp.asksForYou
                           ? StateLegend.Palette.ink
                           : StateLegend.Palette.restingInk).withAlphaComponent(ink)
         name.lineBreakMode = .byTruncatingTail

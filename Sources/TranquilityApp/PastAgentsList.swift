@@ -399,7 +399,7 @@ final class PastRowView: NSControl {
         // hollow once opened, in the state's own colour. One rule in both
         // lists, or "have I heard this" would mean something different
         // depending on which face you were looking at.
-        let hollow = item.row.read == .opened && item.row.lamp != .unlit
+        let hollow = item.row.read == .opened && item.row.lamp.asksForYou
         lamp.layer?.backgroundColor = hollow ? NSColor.clear.cgColor
                                              : item.row.lamp.fill.cgColor
         lamp.layer?.cornerRadius = StateLegend.Lamp.diameter / 2
@@ -423,7 +423,7 @@ final class PastRowView: NSControl {
         // live one.
         let name = NSTextField(labelWithString: item.row.name)
         name.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
-        name.textColor = (item.row.read.isAsking
+        name.textColor = (item.row.read.isAsking && item.row.lamp.asksForYou
                           ? StateLegend.Palette.ink
                           : StateLegend.Palette.restingInk).withAlphaComponent(ink)
         name.lineBreakMode = .byTruncatingTail
