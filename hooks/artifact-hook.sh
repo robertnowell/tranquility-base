@@ -201,8 +201,17 @@ if stamp == "1":
     try:
         with open(path, "r", encoding="utf-8") as fh:
             page = fh.read()
-        cleaned = re.sub(r"<footer data-tb-agent=.*?</footer>", "", page,
-                         flags=re.S)
+        # Every AGENT footer goes, not just ours: a page copied from an
+        # exemplar inherits the exemplar session's footer, and the copying
+        # session then adds its own, which is how one audit page ended up
+        # with two footers naming two different sessions (16 Aug). An agent
+        # footer is one carrying the discuss link; a page's own colophon has
+        # none and is left alone.
+        cleaned = re.sub(
+            r"<footer\b(?:(?!</footer>).)*?"
+            r"(?:data-tb-agent=|tranquilitybase://discuss)"
+            r"(?:(?!</footer>).)*?</footer>",
+            "", page, flags=re.S)
         if "</body>" in cleaned:
             head, _, tail = cleaned.rpartition("</body>")
             stamped = head + snippet + "\n</body>" + tail
