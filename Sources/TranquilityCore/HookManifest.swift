@@ -62,6 +62,10 @@ public enum HookManifest {
         case installed
         /// Wired, but the command it names is not on disk — the silent-death case.
         case brokenPath(String)
+        /// Wired and on disk, but firing on the wrong tools. The manifest is
+        /// the contract; a matcher that drifts from it is a hook that runs at
+        /// the wrong moments and reports itself healthy while doing so.
+        case staleMatcher(found: String?)
         case missing
     }
 
@@ -96,9 +100,20 @@ public enum HookManifest {
             // The path is what rots — a rename, a moved repo, a deleted checkout. The
             // marker being present proves only that someone once installed it.
             let executable = command.split(separator: " ").first.map(String.init) ?? command
-            return FileManager.default.fileExists(atPath: executable)
+            guard FileManager.default.fileExists(atPath: executable) else {
+                return Status(hook: hook, state: .brokenPath(executable))
+            }
+            // The matcher is contract, not decoration: widening artifact-hook
+            // to Write|Edit|Bash left the installed hook firing on Write while
+            // the audit called it healthy (16 Aug).
+            let owner = entries.first {
+                (($0["hooks"] as? [[String: Any]]) ?? [])
+                    .contains { ($0["command"] as? String)?.contains(hook.marker) == true }
+            }
+            let found = owner?["matcher"] as? String
+            return found == hook.matcher
                 ? Status(hook: hook, state: .installed)
-                : Status(hook: hook, state: .brokenPath(executable))
+                : Status(hook: hook, state: .staleMatcher(found: found))
         }
     }
 
@@ -107,10 +122,14 @@ public enum HookManifest {
         guard let statuses = audit(settings: url) else { return "hooks: settings unreadable" }
         let broken = statuses.filter { if case .brokenPath = $0.state { return true } else { return false } }
         let missing = statuses.filter { $0.state == .missing }
-        if broken.isEmpty, missing.isEmpty { return nil }
+        let stale = statuses.filter {
+            if case .staleMatcher = $0.state { return true } else { return false }
+        }
+        if broken.isEmpty, missing.isEmpty, stale.isEmpty { return nil }
         var parts: [String] = []
         if !broken.isEmpty { parts.append("\(broken.count) pointing at a missing file") }
         if !missing.isEmpty { parts.append("\(missing.count) not installed") }
+        if !stale.isEmpty { parts.append("\(stale.count) firing on the wrong tools") }
         return "hooks: " + parts.joined(separator: ", ")
     }
 
@@ -163,7 +182,10 @@ public enum HookManifest {
               var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return .unavailable("settings unreadable") }
         var hooks = root["hooks"] as? [String: Any] ?? [:]
-        for status in statuses where status.state == .installed {
+        // A stale matcher still names a file that exists, so it is as good a
+        // witness to the hooks directory as a fully healthy entry.
+        for status in statuses where status.state == .installed
+            || { if case .staleMatcher = status.state { return true } else { return false } }() {
             if let command = installedCommand(for: status.hook, in: hooks) {
                 candidates.append((command as NSString).deletingLastPathComponent)
             }
@@ -187,13 +209,26 @@ public enum HookManifest {
                           ($0["command"] as? String)?.contains(hook.marker) == true })
                 else { continue }
                 matched = true
+                var updated = entry
+                var changed = false
                 if (inner[j]["command"] as? String) != path {
                     inner[j]["command"] = path
-                    var updated = entry
                     updated["hooks"] = inner
-                    entries[i] = updated
-                    rewired += 1
+                    changed = true
                 }
+                // The MATCHER is part of the contract too, and repair used to
+                // reconcile only the path: widening artifact-hook to
+                // Write|Edit|Bash changed the manifest, the installer reported
+                // "nothing changed", and the hook kept firing on Write alone
+                // (16 Aug). A manifest that is only half enforced is a
+                // manifest that lies twice — once about the setting, once
+                // about having checked.
+                if (updated["matcher"] as? String) != hook.matcher {
+                    if let matcher = hook.matcher { updated["matcher"] = matcher }
+                    else { updated.removeValue(forKey: "matcher") }
+                    changed = true
+                }
+                if changed { entries[i] = updated; rewired += 1 }
             }
             if !matched {
                 var entry: [String: Any] = [
