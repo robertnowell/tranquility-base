@@ -223,8 +223,31 @@ public extension ArtifactStore {
     /// not authorship. This is a coarse allowlist of the ways a page is
     /// actually made in a shell; anything it misses is caught the moment a
     /// real file tool touches the page.
+    /// A shell REDIRECT, not any greater-than sign.
+    ///
+    /// Testing for a bare ">" called every command containing an HTML-stripping
+    /// regex a write — `re.sub(r'<[^>]+>', ...)` carries two — so three pages
+    /// this session only read came back onto its hub minutes after being
+    /// pruned (measured 16 Aug). A redirect's ">" follows whitespace (or a
+    /// single fd digit after whitespace) and points at a destination, never at
+    /// "&", which is a dup of an existing descriptor rather than a file.
+    static func containsRedirect(_ command: String) -> Bool {
+        let chars = Array(command)
+        for (i, c) in chars.enumerated() where c == ">" {
+            var before = i - 1
+            if before >= 0, chars[before].isNumber { before -= 1 }   // 2> file
+            let precededBySpace = before < 0 || chars[before].isWhitespace
+                || chars[before] == ">"                              // >> append
+            guard precededBySpace else { continue }
+            let next = chars[(i + 1)...].drop(while: { $0 == ">" })
+                .drop(while: { $0 == " " }).first
+            if let next, next != "&" { return true }
+        }
+        return false
+    }
+
     static func writesAFile(_ command: String) -> Bool {
-        if command.contains(">") { return true }   // redirect, heredoc, append
+        if containsRedirect(command) { return true }
         for verb in ["cp ", "mv ", "tee ", "install ", "rsync ", "curl -o",
                      "wget ", "sed -i"] {
             if command.contains(verb) { return true }

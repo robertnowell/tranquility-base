@@ -96,6 +96,20 @@ final class ArtifactStoreTests: XCTestCase {
             "cp template.html /Users/x/a/index.html"))
     }
 
+    /// A regex is not a redirect. `re.sub(r'<[^>]+>', ...)` carries two
+    /// greater-than signs and writes nothing; treating them as redirects put
+    /// three read-only pages back on a hub minutes after they were pruned.
+    func testARegexIsNotARedirect() {
+        XCTAssertFalse(ArtifactStore.containsRedirect(
+            "python3 -c \"re.sub(r'<[^>]+>', ' ', open('/Users/x/a/index.html').read())\""))
+        XCTAssertFalse(ArtifactStore.containsRedirect("grep -o 'a->b' file.html"))
+        XCTAssertFalse(ArtifactStore.containsRedirect("cmd 2>&1 | tail"))
+        XCTAssertTrue(ArtifactStore.containsRedirect("cat x >/Users/x/a/index.html"))
+        XCTAssertTrue(ArtifactStore.containsRedirect("cat x > /Users/x/a/index.html"))
+        XCTAssertTrue(ArtifactStore.containsRedirect("cat x >> log.html"))
+        XCTAssertTrue(ArtifactStore.containsRedirect("cmd 2> /Users/x/err.html"))
+    }
+
     /// The site name sits on either end of a title, and keeping the wrong side
     /// listed three different documents as "Tranquility Base".
     func testTheSpecificHalfOfATitleSurvives() {
