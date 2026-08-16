@@ -72,7 +72,28 @@ if not path:
     hq = os.path.expanduser("~/Documents/deep-research")
     recent = [f for f in glob.glob(os.path.join(hq, "*", "*.html"))
               if time.time() - os.path.getmtime(f) < 180]
-    path = max(recent, key=os.path.getmtime) if recent else ""
+
+    # Recency alone is not authorship. With several sessions running, every
+    # one of them runs a shell command inside any three-minute window, so a
+    # page being written by ONE session was claimed by all of them — the page
+    # appeared on four hubs and the doctor flagged it on each (16 Aug, minutes
+    # after this fallback shipped). A session wrote a page only if its own
+    # transcript says so: the agent named the path when it made it. Reading
+    # the tail is enough and costs nothing, and no transcript means no claim.
+    if recent:
+        transcript = p.get("transcript_path") or ""
+        try:
+            with open(transcript, "rb") as fh:
+                fh.seek(0, 2)
+                fh.seek(max(0, fh.tell() - 400_000))
+                tail = fh.read().decode("utf-8", "replace")
+        except Exception:
+            tail = ""
+        mine = [f for f in recent
+                if os.path.basename(os.path.dirname(f)) in tail]
+        path = max(mine, key=os.path.getmtime) if mine else ""
+    else:
+        path = ""
 
 # Only pages. A .md report becomes a page later, through a different tool, and
 # that write is the one that matters.
