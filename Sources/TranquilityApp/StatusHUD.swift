@@ -109,6 +109,14 @@ final class StatusHUD: NSObject {
     var collapsedLampsClearTheControls: Bool {
         strip?.lampsClearTheControlsForTesting ?? false
     }
+    /// Which face the strip's bottom slot last painted, and how much ink it
+    /// put there — the mark at rest, the controls on hover.
+    var collapsedFloorFace: CollapsedStrip.FloorFace? { strip?.lastFloorPaint }
+    var collapsedFloorInk: Int { strip?.floorInkForTesting() ?? 0 }
+    var collapsedMarkSharesTheControlsSlot: Bool {
+        strip?.markSharesTheControlsSlotForTesting ?? false
+    }
+    func collapsedSetHovering(_ on: Bool) { strip?.setHoveringForTesting(on) }
     /// In a window, visible, and actually in the view tree. NOT
     /// `panel.contentView === strip` any more: the strip is a sibling inside the
     /// panel's rounded background now, so the old check asserted an arrangement
@@ -3472,6 +3480,29 @@ final class StatusHUD: NSObject {
             + " opened=\(openedInk.map { "\($0.alphaComponent)" } ?? "-")"
             + " frame \(panel.map { NSStringFromRect($0.frame) } ?? "-")")
 
+        // The mark keeps its slot at every roster size.
+        //
+        // Ruled 17 Aug: the wordmark used to take whatever the lamps left and
+        // disappear past five of them, so the panel went unnamed exactly when
+        // it was busiest. It now paints into the two rows the X and the + stand
+        // in — asserted here on a FULL column, which is the state the old rule
+        // suppressed it in, and asserted as ink on the rendered view, because a
+        // mark sized to 80pt can fail by coming out invisible rather than by
+        // not being drawn.
+        let markAtRest = collapsedFloorFace
+        let inkAtRest = collapsedFloorInk
+        collapsedSetHovering(true)
+        let faceOnHover = collapsedFloorFace
+        collapsedSetHovering(false)
+        let markReturns = collapsedFloorFace
+        let markIsAlwaysThere = markAtRest == .mark && markReturns == .mark
+        let markHasInk = inkAtRest > 40
+        let hoverTakesTheFloor = faceOnHover == .controls
+        let markSharesTheSlot = collapsedMarkSharesTheControlsSlot
+        Permissions.log("collapse drill: floor \(markAtRest.map { "\($0)" } ?? "-")"
+            + " ink=\(inkAtRest) hover=\(faceOnHover.map { "\($0)" } ?? "-")"
+            + " lamps=\(collapsedLampCount)")
+
         SelfTest.report("collapsed", [
             ("idleLampsOmitted", idleLampsOmitted),
             ("stripShown", stripShown),
@@ -3491,6 +3522,10 @@ final class StatusHUD: NSObject {
             ("openedLampIsHollowCollapsedToo", openedIsHollow),
             ("wholeColumnShown", wholeColumnShown),
             ("lampsClearTheControls", lampsClearControls),
+            ("markShowsOnAFullColumn", markIsAlwaysThere),
+            ("markIsActuallyInked", markHasInk),
+            ("hoverTakesTheFloor", hoverTakesTheFloor),
+            ("markSharesTheControlsSlot", markSharesTheSlot),
         ])
         showIdle(rows: [])
 
