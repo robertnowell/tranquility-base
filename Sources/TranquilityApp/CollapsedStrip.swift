@@ -15,7 +15,7 @@ import TranquilityCore
 ///
 ///     ┌────┐  logo mark          — becomes Expand on hover
 ///     │ ◉  │  lamps, ready/working/fault only, idle omitted
-///     │ ◉  │
+///     │ ○  │  — solid unread, hollow once opened, exactly as the grid draws
 ///     │ ◉  │
 ///     │    │
 ///     │ TB │  the wordmark, in whatever space the lamps leave
@@ -37,13 +37,37 @@ import TranquilityCore
 final class CollapsedStrip: NSView {
 
     static let width: CGFloat = 40
-    /// Fixed, so the strip never resizes under the user. Sized for the grid's
-    /// 8-row cap: the logo slot, eight lamp slots, and the remainder — which at
-    /// five lamps is the lower half and at eight is too little for the wordmark,
-    /// which is exactly the ruled cutoff.
-    static let height: CGFloat = 380
     private static let logoSlot: CGFloat = 40
     private static let lampSlot: CGFloat = 28
+    /// The floor the hover controls land in: X and +, one `logoSlot` each.
+    /// Reserved in the ARITHMETIC and not on screen — the wordmark draws over
+    /// the same space at rest, because the mark and the controls never coexist.
+    private static let controlsFloor: CGFloat = logoSlot * 2
+
+    /// How many lamps the column shows, and the number the height is derived
+    /// FROM rather than checked against.
+    ///
+    /// Ruled 16 Aug, from the screenshots: "the collapsed state shows 8, but
+    /// the size has room for 10 at least." Both halves were true, which is the
+    /// tell that the two constants had drifted apart — the cap was the grid's
+    /// old eight-row floor written down a second time, the height was a round
+    /// 380 chosen next to it, and nothing tied them together, so the column
+    /// carried 36pt of dead band under the last lamp and cut the roster anyway.
+    /// Robert's own panel had eleven active agents and the strip showed eight
+    /// greens, dropping both working blues off the bottom of a column that
+    /// looked half empty.
+    ///
+    /// So the cap is the ruling and the height is its consequence. Ten lamps
+    /// because that is what he asked for and it is within a slot of what the
+    /// old frame already held; a number here moves the frame with it, and the
+    /// dead band cannot come back by arithmetic.
+    static let lampCapacity = 10
+
+    /// Fixed, so the strip never resizes under the user — the logo slot, every
+    /// lamp slot, and the floor the hover controls need. DERIVED: see
+    /// `lampCapacity`.
+    static let height: CGFloat =
+        logoSlot + CGFloat(lampCapacity) * lampSlot + controlsFloor
     /// Past this many lamps the wordmark is hidden: "if there's more than 5
     /// working rows, there's probably not room for the Tranquility Base."
     private static let wordmarkLampLimit = 5
@@ -88,6 +112,33 @@ final class CollapsedStrip: NSView {
     /// What the drill reads to prove the glow decays rather than lingering.
     var currentGlowStrength: CGFloat { glowColor == nil ? 0 : glowStrength }
 
+    /// The ink actually PAINTED at the centre of lamp `index`.
+    ///
+    /// Sampled off the rendered view rather than recomputed, because the bug
+    /// this guards was a view that never asked the question at all: a drill
+    /// that re-evaluates `read == .opened` would have passed on the strip that
+    /// shipped, since the expression was right everywhere it existed and
+    /// absent here. A solid lamp answers with its state colour; a hollow one
+    /// has nothing in the middle, so the answer is transparent.
+    func lampCentreInkForTesting(_ index: Int) -> NSColor? {
+        guard index < lamps.count,
+              let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        cacheDisplay(in: bounds, to: rep)
+        let slot = lampRect(index)
+        // The bitmap counts rows from the top; the view's geometry does not.
+        return rep.colorAt(x: Int(slot.midX), y: Int(bounds.maxY - slot.midY))
+    }
+
+    /// Does a FULL column still leave the hover controls their floor?
+    ///
+    /// The property that ties `lampCapacity` to `height`. Raising the cap
+    /// without moving the frame is the drift that put eight lamps in a column
+    /// sized for ten and, run the other way, would push the last lamp through
+    /// the X and the +.
+    var lampsClearTheControlsForTesting: Bool {
+        lampRect(Self.lampCapacity - 1).minY >= Self.controlsFloor - 0.5
+    }
+
     func flash(_ lamp: StateLegend.Lamp) {
         glowTimer?.invalidate()
         glowColor = lamp.fill
@@ -102,7 +153,8 @@ final class CollapsedStrip: NSView {
     }
 
     func show(rows: [StateLegend.SessionRow]) {
-        lamps = rows.filter { $0.lamp != .running }.prefix(8).map { $0 }
+        lamps = rows.filter { $0.lamp != .running }
+            .prefix(Self.lampCapacity).map { $0 }
         needsDisplay = true
     }
 
@@ -242,11 +294,36 @@ final class CollapsedStrip: NSView {
         }
     }
 
+    /// The same lamp the grid draws, at another width — INCLUDING the read
+    /// state, which this column simply did not carry.
+    ///
+    /// Solid unread, a ring once opened, in the state's own colour: the rule
+    /// `GridRowView` has followed since 16 Aug, and one this view was never
+    /// told about, so every lit lamp came out solid. Robert saw the two widths
+    /// side by side and the disagreement was the whole report — "the collapse
+    /// state shows only the filled dots, whereas the uncollapsed state shows
+    /// both filled and unfilled". His grid had one solid green and eight
+    /// hollow; his strip had nine identical solid greens, which says every
+    /// agent is waiting on him when only one of them was.
+    ///
+    /// The hollow test is `GridRowView`'s verbatim, deliberately: it is the
+    /// same question about the same row, and the two views disagreeing about
+    /// it is precisely the defect. `asksForYou` keeps advisory blue solid —
+    /// news has no read state — and 1.5pt keeps the ring from reading as a
+    /// smudge at 9px, both for the reasons the grid states at its own call
+    /// site.
     private func drawLamps() {
         for (i, row) in lamps.enumerated() {
             let slot = lampRect(i)
             let d = StateLegend.Lamp.diameter
             let dot = NSRect(x: slot.midX - d / 2, y: slot.midY - d / 2, width: d, height: d)
+            if row.read == .opened && row.lamp.asksForYou {
+                row.lamp.fill.setStroke()
+                let path = NSBezierPath(ovalIn: dot.insetBy(dx: 0.75, dy: 0.75))
+                path.lineWidth = 1.5
+                path.stroke()
+                continue
+            }
             row.lamp.fill.setFill()
             NSBezierPath(ovalIn: dot).fill()
             if let ring = row.lamp.ring {
