@@ -125,8 +125,17 @@ final class CollapsedStrip: NSView {
               let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
         cacheDisplay(in: bounds, to: rep)
         let slot = lampRect(index)
-        // The bitmap counts rows from the top; the view's geometry does not.
-        return rep.colorAt(x: Int(slot.midX), y: Int(bounds.maxY - slot.midY))
+        // PIXELS, not points, and the bitmap counts rows from the top while the
+        // view's geometry does not. The first version passed neither: it read
+        // point coordinates straight into `colorAt`, which on a 2x display
+        // samples a quarter of the way in from the corner — empty ground, so
+        // every lamp came back transparent and "hollow" was true of all of
+        // them. A drill that measures nothing reports the same as a drill that
+        // measures the right thing and finds it correct.
+        let sx = CGFloat(rep.pixelsWide) / bounds.width
+        let sy = CGFloat(rep.pixelsHigh) / bounds.height
+        return rep.colorAt(x: Int(slot.midX * sx),
+                           y: Int((bounds.maxY - slot.midY) * sy))
     }
 
     /// Does a FULL column still leave the hover controls their floor?
