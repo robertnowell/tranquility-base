@@ -18,8 +18,8 @@ import TranquilityCore
 ///     │ ○  │  — solid unread, hollow once opened, exactly as the grid draws
 ///     │ ◉  │
 ///     │    │
-///     │ TB │  the wordmark, in whatever space the lamps leave
-///     │ RA │  — hidden on hover, and hidden past 5 lamps
+///     │ TB │  the wordmark, in the two rows the controls stand in
+///     │ RA │  — always there, whatever the roster; hidden on hover
 ///     │ AS │
 ///     │ NE │
 ///     └────┘  X and + appear here on hover, in the wordmark's slot
@@ -68,9 +68,23 @@ final class CollapsedStrip: NSView {
     /// `lampCapacity`.
     static let height: CGFloat =
         logoSlot + CGFloat(lampCapacity) * lampSlot + controlsFloor
-    /// Past this many lamps the wordmark is hidden: "if there's more than 5
-    /// working rows, there's probably not room for the Tranquility Base."
-    private static let wordmarkLampLimit = 5
+    /// The mark lives in the controls' slot, at every roster size.
+    ///
+    /// It used to take whatever space the lamps left and vanish past five of
+    /// them — "if there's more than 5 working rows, there's probably not room
+    /// for the Tranquility Base" — which made the identity a function of how
+    /// busy the machine happened to be, and on a full column it was simply
+    /// gone. Ruled 17 Aug: "i would like our vertical tranquility base strip to
+    /// fit in here, so we can always display it, so i guess we make smaller so
+    /// it occupies same height as the two buttons and disappears on hover."
+    ///
+    /// So the mark is sized to the floor rather than to the leftovers. It is
+    /// smaller than it was on a quiet day and it is always there, which is the
+    /// trade he asked for — and it is now the same swap every other control on
+    /// this column already is: one slot, two faces, nothing reflowing.
+    private var wordmarkRect: NSRect {
+        NSRect(x: 0, y: 0, width: bounds.width, height: Self.controlsFloor)
+    }
 
     var onExpand: (() -> Void)?
     var onDismiss: (() -> Void)?
@@ -82,6 +96,14 @@ final class CollapsedStrip: NSView {
     /// column exists to answer one question.
     private(set) var lamps: [StateLegend.SessionRow] = []
     private var hovering = false
+
+    /// Which of the floor's two faces the last paint put there.
+    ///
+    /// Recorded BY `draw`, so it is a record of what happened rather than a
+    /// second copy of the condition. A drill that re-asks "is it hovering?"
+    /// proves only that the expression it just wrote agrees with itself.
+    enum FloorFace: Equatable { case mark, controls }
+    private(set) var lastFloorPaint: FloorFace?
 
     /// The arrival glow: a colour and how much of it is left, 1 → 0.
     ///
@@ -146,6 +168,43 @@ final class CollapsedStrip: NSView {
     /// the X and the +.
     var lampsClearTheControlsForTesting: Bool {
         lampRect(Self.lampCapacity - 1).minY >= Self.controlsFloor - 0.5
+    }
+
+    /// The mark's slot and the controls' slot are the SAME rectangle — the
+    /// property that lets both live at the bottom with nothing reserved.
+    var markSharesTheControlsSlotForTesting: Bool {
+        wordmarkRect.equalTo(dismissRect.union(newAgentRect))
+    }
+
+    /// A drill cannot move the mouse, and hover is the whole swap.
+    func setHoveringForTesting(_ on: Bool) {
+        hovering = on
+        needsDisplay = true
+        display()
+    }
+
+    /// How many pixels of the bottom slot actually carry ink.
+    ///
+    /// Counted rather than sampled at a point: the mark is fifteen small
+    /// glyphs spread over 80pt, so no single pixel is reliably on it, and the
+    /// failure worth catching is the whole run coming out invisible — a size
+    /// clamped to nothing, or an early return. Zero here means the panel is
+    /// unnamed.
+    func floorInkForTesting() -> Int {
+        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return 0 }
+        cacheDisplay(in: bounds, to: rep)
+        let sx = CGFloat(rep.pixelsWide) / bounds.width
+        let sy = CGFloat(rep.pixelsHigh) / bounds.height
+        let top = max(0, Int((bounds.maxY - wordmarkRect.maxY) * sy))
+        let bottom = min(rep.pixelsHigh, Int((bounds.maxY - wordmarkRect.minY) * sy))
+        var ink = 0
+        for y in top..<bottom {
+            for x in 0..<Int(bounds.width * sx)
+            where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
+                ink += 1
+            }
+        }
+        return ink
     }
 
     func flash(_ lamp: StateLegend.Lamp) {
@@ -235,11 +294,15 @@ final class CollapsedStrip: NSView {
         drawHeader()
         drawLamps()
 
+        // The floor has two faces and never both. No roster condition any more:
+        // the mark is sized to this slot, so a full column cannot crowd it out.
         if hovering {
             drawGlyph(StateLegend.Glyph.denied, in: dismissRect, color: StateLegend.Palette.faint)
             drawGlyph("+", in: newAgentRect, color: StateLegend.Palette.faint)
-        } else if lamps.count <= Self.wordmarkLampLimit {
+            lastFloorPaint = .controls
+        } else {
             drawWordmark()
+            lastFloorPaint = .mark
         }
     }
 
@@ -356,30 +419,31 @@ final class CollapsedStrip: NSView {
         let left = Array("TRANQUILITY")
         let right = Array("BASE")
 
-        // Anchored to the BOTTOM of the column, not hung under the lamps.
+        // Sized to the SLOT, not to the leftovers.
         //
-        // The first version started the run immediately below the last lamp, so
-        // on a three-lamp day the mark floated in the middle of the strip with
-        // dead space under it — which is what it looked like, and it looked
-        // like nothing on purpose. The mass belongs in the corner.
+        // The mark used to start under the last lamp and take everything down
+        // to 12pt off the floor, which made it a different size on every roster
+        // and none at all past five lamps. Now it fills `wordmarkRect` — the
+        // two rows the X and the + stand in, which the lamps are structurally
+        // forbidden from entering (see `lampsClearTheControlsForTesting`). The
+        // mark and the controls never coexist, so they share one floor: the
+        // mark paints at rest, the glyphs paint on hover.
         //
-        // Twelve points off the floor and no more. The first version reserved a
-        // whole `logoSlot` beneath it for the X — 52pt of nothing under the
-        // mark, which is not "at the bottom", it is hovering above it.
-        //
-        // Nothing needs reserving: the wordmark and the hover controls never
-        // coexist. The mark is drawn only when NOT hovering, and X and + are
-        // drawn only when hovering, so they can occupy the same floor.
-        let baseY: CGFloat = 12
-        let ceiling = bounds.maxY - Self.logoSlot - CGFloat(lamps.count) * Self.lampSlot - 6
-        let available = ceiling - baseY
-        guard available >= CGFloat(left.count) * 8 else { return }
+        // The consequence is deliberate and was asked for: eleven letters in
+        // 80pt makes this the smallest type on the panel. It is a mark, not
+        // prose — the panel is named on it, and nobody reads it twice.
+        let inset: CGFloat = 4
+        let baseY = wordmarkRect.minY + inset
+        let available = wordmarkRect.height - inset * 2
 
         // Ambient, not ostentatious: the hint line's ink, a step below the
         // chrome the lamps and controls sit in. Legible when looked at, quiet
         // when not.
-        let rhythm = min(13, available / CGFloat(left.count))
-        let size = max(7, min(8.5, rhythm * 0.68))
+        let rhythm = available / CGFloat(left.count)
+        // The floor is 5pt, not the old 7: the slot is fixed now, so a clamp
+        // that refuses to go smaller does not buy legibility, it buys a mark
+        // running up through the lamps.
+        let size = max(5, min(8.5, rhythm * 0.78))
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: size, weight: .regular),
             .foregroundColor: StateLegend.Palette.faint,
