@@ -3502,7 +3502,6 @@ final class StatusHUD: NSObject {
         Permissions.log("collapse drill: floor \(markAtRest.map { "\($0)" } ?? "-")"
             + " ink=\(inkAtRest) hover=\(faceOnHover.map { "\($0)" } ?? "-")"
             + " lamps=\(collapsedLampCount)")
-        strip?.writeShotForTesting()   // TEMPORARY: look at the mark before shipping it
 
         SelfTest.report("collapsed", [
             ("idleLampsOmitted", idleLampsOmitted),

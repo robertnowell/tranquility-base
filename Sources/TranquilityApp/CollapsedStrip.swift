@@ -183,17 +183,6 @@ final class CollapsedStrip: NSView {
         display()
     }
 
-    /// TEMPORARY: dump the rendered column so a human can look at the mark.
-    func writeShotForTesting() {
-        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return }
-        cacheDisplay(in: bounds, to: rep)
-        guard let png = rep.representation(using: .png, properties: [:]) else { return }
-        let url = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Downloads/tb-strip-probe.png")
-        try? png.write(to: url)
-        Permissions.log("collapse drill: wrote \(url.path)")
-    }
-
     /// How many pixels of the bottom slot actually carry ink.
     ///
     /// Counted rather than sampled at a point: the mark is fifteen small

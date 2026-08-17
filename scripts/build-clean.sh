@@ -49,6 +49,40 @@ if [ ! -d "$CLEAN_WORKTREE" ]; then
   echo "→ creating $CLEAN_WORKTREE" >&2
   git worktree add --detach "$CLEAN_WORKTREE" "$REF" >/dev/null
 else
+  # The reaper takes files out of an EXISTING worktree too, and it does not
+  # stop at the tracked ones. Seen 17 Aug: /private/tmp/tb-clean survived as a
+  # directory with its .build cache intact, its `.git` link gone, and half its
+  # tracked files deleted — which failed the deploy twice over. First as
+  # `fatal: not a git repository`, from the fetch below; then, once the link
+  # was repaired by hand, as a dirty-tree refusal listing three hundred
+  # deletions. The only sanctioned relaunch path was down until somebody
+  # worked out that /tmp had eaten the worktree rather than that a session had
+  # left it dirty, and the message said the opposite.
+  #
+  # Both halves self-heal here, because both are unambiguous damage: this
+  # directory is a build cache nobody edits, so a broken link is never
+  # somebody's work in progress, and DELETIONS ONLY are never an edit either.
+  # Anything else — a modification, an untracked file — still refuses below,
+  # which is the case rule 3 is actually about.
+  if ! git -C "$CLEAN_WORKTREE" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "→ $CLEAN_WORKTREE lost its git link (the /tmp reaper) — repairing" >&2
+    git worktree prune
+    git worktree repair "$CLEAN_WORKTREE" >/dev/null 2>&1 || true
+  fi
+  if ! git -C "$CLEAN_WORKTREE" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "→ $CLEAN_WORKTREE is past repairing — rebuilding it from scratch" >&2
+    rm -rf "$CLEAN_WORKTREE"
+    git worktree prune
+    git worktree add --detach "$CLEAN_WORKTREE" "$REF" >/dev/null
+  fi
+  # Restore before fetching: a reaped tree can be missing the scripts this
+  # very run is about to call.
+  if [ -n "$(git -C "$CLEAN_WORKTREE" status --porcelain)" ] \
+     && [ -z "$(git -C "$CLEAN_WORKTREE" status --porcelain | grep -v '^ D ')" ]; then
+    gone=$(git -C "$CLEAN_WORKTREE" status --porcelain | wc -l | tr -d ' ')
+    echo "→ restoring $gone reaped file(s) in $CLEAN_WORKTREE" >&2
+    git -C "$CLEAN_WORKTREE" checkout -- .
+  fi
   git -C "$CLEAN_WORKTREE" fetch -q origin
   git -C "$CLEAN_WORKTREE" checkout -q --detach "$TARGET"
 fi
