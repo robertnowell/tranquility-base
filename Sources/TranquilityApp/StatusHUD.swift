@@ -100,6 +100,15 @@ final class StatusHUD: NSObject {
     /// ones never reach it.
     var collapsedLampCount: Int { strip?.lamps.count ?? 0 }
     var collapsedGlowStrength: CGFloat { strip?.currentGlowStrength ?? 0 }
+    /// The ink the column actually painted in a lamp's middle — a state colour
+    /// when the lamp is solid, transparent when it is a ring.
+    func collapsedLampCentreInk(_ index: Int) -> NSColor? {
+        strip?.lampCentreInkForTesting(index)
+    }
+    /// A full column still clears the floor the X and the + stand in.
+    var collapsedLampsClearTheControls: Bool {
+        strip?.lampsClearTheControlsForTesting ?? false
+    }
     /// In a window, visible, and actually in the view tree. NOT
     /// `panel.contentView === strip` any more: the strip is a sibling inside the
     /// panel's rounded background now, so the old check asserted an arrangement
@@ -3418,6 +3427,51 @@ final class StatusHUD: NSObject {
             + (panel.map { NSStringFromRect($0.frame) } ?? "-"))
         dropOverlay.isHidden = true
 
+        // The column carries the READ state, and it carries the whole roster.
+        //
+        // Both halves of what Robert saw on 16 Aug, side by side: a grid with
+        // one solid green and eight hollow ones, and a strip showing nine
+        // identical solid greens, eight of them — the two blues cut by a cap of
+        // 8 in a column with room for more. So the strip was overstating who
+        // wants him AND hiding who is working, at the same time.
+        //
+        // The ink is SAMPLED off the rendered column rather than recomputed.
+        // The defect was a view that never asked whether a lamp had been
+        // opened, so any drill that asks the question itself passes on the
+        // broken build — the expression was correct everywhere it existed.
+        let readMix: [StateLegend.SessionRow] = [
+            .init(id: "u", name: "unread", aux: "u", lamp: .ready, read: .unread),
+            .init(id: "o", name: "opened", aux: "o", lamp: .ready, read: .opened),
+            .init(id: "w", name: "working", aux: "w", lamp: .working, read: .none),
+        ] + (0..<11).map {
+            .init(id: "x\($0)", name: "more", aux: "x", lamp: .working, read: .none)
+        }
+        setCollapsed(true)
+        showIdle(rows: readMix)
+        settleAnimations()
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        panel?.displayIfNeeded()
+        let unreadInk = collapsedLampCentreInk(0)?.usingColorSpace(.sRGB)
+        let openedInk = collapsedLampCentreInk(1)?.usingColorSpace(.sRGB)
+        // Solid means painted AND painted the state's own colour: an alpha
+        // test alone would pass on a lamp drawn in the wrong hue.
+        let unreadIsSolidGreen = unreadInk.map {
+            $0.alphaComponent > 0.9
+                && $0.greenComponent > $0.redComponent
+                && $0.greenComponent > $0.blueComponent
+        } ?? false
+        // Hollow means nothing in the middle. The ring itself is 1.5pt at the
+        // rim, so the centre pixel is untouched ground.
+        let openedIsHollow = (openedInk?.alphaComponent ?? 1) < 0.1
+        // Fourteen rows in, the column shows its full ten and they still clear
+        // the floor the X and the + stand in.
+        let wholeColumnShown = collapsedLampCount == CollapsedStrip.lampCapacity
+        let lampsClearControls = collapsedLampsClearTheControls
+        Permissions.log("collapse drill: lamps=\(collapsedLampCount)"
+            + " unread=\(unreadInk.map { "\($0.alphaComponent)" } ?? "-")"
+            + " opened=\(openedInk.map { "\($0.alphaComponent)" } ?? "-")"
+            + " frame \(panel.map { NSStringFromRect($0.frame) } ?? "-")")
+
         SelfTest.report("collapsed", [
             ("idleLampsOmitted", idleLampsOmitted),
             ("stripShown", stripShown),
@@ -3433,6 +3487,10 @@ final class StatusHUD: NSObject {
             ("dismissTakesItAway", wentAway && dismissedAgain),
             ("showIdleWouldRaise", showIdleDoesRaise),
             ("thinAfterTheInvitation", thinAfterInvitation),
+            ("unreadLampIsSolid", unreadIsSolidGreen),
+            ("openedLampIsHollowCollapsedToo", openedIsHollow),
+            ("wholeColumnShown", wholeColumnShown),
+            ("lampsClearTheControls", lampsClearControls),
         ])
         showIdle(rows: [])
 
