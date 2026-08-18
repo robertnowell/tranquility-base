@@ -68,11 +68,19 @@ A row-shaped control keeps the wash it already had (`Palette.hover`) instead of
 the ink step. Rule 1 applies to it all the same — the wash says *which* row, and
 only the cursor says a row is a control rather than a lit read-state.
 
-### Two carve-outs, both for the same reason
+### Three carve-outs
 
 The settings tabs and a playing ▶ paint their own ink, because that ink already
 carries a louder signal — which tab is open, which clip is playing. Hover does
 not overwrite a louder signal with a quieter one. They take rule 1 and stop.
+
+So does the voice pane's **Get**, for the opposite reason: it is the one control
+on the panel with a box of its own, so it already looks like a button and its
+title sits on its own fill rather than on the surface.
+
+The onboarding window is out of scope entirely — its buttons are ordinary
+bezelled AppKit controls in an ordinary window, and the platform's affordance is
+intact there.
 
 ## Why readability cannot be spent here
 

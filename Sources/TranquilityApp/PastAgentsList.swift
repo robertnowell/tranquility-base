@@ -681,10 +681,13 @@ final class SettingRowView: NSView, NSTextFieldDelegate {
         if browsable {
             let browse = ConsoleButton(title: "", target: self, action: #selector(browseTapped))
             browse.isBordered = false
-            browse.wordmarkSize = 9.5
-            browse.wordmarkTracking = 1.33
+            // Not a bottom-line door — it lives in the settings pane and keeps
+            // its own letterspaced sans, so it re-inks through the generic hook.
+            browse.reink = { [weak browse] color in
+                browse?.attributedTitle = letterspaced(
+                    "CHOOSE…", size: 9.5, tracking: 1.33, color: color)
+            }
             browse.restingInk = StateLegend.Palette.accent
-            browse.wordmark = "CHOOSE…"
             browse.translatesAutoresizingMaskIntoConstraints = false
             addSubview(browse)
             NSLayoutConstraint.activate([

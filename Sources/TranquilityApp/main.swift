@@ -3164,6 +3164,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return
             }
+            // Say what it was doing, the moment you ask for it back (ruled
+            // 18 Aug: "revive likewise should basically work the same — if
+            // you're reviving, it should reopen the agent message").
+            //
+            // Announced BEFORE the resume rather than after, and not waiting on
+            // it: unlike a launch, a revived session already has a brief, so
+            // there is nothing to synthesize and nothing to wait for. The same
+            // door a launch greeting uses, which means the same voice — this
+            // session's own, assigned long ago — and the same reply routing,
+            // under the same id, because `--resume` keeps it.
+            //
+            // A reply that beats the process back is not lost: dispatch checks
+            // readiness and says "can't take this yet, your words are kept."
+            await MainActor.run { [weak self] in self?.announceNext(only: sessionId) }
             _ = SessionLauncher.resume(sessionId: sessionId, directory: command.cwd)
         }
     }
