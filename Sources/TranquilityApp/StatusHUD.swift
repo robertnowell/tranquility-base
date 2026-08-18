@@ -3383,6 +3383,20 @@ final class StatusHUD: NSObject {
         let pillAnswersTheCursor = stateLabel.isADoor
             && firstColour(pillHovered) != firstColour(pillResting)
             && firstColour(pillRestored) == firstColour(pillResting)
+        // The TITLE, which is the one the ramp could not answer: it rests at
+        // `ink`, the ramp's top rung, so `hovered` handed it back unchanged and
+        // the card's identity took a pointing hand while staying exactly the
+        // colour it was ("it does show the cursor pointer, but it doesn't have
+        // the change text colour impact", 18 Aug). Asserted separately from the
+        // pill because they fail separately: the pill rests mid-ramp and passed
+        // this whole time.
+        let titleResting = titleLabel.attributedStringValue
+        titleLabel.setHovered(true)
+        let titleHovered = titleLabel.attributedStringValue
+        titleLabel.setHovered(false)
+        let titleAnswersTheCursor = titleLabel.isADoor
+            && firstColour(titleHovered) != firstColour(titleResting)
+            && firstColour(titleLabel.attributedStringValue) == firstColour(titleResting)
         // Through the button's own hover seam, not a cast to a class it is not.
         // The first version of this claim cast `goButton` to a type that had
         // never been in the tree — the panel already had `ConsoleButton` with an
@@ -3407,6 +3421,7 @@ final class StatusHUD: NSObject {
             ("bottomRowFits", bottomRowFits),
             ("footerFits", footerFits),
             ("pillAnswersTheCursor", pillAnswersTheCursor),
+            ("titleAnswersTheCursor", titleAnswersTheCursor),
             ("doorAnswersTheCursor", doorAnswersTheCursor),
             ("stripIsNotADoor", stripIsNotADoor),
         ])
@@ -4778,20 +4793,40 @@ final class StatusHUD: NSObject {
             checks.append(("\(name)WearsIt", lit == hover && unlit == resting))
         }
 
-        // The ramp itself: every step is brighter than the one below it, and
-        // `ink` is the top, so "one step up" is always a step towards legible
-        // and never away from it. This is what makes rule 2 safe to apply
-        // without checking each control's contrast by hand.
-        let ordered = zip(StateLegend.inkRamp, StateLegend.inkRamp.dropFirst()).allSatisfy {
-            StateLegend.Measure.contrast($1, StateLegend.Palette.surface)
-                > StateLegend.Measure.contrast($0, StateLegend.Palette.surface)
+        // The step function itself, over every ink anything actually rests at
+        // — including the three the old ramp could not answer (the pill's
+        // amber, the go-green, and `ink`, which is the card's title).
+        //
+        // Two properties, and the second is the one a fraction-based step
+        // silently loses: every lift is the SAME perceptual distance, and it is
+        // far enough to see. The lamps' own floor is ΔL* 6.0, from 4.2
+        // measuring invisible at 9px; text is bigger, so the step is 8 and the
+        // drill accepts a point of slack either side of it.
+        for (name, resting) in [
+            ("faint", StateLegend.Palette.faint), ("hint", StateLegend.Palette.hint),
+            ("muted", StateLegend.Palette.muted), ("secondary", StateLegend.Palette.secondary),
+            ("ink", StateLegend.Palette.ink), ("accent", StateLegend.Palette.accent),
+            ("fault", StateLegend.Palette.fault), ("ready", StateLegend.Palette.ready),
+        ] {
+            let step = StateLegend.Measure.lightnessGap(
+                resting, StateLegend.hovered(resting))
+            checks.append(("\(name)LiftsOneStep",
+                           abs(step - StateLegend.hoverStep) <= 1))
         }
-        checks.append(("theRampClimbs", ordered))
-        checks.append(("inkIsTheTop",
-                       StateLegend.hovered(StateLegend.Palette.ink) == StateLegend.Palette.ink))
-        checks.append(("accentStepsToItsOwnHue",
-                       StateLegend.hovered(StateLegend.Palette.accent)
-                       == StateLegend.Palette.accentHover))
+        // Saturation survives the lift, which is what keeps a caution a caution
+        // and a go-lamp green. Blending toward `ink` was what broke this.
+        func saturation(_ color: NSColor) -> CGFloat {
+            guard let c = color.usingColorSpace(.sRGB) else { return 0 }
+            let high = max(c.redComponent, c.greenComponent, c.blueComponent)
+            let low = min(c.redComponent, c.greenComponent, c.blueComponent)
+            return high == 0 ? 0 : (high - low) / high
+        }
+        for (name, resting) in [("fault", StateLegend.Palette.fault),
+                                ("ready", StateLegend.Palette.ready)] {
+            checks.append(("\(name)KeepsItsHue",
+                           abs(saturation(resting)
+                               - saturation(StateLegend.hovered(resting))) < 0.02))
+        }
 
         SelfTest.report("hover", checks)
     }
@@ -6738,7 +6773,7 @@ final class CardBodyLabel: NSTextField {
 ///     same object to the eye by design (the card's actions are quiet text with
 ///     no lozenge, ruled) and nothing else distinguishes them at rest;
 ///  2. the INK confirms the pointer is on THIS one — one step up the control's
-///     own ramp, `StateLegend.hovered`;
+///     own colour, `StateLegend.hovered` — a fixed +8 ΔL*;
 ///  3. nothing moves, nothing grows, no lozenge appears, no hue changes. A
 ///     panel where things jump under the pointer is an interface asking to be
 ///     looked at, which is the product this one exists not to be;

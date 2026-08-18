@@ -455,6 +455,66 @@ row of 127 qualified.
 Note what the gate does not catch, on purpose: an initialism WITH a vowel
 ("tvpa", "json") survives, because a voice can say it.
 
+## 21. Obfuscation welded two words together — FIXED (18 Aug)
+
+"Sometimes after we obfuscate variable names it removes the space between that
+and the words." Reproduced first try once the right path was suspected, and the
+redaction was innocent: it is the LABEL STRIP.
+
+`Sanitizer.strippingLeadingLabels` handed the first segment to
+`Callsign.strippingLabelPrefixes`, which opens with
+`trimmingCharacters(in: .whitespaces)`. Correct for a whole string; wrong for a
+SEGMENT, where the trailing space is the boundary with the next piece:
+
+| source | before | after |
+|---|---|---|
+| `promotions: Fixed dispatchAttempts and…` | `FixeddispatchAttempts and…` | `Fixed dispatchAttempts and…` |
+| spoken | `Fixeda variable and…` | `Fixed a variable and…` |
+
+It hit the display and the ear equally, and it needed no label to fire — with
+nothing to strip, the trim alone made the result differ from the original, so
+the segment was rewritten shorter anyway. That is why it looked intermittent:
+the visible condition is not "a label was present" but "the first segment ends
+in a space and the next piece is a redaction".
+
+The gap is restored and the guard now compares against the RESTORED string, so a
+segment that only lost whitespace is left exactly as it was. Three regression
+tests in `SanitizerTests`, one per branch (label stripped, no label, label is
+the whole segment).
+
+## 22. Open Report raised a stale tab — FIXED (18 Aug)
+
+"If the report has been updated since it was originally opened, it opens the
+original tab." Raising the tab is the right half — `BrowserFocus` exists so that
+twenty agents do not become a wall of identical favicons — and showing the old
+render of it is the wrong one. `openHub` rewrites the page immediately before
+focusing, so the tab it raised was stale by construction.
+
+`focusExistingTab` now reloads what it raises (`reload tab t of window w`, after
+selecting it). Not gated on a file-date check: the answer would be "yes" almost
+every time, and it would be wrong in the direction that teaches you not to trust
+the door. Chrome restores scroll position across the reload. `reloading: false`
+stays available; nothing needs it.
+
+## 23. The card's title took the pointer and said nothing — FIXED (18 Aug)
+
+The title showed a pointing hand and did not change colour. It rests at `ink`,
+which was the top rung of the hover ramp, so the step function handed it back
+unchanged. The amber pill and the go-green had the same silence for the same
+reason.
+
+Fixed by replacing the ramp — see `docs/ruling-the-panel-answers-the-pointer.md`
+for the measurement, which also disposes of the 35%-toward-ink blend that
+shipped alongside it for half an hour. `hovered` is now a fixed +8 ΔL* channel
+scale: defined for every colour, the same perceptual distance everywhere, and
+saturation-preserving, so the amber pill stays amber.
+
+Three implementations of "one step brighter" existed in this file inside one
+afternoon, written by sessions that could not see each other. `hoverDrill` now
+asserts the PROPERTY (every ink lifts by the same ΔL* ±1, `fault` and `ready`
+keep their hue) rather than a table of tiers, so the next duplicate fails the
+gate instead of passing it.
+
 ## 20. Is the spoken callsign still earning its place? — CLOSED: no (18 Aug)
 
 Ruled the same day it was raised: it is not. See

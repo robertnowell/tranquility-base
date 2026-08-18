@@ -53,4 +53,28 @@ final class BrowserFocusTests: XCTestCase {
         XCTAssertTrue(script.contains("Deep%20Research"))
         XCTAssertTrue(script.contains("Deep Research"))
     }
+
+    // MARK: - Staleness
+
+    func testTheRaisedTabIsReloaded() {
+        // "If the report has been updated since it was originally opened, it
+        // opens the original tab" — raising the tab is right, showing the old
+        // render of it is not. `openHub` rewrites the file immediately before
+        // this runs, so the tab it raises is stale by construction.
+        let page = URL(fileURLWithPath: "/tmp/agents/abc/index.html")
+        let script = BrowserFocus.script(for: page)
+        XCTAssertTrue(script.contains("reload tab t of window w"))
+        // And the reload happens on the tab that MATCHED, after it has been
+        // selected — not on whatever tab happened to be active.
+        let selected = script.range(of: "set active tab index of window w to t")
+        let reloaded = script.range(of: "reload tab t of window w")
+        XCTAssertNotNil(selected)
+        XCTAssertNotNil(reloaded)
+        XCTAssertTrue(selected!.upperBound <= reloaded!.lowerBound)
+    }
+
+    func testAFinderCanStillDeclineToReload() {
+        let page = URL(fileURLWithPath: "/tmp/agents/abc/index.html")
+        XCTAssertFalse(BrowserFocus.script(for: page, reloading: false).contains("reload"))
+    }
 }

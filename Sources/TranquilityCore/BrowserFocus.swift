@@ -46,7 +46,7 @@ public enum BrowserFocus {
     /// space. Comparing on both the exact string and its percent-decoded form
     /// covers the cases seen without resorting to fuzzy matching, which would
     /// eventually focus the wrong tab.
-    static func script(for url: URL) -> String {
+    static func script(for url: URL, reloading: Bool = true) -> String {
         let exact = escaped(url.absoluteString)
         let decoded = escaped(url.absoluteString.removingPercentEncoding ?? url.absoluteString)
         return """
@@ -60,6 +60,7 @@ public enum BrowserFocus {
                 if u is "\(exact)" or u is "\(decoded)" then
                   set index of window w to 1
                   set active tab index of window w to t
+                  \(reloading ? "reload tab t of window w" : "")
                   set matched to true
                   exit repeat
                 end if
@@ -77,11 +78,31 @@ public enum BrowserFocus {
 
     /// Raise an existing tab for this URL, or report that there wasn't one.
     /// Never opens anything, never launches a browser, never throws.
+    ///
+    /// **It reloads what it raises**, and that is the point of the door rather
+    /// than a side effect of it. Reported 18 Aug: "when I open report, if the
+    /// report has been updated since it was originally opened, then it
+    /// obviously is out of date, but it opens the original tab." Raising the
+    /// tab is the RIGHT half — a fleet of agents must not become a wall of
+    /// identical favicons, which is this file's whole reason to exist — and
+    /// showing yesterday's render of it is the wrong one.
+    ///
+    /// Not a heuristic on file dates, deliberately. `openHub` rewrites the page
+    /// immediately before calling this, so "the tab is stale" is the normal
+    /// case and not the exception; a freshness check would compute an answer
+    /// that is almost always yes, and would be wrong in the one direction that
+    /// matters — a door that shows an old page teaches you not to trust the
+    /// door. The cost of being wrong the other way is a repaint of a page the
+    /// click already asked for, and Chrome restores scroll position across it.
+    ///
+    /// `reloading: false` stays available for a caller that only wants to find
+    /// a tab; nothing needs it today.
     @discardableResult
     public static func focusExistingTab(_ url: URL,
+                                        reloading: Bool = true,
                                         run: (String) -> Result<String, ScriptError>
                                             = { AppleScript.run(script: $0) }) -> Outcome {
-        switch run(script(for: url)) {
+        switch run(script(for: url, reloading: reloading)) {
         case .success(let output):
             return output.trimmingCharacters(in: .whitespaces) == "true" ? .focused : .notFound
         case .failure:
