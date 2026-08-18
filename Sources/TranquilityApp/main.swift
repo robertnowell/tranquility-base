@@ -991,6 +991,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// it now covers the already-finished card too.
     private func goHomeFromCard(via door: String) {
         Permissions.log("\(door): home")
+        // Leaving DURING Preparing is the one door out that has to reach into
+        // the announcement itself. Nothing has been spoken yet, so stopping the
+        // voice stops nothing: the task is still summarizing, and it would
+        // arrive seconds later and paint its card over the grid you just asked
+        // for — a back button that appears not to have worked, twice.
+        //
+        // Only from preparing. From `.speaking` the audio IS the task's
+        // progress, so `speech.stop()` already ends it through the interrupted
+        // path, which is what leaves the "Stopped." note the user reads.
+        // Cancelling there would silence that receipt as well as the voice.
+        if case .preparing = hud.state {
+            announceTask?.cancel()
+            announceTask = nil
+        }
         coordinator?.speech.stop()
         GreetingCache.stop()
         showIdleGrid()
