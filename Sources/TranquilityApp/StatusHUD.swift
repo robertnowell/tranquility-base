@@ -652,10 +652,14 @@ final class StatusHUD: NSObject {
     @objc nonisolated private func breadcrumbClicked() {
         MainActor.assumeIsolated {
             // Same altitude rule as ⌃⌥: home from a card. Speaking covers the
-            // announcement and every ⌃⌃ rung — the states whose breadcrumb
-            // says "back the way you came".
-            guard case .speaking = state else { return }
-            onBreadcrumbHome?()
+            // announcement and every ⌃⌃ rung; preparing is the card BEFORE
+            // those, and it was the one face on stage with no door out at all
+            // (18 Aug). A wait is exactly the moment you are most likely to
+            // change your mind, so it gets the same pill and the same verb.
+            switch state {
+            case .speaking, .preparing: onBreadcrumbHome?()
+            default: return
+            }
         }
     }
 
@@ -2055,14 +2059,14 @@ final class StatusHUD: NSObject {
             if item.lamp == .ready {
                 row.onLampTap = { [weak self] in self?.onClearLamp?(item.id) }
             }
-            // END SESSION rides the right-click, on exactly the rows that have a
-            // process to end — the same grammar the Past Agents face has used
-            // since 13 Aug, now on the face people actually look at. The item
-            // NAMES its target, and that IS the confirmation: a right-click, then
-            // a click on a sentence containing the right name. No dialog after
-            // that, and none here either — the grid would otherwise be the only
-            // surface in the app that asks twice.
-            row.menu = terminateMenu(for: item)
+            // GO TO AGENT and END SESSION ride the right-click, on exactly the
+            // rows that have a process behind them — the same grammar the Past
+            // Agents face has used since 13 Aug, now on the face people actually
+            // look at. The terminate item NAMES its target, and that IS the
+            // confirmation: a right-click, then a click on a sentence containing
+            // the right name. No dialog after that, and none here either — the
+            // grid would otherwise be the only surface in the app that asks twice.
+            row.menu = rowMenu(for: item)
             waitingRows.addArrangedSubview(row)
             row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
             if index < shown.count - 1 {
@@ -3725,7 +3729,7 @@ final class StatusHUD: NSObject {
         }
     }
 
-    /// End session is on the grid, and only where there is something to end.
+    /// The row menu is on the grid, and only where there is something to act on.
     ///
     /// The panel has no unit tests (rule 7), so this is the whole evidence that
     /// the menu follows liveness — and it is asserted as a PARTITION rather than
@@ -3733,8 +3737,14 @@ final class StatusHUD: NSObject {
     /// appearing on a row whose process is already gone. That row's verb is
     /// REVIVE, and a kill offered next to it would be a control that can only
     /// lie. The unlit-but-unprovable row is the third case and the reason this
-    /// asks `StateLegend.action` rather than reading the lamp: liveness we could
+    /// asks `StateLegend.isLive` rather than reading the lamp: liveness we could
     /// not establish is not liveness.
+    ///
+    /// The ORDER is asserted too (18 Aug). Go to agent is the harmless item and
+    /// it holds the top; End session sits last, behind a separator, so the one
+    /// item that kills a process is never where a fast pointer lands. A silent
+    /// reorder would be invisible in every screenshot and expensive exactly
+    /// once.
     private func terminateDrill() {
         func row(_ id: String, _ lamp: StateLegend.Lamp,
                  revivable: Bool = false) -> StateLegend.SessionRow {
@@ -3753,16 +3763,20 @@ final class StatusHUD: NSObject {
             .allSatisfy { menus[$0] == true }
         let deadDoNot = ["exited", "unproven"].allSatisfy { menus[$0] == false }
         let everyRowDrawn = rows.allSatisfy { menus[$0.id] != nil }
+        let items = (waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
+            .first { $0.identifier?.rawValue == "ready" }?.menu?.items) ?? []
         // The menu names its target, because the name IS the confirmation.
-        let named = (waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
-            .first { $0.identifier?.rawValue == "ready" }?
-            .menu?.items.first?.title) ?? ""
+        let titles = items.map(\.title)
+        let named = titles.last ?? ""
         showIdle(rows: [])
 
         SelfTest.report("terminate", [
             ("everyRowDrawn", everyRowDrawn),
             ("liveRowsCarryIt", liveCarry),
             ("deadRowsDoNot", deadDoNot),
+            ("goToAgentIsFirst", titles.first == "Go to agent"),
+            ("destructiveIsLastAndSeparated",
+             items.count == 3 && items[1].isSeparatorItem),
             ("theItemNamesItsTarget", named == "End session \u{201C}agent-ready\u{201D}"),
         ])
     }
@@ -4175,6 +4189,15 @@ final class StatusHUD: NSObject {
             ("unlitRingIsFainterThanQuiet", fainterRing),
             ("unlitDimsTheRow", unlit.rowAlpha < 1 && StateLegend.Lamp.running.rowAlpha == 1),
             ("liveRowAnnounces", StateLegend.action(for: row("live", .ready)) == .announce),
+            // Amber does not speak, it points (18 Aug). A blocked session is
+            // not in the waiting set, so the announcement it used to trigger
+            // had nothing to say and left the panel sitting on Preparing.
+            ("amberRowGoesToAgent",
+             StateLegend.action(for: row("amber", .fault)) == .goToAgent),
+            // ...and is still a live row, so it keeps its menu. The two
+            // questions are asked through one function precisely so this
+            // cannot come apart.
+            ("amberRowIsStillLive", StateLegend.isLive(row("amber", .fault))),
             ("revivableRowRevives",
              StateLegend.action(for: row("dead", unlit, revivable: true)) == .revive),
             ("unprovenRowDoesNothing",
@@ -5554,6 +5577,10 @@ final class StatusHUD: NSObject {
             }
             switch StateLegend.action(for: row) {
             case .announce: onPickWaiting?(id)
+            // Amber has one useful destination and it is not the voice: the
+            // row already carries the reason in its own column, and the thing
+            // it cannot tell you is which tab to fix it in.
+            case .goToAgent: onGoToSession?(id)
             case .revive: onRevive?(id, row.name)
             case .none:
                 Permissions.log("grid: tap on \(id.prefix(8)) — unlit and not revivable, "
@@ -5562,17 +5589,36 @@ final class StatusHUD: NSObject {
         }
     }
 
-    /// The right-click menu for a grid row, or nil for a row with nothing to
-    /// end.
+    /// The right-click menu for a grid row, or nil for a row with no process
+    /// behind it.
     ///
     /// Liveness decides, not the lamp's colour: an unlit row is either a session
     /// that has already exited (REVIVE is its verb) or one whose liveness could
     /// not be proven, and offering to kill a process we cannot see is a control
-    /// that can only lie. This is the same partition `StateLegend.action(for:)`
-    /// makes for the left-click, asked the same way so the two can never drift.
-    private func terminateMenu(for item: StateLegend.SessionRow) -> NSMenu? {
-        guard StateLegend.action(for: item) == .announce else { return nil }
+    /// that can only lie. `StateLegend.isLive` asks that question through the
+    /// same function the left-click branches on, so the two can never drift.
+    ///
+    /// Two items, in that order (ruled 18 Aug). GO TO AGENT first because it is
+    /// the harmless one and by far the common one — the card has carried that
+    /// door since the beginning, and the grid is where you are actually looking
+    /// when you want it. END SESSION keeps the bottom, behind a separator, so
+    /// the destructive item is never where the pointer lands by momentum.
+    ///
+    /// GO TO AGENT is offered on EVERY live row, amber included, where it
+    /// duplicates the left-click. That repetition is deliberate: a menu that
+    /// hid the item on the one lamp whose tap already does it would be teaching
+    /// the exception rather than the rule.
+    private func rowMenu(for item: StateLegend.SessionRow) -> NSMenu? {
+        guard StateLegend.isLive(item) else { return nil }
         let menu = NSMenu()
+        let go = NSMenuItem(title: "Go to agent",
+                            action: #selector(goToAgentGridRowPicked(_:)),
+                            keyEquivalent: "")
+        go.target = self
+        go.representedObject = item.id
+        menu.addItem(go)
+        menu.addItem(.separator())
+        // The item NAMES its target, and that IS the confirmation.
         let end = NSMenuItem(title: "End session \u{201C}\(item.name)\u{201D}",
                              action: #selector(terminateGridRowPicked(_:)),
                              keyEquivalent: "")
@@ -5580,6 +5626,17 @@ final class StatusHUD: NSObject {
         end.representedObject = item.id
         menu.addItem(end)
         return menu
+    }
+
+    @objc nonisolated private func goToAgentGridRowPicked(_ sender: NSMenuItem) {
+        // Same hop discipline as the terminate item below: the id is lifted out
+        // here, where the menu item is task-isolated, and only a Sendable String
+        // crosses to the main actor.
+        let picked = sender.representedObject as? String
+        MainActor.assumeIsolated {
+            guard let id = picked else { return }
+            onGoToSession?(id)
+        }
     }
 
     @objc nonisolated private func terminateGridRowPicked(_ sender: NSMenuItem) {
@@ -5596,7 +5653,7 @@ final class StatusHUD: NSObject {
     }
 
     /// For the launch drill: which grid rows exist and whether each carries the
-    /// End session menu — asserted against liveness, never assumed from it.
+    /// row menu — asserted against liveness, never assumed from it.
     var gridRowsForTesting: [(id: String, hasMenu: Bool)] {
         waitingRows.arrangedSubviews.compactMap {
             guard let row = $0 as? GridRowView, let id = row.identifier?.rawValue

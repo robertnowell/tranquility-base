@@ -22,6 +22,10 @@ enum StateLegend {
         /// the menu-bar placeholder before the SF Symbol loads.
         static let quiet = "◌"
         static let speaking = "◀"
+        /// The breadcrumb, on a face that is NOT the speaking card. Same mark,
+        /// because it is the same promise — this pill is the door back to the
+        /// grid — and the panel has exactly one mark for that promise.
+        static let home = "◀"
         /// Menu status lines and the dictation-receipt pill (ui-pass-7,
         /// ruling 5). The reply-send Sent face stays dead.
         static let sent = "▶"
@@ -503,6 +507,17 @@ enum StateLegend {
     enum RowAction: Equatable {
         /// Live: hear what it has to say.
         case announce
+        /// Amber: stopped on something it cannot pass alone, so the only useful
+        /// thing this app can do is put you in front of it (ruled 18 Aug).
+        ///
+        /// Announcing an amber row was the wrong verb twice over. A blocked
+        /// session is not in the waiting set — it has no unread turn — so the
+        /// announcement had nothing to say and the panel sat on Preparing; and
+        /// even when it did speak, hearing "it cannot reach the API" is not the
+        /// move. The reason is already on the row, in the column where every
+        /// other row shows its id. What is missing is the tab, and that is the
+        /// one thing a tap can hand you.
+        case goToAgent
         /// Proven gone, and its directory is still there: bring it back.
         case revive
         /// Unlit but unproven — the probe could not answer, or the directory is
@@ -514,8 +529,25 @@ enum StateLegend {
 
     static func action(for row: SessionRow) -> RowAction {
         switch row.lamp {
-        case .ready, .working, .running, .fault: return .announce
+        case .fault: return .goToAgent
+        case .ready, .working, .running: return .announce
         case .unlit: return row.revivable ? .revive : .none
+        }
+    }
+
+    /// Is there a process behind this row — the question END SESSION and GO TO
+    /// AGENT both have to answer.
+    ///
+    /// Asked through `action(for:)` rather than off the lamp, so the menu and
+    /// the left-click can never drift into disagreeing about which rows are
+    /// alive. That drift is not hypothetical: offering to kill a process we
+    /// cannot see is a control that can only lie, and the menu used to test
+    /// `== .announce` — which stopped meaning "live" the moment amber got its
+    /// own verb.
+    static func isLive(_ row: SessionRow) -> Bool {
+        switch action(for: row) {
+        case .announce, .goToAgent: return true
+        case .revive, .none: return false
         }
     }
 
@@ -587,7 +619,12 @@ enum StateLegend {
             return Row(stateText: "\(Glyph.quiet) Ready", glyph: Glyph.quiet,
                        lens: .chrome, speakTier: .silent)
         case .preparing:
-            return Row(stateText: "\(Glyph.quiet) Preparing", glyph: Glyph.quiet,
+            // The breadcrumb, not the quiet ◌ (ruled 18 Aug). Preparing was the
+            // one face on stage with no way off it: the pill was inert, the ◀
+            // was absent, and ⌃⌥ walked to the NEXT agent rather than home —
+            // "there is no way to get back to the grid". A wait you cannot
+            // leave is a trap, and the mark that says you can leave is ◀.
+            return Row(stateText: "\(Glyph.home) Preparing", glyph: Glyph.home,
                        lens: .chrome, speakTier: .silent)
         case .working:
             return Row(stateText: "\(Glyph.quiet) Working", glyph: Glyph.quiet,
