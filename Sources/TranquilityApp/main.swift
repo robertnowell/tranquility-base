@@ -183,6 +183,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// identical, and a summary arriving changes a row's topic with no count
     /// change at all.
     private var lastShownRows: [StateLegend.SessionRow]?
+    /// Which sessions were already waiting on the previous tick.
+    ///
+    /// `turnArrived` is honest about a TURN arriving — it keys off rows being
+    /// inserted, deliberately, because "a newer turn superseding an older one
+    /// leaves the count identical, and that is the commonest case of all." That is
+    /// the right trigger for repainting. It is the WRONG trigger for a sound.
+    ///
+    /// Reported 18 Aug: the return cue fired seconds after a send with nothing new
+    /// in the grid. It was not a false positive in the strict sense — a turn had
+    /// genuinely landed — but it landed on a session that was ALREADY green, so
+    /// nothing the user could act on had changed. A cue that fires when nothing
+    /// actionable happened is precisely the cry-wolf failure the cue set exists to
+    /// avoid; in ATC an estimated 62-91% of conflict alerts needed no intervention
+    /// and controllers learned to distrust them.
+    ///
+    /// So the SOUND asks a narrower question than the repaint does: did the set of
+    /// sessions waiting on you gain a member? nil until the first tick primes it,
+    /// so a launch that intakes a backlog stays silent.
+    private var lastWaitingIds: Set<String>?
     /// The last turn the hail sounded for, as "sessionId:latestId". One hail per
     /// arrival: a tick that re-surfaces the same turn stays quiet — silence after
     /// a hail is "standby", not a request to be hailed again — while a
@@ -396,11 +415,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // flicker on a window that is meant to sit still. The guard is
                 // the row DATA (callsign/topic/lamp), not counts: a topic
                 // changing is a change worth painting.
+                // Identity, not count: a turn replacing an older turn on the same
+                // session leaves both the count and the membership unchanged, and
+                // that is exactly the case that should not make a noise.
+                let waitingIds = Set(rows.filter { $0.lamp == .ready }.map(\.id))
+                let primed = self.lastWaitingIds
+                self.lastWaitingIds = waitingIds
+                let newlyWaiting = EarconGate.hasNewArrival(waiting: waitingIds, previous: primed)
                 let arrived = turnArrived && waiting > 0
                 if self.hud.canSurfaceAmbiently,
                    arrived || rows != self.lastShownRows {
                     if arrived {
-                        self.surfaceArrival(rows: rows, waiting: waiting)
+                        self.surfaceArrival(rows: rows, waiting: waiting,
+                                            newlyWaiting: newlyWaiting)
                     }
                     // Currency is not attention. Whatever the attention gates
                     // decided (held, frontmost-skip), lamps that are on screen
@@ -2850,7 +2877,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// a keypress, which is backwards — you cannot interrupt someone who just asked
     /// for something. Interrupting is exactly what this does, so this is where a
     /// veto belongs.
-    private func surfaceArrival(rows: [StateLegend.SessionRow], waiting: Int) {
+    private func surfaceArrival(rows: [StateLegend.SessionRow], waiting: Int,
+                                newlyWaiting: Bool) {
         let decision = gate.evaluate()
         guard decision.allowed else {
             // Held, not dropped. The count is still right the moment the panel is
@@ -2878,7 +2906,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let terminalIsFront = NSWorkspace.shared.frontmostApplication?
             .bundleIdentifier == "com.apple.Terminal"
         guard terminalIsFront, let target else {
-            finishArrival(rows: rows, waiting: waiting)
+            finishArrival(rows: rows, waiting: waiting, newlyWaiting: newlyWaiting)
             return
         }
         // Terminal IS frontmost: probe off-main, newest arrival wins. A newer
@@ -2886,7 +2914,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // moment gone and stays silent — the newer one carries the chime.
         arrivalProbeGeneration += 1
         let generation = arrivalProbeGeneration
-        pendingArrival = (rows, waiting)
+        pendingArrival = (rows, waiting, newlyWaiting)
         let sessionId = target.sessionId
         Task.detached(priority: .userInitiated) { [weak self] in
             let front = await Self.frontmostTerminalTabTty()
@@ -2906,7 +2934,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Permissions.log("ambient: skipped, that session is the frontmost tab")
                     return
                 }
-                self.finishArrival(rows: pending.rows, waiting: pending.waiting)
+                self.finishArrival(rows: pending.rows, waiting: pending.waiting,
+                                   newlyWaiting: pending.newlyWaiting)
             }
         }
     }
@@ -2914,10 +2943,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// One probe in flight, newest wins; the pending rows never cross an
     /// isolation boundary — they wait here for the probe's verdict.
     private var arrivalProbeGeneration = 0
-    private var pendingArrival: (rows: [StateLegend.SessionRow], waiting: Int)?
+    private var pendingArrival: (rows: [StateLegend.SessionRow], waiting: Int,
+                                newlyWaiting: Bool)?
 
     /// The away-channel tail of an arrival, after the gates have spoken.
-    private func finishArrival(rows: [StateLegend.SessionRow], waiting: Int) {
+    private func finishArrival(rows: [StateLegend.SessionRow], waiting: Int,
+                               newlyWaiting: Bool) {
         // RULING 1: an arrival changes what the panel SAYS, never whether it is
         // on screen or how wide it is. A panel you put away stays away.
         //
@@ -2932,7 +2963,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // arriving turn re-opened a panel the user had dismissed.
         guard hud.isOnScreen else {
             Permissions.log("ambient: \(waiting) waiting, panel stays dismissed")
-            Earcons.play(.returned, gate: earconGate())
+            if newlyWaiting { Earcons.play(.returned, gate: earconGate()) }
             return
         }
         Permissions.log("ambient: surfaced for \(waiting) waiting")
@@ -2945,7 +2976,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // was rude — and in the whole time it shipped it never once announced
         // successfully. A chime carries the same information ("something came
         // back") at none of that cost, and the panel already carries WHICH.
-        Earcons.play(.returned, gate: earconGate())
+        // Sound only on a session JOINING the waiting set — see `lastWaitingIds`.
+        // The panel repaint above is unconditional and stays that way: currency is
+        // not attention, and a lamp on screen must be true even when nothing
+        // announces itself.
+        if newlyWaiting {
+            Earcons.play(.returned, gate: earconGate())
+        } else {
+            Permissions.log("earcon: no returned — \(waiting) waiting, none of them new")
+        }
     }
 
 
