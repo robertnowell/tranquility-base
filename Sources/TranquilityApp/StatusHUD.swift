@@ -1554,11 +1554,10 @@ final class StatusHUD: NSObject {
         let door = currentDoor
         openPageButton.isHidden = door == nil
         if let door {
-            let label = { if case .report = door { return "OPEN REPORT" }
-                          return "OPEN HUB" }()
-            openPageButton.attributedTitle = letterspaced(
-                "\(label) \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
-                color: StateLegend.Palette.accent)
+            let label = { if case .report = door { return StateLegend.openReportTitle }
+                          return StateLegend.openHubTitle }()
+            openPageButton.attributedTitle = StateLegend.BottomLine.door(
+                "\(label) \(StateLegend.Glyph.forward)")
         }
         dontSendButton.isHidden = true
         micSettingsButton.isHidden = true
@@ -3399,6 +3398,21 @@ final class StatusHUD: NSObject {
             sessionId: "cw", pid: 1, project: "projects", cwd: "/tmp")
         panel?.contentView?.layoutSubtreeIfNeeded()
         let cardKeepsTheWord = !cardControls.isHidden && !actionRow.isHidden
+        // One lexicon on the bottom line: same face, same size, same case for
+        // the doors and the quiet words alike. Asserted on the FONT rather than
+        // by eye, because "these look different" is exactly what nobody notices
+        // until the row has three treatments in four words.
+        func rowFace(_ text: NSAttributedString) -> NSFont? {
+            text.length == 0 ? nil
+                : text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        }
+        let doorFace = rowFace(goButton.attributedTitle)
+        let wordFace = rowFace(cardControls.wordValue)
+        let oneLexicon = doorFace?.fontName == wordFace?.fontName
+            && doorFace?.pointSize == wordFace?.pointSize
+            && doorFace?.pointSize == StateLegend.BottomLine.size
+            // Title case, not capitals: the placard beside it says "Speaking".
+            && goButton.attributedTitle.string != goButton.attributedTitle.string.uppercased()
         // Air under the last line of the card. Measured to the WORD rather than
         // to the row: the row's frame includes the 6pt top inset that provides
         // the air, so a frame-to-frame gap would report the stack's 6 and miss
@@ -3447,6 +3461,7 @@ final class StatusHUD: NSObject {
             ("footerIsTheLastRow", footerIsTheLastRow),
             ("gridWordIsCentred", gridWordIsCentred),
             ("cardKeepsTheWord", cardKeepsTheWord),
+            ("oneLexicon", oneLexicon),
             ("bottomLineHasAir", bottomLineAir >= 11.5),
             ("cardNoteOpens", cardNoteOpens),
             ("cardNoteFitsThePanel", cardNoteFitsThePanel),
@@ -3838,11 +3853,11 @@ final class StatusHUD: NSObject {
         doorForSession = { _ in .hub }
         render()
         let hubOpensADoor = !openPageButton.isHidden
-            && openPageButton.attributedTitle.string.contains("OPEN HUB")
+            && openPageButton.attributedTitle.string.contains(StateLegend.openHubTitle)
         doorForSession = { _ in .report("/tmp/tb-drill-report.html") }
         render()
         let reportNamesItself = !openPageButton.isHidden
-            && openPageButton.attributedTitle.string.contains("OPEN REPORT")
+            && openPageButton.attributedTitle.string.contains(StateLegend.openReportTitle)
         doorForSession = priorResolver
         SelfTest.report("openHub", [
             ("noHubNoDoor", noHubNoDoor),
@@ -5161,9 +5176,8 @@ final class StatusHUD: NSObject {
         // Still flat, no lozenge: promotion by ink and placement, not chrome.
         goButton = NSButton(title: "Go to agent", target: self, action: #selector(goToSession))
         goButton.isBordered = false
-        goButton.attributedTitle = letterspaced(
-            "GO TO AGENT \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
-            color: StateLegend.Palette.accent)
+        goButton.attributedTitle = StateLegend.BottomLine.door(
+            "\(StateLegend.goToAgentTitle) \(StateLegend.Glyph.forward)")
         // The second door shares "Go to agent"'s treatment — same kind of
         // move, leave this panel and go to the thing — and differs only in
         // destination: one is a terminal tab, the other a browser. It sits at
@@ -5175,9 +5189,8 @@ final class StatusHUD: NSObject {
         openPageButton = NSButton(title: "Open hub", target: self,
                                   action: #selector(openHubTapped))
         openPageButton.isBordered = false
-        openPageButton.attributedTitle = letterspaced(
-            "OPEN HUB \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
-            color: StateLegend.Palette.accent)
+        openPageButton.attributedTitle = StateLegend.BottomLine.door(
+            "\(StateLegend.openHubTitle) \(StateLegend.Glyph.forward)")
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
         // The device-fault card's way out. Quiet like its row-mates: it is a
         // door, not an alarm — the placard and the body have already said how
@@ -6657,14 +6670,16 @@ private final class HoverBox: NSView {
 /// reads as a different thing each time.
 private final class ControlsWordView: NSView {
     var onHover: ((Bool) -> Void)?
+    /// For the drill: what the word is actually drawn with.
+    private(set) var wordValue = NSAttributedString()
 
     init() {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
-        let word = NSTextField(labelWithString: StateLegend.controlsTitle)
-        word.font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .regular)
-        word.textColor = StateLegend.Palette.hint
+        let word = NSTextField(labelWithString: "")
+        wordValue = StateLegend.BottomLine.quiet(StateLegend.controlsTitle)
+        word.attributedStringValue = wordValue
         word.translatesAutoresizingMaskIntoConstraints = false
 
         let box = HoverBox()
@@ -6674,19 +6689,26 @@ private final class ControlsWordView: NSView {
             // One ink tier under the cursor — `hint` to `ink`, both above their
             // floors, so the change is a confirmation and never the difference
             // between legible and not.
-            word.textColor = hovering
-                ? StateLegend.Palette.ink : StateLegend.Palette.hint
+            word.attributedStringValue = StateLegend.BottomLine.quiet(
+                StateLegend.controlsTitle,
+                color: hovering ? StateLegend.Palette.ink : StateLegend.Palette.hint)
             self?.onHover?(hovering)
         }
 
         addSubview(box)
         NSLayoutConstraint.activate([
-            // The box hugs the word horizontally but takes the row's full
-            // height, so the hover target is a comfortable strip rather than
-            // the 8pt band the glyphs actually occupy.
-            word.leadingAnchor.constraint(equalTo: box.leadingAnchor),
-            word.trailingAnchor.constraint(equalTo: box.trailingAnchor),
+            // The target is bigger than the word (ruled 18 Aug: "the controls
+            // hover area on the spoken page is too small"). On the grid the
+            // footer lends it a 14pt strip and it feels right; in a card's
+            // action row the view hugs its own label, so the hittable area was
+            // exactly the glyphs — about 8pt tall and not much wider than the
+            // word — and finding it was a hunt. 8pt of slack on each side and a
+            // 20pt floor makes it the same size target on both faces, which is
+            // the point: one affordance, one feel.
+            word.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 8),
+            word.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -8),
             word.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+            box.heightAnchor.constraint(greaterThanOrEqualToConstant: 20),
             box.leadingAnchor.constraint(equalTo: leadingAnchor),
             box.trailingAnchor.constraint(equalTo: trailingAnchor),
             box.topAnchor.constraint(equalTo: topAnchor),
@@ -6719,9 +6741,7 @@ private final class GridFooterView: NSView {
         controls.onHover = { [weak self] in self?.onControlsHover?($0) }
 
         let mark = NSTextField(labelWithString: "")
-        mark.attributedStringValue = letterspaced(
-            StateLegend.wordmark, size: 9.5, tracking: 0.9,
-            color: StateLegend.Palette.hint)
+        mark.attributedStringValue = StateLegend.BottomLine.quiet(StateLegend.wordmark)
         mark.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(controls); addSubview(mark)
