@@ -487,8 +487,9 @@ final class PastRowView: NSControl {
     /// a row cannot know it stopped being under the pointer when the thing that
     /// moved was the scroll view and not the mouse.
     func setHovered(_ on: Bool) {
-        // Both registers, exactly as the grid's rows — see `GridRowView`.
-        highlight.layer?.backgroundColor = on ? StateLegend.Palette.hover.cgColor : nil
+        // Words only, exactly as the grid's rows — see `GridRowView.setHovered`.
+        // This list has a second cue the grid does not: the id gives way to the
+        // verb, so the hovered row also says what a click would DO.
         nameLabel.textColor = on ? StateLegend.hovered(restingName) : restingName
         idLabel.isHidden = on
         verbLabel.isHidden = !on

@@ -5173,6 +5173,18 @@ final class StatusHUD: NSObject {
                       aux: "d882f184", lamp: .running),
             ])
 
+        // The grid with a row lit, because a hover is a face too and it was
+        // the one state nobody could photograph. Every other treatment on this
+        // panel has been decided by looking at a picture of it; this one was
+        // decided twice by argument, which is how it took three passes.
+        case "grid-hover":
+            _ = pose("grid")
+            panel?.contentView?.layoutSubtreeIfNeeded()
+            waitingRows.arrangedSubviews
+                .compactMap { $0 as? GridRowView }
+                .dropFirst(2).first?
+                .setHovered(true)
+
         // The read state, both halves on one stage: two unread rows against
         // two opened ones, same lamp, so the only difference on screen is the
         // one being claimed. Weight-only failed exactly here — it looked like
@@ -7038,9 +7050,15 @@ final class ConsoleButton: NSButton {
 
     func setHoveringForTesting(_ on: Bool) { hovering = on }
     var currentInkForTesting: NSColor? {
-        if wordmark != nil {
-            return attributedTitle.length == 0 ? nil : attributedTitle.attribute(
-                .foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        // Whatever PAINTS, not whatever a particular path happens to use. This
+        // asked `wordmark != nil` and so read `contentTintColor` for a button
+        // that repaints through `reink` — which is how `backWearsIt` went red
+        // the moment the back button's ‹ started being composed as an
+        // attributed title. Same mistake as the face census made an hour
+        // earlier, in the same file: the instrument looked beside the pixels.
+        if attributedTitle.length > 0 {
+            return attributedTitle.attribute(.foregroundColor, at: 0,
+                                             effectiveRange: nil) as? NSColor
         }
         return contentTintColor
     }
@@ -7275,8 +7293,23 @@ final class GridRowView: NSControl {
     /// path — you in Terminal, the panel on screen — the pointer never becomes
     /// a hand. On that path the wash is the only cue there is, and a region is
     /// what it is cueing.
+    /// The row lights its WORDS, and nothing else (ruled 18 Aug — "let's prefer
+    /// that text hover on the agent grid list").
+    ///
+    /// The wash is gone. What it bought was area, not contrast — measured at
+    /// ΔL* 4.6 from the surface, the same distance the name travels — and the
+    /// cost was that a list of eight rows answered the pointer with a grey box
+    /// instead of with the row.
+    ///
+    /// Worth knowing, because it is the one thing this treatment gives up: ink
+    /// brightness on this grid ALSO carries read state — an unread row rests at
+    /// full ink, an opened one below it — so a hovered opened row now lands
+    /// about where an unread row rests. The lamp still separates them (solid
+    /// unread, hollow opened) and the hover is transient, so it reads as
+    /// pointer feedback rather than as a state; if it ever reads as ambiguous,
+    /// the answer is an underline — a shape rather than a tier, which is what
+    /// the card title already does at the top of the ramp.
     func setHovered(_ on: Bool) {
-        highlight.layer?.backgroundColor = on ? StateLegend.Palette.hover.cgColor : nil
         nameLabel.textColor = on ? StateLegend.hovered(restingName) : restingName
     }
 
