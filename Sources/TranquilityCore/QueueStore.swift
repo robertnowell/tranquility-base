@@ -358,6 +358,42 @@ public final class QueueStore: Sendable {
         }
     }
 
+    /// Insert a turn the APP wrote, with its brief, in ONE transaction.
+    ///
+    /// Every other event here is read off a hook and describes something a
+    /// session did; this is the other kind — a turn whose words the app already
+    /// knows, so there is nothing to summarize. Today there is exactly one: the
+    /// greeting a freshly launched agent wears (`LaunchGreeting`).
+    ///
+    /// The transaction is the point, not tidiness. Between an event landing and
+    /// its brief landing, that event is simply a waiting session with no brief,
+    /// and the announcer's prewarm — which runs on a five-second timer and takes
+    /// whatever it finds — would answer it the only way it knows: with a model
+    /// call, on a session that has said nothing, producing a summary of an empty
+    /// transcript. Written together, the brief is never absent, and the restore
+    /// path (`restoredSummary`) reads the words the app authored for free.
+    ///
+    /// Returns the event's rowid — the identity a brief is keyed by — or nil if
+    /// the event was a duplicate, in which case nothing was written at all.
+    @discardableResult
+    public func insert(
+        event: QueuedEvent, brief: SessionBrief, provider: String,
+        callsign: String? = nil, at: Date = Date()
+    ) throws -> Int64? {
+        try dbQueue.write { db in
+            do {
+                try event.insert(db)
+            } catch let error as DatabaseError where error.resultCode == .SQLITE_CONSTRAINT {
+                return nil
+            }
+            let rowid = db.lastInsertedRowID
+            try QueueStore.briefRow(
+                brief, sessionId: event.sessionId, eventRowid: rowid,
+                provider: provider, callsign: callsign, at: at).save(db)
+            return rowid
+        }
+    }
+
     /// Retire everything still waiting for a session.
     ///
     /// Used for both supersession (a newer turn arrived) and self-answering (the
@@ -703,7 +739,19 @@ public final class QueueStore: Sendable {
         _ brief: SessionBrief, sessionId: String, eventRowid: Int64,
         provider: String, callsign: String?, at: Date = Date()
     ) throws {
-        let row = StoredBrief(
+        let row = QueueStore.briefRow(brief, sessionId: sessionId, eventRowid: eventRowid,
+                                      provider: provider, callsign: callsign, at: at)
+        try dbQueue.write { db in try row.save(db) }
+    }
+
+    /// One brief, as a row. Shared by the two writers — a generated summary
+    /// landing after the fact, and an app-authored turn landing with its event —
+    /// so a column added to `SessionBrief` cannot reach one and miss the other.
+    private static func briefRow(
+        _ brief: SessionBrief, sessionId: String, eventRowid: Int64,
+        provider: String, callsign: String?, at: Date
+    ) -> StoredBrief {
+        StoredBrief(
             eventRowid: eventRowid, sessionId: sessionId,
             atMs: Int64(at.timeIntervalSince1970 * 1000),
             topic: brief.topic, goal: brief.goal, happened: brief.happened,
@@ -713,7 +761,6 @@ public final class QueueStore: Sendable {
             recap: brief.recap, proposal: brief.proposal,
             headline: brief.headline, deck: brief.deck,
             callsign: callsign, provider: provider)
-        try dbQueue.write { db in try row.save(db) }
     }
 
     /// The brief for one specific event — the read-through the in-memory
