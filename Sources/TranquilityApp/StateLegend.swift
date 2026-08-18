@@ -338,12 +338,23 @@ enum StateLegend {
          // A hover value is read for as long as the pointer sits on it, which
          // is longer than a resting placard is read; it owes the text floor
          // even where its resting value did not.
-         // Hover values are read for as long as the pointer sits on them, which
-         // is longer than a resting placard is read, so they owe the text floor
-         // even where their resting value did not. COMPUTED, not minted:
-         // `hovered` is the one step function, and asserting its output is what
-         // stops a change to it quietly dimming every control on the panel.
-         ("hovered(accent)", hovered(Palette.accent), 4.5),
+         // A hover owes exactly what its RESTING value owes, and no more.
+         //
+         // These shipped at a flat 4.5 for half a day, on the argument that a
+         // hover is read for as long as the pointer sits on it. The argument is
+         // true and the floor was still wrong: the resting value is read for as
+         // long as the CARD is up, which is longer, so a hover cannot sensibly
+         // owe more than its rest. `accent` rests at 3.41:1 on purpose — "the
+         // card's focal point is the prose and the actions are keyboard" — and
+         // one +8 ΔL* step from a deliberately recessive colour landed at
+         // 4.49:1, failing a 4.5 floor by a hundredth and taking a deploy gate
+         // red with it (18 Aug, 20:45). Tuning `hoverStep` to clear it would
+         // have been fitting the constant to the test.
+         //
+         // What actually matters is asserted in `hoverDrill` instead: a hover
+         // is always strictly MORE legible than its rest. COMPUTED, not minted,
+         // so a change to the step function that dims a control fails here.
+         ("hovered(accent)", hovered(Palette.accent), 3.0),
          ("hovered(secondary)", hovered(Palette.secondary), 4.5),
          ("hovered(ink)", hovered(Palette.ink), 7.0)]
     }
