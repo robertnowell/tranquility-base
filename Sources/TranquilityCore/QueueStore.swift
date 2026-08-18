@@ -824,6 +824,47 @@ public final class QueueStore: Sendable {
         }
     }
 
+    /// The voice the next session to ask will be given, without giving it.
+    ///
+    /// For the one speaker that has to talk BEFORE its session exists: a launch
+    /// greeting is spoken while Claude Code is still starting, and it has to be
+    /// the voice that agent then keeps — otherwise the first thing you hear
+    /// from a session is a stranger, and the second is somebody else. The
+    /// launcher peeks here, speaks in that voice, and hands it to
+    /// `assignVoice` when the session id arrives.
+    ///
+    /// Same arithmetic as `voiceId(for:roster:)`, deliberately: two definitions
+    /// of "next" is how the peek and the assignment come to disagree.
+    public func nextVoiceInRotation(roster: [String]) throws -> String? {
+        guard !roster.isEmpty else { return nil }
+        return try dbQueue.read { db in
+            let count = try Int.fetchOne(db, sql: "SELECT count(*) FROM session_voice") ?? 0
+            return roster[count % roster.count]
+        }
+    }
+
+    /// Give a session a specific voice, if it does not already have one.
+    ///
+    /// First ask wins, exactly as `voiceId(for:roster:)` establishes — this is
+    /// the same rule reached from the other direction, for a caller that
+    /// already knows the answer because it has been speaking in it.
+    @discardableResult
+    public func assignVoice(_ voiceId: String, to sessionId: String,
+                            at: Date = Date()) throws -> String {
+        try dbQueue.write { db in
+            if let existing = try String.fetchOne(
+                db, sql: "SELECT voiceId FROM session_voice WHERE sessionId = ?",
+                arguments: [sessionId]) {
+                return existing
+            }
+            try db.execute(
+                sql: "INSERT INTO session_voice (sessionId, voiceId, assignedAtMs) VALUES (?, ?, ?)",
+                arguments: [sessionId, voiceId, Int64(at.timeIntervalSince1970 * 1000)])
+            Self.trace?("voice: bound \(voiceId) to \(sessionId.prefix(8)) (spoken first)")
+            return voiceId
+        }
+    }
+
     // MARK: - Boot reconciliation
     //
     // Runs once at launch. The rule that matters: an utterance that was mid-dispatch

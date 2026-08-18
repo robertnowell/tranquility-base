@@ -42,8 +42,12 @@ public enum GreetingCache {
     /// Speak a fixed line, fetching it once per voice and replaying it thereafter.
     /// Silent when the good voice is unavailable: a greeting is not worth the
     /// system voice, and the panel carries the same information anyway.
-    public static func speak(_ text: String) async {
-        let voiceId = VoiceCatalog.selectedVoiceId
+    /// `voiceId` names the voice to use; nil takes the app's own. The launch
+    /// greeting passes the voice the session it is starting will keep, so the
+    /// first thing an agent says and everything it says afterwards are the same
+    /// person.
+    public static func speak(_ text: String, voiceId: String? = nil) async {
+        let voiceId = voiceId ?? VoiceCatalog.selectedVoiceId
         let file = url(voiceId: voiceId, text: text)
 
         if let cached = try? Data(contentsOf: file), !cached.isEmpty {
