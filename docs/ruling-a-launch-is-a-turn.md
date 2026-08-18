@@ -202,3 +202,33 @@ Two other things from the same look:
   it. The action row carries a 6pt top inset now — the same air the panel gives
   its own edges — measured by the drill to the WORD rather than to the row, since
   the row's frame contains the inset that provides it.
+
+## The greeting has to point at a transcript
+
+Reported 18 Aug, replying to a brand-new agent:
+
+> "Typed it into Projects, but couldn't confirm it landed. Check the tab before
+> repeating yourself."
+
+The words had landed. The verification could not see them, because delivery is
+confirmed by watching OUR OWN text appear in the session transcript, and the
+greeting event carried `transcriptPath: nil`.
+
+That nil was deliberate, and the comment defending it named two readers of the
+field — the headless filter, which fails open, and the ⌃⌃ ladder, which has no
+rungs to walk on a turn that never happened. Both true. Both beside the point:
+there is a third reader, `DispatchTransport`, and it is the one the whole feature
+runs through. A field is not safely nil because the readers you thought of
+tolerate nil.
+
+Two changes, because the failure has two halves:
+
+- **The event points at the transcript.** `TranscriptArchive.transcriptPath(forSessionId:)`
+  FINDS the file rather than deriving it — a session id is a uuid, so one
+  `fileExists` per project directory beats reproducing Claude Code's private
+  cwd-to-directory-name encoding, which would work until the day they change it
+  and then fail silently.
+- **The dispatch resolves it again** when the row has none. A session registers a
+  beat before its first line hits disk, so the row written at registration can
+  legitimately be empty; by the time anyone replies, the file exists. Resolving at
+  send time makes "unconfirmed" mean the text really did not arrive.

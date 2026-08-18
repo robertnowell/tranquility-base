@@ -992,11 +992,19 @@ public struct Coordinator: Sendable {
             return .sessionNotReady(.notRegistered)
         }
 
+        // The transcript is resolved again here when the row has none. Delivery
+        // is confirmed by watching our own text appear in it, so a missing path
+        // is not a missing detail — it is a send that can only ever report
+        // itself unconfirmed. Every event written by a hook carries one; the
+        // one the APP writes (a launch greeting) is written before the session
+        // has finished coming up, and a file that did not exist then usually
+        // does by the time anyone replies.
         let dispatchTarget = DispatchTarget(
             sessionId: target.sessionId,
             pid: live.pid,
             tty: ProcessProbe.tty(of: live.pid),
-            transcriptPath: target.transcriptPath,
+            transcriptPath: target.transcriptPath
+                ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId),
             label: target.projectLabel)
 
         utterance.status = .dispatching
