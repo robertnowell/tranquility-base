@@ -125,3 +125,40 @@ is what the panel already means by "no session on this face", so GO TO AGENT, th
 hub link, and the title-as-door all stay correctly shut until the binding lands.
 `bindGreeting` refuses once the face has moved on — a late registration must never
 repoint the reply routing at a session you have stopped looking at.
+
+## Controls belongs to the panel, not to the grid
+
+Ruled 18 Aug, on the greeting card:
+
+> "There's no controls hover option on this screen. Make sure anything we change
+> here will work regardless of the specific state. Since we changed the bottom —
+> open hub, go to agent, et cetera — there's no controls thing here, which
+> probably we do need. It's hard to put that in the top bar. It could go in the
+> centre… but then probably we should move it to the centre on the grid as well."
+
+The word lived in the grid footer and nowhere else, so the moment a card took the
+stage — the face you are on when a gesture is most likely to be the next thing you
+do — the only place that names the chords was gone.
+
+- **One class, two placements.** `ControlsWordView` owns the hover behaviour, the
+  ink tiers and the type; the grid footer holds one and the action row holds the
+  other. Two instances, because they are two rows; one definition, because a
+  second copy of the behaviour is how the two drift.
+- **The middle, on both faces.** A card's bottom line already spends both edges
+  (OPEN HUB left, GO TO AGENT right), so the centre is the only free space — and
+  the grid's copy moves there too, because a permanent affordance that changes
+  position with the face reads as a different thing each time.
+- **One rule, off the state.** `cardControls.isHidden = !state.isCardOnStage`,
+  written once in `render()` rather than unhidden by each arm, so a face added
+  later inherits the answer instead of quietly missing it. Not while a capture is
+  in flight: arming, listening, transcribing and the send countdown are the panel
+  mid-transaction, and a note about how to start the thing you are already doing
+  is furniture.
+- **The note hangs over the row that owns the word**, placed per open rather than
+  pinned at construction, and centred on the panel — it is wider than the word is
+  long, so following the word's leading edge would run it off the right.
+
+Drill: `gridWordIsCentred`, `cardKeepsTheWord`, `cardNoteOpens`,
+`cardNoteFitsThePanel`, `captureDropsTheWord`, and `wordSurvivesEveryFace` — the
+last asserted over the list of card faces rather than at one of them, because the
+regression this ruling is about is a NEW face quietly not inheriting the rule.
