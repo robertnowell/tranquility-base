@@ -46,8 +46,36 @@ public enum Callsign {
         let words = raw.lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
             .map(String.init)
+            .filter(isSpeakable)
         guard !words.isEmpty else { return "session" }
         return words.suffix(2).joined(separator: " ")
+    }
+
+    // MARK: - Speakability
+
+    /// A word a voice can SAY. The one hard gate on every word a callsign is
+    /// built from, directory half and topic half alike.
+    ///
+    /// Earned 18 Aug by "promotions stlth" — STLTH is a vape brand spelled
+    /// without vowels on purpose, it was the longest word in the topic, and so
+    /// the distinctiveness heuristic picked it and froze it for the session's
+    /// life. A callsign exists to be said out loud (06 Aug); a word with no
+    /// vowel in it cannot be, and TTS does not decline gracefully — it either
+    /// spells the letters or invents a pronunciation, which is the "facts-cache"
+    /// failure again wearing different clothes.
+    ///
+    /// The rule is ONE condition — the word contains a vowel — and it is
+    /// deliberately no cleverer than that. A consonant-run limit was the obvious
+    /// second rule and it fails on real English ("strengths" carries five in a
+    /// row); a syllable estimator would guess. Every word English can say has a
+    /// vowel in it, `y` included ("gym", "myth"), so this rejects the class that
+    /// actually breaks and nothing else. It also disposes of the vowelless
+    /// initialisms — HTML, SOC, TVPA — for free, which is the same failure by
+    /// another route.
+    static let vowels: Set<Character> = ["a", "e", "i", "o", "u", "y"]
+
+    static func isSpeakable(_ word: String) -> Bool {
+        word.lowercased().contains(where: vowels.contains)
     }
 
     // MARK: - Topic word
@@ -76,7 +104,8 @@ public enum Callsign {
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
             .map(String.init)
             .filter { word in
-                word.count >= 3 && !stopwords.contains(word) && !dirWords.contains(word)
+                word.count >= 3 && isSpeakable(word) && !stopwords.contains(word)
+                    && !dirWords.contains(word)
                     && !word.allSatisfy(\.isNumber) && seen.insert(word).inserted
             }
         return filtered.enumerated().sorted { a, b in
@@ -113,8 +142,11 @@ public enum Callsign {
         let first = candidates[0]
         let dirTail = directoryWord.split(separator: " ").last.map(String.init)
             ?? directoryWord
+        // The raw topic bypasses `candidateTopicWords`, so the gate is re-applied
+        // here — a third word is still a spoken word.
         let rawWords = topic.lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+            .filter(isSpeakable)
         for extra in (candidates.dropFirst() + rawWords)
         where extra != first && extra != dirTail {
             let candidate = "\(dirTail) \(first) \(extra)"

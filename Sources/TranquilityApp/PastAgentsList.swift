@@ -471,6 +471,13 @@ final class PastRowView: NSControl {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    /// Rule 1 of the hover standard (18 Aug): the wash says which row, the
+    /// cursor says it is a control.
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
     /// Told, not tracked. The list decides who is hovered — see its own note:
     /// a row cannot know it stopped being under the pointer when the thing that
     /// moved was the scroll view and not the mouse.
@@ -528,6 +535,13 @@ final class SplitPlacardRowView: NSView {
 
 private final class PlacardHalf: NSControl {
     private let highlight = NSView()
+
+    /// Rule 1 of the hover standard: the wash says which half, the cursor says
+    /// the placard is a control at all.
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
 
     init(title: String, glyph: String, alignment: NSLayoutConstraint.Attribute,
          target: AnyObject, action: Selector) {
@@ -665,10 +679,15 @@ final class SettingRowView: NSView, NSTextFieldDelegate {
         // long path shows the part that identifies it, and the button opens the
         // picker that already knows what a folder is.
         if browsable {
-            let browse = NSButton(title: "", target: self, action: #selector(browseTapped))
+            let browse = ConsoleButton(title: "", target: self, action: #selector(browseTapped))
             browse.isBordered = false
-            browse.attributedTitle = letterspaced(
-                "CHOOSE…", size: 9.5, tracking: 1.33, color: StateLegend.Palette.accent)
+            // Not a bottom-line door — it lives in the settings pane and keeps
+            // its own letterspaced sans, so it re-inks through the generic hook.
+            browse.reink = { [weak browse] color in
+                browse?.attributedTitle = letterspaced(
+                    "CHOOSE…", size: 9.5, tracking: 1.33, color: color)
+            }
+            browse.restingInk = StateLegend.Palette.accent
             browse.translatesAutoresizingMaskIntoConstraints = false
             addSubview(browse)
             NSLayoutConstraint.activate([
@@ -732,7 +751,10 @@ final class SettingsTabBar: NSView {
 
         var previous: NSView?
         for tab in SettingsTab.allCases {
-            let button = NSButton(title: "", target: self, action: #selector(tapped(_:)))
+            // A ConsoleButton for the cursor alone: no `restingInk`, because
+            // a tab's ink already carries which one is open and hover must not
+            // overwrite a louder signal with a quieter one.
+            let button = ConsoleButton(title: "", target: self, action: #selector(tapped(_:)))
             button.isBordered = false
             button.identifier = NSUserInterfaceItemIdentifier(tab.rawValue)
             button.translatesAutoresizingMaskIntoConstraints = false

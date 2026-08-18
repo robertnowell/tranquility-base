@@ -162,6 +162,12 @@ enum StateLegend {
         /// not a verb. On the dark ground a saturated accent inverts that
         /// hierarchy outright; this one recedes under the text.
         static let accent = hex(0x6E7F8C)
+        /// `accent` with the pointer on it. 4.94:1, ΔL* 10.9 above its resting
+        /// value — the accent's own rung on the hover ramp, because the ink
+        /// ladder below is neutral and stepping a blue-grey control onto it
+        /// would change its HUE on hover, which the standard forbids (see
+        /// `hovered` and docs/ruling-the-panel-answers-the-pointer.md).
+        static let accentHover = hex(0x8B9BA8)
 
         // MARK: The light console, kept for the swap
         //
@@ -185,6 +191,36 @@ enum StateLegend {
         // And `socket` equals `hover` on light because an unlit lamp against
         // putty has to be carried by its ring — there is no "off" that reads as
         // off on a light ground, which is half of why the console went dark.
+    }
+
+    // MARK: - Hover
+
+    /// The ink ladder, dimmest first. Named as a sequence because the hover
+    /// standard is expressed as a POSITION on it — "one step up" — and a rule
+    /// stated as a lookup table drifts control by control the first time
+    /// somebody picks a colour they like.
+    ///
+    /// `faint` is on the ladder even though it owes no contrast floor: it is a
+    /// resting value only, and a control resting there steps onto `hint`, which
+    /// does owe one. Nothing rests at `ink` — see the standard's fourth rule.
+    static let inkRamp: [NSColor] = [
+        Palette.faint, Palette.hint, Palette.muted, Palette.secondary, Palette.ink,
+    ]
+
+    /// What an ink becomes while the pointer is on it: one step up its own
+    /// ramp, and nothing else — no lozenge, no move, no change of hue.
+    ///
+    /// Returns the resting value unchanged for an ink with no step above it,
+    /// which is the signal that the control is resting too bright. `ink` is
+    /// content's; a control that rests there has nowhere to go and gets no
+    /// hover at all, so the standard's fourth rule ("no control rests at
+    /// `ink`") is enforced by this returning the same colour rather than by
+    /// anybody remembering it.
+    static func hovered(_ resting: NSColor) -> NSColor {
+        if resting == Palette.accent { return Palette.accentHover }
+        guard let step = inkRamp.firstIndex(of: resting), step + 1 < inkRamp.count
+        else { return resting }
+        return inkRamp[step + 1]
     }
 
     // MARK: - The palette's own evidence
@@ -251,7 +287,11 @@ enum StateLegend {
          ("ready", Palette.ready, 3.0),
          ("working", Palette.working, 3.0),
          ("fault", Palette.fault, 3.0),
-         ("accent", Palette.accent, 3.0)]
+         ("accent", Palette.accent, 3.0),
+         // A hover value is read for as long as the pointer sits on it, which
+         // is longer than a resting placard is read; it owes the text floor
+         // even where its resting value did not.
+         ("accentHover", Palette.accentHover, 4.5)]
     }
 
     /// The lamp separation the busy panel was ruled on. Below this the ready and
@@ -702,9 +742,14 @@ enum StateLegend {
     enum BottomLine {
         static let size: CGFloat = 10
         static let tracking: CGFloat = 0.8
-        /// A door out of the panel: GO TO AGENT, OPEN HUB, OPEN REPORT.
-        static func door(_ text: String) -> NSAttributedString {
-            label(text, weight: .medium, color: Palette.accent)
+        /// A door out of the panel: Go to Agent, Open Hub, Open Report.
+        ///
+        /// The colour is a parameter with the resting value as its default, so
+        /// the hover step (`StateLegend.hovered`) rebuilds a door's title
+        /// through this same function instead of a second copy of its type.
+        static func door(_ text: String,
+                         color: NSColor = Palette.accent) -> NSAttributedString {
+            label(text, weight: .medium, color: color)
         }
         /// A word that explains rather than acts: Controls, the wordmark.
         static func quiet(_ text: String, color: NSColor = Palette.hint) -> NSAttributedString {
