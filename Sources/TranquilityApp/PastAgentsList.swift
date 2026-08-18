@@ -534,10 +534,23 @@ final class SplitPlacardRowView: NSView {
 }
 
 private final class PlacardHalf: NSControl {
-    private let highlight = NSView()
+    private let mark = NSTextField(labelWithString: "")
+    private let label = NSTextField(labelWithString: "")
+    private var resting: [NSAttributedString] = []
 
-    /// Rule 1 of the hover standard: the wash says which half, the cursor says
-    /// the placard is a control at all.
+    /// The hover standard, re-ruled 18 Aug: **a row washes, a word brightens.**
+    ///
+    /// This was a wash — a rounded fill across the whole half — because it was
+    /// built beside the grid rows, which wash. But a grid row IS a region: a
+    /// lamp, a name and a callsign across 352pt, where the fill tells you which
+    /// row the click will land on. NEW AGENT and PAST AGENTS are two words in a
+    /// strip, and a fill four times their width reads as a button that isn't
+    /// there — "they have a big background hover instead of a text hover
+    /// effect. That's an inconsistency."
+    ///
+    /// So the words brighten, exactly as `Controls` and the state pill do, and
+    /// the cursor still says the placard is a control at all. The wash stays
+    /// where a region needs one.
     override func resetCursorRects() {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .pointingHand)
@@ -551,26 +564,18 @@ private final class PlacardHalf: NSControl {
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
 
-        highlight.wantsLayer = true
-        highlight.layer?.cornerRadius = 6
-        highlight.translatesAutoresizingMaskIntoConstraints = false
-
-        let mark = NSTextField(labelWithString: glyph)
-        mark.font = ChromeType.mono(ofSize: 12, weight: .regular)
-        mark.textColor = StateLegend.Palette.hint
+        mark.attributedStringValue = ChromeType.line(
+            glyph, font: ChromeType.mono(ofSize: 12, weight: .regular),
+            color: StateLegend.Palette.hint)
         mark.translatesAutoresizingMaskIntoConstraints = false
 
-        let label = NSTextField(labelWithString: "")
         label.attributedStringValue = letterspaced(
             title, size: 9.5, tracking: 1.33, color: StateLegend.Palette.hint)
         label.translatesAutoresizingMaskIntoConstraints = false
+        resting = [mark.attributedStringValue, label.attributedStringValue]
 
-        addSubview(highlight); addSubview(mark); addSubview(label)
+        addSubview(mark); addSubview(label)
         NSLayoutConstraint.activate([
-            highlight.leadingAnchor.constraint(equalTo: leadingAnchor, constant: -4),
-            highlight.trailingAnchor.constraint(equalTo: trailingAnchor, constant: 4),
-            highlight.topAnchor.constraint(equalTo: topAnchor, constant: 1),
-            highlight.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -1),
             mark.centerYAnchor.constraint(equalTo: centerYAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
@@ -601,10 +606,12 @@ private final class PlacardHalf: NSControl {
             owner: self, userInfo: nil))
     }
     override func mouseEntered(with event: NSEvent) {
-        highlight.layer?.backgroundColor = StateLegend.Palette.hover.cgColor
+        mark.attributedStringValue = StatusHUD.lifting(resting[0])
+        label.attributedStringValue = StatusHUD.lifting(resting[1])
     }
     override func mouseExited(with event: NSEvent) {
-        highlight.layer?.backgroundColor = nil
+        mark.attributedStringValue = resting[0]
+        label.attributedStringValue = resting[1]
     }
     override func mouseDown(with event: NSEvent) {}
     override func mouseUp(with event: NSEvent) {
