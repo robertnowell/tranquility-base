@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Spawn a fresh Claude session in a new Terminal window.
@@ -184,9 +185,16 @@ public enum SessionLauncher {
             Self.trace?("goTo: no tty for pid \(pid)")
             return .success(false)
         }
+        // Order matters, and it is the whole fix (ruled 18 Aug: "it brought all
+        // the terminal windows to the top"). Selecting the tab and promoting
+        // its window to index 1 FIRST makes the agent's window Terminal's own
+        // frontmost; activating afterwards through `NSRunningApplication`
+        // brings that window forward and leaves the rest where they were.
+        // AppleScript's `activate` cannot do this — it is an app-level
+        // activation that raises every window the app owns, which is how one
+        // click on GO TO AGENT buried the screen under nine other terminals.
         let script = """
             tell application "Terminal"
-              activate
               repeat with w in windows
                 repeat with t in tabs of w
                   if (tty of t) as text is "\(tty)" then
@@ -204,6 +212,11 @@ public enum SessionLauncher {
             Self.trace?("goTo: tab not found for \(tty)")
             return .success(false)
         case .success:
+            // Without `.activateAllWindows`, which is the option that would
+            // reproduce exactly what we just stopped doing.
+            NSRunningApplication
+                .runningApplications(withBundleIdentifier: "com.apple.Terminal")
+                .first?.activate()
             Self.trace?("goTo: focused \(tty)")
             return .success(true)
         case .failure(let error):
