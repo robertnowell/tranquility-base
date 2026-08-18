@@ -292,18 +292,18 @@ private final class FilterRowView: NSView, NSTextFieldDelegate {
         translatesAutoresizingMaskIntoConstraints = false
 
         let glyph = NSTextField(labelWithString: "⌕")
-        glyph.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        glyph.font = ChromeType.mono(ofSize: 12, weight: .regular)
         glyph.textColor = StateLegend.Palette.hint
         glyph.translatesAutoresizingMaskIntoConstraints = false
 
         input.isBordered = false
         input.drawsBackground = false
         input.focusRingType = .none
-        input.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        input.font = ChromeType.mono(ofSize: 12, weight: .regular)
         input.textColor = StateLegend.Palette.ink
         input.placeholderAttributedString = NSAttributedString(
             string: "Filter",
-            attributes: [.font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            attributes: [.font: ChromeType.mono(ofSize: 12, weight: .regular),
                          .foregroundColor: StateLegend.Palette.faint])
         input.delegate = self
         input.translatesAutoresizingMaskIntoConstraints = false
@@ -422,7 +422,7 @@ final class PastRowView: NSControl {
         // opened is dimmed once by each and still cannot be mistaken for a
         // live one.
         let name = NSTextField(labelWithString: item.row.name)
-        name.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
+        name.font = ChromeType.mono(ofSize: 13, weight: .medium)
         name.textColor = (item.row.read.isAsking && item.row.lamp.asksForYou
                           ? StateLegend.Palette.ink
                           : StateLegend.Palette.restingInk).withAlphaComponent(ink)
@@ -556,7 +556,7 @@ private final class PlacardHalf: NSControl {
         highlight.translatesAutoresizingMaskIntoConstraints = false
 
         let mark = NSTextField(labelWithString: glyph)
-        mark.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        mark.font = ChromeType.mono(ofSize: 12, weight: .regular)
         mark.textColor = StateLegend.Palette.hint
         mark.translatesAutoresizingMaskIntoConstraints = false
 
@@ -653,12 +653,12 @@ final class SettingRowView: NSView, NSTextFieldDelegate {
         input.isBordered = false
         input.drawsBackground = false
         input.focusRingType = .none
-        input.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        input.font = ChromeType.mono(ofSize: 11, weight: .regular)
         input.textColor = StateLegend.Palette.ink
         input.lineBreakMode = .byTruncatingHead
         input.placeholderAttributedString = NSAttributedString(
             string: placeholder,
-            attributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+            attributes: [.font: ChromeType.mono(ofSize: 11, weight: .regular),
                          .foregroundColor: StateLegend.Palette.faint])
         input.delegate = self
         input.translatesAutoresizingMaskIntoConstraints = false

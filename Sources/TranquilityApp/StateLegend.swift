@@ -712,7 +712,7 @@ enum StateLegend {
     /// The placard face: the state's own label, one step up in weight from the
     /// row beneath it. Named here because two files draw it and a size that
     /// lives in one of them is a size the other one guesses.
-    static let placardFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
+    static let placardFont = ChromeType.mono(ofSize: 10, weight: .medium)
 
     // MARK: - The bottom line's lexicon (ruled 18 Aug)
 
@@ -763,7 +763,7 @@ enum StateLegend {
             // able to name.
             ChromeType.line(
                 text,
-                font: NSFont.monospacedSystemFont(ofSize: size, weight: weight),
+                font: ChromeType.mono(ofSize: size, weight: weight),
                 color: color, tracking: tracking)
         }
     }
