@@ -1,8 +1,7 @@
 # The panel answers the pointer
 
-**STATUS: proposed 18 Aug 2026, awaiting a ruling.** The code implements it;
-this line is what changes when it is ruled. Written after the operator asked
-for one thing and one question:
+Ruled 18 Aug 2026, in a voice session, against the implemented build: "as
+implemented." Written after the operator asked for one thing and one question:
 
 > "A lot of our buttons and actual, like, hover states, lack any visual
 > indicator that something is clickable… we should also look into, like, what
