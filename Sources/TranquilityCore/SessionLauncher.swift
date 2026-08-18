@@ -56,6 +56,20 @@ public enum SessionLauncher {
     /// `resume` still activates, and that ruling stands for its own reason —
     /// a revived session asks a question (summary or full context) that only
     /// you can answer, in its own window.
+    ///
+    /// **A window per agent, and that is settled** (ruled 18 Aug). A tab would
+    /// be tidier and Terminal.app cannot make one: its dictionary marks tabs
+    /// `<element type="tab" access="r">`, there is no `make new tab`, and the
+    /// near-miss — `do script … in window 1` — does not create anything, it
+    /// types into that window's SELECTED tab, which on a machine running ten
+    /// agents is somebody's live conversation.
+    ///
+    /// The only mechanism that works is pressing ⌘T through System Events,
+    /// which requires Terminal frontmost, which is the focus theft removed
+    /// directly above. Juggling it — activate, keystroke, run, hand focus back —
+    /// was scoped, costed and refused: "that's brittle and is gonna break." So
+    /// this stays a window, deliberately, and a session that reads this file
+    /// and thinks of ⌘T should read this paragraph instead of writing it.
     @discardableResult
     public static func launch(
         directory: String = defaultDirectory,
