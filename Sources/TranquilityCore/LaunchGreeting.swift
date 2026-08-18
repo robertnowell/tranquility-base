@@ -10,10 +10,13 @@ import Foundation
 /// one moment where you always know what you want to say was the moment that
 /// sent you to a keyboard in another window.
 ///
-/// So a launch is a turn. The app writes one, in the agent's own name, and the
-/// entire loop downstream is the one that already exists: the card appears, the
-/// hail sounds, ⌃⌥ reads it, and what you say back is typed into the tab as
-/// that session's first user message.
+/// So a launch is a turn. Re-ruled the same afternoon, after the first version
+/// went through the announcement pipeline and made you wait for it: **the card
+/// comes first**. The panel paints the question and speaks it the instant you
+/// press the button, before Terminal has done anything, and the session it
+/// belongs to is attached underneath a second or two later when Claude Code
+/// registers it. What you say back is typed into the tab as that session's first
+/// user message.
 ///
 /// **The greeting is never sent to the agent.** It is the app speaking on its
 /// own behalf about a session it just started; the transcript stays empty until
@@ -23,29 +26,54 @@ import Foundation
 /// and one row in the brief table, which is what every other turn already is.
 public enum LaunchGreeting {
 
-    /// The one sentence the app says on its own behalf.
+    /// What it says, and it is the whole card.
     ///
-    /// A question, not an instruction, and deliberately the emptiest one there
-    /// is: the app knows a session started and knows nothing else, so anything
-    /// more specific would be the app guessing at your work out loud.
-    public static let question = "How would you like to get started?"
+    /// Two lines, alternating, because one line said twenty times a day is a
+    /// recording and two is a person. Both are the same question asked the two
+    /// ways it gets asked, and both are under four seconds of audio — the first
+    /// version ("New agent. It's up in Projects and hasn't been asked for
+    /// anything. How would you like to get started?") narrated facts you could
+    /// already see on the card you were looking at, in front of the only part
+    /// that was a question.
+    ///
+    /// No attribution, no callsign, no project label. You pressed the button;
+    /// you know which agent this is, and nothing else here has a name yet.
+    public static let lines = [
+        "How should we get started?",
+        "What would you like to work on?",
+    ]
+
+    /// The next line to use. In memory on purpose: the alternation exists so
+    /// two launches in a row do not sound identical, and that is a fact about
+    /// this sitting, not one worth a file on disk.
+    public static func nextLine() -> String { lines[turn.next() % lines.count] }
+
+    private static let turn = Turn()
+
+    final class Turn: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n = 0
+        func next() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            defer { n += 1 }
+            return n
+        }
+    }
 
     /// Tags the brief's provenance in the store. Not a model provider, and it
     /// must never be mistaken for one — this brief was authored here, and the
     /// `+stored` suffix the restore path adds makes that legible in the log.
     public static let provider = "greeting"
 
-    /// What the card says and what ⌃⌥ reads out.
+    /// The card, and — through `recap` — the spoken line, exactly.
     ///
-    /// `question`, not `nextStep`: a question outranks a next step in the spoken
-    /// composition because it blocks, and this one does — the agent will sit in
-    /// its tab doing nothing at all until it is answered.
-    public static func brief(directory: String) -> SessionBrief {
-        let label = (directory as NSString).lastPathComponent
-        return SessionBrief(
-            topic: "New agent",
-            happened: "It's up in \(label.isEmpty ? directory : label) and hasn't been asked for anything",
-            question: question)
+    /// `recap` rather than `topic` + `happened` + `question`: `spokenText()`
+    /// prefers an authored recap and assembles the fields only as a fallback,
+    /// so this is how a brief says "these words, in this order, and nothing
+    /// else". The structured fields still carry the same sentence for the card
+    /// and the hub, which read fields rather than the spoken line.
+    public static func brief(line: String) -> SessionBrief {
+        SessionBrief(topic: "New agent", happened: line, recap: line)
     }
 
     /// Record the greeting for a session that has just registered.
@@ -57,17 +85,18 @@ public enum LaunchGreeting {
     /// callsign, the reply target, supersession by the session's first real turn
     /// — then addresses the same session the terminal tab does.
     ///
-    /// The callsign is left unminted on purpose. Minting happens at a session's
+    /// No callsign, and no attribution at all. Minting happens at a session's
     /// first successful summary and freezes for life; a name derived from a turn
-    /// with no content would be a name derived from nothing. Until then the
-    /// greeting is attributed by its directory word, which is the only true
-    /// thing about the session anyway.
+    /// with no content is a name derived from nothing — "why is there a callsign?
+    /// You don't even know what we're working on." The card the panel paints
+    /// carries the DIRECTORY as its title and the question as its body, and the
+    /// spoken line is the question alone.
     ///
     /// Idempotent through `promptId`: the launch that produced it is the prompt
     /// this turn answers, so a second call for the same session writes nothing.
     @discardableResult
     public static func record(
-        sessionId: String, directory: String, tty: String? = nil,
+        sessionId: String, directory: String, line: String, tty: String? = nil,
         store: QueueStore, at: Date = Date()
     ) throws -> Int64? {
         let event = QueuedEvent(
@@ -82,7 +111,7 @@ public enum LaunchGreeting {
             // there are no rungs to walk on a turn that has not happened.
             transcriptPath: nil,
             tty: tty)
-        return try store.insert(event: event, brief: brief(directory: directory),
+        return try store.insert(event: event, brief: brief(line: line),
                                 provider: provider, at: at)
     }
 
@@ -103,7 +132,7 @@ public enum LaunchGreeting {
         excluding known: Set<String>,
         agents: any ClaudeAgentsReading = ClaudeAgentsCLI(),
         timeout: TimeInterval = 30,
-        interval: TimeInterval = 2,
+        interval: TimeInterval = 1,
         now: () -> Date = Date.init,
         sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
     ) -> String? {
