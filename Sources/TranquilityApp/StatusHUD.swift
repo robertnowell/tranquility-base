@@ -3243,10 +3243,23 @@ final class StatusHUD: NSObject {
         // an empty `hintLabel` is still a laid-out line — it and the stack's
         // spacing put ~19pt of nothing under the footer, which read as the
         // wordmark and Controls floating rather than resting on the panel's
-        // own 12pt inset. Measured to the nearest content edge rather than
-        // assuming which way y runs: the footer is the last visible thing on
-        // this face, so the near edge is the floor by construction.
+        // own 12pt inset.
+        //
+        // Asserted STRUCTURALLY: nothing visible may follow the footer in the
+        // stack, which is what makes the stack's own 12pt bottom inset the
+        // whole gap. The first version of this drill measured the footer
+        // against the content view's edges and failed its first deploy at
+        // 23pt with the fix working perfectly — `resizeToFit` animates the
+        // frame over 0.12s, so anything read from the panel's live bounds
+        // immediately after a face change is a transient. The strip drill's
+        // own note says exactly this about the top edge; the geometry is
+        // logged below for eyes and never asserted. This form is also the
+        // better claim: the regression class is a widget left standing under
+        // the footer, and that is what it names.
         let hintIsNotALine = hintLabel.isHidden
+        let underTheFooter = (contentStack?.arrangedSubviews ?? [])
+            .drop(while: { $0 !== gridFooter }).dropFirst()
+        let footerIsTheLastRow = underTheFooter.allSatisfy(\.isHidden)
         let contentBox = panel?.contentView?.bounds ?? .zero
         let footerBox = panel?.contentView
             .map { gridFooter.convert(gridFooter.bounds, to: $0) } ?? .zero
@@ -3268,7 +3281,7 @@ final class StatusHUD: NSObject {
             ("noteFitsColumn", noteWidth > 0 && noteWidth <= column),
             ("closedOnLeave", closedOnLeave),
             ("hintIsNotALine", hintIsNotALine),
-            ("footerSitsOnTheFloor", floorGap >= 0 && floorGap <= 16),
+            ("footerIsTheLastRow", footerIsTheLastRow),
         ])
         Permissions.log("selftest controls: panelH \(heightShut)->\(heightOpen) "
                         + "noteW=\(noteWidth) column=\(column) "
