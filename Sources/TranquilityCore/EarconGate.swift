@@ -61,3 +61,29 @@ public struct EarconGate: Sendable, Equatable {
         return nil
     }
 }
+
+extension EarconGate {
+
+    /// Did the set of sessions waiting on you gain a member?
+    ///
+    /// The app's repaint trigger is "a turn arrived", which is honest and is the
+    /// right trigger for painting — a newer turn superseding an older one on the
+    /// same session leaves the count identical, and repainting for it is correct.
+    /// It is the wrong trigger for a SOUND.
+    ///
+    /// Reported 18 Aug: the return cue fired seconds after a send with nothing new
+    /// visible in the grid. Not a false positive in the strict sense — a turn had
+    /// landed — but on a session already showing green, so nothing the user could
+    /// act on had changed. That is the cry-wolf pattern the cue set is designed
+    /// against, and it is worth being strict about: in ATC an estimated 62-91% of
+    /// conflict alerts required no intervention, and controllers learned to
+    /// distrust the alerts rather than the estimate.
+    ///
+    /// `previous == nil` means the tick has not primed yet, and returns false: a
+    /// launch that intakes a backlog of ten waiting sessions must not announce
+    /// them as ten arrivals.
+    public static func hasNewArrival(waiting: Set<String>, previous: Set<String>?) -> Bool {
+        guard let previous else { return false }
+        return !waiting.subtracting(previous).isEmpty
+    }
+}

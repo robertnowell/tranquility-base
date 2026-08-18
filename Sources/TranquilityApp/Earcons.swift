@@ -122,7 +122,13 @@ enum Earcons {
         // rather than as two events landing close together. Inherited from
         // ArrivalChime, where it was found the hard way.
         sound.stop()
-        if !sound.play() {
+        // Logged on SUCCESS as well as failure, which the first cut did not do.
+        // A cue that fires when nothing actionable happened is the failure mode
+        // this whole set is designed against, and diagnosing one meant inferring
+        // it from neighbouring `ambient:` lines. The cue now says so itself.
+        if sound.play() {
+            Permissions.log("earcon: \(cue.rawValue)")
+        } else {
             Permissions.log("earcon: \(cue.rawValue) play refused")
         }
     }
