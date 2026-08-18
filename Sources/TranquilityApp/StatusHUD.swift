@@ -1675,7 +1675,7 @@ final class StatusHUD: NSObject {
             stripTitle.addAttribute(.paragraphStyle, value: indent,
                                     range: NSRange(location: 0, length: stripTitle.length))
             stateLabel.attributedStringValue = stripTitle
-            hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
+            hintLabel.font = ChromeType.mono(ofSize: 9.5, weight: .regular)
             gridFooter.isHidden = false
             waitingRows.isHidden = false
             collapseButton?.isHidden = isCollapsed
@@ -1783,7 +1783,7 @@ final class StatusHUD: NSObject {
             backButton.isHidden = true
             collapseButton?.isHidden = true
             pastBackButton?.isHidden = false
-            hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
+            hintLabel.font = ChromeType.mono(ofSize: 9.5, weight: .regular)
             hintLabel.stringValue = pastList?.summary ?? ""
             pastList?.isHidden = false
 
@@ -1796,7 +1796,7 @@ final class StatusHUD: NSObject {
             gearButton.isHidden = true; backButton.isHidden = false
             settingsTabs.isHidden = false
             settingsTabs.select(face.settingsTab)
-            hintLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
+            hintLabel.font = ChromeType.mono(ofSize: 9.5, weight: .regular)
 
             switch face.settingsTab {
             case .agents:
@@ -1969,7 +1969,7 @@ final class StatusHUD: NSObject {
         truncating.lineBreakMode = .byTruncatingTail
         titleLabel.attributedStringValue = NSAttributedString(
             string: face.title, attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold),
+                .font: ChromeType.mono(ofSize: 13, weight: .semibold),
                 .foregroundColor: StateLegend.Palette.ink,
                 .paragraphStyle: truncating,
             ])
@@ -1984,7 +1984,7 @@ final class StatusHUD: NSObject {
     /// The listening pill: the live dot in channel green (mic open = go), the
     /// target in the pill's usual chrome mono.
     private func listeningPill() -> NSAttributedString {
-        let font = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
+        let font = ChromeType.mono(ofSize: 10, weight: .medium)
         let pill = NSMutableAttributedString(
             string: StateLegend.Glyph.dot, attributes: [
                 .font: font, .foregroundColor: StateLegend.Palette.ready,
@@ -2012,7 +2012,7 @@ final class StatusHUD: NSObject {
     /// target rides along only when it was already in hand (the active
     /// conversation); the arm path never probes for one.
     private func armingPill() -> NSAttributedString {
-        let font = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
+        let font = ChromeType.mono(ofSize: 10, weight: .medium)
         // `hint`, not `faint`: the pill names where the words are about to go,
         // which is the one thing you must be able to read before releasing.
         let pill = NSMutableAttributedString(
@@ -3336,7 +3336,7 @@ final class StatusHUD: NSObject {
         let placardErrors = ChromeType.centringError(
             font: StateLegend.placardFont, markScale: 0.68)
         let rowErrors = ChromeType.centringError(
-            font: NSFont.monospacedSystemFont(
+            font: ChromeType.mono(
                 ofSize: StateLegend.BottomLine.size, weight: .medium))
         let worstMark = (placardErrors + rowErrors).map { abs($0.1) }.max() ?? 0
         // One optical size for every mark on a face, whatever family it comes
@@ -3354,7 +3354,9 @@ final class StatusHUD: NSObject {
             ("marksShareOneOpticalSize", markSpread <= 0.5),
             ("marksAreSmallerThanTheCaps", (markHeights.max() ?? 0) < capBand),
         ])
-        Permissions.log("selftest chrome: worst \(String(format: "%.2f", worstMark))pt "
+        Permissions.log("selftest chrome: face "
+            + "\(ChromeType.preferredFamily ?? "system mono") · "
+            + "worst \(String(format: "%.2f", worstMark))pt "
             + "spread \(String(format: "%.2f", markSpread))pt cap \(String(format: "%.2f", capBand))pt · "
             + (placardErrors + rowErrors)
                 .map { "\($0.0)\(String(format: "%+.2f", $0.1))" }.joined(separator: " "))
@@ -3460,7 +3462,7 @@ final class StatusHUD: NSObject {
         let doorFace = rowFace(goButton.attributedTitle)
         let wordFace = rowFace(cardControls.wordValue)
         // FAMILY, not name: the lexicon's whole design is that weight carries
-        // the difference between a door and a hint, and `monospacedSystemFont`
+        // the difference between a door and a hint, and the chrome face
         // returns a different fontName per weight — so comparing names asserted
         // that the two roles look identical, which is the opposite of the rule.
         // Failed its first deploy saying exactly that.
@@ -4546,7 +4548,7 @@ final class StatusHUD: NSObject {
             // is bold. The panel broke this quietly for the grid's whole
             // life and nobody noticed until it was asked to carry meaning.
             ("nothingIsBold", built.allSatisfy {
-                $0.nameLabel.font == .monospacedSystemFont(ofSize: 13, weight: .medium) }),
+                $0.nameLabel.font == ChromeType.mono(ofSize: 13, weight: .medium) }),
             ("unreadIsBrightest", unreadL > openedL && unreadL > idleL),
             // Idle and opened rest at ONE level — "the idle sessions should
             // not be brighter than read active sessions" (16 Aug). Equality
@@ -5330,7 +5332,7 @@ final class StatusHUD: NSObject {
         // render(), which writes every widget's visibility before the panel is
         // ever ordered front.
         stateLabel = DoorLabel(labelWithString: "")
-        stateLabel.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
+        stateLabel.font = ChromeType.mono(ofSize: 10, weight: .medium)
         stateLabel.textColor = StateLegend.Lens.chrome.color
         // The ◀ breadcrumb is clickable (ruled 06 Aug): voiced first, but a
         // pointer tap goes home too. The gesture is on the label always; the
@@ -5343,7 +5345,7 @@ final class StatusHUD: NSObject {
         // The identity face: mono, matching the grid rows (ruled). renderTitle
         // sets the string; this is the fallback style. ONE line since the topic
         // died (10 Aug) — the identity was always the only thing on line one.
-        titleLabel.font = .monospacedSystemFont(ofSize: 13, weight: .semibold)
+        titleLabel.font = ChromeType.mono(ofSize: 13, weight: .semibold)
         titleLabel.textColor = StateLegend.Lens.content.color
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
@@ -6364,12 +6366,12 @@ final class TrayRowView: NSStackView {
             // legend: the legend's marks all mean something about a SESSION,
             // and a staged file is a fact about the message instead.
             let mark = NSTextField(labelWithString: "▣")
-            mark.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+            mark.font = ChromeType.mono(ofSize: 10, weight: .regular)
             mark.textColor = StateLegend.Lens.chrome.color
             mark.translatesAutoresizingMaskIntoConstraints = false
 
             let name = NSTextField(labelWithString: displayName)
-            name.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+            name.font = ChromeType.mono(ofSize: 10.5, weight: .regular)
             name.textColor = StateLegend.Lens.content.color
             name.lineBreakMode = .byTruncatingMiddle
             name.maximumNumberOfLines = 1
@@ -6380,7 +6382,7 @@ final class TrayRowView: NSStackView {
             name.translatesAutoresizingMaskIntoConstraints = false
 
             removeButton.isBordered = false
-            removeButton.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
+            removeButton.font = ChromeType.mono(ofSize: 10, weight: .medium)
             // The one control on the panel that already advertised itself (it
             // has carried a pointing hand since the tray shipped), so it is the
             // one that must not be the exception now there is a standard.
@@ -6388,7 +6390,7 @@ final class TrayRowView: NSStackView {
                 removeButton?.attributedTitle = NSAttributedString(
                     string: StateLegend.Glyph.denied,
                     attributes: [
-                        .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .medium),
+                        .font: ChromeType.mono(ofSize: 10, weight: .medium),
                         .foregroundColor: color,
                     ])
             }
@@ -6444,7 +6446,7 @@ final class DropOverlayView: NSView {
         layer?.borderWidth = 1
         layer?.borderColor = StateLegend.Palette.hairline.cgColor
 
-        label.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+        label.font = ChromeType.mono(ofSize: 11, weight: .medium)
         label.textColor = StateLegend.Lens.content.color
         label.alignment = .center
         // Wraps rather than clips. With both edges pinned, wrapping is what
@@ -6757,7 +6759,7 @@ final class GridRowView: NSControl {
     /// Nothing that is drawn moves: this widens the lit rectangle only.
     static let hoverBleed: CGFloat = 8
     static let auxFraction: CGFloat = 0.38
-    static let auxFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    static let auxFont = ChromeType.mono(ofSize: 11, weight: .regular)
 
     init(item: StateLegend.SessionRow, auxWidth: CGFloat,
          target: AnyObject, action: Selector) {
@@ -6841,7 +6843,7 @@ final class GridRowView: NSControl {
         // and it is the SAME answer on every face. A row that is merely
         // alive rests at the same level as one you have already heard,
         // because neither is asking; only their lamps differ.
-        name.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
+        name.font = ChromeType.mono(ofSize: 13, weight: .medium)
         // FULL INK IS RESERVED FOR ROWS THAT WANT YOU, and after this change
         // that is exactly the green and amber ones you have not heard.
         //
@@ -6982,7 +6984,7 @@ private final class PlacardRowView: NSControl {
         wantsLayer = true
 
         let plus = NSTextField(labelWithString: "+")
-        plus.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        plus.font = ChromeType.mono(ofSize: 12, weight: .regular)
         // The marker and its label are one affordance and take one ink.
         plus.textColor = StateLegend.Palette.hint
         plus.translatesAutoresizingMaskIntoConstraints = false
@@ -7156,7 +7158,7 @@ private final class ControlsNoteView: NSView {
         layer?.borderWidth = 1
         layer?.borderColor = StateLegend.Palette.hairline.cgColor
 
-        let font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .regular)
+        let font = ChromeType.mono(ofSize: 9.5, weight: .regular)
         // ONE chord column, sized to the widest chord — the rule the grid's
         // callsign column already follows. Per-line widths would start every
         // meaning at its own x, and a three-line rag is what made the old
@@ -7277,7 +7279,7 @@ private final class PaneLinkRowView: NSControl {
         layer?.addSublayer(hairline)
 
         let label = NSTextField(labelWithString: title)
-        label.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        label.font = ChromeType.mono(ofSize: 12, weight: .medium)
         label.textColor = StateLegend.Palette.secondary
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
@@ -7346,12 +7348,12 @@ private final class AudioEventRowView: NSControl, NSMenuDelegate {
         layer?.addSublayer(hairline)
 
         let when = NSTextField(labelWithString: event.timeLabel)
-        when.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        when.font = ChromeType.mono(ofSize: 10, weight: .regular)
         when.textColor = StateLegend.Palette.secondary
         when.translatesAutoresizingMaskIntoConstraints = false
 
         let duration = NSTextField(labelWithString: event.durationLabel)
-        duration.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        duration.font = ChromeType.mono(ofSize: 10, weight: .regular)
         duration.textColor = StateLegend.Palette.faint
         duration.alignment = .right
         duration.translatesAutoresizingMaskIntoConstraints = false
@@ -7360,7 +7362,7 @@ private final class AudioEventRowView: NSControl, NSMenuDelegate {
         // hint colour rather than left as a blank, because an empty slot
         // reads as a rendering bug and a stated absence reads as a fact.
         let snippet = NSTextField(labelWithString: event.transcript ?? "no transcript")
-        snippet.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        snippet.font = ChromeType.mono(ofSize: 11, weight: .regular)
         snippet.textColor = event.transcript == nil
             ? StateLegend.Palette.hint : StateLegend.Palette.ink
         snippet.lineBreakMode = .byTruncatingTail
@@ -7370,7 +7372,7 @@ private final class AudioEventRowView: NSControl, NSMenuDelegate {
         playButton = ConsoleButton(title: event.playing ? "■" : "▶",
                                    target: self, action: #selector(playTapped))
         playButton.isBordered = false
-        playButton.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        playButton.font = ChromeType.mono(ofSize: 12, weight: .regular)
         if event.playing {
             // Playing is a STATE, and it is already wearing `ink`. Hover does
             // not overwrite a louder signal with a quieter one, so a playing
@@ -7384,7 +7386,7 @@ private final class AudioEventRowView: NSControl, NSMenuDelegate {
 
         menuButton = ConsoleButton(title: "⋯", target: self, action: #selector(menuTapped))
         menuButton.isBordered = false
-        menuButton.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
+        menuButton.font = ChromeType.mono(ofSize: 12, weight: .semibold)
         menuButton.restingInk = StateLegend.Palette.secondary
         menuButton.translatesAutoresizingMaskIntoConstraints = false
 
@@ -7506,7 +7508,7 @@ private final class VoiceRowView: NSControl {
         layer?.addSublayer(hairline)
 
         let grip = NSTextField(labelWithString: onRoster ? "≡" : "")   // download rows never show one
-        grip.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        grip.font = ChromeType.mono(ofSize: 11, weight: .regular)
         grip.textColor = StateLegend.Palette.faint
         grip.translatesAutoresizingMaskIntoConstraints = false
 
@@ -7524,7 +7526,7 @@ private final class VoiceRowView: NSControl {
 
         let play = ConsoleButton(title: "▶", target: self, action: #selector(playTapped))
         play.isBordered = false
-        play.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+        play.font = ChromeType.mono(ofSize: 14, weight: .regular)
         play.restingInk = StateLegend.Palette.secondary
         // Invisible, not absent: the slot holds the name column's x so every row's
         // name starts on the same pixel. Putting "Get" in this slot instead pushed
@@ -7533,7 +7535,7 @@ private final class VoiceRowView: NSControl {
         play.translatesAutoresizingMaskIntoConstraints = false
 
         let name = NSTextField(labelWithString: Self.concise(voice.name))
-        name.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        name.font = ChromeType.mono(ofSize: 12, weight: .medium)
         // Dimmed when it is not installed — the row is an offer, not a voice you have.
         name.textColor = isDownload ? StateLegend.Palette.secondary : StateLegend.Palette.ink
         name.lineBreakMode = .byTruncatingTail
@@ -7541,7 +7543,7 @@ private final class VoiceRowView: NSControl {
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let category = NSTextField(labelWithString: voice.category)
-        category.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
+        category.font = ChromeType.mono(ofSize: 9.5, weight: .regular)
         category.textColor = StateLegend.Palette.hint
         category.translatesAutoresizingMaskIntoConstraints = false
 
@@ -7569,7 +7571,7 @@ private final class VoiceRowView: NSControl {
                 // ink on surface is 8.39:1 — the same ink the row names use, so the
                 // action is at least as legible as the thing it acts on.
                 .foregroundColor: StateLegend.Palette.ink,
-                .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .semibold),
+                .font: ChromeType.mono(ofSize: 10, weight: .semibold),
             ])
         get.translatesAutoresizingMaskIntoConstraints = false
         get.isHidden = !isDownload
@@ -7670,7 +7672,7 @@ private final class CheckView: NSControl {
         }
         if on {
             let mark = NSTextField(labelWithString: StateLegend.Glyph.confirm)
-            mark.font = .monospacedSystemFont(ofSize: 9, weight: .bold)
+            mark.font = ChromeType.mono(ofSize: 9, weight: .bold)
             // Punched out of the lamp, in the housing's own colour: 6.35:1
             // against `ready`. This was a hardcoded near-white, which read fine
             // on the old dark green and would have fallen to 1.88:1 on the

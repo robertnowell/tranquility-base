@@ -523,7 +523,7 @@ final class CollapsedStrip: NSView {
         let size = max(Self.markTypeFloor, min(10, rhythm * 0.78))
         lastMarkTypeSize = size
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: size, weight: .regular),
+            .font: ChromeType.mono(ofSize: size, weight: .regular),
             .foregroundColor: StateLegend.Palette.faint,
         ]
 
