@@ -460,6 +460,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Lifted ABOVE the hotkey on purpose (ruled 18 Aug). A screenshot
+        // tool has no business installing a global event tap: `--pose-shot`
+        // renders one face, writes a PNG and exits, and it used to do all that
+        // AFTER `HotkeyMonitor` was live — so taking a picture of the panel
+        // while the real app was running put two taps on one chord for the
+        // second it took, which is the collision relaunch.sh exists to prevent.
+        // Nothing below this line is needed to draw a face.
+        // Dev tooling: `--pose <name>` renders exactly one panel state with
+        // representative data and holds it until the process is killed. The
+        // whole launch tail is skipped — intake, permission polling, the
+        // microphone request, the idle repaint — so nothing ever advances or
+        // repaints over the posed face. See StatusHUD.pose for the states.
+        if let flag = CommandLine.arguments.firstIndex(of: "--pose"),
+           flag + 1 < CommandLine.arguments.count {
+            let name = CommandLine.arguments[flag + 1]
+            intakeTimer?.invalidate(); intakeTimer = nil
+            if hud.pose(name) {
+                Permissions.log("pose: holding \(name) until killed")
+            } else {
+                Permissions.log("pose: unknown name '\(name)'")
+            }
+            return
+        }
+
+        // One-shot: pose a face, photograph it FROM the view hierarchy, exit.
+        // No Screen Recording grant, no awake display — the pose renders its
+        // own pixels, so this works from a lidded laptop or a headless agent.
+        if let flag = CommandLine.arguments.firstIndex(of: "--pose-shot"),
+           flag + 2 < CommandLine.arguments.count {
+            let name = CommandLine.arguments[flag + 1]
+            let path = CommandLine.arguments[flag + 2]
+            intakeTimer?.invalidate(); intakeTimer = nil
+            if hud.pose(name), let png = hud.poseSnapshot() {
+                do {
+                    try png.write(to: URL(fileURLWithPath: path))
+                    Permissions.log("pose-shot: \(name) → \(path) (\(png.count) bytes)")
+                } catch {
+                    Permissions.log("pose-shot: write failed: \(error)")
+                }
+            } else {
+                Permissions.log("pose-shot: nothing rendered for '\(name)'")
+            }
+            NSApp.terminate(nil)
+            return
+        }
+
+
         hotkey = HotkeyMonitor { [weak self] transition in
             if case .pauseToggled = transition {
                 // Pause is an AUDIO behavior (simplification pass, ruled): the
@@ -916,45 +963,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 })
                 Permissions.log("selftest-speak finished")
             }
-        }
-
-        // Dev tooling: `--pose <name>` renders exactly one panel state with
-        // representative data and holds it until the process is killed. The
-        // whole launch tail is skipped — intake, permission polling, the
-        // microphone request, the idle repaint — so nothing ever advances or
-        // repaints over the posed face. See StatusHUD.pose for the states.
-        if let flag = CommandLine.arguments.firstIndex(of: "--pose"),
-           flag + 1 < CommandLine.arguments.count {
-            let name = CommandLine.arguments[flag + 1]
-            intakeTimer?.invalidate(); intakeTimer = nil
-            if hud.pose(name) {
-                Permissions.log("pose: holding \(name) until killed")
-            } else {
-                Permissions.log("pose: unknown name '\(name)'")
-            }
-            return
-        }
-
-        // One-shot: pose a face, photograph it FROM the view hierarchy, exit.
-        // No Screen Recording grant, no awake display — the pose renders its
-        // own pixels, so this works from a lidded laptop or a headless agent.
-        if let flag = CommandLine.arguments.firstIndex(of: "--pose-shot"),
-           flag + 2 < CommandLine.arguments.count {
-            let name = CommandLine.arguments[flag + 1]
-            let path = CommandLine.arguments[flag + 2]
-            intakeTimer?.invalidate(); intakeTimer = nil
-            if hud.pose(name), let png = hud.poseSnapshot() {
-                do {
-                    try png.write(to: URL(fileURLWithPath: path))
-                    Permissions.log("pose-shot: \(name) → \(path) (\(png.count) bytes)")
-                } catch {
-                    Permissions.log("pose-shot: write failed: \(error)")
-                }
-            } else {
-                Permissions.log("pose-shot: nothing rendered for '\(name)'")
-            }
-            NSApp.terminate(nil)
-            return
         }
 
         startPermissionPolling()
