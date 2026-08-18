@@ -102,6 +102,51 @@ final class Phase1bTests: XCTestCase {
         XCTAssertEqual(callsign, "facts cache timeout")
     }
 
+    // MARK: - Speakability
+
+    func testAVowellessTopicWordIsNeverMinted() {
+        // The real one, 18 Aug: "promotions stlth". STLTH is a brand spelled
+        // without vowels, it was the longest word in the topic, and the
+        // longest-word heuristic froze it on the session for its whole life.
+        let callsign = Callsign.mint(
+            directoryWord: "promotions", topic: "STLTH launch email",
+            existingCallsigns: [])
+        XCTAssertEqual(callsign, "promotions launch")
+        XCTAssertFalse(callsign!.contains("stlth"))
+    }
+
+    func testVowellessWordsAreRejectedAndOrdinaryOnesAreNot() {
+        for sayable in ["gym", "myth", "kopi", "strengths", "rhythm", "json"] {
+            XCTAssertTrue(Callsign.isSpeakable(sayable), sayable)
+        }
+        for not in ["stlth", "html", "www", "grrr", "sms"] {
+            XCTAssertFalse(Callsign.isSpeakable(not), not)
+        }
+        // And the gate stops exactly there. An initialism WITH a vowel is a
+        // word a voice can say ("tvpa", "json", "api"), so it survives — the
+        // rule is speakability, not taste.
+        XCTAssertTrue(Callsign.isSpeakable("tvpa"))
+    }
+
+    func testTheTieBreakWordIsAlsoGated() {
+        // Exhaustion path: every candidate collides, so mint reaches into the
+        // RAW topic for a third word. The gate applies there too, or the
+        // vowelless word comes back through the side door.
+        let callsign = Callsign.mint(
+            directoryWord: "promotions", topic: "launch stlth now",
+            existingCallsigns: ["kopi launch"])
+        XCTAssertNotNil(callsign)
+        XCTAssertFalse(callsign!.contains("stlth"))
+    }
+
+    func testAVowellessDirectoryNameFallsBackRatherThanBeingSaid() {
+        // A folder can be spelled however its owner likes; a callsign cannot.
+        XCTAssertEqual(Callsign.directoryWord(cwd: "/Users/x/Projects/stlth"), "session")
+        // ...and only the unsayable half is dropped, not the whole name.
+        XCTAssertEqual(Callsign.directoryWord(cwd: "/Users/x/Projects/stlth-promotions"),
+                       "promotions")
+    }
+
     func testMintReturnsNilWhenTheTopicOffersNoWord() {
         // A deterministic-floor topic is just the label — nothing to mint from.
         XCTAssertNil(Callsign.mint(
