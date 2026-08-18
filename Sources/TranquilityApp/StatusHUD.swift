@@ -3439,14 +3439,31 @@ final class StatusHUD: NSObject {
             return font.isFixedPitch
                 || font.familyName == ChromeType.preferredFamily
         }
+        // The face is in the STRING for anything drawn from an attributed
+        // title, and `.font` on those is whatever AppKit defaulted to — which
+        // is how this claim failed its first deploy naming a stray that was
+        // never on screen. Read what draws, not what is adjacent to it.
+        func drawnFont(_ view: NSView) -> NSFont? {
+            if let button = view as? NSButton, button.attributedTitle.length > 0 {
+                return button.attributedTitle
+                    .attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+            }
+            guard let field = view as? NSTextField else { return nil }
+            if field.attributedStringValue.length > 0,
+               let font = field.attributedStringValue
+                .attribute(.font, at: 0, effectiveRange: nil) as? NSFont {
+                return font
+            }
+            return field.font
+        }
         let chromeWidgets: [(String, NSFont?)] = [
-            ("state", stateLabel.font), ("title", titleLabel.font),
-            ("hint", hintLabel.font), ("strip", stripLabel.font),
-            ("action", goButton.font ?? dontSendButton.font),
+            ("state", drawnFont(stateLabel)), ("title", drawnFont(titleLabel)),
+            ("hint", drawnFont(hintLabel)), ("strip", drawnFont(stripLabel)),
+            ("door", drawnFont(goButton)), ("quiet", drawnFont(dontSendButton)),
         ]
         let strays = chromeWidgets.filter { !isMono($0.1) }.map(\.0)
         // And the one exception, said out loud: an agent's words are prose.
-        let bodyIsProse = !isMono(bodyLabel.font)
+        let bodyIsProse = !isMono(drawnFont(bodyLabel))
 
         SelfTest.report("chrome", [
             ("marksSitOnTheLine", worstMark <= 0.25),
@@ -3463,7 +3480,8 @@ final class StatusHUD: NSObject {
             ("chromeIsMono", strays.isEmpty),
             ("theMessageIsProse", bodyIsProse),
         ])
-        Permissions.log("selftest chrome: face "
+        Permissions.log("selftest chrome: strays "
+            + "\(strays.isEmpty ? "none" : strays.joined(separator: ",")) · face "
             + "\(ChromeType.preferredFamily ?? "system mono") · "
             + "worst \(String(format: "%.2f", worstMark))pt "
             + "spread \(String(format: "%.2f", markSpread))pt cap \(String(format: "%.2f", capBand))pt "
