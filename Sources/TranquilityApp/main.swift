@@ -1023,8 +1023,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Settings while the menu is open. The hotkey monitor guards against redundant
     // restarts, so calling start() on every tick is safe.
 
+    /// Live state for the earcon gate. Read on the main actor at the moment a cue
+    /// wants to play, never cached: a snapshot is a thing that goes stale, and the
+    /// whole point of the gate is that it reflects RIGHT NOW.
+    private func earconGate() -> EarconGate {
+        EarconGate(
+            userIsSpeaking: recorder.isRecording,
+            agentIsSpeaking: {
+                guard let speech = coordinator?.speech else { return false }
+                return speech.isSpeaking || speech.isPaused
+            }())
+    }
+
     private func startPermissionPolling() {
-        ArrivalChime.clearOldNotifications()
+        Earcons.clearOldNotifications()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -1054,6 +1066,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // its read-back verification run behind the scenes. Only repaint if
             // the stage is actually free: on a ⌃⌥ commit-and-advance the next
             // announcement is already preparing, and this must not stomp it.
+            // The undo window closed, which is the moment the user CONFIRMED the
+            // send. Ruled 18 Aug: "dispatch means turn done" — so this is the
+            // closure cue, and it is the only falling figure in the set.
+            Earcons.play(.dispatched, gate: earconGate())
             lastStatusLine = "sending to \(label)…"
             // The whisper (ruled 06 Aug): the words are on their way, said
             // without taking the stage from whatever is on it.
@@ -1087,10 +1103,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // Sanctioned change (b): the actual condition in plain words,
                     // not the enum case's name. Mapping documented in
                     // StateLegend.plainWords(for:).
+                    Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult(
                         "\(label) can't take this yet — \(StateLegend.plainWords(for: readiness)). "
                         + "Your words are kept. Try again in a moment.")
                 case .dispatchFailed(.verificationTimedOut, _):
+                    // Documented as ambiguous and never auto-retried: only a human
+                    // can decide whether to repeat themselves. That is needs-you.
+                    Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult(
                         "Typed it into \(label), but couldn't confirm it landed. "
                         + "Check the tab before repeating yourself.")
@@ -1098,20 +1118,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                      .dispatchFailed(.targetGone, let utteranceId):
                     // The destination no longer exists — "kept" must mean usable,
                     // not archived. The words go to the clipboard, plainly said.
+                    Earcons.play(.needsYou, gate: earconGate())
                     let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
                     hud.showResult(copied
                         ? "\(label)'s tab is gone — copied your words to the clipboard."
                         : "\(label)'s tab is gone. Your words are kept in the log.")
                 case .dispatchFailed(let failure, _):
+                    Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult("Couldn't type into \(label): \(failure). "
                                    + "Your words are kept.")
                 case .noTarget:
+                    Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult("That reply lost its agent. Your words are kept.")
                 default:
+                    Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult("Unexpected result: \(outcome). Your words are kept.")
                 }
             } catch {
                 Permissions.log("confirmAndSend threw: \(error)")
+                Earcons.play(.needsYou, gate: earconGate())
                 hud.showResult("Send failed: \(error). Your words are kept.")
             }
             rebuildMenu()
@@ -2907,7 +2932,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // arriving turn re-opened a panel the user had dismissed.
         guard hud.isOnScreen else {
             Permissions.log("ambient: \(waiting) waiting, panel stays dismissed")
-            ArrivalChime.play()
+            Earcons.play(.returned, gate: earconGate())
             return
         }
         Permissions.log("ambient: surfaced for \(waiting) waiting")
@@ -2920,7 +2945,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // was rude — and in the whole time it shipped it never once announced
         // successfully. A chime carries the same information ("something came
         // back") at none of that cost, and the panel already carries WHICH.
-        ArrivalChime.play()
+        Earcons.play(.returned, gate: earconGate())
     }
 
 

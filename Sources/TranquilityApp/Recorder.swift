@@ -633,7 +633,16 @@ public final class Recorder: @unchecked Sendable {
         if firstBuffer {
             verification?.cancel()
             verification = nil
-            _ = submit(.firstBuffer(generation: generation), because: "audio arrived")
+            let transition = submit(.firstBuffer(generation: generation), because: "audio arrived")
+            // "The mic is open, talk now." Deliberately here and not at the
+            // keypress: this is the first moment audio is PROVABLY flowing, and a
+            // cue that fires on the press would be a promise the machine has not
+            // kept yet — the exact case the `opening -> wedged` path exists for.
+            // Gated on the transition being accepted, so a stale generation's late
+            // buffer cannot announce a capture that is not this one.
+            if transition.accepted {
+                Earcons.acknowledge(.listening)
+            }
         }
         if let converted {
             liveStream?.feed(pcm16: converted)

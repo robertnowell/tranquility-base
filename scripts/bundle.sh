@@ -28,6 +28,14 @@ rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BUILD_DIR/TranquilityApp" "$APP_DIR/Contents/MacOS/TranquilityApp"
 
+# The earcon set. Four short files, ~160KB total, loaded by name through
+# Bundle.main in Earcons.swift. Flat in Resources/ rather than in a SwiftPM
+# resource bundle, because this .app is assembled by hand and a
+# `Bundle.module` lookup would need that bundle copied in too — one more
+# thing to forget. If these are missing the app still runs; it just goes
+# silent, and Earcons logs "no audio for <cue>".
+cp Resources/Sounds/*.wav "$APP_DIR/Contents/Resources/"
+
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
