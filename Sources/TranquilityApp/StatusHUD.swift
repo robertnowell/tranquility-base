@@ -344,7 +344,7 @@ final class StatusHUD: NSObject {
         if let detail, !detail.isEmpty {
             line.append(NSAttributedString(
                 string: "\n" + detail,
-                attributes: [.font: NSFont.systemFont(ofSize: 11),
+                attributes: [.font: StateLegend.Face.chrome(11),
                              .foregroundColor: StateLegend.Palette.secondary]))
         }
         stripLabel.attributedStringValue = line
@@ -1551,7 +1551,7 @@ final class StatusHUD: NSObject {
         // Part of the baseline for the same reason the hint's font is: the empty
         // room's 17pt centred sentence is the only face that changes either, so
         // a state that never mentions them must not inherit them.
-        bodyLabel.font = .systemFont(ofSize: 12)
+        bodyLabel.font = StateLegend.Face.message(12)
         bodyLabel.alignment = .natural
         // The ink is a BODY ATTRIBUTE, so it belongs to the baseline: the line
         // above writes a plain string and would otherwise erase the read-along
@@ -1616,7 +1616,7 @@ final class StatusHUD: NSObject {
         collapseButton?.isHidden = true
         // Part of the baseline so the grid's monospaced key line can never leak
         // into another state's hint — a font no arm mentions is at its baseline.
-        hintLabel.font = .systemFont(ofSize: 10)
+        hintLabel.font = StateLegend.Face.chrome(10)
         // Unhidden only by the slow-transcription tick, never by a state's arm.
         cancelTranscriptionButton.isHidden = true; retryTranscriptionButton.isHidden = true
 
@@ -1675,7 +1675,7 @@ final class StatusHUD: NSObject {
             stripTitle.addAttribute(.paragraphStyle, value: indent,
                                     range: NSRange(location: 0, length: stripTitle.length))
             stateLabel.attributedStringValue = stripTitle
-            hintLabel.font = ChromeType.mono(ofSize: 9.5, weight: .regular)
+            hintLabel.font = StateLegend.Face.chrome(9.5)
             gridFooter.isHidden = false
             waitingRows.isHidden = false
             collapseButton?.isHidden = isCollapsed
@@ -1701,7 +1701,7 @@ final class StatusHUD: NSObject {
             // rather than a caption on an absence.
             stateLabel.isHidden = true
             titleLabel.isHidden = true
-            bodyLabel.font = .systemFont(ofSize: 17, weight: .regular)
+            bodyLabel.font = StateLegend.Face.message(17)
             bodyLabel.alignment = .center
 
         case .idle:
@@ -1743,7 +1743,7 @@ final class StatusHUD: NSObject {
             // speaks from the strip, in the needs-you channel.
             renderCaptureStrip(NSAttributedString(
                 string: "\(StateLegend.Glyph.needsYou) \(face.captureFault ?? "")",
-                attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                attributes: [.font: StateLegend.Face.chrome(11, .medium),
                              .foregroundColor: StateLegend.Palette.fault]))
             micSettingsButton.isHidden = !face.offersMicSettings
 
@@ -1783,7 +1783,7 @@ final class StatusHUD: NSObject {
             backButton.isHidden = true
             collapseButton?.isHidden = true
             pastBackButton?.isHidden = false
-            hintLabel.font = ChromeType.mono(ofSize: 9.5, weight: .regular)
+            hintLabel.font = StateLegend.Face.chrome(9.5)
             hintLabel.stringValue = pastList?.summary ?? ""
             pastList?.isHidden = false
 
@@ -1796,7 +1796,7 @@ final class StatusHUD: NSObject {
             gearButton.isHidden = true; backButton.isHidden = false
             settingsTabs.isHidden = false
             settingsTabs.select(face.settingsTab)
-            hintLabel.font = ChromeType.mono(ofSize: 9.5, weight: .regular)
+            hintLabel.font = StateLegend.Face.chrome(9.5)
 
             switch face.settingsTab {
             case .agents:
@@ -3426,6 +3426,28 @@ final class StatusHUD: NSObject {
         let rowLightsItsName = rowResting != nil && rowHovered != rowResting
             && row?.nameLabel.textColor == rowResting
 
+        // The face census. One rule — the machine speaks in mono, the message
+        // speaks in prose — asserted over the widgets rather than trusted to
+        // every call site, because the way this went wrong was not a decision:
+        // it was eight files each picking a font that looked fine on its own.
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("Face census."),
+            sessionId: "fc", pid: 1, project: "promotions copy", cwd: "/tmp")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        func isMono(_ font: NSFont?) -> Bool {
+            guard let font else { return false }
+            return font.isFixedPitch
+                || font.familyName == ChromeType.preferredFamily
+        }
+        let chromeWidgets: [(String, NSFont?)] = [
+            ("state", stateLabel.font), ("title", titleLabel.font),
+            ("hint", hintLabel.font), ("strip", stripLabel.font),
+            ("action", goButton.font ?? dontSendButton.font),
+        ]
+        let strays = chromeWidgets.filter { !isMono($0.1) }.map(\.0)
+        // And the one exception, said out loud: an agent's words are prose.
+        let bodyIsProse = !isMono(bodyLabel.font)
+
         SelfTest.report("chrome", [
             ("marksSitOnTheLine", worstMark <= 0.25),
             ("marksShareOneOpticalSize", markSpread <= 0.5),
@@ -3438,6 +3460,8 @@ final class StatusHUD: NSObject {
             ("doorAnswersTheCursor", doorAnswersTheCursor),
             ("stripIsNotADoor", stripIsNotADoor),
             ("rowLightsItsName", rowLightsItsName),
+            ("chromeIsMono", strays.isEmpty),
+            ("theMessageIsProse", bodyIsProse),
         ])
         Permissions.log("selftest chrome: face "
             + "\(ChromeType.preferredFamily ?? "system mono") · "
@@ -5468,7 +5492,7 @@ final class StatusHUD: NSObject {
             NSClickGestureRecognizer(target: self, action: #selector(goToSession)))
 
         bodyLabel = CardBodyLabel(wrappingLabelWithString: "")
-        bodyLabel.font = .systemFont(ofSize: 12)
+        bodyLabel.font = StateLegend.Face.message(12)
         bodyLabel.textColor = StateLegend.Lens.content.color
         bodyLabel.maximumNumberOfLines = 0
         // Selectable so a line can be quoted out of a card by hand; see
@@ -5482,7 +5506,7 @@ final class StatusHUD: NSObject {
             let button = ConsoleButton(title: title, target: self, action: action)
             button.isBordered = false
             button.controlSize = .small
-            button.font = .systemFont(ofSize: 11, weight: .medium)
+            button.font = StateLegend.Face.chrome(11, .medium)
             // Chrome, not `ink` — the hover standard's fourth rule:
             // the brightest ink belongs to the prose, and a control resting
             // there is both louder than the message and out of ramp, with no
@@ -5545,7 +5569,7 @@ final class StatusHUD: NSObject {
                                    action: #selector(backTapped))
         backButton.isBordered = false
         backButton.controlSize = .small
-        backButton.font = .systemFont(ofSize: 11, weight: .medium)
+        backButton.font = StateLegend.Face.chrome(11, .medium)
         backButton.restingInk = StateLegend.Lens.chrome.color
 
         // Surfaced only once a transcription has run long enough to deserve them
@@ -5556,7 +5580,7 @@ final class StatusHUD: NSObject {
                                                #selector(retryTranscriptionTapped))
 
         hintLabel = NSTextField(labelWithString: "")
-        hintLabel.font = .systemFont(ofSize: 10)
+        hintLabel.font = StateLegend.Face.chrome(10)
         hintLabel.textColor = StateLegend.Lens.guidance.color
 
         // Quiet context actions keep the left edge; GO TO AGENT holds the
@@ -5596,7 +5620,11 @@ final class StatusHUD: NSObject {
         // and it is hidden with the label, so a face with no capture has no
         // orphan line across it.
         stripLabel = NSTextField(labelWithString: "")
-        stripLabel.font = .systemFont(ofSize: 11)
+        // Chrome: the strip is the machine reporting on itself — the mic, the
+        // transcription, the send. The readback rides it too, and mono is right
+        // for that as well: those words are about to be TYPED into a terminal,
+        // and this is the last look at them.
+        stripLabel.font = StateLegend.Face.chrome(11)
         stripLabel.textColor = StateLegend.Palette.hint
         stripLabel.maximumNumberOfLines = 2
         stripLabel.lineBreakMode = .byTruncatingHead
@@ -5990,7 +6018,7 @@ final class StatusHUD: NSObject {
                                 range: spokenRange)
         attributed.addAttribute(Self.spokenMark, value: true, range: spokenRange)
         attributed.addAttribute(
-            .font, value: NSFont.systemFont(ofSize: 12), range: full)
+            .font, value: StateLegend.Face.message(12), range: full)
         bodyLabel.attributedStringValue = attributed
 
         Permissions.log("highlight rendered bright=\(inkBrightLength)/\(full.length)")
@@ -6289,7 +6317,12 @@ private func placardText(
 func letterspaced(_ text: String, size: CGFloat, tracking: CGFloat,
                           color: NSColor, headIndent: CGFloat = 0) -> NSAttributedString {
     var attributes: [NSAttributedString.Key: Any] = [
-        .font: NSFont.systemFont(ofSize: size),
+        // Chrome, like everything else that names rather than says (ruled
+        // 18 Aug). This was the system font, which is why AGENTS and NEW AGENT
+        // read as visitors on a monospaced panel — the letterspacing was doing
+        // the work of looking deliberate while the face disagreed with every
+        // row beneath it.
+        .font: StateLegend.Face.chrome(size),
         .kern: tracking,
         .foregroundColor: color,
     ]
