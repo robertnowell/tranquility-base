@@ -393,6 +393,96 @@ The five independent booleans became `PanelState` + the stage arbiter
 Issues 5, 6 and 7 above were closed by exactly the mechanism this section promised.
 History: `docs/state-architecture.html`, `docs/3a-collapse.md`.
 
+## 18. A card came back with its own body highlighted — FIXED (18 Aug)
+
+Reported from a screenshot: a Speaking card, `✓ SENT`, and the whole body in a
+pale grey band nobody had dragged over. Two independent faults that read as one.
+
+**It selected itself.** `bodyLabel` is `isSelectable` so a line can be quoted
+out of a card by hand. A selectable `NSTextField` is also a valid key view, and
+a text field that becomes first responder selects ALL of its text — so the two
+faces that take the keyboard (the list, and settings→agents) handed it to
+whatever AppKit picked, which was this label. From then on the field editor
+stayed installed and every programmatic `stringValue` arrived pre-selected: a
+new turn's words landed already highlighted.
+
+Fixed by narrowing who may start a selection rather than by switching selection
+off (`CardBodyLabel`): first responder is refused unless the current event is a
+pointer press whose location is inside the label's own bounds. Keyboard
+traversal, the window's automatic pick, and a click anywhere else are all
+refused. A live selection is also dropped when the WORDS change — not on every
+repaint, because `paintInk` rewrites this label once per spoken word to advance
+the karaoke ink, and dropping a hand-made selection on a colour change is the
+same bug pointing the other way.
+
+**And it was unreadable when it did happen.** The panel pinned
+`NSAppearance(named: .aqua)` when the console was light putty, with a comment
+whose logic now argues the other way ("a dark-mode bezel sits on light putty
+looking like a hole"). The console went dark on 09 Aug and the pin did not
+follow, so every AppKit-drawn thing on the panel has been dressed for a light
+ground on a dark one since. Measured on a non-key panel, which is every card
+face:
+
+| | selection band | text on it | contrast |
+|---|---|---|---|
+| `.aqua` (shipped) | `#DCDCDC` | `#C9C8BF` | **1.23:1** |
+| `.darkAqua` (fixed) | `#464646` | `#FFFFFF` | 9.44:1 |
+
+1.23:1 is below every floor in the palette — less readable than `faint`, which
+is ruled decorative and forbidden for text. Note also that
+`selectedTextAttributes` on the field editor does NOT reach this: measured, it
+is ignored entirely while the window is not key, which is why the fix is the
+appearance and not a colour.
+
+Evidence: `selectionDrill` in the launch self-tests.
+
+## 19. A callsign was minted that no voice can say — FIXED (18 Aug)
+
+"promotions stlth". STLTH is a vape brand spelled without vowels on purpose; it
+was the longest word in the topic, the distinctiveness heuristic is
+longest-word-wins, and minting freezes for the session's life. The 06 Aug ruling
+("callsigns exist to be SAID") had a de-hyphenating migration behind it and no
+gate, so the same failure came back through a different door.
+
+`Callsign.isSpeakable` is one condition — the word contains a vowel, `y`
+included — applied to the directory half, the topic half, and the raw-topic
+tie-break word. It is deliberately no cleverer: a consonant-run limit was the
+obvious second rule and fails on real English ("strengths" carries five in a
+row). Migration `v12_vowelless_callsigns` DELETES an offending row rather than
+rewriting it, which un-freezes the session so it re-mints through the gate; one
+row of 127 qualified.
+
+Note what the gate does not catch, on purpose: an initialism WITH a vowel
+("tvpa", "json") survives, because a voice can say it.
+
+## 20. Is the spoken callsign still earning its place? — OPEN, needs a ruling
+
+Raised 18 Aug alongside #19: "there's a deeper question of whether the spoken
+call sign is even useful anymore — we already have the voice and the name of the
+Claude Code session."
+
+The callsign has been losing surfaces for two weeks. It left the grid's right
+column on 12 Aug (an id answers "which tab is this" and a name does not) and the
+hub page on 16 Aug ("a SPOKEN name… on a page it read as a third identity
+competing with the two real ones"). The spoken HAIL died on 10 Aug. What is
+left is one job: the mechanical prefix `withCallsign` prepends to every
+announcement, and the Lexicon seed that lets the recogniser hear the name.
+
+Against keeping it: three identities for one session (title, id, callsign) and
+the panel already shows two of them.
+
+For keeping it: the announcement is the one channel with no panel in it, and
+`session_voice` assigns round-robin from a 14-voice roster — a voice identifies
+a session only while fewer than fourteen have spoken.
+
+The middle option, and the one worth measuring first: keep the prefix, drop the
+topic word, and speak the DIRECTORY word alone. It is a name the user chose, so
+it is speakable by construction and cannot be mis-minted; voice keeps saying
+which session and the prefix says which project; and the whole minting apparatus
+— candidates, collisions, Levenshtein, the freeze, both migrations — goes away.
+Its cost is that two sessions in one directory sound alike, which the corpus
+says is the common case (23 of 127 rows begin "promotions").
+
 ## 17. The canary leaves its Terminal window behind — CLOSED BY DECISION
 
 Reported 16 Aug with a screenshot: three windows piled up, each showing

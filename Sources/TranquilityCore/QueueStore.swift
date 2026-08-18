@@ -325,6 +325,32 @@ public final class QueueStore: Sendable {
             }
         }
 
+        // A callsign with a vowelless word in it was never sayable, and the
+        // freeze made that permanent — "promotions stlth" (STLTH is a brand
+        // spelled without vowels) sat frozen on a session for its whole life.
+        // The gate that stops it being minted is `Callsign.isSpeakable`; this
+        // clears the ones minted before the gate existed.
+        //
+        // DELETED rather than rewritten. A callsign is frozen because a name
+        // that drifts is not a name — but the freeze is only worth defending
+        // for a name that was valid to begin with, and there is no honest way
+        // to rewrite this one here: the topic it was minted from is a fact
+        // about a turn, not about the session, and the row does not carry it.
+        // Dropping the row un-freezes the session, so `withCallsign` mints it
+        // again at its next summary, through the gate. Until then the session
+        // is attributed by its directory word, which is what an unminted
+        // session has always used.
+        m.registerMigration("v12_vowelless_callsigns") { db in
+            for row in try Row.fetchAll(db, sql: "SELECT sessionId, callsign FROM session_callsign") {
+                let callsign: String = row["callsign"]
+                guard callsign.split(separator: " ")
+                    .contains(where: { !Callsign.isSpeakable(String($0)) })
+                else { continue }
+                try db.execute(sql: "DELETE FROM session_callsign WHERE sessionId = ?",
+                               arguments: [row["sessionId"] as String])
+            }
+        }
+
         return m
     }
 
