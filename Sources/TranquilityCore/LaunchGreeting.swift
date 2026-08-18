@@ -94,11 +94,16 @@ public enum LaunchGreeting {
     ///
     /// Idempotent through `promptId`: the launch that produced it is the prompt
     /// this turn answers, so a second call for the same session writes nothing.
+    /// `voice` is the voice the greeting was SPOKEN in, bound to the session
+    /// here so everything it says afterwards is the same person. The launcher
+    /// peeked at the rotation before it spoke; this is where that peek becomes
+    /// the assignment.
     @discardableResult
     public static func record(
-        sessionId: String, directory: String, line: String, tty: String? = nil,
-        store: QueueStore, at: Date = Date()
+        sessionId: String, directory: String, line: String, voice: String? = nil,
+        tty: String? = nil, store: QueueStore, at: Date = Date()
     ) throws -> Int64? {
+        if let voice { try store.assignVoice(voice, to: sessionId, at: at) }
         let event = QueuedEvent(
             createdAtMs: Int64(at.timeIntervalSince1970 * 1000),
             hookEvent: .stop,

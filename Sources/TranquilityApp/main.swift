@@ -3162,13 +3162,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `claude agents --json`: seconds of nothing, in answer to a button.
         // None of that is a precondition for asking the question, so none of it
         // is waited on. The session is attached underneath when it exists.
+        // The voice this agent is about to be given, asked for before it has an
+        // id to be given it under (ruled 18 Aug: "it should be the actual voice
+        // for the agent, not a temporary one-off"). The greeting used the app's
+        // own narrator, so a session introduced itself as one person and came
+        // back as another the first time you pressed ⌃⌥. The peek is bound to
+        // the session at registration, so the two cannot diverge.
+        let voice = (try? store?.nextVoiceInRotation(roster: VoiceRoster.load())) ?? nil
         if greet, hud.showGreeting(line: line, label: label) {
             // Through the greeting cache, which is what it is for: one fixed
             // sentence per voice, synthesized once and replayed from disk
             // forever after — no model call, no round trip, no waiting for a
             // brief that has not been written yet. Detached because the audio
             // is not the panel's business and the panel is already up.
-            Task.detached(priority: .userInitiated) { await GreetingCache.speak(line) }
+            Task.detached(priority: .userInitiated) {
+                await GreetingCache.speak(line, voiceId: voice)
+            }
         }
 
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -3221,7 +3230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // session's own first Stop supersedes. nil means the session
                 // already carries its greeting.
                 guard try LaunchGreeting.record(sessionId: sessionId, directory: dir,
-                                                line: line, tty: tty, store: store) != nil
+                                                line: line, voice: voice, tty: tty,
+                                                store: store) != nil
                 else { return }
                 Permissions.log("greeting: recorded for \(sessionId.prefix(8)) in \(dir)")
             } catch {
