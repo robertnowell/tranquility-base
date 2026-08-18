@@ -162,3 +162,43 @@ Drill: `gridWordIsCentred`, `cardKeepsTheWord`, `cardNoteOpens`,
 `cardNoteFitsThePanel`, `captureDropsTheWord`, and `wordSurvivesEveryFace` — the
 last asserted over the list of card faces rather than at one of them, because the
 regression this ruling is about is a NEW face quietly not inheriting the rule.
+
+## An agent has one voice, and the greeting is spoken in it
+
+Ruled 18 Aug, watching a launch:
+
+> "The voice used in that announcement is different than after I went back to the
+> grid and went to the agent again. First it was a woman, then it was a man. It
+> should be the actual voice for the agent, not a temporary one-off one."
+
+The greeting spoke through `GreetingCache`, which uses the app's own narrator
+voice; the session's durable voice is assigned round-robin at its first ask, which
+happened later, from the announcer. So a session introduced itself as one person
+and answered as another — the identity the whole cast exists to establish, broken
+at the one moment it is being formed.
+
+The fix runs the assignment backwards, because the greeting is spoken before the
+session has an id to be assigned under:
+
+1. The launcher **peeks** at the rotation (`nextVoiceInRotation`) and speaks the
+   greeting in that voice.
+2. When the session registers, `record(voice:)` **binds** that voice to the id
+   (`assignVoice`), in the same write as the greeting itself.
+
+The peek is the same arithmetic as the assignment, deliberately — two definitions
+of "next" is how a peek and an assignment come to disagree — and binding keeps the
+existing first-ask-wins rule, reached from the other direction.
+
+Two other things from the same look:
+
+- **GO TO AGENT raised every Terminal window.** The script said `activate`, which
+  is an app-level activation and does exactly that. Selecting the tab and
+  promoting its window to index 1 FIRST, then activating through
+  `NSRunningApplication.activate()` — without `.activateAllWindows` — brings the
+  agent's window forward and leaves the other nine where they were.
+- **The bottom line was cramped** under the last line of a card. The stack's 6pt
+  row gap is right between rows of the same kind and too tight under a message,
+  where what follows is not more of the message but the things you can do about
+  it. The action row carries a 6pt top inset now — the same air the panel gives
+  its own edges — measured by the drill to the WORD rather than to the row, since
+  the row's frame contains the inset that provides it.

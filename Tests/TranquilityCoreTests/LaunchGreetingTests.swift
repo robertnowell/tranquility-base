@@ -106,6 +106,46 @@ final class LaunchGreetingTests: XCTestCase {
         XCTAssertEqual(Set(try store.waitingSessions().map(\.sessionId)), ["s1", "s2"])
     }
 
+    // MARK: - The voice
+
+    /// The greeting speaks before the session exists, so it has to be able to
+    /// ask what voice that session is GOING to get — otherwise an agent
+    /// introduces itself as one person and answers as another.
+    func testTheGreetingIsSpokenInTheVoiceTheSessionKeeps() throws {
+        let roster = ["alice", "bob", "carla"]
+        let reserved = try XCTUnwrap(store.nextVoiceInRotation(roster: roster))
+        _ = try LaunchGreeting.record(sessionId: "s1", directory: "/tmp/one",
+                                      line: "a", voice: reserved, store: store)
+        // What the session answers in, from then on, through the ordinary door.
+        XCTAssertEqual(try store.voiceId(for: "s1", roster: roster), reserved)
+    }
+
+    /// The peek is the same arithmetic as the assignment, so the voice a launch
+    /// speaks in is the one the rotation would have handed out anyway.
+    func testThePeekMatchesTheRotation() throws {
+        let roster = ["alice", "bob", "carla"]
+        for i in 0..<5 {
+            let peeked = try XCTUnwrap(store.nextVoiceInRotation(roster: roster))
+            let assigned = try store.voiceId(for: "s\(i)", roster: roster)
+            XCTAssertEqual(peeked, assigned, "assignment #\(i + 1)")
+        }
+    }
+
+    /// First ask wins, reached from the other direction: a session that already
+    /// has a voice keeps it, whatever a later greeting believes.
+    func testAVoiceIsNeverReassigned() throws {
+        let roster = ["alice", "bob"]
+        let first = try XCTUnwrap(store.voiceId(for: "s1", roster: roster))
+        XCTAssertEqual(try store.assignVoice("bob", to: "s1"), first)
+        XCTAssertEqual(try store.voiceId(for: "s1", roster: roster), first)
+    }
+
+    /// No roster (no catalogue yet) is "the default voice", not a crash and not
+    /// a bogus assignment.
+    func testAnEmptyRosterReservesNothing() throws {
+        XCTAssertNil(try store.nextVoiceInRotation(roster: []))
+    }
+
     // MARK: - Waiting for the session to register
 
     func testRegistrationTakesTheFirstNewIdInTheLaunchedDirectory() {

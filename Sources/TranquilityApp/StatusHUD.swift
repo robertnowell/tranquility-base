@@ -3399,6 +3399,16 @@ final class StatusHUD: NSObject {
             sessionId: "cw", pid: 1, project: "projects", cwd: "/tmp")
         panel?.contentView?.layoutSubtreeIfNeeded()
         let cardKeepsTheWord = !cardControls.isHidden && !actionRow.isHidden
+        // Air under the last line of the card. Measured to the WORD rather than
+        // to the row: the row's frame includes the 6pt top inset that provides
+        // the air, so a frame-to-frame gap would report the stack's 6 and miss
+        // the point. Sibling geometry inside one settled layout pass, never the
+        // panel's own animating bounds — that mistake is recorded two drills up.
+        let stackBox = contentStack
+        let wordBox = stackBox.map { cardControls.convert(cardControls.bounds, to: $0) }
+            ?? .zero
+        let bodyBox = stackBox.map { bodyLabel.convert(bodyLabel.bounds, to: $0) } ?? .zero
+        let bottomLineAir = max(bodyBox.minY - wordBox.maxY, wordBox.minY - bodyBox.maxY)
         setControlsNote(open: true, above: actionRow)
         panel?.contentView?.layoutSubtreeIfNeeded()
         let cardNoteOpens = !controlsSticky.isHidden
@@ -3437,6 +3447,7 @@ final class StatusHUD: NSObject {
             ("footerIsTheLastRow", footerIsTheLastRow),
             ("gridWordIsCentred", gridWordIsCentred),
             ("cardKeepsTheWord", cardKeepsTheWord),
+            ("bottomLineHasAir", bottomLineAir >= 11.5),
             ("cardNoteOpens", cardNoteOpens),
             ("cardNoteFitsThePanel", cardNoteFitsThePanel),
             ("captureDropsTheWord", captureDropsTheWord),
@@ -3445,7 +3456,7 @@ final class StatusHUD: NSObject {
         Permissions.log("selftest controls: panelH \(heightShut)->\(heightOpen) "
                         + "noteW=\(noteWidth) column=\(column) "
                         + "lines=\(StateLegend.controlsNote.count) "
-                        + "floorGap=\(floorGap)")
+                        + "floorGap=\(floorGap) bottomLineAir=\(bottomLineAir)")
 
         SelfTest.report("strip", [
             ("dontSendKeepsTheMicShut", dontSendKeptMicShut),
@@ -5219,6 +5230,16 @@ final class StatusHUD: NSObject {
         actionRow = buttons
         buttons.orientation = .horizontal
         buttons.spacing = 12
+        // Air above the bottom line (ruled 18 Aug: "the controls seems a little
+        // too cramped relative to the text above"). The stack's own 6pt row gap
+        // is right between rows of the same kind — two labels, a rule and a
+        // label — and too tight under the last line of a card, where what
+        // follows is not more of the message but the things you can DO about
+        // it. Doubling it to 12 gives that row the same air the panel gives its
+        // own edges. Carried by the row rather than by custom spacing after the
+        // body, because the view above it differs by face and a hidden one
+        // takes its spacing with it.
+        buttons.edgeInsets = NSEdgeInsets(top: 6, left: 0, bottom: 0, right: 0)
         buttons.addView(openPageButton, in: .leading)
         buttons.addView(dontSendButton, in: .leading)
         buttons.addView(micSettingsButton, in: .leading)
