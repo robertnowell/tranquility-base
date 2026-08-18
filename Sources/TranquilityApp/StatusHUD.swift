@@ -4784,8 +4784,13 @@ final class StatusHUD: NSObject {
             // answers with the resting colour to say so.
             checks.append(("\(name)RestsBelowInk", resting != StateLegend.Palette.ink))
             checks.append(("\(name)StepsOnHover", hover != resting))
-            checks.append(("\(name)HoverClearsTheTextFloor",
-                           StateLegend.Measure.contrast(hover, StateLegend.Palette.surface) >= 4.5))
+            // Not a fixed floor — a hover owes what its rest owes (see
+            // `contrastFloors`). What it must never do is make a control
+            // HARDER to read at the moment somebody is pointing at it, and
+            // that is the invariant worth pinning.
+            checks.append(("\(name)HoverIsMoreLegibleThanRest",
+                           StateLegend.Measure.contrast(hover, StateLegend.Palette.surface)
+                           > StateLegend.Measure.contrast(resting, StateLegend.Palette.surface)))
             control.setHoveringForTesting(true)
             let lit = control.currentInkForTesting
             control.setHoveringForTesting(false)
