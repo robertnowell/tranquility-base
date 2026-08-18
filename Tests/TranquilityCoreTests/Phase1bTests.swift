@@ -387,9 +387,9 @@ final class Phase1bTests: XCTestCase {
         XCTAssertFalse(result.text.contains("a3f9c21b4e"))
     }
 
-    // MARK: - End to end: the spoken line opens with the callsign
+    // MARK: - End to end: the spoken line opens with the RECAP
 
-    func testAnnouncementOpensWithTheMintedCallsignExactlyOnce() async throws {
+    func testTheRecapOpensWithTheRecapAndTheModelsLabelIsStripped() async throws {
         let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("vd-p1b-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
@@ -435,22 +435,32 @@ final class Phase1bTests: XCTestCase {
         guard case .spoke(let announcement) = try await coordinator.announceNext() else {
             return XCTFail("expected an announcement")
         }
-        // Directory word "promotions", most distinctive topic word "refactor".
-        XCTAssertTrue(announcement.spoken.text.hasPrefix("promotions refactor: export"),
+        // The summariser writes "promotions: export pipeline fixed…" — the
+        // tuned prompt asks it to, and it complies most of the time. Nothing is
+        // prepended any more (ruled 18 Aug), but the label it wrote is still
+        // stripped: otherwise the recap opens with a prefix the MODEL chose,
+        // which is wrong on the miss (brand-substitution) and inconsistent on
+        // the hit.
+        XCTAssertTrue(announcement.spoken.text.hasPrefix("export pipeline fixed"),
                       "got: \(announcement.spoken.text)")
-        XCTAssertFalse(announcement.spoken.text.contains("promotions: promotions"),
-                       "a doubled prefix must be impossible")
-        XCTAssertEqual(try store.callsign(for: "sess-1"), "promotions refactor")
+        XCTAssertFalse(announcement.spoken.text.lowercased().contains("promotions"),
+                       "no label, the model's or ours")
 
-        // The callsign is frozen: a later turn with a different topic keeps it.
+        // And nothing is minted. The name is not merely unspoken — the mechanism
+        // that chose the second word (longest word in the topic, as a proxy for
+        // distinctiveness) is what produced "promotions stlth", and it does not
+        // run.
+        XCTAssertNil(try store.callsign(for: "sess-1"))
+
+        // A later turn is the same, with no name to inherit either way.
         _ = try store.insert(event: QueuedEvent(
             hookEvent: .stop, sessionId: "sess-1", promptId: "p2",
             cwd: "/tmp/promotions", lastAssistantMessage: "Now doing something else."))
         guard case .spoke(let second) = try await coordinator.announceNext() else {
             return XCTFail("expected a second announcement")
         }
-        XCTAssertTrue(second.spoken.text.hasPrefix("promotions refactor: "))
-        XCTAssertEqual(second.event.callsign, "promotions refactor",
-                       "exposed on WaitingSession for the UI")
+        XCTAssertTrue(second.spoken.text.hasPrefix("export pipeline fixed"),
+                      "got: \(second.spoken.text)")
+        XCTAssertNil(second.event.callsign)
     }
 }

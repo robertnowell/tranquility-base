@@ -215,6 +215,12 @@ public final class QueueStore: Sendable {
         // lifetime. Its own table rather than a column on events, because it is a
         // fact about the session, not about any one turn — and events are
         // append-only facts that never change.
+        //
+        // Nothing mints into it since 18 Aug (the spoken callsign is dead — see
+        // Coordinator.strippingModelLabels). The table and its rows stay: they
+        // still seed the recogniser's lexicon and still name a session in the
+        // grid until its tab has a title, and dropping a table is not how you
+        // keep a decision reversible.
         m.registerMigration("v4_session_callsign") { db in
             try db.create(table: "session_callsign") { t in
                 t.column("sessionId", .text).primaryKey()
@@ -336,10 +342,15 @@ public final class QueueStore: Sendable {
         // for a name that was valid to begin with, and there is no honest way
         // to rewrite this one here: the topic it was minted from is a fact
         // about a turn, not about the session, and the row does not carry it.
-        // Dropping the row un-freezes the session, so `withCallsign` mints it
-        // again at its next summary, through the gate. Until then the session
-        // is attributed by its directory word, which is what an unminted
-        // session has always used.
+        // Dropping the row un-freezes the session, so it mints again at its
+        // next summary, through the gate.
+        //
+        // Written hours before the spoken callsign was dropped altogether
+        // (18 Aug, Coordinator.strippingModelLabels), which makes this a
+        // tidy-up rather than a repair: nothing says these names out loud any
+        // more. It stays because the stored name still seeds the recogniser's
+        // lexicon and still shows in the grid for a session whose tab has no
+        // title yet, and an unsayable name is no better in a lexicon.
         m.registerMigration("v12_vowelless_callsigns") { db in
             for row in try Row.fetchAll(db, sql: "SELECT sessionId, callsign FROM session_callsign") {
                 let callsign: String = row["callsign"]
