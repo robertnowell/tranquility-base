@@ -25,6 +25,11 @@ config.local.json
 *.sqlite-shm
 *.jsonl
 *.wav
+# ...except the earcon set, which is source, not output. `*.wav` above exists
+# because the app WRITES recordings; these four are shipped assets that
+# scripts/bundle.sh copies into the .app. Without this negation they can only be
+# committed with `git add -f`, and a later edit to one would be silently ignored.
+!Resources/Sounds/*.wav
 *.caf
 
 # Replay corpus. The same rule as above, one step downstream: `*.jsonl` keeps
