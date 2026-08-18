@@ -455,33 +455,30 @@ row of 127 qualified.
 Note what the gate does not catch, on purpose: an initialism WITH a vowel
 ("tvpa", "json") survives, because a voice can say it.
 
-## 20. Is the spoken callsign still earning its place? — OPEN, needs a ruling
+## 20. Is the spoken callsign still earning its place? — CLOSED: no (18 Aug)
 
-Raised 18 Aug alongside #19: "there's a deeper question of whether the spoken
-call sign is even useful anymore — we already have the voice and the name of the
-Claude Code session."
+Ruled the same day it was raised: it is not. See
+`docs/ruling-the-recap-starts-with-the-recap.md`.
 
-The callsign has been losing surfaces for two weeks. It left the grid's right
-column on 12 Aug (an id answers "which tab is this" and a name does not) and the
-hub page on 16 Aug ("a SPOKEN name… on a page it read as a third identity
-competing with the two real ones"). The spoken HAIL died on 10 Aug. What is
-left is one job: the mechanical prefix `withCallsign` prepends to every
-announcement, and the Lexicon seed that lets the recogniser hear the name.
+Both halves failed on measurement. The project half names nothing — 23 of 127
+minted signs begin "promotions", because that is where the work is — and the
+voice already says who: `session_voice` assigns round-robin from a 14-voice
+roster and fewer than fourteen sessions are ever live at once.
 
-Against keeping it: three identities for one session (title, id, callsign) and
-the panel already shows two of them.
+The topic half turned out to have no chooser at all: the model writes a topic
+sentence and `candidateTopicWords` takes the LONGEST word in it, ties broken by
+position, as a proxy for distinctiveness. That is "promotions stlth". The vowel
+gate from issue 19 does not rescue it — it admits `b6y9z` and it admits
+`stealthy` — and the ruling records why: **for a model-shaped failure the answer
+is usually context, not a gate.** Asking for a name, told it will be spoken,
+would have worked; mining prose for its longest token could not. Neither is
+worth building for a name nobody hears.
 
-For keeping it: the announcement is the one channel with no panel in it, and
-`session_voice` assigns round-robin from a 14-voice roster — a voice identifies
-a session only while fewer than fourteen have spoken.
-
-The middle option, and the one worth measuring first: keep the prefix, drop the
-topic word, and speak the DIRECTORY word alone. It is a name the user chose, so
-it is speakable by construction and cannot be mis-minted; voice keeps saying
-which session and the prefix says which project; and the whole minting apparatus
-— candidates, collisions, Levenshtein, the freeze, both migrations — goes away.
-Its cost is that two sessions in one directory sound alike, which the corpus
-says is the common case (23 of 127 rows begin "promotions").
+`withCallsign` → `strippingModelLabels`: the prepend is gone, the strip stays and
+is now the whole job (the model opens with a label 65 turns in 71, and picks the
+wrong one on the miss). Minting no longer runs. Nothing is deleted — the table,
+its rows, the lexicon seed, the grid's tab-less fallback and `hailText` all
+stand, so bringing it back is one function.
 
 ## 17. The canary leaves its Terminal window behind — CLOSED BY DECISION
 
