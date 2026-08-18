@@ -473,13 +473,30 @@ public struct SpokenTextSanitizer: Sendable {
         _ labels: [String], from segments: [SpokenSegment]
     ) -> [SpokenSegment] {
         guard let first = segments.first, !first.isRedacted else { return segments }
+        // Put back the space this segment ENDS on.
+        //
+        // `strippingLabelPrefixes` trims the whole string, which is correct for
+        // a whole string and wrong for a SEGMENT: the trailing space is not
+        // padding, it is the boundary between this piece and the next one, and
+        // dropping it welds the last word onto whatever follows —
+        // "promotions: Fixed dispatchAttempts" came out as
+        // "FixeddispatchAttempts" on the card and "Fixeda variable" in the ear.
+        //
+        // It fired with NO label to strip, too, which is why it looked
+        // intermittent rather than tied to the prefix: trimming alone made
+        // `stripped` differ from the original, so the segment was rewritten
+        // (and shortened) on any first piece that ended in a space. The guard
+        // below now compares against the RESTORED string, so a segment that
+        // only lost whitespace is left exactly as it was.
+        let gap = first.display.last?.isWhitespace == true ? " " : ""
         let stripped = Callsign.strippingLabelPrefixes(first.display, labels: labels)
-        guard stripped != first.display else { return segments }
+        let restored = stripped.isEmpty ? "" : stripped + gap
+        guard restored != first.display else { return segments }
         var out = segments
-        if stripped.isEmpty {
+        if restored.isEmpty {
             out.removeFirst()
         } else {
-            out[0] = .verbatim(stripped)
+            out[0] = .verbatim(restored)
         }
         return out
     }
