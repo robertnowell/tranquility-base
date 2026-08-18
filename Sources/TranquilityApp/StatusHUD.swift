@@ -3383,10 +3383,15 @@ final class StatusHUD: NSObject {
         let pillAnswersTheCursor = stateLabel.isADoor
             && firstColour(pillHovered) != firstColour(pillResting)
             && firstColour(pillRestored) == firstColour(pillResting)
+        // Through the button's own hover seam, not a cast to a class it is not.
+        // The first version of this claim cast `goButton` to a type that had
+        // never been in the tree — the panel already had `ConsoleButton` with an
+        // ink ramp, written in parallel — so the cast produced nil, the hover
+        // never ran, and the drill failed on its first deploy. It was right to.
         let goResting = goButton.attributedTitle
-        (goButton as? DoorButton)?.setHovered(true)
+        goButton.setHovered(true)
         let goHovered = goButton.attributedTitle
-        (goButton as? DoorButton)?.setHovered(false)
+        goButton.setHovered(false)
         let doorAnswersTheCursor = firstColour(goHovered) != firstColour(goResting)
             && firstColour(goButton.attributedTitle) == firstColour(goResting)
         // And the grid strip does NOT: it names a face, it is not a control.
@@ -6593,64 +6598,6 @@ final class DropOverlayView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// A word that is a button. Same idiom as the pill and the placard words: it
-/// brightens under the cursor and takes the pointing hand, because the panel has
-/// exactly one way of saying "this is a control" and a lozenge is not it.
-final class DoorButton: NSButton {
-    private var restingTitle: NSAttributedString?
-    private var restingTint: NSColor?
-
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        guard isEnabled, !isHidden else { return }
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(
-            rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
-            owner: self, userInfo: nil))
-    }
-
-    override func mouseEntered(with event: NSEvent) { setHovered(true) }
-    override func mouseExited(with event: NSEvent) { setHovered(false) }
-
-    func setHovered(_ hovered: Bool) {
-        if hovered {
-            if attributedTitle.length > 0, restingTitle == nil {
-                restingTitle = attributedTitle
-                attributedTitle = StatusHUD.lifting(attributedTitle)
-            } else if restingTint == nil, let tint = contentTintColor {
-                restingTint = tint
-                contentTintColor = StateLegend.Palette.lifted(tint)
-            }
-        } else {
-            if let restingTitle { attributedTitle = restingTitle }
-            if let restingTint { contentTintColor = restingTint }
-            restingTitle = nil; restingTint = nil
-        }
-    }
-}
-
-extension StatusHUD {
-    /// Every run of an attributed string, one tier brighter.
-    ///
-    /// The panel's hover idiom in one function, so the pill, the placard halves
-    /// and the doors cannot drift into three versions of "brighter".
-    static func lifting(_ text: NSAttributedString) -> NSAttributedString {
-        let out = NSMutableAttributedString(attributedString: text)
-        out.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: out.length)) {
-            value, range, _ in
-            let colour = (value as? NSColor) ?? StateLegend.Palette.hint
-            out.addAttribute(.foregroundColor, value: StateLegend.Palette.lifted(colour),
-                             range: range)
-        }
-        return out
-    }
-}
-
 private final class DoorLabel: NSTextField {
     var isADoor = false {
         didSet {
@@ -6697,7 +6644,7 @@ private final class DoorLabel: NSTextField {
         guard isADoor, resting == nil else { return }
         let current = attributedStringValue
         resting = current
-        attributedStringValue = StatusHUD.lifting(current)
+        attributedStringValue = StateLegend.hoveredInk(current)
     }
 
     private func unlift() {
@@ -6825,6 +6772,10 @@ final class ConsoleButton: NSButton {
     private var hovering = false {
         didSet { guard hovering != oldValue else { return }; paintInk() }
     }
+
+    /// The hover, without a mouse. `mouseEntered` takes an NSEvent no drill can
+    /// post, and the panel's only coverage is drills.
+    func setHovered(_ hovered: Bool) { hovering = hovered }
 
     /// A hidden button gets no hover events, so a button hidden while the
     /// pointer is on it would come back lit. Faces swap buttons constantly.
