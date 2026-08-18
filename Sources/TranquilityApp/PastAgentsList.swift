@@ -606,8 +606,8 @@ private final class PlacardHalf: NSControl {
             owner: self, userInfo: nil))
     }
     override func mouseEntered(with event: NSEvent) {
-        mark.attributedStringValue = StatusHUD.lifting(resting[0])
-        label.attributedStringValue = StatusHUD.lifting(resting[1])
+        mark.attributedStringValue = StateLegend.hoveredInk(resting[0])
+        label.attributedStringValue = StateLegend.hoveredInk(resting[1])
     }
     override func mouseExited(with event: NSEvent) {
         mark.attributedStringValue = resting[0]

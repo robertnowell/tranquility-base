@@ -135,24 +135,6 @@ enum StateLegend {
         /// ground: on putty a hover went darker, on housing it goes lighter.
         static let hover = hex(0x343631)
 
-        /// A word under the cursor, one tier brighter — the panel's ONE hover
-        /// idiom for text (ruled 18 Aug).
-        ///
-        /// Toward `ink` rather than to it, so the hue survives: an amber pill
-        /// hovers to a brighter amber and stays a caution, where painting it
-        /// full ink would drop the one colour that carries the meaning. 35% is
-        /// the same visible step the Controls word already had from `hint` to
-        /// `ink`, applied to every other tier by arithmetic instead of by a
-        /// second constant.
-        ///
-        /// Not a literal, and it does not need to be: it is defined here, in
-        /// the file that owns every colour, and derived from a palette colour
-        /// at both ends.
-        static func lifted(_ color: NSColor) -> NSColor {
-            guard let from = color.usingColorSpace(.sRGB),
-                  let to = ink.usingColorSpace(.sRGB) else { return color }
-            return from.blended(withFraction: 0.35, of: to) ?? color
-        }
         /// The quiet lamp's fill — an unlit socket, 1.45:1. Not a compromise:
         /// dark-cockpit doctrine says the panel is dark when all is nominal and
         /// a lit lamp always means deviation. On this ground that falls out of
@@ -240,6 +222,27 @@ enum StateLegend {
         guard let step = inkRamp.firstIndex(of: resting), step + 1 < inkRamp.count
         else { return resting }
         return inkRamp[step + 1]
+    }
+
+    /// Every run of an attributed string, one step up the ink ramp.
+    ///
+    /// The string form of `hovered(_:)`, for the two hover targets that carry
+    /// attributed text rather than a tint: the state pill (whose mark and word
+    /// are separate runs, and whose amber must stay amber) and the placard
+    /// words. `ConsoleButton` reaches the same ramp through `restingInk`.
+    ///
+    /// One ramp, deliberately. A second one shipped here for half an hour on
+    /// 18 Aug — a 35%-toward-ink blend, written in parallel with this file's
+    /// discrete steps by a session that had not seen them — and two definitions
+    /// of "one step brighter" is precisely the drift the ramp exists to stop.
+    static func hoveredInk(_ text: NSAttributedString) -> NSAttributedString {
+        let out = NSMutableAttributedString(attributedString: text)
+        out.enumerateAttribute(.foregroundColor,
+                               in: NSRange(location: 0, length: out.length)) { value, range, _ in
+            let colour = (value as? NSColor) ?? Palette.hint
+            out.addAttribute(.foregroundColor, value: hovered(colour), range: range)
+        }
+        return out
     }
 
     // MARK: - The palette's own evidence
