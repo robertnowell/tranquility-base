@@ -36,6 +36,10 @@ final class LaunchGreetingTests: XCTestCase {
         }
     }
 
+    private func resolved(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    }
+
     private func live(_ id: String, cwd: String) -> LiveSession {
         LiveSession(pid: 1, sessionId: id, cwd: cwd, status: nil, name: nil, waitingFor: nil)
     }
@@ -75,13 +79,55 @@ final class LaunchGreetingTests: XCTestCase {
         }
     }
 
+    /// The bug that shipped: a greeting with no transcript path is a reply that
+    /// can never be confirmed, because delivery is verified by watching our own
+    /// text appear in the transcript. The first message to a new agent landed
+    /// correctly and reported "couldn't confirm it landed."
+    func testTheGreetingCarriesTheTranscriptSoAReplyCanBeVerified() throws {
+        let projects = tmpDir.appendingPathComponent("projects", isDirectory: true)
+        let project = projects.appendingPathComponent("-Users-x-Projects-kopi")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let transcript = project.appendingPathComponent("s1.jsonl")
+        try Data("{}\n".utf8).write(to: transcript)
+
+        _ = try LaunchGreeting.record(sessionId: "s1", directory: "/Users/x/Projects/kopi",
+                                      line: "a", store: store, projects: projects)
+        let waiting = try XCTUnwrap(store.waitingSessions().first)
+        // Resolved on both sides: the temp directory is reached through a
+        // symlink (/var -> /private/var) and the scan returns the real path.
+        XCTAssertEqual(waiting.transcriptPath.map(resolved), resolved(transcript.path))
+    }
+
+    /// Found by id rather than derived from the cwd: the directory name is
+    /// somebody else's encoding of a path, and reproducing it here is a copy
+    /// that fails silently the day it changes.
+    func testTheTranscriptIsFoundByIdAcrossProjects() throws {
+        let projects = tmpDir.appendingPathComponent("projects", isDirectory: true)
+        for name in ["-Users-x-one", "-Users-x-two"] {
+            try FileManager.default.createDirectory(
+                at: projects.appendingPathComponent(name), withIntermediateDirectories: true)
+        }
+        let wanted = projects.appendingPathComponent("-Users-x-two/abc.jsonl")
+        try Data("{}\n".utf8).write(to: wanted)
+        XCTAssertEqual(
+            TranscriptArchive.transcriptPath(forSessionId: "abc", projects: projects)
+                .map(resolved),
+            resolved(wanted.path))
+        // A session that has registered but not yet written a line is a real
+        // state, and nil is the honest answer — the dispatch path resolves it
+        // again at send time.
+        XCTAssertNil(
+            TranscriptArchive.transcriptPath(forSessionId: "nope", projects: projects))
+    }
+
     /// The greeting is the app talking about the session, never to it.
     func testGreetingFabricatesNoTranscript() throws {
         let rowid = try XCTUnwrap(LaunchGreeting.record(
             sessionId: "s1", directory: "/Users/x/Projects/kopi",
             line: LaunchGreeting.lines[0], store: store))
         let event = try XCTUnwrap(store.events().first { $0.sessionId == "s1" })
-        XCTAssertNil(event.transcriptPath)
+        // The transcript is POINTED at, never written to: the greeting puts no
+        // words in the session's mouth and none in its file.
         XCTAssertNil(event.lastAssistantMessage)
         XCTAssertNil(event.summaryText)
         XCTAssertEqual(try store.storedBrief(sessionId: "s1", eventRowid: rowid)?.sessionId, "s1")

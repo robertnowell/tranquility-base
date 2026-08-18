@@ -101,7 +101,8 @@ public enum LaunchGreeting {
     @discardableResult
     public static func record(
         sessionId: String, directory: String, line: String, voice: String? = nil,
-        tty: String? = nil, store: QueueStore, at: Date = Date()
+        tty: String? = nil, store: QueueStore, at: Date = Date(),
+        projects: URL = TranscriptArchive.projectsDirectory
     ) throws -> Int64? {
         if let voice { try store.assignVoice(voice, to: sessionId, at: at) }
         let event = QueuedEvent(
@@ -110,11 +111,24 @@ public enum LaunchGreeting {
             sessionId: sessionId,
             promptId: "greeting:\(sessionId)",
             cwd: directory,
-            // No transcript path. The file exists but has nothing in it yet, and
-            // the two readers of this field — the headless filter and the ladder
-            // — both do the right thing with nil: the filter fails open, and
-            // there are no rungs to walk on a turn that has not happened.
-            transcriptPath: nil,
+            // The transcript, found by session id.
+            //
+            // This was nil, with a comment reasoning that the two readers of the
+            // field both do the right thing with nothing — the headless filter
+            // fails open, and a turn that has not happened has no ladder rungs
+            // to walk. Both true, and both beside the point: there is a THIRD
+            // reader, and it is the one that matters. Delivery is confirmed by
+            // watching our own text appear in the transcript, so an event with
+            // no transcript cannot be confirmed, and the first reply to a new
+            // agent — the entire feature — landed correctly and then reported
+            // "typed it into Projects, but couldn't confirm it landed."
+            //
+            // Still nil-tolerant everywhere: a session registers a beat before
+            // its first line hits disk, so this can legitimately come back
+            // empty, and `Coordinator.dispatch` resolves it again at send time
+            // rather than trusting a row written seconds earlier.
+            transcriptPath: TranscriptArchive.transcriptPath(forSessionId: sessionId,
+                                                             projects: projects),
             tty: tty)
         return try store.insert(event: event, brief: brief(line: line),
                                 provider: provider, at: at)
