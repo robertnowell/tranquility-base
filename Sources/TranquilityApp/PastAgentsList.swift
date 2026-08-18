@@ -583,7 +583,17 @@ private final class PlacardHalf: NSControl {
 
         addSubview(mark); addSubview(label)
         NSLayoutConstraint.activate([
-            mark.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // Not a plain centerY: that centres two FRAMES, and a mark's ink
+            // sits differently inside its box than a capital does inside
+            // theirs. The offset is measured — see `ChromeType.capLineOffset`.
+            // The mark keeps its own view here because the 20pt gutter lines up
+            // with the grid's lamp column, which a merged string would lose.
+            mark.centerYAnchor.constraint(
+                equalTo: centerYAnchor,
+                constant: -ChromeType.capLineOffset(
+                    mark: Character(glyph),
+                    markFont: ChromeType.mono(ofSize: 12, weight: .regular),
+                    textFont: ChromeType.mono(ofSize: 9.5, weight: .regular))),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         // The glyph keeps the lamp column's 20pt offset from the label either
