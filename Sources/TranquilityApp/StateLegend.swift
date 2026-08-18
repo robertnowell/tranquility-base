@@ -654,10 +654,20 @@ enum StateLegend {
     /// cleanup" by deleting `Bindings.dismiss` re-opens a bug that was closed
     /// on purpose; the honest prerequisite is showing Cancel from the first
     /// second.
+    /// Each key is named as well as drawn (ruled 18 Aug). The glyphs are what
+    /// is printed on the keyboard and the names are what people call them, and
+    /// only one of those two can be READ by someone who has not already learned
+    /// the other: ⌃ is widely taken for a caret and ⌥ for a decoration, so a
+    /// note whose entire job is teaching three gestures was spelling them in the
+    /// alphabet you need the note to learn. Every shortcut UI that works does
+    /// this — Wispr Flow prints "^ Ctrl" and "⌘ Cmd" in its key caps — and the
+    /// name costs one word on a line that had room for it. `⌃⌃` becomes "twice"
+    /// rather than a doubled glyph for the same reason: the repetition was
+    /// carrying the meaning "tap it twice" and nothing said so.
     static let controlsNote: [(chord: String, meaning: String)] = [
-        ("⌃⌥", "hear the next agent update"),
-        ("hold ⌥", "speak"),
-        ("⌃⌃", "hear more"),
+        ("⌃ Ctrl + ⌥ Option", "hear the next agent update"),
+        ("hold ⌥ Option", "speak"),
+        ("⌃ Ctrl twice", "hear more"),
     ]
 
     /// The panel signs its own bottom-right corner (ruled 10 Aug: "subtle but

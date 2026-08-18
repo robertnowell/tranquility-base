@@ -667,6 +667,7 @@ final class StatusHUD: NSObject {
     func note(_ message: String) {
         hintLabel.stringValue = [message, hintLabel.stringValue]
             .filter { !$0.isEmpty }.joined(separator: "\n")
+        syncHintVisibility()
         if let panel { resizeToFit(panel); position(panel) }
     }
 
@@ -1777,6 +1778,8 @@ final class StatusHUD: NSObject {
         // slow-transcription tick unhides its own actions later and re-runs
         // this.)
         updateActionRowVisibility()
+        // And the same rule for the line under it: an empty hint is not a line.
+        syncHintVisibility()
 
         Permissions.log("HUD.render state=\(state.name) title=\(titleLabel.stringValue)")
         resizeToFit(panel)
@@ -1935,6 +1938,21 @@ final class StatusHUD: NSObject {
                               cancelTranscriptionButton, retryTranscriptionButton]
             .allSatisfy { $0?.isHidden ?? true }
         if let panel { resizeToFit(panel); position(panel) }
+    }
+
+    /// A hint with no words is not a line, and a label that says nothing still
+    /// bills the face for one.
+    ///
+    /// `NSStackView` detaches HIDDEN views and only hidden ones, so an empty
+    /// `hintLabel` costs its full line height plus the stack's 6pt spacing on
+    /// every face that has no hint to give — most of them, and the grid is one.
+    /// That is the ~19pt of dead air under the footer: the bottom line read as
+    /// floating above the panel's floor instead of resting on the 12pt inset
+    /// every other edge uses. Called from both writers of the text — render()'s
+    /// arms and `note()` — so the two can never disagree about whether the line
+    /// exists.
+    private func syncHintVisibility() {
+        hintLabel.isHidden = hintLabel.stringValue.isEmpty
     }
 
     /// The grid's content width: the 380 panel minus the stack's 14pt insets.
@@ -3217,6 +3235,19 @@ final class StatusHUD: NSObject {
         ])
         panel?.contentView?.layoutSubtreeIfNeeded()
         let footerOnGrid = !gridFooter.isHidden
+        // The bottom line sits ON the floor. The grid has no hint to give, and
+        // an empty `hintLabel` is still a laid-out line — it and the stack's
+        // spacing put ~19pt of nothing under the footer, which read as the
+        // wordmark and Controls floating rather than resting on the panel's
+        // own 12pt inset. Measured to the nearest content edge rather than
+        // assuming which way y runs: the footer is the last visible thing on
+        // this face, so the near edge is the floor by construction.
+        let hintIsNotALine = hintLabel.isHidden
+        let contentBox = panel?.contentView?.bounds ?? .zero
+        let footerBox = panel?.contentView
+            .map { gridFooter.convert(gridFooter.bounds, to: $0) } ?? .zero
+        let floorGap = min(footerBox.minY - contentBox.minY,
+                           contentBox.maxY - footerBox.maxY)
         let heightShut = panel?.frame.height ?? 0
         setControlsNote(open: true)
         panel?.contentView?.layoutSubtreeIfNeeded()
@@ -3232,10 +3263,13 @@ final class StatusHUD: NSObject {
             ("noReflow", heightOpen == heightShut),
             ("noteFitsColumn", noteWidth > 0 && noteWidth <= column),
             ("closedOnLeave", closedOnLeave),
+            ("hintIsNotALine", hintIsNotALine),
+            ("footerSitsOnTheFloor", floorGap >= 0 && floorGap <= 16),
         ])
         Permissions.log("selftest controls: panelH \(heightShut)->\(heightOpen) "
                         + "noteW=\(noteWidth) column=\(column) "
-                        + "lines=\(StateLegend.controlsNote.count)")
+                        + "lines=\(StateLegend.controlsNote.count) "
+                        + "floorGap=\(floorGap)")
 
         SelfTest.report("strip", [
             ("dontSendKeepsTheMicShut", dontSendKeptMicShut),
