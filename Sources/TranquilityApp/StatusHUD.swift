@@ -237,6 +237,9 @@ final class StatusHUD: NSObject {
     /// hub fresh before opening it, and the write needs the store the panel
     /// deliberately does not hold.
     var onOpenHub: ((String) -> Void)?
+    /// The signature in the grid's bottom-right corner. Not per-agent like the
+    /// doors above it — this one is the project.
+    var onOpenRepository: (() -> Void)?
     /// Wired by the app onto the workspace's focus-or-open call.
     var onOpenReport: ((String) -> Void)?
 
@@ -3562,6 +3565,27 @@ final class StatusHUD: NSObject {
         // every face that has it, and on a card both edges are already spent.
         let gridWordIsCentred = abs(
             gridFooter.controls.frame.midX - gridFooter.frame.width / 2) < 1
+        // The signature is a door (18 Aug). Three things, because they fail
+        // separately: it says so, it answers the pointer, and the tap reaches
+        // the host — a door wired to nothing is the same secret as a door with
+        // no cursor, one layer further in.
+        let signatureIsADoor = gridFooter.mark.isADoor
+        let signatureResting = gridFooter.mark.attributedStringValue
+        gridFooter.mark.setHovered(true)
+        let signatureHovered = gridFooter.mark.attributedStringValue
+        gridFooter.mark.setHovered(false)
+        func firstInk(_ text: NSAttributedString) -> NSColor? {
+            text.length == 0 ? nil
+                : text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        }
+        let signatureAnswersTheCursor =
+            firstInk(signatureHovered) != firstInk(signatureResting)
+            && firstInk(gridFooter.mark.attributedStringValue) == firstInk(signatureResting)
+        var signatureTapped = false
+        let priorRepository = onOpenRepository
+        onOpenRepository = { signatureTapped = true }
+        gridFooter.onWordmark?()
+        onOpenRepository = priorRepository
         let heightShut = panel?.frame.height ?? 0
         setControlsNote(open: true, above: gridFooter)
         panel?.contentView?.layoutSubtreeIfNeeded()
@@ -3647,6 +3671,9 @@ final class StatusHUD: NSObject {
             ("hintIsNotALine", hintIsNotALine),
             ("footerIsTheLastRow", footerIsTheLastRow),
             ("gridWordIsCentred", gridWordIsCentred),
+            ("signatureIsADoor", signatureIsADoor),
+            ("signatureAnswersTheCursor", signatureAnswersTheCursor),
+            ("signatureReachesTheHost", signatureTapped),
             ("cardKeepsTheWord", cardKeepsTheWord),
             ("oneLexicon", oneLexicon),
             ("bottomLineHasAir", bottomLineAir >= 11.5),
@@ -5667,6 +5694,7 @@ final class StatusHUD: NSObject {
             guard let self else { return }
             setControlsNote(open: hovering, above: gridFooter)
         }
+        gridFooter.onWordmark = { [weak self] in self?.onOpenRepository?() }
         cardControls.onHover = { [weak self] hovering in
             guard let self else { return }
             setControlsNote(open: hovering, above: actionRow)
@@ -7339,9 +7367,16 @@ private final class GridFooterView: NSView {
 
     /// True on enter, false on exit — for `Controls` only.
     var onControlsHover: ((Bool) -> Void)?
+    /// The signature was tapped. The panel's one door to the project itself
+    /// rather than to an agent.
+    var onWordmark: (() -> Void)?
     /// The hover target, exposed so the note can be hung above the row that
     /// actually owns the word rather than above a hard-coded one.
     let controls = ControlsWordView()
+    /// The signature, exposed for the same reason `controls` is: a door that
+    /// silently stops being a door is the failure this panel keeps having, and
+    /// a drill cannot assert what it cannot reach.
+    let mark = DoorLabel(labelWithString: "")
 
     init(width: CGFloat) {
         super.init(frame: .zero)
@@ -7349,8 +7384,14 @@ private final class GridFooterView: NSView {
 
         controls.onHover = { [weak self] in self?.onControlsHover?($0) }
 
-        let mark = NSTextField(labelWithString: "")
+        // A `DoorLabel` rather than a label, so the signature answers the
+        // pointer the way everything else on the panel does — the cursor says
+        // it is a control, the ink says the pointer is on it. Both come with
+        // the type; all this has to declare is that it IS a door.
         mark.attributedStringValue = StateLegend.BottomLine.quiet(StateLegend.wordmark)
+        mark.isADoor = true
+        mark.addGestureRecognizer(
+            NSClickGestureRecognizer(target: self, action: #selector(wordmarkTapped)))
         mark.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(controls); addSubview(mark)
@@ -7364,6 +7405,8 @@ private final class GridFooterView: NSView {
             mark.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
+
+    @objc private func wordmarkTapped() { onWordmark?() }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
