@@ -25,6 +25,53 @@ import CoreText
 /// and it is a number the drill can check.
 enum ChromeType {
 
+    // MARK: - The chrome face
+
+    /// The monospaced face the whole panel is set in.
+    ///
+    /// Berkeley Mono when the machine has it, the system's monospaced face
+    /// otherwise — and **the font is never shipped with the app**. Its licence
+    /// does not permit redistribution and the vendor's commercial tiers are
+    /// explicitly not compatible with open-source applications, so the repo
+    /// carries no font file and installs nothing. This is the same courtesy a
+    /// terminal extends: if you have licensed it and installed it, your tools
+    /// use it; if you have not, nothing is missing.
+    ///
+    /// Nothing else in the panel needs to know. Every measurement that matters
+    /// — the cap band, each mark's ink, the size a mark has to be to match it —
+    /// is taken from the face at runtime (see `inkMetrics`), so a face with a
+    /// different cap height, a different set of marks and a different weight
+    /// ladder lands correctly without a single constant changing.
+    ///
+    /// `TB_MONO=system` forces the system face, for comparing the two.
+    static func mono(ofSize size: CGFloat, weight: NSFont.Weight) -> NSFont {
+        guard let family = preferredFamily else {
+            return .monospacedSystemFont(ofSize: size, weight: weight)
+        }
+        // Berkeley Mono ships Regular and Bold and nothing between, so the
+        // panel's five weights land on two. Medium stays REGULAR rather than
+        // rounding up: the panel spends weight on one distinction only — a door
+        // versus a word — and it already spends ink on the same one. Rounding
+        // medium to bold would put half the chrome in bold and leave the
+        // hierarchy carried by nothing.
+        let bold = weight.rawValue >= NSFont.Weight.semibold.rawValue
+        let name = bold ? "BerkeleyMono-Bold" : "BerkeleyMono-Regular"
+        return NSFont(name: name, size: size)
+            ?? NSFontManager.shared.font(withFamily: family,
+                                         traits: bold ? .boldFontMask : [],
+                                         weight: bold ? 9 : 5, size: size)
+            ?? .monospacedSystemFont(ofSize: size, weight: weight)
+    }
+
+    /// Resolved once. A font lookup per label per render is a subprocess-free
+    /// but not free thing, and the answer cannot change while the app runs.
+    static let preferredFamily: String? = {
+        guard ProcessInfo.processInfo.environment["TB_MONO"] != "system" else { return nil }
+        let wanted = "Berkeley Mono"
+        guard NSFont(name: "BerkeleyMono-Regular", size: 10) != nil else { return nil }
+        return wanted
+    }()
+
     /// The font CoreText will actually use to draw this character.
     static func resolvedFont(for ch: Character, in font: NSFont) -> NSFont {
         let s = String(ch) as NSString
