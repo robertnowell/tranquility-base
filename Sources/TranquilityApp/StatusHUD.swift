@@ -56,6 +56,13 @@ final class StatusHUD: NSObject {
     /// the grid up and resize the panel on a mouse-over, which is the same
     /// reflow-on-hover the collapsed strip forbids, for the same reason.
     private var controlsSticky: ControlsNoteView!
+    /// The card's copy of the word, in the middle of the action row. The grid's
+    /// copy lives in its footer; both drive `setControlsNote(open:above:)`, so
+    /// there is one note and one behaviour behind two placements.
+    private var cardControls: ControlsWordView!
+    /// Where the note is currently hung. Rebuilt on every open, because the row
+    /// that owns the word changes with the face.
+    private var stickyPlacement: [NSLayoutConstraint] = []
     private var stripLabel: NSTextField!
     private var stripRule: NSView!
     /// The drop tray's chips: what would ride the next voice reply to the
@@ -350,7 +357,25 @@ final class StatusHUD: NSObject {
     /// hover is not a state, and a pointer crossing a word must not be able to
     /// write into the panel's state machine. Closing is owned by render()'s
     /// baseline, which is why leaving the grid closes the note for free.
-    func setControlsNote(open: Bool) { controlsSticky?.isHidden = !open }
+    /// Open or close the note, hung above the row that owns the word.
+    ///
+    /// The placement is rebuilt per open rather than fixed at construction: the
+    /// grid's footer and a card's action row sit at different heights, and the
+    /// same note serves both. Centred on the panel rather than aligned to the
+    /// word — the note is wider than the word is long, so a leading-aligned
+    /// note hung off a centred word would run off the right edge.
+    func setControlsNote(open: Bool, above host: NSView? = nil) {
+        guard let controlsSticky else { return }
+        if open, let host, let background = controlsSticky.superview {
+            NSLayoutConstraint.deactivate(stickyPlacement)
+            stickyPlacement = [
+                controlsSticky.centerXAnchor.constraint(equalTo: background.centerXAnchor),
+                controlsSticky.bottomAnchor.constraint(equalTo: host.topAnchor, constant: -8),
+            ]
+            NSLayoutConstraint.activate(stickyPlacement)
+        }
+        controlsSticky.isHidden = !open
+    }
 
     /// The top band is shared, and this is the only thing that says so.
     ///
@@ -1823,6 +1848,16 @@ final class StatusHUD: NSObject {
             }
         }
 
+        // Controls belongs to every face where a gesture is the next thing you
+        // might do, not to the grid alone (ruled 18 Aug). That is the grid — in
+        // its own footer — and a card on stage, in the middle of its action
+        // row. Deliberately NOT while a capture is in flight: arming,
+        // listening, transcribing and the send countdown are the panel
+        // mid-transaction, and a note explaining how to start the thing you are
+        // already doing is furniture. Written as one rule off the state rather
+        // than unhidden by each arm, so a face added later inherits the answer.
+        cardControls.isHidden = !state.isCardOnStage
+
         // The action row exists exactly when a quiet action is visible. (The
         // slow-transcription tick unhides its own actions later and re-runs
         // this.)
@@ -1982,9 +2017,12 @@ final class StatusHUD: NSObject {
     /// the row of lozenge buttons is dead (ruled); this is what replaced its
     /// per-state visibility flag.
     private func updateActionRowVisibility() {
+        // `cardControls` counts: it is a row member like any other, and a card
+        // with no buttons but a Controls word still has a bottom line.
         actionRow.isHidden = [goButton, openPageButton, dontSendButton,
                               micSettingsButton, newSessionButton,
-                              cancelTranscriptionButton, retryTranscriptionButton]
+                              cancelTranscriptionButton, retryTranscriptionButton,
+                              cardControls]
             .allSatisfy { $0?.isHidden ?? true }
         if let panel { resizeToFit(panel); position(panel) }
     }
@@ -3339,8 +3377,12 @@ final class StatusHUD: NSObject {
             .map { gridFooter.convert(gridFooter.bounds, to: $0) } ?? .zero
         let floorGap = min(footerBox.minY - contentBox.minY,
                            contentBox.maxY - footerBox.maxY)
+        // Centred, not left-aligned: the word must sit in the same place on
+        // every face that has it, and on a card both edges are already spent.
+        let gridWordIsCentred = abs(
+            gridFooter.controls.frame.midX - gridFooter.frame.width / 2) < 1
         let heightShut = panel?.frame.height ?? 0
-        setControlsNote(open: true)
+        setControlsNote(open: true, above: gridFooter)
         panel?.contentView?.layoutSubtreeIfNeeded()
         let heightOpen = panel?.frame.height ?? 0
         let noteOpens = !controlsSticky.isHidden
@@ -3348,6 +3390,43 @@ final class StatusHUD: NSObject {
         let column = (panel?.frame.width ?? 0) - 28
         showResult("A failure card, arriving under an open Controls note.")
         let closedOnLeave = controlsSticky.isHidden && gridFooter.isHidden
+
+        // The other half of the ruling: the word does not belong to the grid.
+        // A card on stage carries it in the middle of its action row, and the
+        // note opens over that row rather than over a footer that is not there.
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("What would you like to work on?"),
+            sessionId: "cw", pid: 1, project: "projects", cwd: "/tmp")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let cardKeepsTheWord = !cardControls.isHidden && !actionRow.isHidden
+        setControlsNote(open: true, above: actionRow)
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let cardNoteOpens = !controlsSticky.isHidden
+        // Hung over the card's own bottom line and inside the panel's column —
+        // the note is wider than the word, so a placement that followed the
+        // word's leading edge would hang off the right of the panel.
+        let cardNoteBox = panel?.contentView
+            .map { controlsSticky.convert(controlsSticky.bounds, to: $0) } ?? .zero
+        let cardNoteFitsThePanel = cardNoteBox.width > 0
+            && cardNoteBox.width <= (panel?.frame.width ?? 0) - 28
+        setControlsNote(open: false)
+        // Mid-capture the panel is in a transaction, and a note about how to
+        // start one is furniture.
+        showListening(level: { 0.1 })
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let captureDropsTheWord = cardControls.isHidden
+        endCapture(because: "selftest controls cleanup")
+        // Every face that offers a gesture keeps the word. Asserted over the
+        // list rather than at one face, because the regression is a NEW face
+        // that quietly does not inherit the rule.
+        var wordSurvivesEveryFace = true
+        for probe in [PanelState.speaking(eventId: nil), .preparing,
+                      .receipt, .result] {
+            forceTransition(to: probe, because: "selftest controls sweep")
+            render()
+            if cardControls.isHidden { wordSurvivesEveryFace = false }
+        }
+        endCapture(because: "selftest controls sweep cleanup")
         SelfTest.report("controls", [
             ("footerOnGrid", footerOnGrid),
             ("noteOpens", noteOpens),
@@ -3356,6 +3435,12 @@ final class StatusHUD: NSObject {
             ("closedOnLeave", closedOnLeave),
             ("hintIsNotALine", hintIsNotALine),
             ("footerIsTheLastRow", footerIsTheLastRow),
+            ("gridWordIsCentred", gridWordIsCentred),
+            ("cardKeepsTheWord", cardKeepsTheWord),
+            ("cardNoteOpens", cardNoteOpens),
+            ("cardNoteFitsThePanel", cardNoteFitsThePanel),
+            ("captureDropsTheWord", captureDropsTheWord),
+            ("wordSurvivesEveryFace", wordSurvivesEveryFace),
         ])
         Permissions.log("selftest controls: panelH \(heightShut)->\(heightOpen) "
                         + "noteW=\(noteWidth) column=\(column) "
@@ -5141,6 +5226,10 @@ final class StatusHUD: NSObject {
         buttons.addView(cancelTranscriptionButton, in: .leading)
         buttons.addView(retryTranscriptionButton, in: .leading)
         buttons.addView(goButton, in: .trailing)
+        // The middle, which is the only space a card's bottom line has left and
+        // the same place the grid puts it.
+        cardControls = ControlsWordView()
+        buttons.addView(cardControls, in: .center)
 
         hintLabel.maximumNumberOfLines = 0
         hintLabel.lineBreakMode = .byTruncatingMiddle
@@ -5172,7 +5261,12 @@ final class StatusHUD: NSObject {
         controlsSticky = ControlsNoteView()
         controlsSticky.isHidden = true
         gridFooter.onControlsHover = { [weak self] hovering in
-            self?.setControlsNote(open: hovering)
+            guard let self else { return }
+            setControlsNote(open: hovering, above: gridFooter)
+        }
+        cardControls.onHover = { [weak self] hovering in
+            guard let self else { return }
+            setControlsNote(open: hovering, above: actionRow)
         }
 
         countdownBar = CountdownBarView()
@@ -5275,11 +5369,8 @@ final class StatusHUD: NSObject {
         // nothing to the fitting size resizeToFit() measures — the panel is
         // exactly as tall with the note open as with it shut.
         background.addSubview(controlsSticky, positioned: .above, relativeTo: nil)
-        NSLayoutConstraint.activate([
-            controlsSticky.leadingAnchor.constraint(equalTo: gridFooter.leadingAnchor),
-            controlsSticky.bottomAnchor.constraint(equalTo: gridFooter.topAnchor,
-                                                   constant: -8),
-        ])
+        // No placement here: `setControlsNote(open:above:)` hangs it over
+        // whichever row owns the word at the moment it is asked for.
 
         // Above everything, pinned to the panel's own edges rather than to the
         // stack: it covers whatever face is up, and — like the sticky — it is
@@ -6529,9 +6620,66 @@ private final class HoverBox: NSView {
     override func mouseExited(with event: NSEvent) { onHover?(false) }
 }
 
-/// The grid's bottom line: `Controls` at the left edge, `Tranquility Base` at
-/// the right. Two words at two edges, the same size and the same ink — the
-/// difference between them is that one answers the cursor.
+/// The word `Controls`, wherever a face has a bottom line to put it on.
+///
+/// Ruled 18 Aug: the gestures do not stop existing when the grid does. The word
+/// lived in the grid footer and nowhere else, so the moment a card took the
+/// stage — the face you are on when a gesture is most likely to be the next
+/// thing you do — the only place that names the chords was gone. One class, so
+/// the hover behaviour, the ink tiers and the type cannot drift between the two
+/// rows that host it; two instances, because they are two rows.
+///
+/// It sits in the CENTRE of its row on both faces. The card's bottom line
+/// already spends both edges (OPEN HUB left, GO TO AGENT right) and the middle
+/// is the only free space; putting the grid's copy anywhere else would make the
+/// same word move when the face changed, which is how a permanent affordance
+/// reads as a different thing each time.
+private final class ControlsWordView: NSView {
+    var onHover: ((Bool) -> Void)?
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        let word = NSTextField(labelWithString: StateLegend.controlsTitle)
+        word.font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .regular)
+        word.textColor = StateLegend.Palette.hint
+        word.translatesAutoresizingMaskIntoConstraints = false
+
+        let box = HoverBox()
+        box.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(word)
+        box.onHover = { [weak self] hovering in
+            // One ink tier under the cursor — `hint` to `ink`, both above their
+            // floors, so the change is a confirmation and never the difference
+            // between legible and not.
+            word.textColor = hovering
+                ? StateLegend.Palette.ink : StateLegend.Palette.hint
+            self?.onHover?(hovering)
+        }
+
+        addSubview(box)
+        NSLayoutConstraint.activate([
+            // The box hugs the word horizontally but takes the row's full
+            // height, so the hover target is a comfortable strip rather than
+            // the 8pt band the glyphs actually occupy.
+            word.leadingAnchor.constraint(equalTo: box.leadingAnchor),
+            word.trailingAnchor.constraint(equalTo: box.trailingAnchor),
+            word.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+            box.leadingAnchor.constraint(equalTo: leadingAnchor),
+            box.trailingAnchor.constraint(equalTo: trailingAnchor),
+            box.topAnchor.constraint(equalTo: topAnchor),
+            box.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+}
+
+/// The grid's bottom line: `Controls` in the middle, `Tranquility Base` at the
+/// right. Same size and same ink — the difference between them is that one
+/// answers the cursor.
 private final class GridFooterView: NSView {
     /// Shorter than a grid row on purpose: a rule-under-the-page line, not a
     /// row you might mistake for a session.
@@ -6539,28 +6687,15 @@ private final class GridFooterView: NSView {
 
     /// True on enter, false on exit — for `Controls` only.
     var onControlsHover: ((Bool) -> Void)?
+    /// The hover target, exposed so the note can be hung above the row that
+    /// actually owns the word rather than above a hard-coded one.
+    let controls = ControlsWordView()
 
     init(width: CGFloat) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
-        let font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .regular)
-        let controls = NSTextField(labelWithString: StateLegend.controlsTitle)
-        controls.font = font
-        controls.textColor = StateLegend.Palette.hint
-        controls.translatesAutoresizingMaskIntoConstraints = false
-
-        let box = HoverBox()
-        box.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(controls)
-        box.onHover = { [weak self] hovering in
-            // One ink tier under the cursor — `hint` to `ink`, both above their
-            // floors, so the change is a confirmation and never the difference
-            // between legible and not.
-            controls.textColor = hovering
-                ? StateLegend.Palette.ink : StateLegend.Palette.hint
-            self?.onControlsHover?(hovering)
-        }
+        controls.onHover = { [weak self] in self?.onControlsHover?($0) }
 
         let mark = NSTextField(labelWithString: "")
         mark.attributedStringValue = letterspaced(
@@ -6568,19 +6703,13 @@ private final class GridFooterView: NSView {
             color: StateLegend.Palette.hint)
         mark.translatesAutoresizingMaskIntoConstraints = false
 
-        addSubview(box); addSubview(mark)
+        addSubview(controls); addSubview(mark)
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: width),
             heightAnchor.constraint(equalToConstant: Self.height),
-            // The box hugs the word horizontally but takes the footer's full
-            // height, so the hover target is a comfortable strip rather than
-            // the 8pt band the glyphs actually occupy.
-            controls.leadingAnchor.constraint(equalTo: box.leadingAnchor),
-            controls.trailingAnchor.constraint(equalTo: box.trailingAnchor),
-            controls.centerYAnchor.constraint(equalTo: box.centerYAnchor),
-            box.leadingAnchor.constraint(equalTo: leadingAnchor),
-            box.topAnchor.constraint(equalTo: topAnchor),
-            box.bottomAnchor.constraint(equalTo: bottomAnchor),
+            controls.centerXAnchor.constraint(equalTo: centerXAnchor),
+            controls.topAnchor.constraint(equalTo: topAnchor),
+            controls.bottomAnchor.constraint(equalTo: bottomAnchor),
             mark.trailingAnchor.constraint(equalTo: trailingAnchor),
             mark.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
