@@ -332,4 +332,40 @@ extension SanitizerTests {
         XCTAssertFalse(summary.spoken.text.contains("dispatchAttempts"))
         XCTAssertTrue(summary.spoken.displayText.contains("dispatchAttempts"))
     }
+
+    // MARK: - The gap a stripped label used to eat
+
+    func testStrippingALabelKeepsTheSpaceBeforeTheNextSegment() {
+        // Reported 18 Aug as "after obfuscation it removes the space between
+        // that and the words". The redaction was innocent: the LABEL STRIP
+        // trimmed the first segment, and the segment's trailing space is the
+        // boundary with whatever follows it.
+        let sanitizer = SpokenTextSanitizer()
+        let out = sanitizer.strippingLeadingLabels(
+            ["promotions"],
+            from: sanitizer.sanitize("promotions: Fixed dispatchAttempts and the retry holds."))
+        XCTAssertEqual(out.displayText, "Fixed dispatchAttempts and the retry holds.")
+        XCTAssertEqual(out.text, "Fixed a variable and the retry holds.")
+    }
+
+    func testTheGapSurvivesWhenThereIsNoLabelToStripAtAll() {
+        // The half that made it look intermittent: with no label present, the
+        // trim ALONE counted as a change, so the segment was rewritten shorter
+        // and welded anyway. Nothing here should move.
+        let sanitizer = SpokenTextSanitizer()
+        let source = "Fixed dispatchAttempts and the retry holds."
+        let out = sanitizer.strippingLeadingLabels(["nothing-matches"],
+                                                   from: sanitizer.sanitize(source))
+        XCTAssertEqual(out.displayText, source)
+        XCTAssertEqual(out.text, "Fixed a variable and the retry holds.")
+    }
+
+    func testALabelThatIsTheWholeFirstSegmentStillGoesAway() {
+        // The other branch: nothing but the label before the first redaction.
+        let sanitizer = SpokenTextSanitizer()
+        let out = sanitizer.strippingLeadingLabels(
+            ["promotions"], from: sanitizer.sanitize("promotions: dispatchAttempts is fixed."))
+        XCTAssertEqual(out.displayText, "dispatchAttempts is fixed.")
+        XCTAssertEqual(out.text, "a variable is fixed.")
+    }
 }

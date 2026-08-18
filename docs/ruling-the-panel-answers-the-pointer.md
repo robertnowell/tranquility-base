@@ -46,10 +46,10 @@ text above it.
    panel a control and a label are the same object to the eye by design, and at
    rest nothing else distinguishes them.
 
-2. **The ink says the pointer is on *this* one.** One step up the control's own
-   ramp — `StateLegend.hovered`, walking `StateLegend.inkRamp`
-   (faint → hint → muted → secondary → ink), with `accent` stepping to
-   `accentHover` so a blue-grey control does not change hue to answer a mouse.
+2. **The ink says the pointer is on *this* one.** One step brighter —
+   `StateLegend.hovered`, a fixed **+8 ΔL\***, applied by scaling the colour's
+   channels rather than by blending it toward anything. Scaling preserves
+   saturation exactly, so a caution hovers to a brighter caution.
 
 3. **Nothing moves.** No lozenge appears, no weight changes, nothing grows,
    nothing shifts. A panel where things jump under the pointer is an interface
@@ -57,15 +57,58 @@ text above it.
    rule the collapsed strip already enforces on itself ("a revealed row would
    push the grid up and resize the panel on a mouse-over").
 
-4. **No control rests at `ink`.** The brightest ink belongs to the prose. A
-   control resting there is louder than the message it sits under *and* has no
-   step left to take, so it cannot obey rule 2. `secondary` is the ceiling for a
-   control at rest: 6.69:1 against the surface, legible with room to spare, and
-   one clean step below the message.
+4. **No control rests at `ink`.** The brightest ink belongs to the prose, and a
+   control resting there is louder than the message it sits under. `secondary`
+   is the ceiling for a control at rest: 6.69:1 against the surface, legible
+   with room to spare, and one clean step below the message.
+
+   This rule was originally justified twice over — hierarchy, *and* "`ink` has
+   no step left to take". The second half is no longer true (see the
+   measurement below) and the rule stands on the first, which was always the
+   real one. The card's TITLE does rest at `ink` and that is correct: it is
+   content that happens to be a door, not a control, and it now answers the
+   pointer like everything else.
 
 A row-shaped control keeps the wash it already had (`Palette.hover`) instead of
 the ink step. Rule 1 applies to it all the same — the wash says *which* row, and
 only the cursor says a row is a control rather than a lit read-state.
+
+### The step function, and how it was chosen
+
+Three implementations of "one step brighter" shipped into this file inside one
+afternoon, two of them within half an hour of each other, written by sessions
+that could not see each other's work. Rule 4 of CLAUDE.md asks a reversal to
+cite a measurement, so here is the one that picked the survivor:
+
+| resting ink | discrete ramp | 35% toward `ink` | scale to +8 ΔL\* |
+|---|---|---|---|
+| `hint` | ΔL\* 4.6 | ΔL\* 7.2 | ΔL\* 8.3 |
+| `secondary` — where most controls rest | ΔL\* 7.7 | ΔL\* 2.6 | ΔL\* 8.4 |
+| `accent` — the doors | ΔL\* 10.9 | ΔL\* 10.2 | ΔL\* 8.4 |
+| `ink` — the card's title | **no step** | ΔL\* 0.0 | ΔL\* 8.2 |
+| `fault` — the amber pill | **no step** | ΔL\* 2.9 | ΔL\* 8.3 |
+| `ready` — the go-green | **no step** | ΔL\* 2.9 | ΔL\* 8.0 |
+
+A **ramp of named tiers** gives good steps and answers only the five colours on
+it. Three real controls sat still under the cursor: the amber pill that the
+attributed-string helper was written to protect, the go-green, and the card's
+title — which is exactly what the operator reported ("it does show the cursor
+pointer, but it doesn't have the change text colour impact").
+
+A **blend toward `ink`** answers everywhere and says almost nothing where it
+matters, because the step shrinks as the colour approaches the target. This
+codebase already knows the price of that: the lamps carry a ΔL\* 6.0 floor
+because 4.2 measured *invisible* at 9px while ΔE2000 called it twelve times over
+threshold.
+
+A **scale to a fixed ΔL\*** is the one that holds. It is defined for every
+colour, it is the same perceptual distance everywhere, and — because multiplying
+channels is not the same move as mixing in a grey — saturation comes through
+untouched: amber 0.67 → 0.67, green 0.42 → 0.42, measured.
+
+The floors ride the launch drill: `hovered(accent)`, `hovered(secondary)` and
+`hovered(ink)` are in `contrastFloors` as computed values rather than minted
+tokens, so a change to the step function that dims a control fails the gate.
 
 ### Three carve-outs
 
@@ -121,16 +164,20 @@ it rather than a preference:
   each call site. Every panel button is one: go, open page, gear, collapse,
   back, past-back, the five quiet actions, the chip's ✕, the audio row's ▶ and
   ⋯, the voice row's ▶, the settings tabs, and the directory row's CHOOSE….
-- `StateLegend.inkRamp` and `StateLegend.hovered` — "one step" as a position on
-  a named ladder rather than a colour chosen per control, plus the new
-  `Palette.accentHover`.
+- `StateLegend.hovered` — one step function for the whole panel, and
+  `StateLegend.hoveredInk` for the targets that carry attributed text (the
+  title, the state pill, the placard words) rather than a tint.
 - `quietAction` rests at `chrome` (secondary) instead of `ink` — rule 4, and the
   only *resting* appearance this pass changes.
 - Cursor rects on the grid rows, the list rows, the placard halves, the
   checkbox, and the collapsed strip.
-- `hoverDrill` in the launch self-tests asserts the standard rather than the
-  call sites: every control steps, every step clears the text floor, no control
-  rests at `ink`, and the ramp climbs.
+- `hoverDrill` and `chrome` in the launch self-tests assert the standard rather
+  than the call sites: every control steps, every step clears the text floor, no
+  control rests at `ink`, every ink lifts by the same ΔL\* ±1 (including the
+  three the ramp could not answer), and `fault` and `ready` keep their
+  saturation. `titleAnswersTheCursor` is asserted separately from
+  `pillAnswersTheCursor`, because they fail separately — the pill rests
+  mid-ramp and passed the whole time the title was silent.
 
 ## What was considered and rejected
 
