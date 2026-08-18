@@ -3324,6 +3324,41 @@ final class StatusHUD: NSObject {
         let faultIsInTheStrip = stripLabel.stringValue.contains("lost its address")
         endCapture(because: "selftest fault cleanup")
 
+        // The chrome drill: every mark in the vocabulary sits on the cap line
+        // of the word beside it, at the same optical weight, whichever face it
+        // is actually drawn from.
+        //
+        // Asserted as a MEASUREMENT rather than a look, because this is the
+        // class of defect that survives every review — 0.4pt is invisible in a
+        // diff, unmistakable on a screen, and the numbers are the only way to
+        // hold it. The errors are logged in full so a regression names the
+        // glyph that moved.
+        let placardErrors = ChromeType.centringError(
+            font: StateLegend.placardFont, markScale: 0.68)
+        let rowErrors = ChromeType.centringError(
+            font: NSFont.monospacedSystemFont(
+                ofSize: StateLegend.BottomLine.size, weight: .medium))
+        let worstMark = (placardErrors + rowErrors).map { abs($0.1) }.max() ?? 0
+        // One optical size for every mark on a face, whatever family it comes
+        // from: `◀` is monospaced and `⚠` is not, and before this they were
+        // 10px and 5px tall on the same 15px cap band.
+        let markHeights = ChromeType.vocabulary.compactMap { ch -> CGFloat? in
+            let f = ChromeType.markFont(for: ch, textFont: StateLegend.placardFont,
+                                        fraction: 0.68)
+            return ChromeType.inkMetrics(ch, in: f)?.height
+        }
+        let capBand = ChromeType.inkMetrics("H", in: StateLegend.placardFont)?.height ?? 0
+        let markSpread = (markHeights.max() ?? 0) - (markHeights.min() ?? 0)
+        SelfTest.report("chrome", [
+            ("marksSitOnTheLine", worstMark <= 0.25),
+            ("marksShareOneOpticalSize", markSpread <= 0.5),
+            ("marksAreSmallerThanTheCaps", (markHeights.max() ?? 0) < capBand),
+        ])
+        Permissions.log("selftest chrome: worst \(String(format: "%.2f", worstMark))pt "
+            + "spread \(String(format: "%.2f", markSpread))pt cap \(String(format: "%.2f", capBand))pt · "
+            + (placardErrors + rowErrors)
+                .map { "\($0.0)\(String(format: "%+.2f", $0.1))" }.joined(separator: " "))
+
         // The greeting drill. The card exists before the session does, which is
         // the whole ruling and also the whole risk: an unbound card must not
         // pretend to have an agent, and a binding that arrives after you have
@@ -6120,33 +6155,21 @@ final class StatusHUD: NSObject {
 /// nudge so both fonts share one optical center; letter runs keep the
 /// placard's own font. Color is explicit because attributed runs ignore the
 /// field's textColor.
+/// A placard: the state's mark and its word, on one line.
+///
+/// Every mark is centred on the cap line by measurement (`ChromeType`), not by
+/// a per-glyph nudge. The old version carried `baselineOffset: 0.8` for `◀`
+/// alone — 0.67pt low, measured — and nothing at all for `⚠`, `→` or the
+/// chevrons, half of which are not even in the monospaced font and are drawn by
+/// a fallback face with its own metrics.
+///
+/// The marks stay three-quarters of the text size: a state mark is a
+/// punctuation-weight thing beside its word, not a second word. Only its
+/// POSITION was ever wrong.
 private func placardText(
     _ text: String, color: NSColor = StateLegend.Lens.chrome.color
 ) -> NSAttributedString {
-    let placardFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
-    let out = NSMutableAttributedString()
-    var letters = ""
-    func flushLetters() {
-        guard !letters.isEmpty else { return }
-        out.append(NSAttributedString(string: letters, attributes: [
-            .font: placardFont, .foregroundColor: color,
-        ]))
-        letters = ""
-    }
-    for ch in text {
-        if ch == "◀" || ch == "▶" {
-            flushLetters()
-            out.append(NSAttributedString(string: String(ch), attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 7.5, weight: .medium),
-                .baselineOffset: 0.8,
-                .foregroundColor: color,
-            ]))
-        } else {
-            letters.append(ch)
-        }
-    }
-    flushLetters()
-    return out
+    ChromeType.line(text, font: StateLegend.placardFont, color: color, markScale: 0.68)
 }
 
 func letterspaced(_ text: String, size: CGFloat, tracking: CGFloat,
