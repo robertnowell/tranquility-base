@@ -110,6 +110,16 @@ The floors ride the launch drill: `hovered(accent)`, `hovered(secondary)` and
 `hovered(ink)` are in `contrastFloors` as computed values rather than minted
 tokens, so a change to the step function that dims a control fails the gate.
 
+**A hover owes exactly what its resting value owes, and no more.** Those three
+shipped at a flat 4.5 for half a day, on the argument that a hover is read for
+as long as the pointer sits on it. The argument is true and the floor was still
+wrong — the resting value is read for as long as the card is up, which is
+longer. `accent` rests at 3.41:1 on purpose, and one step from a deliberately
+recessive colour landed at 4.49:1: a deploy gate went red over a hundredth of a
+point, and tuning `hoverStep` to clear it would have been fitting the constant
+to the test. The invariant that actually matters is in `hoverDrill` instead —
+a hover is always strictly *more* legible than its rest.
+
 ### Three carve-outs
 
 The settings tabs and a playing ▶ paint their own ink, because that ink already
