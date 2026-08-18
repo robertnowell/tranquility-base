@@ -709,6 +709,62 @@ enum StateLegend {
     /// replacement. See docs/simplification-pass.md.
     static let controlsTitle = "Controls"
 
+    // MARK: - The bottom line's lexicon (ruled 18 Aug)
+
+    /// One face, one size, one case, for every word on a card's or the grid's
+    /// bottom row.
+    ///
+    /// It had three of each. `OPEN REPORT ›` and `GO TO AGENT ›` were the
+    /// SYSTEM font, letterspaced, in capitals; `Controls` was monospaced, plain,
+    /// in title case; `Tranquility Base` was the system font again at a third
+    /// size and tracking. Three treatments in one row of four words, and the
+    /// row read as three unrelated things that happened to be adjacent —
+    /// "we need to have a little bit of a design system here, otherwise it's
+    /// starting to look a little disjoint."
+    ///
+    /// The face is MONOSPACED because that is already the panel's chrome voice:
+    /// the state placards, the grid's callsigns and the Controls note are all
+    /// mono, and it was the letterspaced system font in two widgets that was
+    /// the exception. The case is TITLE because the placard beside it says
+    /// "Speaking", not "SPEAKING", and because a row shouting four things at
+    /// once has no way to say which one matters.
+    ///
+    /// What is left to carry meaning is WEIGHT and INK, which is the whole
+    /// point: medium + steel is a door out of the panel, regular + hint is a
+    /// word that explains itself. Nothing on this row is green or amber —
+    /// those belong to the lamps, and a chrome word wearing a lamp's colour
+    /// would be the instrument lying.
+    enum BottomLine {
+        static let size: CGFloat = 10
+        static let tracking: CGFloat = 0.8
+        /// A door out of the panel: Go to Agent, Open Hub, Open Report.
+        ///
+        /// The colour is a parameter with the resting value as its default, so
+        /// the hover step (`StateLegend.hovered`) rebuilds a door's title
+        /// through this same function instead of a second copy of its type.
+        static func door(_ text: String,
+                         color: NSColor = Palette.accent) -> NSAttributedString {
+            label(text, weight: .medium, color: color)
+        }
+        /// A word that explains rather than acts: Controls, the wordmark.
+        static func quiet(_ text: String, color: NSColor = Palette.hint) -> NSAttributedString {
+            label(text, weight: .regular, color: color)
+        }
+        static func label(_ text: String, weight: NSFont.Weight,
+                          color: NSColor) -> NSAttributedString {
+            NSAttributedString(string: text, attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: size, weight: weight),
+                .kern: tracking,
+                .foregroundColor: color,
+            ])
+        }
+    }
+
+    /// Title case, because the row does not shout (ruled 18 Aug).
+    static let goToAgentTitle = "Go to Agent"
+    static let openHubTitle = "Open Hub"
+    static let openReportTitle = "Open Report"
+
     /// What hovering `Controls` reveals, in order of how often you reach for it.
     ///
     /// Probation ended 10 Aug: the key line — four chords spelled out along the
