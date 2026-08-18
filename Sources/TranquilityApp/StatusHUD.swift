@@ -3349,15 +3349,35 @@ final class StatusHUD: NSObject {
         }
         let capBand = ChromeType.inkMetrics("H", in: StateLegend.placardFont)?.height ?? 0
         let markSpread = (markHeights.max() ?? 0) - (markHeights.min() ?? 0)
+        // Nothing clipped under whichever face is installed. A swapped family
+        // changes advance widths, and the panel's text column is fixed — so the
+        // failure mode of a font it has never seen is a label quietly cut off,
+        // which no arithmetic about baselines would catch.
+        let chromeColumn = Self.gridWidth
+        let placardWidth = ChromeType
+            .line(StateLegend.legend("Needs you"), font: StateLegend.placardFont,
+                  color: .white, markScale: 0.68).size().width
+        let doorWidth = StateLegend.BottomLine
+            .door("\(StateLegend.goToAgentTitle) \(StateLegend.Glyph.forward)").size().width
+        let quietWidth = StateLegend.BottomLine.quiet(StateLegend.controlsTitle).size().width
+        let markWidth = StateLegend.BottomLine.quiet(StateLegend.wordmark).size().width
+        let bottomRowFits = doorWidth * 2 + quietWidth + 24 <= chromeColumn
+        let footerFits = quietWidth + markWidth + 24 <= chromeColumn
+
         SelfTest.report("chrome", [
             ("marksSitOnTheLine", worstMark <= 0.25),
             ("marksShareOneOpticalSize", markSpread <= 0.5),
             ("marksAreSmallerThanTheCaps", (markHeights.max() ?? 0) < capBand),
+            ("placardFitsTheColumn", placardWidth <= chromeColumn),
+            ("bottomRowFits", bottomRowFits),
+            ("footerFits", footerFits),
         ])
         Permissions.log("selftest chrome: face "
             + "\(ChromeType.preferredFamily ?? "system mono") · "
             + "worst \(String(format: "%.2f", worstMark))pt "
-            + "spread \(String(format: "%.2f", markSpread))pt cap \(String(format: "%.2f", capBand))pt · "
+            + "spread \(String(format: "%.2f", markSpread))pt cap \(String(format: "%.2f", capBand))pt "
+            + "· widths placard \(Int(placardWidth)) door \(Int(doorWidth)) "
+            + "quiet \(Int(quietWidth)) mark \(Int(markWidth)) of \(Int(chromeColumn)) · "
             + (placardErrors + rowErrors)
                 .map { "\($0.0)\(String(format: "%+.2f", $0.1))" }.joined(separator: " "))
 
