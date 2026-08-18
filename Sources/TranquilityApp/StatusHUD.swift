@@ -3364,6 +3364,36 @@ final class StatusHUD: NSObject {
         let bottomRowFits = doorWidth * 2 + quietWidth + 24 <= chromeColumn
         let footerFits = quietWidth + markWidth + 24 <= chromeColumn
 
+        // Every door answers the cursor, and nothing else does. A pointing hand
+        // over a word that does not react is a promise the pixels are not
+        // keeping — which is exactly what the pill was doing.
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("Hover check."),
+            sessionId: "hv", pid: 1, project: "projects", cwd: "/tmp")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let pillResting = stateLabel.attributedStringValue
+        stateLabel.setHovered(true)
+        let pillHovered = stateLabel.attributedStringValue
+        stateLabel.setHovered(false)
+        let pillRestored = stateLabel.attributedStringValue
+        func firstColour(_ text: NSAttributedString) -> NSColor? {
+            guard text.length > 0 else { return nil }
+            return text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        }
+        let pillAnswersTheCursor = stateLabel.isADoor
+            && firstColour(pillHovered) != firstColour(pillResting)
+            && firstColour(pillRestored) == firstColour(pillResting)
+        let goResting = goButton.attributedTitle
+        (goButton as? DoorButton)?.setHovered(true)
+        let goHovered = goButton.attributedTitle
+        (goButton as? DoorButton)?.setHovered(false)
+        let doorAnswersTheCursor = firstColour(goHovered) != firstColour(goResting)
+            && firstColour(goButton.attributedTitle) == firstColour(goResting)
+        // And the grid strip does NOT: it names a face, it is not a control.
+        showIdle(note: nil, rows: [.init(id: "h1", name: "row", aux: "", lamp: .running)])
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let stripIsNotADoor = !stateLabel.isADoor
+
         SelfTest.report("chrome", [
             ("marksSitOnTheLine", worstMark <= 0.25),
             ("marksShareOneOpticalSize", markSpread <= 0.5),
@@ -3371,6 +3401,9 @@ final class StatusHUD: NSObject {
             ("placardFitsTheColumn", placardWidth <= chromeColumn),
             ("bottomRowFits", bottomRowFits),
             ("footerFits", footerFits),
+            ("pillAnswersTheCursor", pillAnswersTheCursor),
+            ("doorAnswersTheCursor", doorAnswersTheCursor),
+            ("stripIsNotADoor", stripIsNotADoor),
         ])
         Permissions.log("selftest chrome: face "
             + "\(ChromeType.preferredFamily ?? "system mono") · "
@@ -6560,11 +6593,70 @@ final class DropOverlayView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+/// A word that is a button. Same idiom as the pill and the placard words: it
+/// brightens under the cursor and takes the pointing hand, because the panel has
+/// exactly one way of saying "this is a control" and a lozenge is not it.
+final class DoorButton: NSButton {
+    private var restingTitle: NSAttributedString?
+    private var restingTint: NSColor?
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard isEnabled, !isHidden else { return }
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) { setHovered(true) }
+    override func mouseExited(with event: NSEvent) { setHovered(false) }
+
+    func setHovered(_ hovered: Bool) {
+        if hovered {
+            if attributedTitle.length > 0, restingTitle == nil {
+                restingTitle = attributedTitle
+                attributedTitle = StatusHUD.lifting(attributedTitle)
+            } else if restingTint == nil, let tint = contentTintColor {
+                restingTint = tint
+                contentTintColor = StateLegend.Palette.lifted(tint)
+            }
+        } else {
+            if let restingTitle { attributedTitle = restingTitle }
+            if let restingTint { contentTintColor = restingTint }
+            restingTitle = nil; restingTint = nil
+        }
+    }
+}
+
+extension StatusHUD {
+    /// Every run of an attributed string, one tier brighter.
+    ///
+    /// The panel's hover idiom in one function, so the pill, the placard halves
+    /// and the doors cannot drift into three versions of "brighter".
+    static func lifting(_ text: NSAttributedString) -> NSAttributedString {
+        let out = NSMutableAttributedString(attributedString: text)
+        out.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: out.length)) {
+            value, range, _ in
+            let colour = (value as? NSColor) ?? StateLegend.Palette.hint
+            out.addAttribute(.foregroundColor, value: StateLegend.Palette.lifted(colour),
+                             range: range)
+        }
+        return out
+    }
+}
+
 private final class DoorLabel: NSTextField {
     var isADoor = false {
         didSet {
             guard isADoor != oldValue else { return }
             window?.invalidateCursorRects(for: self)
+            if !isADoor { unlift() }
         }
     }
 
@@ -6572,6 +6664,46 @@ private final class DoorLabel: NSTextField {
         super.resetCursorRects()
         guard isADoor else { return }
         addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    // MARK: - Hover
+    //
+    // The pill was a door with a cursor and no answer: "Speaking is clickable,
+    // but doesn't have any hover effect." The cursor is a promise the pixels
+    // were not keeping, and it is the same promise `Controls` keeps by
+    // brightening — so the pill brightens too, by the same rule and the same
+    // step. Repainted rather than tinted: the placard is an attributed string
+    // whose runs carry their own colours (the mark and the word, amber or
+    // chrome), and `contentTintColor` does not reach them.
+
+    private var resting: NSAttributedString?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) { setHovered(true) }
+    override func mouseExited(with event: NSEvent) { setHovered(false) }
+
+    /// The hover, without a mouse — `mouseEntered` reads an NSEvent no drill
+    /// can post, and a hover nobody can assert is a hover that silently stops
+    /// working.
+    func setHovered(_ hovered: Bool) {
+        guard hovered else { return unlift() }
+        guard isADoor, resting == nil else { return }
+        let current = attributedStringValue
+        resting = current
+        attributedStringValue = StatusHUD.lifting(current)
+    }
+
+    private func unlift() {
+        guard let resting else { return }
+        attributedStringValue = resting
+        self.resting = nil
     }
 
     /// The gesture recogniser does the work; this only keeps a dead label from

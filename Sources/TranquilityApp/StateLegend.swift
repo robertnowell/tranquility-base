@@ -134,6 +134,25 @@ enum StateLegend {
         /// Hover row — surface, one step UP. The direction inverts with the
         /// ground: on putty a hover went darker, on housing it goes lighter.
         static let hover = hex(0x343631)
+
+        /// A word under the cursor, one tier brighter — the panel's ONE hover
+        /// idiom for text (ruled 18 Aug).
+        ///
+        /// Toward `ink` rather than to it, so the hue survives: an amber pill
+        /// hovers to a brighter amber and stays a caution, where painting it
+        /// full ink would drop the one colour that carries the meaning. 35% is
+        /// the same visible step the Controls word already had from `hint` to
+        /// `ink`, applied to every other tier by arithmetic instead of by a
+        /// second constant.
+        ///
+        /// Not a literal, and it does not need to be: it is defined here, in
+        /// the file that owns every colour, and derived from a palette colour
+        /// at both ends.
+        static func lifted(_ color: NSColor) -> NSColor {
+            guard let from = color.usingColorSpace(.sRGB),
+                  let to = ink.usingColorSpace(.sRGB) else { return color }
+            return from.blended(withFraction: 0.35, of: to) ?? color
+        }
         /// The quiet lamp's fill — an unlit socket, 1.45:1. Not a compromise:
         /// dark-cockpit doctrine says the panel is dark when all is nominal and
         /// a lit lamp always means deviation. On this ground that falls out of
