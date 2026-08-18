@@ -709,6 +709,11 @@ enum StateLegend {
     /// replacement. See docs/simplification-pass.md.
     static let controlsTitle = "Controls"
 
+    /// The placard face: the state's own label, one step up in weight from the
+    /// row beneath it. Named here because two files draw it and a size that
+    /// lives in one of them is a size the other one guesses.
+    static let placardFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
+
     // MARK: - The bottom line's lexicon (ruled 18 Aug)
 
     /// One face, one size, one case, for every word on a card's or the grid's
@@ -752,11 +757,14 @@ enum StateLegend {
         }
         static func label(_ text: String, weight: NSFont.Weight,
                           color: NSColor) -> NSAttributedString {
-            NSAttributedString(string: text, attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: size, weight: weight),
-                .kern: tracking,
-                .foregroundColor: color,
-            ])
+            // Through ChromeType so the trailing chevron sits on the cap line
+            // like every other mark in the app — it was 0.40pt low, which on a
+            // row of four words is exactly the wonk you notice without being
+            // able to name.
+            ChromeType.line(
+                text,
+                font: NSFont.monospacedSystemFont(ofSize: size, weight: weight),
+                color: color, tracking: tracking)
         }
     }
 
