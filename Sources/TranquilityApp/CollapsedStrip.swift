@@ -18,7 +18,7 @@ import TranquilityCore
 ///     │ ○  │  — solid unread, hollow once opened, exactly as the grid draws
 ///     │ ◉  │
 ///     │    │
-///     │ TB │  the wordmark, in the two rows the controls stand in
+///     │ TB │  the wordmark, in the band the controls stand in
 ///     │ RA │  — always there, whatever the roster; hidden on hover
 ///     │ AS │
 ///     │ NE │
@@ -57,17 +57,36 @@ final class CollapsedStrip: NSView {
     /// greens, dropping both working blues off the bottom of a column that
     /// looked half empty.
     ///
-    /// So the cap is the ruling and the height is its consequence. Ten lamps
-    /// because that is what he asked for and it is within a slot of what the
-    /// old frame already held; a number here moves the frame with it, and the
-    /// dead band cannot come back by arithmetic.
-    static let lampCapacity = 10
+    /// So the cap is the ruling and the height is its consequence.
+    ///
+    /// RE-RULED 17 Aug, and the two rulings are one trade seen from both ends.
+    /// Ten lamps bought the roster and spent the mark: with the wordmark moved
+    /// into the controls' 80pt floor, eleven letters landed at 5pt and Robert
+    /// could not read them — "too small not readable, maybe make bigger and go
+    /// back to 8 lamps". Eight it is. The two slots that buys go to the mark,
+    /// which is the thing you look at to know whose column this is.
+    static let lampCapacity = 8
+
+    /// The band the mark gets, and the reason the frame did not change.
+    ///
+    /// 136pt: two lamp slots handed back plus the controls' own 80. The X and
+    /// the + still stand in the bottom 80 of it — they are 40pt targets and
+    /// growing them was never the ask — so the mark simply has more room above
+    /// them than they use, and still shares their floor rather than reserving
+    /// its own.
+    ///
+    /// Sized from the TYPE, not chosen and then filled: eleven letters need
+    /// `markTypeFloor` points of rhythm each to stay legible, and 136 is what
+    /// that comes to with the inset. That is the arithmetic that failed last
+    /// time, run in the right direction.
+    private static let markFloor: CGFloat = 136
 
     /// Fixed, so the strip never resizes under the user — the logo slot, every
-    /// lamp slot, and the floor the hover controls need. DERIVED: see
-    /// `lampCapacity`.
+    /// lamp slot, and the band the mark and the controls share. DERIVED: see
+    /// `lampCapacity`. Still 400: eight lamps and a readable mark cost exactly
+    /// what ten lamps and an unreadable one did.
     static let height: CGFloat =
-        logoSlot + CGFloat(lampCapacity) * lampSlot + controlsFloor
+        logoSlot + CGFloat(lampCapacity) * lampSlot + markFloor
     /// The mark lives in the controls' slot, at every roster size.
     ///
     /// It used to take whatever space the lamps left and vanish past five of
@@ -78,13 +97,27 @@ final class CollapsedStrip: NSView {
     /// fit in here, so we can always display it, so i guess we make smaller so
     /// it occupies same height as the two buttons and disappears on hover."
     ///
-    /// So the mark is sized to the floor rather than to the leftovers. It is
-    /// smaller than it was on a quiet day and it is always there, which is the
-    /// trade he asked for — and it is now the same swap every other control on
-    /// this column already is: one slot, two faces, nothing reflowing.
+    /// So the mark is sized to a fixed band rather than to the leftovers, and
+    /// it is the same swap every other control on this column already is: one
+    /// slot, two faces, nothing reflowing.
+    ///
+    /// The band is `markFloor`, not `controlsFloor`. Fitting it to the two
+    /// button rows was the 17 Aug version and it shipped illegible — the mark
+    /// is the one thing here that has a MINIMUM size, so it sets the band's
+    /// height instead of accepting it.
     private var wordmarkRect: NSRect {
-        NSRect(x: 0, y: 0, width: bounds.width, height: Self.controlsFloor)
+        NSRect(x: 0, y: 0, width: bounds.width, height: Self.markFloor)
     }
+
+    /// The smallest the mark may render, in points.
+    ///
+    /// A floor, and the drill enforces it, because "is this readable" is not a
+    /// question a layout answers on its own — the 17 Aug version computed 5pt
+    /// from the space it was given, drew it correctly, passed an ink count, and
+    /// was unreadable on the actual screen. 8pt is where the mark sat for the
+    /// whole life of the design before that pass, unremarked; below it the type
+    /// stops being quiet and starts being absent.
+    static let markTypeFloor: CGFloat = 8
 
     var onExpand: (() -> Void)?
     var onDismiss: (() -> Void)?
@@ -104,6 +137,11 @@ final class CollapsedStrip: NSView {
     /// proves only that the expression it just wrote agrees with itself.
     enum FloorFace: Equatable { case mark, controls }
     private(set) var lastFloorPaint: FloorFace?
+
+    /// The point size the mark last actually rendered at — recorded by the
+    /// draw, so the drill measures the type that was PAINTED rather than the
+    /// constant somebody intended.
+    private(set) var lastMarkTypeSize: CGFloat = 0
 
     /// The arrival glow: a colour and how much of it is left, 1 → 0.
     ///
@@ -166,14 +204,19 @@ final class CollapsedStrip: NSView {
     /// without moving the frame is the drift that put eight lamps in a column
     /// sized for ten and, run the other way, would push the last lamp through
     /// the X and the +.
-    var lampsClearTheControlsForTesting: Bool {
-        lampRect(Self.lampCapacity - 1).minY >= Self.controlsFloor - 0.5
+    var lampsClearTheMarkForTesting: Bool {
+        lampRect(Self.lampCapacity - 1).minY >= Self.markFloor - 0.5
     }
 
-    /// The mark's slot and the controls' slot are the SAME rectangle — the
-    /// property that lets both live at the bottom with nothing reserved.
-    var markSharesTheControlsSlotForTesting: Bool {
-        wordmarkRect.equalTo(dismissRect.union(newAgentRect))
+    /// The controls stand INSIDE the mark's band, so nothing is reserved twice
+    /// — the property that lets both live at the bottom of a fixed frame.
+    var controlsSitInsideTheMarkForTesting: Bool {
+        wordmarkRect.contains(dismissRect.union(newAgentRect))
+    }
+
+    /// The type the mark actually rendered at, against the floor it owes.
+    var markTypeIsLegibleForTesting: Bool {
+        lastMarkTypeSize >= Self.markTypeFloor
     }
 
     /// A drill cannot move the mouse, and hover is the whole swap.
@@ -181,6 +224,28 @@ final class CollapsedStrip: NSView {
         hovering = on
         needsDisplay = true
         display()
+    }
+
+    /// Write the rendered column to a PNG, next to the log, on every deploy.
+    ///
+    /// Ruled 17 Aug, and it is a process fix rather than a feature: "really you
+    /// should eval if it's visible before shipping". The 5pt mark passed a
+    /// paint record, an ink count and a geometry check, and was illegible on
+    /// the screen — the properties a drill can state are not the whole of what
+    /// a panel has to be. So the drill leaves a picture, at the panel's real
+    /// pixel scale, and looking at it is one Read away for whoever ships next.
+    ///
+    /// One file, overwritten each launch: this is the current column, not an
+    /// archive. `logs/deploys.log` already says which build drew it.
+    @discardableResult
+    func writeShot() -> URL? {
+        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        cacheDisplay(in: bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        let url = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support/VoiceDispatch/strip-shot.png")
+        do { try png.write(to: url) } catch { return nil }
+        return url
     }
 
     /// How many pixels of the bottom slot actually carry ink.
@@ -419,20 +484,21 @@ final class CollapsedStrip: NSView {
         let left = Array("TRANQUILITY")
         let right = Array("BASE")
 
-        // Sized to the SLOT, not to the leftovers.
+        // Sized to a fixed BAND, and the band was sized to the type.
         //
-        // The mark used to start under the last lamp and take everything down
-        // to 12pt off the floor, which made it a different size on every roster
-        // and none at all past five lamps. Now it fills `wordmarkRect` — the
-        // two rows the X and the + stand in, which the lamps are structurally
-        // forbidden from entering (see `lampsClearTheControlsForTesting`). The
-        // mark and the controls never coexist, so they share one floor: the
-        // mark paints at rest, the glyphs paint on hover.
+        // The mark used to take whatever the lamps left, which made it a
+        // different size on every roster and nothing at all past five of them.
+        // The first fix put it in the controls' 80pt floor, which fixed the
+        // disappearing and produced 5pt letters: "too small not readable".
         //
-        // The consequence is deliberate and was asked for: eleven letters in
-        // 80pt makes this the smallest type on the panel. It is a mark, not
-        // prose — the panel is named on it, and nobody reads it twice.
-        let inset: CGFloat = 4
+        // So the arithmetic now runs the other way. Eleven letters at
+        // `markTypeFloor` set the band, the band set the frame, and the lamp
+        // cap came down to eight to pay for it. `wordmarkRect` is 136pt and the
+        // lamps are structurally forbidden from entering it (see
+        // `lampsClearTheMarkForTesting`); the X and the + stand in its bottom
+        // 80, so mark and controls still share one floor — mark at rest, glyphs
+        // on hover.
+        let inset: CGFloat = 6
         let baseY = wordmarkRect.minY + inset
         let available = wordmarkRect.height - inset * 2
 
@@ -440,10 +506,13 @@ final class CollapsedStrip: NSView {
         // chrome the lamps and controls sit in. Legible when looked at, quiet
         // when not.
         let rhythm = available / CGFloat(left.count)
-        // The floor is 5pt, not the old 7: the slot is fixed now, so a clamp
-        // that refuses to go smaller does not buy legibility, it buys a mark
-        // running up through the lamps.
-        let size = max(5, min(8.5, rhythm * 0.78))
+        // Clamped BELOW by the legibility floor rather than by whatever fits.
+        // If a future edit shrinks the band, the mark holds its size and the
+        // drill fails loudly — which is the opposite of what happened on 17
+        // Aug, where the type quietly followed the space down to 5pt and every
+        // property still passed.
+        let size = max(Self.markTypeFloor, min(10, rhythm * 0.78))
+        lastMarkTypeSize = size
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: size, weight: .regular),
             .foregroundColor: StateLegend.Palette.faint,
