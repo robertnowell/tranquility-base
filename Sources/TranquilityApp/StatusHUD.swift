@@ -3408,7 +3408,12 @@ final class StatusHUD: NSObject {
         }
         let doorFace = rowFace(goButton.attributedTitle)
         let wordFace = rowFace(cardControls.wordValue)
-        let oneLexicon = doorFace?.fontName == wordFace?.fontName
+        // FAMILY, not name: the lexicon's whole design is that weight carries
+        // the difference between a door and a hint, and `monospacedSystemFont`
+        // returns a different fontName per weight — so comparing names asserted
+        // that the two roles look identical, which is the opposite of the rule.
+        // Failed its first deploy saying exactly that.
+        let oneLexicon = doorFace?.familyName == wordFace?.familyName
             && doorFace?.pointSize == wordFace?.pointSize
             && doorFace?.pointSize == StateLegend.BottomLine.size
             // Title case, not capitals: the placard beside it says "Speaking".
