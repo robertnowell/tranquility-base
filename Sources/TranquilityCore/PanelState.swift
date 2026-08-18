@@ -95,9 +95,15 @@ public enum PanelState: Equatable {
     /// ⌃⌥ from any of them means HOME first, never straight to the next agent
     /// (ruled 06 Aug — the error card was still advancing: "it should always
     /// go back to home before it goes to the next agent update").
+    ///
+    /// `.preparing` counts (18 Aug). It is the announcement's own card — the
+    /// same card, a second earlier — and leaving it out was the one place the
+    /// home-first law had a hole: ⌃⌥ during a slow summary walked to the NEXT
+    /// agent, from a face that had no other way back to the grid. The card you
+    /// are waiting for is still a card on stage.
     public var isCardOnStage: Bool {
         switch self {
-        case .speaking, .result, .receipt: return true
+        case .preparing, .speaking, .result, .receipt: return true
         default: return false
         }
     }
