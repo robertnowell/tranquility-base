@@ -455,6 +455,34 @@ row of 127 qualified.
 Note what the gate does not catch, on purpose: an initialism WITH a vowel
 ("tvpa", "json") survives, because a voice can say it.
 
+## 24. The signature is a door to the repository — SHIPPED (18 Aug)
+
+Asked for directly: "let's have a Tranquility Base link to our GitHub, the
+wordmark on the homepage, on the grid."
+
+`GridFooterView`'s wordmark is a `DoorLabel` now, so it takes the cursor and the
+hover step from the type rather than from a call site, and taps reach
+`StatusHUD.onOpenRepository`. `StateLegend.repositoryURL` is the destination.
+
+It goes through `BrowserFocus` like the other doors — raise the tab that already
+has it rather than making tab twenty-nine — but with **`reloading: false`**,
+which is the first caller for that parameter. The pages the other doors open are
+rewritten by this app immediately beforehand, so reloading them is the point
+(issue 22); the repository is a live page nobody here rewrote, and reloading it
+would throw away whatever the user was reading.
+
+This spends half of the 10 Aug wordmark ruling. "`Controls` brightens under the
+cursor and the signature never does, so the pair reads as one live thing and one
+dead one at identical contrast" — the signature is not a dead thing any more,
+and a door that does not answer the pointer is exactly the secret this panel
+spent the day closing. The pair still reads as two different things, by
+DESTINATION rather than by liveness: `Controls` reveals the chords in place, the
+signature leaves.
+
+Drills: `signatureIsADoor`, `signatureAnswersTheCursor`, `signatureReachesTheHost`
+— three, because they fail separately, and a door wired to nothing is the same
+secret as a door with no cursor one layer further in.
+
 ## 21. Obfuscation welded two words together — FIXED (18 Aug)
 
 "Sometimes after we obfuscate variable names it removes the space between that

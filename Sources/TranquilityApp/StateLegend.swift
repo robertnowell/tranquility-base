@@ -939,10 +939,22 @@ enum StateLegend {
     /// Set in `hint`, the same ink as `Controls`, NOT in `faint`: `faint` is
     /// ruled decorative-only with no contrast floor and explicitly "never small
     /// text", and a wordmark is small text. Subtlety is bought with
-    /// letterspacing and stillness instead — `Controls` brightens to `ink`
-    /// under the cursor and the signature never does, so the pair reads as one
-    /// live thing and one dead one at identical contrast.
+    /// letterspacing rather than with dimness.
+    ///
+    /// It used to be bought with stillness too — "`Controls` brightens under
+    /// the cursor and the signature never does, so the pair reads as one live
+    /// thing and one dead one at identical contrast" (10 Aug). That half is
+    /// spent: the signature is a door now (18 Aug), and a door that does not
+    /// answer the pointer is the secret this panel spent a day closing. The
+    /// pair still reads as two different things, by DESTINATION rather than by
+    /// liveness — `Controls` reveals the chords in place, the signature leaves
+    /// for the repository.
     static let wordmark = "Tranquility Base"
+
+    /// Where the signature goes. The project is public, and the wordmark is
+    /// the only thing on the panel that names the whole app rather than one
+    /// agent — so it is the one place a door to the source belongs.
+    static let repositoryURL = URL(string: "https://github.com/robertnowell/tranquility-base")!
     /// The quiet placard row above the hint. "AGENT", not "SESSION" (ui-pass-7,
     /// ruling 1): every user-facing noun on the panel says agent.
     static let newAgentTitle = "NEW AGENT"

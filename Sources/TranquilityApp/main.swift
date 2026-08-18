@@ -603,6 +603,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSWorkspace.shared.open(url)
             }
         }
+        // The signature. Same door mechanics as the pages above it — raise the
+        // tab that already has it rather than making tab twenty-nine — except
+        // that it does NOT reload: the repository is a live page nobody here
+        // rewrote, so a reload would throw away whatever the user was reading
+        // on it. This is the caller `reloading: false` was left in for.
+        hud.onOpenRepository = {
+            let url = StateLegend.repositoryURL
+            if BrowserFocus.focusExistingTab(url, reloading: false) == .notFound {
+                NSWorkspace.shared.open(url)
+            }
+        }
         // The drop tray's three wires (docs: the panel takes files).
         //
         // Answered from a CACHED tuple, never a live probe: render() calls
