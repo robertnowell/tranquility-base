@@ -19,6 +19,31 @@ public enum TranscriptArchive {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
     }
 
+    /// The transcript file for one session id — FOUND, not derived.
+    ///
+    /// Claude Code files a session under a directory named for its cwd with the
+    /// separators mangled, and reproducing that mangling here would be a second
+    /// copy of somebody else's private encoding: it works until the day they
+    /// change it, and then it fails silently. A session id is a uuid, so the
+    /// file it names is unique across every project directory; checking for it
+    /// is one `fileExists` per directory and no assumptions at all.
+    ///
+    /// Nil when the session has not written a transcript yet, which is a real
+    /// state — a session registers with `claude agents --json` a beat before its
+    /// first line lands on disk.
+    public static func transcriptPath(forSessionId id: String,
+                                      projects: URL = projectsDirectory) -> String? {
+        let fm = FileManager.default
+        guard let dirs = try? fm.contentsOfDirectory(at: projects,
+                                                     includingPropertiesForKeys: nil)
+        else { return nil }
+        for dir in dirs {
+            let candidate = dir.appendingPathComponent("\(id).jsonl")
+            if fm.fileExists(atPath: candidate.path) { return candidate.path }
+        }
+        return nil
+    }
+
     /// Most recently modified sessions first, skipping any whose final message is
     /// too short to be worth summarizing.
     public static func recentSamples(limit: Int = 20, minimumLength: Int = 120) -> [Sample] {
