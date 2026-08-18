@@ -344,7 +344,14 @@ final class StatusHUD: NSObject {
         if let detail, !detail.isEmpty {
             line.append(NSAttributedString(
                 string: "\n" + detail,
-                attributes: [.font: StateLegend.Face.chrome(11),
+                // Prose: the detail slot carries exactly one thing, the
+                // read-back, and a read-back is YOUR words waiting to be sent.
+                // It was mono on the argument that they are about to be typed
+                // into a terminal — but that is a fact about the destination,
+                // and by it the card's body would be mono too, since those
+                // words came out of one. The rule is about role: an agent's
+                // message is prose, and so is yours.
+                attributes: [.font: StateLegend.Face.message(11),
                              .foregroundColor: StateLegend.Palette.secondary]))
         }
         stripLabel.attributedStringValue = line
@@ -1804,7 +1811,7 @@ final class StatusHUD: NSObject {
                 launchRow.show(AgentDefaults.load())
                 directoryRow.show(AgentDefaults.directoryAsTyped())
                 bodyLabel.stringValue = face.body
-                hintLabel.stringValue = "return to save · choose… picks a folder"
+                setHint("return to save · choose… picks a folder")
                 // Settings is the second face that asks for typing, so it takes
                 // the keyboard the way the list does, and gives it back through
                 // the same baseline door.
@@ -1817,13 +1824,13 @@ final class StatusHUD: NSObject {
                 voiceList.isHidden = false
                 bodyLabel.stringValue =
                     "\(face.roster.count) of \(face.voices.count) on roster. \(face.body)"
-                hintLabel.stringValue = "check = on roster · ▶ preview · drag ≡ to reorder"
+                setHint("check = on roster · ▶ preview · drag ≡ to reorder")
                 rebuildVoiceRows()
 
             case .recent:
                 voiceList.isHidden = false
                 bodyLabel.stringValue = face.body
-                hintLabel.stringValue = "▶ plays the capture · ⋯ copy, retry, reveal"
+                setHint("▶ plays the capture · ⋯ copy, retry, reveal")
                 rebuildAudioRows(face.audioEvents ?? [])
             }
         }
@@ -2053,6 +2060,17 @@ final class StatusHUD: NSObject {
     /// every other edge uses. Called from both writers of the text — render()'s
     /// arms and `note()` — so the two can never disagree about whether the line
     /// exists.
+    /// The hint line, composed. Several hints name a mark — "▶ plays the
+    /// capture", "drag ≡ to reorder" — and a mark typed into a `stringValue` is
+    /// a mark nobody measured. Everything that writes this line goes through
+    /// here.
+    private func setHint(_ text: String) {
+        hintLabel.attributedStringValue = ChromeType.line(
+            text, font: hintLabel.font ?? StateLegend.Face.chrome(10),
+            color: hintLabel.textColor ?? StateLegend.Lens.guidance.color)
+        syncHintVisibility()
+    }
+
     private func syncHintVisibility() {
         hintLabel.isHidden = hintLabel.stringValue.isEmpty
     }
@@ -3465,6 +3483,58 @@ final class StatusHUD: NSObject {
         // And the one exception, said out loud: an agent's words are prose.
         let bodyIsProse = !isMono(drawnFont(bodyLabel))
 
+        // The mark census: walk the ACTUAL view tree and find any mark drawn
+        // without going through the composer. The chip's ▣ was a plain
+        // `labelWithString: "▣"` in its own view, frame-centred and visibly
+        // low, and the first audit missed it because it looked for glyphs in
+        // the files it had already touched. A tree walk cannot be fooled that
+        // way: whatever is on screen is what it reads.
+        //
+        // A mark is composed when its run carries a baseline offset. Zero is a
+        // legitimate answer for a glyph that needs none, so the test is that
+        // the ATTRIBUTE exists — which only `ChromeType.line` puts there.
+        //
+        // A mark ALONE in its own control is exempt: ▶, ⋯, ■ and the filter's
+        // ⌕ are centred in their frames, which is the right answer when there
+        // is no cap line to sit on. The rule is about a mark that shares a line
+        // with words, which is the only case where "level with the text" means
+        // anything.
+        func needsComposing(_ text: String) -> Bool {
+            text.contains(where: ChromeType.isMark) && text.contains(where: \.isLetter)
+        }
+        func uncomposedMarks(_ view: NSView) -> [String] {
+            var found: [String] = []
+            if let field = view as? NSTextField, needsComposing(field.stringValue) {
+                let text = field.attributedStringValue
+                let plain = field.stringValue
+                for (i, ch) in plain.enumerated() where ChromeType.isMark(ch) {
+                    let index = min(i, max(0, text.length - 1))
+                    let composed = text.length > 0
+                        && text.attribute(.baselineOffset, at: index,
+                                          effectiveRange: nil) != nil
+                    if !composed { found.append("\(ch)@\(type(of: view))") }
+                }
+            }
+            if let button = view as? NSButton, button.attributedTitle.length > 0,
+               needsComposing(button.attributedTitle.string) {
+                let text = button.attributedTitle
+                for (i, ch) in text.string.enumerated() where ChromeType.isMark(ch) {
+                    let index = min(i, max(0, text.length - 1))
+                    if text.attribute(.baselineOffset, at: index, effectiveRange: nil) == nil {
+                        found.append("\(ch)@\(type(of: view))")
+                    }
+                }
+            }
+            return found + view.subviews.flatMap(uncomposedMarks)
+        }
+        var loose: [String] = []
+        for probe in ["grid", "speaking", "needsyou", "settings", "recent-audio"] {
+            _ = pose(probe)
+            panel?.contentView?.layoutSubtreeIfNeeded()
+            if let root = panel?.contentView { loose += uncomposedMarks(root) }
+        }
+        let everyMarkComposed = loose.isEmpty
+
         SelfTest.report("chrome", [
             ("marksSitOnTheLine", worstMark <= 0.25),
             ("marksShareOneOpticalSize", markSpread <= 0.5),
@@ -3479,8 +3549,10 @@ final class StatusHUD: NSObject {
             ("rowLightsItsName", rowLightsItsName),
             ("chromeIsMono", strays.isEmpty),
             ("theMessageIsProse", bodyIsProse),
+            ("everyMarkComposed", everyMarkComposed),
         ])
-        Permissions.log("selftest chrome: strays "
+        Permissions.log("selftest chrome: loose marks "
+            + "\(loose.isEmpty ? "none" : Set(loose).sorted().joined(separator: " ")) · strays "
             + "\(strays.isEmpty ? "none" : strays.joined(separator: ",")) · face "
             + "\(ChromeType.preferredFamily ?? "system mono") · "
             + "worst \(String(format: "%.2f", worstMark))pt "
@@ -5588,6 +5660,15 @@ final class StatusHUD: NSObject {
         backButton.isBordered = false
         backButton.controlSize = .small
         backButton.font = StateLegend.Face.chrome(11, .medium)
+        // The ‹ is a mark beside a word, so it goes through the same composer
+        // as every other one rather than sitting on the baseline where the
+        // font left it. `reink` because a ConsoleButton repaints by rebuilding
+        // its title, and this title is attributed.
+        backButton.reink = { [weak backButton] color in
+            backButton?.attributedTitle = ChromeType.line(
+                StateLegend.backTitle, font: StateLegend.Face.chrome(11, .medium),
+                color: color)
+        }
         backButton.restingInk = StateLegend.Lens.chrome.color
 
         // Surfaced only once a transcription has run long enough to deserve them
@@ -6528,14 +6609,21 @@ final class TrayRowView: NSStackView {
             // The paperclip is the one glyph here that is not from the state
             // legend: the legend's marks all mean something about a SESSION,
             // and a staged file is a fact about the message instead.
-            let mark = NSTextField(labelWithString: "▣")
-            mark.font = ChromeType.mono(ofSize: 10, weight: .regular)
-            mark.textColor = StateLegend.Lens.chrome.color
-            mark.translatesAutoresizingMaskIntoConstraints = false
-
-            let name = NSTextField(labelWithString: displayName)
-            name.font = ChromeType.mono(ofSize: 10.5, weight: .regular)
-            name.textColor = StateLegend.Lens.content.color
+            // ONE label, mark and name together, so `ChromeType.line` centres
+            // the ▣ on the name's cap line by measurement. It used to be its
+            // own text field pinned with `centerY`, which centres two FRAMES —
+            // ascender to descender — and left the mark visibly low. A mark in
+            // its own view is a mark nobody is measuring.
+            let name = NSTextField(labelWithString: "")
+            let markRun = ChromeType.line("▣ ", font: ChromeType.mono(ofSize: 10, weight: .regular),
+                                          color: StateLegend.Lens.chrome.color)
+            let nameRun = NSAttributedString(
+                string: displayName,
+                attributes: [.font: ChromeType.mono(ofSize: 10.5, weight: .regular),
+                             .foregroundColor: StateLegend.Lens.content.color])
+            let composed = NSMutableAttributedString(attributedString: markRun)
+            composed.append(nameRun)
+            name.attributedStringValue = composed
             name.lineBreakMode = .byTruncatingMiddle
             name.maximumNumberOfLines = 1
             // Middle truncation, and it must actually happen: a long filename
@@ -6562,12 +6650,10 @@ final class TrayRowView: NSStackView {
             removeButton.action = #selector(removeTapped)
             removeButton.translatesAutoresizingMaskIntoConstraints = false
 
-            addSubview(mark); addSubview(name); addSubview(removeButton)
+            addSubview(name); addSubview(removeButton)
             NSLayoutConstraint.activate([
                 heightAnchor.constraint(equalToConstant: 16),
-                mark.leadingAnchor.constraint(equalTo: leadingAnchor),
-                mark.centerYAnchor.constraint(equalTo: centerYAnchor),
-                name.leadingAnchor.constraint(equalTo: mark.trailingAnchor, constant: 6),
+                name.leadingAnchor.constraint(equalTo: leadingAnchor),
                 name.centerYAnchor.constraint(equalTo: centerYAnchor),
                 name.trailingAnchor.constraint(lessThanOrEqualTo: removeButton.leadingAnchor,
                                                constant: -6),
@@ -7401,7 +7487,12 @@ private final class ControlsNoteView: NSView {
         rows.translatesAutoresizingMaskIntoConstraints = false
 
         for entry in StateLegend.controlsNote {
-            let chord = NSTextField(labelWithString: entry.chord)
+            // Through the composer: these rows are nothing BUT marks beside
+            // words — "⌃ Ctrl + ⌥ Option" — which makes them the last place
+            // that should be setting a plain string.
+            let chord = NSTextField(labelWithString: "")
+            chord.attributedStringValue = ChromeType.line(
+                entry.chord, font: font, color: StateLegend.Palette.ink)
             chord.font = font
             // The chord is the thing you are here to learn; the gloss explains
             // it. Full ink on the key, hint on the words.
