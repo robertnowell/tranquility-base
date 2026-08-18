@@ -3413,6 +3413,19 @@ final class StatusHUD: NSObject {
         panel?.contentView?.layoutSubtreeIfNeeded()
         let stripIsNotADoor = !stateLabel.isADoor
 
+        // A row lights in both registers. Asserted on the NAME as well as the
+        // wash, because the wash was there all along and the question the audit
+        // asked was whether it is enough on its own.
+        showIdle(note: nil, rows: [.init(id: "hr", name: "hover row", aux: "a1", lamp: .running)])
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let row = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }.first
+        let rowResting = row?.nameLabel.textColor
+        row?.setHovered(true)
+        let rowHovered = row?.nameLabel.textColor
+        row?.setHovered(false)
+        let rowLightsItsName = rowResting != nil && rowHovered != rowResting
+            && row?.nameLabel.textColor == rowResting
+
         SelfTest.report("chrome", [
             ("marksSitOnTheLine", worstMark <= 0.25),
             ("marksShareOneOpticalSize", markSpread <= 0.5),
@@ -3424,6 +3437,7 @@ final class StatusHUD: NSObject {
             ("titleAnswersTheCursor", titleAnswersTheCursor),
             ("doorAnswersTheCursor", doorAnswersTheCursor),
             ("stripIsNotADoor", stripIsNotADoor),
+            ("rowLightsItsName", rowLightsItsName),
         ])
         Permissions.log("selftest chrome: face "
             + "\(ChromeType.preferredFamily ?? "system mono") · "
@@ -7069,13 +7083,31 @@ final class GridRowView: NSControl {
     /// and a drill that cannot see it would be asserting a sort order about
     /// pixels it never checks.
     let nameLabel: NSTextField
+    /// The name's ink at rest, so the hover step has something to return to.
+    /// Read once at build: a row is rebuilt whenever its state changes, so a
+    /// stale value cannot outlive the ink it describes.
+    private lazy var restingName: NSColor = nameLabel.textColor ?? StateLegend.Palette.ink
 
-    override func mouseEntered(with event: NSEvent) {
-        highlight.layer?.backgroundColor = StateLegend.Palette.hover.cgColor
-    }
+    override func mouseEntered(with event: NSEvent) { setHovered(true) }
+    override func mouseExited(with event: NSEvent) { setHovered(false) }
 
-    override func mouseExited(with event: NSEvent) {
-        highlight.layer?.backgroundColor = nil
+    /// A row lights in BOTH registers (ruled 18 Aug): the wash says which
+    /// region the click lands in, and the name steps one hover distance so the
+    /// row reads as LIT rather than as a grey box with the same words on it.
+    ///
+    /// Measured, because the question was whether the wash is enough: the wash
+    /// is ΔL* 4.6 from the surface — the same distance a hovered word travels —
+    /// so its advantage over text was never contrast, it was area. Area alone
+    /// is what makes a hover feel cheap.
+    ///
+    /// The wash stays, though, and not out of taste: this is a non-activating
+    /// panel, cursor rects only fire while the app is active, and on the common
+    /// path — you in Terminal, the panel on screen — the pointer never becomes
+    /// a hand. On that path the wash is the only cue there is, and a region is
+    /// what it is cueing.
+    func setHovered(_ on: Bool) {
+        highlight.layer?.backgroundColor = on ? StateLegend.Palette.hover.cgColor : nil
+        nameLabel.textColor = on ? StateLegend.hovered(restingName) : restingName
     }
 
     /// Rule 1 of the hover standard: the wash says WHICH row the pointer is on,

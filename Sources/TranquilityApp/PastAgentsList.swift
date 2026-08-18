@@ -374,6 +374,9 @@ final class PastRowView: NSControl {
     private let idLabel: NSTextField
     private let verbLabel: NSTextField
     private let highlight = NSView()
+    /// Held so the hover can step its ink and put it back — see `setHovered`.
+    private var nameLabel: NSTextField!
+    private var restingName: NSColor = StateLegend.Palette.ink
 
     init(item: PastAgentsList.Item, target: AnyObject, action: Selector) {
         idLabel = NSTextField(labelWithString: item.row.aux)
@@ -443,6 +446,8 @@ final class PastRowView: NSControl {
         verbLabel.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(highlight)
+        nameLabel = name
+        restingName = name.textColor ?? StateLegend.Palette.ink
         addSubview(lamp); addSubview(name); addSubview(idLabel); addSubview(verbLabel)
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: GridRowView.height),
@@ -482,7 +487,9 @@ final class PastRowView: NSControl {
     /// a row cannot know it stopped being under the pointer when the thing that
     /// moved was the scroll view and not the mouse.
     func setHovered(_ on: Bool) {
+        // Both registers, exactly as the grid's rows — see `GridRowView`.
         highlight.layer?.backgroundColor = on ? StateLegend.Palette.hover.cgColor : nil
+        nameLabel.textColor = on ? StateLegend.hovered(restingName) : restingName
         idLabel.isHidden = on
         verbLabel.isHidden = !on
     }
