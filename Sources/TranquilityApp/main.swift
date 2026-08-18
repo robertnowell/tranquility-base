@@ -15,10 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkey: HotkeyMonitor!
     private let recorder = Recorder()
     private var store: QueueStore?
-    /// A turn the app authored since the last tick — today only a launch
-    /// greeting. Consumed by the intake tick, which owns what an arrival means;
-    /// set from the launcher, which owns when one happened.
-    private var appAuthoredArrival = false
     private var coordinator: Coordinator?
     private var permissionTimer: Timer?
     private var intakeTimer: Timer?
@@ -338,14 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // change — the user can ⌘-drag the item toward the clock (the
                 // autosaved position survives relaunches).
                 self.checkMenuBarPresence()
-                // A turn can also arrive because the app wrote one. The
-                // greeting a launch records does not come through the spool —
-                // it is written straight to the store, with its brief, in the
-                // agent's own name — and it is an arrival in every sense the
-                // hail cares about: a session that is waiting on you, whose
-                // card has words in it, that you have not heard.
-                var turnArrived = self.appAuthoredArrival
-                self.appAuthoredArrival = false
+                var turnArrived = false
                 if let result = try? coordinator.intake(), result.inserted > 0 {
                     // Rows were inserted: a turn came back. This is the honest
                     // trigger. Keying off the count changing missed every arrival
@@ -3195,7 +3184,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard try LaunchGreeting.record(
                     sessionId: sessionId, directory: dir, store: store) != nil else { return }
                 Permissions.log("greeting: recorded for \(sessionId.prefix(8)) in \(dir)")
-                await MainActor.run { [weak self] in self?.appAuthoredArrival = true }
+                // And it says so, out loud, immediately (ruled 18 Aug). Not a
+                // chime and not a hail: you took an action, and speaking is the
+                // recognition that the agent is alive and ready for you.
+                //
+                // The same door ⌃⌥ and a row tap already use, deliberately.
+                // `announceNext` documents why the interruptibility gate does
+                // not apply to it — "you cannot interrupt someone who just
+                // asked" — and pressing NEW AGENT is exactly that ask. It also
+                // has to be this door rather than the ambient arrival path,
+                // which would skip the greeting nearly every time: that path
+                // stays quiet when the session's own tab is frontmost, and a
+                // launch activates Terminal by construction.
+                //
+                // One path for everybody. A first-run-only greeting would be a
+                // code path the person who ships this never runs, and an
+                // unrun path collects bugs — so the power user hears the same
+                // thing the new user does, on the day they both press it.
+                await MainActor.run { [weak self] in self?.announceNext(only: sessionId) }
             } catch {
                 // The agent is up either way. A greeting that failed to land
                 // costs a trip to the terminal, which is exactly where we were

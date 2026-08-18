@@ -47,17 +47,34 @@ what you say back is typed into the tab because that is what a reply is.
   word, which is the only true thing about the session.
 - **Not on the artifact invitation.** That launch already knows what it is for.
 
-## The open question: does it speak by itself?
+## It speaks, and there is only one path
 
-> "For me, as a power user, I don't want it to talk to me automatically, but for
-> a new user, it is nice that it introduces itself and its voice."
+Ruled 18 Aug, second pass:
 
-As shipped, the greeting follows the protocol every other turn follows: **hail
-and standby** — chime plus the agent's own name, then silence until ⌃⌥. So it
-does not read itself out, and the power-user case is the default with no setting.
+> "Just speak. […] I want a new agent. I've taken an action. That is a
+> recognition that the agent is alive and ready for me to communicate. So,
+> speak. […] And also, a new flag for a new user — anytime we get into that,
+> the new-user experience is going to collect bugs, because it's not what I'm
+> using day to day. So the elegant thing is the power user has the same
+> experience as the new user."
 
-The alternative, if the first run should demonstrate the voice rather than
-describe it: speak the greeting outright the FIRST time only, keyed off a
-`UserDefaults` flag, and hail-and-standby forever after. That is one flag and one
-call at the point where `appAuthoredArrival` is set — deliberately not built,
-because the ruling above did not settle it.
+The greeting reads itself out, on every launch, for everybody.
+
+Two things follow, and both are the point:
+
+1. **It goes through `announceNext(only:)`** — the same door ⌃⌥ and a grid-row
+   tap already use. That function documents why the interruptibility gate does
+   not apply to it ("you cannot interrupt someone who just asked"), and pressing
+   NEW AGENT is exactly that ask. It also has to be this door rather than the
+   ambient arrival path: that path stays quiet when the session's own tab is
+   frontmost, and a launch activates Terminal by construction, so the greeting
+   would be skipped nearly every time it mattered.
+2. **There is no first-run flag, and no setting.** A greeting that only speaks
+   the first time is a code path the person shipping this never runs, and an
+   unrun path collects bugs. One experience, exercised daily by the people most
+   able to notice when it breaks — accessible to a new user precisely because it
+   is not a special case built for them.
+
+The hail-and-standby protocol is unchanged for turns an AGENT produces. This is
+the one turn the app produces, in answer to a button you just pressed, and
+answering out loud is what the button means.
