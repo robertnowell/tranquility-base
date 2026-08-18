@@ -43,8 +43,9 @@ final class LaunchGreetingTests: XCTestCase {
     // MARK: - The turn
 
     func testGreetingMakesTheSessionWaitingWithWordsOnItsCard() throws {
+        let line = LaunchGreeting.lines[0]
         let rowid = try XCTUnwrap(LaunchGreeting.record(
-            sessionId: "s1", directory: "/Users/x/Projects/kopi", store: store))
+            sessionId: "s1", directory: "/Users/x/Projects/kopi", line: line, store: store))
 
         let waiting = try store.waitingSessions()
         XCTAssertEqual(waiting.map(\.sessionId), ["s1"])
@@ -54,19 +55,31 @@ final class LaunchGreetingTests: XCTestCase {
         // announcer pays for a model call to describe an empty transcript.
         XCTAssertEqual(waiting.first?.latestId, rowid)
         let brief = try XCTUnwrap(store.storedBrief(sessionId: "s1", eventRowid: rowid))
-        XCTAssertEqual(brief.question, LaunchGreeting.question)
         XCTAssertEqual(brief.provider, LaunchGreeting.provider)
-        // Named by where it is, since that is the only true thing about a
-        // session that has not done anything yet.
-        XCTAssertTrue(brief.happened.contains("kopi"), brief.happened)
-        // Spoken, it opens with what it is and closes on the question.
-        XCTAssertTrue(brief.brief.spokenText().hasSuffix(LaunchGreeting.question))
+        // The spoken line is the question and NOTHING else — no project label,
+        // no "new agent", no narration of what you just did. Two or three
+        // seconds of audio, which is the whole ruling.
+        XCTAssertEqual(brief.brief.spokenText(), line)
+    }
+
+    /// Two launches in a row do not sound identical.
+    func testTheLineAlternates() {
+        let first = LaunchGreeting.nextLine()
+        let second = LaunchGreeting.nextLine()
+        XCTAssertNotEqual(first, second)
+        XCTAssertTrue(LaunchGreeting.lines.contains(first))
+        XCTAssertTrue(LaunchGreeting.lines.contains(second))
+        // Short enough to be over before you have thought about it.
+        for line in LaunchGreeting.lines {
+            XCTAssertLessThanOrEqual(line.split(separator: " ").count, 7, line)
+        }
     }
 
     /// The greeting is the app talking about the session, never to it.
     func testGreetingFabricatesNoTranscript() throws {
         let rowid = try XCTUnwrap(LaunchGreeting.record(
-            sessionId: "s1", directory: "/Users/x/Projects/kopi", store: store))
+            sessionId: "s1", directory: "/Users/x/Projects/kopi",
+            line: LaunchGreeting.lines[0], store: store))
         let event = try XCTUnwrap(store.events().first { $0.sessionId == "s1" })
         XCTAssertNil(event.transcriptPath)
         XCTAssertNil(event.lastAssistantMessage)
@@ -78,16 +91,18 @@ final class LaunchGreetingTests: XCTestCase {
     /// happen above it.
     func testGreetingIsRecordedOnce() throws {
         XCTAssertNotNil(try LaunchGreeting.record(
-            sessionId: "s1", directory: "/tmp/one", store: store))
+            sessionId: "s1", directory: "/tmp/one", line: "a", store: store))
         XCTAssertNil(try LaunchGreeting.record(
-            sessionId: "s1", directory: "/tmp/one", store: store))
+            sessionId: "s1", directory: "/tmp/one", line: "a", store: store))
         XCTAssertEqual(try store.waitingSessions().count, 1)
     }
 
     /// Two agents started in the same directory are two agents.
     func testEachSessionGetsItsOwnGreeting() throws {
-        _ = try LaunchGreeting.record(sessionId: "s1", directory: "/tmp/one", store: store)
-        _ = try LaunchGreeting.record(sessionId: "s2", directory: "/tmp/one", store: store)
+        _ = try LaunchGreeting.record(sessionId: "s1", directory: "/tmp/one",
+                                      line: "a", store: store)
+        _ = try LaunchGreeting.record(sessionId: "s2", directory: "/tmp/one",
+                                      line: "b", store: store)
         XCTAssertEqual(Set(try store.waitingSessions().map(\.sessionId)), ["s1", "s2"])
     }
 
@@ -134,8 +149,8 @@ final class LaunchGreetingTests: XCTestCase {
         var clock = Date(timeIntervalSince1970: 0)
         let found = LaunchGreeting.awaitRegistration(
             directory: "/tmp/one", excluding: [], agents: agents,
-            timeout: 30, interval: 2, now: { clock }, sleep: { clock += $0 })
+            timeout: 30, interval: 1, now: { clock }, sleep: { clock += $0 })
         XCTAssertNil(found)
-        XCTAssertEqual(agents.calls, 15)
+        XCTAssertEqual(agents.calls, 30)
     }
 }
