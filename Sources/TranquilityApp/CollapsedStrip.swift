@@ -337,6 +337,15 @@ final class CollapsedStrip: NSView {
         NSRect(x: 0, y: Self.logoSlot, width: bounds.width, height: Self.logoSlot)
     }
 
+    /// Rule 1 of the hover standard: every band of the strip does something —
+    /// expand, dismiss, new agent, or pick a lamp — so the whole strip carries
+    /// the cursor. It is the one surface where the hover swap already announced
+    /// itself, and it still never said "clickable", only "there is more here".
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         if logoRect.contains(p) { onExpand?(); return }

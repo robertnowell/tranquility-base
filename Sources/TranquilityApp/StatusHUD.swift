@@ -21,16 +21,16 @@ import TranquilityCore
 final class StatusHUD: NSObject {
     private var panel: ConsolePanel?
     private var titleLabel: DoorLabel!
-    private var bodyLabel: NSTextField!
-    private var stateLabel: NSTextField!
-    private var goButton: NSButton!
+    private var bodyLabel: CardBodyLabel!
+    private var stateLabel: DoorLabel!
+    private var goButton: ConsoleButton!
     /// The readback face's ONE negative (simplification pass, ruled): a quiet
     /// text action, not a lozenge. The Reply/Dismiss buttons are dead — chords
     /// are the interface.
-    private var dontSendButton: NSButton!
-    private var micSettingsButton: NSButton!
-    private var newSessionButton: NSButton!
-    private var openPageButton: NSButton!
+    private var dontSendButton: ConsoleButton!
+    private var micSettingsButton: ConsoleButton!
+    private var newSessionButton: ConsoleButton!
+    private var openPageButton: ConsoleButton!
     private var hintLabel: NSTextField!
     /// The capture strip's own label, and the hairline that separates it from
     /// whatever it sits under.
@@ -186,10 +186,10 @@ final class StatusHUD: NSObject {
     private var directoryRow: SettingRowView!
     private var voiceStack: NSStackView!
     private var voiceListHeight: NSLayoutConstraint!
-    private var gearButton: NSButton!
-    private var collapseButton: NSButton!
-    private var backButton: NSButton!
-    private var pastBackButton: NSButton!
+    private var gearButton: ConsoleButton!
+    private var collapseButton: ConsoleButton!
+    private var backButton: ConsoleButton!
+    private var pastBackButton: ConsoleButton!
     private var waitingRows: NSStackView!
     var onPickWaiting: ((String) -> Void)?
     /// Wired by the app onto `SessionLauncher.resume`. Only ever called for a
@@ -719,6 +719,16 @@ final class StatusHUD: NSObject {
         }
     }
 
+    /// The faces the breadcrumb is a door on. One declaration, read by the
+    /// cursor and by the handler, so the affordance and the behaviour cannot
+    /// drift apart.
+    private var breadcrumbIsADoor: Bool {
+        switch state {
+        case .speaking, .preparing: return true
+        default: return false
+        }
+    }
+
     @objc nonisolated private func breadcrumbClicked() {
         MainActor.assumeIsolated {
             // Same altitude rule as ⌃⌥: home from a card. Speaking covers the
@@ -899,8 +909,8 @@ final class StatusHUD: NSObject {
     // MARK: - Transcription progress (sanctioned change: open issue #4)
 
     private var transcribingTimer: Timer?
-    private var cancelTranscriptionButton: NSButton!
-    private var retryTranscriptionButton: NSButton!
+    private var cancelTranscriptionButton: ConsoleButton!
+    private var retryTranscriptionButton: ConsoleButton!
 
     /// Working, but with the clock visible. A 27-second transcription once sat on
     /// "Transcribing your reply…" with no feedback at all and read as a hang
@@ -1528,6 +1538,11 @@ final class StatusHUD: NSObject {
                 ? (row?.stateText ?? "") : face.placardOverride)
         stateLabel.isHidden = false
         stateLabel.textColor = StateLegend.Lens.chrome.color
+        // A baseline property like every other (see the contract above): the
+        // breadcrumb is a door on exactly the faces `breadcrumbClicked` lets
+        // through, so a pointer never offers a way back from a face that has
+        // none.
+        stateLabel.isADoor = breadcrumbIsADoor
         // A title exists exactly when the face carries one; an empty label still
         // reserves a line's height, which reads as a hole. The identity renders
         // in MONO, matching the grid rows; the topic joins in the regular face.
@@ -1556,9 +1571,7 @@ final class StatusHUD: NSObject {
         if let door {
             let label = { if case .report = door { return "OPEN REPORT" }
                           return "OPEN HUB" }()
-            openPageButton.attributedTitle = letterspaced(
-                "\(label) \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
-                color: StateLegend.Palette.accent)
+            openPageButton.wordmark = "\(label) \(StateLegend.Glyph.forward)"
         }
         dontSendButton.isHidden = true
         micSettingsButton.isHidden = true
@@ -3890,6 +3903,8 @@ final class StatusHUD: NSObject {
 
         contrastDrill()
         titleDoorDrill()
+        selectionDrill()
+        hoverDrill()
         quietRowsDrill()
         closedRowsDrill()
         readIntensityDrill()
@@ -4531,6 +4546,138 @@ final class StatusHUD: NSObject {
         SelfTest.report("titleDoor", checks)
     }
 
+    /// A card's prose is selectable, and selects itself never.
+    ///
+    /// The 16 Aug screenshot: a card came back from a turn with its whole body
+    /// highlighted, in a light-grey band that put `ink` at 1.23:1 — text and
+    /// selection both, unreadable, and untouched by any hand. Two independent
+    /// faults, so two independent halves here.
+    ///
+    /// The panel cannot be photographed by a drill, so the second half is
+    /// asserted where it is caused: the panel's declared appearance. `.aqua` on
+    /// a dark console is what dressed the selection band for a light ground.
+    private func selectionDrill() {
+        var checks: [(String, Bool)] = []
+        currentTarget = ("drill", 1, "promotions")
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("The poller is fixed. Go?"),
+            sessionId: "drill", pid: 1, project: "promotions", cwd: "/tmp")
+
+        // Nothing selects itself. Both halves: no field editor is installed, and
+        // asking for one the way the window does on becoming key is refused.
+        checks.append(("aCardArrivesUnselected", bodyLabel.currentEditor() == nil))
+        checks.append(("noSelection", !bodyLabel.hasSelection))
+        if let panel {
+            _ = panel.makeFirstResponder(bodyLabel)
+            checks.append(("theWindowCannotHandItTheKeyboard",
+                           bodyLabel.currentEditor() == nil))
+
+            let inside = bodyLabel.convert(
+                NSPoint(x: bodyLabel.bounds.midX, y: bodyLabel.bounds.midY), to: nil)
+            func press(at point: NSPoint) -> NSEvent? {
+                NSEvent.mouseEvent(
+                    with: .leftMouseDown, location: point, modifierFlags: [],
+                    timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: 1)
+            }
+            let tab = NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: panel.windowNumber, context: nil, characters: "\t",
+                charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48)
+            // The gate, in all four directions. The third and fourth are the
+            // ones that were failing: the window picks a first responder on
+            // becoming key with no mouse event at all, and Tab walks the key
+            // view loop into any selectable field.
+            checks.append(("aPressOnTheWordsSelects", bodyLabel.acceptsPress(press(at: inside))))
+            checks.append(("aPressElsewhereDoesNot",
+                           !bodyLabel.acceptsPress(press(at: NSPoint(x: -80, y: -80)))))
+            checks.append(("noEventDoesNot", !bodyLabel.acceptsPress(nil)))
+            checks.append(("theKeyboardDoesNot", !bodyLabel.acceptsPress(tab)))
+        }
+
+        // A hand-made selection survives a repaint that changed only the ink —
+        // the karaoke cursor rewrites this label once per spoken word — and is
+        // dropped the moment the WORDS change, because it is then a selection
+        // of text that is no longer there.
+        bodyLabel.selectText(nil)
+        let madeByHand = bodyLabel.hasSelection
+        paintInkForTesting(displayCursor: 4)
+        checks.append(("aRepaintKeepsIt", madeByHand && bodyLabel.hasSelection))
+        bodyLabel.stringValue = "A different turn, with different words in it."
+        checks.append(("newWordsDropIt", !bodyLabel.hasSelection))
+        checks.append(("andGiveTheKeyboardBack", bodyLabel.currentEditor() == nil))
+
+        // The cause of the unreadable band. `.aqua` was pinned when the console
+        // was light putty and did not follow it into the dark (09 Aug).
+        checks.append(("panelIsDressedForItsOwnSurface",
+                       panel?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua))
+
+        SelfTest.report("selection", checks)
+        showIdle(rows: [])
+    }
+
+    /// Every control answers the pointer, and answers it the same way.
+    ///
+    /// The standard is docs/ruling-the-panel-answers-the-pointer.md, written
+    /// after the panel was measured against its own inventory: two cursor rects
+    /// in the
+    /// whole app, and sixteen buttons that looked exactly like the prose beside
+    /// them until you clicked one.
+    ///
+    /// The drill asserts the STANDARD, not the call sites: that every control
+    /// is a `ConsoleButton` (which is where the cursor rect lives, so being one
+    /// IS rule 1), that its hover ink is a real step away from its resting ink
+    /// and clears the text floor, and that nothing rests at `ink` — rule 4,
+    /// which is the rule a new button is most likely to break, because `ink` is
+    /// the obvious colour to reach for and it is the one colour with no answer
+    /// to the pointer.
+    private func hoverDrill() {
+        var checks: [(String, Bool)] = []
+        let controls: [(String, ConsoleButton?)] = [
+            ("go", goButton), ("openPage", openPageButton), ("gear", gearButton),
+            ("collapse", collapseButton), ("back", backButton),
+            ("pastBack", pastBackButton), ("dontSend", dontSendButton),
+            ("micSettings", micSettingsButton), ("newSession", newSessionButton),
+            ("cancelTranscription", cancelTranscriptionButton),
+            ("retryTranscription", retryTranscriptionButton),
+        ]
+        for (name, control) in controls {
+            guard let control, let resting = control.restingInk else {
+                checks.append(("\(name)Exists", control != nil))
+                continue
+            }
+            guard let hover = control.hoverInkForTesting else { continue }
+            // Rule 4 first: at `ink` the ramp has no step, and `hovered`
+            // answers with the resting colour to say so.
+            checks.append(("\(name)RestsBelowInk", resting != StateLegend.Palette.ink))
+            checks.append(("\(name)StepsOnHover", hover != resting))
+            checks.append(("\(name)HoverClearsTheTextFloor",
+                           StateLegend.Measure.contrast(hover, StateLegend.Palette.surface) >= 4.5))
+            control.setHoveringForTesting(true)
+            let lit = control.currentInkForTesting
+            control.setHoveringForTesting(false)
+            let unlit = control.currentInkForTesting
+            checks.append(("\(name)WearsIt", lit == hover && unlit == resting))
+        }
+
+        // The ramp itself: every step is brighter than the one below it, and
+        // `ink` is the top, so "one step up" is always a step towards legible
+        // and never away from it. This is what makes rule 2 safe to apply
+        // without checking each control's contrast by hand.
+        let ordered = zip(StateLegend.inkRamp, StateLegend.inkRamp.dropFirst()).allSatisfy {
+            StateLegend.Measure.contrast($1, StateLegend.Palette.surface)
+                > StateLegend.Measure.contrast($0, StateLegend.Palette.surface)
+        }
+        checks.append(("theRampClimbs", ordered))
+        checks.append(("inkIsTheTop",
+                       StateLegend.hovered(StateLegend.Palette.ink) == StateLegend.Palette.ink))
+        checks.append(("accentStepsToItsOwnHue",
+                       StateLegend.hovered(StateLegend.Palette.accent)
+                       == StateLegend.Palette.accentHover))
+
+        SelfTest.report("hover", checks)
+    }
+
     /// Assert the palette still measures what the ruling says it measures.
     ///
     /// This drill renders nothing. It exists because every other drill here
@@ -5068,11 +5215,21 @@ final class StatusHUD: NSObject {
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        // The surface is an opaque light console on every face (ruled): AppKit's
-        // own chrome — bezels, the picker, the progress bar — must render for a
-        // light surface even when the system is in dark mode, or a dark-mode
-        // bezel sits on light putty looking like a hole.
-        panel.appearance = NSAppearance(named: .aqua)
+        // The panel declares the appearance it actually DRAWS, so AppKit's own
+        // chrome — bezels, scrollers, menus, and the text-selection band — is
+        // drawn for this surface rather than for the system's.
+        //
+        // This was pinned to `.aqua` when the console was light putty, with a
+        // comment whose logic now argues the other way: "a dark-mode bezel on
+        // light putty looks like a hole". The console went dark on 09 Aug
+        // (docs/ruling-the-console-goes-dark.md) and the pin did not follow, so
+        // every AppKit-drawn thing on the panel has been dressed for a light
+        // ground on a dark one ever since. Measured 18 Aug on the one that
+        // shows: an inactive text selection painted #DCDCDC under `ink`, which
+        // is 1.23:1 — the least readable thing the panel has ever drawn, and
+        // below every floor in the palette. Under `.darkAqua` the same band is
+        // #464646 under white at 9.44:1.
+        panel.appearance = NSAppearance(named: .darkAqua)
 
         // Opaque light console surface, panel-wide (ruled — the blur is dead: an
         // instrument guarantees its own contrast, a blur borrowed the desktop's).
@@ -5114,7 +5271,7 @@ final class StatusHUD: NSObject {
         // Widgets carry no initial visibility: build() is only reached from
         // render(), which writes every widget's visibility before the panel is
         // ever ordered front.
-        stateLabel = NSTextField(labelWithString: "")
+        stateLabel = DoorLabel(labelWithString: "")
         stateLabel.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
         stateLabel.textColor = StateLegend.Lens.chrome.color
         // The ◀ breadcrumb is clickable (ruled 06 Aug): voiced first, but a
@@ -5138,32 +5295,39 @@ final class StatusHUD: NSObject {
         titleLabel.addGestureRecognizer(
             NSClickGestureRecognizer(target: self, action: #selector(goToSession)))
 
-        bodyLabel = NSTextField(wrappingLabelWithString: "")
+        bodyLabel = CardBodyLabel(wrappingLabelWithString: "")
         bodyLabel.font = .systemFont(ofSize: 12)
         bodyLabel.textColor = StateLegend.Lens.content.color
         bodyLabel.maximumNumberOfLines = 0
+        // Selectable so a line can be quoted out of a card by hand; see
+        // `CardBodyLabel` for what stops it selecting itself.
         bodyLabel.isSelectable = true
 
         // Every surviving action is a QUIET text action (ruled): borderless,
         // palette ink, no lozenge. The button rows are dead — chords are the
         // interface; these are the few context actions a face still owns.
-        func quietAction(_ title: String, _ action: Selector) -> NSButton {
-            let button = NSButton(title: title, target: self, action: action)
+        func quietAction(_ title: String, _ action: Selector) -> ConsoleButton {
+            let button = ConsoleButton(title: title, target: self, action: action)
             button.isBordered = false
             button.controlSize = .small
             button.font = .systemFont(ofSize: 11, weight: .medium)
-            button.contentTintColor = StateLegend.Palette.ink
+            // Chrome, not `ink` — the hover standard's fourth rule:
+            // the brightest ink belongs to the prose, and a control resting
+            // there is both louder than the message and out of ramp, with no
+            // step left to answer the pointer with. `secondary` is 6.69:1,
+            // legible with room to spare, and it steps up to `ink` on hover.
+            button.restingInk = StateLegend.Lens.chrome.color
             return button
         }
         // "Go to agent" (ui-pass-7, rulings 1 + 3): the one navigation the
         // panel owns gets presence — go-green palette ink, letterspaced caps
         // like the grid placards, and the action row's right edge to itself.
         // Still flat, no lozenge: promotion by ink and placement, not chrome.
-        goButton = NSButton(title: "Go to agent", target: self, action: #selector(goToSession))
+        goButton = ConsoleButton(title: "Go to agent", target: self,
+                                 action: #selector(goToSession))
         goButton.isBordered = false
-        goButton.attributedTitle = letterspaced(
-            "GO TO AGENT \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
-            color: StateLegend.Palette.accent)
+        goButton.restingInk = StateLegend.Palette.accent
+        goButton.wordmark = "GO TO AGENT \(StateLegend.Glyph.forward)"
         // The second door shares "Go to agent"'s treatment — same kind of
         // move, leave this panel and go to the thing — and differs only in
         // destination: one is a terminal tab, the other a browser. It sits at
@@ -5172,12 +5336,11 @@ final class StatusHUD: NSObject {
         // nothing. The title here is a placeholder; render() sets the real
         // label per card — OPEN REPORT when this turn wrote a page, OPEN HUB
         // otherwise — because the label follows the destination (ruled 15 Aug).
-        openPageButton = NSButton(title: "Open hub", target: self,
-                                  action: #selector(openHubTapped))
+        openPageButton = ConsoleButton(title: "Open hub", target: self,
+                                       action: #selector(openHubTapped))
         openPageButton.isBordered = false
-        openPageButton.attributedTitle = letterspaced(
-            "OPEN HUB \(StateLegend.Glyph.forward)", size: 10.5, tracking: 1.3,
-            color: StateLegend.Palette.accent)
+        openPageButton.restingInk = StateLegend.Palette.accent
+        openPageButton.wordmark = "OPEN HUB \(StateLegend.Glyph.forward)"
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
         // The device-fault card's way out. Quiet like its row-mates: it is a
         // door, not an alarm — the placard and the body have already said how
@@ -5194,23 +5357,24 @@ final class StatusHUD: NSObject {
         // A real symbol at a real size. The text glyph was 12pt — visually timid
         // and, worse, a hit target well under the ~24pt a fingertip-sized control
         // needs even for a mouse.
-        gearButton = NSButton(image: NSImage(systemSymbolName: "gearshape",
-                                             accessibilityDescription: "Settings")!
-                                .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))!,
-                              target: self, action: #selector(gearTapped))
+        gearButton = ConsoleButton(image: NSImage(systemSymbolName: "gearshape",
+                                                  accessibilityDescription: "Settings")!
+                                     .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))!,
+                                  target: self, action: #selector(gearTapped))
         gearButton.isBordered = false
-        gearButton.contentTintColor = StateLegend.Lens.chrome.color
+        gearButton.restingInk = StateLegend.Lens.chrome.color
         gearButton.translatesAutoresizingMaskIntoConstraints = false
         gearButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
         gearButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
 
         // A breadcrumb, not a button in a row of actions: it says where you are and
         // the only way out is back the way you came.
-        backButton = NSButton(title: StateLegend.backTitle, target: self, action: #selector(backTapped))
+        backButton = ConsoleButton(title: StateLegend.backTitle, target: self,
+                                   action: #selector(backTapped))
         backButton.isBordered = false
         backButton.controlSize = .small
         backButton.font = .systemFont(ofSize: 11, weight: .medium)
-        backButton.contentTintColor = StateLegend.Lens.chrome.color
+        backButton.restingInk = StateLegend.Lens.chrome.color
 
         // Surfaced only once a transcription has run long enough to deserve them
         // (sanctioned change: open issue #4). Quiet text, like their row-mates.
@@ -5412,7 +5576,7 @@ final class StatusHUD: NSObject {
         // opens the panel, so "Show panel" was a second door to one room, and a
         // control for shrinking the panel belongs on the panel rather than two
         // clicks away in a menu you have to know is there.
-        collapseButton = NSButton(
+        collapseButton = ConsoleButton(
             // A chevron, ruled over the standard sidebar glyph. The sidebar
             // symbol carries a rectangle that reads as a second panel edge
             // inside a panel that already has one, and at 12pt against a 10pt
@@ -5425,7 +5589,7 @@ final class StatusHUD: NSObject {
                 .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))!,
             target: self, action: #selector(collapseTapped))
         collapseButton.isBordered = false
-        collapseButton.contentTintColor = StateLegend.Lens.chrome.color
+        collapseButton.restingInk = StateLegend.Lens.chrome.color
         collapseButton.translatesAutoresizingMaskIntoConstraints = false
         collapseButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
         collapseButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
@@ -5435,12 +5599,12 @@ final class StatusHUD: NSObject {
         // gear. Ruled 12 Aug — the separate "‹ Back" button above the placard
         // made the list two rows deep where the grid is one, and the two faces
         // stopped rhyming.
-        pastBackButton = NSButton(
+        pastBackButton = ConsoleButton(
             image: NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back")!
                 .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))!,
             target: self, action: #selector(backTapped))
         pastBackButton.isBordered = false
-        pastBackButton.contentTintColor = StateLegend.Lens.chrome.color
+        pastBackButton.restingInk = StateLegend.Lens.chrome.color
         pastBackButton.translatesAutoresizingMaskIntoConstraints = false
         pastBackButton.isHidden = true
         background.addSubview(pastBackButton)
@@ -5659,6 +5823,10 @@ final class StatusHUD: NSObject {
 
         Permissions.log("highlight rendered bright=\(inkBrightLength)/\(full.length)")
     }
+
+    /// `paintInk` under a name that says why a drill is calling it: to repaint
+    /// the body without changing a word of it.
+    func paintInkForTesting(displayCursor: Int) { paintInk(displayCursor: displayCursor) }
 
     /// How many characters are currently painted as spoken. Read from the
     /// PIXELS, not from `face.spokenUpTo` — a drill that asked the field would
@@ -6130,18 +6298,19 @@ final class TrayRowView: NSStackView {
         arrangedSubviews.compactMap { ($0 as? ChipRow)?.displayName }
     }
 
-    var removeButtonsForTesting: [NSButton] {
+    var removeButtonsForTesting: [ConsoleButton] {
         arrangedSubviews.compactMap { ($0 as? ChipRow)?.removeButton }
     }
 
     private final class ChipRow: NSView {
         var onRemove: (() -> Void)?
         let displayName: String
-        let removeButton: NSButton
+        let removeButton: ConsoleButton
 
         init(path: String) {
             displayName = (path as NSString).lastPathComponent
-            removeButton = NSButton(title: StateLegend.Glyph.denied, target: nil, action: nil)
+            removeButton = ConsoleButton(title: StateLegend.Glyph.denied,
+                                         target: nil, action: nil)
             super.init(frame: .zero)
             translatesAutoresizingMaskIntoConstraints = false
 
@@ -6166,11 +6335,18 @@ final class TrayRowView: NSStackView {
 
             removeButton.isBordered = false
             removeButton.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
-            removeButton.contentTintColor = StateLegend.Lens.chrome.color
-            removeButton.attributedTitle = NSAttributedString(
-                string: StateLegend.Glyph.denied,
-                attributes: [.font: NSFont.monospacedSystemFont(ofSize: 10, weight: .medium),
-                             .foregroundColor: StateLegend.Lens.chrome.color])
+            // The one control on the panel that already advertised itself (it
+            // has carried a pointing hand since the tray shipped), so it is the
+            // one that must not be the exception now there is a standard.
+            removeButton.reink = { [weak removeButton] color in
+                removeButton?.attributedTitle = NSAttributedString(
+                    string: StateLegend.Glyph.denied,
+                    attributes: [
+                        .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .medium),
+                        .foregroundColor: color,
+                    ])
+            }
+            removeButton.restingInk = StateLegend.Lens.chrome.color
             removeButton.target = self
             removeButton.action = #selector(removeTapped)
             removeButton.translatesAutoresizingMaskIntoConstraints = false
@@ -6334,6 +6510,171 @@ private final class DoorLabel: NSTextField {
     /// swallowing clicks meant for the card behind it.
     override func hitTest(_ point: NSPoint) -> NSView? {
         isADoor ? super.hitTest(point) : nil
+    }
+}
+
+/// The card's prose: selectable by hand, and by hand ONLY.
+///
+/// A selectable `NSTextField` is a valid key view, and a text field that becomes
+/// first responder selects ALL of its text. The two faces that take the keyboard
+/// — the list and the settings pane — hand it to whatever AppKit picks, which
+/// was this label; from then on the field editor stayed installed and every
+/// programmatic `stringValue` arrived pre-selected, so a card would come back
+/// from a turn with its whole body highlighted and nobody had touched it
+/// (screenshot, 16 Aug). The highlight was also unreadable, which is the panel's
+/// appearance and is fixed where the panel is built.
+///
+/// Selecting prose off a card is worth keeping — it is how a line gets quoted
+/// into a reply — so this does not switch selection off. It narrows WHO may
+/// start one to a pointer press that lands on these words. Keyboard traversal,
+/// the window's automatic first-responder pick, and a click anywhere else on
+/// the panel are all refused, so a selection means a hand made it.
+final class CardBodyLabel: NSTextField {
+    /// The gate, taking its event as an argument so a drill can ask the
+    /// question without a mouse: `acceptsFirstResponder` reads
+    /// `NSApp.currentEvent`, which no test can set.
+    func acceptsPress(_ event: NSEvent?) -> Bool {
+        guard let event, let window, event.window === window else { return false }
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .leftMouseDragged: break
+        default: return false
+        }
+        return bounds.contains(convert(event.locationInWindow, from: nil))
+    }
+
+    override var acceptsFirstResponder: Bool { acceptsPress(NSApp.currentEvent) }
+
+    /// New words, no selection.
+    ///
+    /// Guarded on the WORDS rather than on the assignment: `paintInk` rewrites
+    /// this label once per spoken word to advance the karaoke ink, and dropping
+    /// a hand-made selection on a repaint that changed only colour would be the
+    /// same bug pointing the other way.
+    override var stringValue: String {
+        get { super.stringValue }
+        set {
+            let changed = newValue != super.stringValue
+            super.stringValue = newValue
+            if changed { dropSelection() }
+        }
+    }
+
+    override var attributedStringValue: NSAttributedString {
+        get { super.attributedStringValue }
+        set {
+            let changed = newValue.string != super.attributedStringValue.string
+            super.attributedStringValue = newValue
+            if changed { dropSelection() }
+        }
+    }
+
+    /// True while a hand-made selection is on screen. The drill's evidence, and
+    /// read from the field editor rather than from a flag we set, because the
+    /// defect is precisely the editor disagreeing with what we think we did.
+    var hasSelection: Bool {
+        guard let editor = currentEditor() else { return false }
+        return editor.selectedRange.length > 0
+    }
+
+    func dropSelection() {
+        guard currentEditor() != nil else { return }
+        window?.makeFirstResponder(nil)
+    }
+}
+
+/// Every button on the panel answers the pointer the same way.
+///
+/// The standard (docs/ruling-the-panel-answers-the-pointer.md):
+///
+///  1. the CURSOR says a thing is a control — a pointing hand over its hit
+///     rect, everywhere, because on this panel a control and a label are the
+///     same object to the eye by design (the card's actions are quiet text with
+///     no lozenge, ruled) and nothing else distinguishes them at rest;
+///  2. the INK confirms the pointer is on THIS one — one step up the control's
+///     own ramp, `StateLegend.hovered`;
+///  3. nothing moves, nothing grows, no lozenge appears, no hue changes. A
+///     panel where things jump under the pointer is an interface asking to be
+///     looked at, which is the product this one exists not to be;
+///  4. no control rests at `ink`. The brightest ink is the prose's; a control
+///     resting there is louder than the message and has no step left to take.
+///
+/// A row-shaped control keeps the wash it already had (`Palette.hover`) instead
+/// of the ink step — see `GridRowView`. Rule 1 applies to it all the same.
+final class ConsoleButton: NSButton {
+    /// The ink at rest. Its hover value is decided by the ramp, not here, so
+    /// "one step" cannot become a different distance on a different button.
+    ///
+    /// Nil for a button that paints its own title for reasons the ramp does not
+    /// know about — the settings tabs, whose ink carries WHICH TAB IS OPEN, a
+    /// louder signal than the pointer and not one hover may overwrite. Rule 1
+    /// still applies to those: they get the cursor, and their confirmation is
+    /// the selection they already draw.
+    var restingInk: NSColor? { didSet { paintInk() } }
+
+    /// A letterspaced placard title, held as plain words so the hover step can
+    /// rebuild it in the new ink. Buttons carrying a symbol leave this nil and
+    /// are re-inked through `contentTintColor`.
+    var wordmark: String? { didSet { paintInk() } }
+
+    /// For a button drawn some third way — the chip's ✕ is a monospaced glyph
+    /// in an attributed title, which neither a tint nor a wordmark reaches.
+    /// Set this BEFORE `restingInk`, which is what triggers the first paint.
+    var reink: ((NSColor) -> Void)?
+    var wordmarkSize: CGFloat = 10.5
+    var wordmarkTracking: CGFloat = 1.3
+
+    private var hovering = false {
+        didSet { guard hovering != oldValue else { return }; paintInk() }
+    }
+
+    /// A hidden button gets no hover events, so a button hidden while the
+    /// pointer is on it would come back lit. Faces swap buttons constantly.
+    override var isHidden: Bool {
+        didSet { if isHidden { hovering = false } }
+    }
+
+    private func paintInk() {
+        guard let restingInk else { return }
+        let color = hovering ? StateLegend.hovered(restingInk) : restingInk
+        if let reink {
+            reink(color)
+        } else if let wordmark {
+            attributedTitle = letterspaced(wordmark, size: wordmarkSize,
+                                           tracking: wordmarkTracking, color: color)
+        } else {
+            contentTintColor = color
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    /// The hover ink, for the drill. Reading it off the button rather than
+    /// recomputing it is the difference between asserting the standard and
+    /// asserting the arithmetic twice.
+    var hoverInkForTesting: NSColor? { restingInk.map(StateLegend.hovered) }
+
+    func setHoveringForTesting(_ on: Bool) { hovering = on }
+    var currentInkForTesting: NSColor? {
+        if wordmark != nil {
+            return attributedTitle.length == 0 ? nil : attributedTitle.attribute(
+                .foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        }
+        return contentTintColor
     }
 }
 
@@ -6551,6 +6892,15 @@ final class GridRowView: NSControl {
 
     override func mouseExited(with event: NSEvent) {
         highlight.layer?.backgroundColor = nil
+    }
+
+    /// Rule 1 of the hover standard: the wash says WHICH row the pointer is on,
+    /// and the cursor says the row is a control at all. The wash alone cannot —
+    /// the list has always lit its rows, and a lit row still reads as a
+    /// read-state change to anyone who has not already learned otherwise.
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
     }
 
     /// "Mischief managed" (ruled 06 Aug): clicking a lit lamp switches it off —
@@ -6918,8 +7268,8 @@ private final class AudioEventRowView: NSControl, NSMenuDelegate {
     private let onRetry: () -> Void
     private let onReveal: () -> Void
     private let hairline = CALayer()
-    private var playButton: NSButton!
-    private var menuButton: NSButton!
+    private var playButton: ConsoleButton!
+    private var menuButton: ConsoleButton!
 
     var playButtonTitle: String { playButton.title }
     var controlsClearTheScroller: Bool {
@@ -6966,18 +7316,25 @@ private final class AudioEventRowView: NSControl, NSMenuDelegate {
         snippet.translatesAutoresizingMaskIntoConstraints = false
         snippet.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        playButton = NSButton(title: event.playing ? "■" : "▶",
-                              target: self, action: #selector(playTapped))
+        playButton = ConsoleButton(title: event.playing ? "■" : "▶",
+                                   target: self, action: #selector(playTapped))
         playButton.isBordered = false
         playButton.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        playButton.contentTintColor = event.playing
-            ? StateLegend.Palette.ink : StateLegend.Palette.secondary
+        if event.playing {
+            // Playing is a STATE, and it is already wearing `ink`. Hover does
+            // not overwrite a louder signal with a quieter one, so a playing
+            // row answers the pointer with the cursor alone — the same carve-out
+            // the settings tabs take.
+            playButton.contentTintColor = StateLegend.Palette.ink
+        } else {
+            playButton.restingInk = StateLegend.Palette.secondary
+        }
         playButton.translatesAutoresizingMaskIntoConstraints = false
 
-        menuButton = NSButton(title: "⋯", target: self, action: #selector(menuTapped))
+        menuButton = ConsoleButton(title: "⋯", target: self, action: #selector(menuTapped))
         menuButton.isBordered = false
         menuButton.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
-        menuButton.contentTintColor = StateLegend.Palette.secondary
+        menuButton.restingInk = StateLegend.Palette.secondary
         menuButton.translatesAutoresizingMaskIntoConstraints = false
 
         for view in [when, duration, snippet, playButton!, menuButton!] { addSubview(view) }
@@ -7114,10 +7471,10 @@ private final class VoiceRowView: NSControl {
         // list against itself.
         check.isHidden = isDownload
 
-        let play = NSButton(title: "▶", target: self, action: #selector(playTapped))
+        let play = ConsoleButton(title: "▶", target: self, action: #selector(playTapped))
         play.isBordered = false
         play.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
-        play.contentTintColor = StateLegend.Palette.secondary
+        play.restingInk = StateLegend.Palette.secondary
         // Invisible, not absent: the slot holds the name column's x so every row's
         // name starts on the same pixel. Putting "Get" in this slot instead pushed
         // the name right and misaligned that row against the whole list.
@@ -7235,6 +7592,14 @@ private final class VoiceRowView: NSControl {
 /// different shape — shape is what says "you can set this".
 private final class CheckView: NSControl {
     private let onToggle: () -> Void
+
+    /// Rule 1 of the hover standard: a control says so with the cursor. A
+    /// checkbox drawn by hand looks exactly as clickable as the glyph beside it,
+    /// which is to say not at all.
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
 
     init(on: Bool, onToggle: @escaping () -> Void) {
         self.onToggle = onToggle
