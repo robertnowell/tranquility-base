@@ -548,7 +548,7 @@ final class CollapsedStrip: NSView {
 
     private func drawGlyph(_ glyph: String, in rect: NSRect, color: NSColor) {
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+            .font: StateLegend.Face.chrome(13),
             .foregroundColor: color,
         ]
         let s = glyph as NSString
