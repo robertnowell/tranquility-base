@@ -653,10 +653,28 @@ enum StateLegend {
         case settings
     }
 
+    /// The pill is a LEGEND, and legends are set in capitals (ruled 18 Aug).
+    ///
+    /// It was not a rule, it was two lineages meeting on one pill: the state
+    /// placards grew as title case ("Speaking", "Needs you") and the ⌃⌃ ladder
+    /// rungs came from `RungKind.rawValue`, which is data and has always been
+    /// capitals ("SOLUTION", "WHY"). Same pill, same size, same position, two
+    /// cases — "is that intentional?" No.
+    ///
+    /// Capitals, because this is the one place the standard actually asks for
+    /// them: HF-STD-001B §5.6.2.5.8.3 allows capitals for "short items to draw
+    /// the user's attention to important text (for example, field labels or a
+    /// window title)", and a pill naming the face is exactly that. Everything
+    /// you READ stays mixed case — §5.13.3.3.7.6 rules capitals out for text —
+    /// so the rule the panel now follows is one line: **labels shout, content
+    /// does not.** The face labels (AGENTS, PAST AGENTS) already obeyed it; the
+    /// state pills do now; a notice is a sentence and never will.
+    static func legend(_ text: String) -> String { text.uppercased() }
+
     static func row(for situation: Situation) -> Row {
         switch situation {
         case .ready:
-            return Row(stateText: "\(Glyph.quiet) Ready", glyph: Glyph.quiet,
+            return Row(stateText: "\(Glyph.quiet) \(legend("Ready"))", glyph: Glyph.quiet,
                        lens: .chrome, speakTier: .silent)
         case .preparing:
             // The breadcrumb, not the quiet ◌ (ruled 18 Aug). Preparing was the
@@ -664,28 +682,28 @@ enum StateLegend {
             // was absent, and ⌃⌥ walked to the NEXT agent rather than home —
             // "there is no way to get back to the grid". A wait you cannot
             // leave is a trap, and the mark that says you can leave is ◀.
-            return Row(stateText: "\(Glyph.home) Preparing", glyph: Glyph.home,
+            return Row(stateText: "\(Glyph.home) \(legend("Preparing"))", glyph: Glyph.home,
                        lens: .chrome, speakTier: .silent)
         case .working:
-            return Row(stateText: "\(Glyph.quiet) Working", glyph: Glyph.quiet,
+            return Row(stateText: "\(Glyph.quiet) \(legend("Working"))", glyph: Glyph.quiet,
                        lens: .chrome, speakTier: .silent)
         case .workingFor(let seconds):
-            return Row(stateText: "\(Glyph.quiet) Working · \(seconds)s",
+            return Row(stateText: "\(Glyph.quiet) \(legend("Working")) · \(seconds)s",
                        glyph: Glyph.quiet, lens: .chrome, speakTier: .silent)
         case .speaking:
-            return Row(stateText: "\(Glyph.speaking) Speaking", glyph: Glyph.speaking,
+            return Row(stateText: "\(Glyph.speaking) \(legend("Speaking"))", glyph: Glyph.speaking,
                        lens: .chrome, speakTier: .speaks)
         case .listening(let target):
             return Row(stateText: "\(Glyph.dot) \(target)", glyph: Glyph.dot,
                        lens: .chrome, speakTier: .silent)
         case .delivered:
-            return Row(stateText: "\(Glyph.sent) Delivered", glyph: Glyph.sent,
+            return Row(stateText: "\(Glyph.sent) \(legend("Delivered"))", glyph: Glyph.sent,
                        lens: .chrome, speakTier: .silent)
         case .needsYou:
-            return Row(stateText: "\(Glyph.needsYou) Needs you", glyph: Glyph.needsYou,
+            return Row(stateText: "\(Glyph.needsYou) \(legend("Needs you"))", glyph: Glyph.needsYou,
                        lens: .chrome, speakTier: .silent)
         case .settings:
-            return Row(stateText: "Settings", glyph: "",
+            return Row(stateText: "\(legend("Settings"))", glyph: "",
                        lens: .chrome, speakTier: .silent)
         }
     }
