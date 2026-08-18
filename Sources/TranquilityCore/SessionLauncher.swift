@@ -43,18 +43,29 @@ public enum SessionLauncher {
     /// Blocks while watching for the prompt — ~4s in the common case (two
     /// settled polls), up to ~30s if the tab never looks started; call
     /// off-main.
+    /// Returns the new tab's tty, so a caller can watch exactly this window.
+    ///
+    /// **Terminal is not activated** (ruled 18 Aug: "the terminal window does
+    /// not need to be focused"). Starting an agent is a background act — the
+    /// panel is the interface, and the whole point of the greeting is that you
+    /// never have to look at the tab. Nothing here needs focus either: the
+    /// trust prompt is answered with `do script ""` into the tab by id, not
+    /// with keystrokes, so it works on a window you were never shown.
+    ///
+    /// `resume` still activates, and that ruling stands for its own reason —
+    /// a revived session asks a question (summary or full context) that only
+    /// you can answer, in its own window.
     @discardableResult
     public static func launch(
         directory: String = defaultDirectory,
         command: String = defaultCommand,
         acceptTrustPrompt: Bool = true
-    ) -> Result<Void, ScriptError> {
+    ) -> Result<String, ScriptError> {
         // `quoted form of` is AppleScript's own shell-quoting — the directory
         // never touches the shell unescaped. The tab's tty comes back so the
         // follow-up can address exactly this window and no other.
         let script = """
             tell application "Terminal"
-              activate
               set newTab to do script "cd " & quoted form of "\(directory)" & " && \(command)"
               return tty of newTab
             end tell
@@ -63,8 +74,13 @@ public enum SessionLauncher {
         case .success(let tty):
             let tty = tty.trimmingCharacters(in: .whitespacesAndNewlines)
             Self.trace?("newSession: launched `\(command)` in \(directory) (tty \(tty))")
-            if acceptTrustPrompt { acceptTrustPromptIfShown(tty: tty) }
-            return .success(())
+            // Callers that drive their own watcher pass false and run
+            // `watchForTrustPrompt` CONCURRENTLY: this blocks for at least two
+            // settled polls (~4s) and up to 30, and everything waiting behind
+            // it — the registration the greeting card binds to, in particular —
+            // was paying that latency for a prompt that usually never appears.
+            if acceptTrustPrompt { watchForTrustPrompt(tty: tty) }
+            return .success(tty)
         case .failure(let error):
             Self.trace?("newSession FAILED: \(error.message)")
             return .failure(error)
@@ -107,7 +123,7 @@ public enum SessionLauncher {
     /// and says the full one "will consume a substantial portion of your usage
     /// limits". That is a spend, and a preference — it stays with the user, and
     /// it is why Terminal is brought to the front rather than left behind.
-    /// `acceptTrustPromptIfShown` returns the moment it presses once, so it
+    /// `watchForTrustPrompt` returns the moment it presses once, so it
     /// cannot walk into it.
     ///
     /// Blocks up to ~30s while watching; call off-main.
@@ -147,7 +163,7 @@ public enum SessionLauncher {
             let tty = tty.trimmingCharacters(in: .whitespacesAndNewlines)
             Self.trace?("revive: resumed \(sessionId.prefix(8)) in \(directory) "
                 + "as `\(command)` (tty \(tty))")
-            if acceptTrustPrompt { acceptTrustPromptIfShown(tty: tty) }
+            if acceptTrustPrompt { watchForTrustPrompt(tty: tty) }
             return .success(())
         case .failure(let error):
             Self.trace?("revive FAILED for \(sessionId.prefix(8)): \(error.message)")
@@ -237,7 +253,7 @@ public enum SessionLauncher {
     ///    (`contents of tab i of window id wid`) reads the screen. The same
     ///    trap applies to `do script "" in t`, so both scripts address
     ///    directly.
-    private static func acceptTrustPromptIfShown(tty: String) {
+    public static func watchForTrustPrompt(tty: String) {
         var settled = 0
         for _ in 0..<15 {
             usleep(2_000_000)
