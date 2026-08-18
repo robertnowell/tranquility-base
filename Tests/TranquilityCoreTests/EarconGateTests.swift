@@ -84,3 +84,53 @@ final class EarconGateTests: XCTestCase {
                        "a fifth cue needs a ruling, not just a case — see the ceiling of five")
     }
 }
+
+/// `returned` means "a session you were not already waiting on now wants you."
+///
+/// The distinction between that and "a turn arrived" is the whole bug of 18 Aug:
+/// a turn landing on an already-green session is a real event and a false alarm at
+/// the same time — real to the machine, nothing-to-do for the human.
+final class EarconNewArrivalTests: XCTestCase {
+
+    func testUnprimedNeverAnnounces() {
+        // Launch intakes a backlog. Ten waiting sessions are not ten arrivals.
+        XCTAssertFalse(EarconGate.hasNewArrival(
+            waiting: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"], previous: nil))
+    }
+
+    func testASessionJoiningTheWaitingSetAnnounces() {
+        XCTAssertTrue(EarconGate.hasNewArrival(waiting: ["a", "b"], previous: ["a"]))
+    }
+
+    /// The reported case. A newer turn superseding an older one on the same
+    /// session: membership identical, count identical, nothing for the user to do
+    /// that they were not already going to do.
+    func testANewerTurnOnAnAlreadyWaitingSessionIsSilent() {
+        XCTAssertFalse(EarconGate.hasNewArrival(waiting: ["a", "b"], previous: ["a", "b"]))
+    }
+
+    /// The other half of the reported case: answering one session removes it, and
+    /// a shrinking set is not an arrival.
+    func testAnsweringASessionIsNotAnArrival() {
+        XCTAssertFalse(EarconGate.hasNewArrival(waiting: ["a"], previous: ["a", "b"]))
+    }
+
+    /// One in, one out, same count — the case a count-based check gets wrong in
+    /// both directions.
+    func testSwapAnnouncesEvenThoughTheCountIsUnchanged() {
+        XCTAssertTrue(EarconGate.hasNewArrival(waiting: ["a", "c"], previous: ["a", "b"]))
+    }
+
+    func testEmptyToEmptyIsSilent() {
+        XCTAssertFalse(EarconGate.hasNewArrival(waiting: [], previous: []))
+    }
+
+    /// A session leaving the waiting set and coming straight back IS an arrival —
+    /// this is the normal shape of replying to an agent and it answering.
+    func testLeavingAndReturningAnnounces() {
+        var previous: Set<String>? = ["a", "b"]
+        XCTAssertFalse(EarconGate.hasNewArrival(waiting: ["b"], previous: previous))   // answered a
+        previous = ["b"]
+        XCTAssertTrue(EarconGate.hasNewArrival(waiting: ["a", "b"], previous: previous)) // a came back
+    }
+}
