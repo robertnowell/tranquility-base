@@ -2230,7 +2230,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         let live = (ClaudeAgentsCLI().sessions() ?? [])
                             .first { $0.sessionId == announcement.event.sessionId }
                         // One displayed identity (re-ruled 05 Aug): the terminal
-                        // tab's own string; the voice still speaks the callsign.
+                        // tab's own string. It is now the ONLY identity — the
+                        // voice stopped speaking the callsign on 18 Aug, so the
+                        // eye and the ear have nothing left to disagree about.
                         let name = self.tabDisplayName(for: announcement.event, live: live)
                         // The stage is claimed FIRST. Everything below records
                         // "this is the conversation you are in", and a refused

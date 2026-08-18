@@ -530,12 +530,12 @@ public struct Coordinator: Sendable {
         /// will assume is just how the app sounds now.
         public var degraded: String?
 
-        /// A2 hail, Core half. DORMANT: `announceNext` does not speak this —
-        /// the app wires the hail (minor chime + spoken callsign; content waits
-        /// for ⌃⌥) after the stage arbiter lands. The chime is the app's job;
-        /// this is the spoken part: just the callsign, nothing else. Falls back
-        /// to the directory word for a session not yet minted, mirroring the
-        /// prefix rule in `withCallsign`.
+        /// A2 hail, Core half. DORMANT twice over now: `announceNext` never
+        /// spoke this, the app's spoken hail died on 10 Aug ("it never once
+        /// announced successfully" — a chime carries the same information), and
+        /// the spoken callsign itself died on 18 Aug. Kept as the one place
+        /// that still knows how to say a session's name out loud, for whoever
+        /// brings attribution back.
         public var hailText: String {
             event.callsign ?? Callsign.directoryWord(cwd: event.cwd)
         }
@@ -621,8 +621,8 @@ public struct Coordinator: Sendable {
             : (event.transcriptPath
                 .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
 
-        // One agents probe serves both the lexicon's live names and the prefix
-        // stripping in `withCallsign` — summarizing must not double the
+        // One agents probe serves both the lexicon's live names and the label
+        // stripping in `strippingModelLabels` — summarizing must not double the
         // subprocess cost it already pays.
         let liveSessions = agents.sessions()
 
@@ -650,7 +650,7 @@ public struct Coordinator: Sendable {
             Coordinator.trace?("digit grounding scrubbed ungrounded number(s): "
                 + "event \(event.latestId) session \(event.sessionId.prefix(8))")
         }
-        let composed = withCallsign(summary, for: event, liveSessions: liveSessions)
+        let composed = strippingModelLabels(summary, for: event, liveSessions: liveSessions)
         persistBrief(composed, for: event)
         return composed
     }
@@ -706,54 +706,69 @@ public struct Coordinator: Sendable {
             .speakableTerms(in: event.lastAssistantMessage ?? "")
             .union(lexicon.allowlistTerms)
 
-        let prefix = stored.callsign ?? event.callsign ?? Callsign.directoryWord(cwd: event.cwd)
-        let spoken = summarizer.sanitizer.applyingCallsign(
-            prefix, strippingLabels: [event.projectLabel],
-            to: summarizer.sanitizer.sanitize(brief.spokenText(), allowing: speakable))
+        // Same strip as a fresh summary (`strippingModelLabels`) and for the
+        // same reason: a restored brief is the model's words, and the model
+        // opens with a label most of the time. It cannot reach the live-session
+        // probe from here, so it strips the two labels it has.
+        let labels = [event.projectLabel, stored.callsign, event.callsign].compactMap { $0 }
+        let spoken = summarizer.sanitizer.strippingLeadingLabels(
+            labels,
+            from: summarizer.sanitizer.sanitize(brief.spokenText(), allowing: speakable))
         return Summary(spoken: spoken, brief: brief,
                        provider: stored.provider + "+stored", latencyMs: 0)
     }
 
-    // MARK: - Callsign
+    // MARK: - Attribution
 
-    /// Spoken attribution is 100% by construction, never by model compliance.
+    /// The recap starts with the recap. Ruled 18 Aug 2026.
     ///
-    /// The tuned prompt asks the model to open with the project label and it
-    /// complies 65/71 — the miss is brand-substitution ("Kopi:" from a promotions
-    /// session whose CONTENT was about Kopi). So whatever label-like prefix the
-    /// model wrote is stripped, and the minted callsign is prepended mechanically.
-    /// Minting happens here — at the session's first successful summary — and the
-    /// stored value is frozen thereafter.
-    private func withCallsign(
+    /// The spoken callsign is dead — the LAST of its jobs, after the grid took
+    /// its column on 12 Aug and the hub page took its byline on 16 Aug ("on a
+    /// page it read as a third identity competing with the two real ones").
+    /// Two measurements ended it, both the operator's:
+    ///
+    ///  - **The project half names nothing.** Attribution by directory assumes
+    ///    sessions are spread across directories and they are not — 23 of 127
+    ///    minted signs begin "promotions", because that is where the work is.
+    ///  - **The voice already says who.** `session_voice` assigns round-robin
+    ///    from a 14-voice roster, and fewer than fourteen sessions are ever
+    ///    live at once, so the voice is a distinct identity per speaker for
+    ///    every case that actually occurs.
+    ///
+    /// And the topic half was indefensible on its own terms. Nothing chose it:
+    /// the model wrote a topic sentence and `candidateTopicWords` took the
+    /// LONGEST word in it, ties broken by position, as a proxy for
+    /// distinctiveness. That is how a session came to be called "promotions
+    /// stlth". The vowel gate added the same morning does not rescue it — it
+    /// admits "b6y9z" and it admits "stealthy", which is wrong in a way no
+    /// filter can see. A name is a context problem, not a validation problem,
+    /// and the mechanism that would fix it (ask the model for a NAME, telling
+    /// it the name is to be said out loud) is not worth building for a name
+    /// with no remaining listener.
+    ///
+    /// What still has to happen is the STRIP. The tuned prompt asks the model
+    /// to open with the project label and it complies 65/71, so without this
+    /// the recap would open with a label-like prefix on most turns — chosen by
+    /// the model, and wrong on the miss (brand-substitution: "Kopi:" from a
+    /// promotions session whose CONTENT was about Kopi). Prepending is what
+    /// stopped; stripping is what the prepending was hiding.
+    ///
+    /// Nothing is deleted to bring it back: `Callsign` still mints on demand,
+    /// `session_callsign` keeps every name it has, and the stored ones still
+    /// seed the recogniser's lexicon and still name a session in the grid
+    /// until its tab has a title. Re-speaking it is this function again.
+    private func strippingModelLabels(
         _ summary: Summary, for event: WaitingSession, liveSessions: [LiveSession]?
     ) -> Summary {
-        var callsign = event.callsign ?? ((try? store.callsign(for: event.sessionId)) ?? nil)
-
-        // "First successful summary": the failure paths never mint, so a transient
-        // outage cannot freeze a floor-quality name for the session's lifetime.
-        let failedProviders: Set<String> = ["deterministic-fallback", "empty-source", "none"]
-        if callsign == nil, !failedProviders.contains(summary.provider) {
-            let directory = Callsign.directoryWord(cwd: event.cwd)
-            let existing = (try? store.activeCallsigns(excluding: event.sessionId)) ?? []
-            if let minted = Callsign.mint(
-                directoryWord: directory, topic: summary.brief.topic,
-                existingCallsigns: existing) {
-                // The store enforces the freeze: if another announcer minted first,
-                // its value comes back and ours is discarded.
-                callsign = (try? store.mintCallsign(minted, for: event.sessionId)) ?? minted
-                Coordinator.trace?("callsign minted \"\(callsign ?? minted)\" "
-                    + "for session \(event.sessionId.prefix(8))")
-            }
-        }
-
-        // Not yet mintable (no usable topic word) — attribute with the directory
-        // word alone rather than skipping attribution; minting retries next turn.
-        let prefix = callsign ?? Callsign.directoryWord(cwd: event.cwd)
         let liveName = liveSessions?
             .first(where: { $0.sessionId == event.sessionId })?.name
-        let labels = [event.projectLabel, liveName].compactMap { $0 }
-        let spoken = summarizer.sanitizer.applyingCallsign(
-            prefix, strippingLabels: labels, to: summary.spoken)
+        // The session's own stored callsign is stripped along with the labels:
+        // a sign minted before today can still be echoed back by a model that
+        // saw it in the transcript, and hearing the dead name is worse than
+        // hearing it deliberately.
+        let stored = event.callsign ?? ((try? store.callsign(for: event.sessionId)) ?? nil)
+        let labels = [event.projectLabel, liveName, stored].compactMap { $0 }
+        let spoken = summarizer.sanitizer.strippingLeadingLabels(labels, from: summary.spoken)
         return Summary(spoken: spoken, brief: summary.brief,
                        provider: summary.provider, latencyMs: summary.latencyMs)
     }
