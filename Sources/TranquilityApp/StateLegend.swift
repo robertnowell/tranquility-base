@@ -163,12 +163,6 @@ enum StateLegend {
         /// not a verb. On the dark ground a saturated accent inverts that
         /// hierarchy outright; this one recedes under the text.
         static let accent = hex(0x6E7F8C)
-        /// `accent` with the pointer on it. 4.94:1, ΔL* 10.9 above its resting
-        /// value — the accent's own rung on the hover ramp, because the ink
-        /// ladder below is neutral and stepping a blue-grey control onto it
-        /// would change its HUE on hover, which the standard forbids (see
-        /// `hovered` and docs/ruling-the-panel-answers-the-pointer.md).
-        static let accentHover = hex(0x8B9BA8)
 
         // MARK: The light console, kept for the swap
         //
@@ -196,45 +190,76 @@ enum StateLegend {
 
     // MARK: - Hover
 
-    /// The ink ladder, dimmest first. Named as a sequence because the hover
-    /// standard is expressed as a POSITION on it — "one step up" — and a rule
-    /// stated as a lookup table drifts control by control the first time
-    /// somebody picks a colour they like.
+    /// What an ink becomes while the pointer is on it: one step brighter, and
+    /// nothing else — no lozenge, no move, no change of hue.
     ///
-    /// `faint` is on the ladder even though it owes no contrast floor: it is a
-    /// resting value only, and a control resting there steps onto `hint`, which
-    /// does owe one. Nothing rests at `ink` — see the standard's fourth rule.
-    static let inkRamp: [NSColor] = [
-        Palette.faint, Palette.hint, Palette.muted, Palette.secondary, Palette.ink,
-    ]
+    /// **A fixed perceptual distance, not a table and not a fraction.**
+    /// `hoverStep` is ΔL*. Both of the things this function replaced were
+    /// written on 18 Aug, in parallel, by two sessions that could not see each
+    /// other; deleting one of them was right and keeping either was not.
+    /// Measured, which is what rule 4 asks of a reversal:
+    ///
+    /// | resting | discrete ramp | 35% toward ink | this |
+    /// |---|---|---|---|
+    /// | `secondary` | ΔL* 7.7 | ΔL* 2.6 | ΔL* 8.4 |
+    /// | `ink` (the card's title) | **no step** | ΔL* 0.0 | ΔL* 8.2 |
+    /// | `fault` (the amber pill) | **no step** | ΔL* 2.9 | ΔL* 8.3 |
+    /// | `ready` | **no step** | ΔL* 2.9 | ΔL* 8.0 |
+    ///
+    /// The ramp answered only the five tiers on it, so three real controls sat
+    /// still under the cursor — the amber pill that `hoveredInk` was written to
+    /// protect, the go-green, and the card's TITLE, which is what the operator
+    /// reported ("it does show the cursor pointer, but it doesn't have the
+    /// change text colour impact"). The blend answered everywhere and said
+    /// almost nothing where it mattered: this codebase already fixed a ΔL* 6.0
+    /// floor on the lamps because 4.2 measured invisible at 9px.
+    ///
+    /// The move is a SCALE, not a blend or a lookup. Multiplying the channels
+    /// raises lightness and leaves saturation exactly where it was (measured:
+    /// amber 0.67 → 0.67, green 0.42 → 0.42), so a caution hovers to a brighter
+    /// caution instead of fading toward the ink — which is what blending toward
+    /// `ink` was reaching for and did not achieve.
+    ///
+    /// `ink` gains a step it never had, and that is the point: it does not
+    /// reopen the 09 Aug ruling that capped resting prose below 11.15:1 for
+    /// reading as shouting, because a hover lasts as long as the pointer does.
+    static let hoverStep: CGFloat = 8
 
-    /// What an ink becomes while the pointer is on it: one step up its own
-    /// ramp, and nothing else — no lozenge, no move, no change of hue.
-    ///
-    /// Returns the resting value unchanged for an ink with no step above it,
-    /// which is the signal that the control is resting too bright. `ink` is
-    /// content's; a control that rests there has nowhere to go and gets no
-    /// hover at all, so the standard's fourth rule ("no control rests at
-    /// `ink`") is enforced by this returning the same colour rather than by
-    /// anybody remembering it.
     static func hovered(_ resting: NSColor) -> NSColor {
-        if resting == Palette.accent { return Palette.accentHover }
-        guard let step = inkRamp.firstIndex(of: resting), step + 1 < inkRamp.count
-        else { return resting }
-        return inkRamp[step + 1]
+        guard let from = resting.usingColorSpace(.sRGB) else { return resting }
+        let target = Measure.lightness(from) + hoverStep
+        // Bisection on the channel scale: lightness is gamma-encoded and the
+        // channels clamp at white, so there is no closed form. Twenty steps on
+        // a hover event costs nothing measurable.
+        var low: CGFloat = 1, high: CGFloat = 3
+        for _ in 0..<20 {
+            let mid = (low + high) / 2
+            if Measure.lightness(scaled(from, by: mid)) < target { low = mid } else { high = mid }
+        }
+        return scaled(from, by: high)
     }
 
-    /// Every run of an attributed string, one step up the ink ramp.
+    private static func scaled(_ color: NSColor, by factor: CGFloat) -> NSColor {
+        NSColor(srgbRed: min(1, color.redComponent * factor),
+                green: min(1, color.greenComponent * factor),
+                blue: min(1, color.blueComponent * factor),
+                alpha: color.alphaComponent)
+    }
+
+    /// Every run of an attributed string, one step brighter.
     ///
-    /// The string form of `hovered(_:)`, for the two hover targets that carry
-    /// attributed text rather than a tint: the state pill (whose mark and word
-    /// are separate runs, and whose amber must stay amber) and the placard
-    /// words. `ConsoleButton` reaches the same ramp through `restingInk`.
+    /// The string form of `hovered(_:)`, for the hover targets that carry
+    /// attributed text rather than a tint: the card's TITLE, the state pill
+    /// (whose mark and word are separate runs, and whose amber must stay amber
+    /// — which is now true of the pixels and not only of the intent) and the
+    /// placard words. `ConsoleButton` reaches the same function through
+    /// `restingInk`.
     ///
-    /// One ramp, deliberately. A second one shipped here for half an hour on
-    /// 18 Aug — a 35%-toward-ink blend, written in parallel with this file's
-    /// discrete steps by a session that had not seen them — and two definitions
-    /// of "one step brighter" is precisely the drift the ramp exists to stop.
+    /// One step function, deliberately. Three shipped here inside one afternoon
+    /// on 18 Aug, two of them within half an hour of each other, written by
+    /// sessions that could not see each other's work. Two definitions of "one
+    /// step brighter" is exactly the drift this exists to stop; the measurement
+    /// that chose between them is on `hovered(_:)`.
     static func hoveredInk(_ text: NSAttributedString) -> NSAttributedString {
         let out = NSMutableAttributedString(attributedString: text)
         out.enumerateAttribute(.foregroundColor,
@@ -313,7 +338,14 @@ enum StateLegend {
          // A hover value is read for as long as the pointer sits on it, which
          // is longer than a resting placard is read; it owes the text floor
          // even where its resting value did not.
-         ("accentHover", Palette.accentHover, 4.5)]
+         // Hover values are read for as long as the pointer sits on them, which
+         // is longer than a resting placard is read, so they owe the text floor
+         // even where their resting value did not. COMPUTED, not minted:
+         // `hovered` is the one step function, and asserting its output is what
+         // stops a change to it quietly dimming every control on the panel.
+         ("hovered(accent)", hovered(Palette.accent), 4.5),
+         ("hovered(secondary)", hovered(Palette.secondary), 4.5),
+         ("hovered(ink)", hovered(Palette.ink), 7.0)]
     }
 
     /// The lamp separation the busy panel was ruled on. Below this the ready and
