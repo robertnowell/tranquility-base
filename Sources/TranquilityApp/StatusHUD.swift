@@ -520,6 +520,51 @@ final class StatusHUD: NSObject {
         return true
     }
 
+    /// The card a launch paints before there is a session to hang it on.
+    ///
+    /// Ruled 18 Aug: the card comes FIRST. Everything else about starting an
+    /// agent takes seconds that are not ours to spend — Terminal opening a
+    /// window, Claude Code coming up, the trust watcher settling, the id
+    /// appearing in `claude agents --json` — and the panel waited on all of it
+    /// before showing anything. It waits on none of it now: the question is on
+    /// screen and in the air the instant the button is pressed, and
+    /// `bindGreeting` attaches the session underneath when it exists.
+    ///
+    /// No target yet, deliberately, rather than a placeholder id: an empty
+    /// string in `currentTarget.sessionId` is a session that does not exist,
+    /// and every door on this card would be a door to nowhere. Nil is what the
+    /// panel already means by "no session on this face", and GO TO AGENT, the
+    /// hub link and the title-as-door all read it correctly for free.
+    @discardableResult
+    func showGreeting(line: String, label: String) -> Bool {
+        guard transition(to: .speaking(eventId: nil), because: "greeting") else {
+            return false
+        }
+        currentEventId = nil
+        currentSpoken = nil
+        currentTarget = nil
+        face = Face(title: label, body: line)
+        render()
+        return true
+    }
+
+    /// Attach the session to the greeting card once Claude Code has minted it.
+    ///
+    /// Refuses unless the greeting card is still the one on stage — no target,
+    /// still speaking. A binding that arrived after you had moved on would
+    /// silently repoint the reply routing at a session you are not looking at,
+    /// which is the exact failure `showAnnouncement`'s own guard exists to
+    /// prevent. Late is not wrong here; late and unnoticed would be.
+    @discardableResult
+    func bindGreeting(sessionId: String, pid: Int?, label: String, cwd: String?) -> Bool {
+        guard state.isSpeaking, currentTarget == nil else { return false }
+        adoptTarget(sessionId: sessionId, pid: pid, label: label, cwd: cwd)
+        // The doors are derived from the target, so the card grows GO TO AGENT
+        // and its hub link at the moment it acquires one.
+        render()
+        return true
+    }
+
     /// The first reply to a session asks once, showing the words that are about to
     /// be typed and the tab they are going into. Approving here enrols it, so this
     /// appears once per session and never again.
@@ -3225,6 +3270,35 @@ final class StatusHUD: NSObject {
             && inkBrightLength == faultCardInk
         let faultIsInTheStrip = stripLabel.stringValue.contains("lost its address")
         endCapture(because: "selftest fault cleanup")
+
+        // The greeting drill. The card exists before the session does, which is
+        // the whole ruling and also the whole risk: an unbound card must not
+        // pretend to have an agent, and a binding that arrives after you have
+        // moved on must not repoint the reply routing at a session you are no
+        // longer looking at.
+        let greetingLine = LaunchGreeting.lines[0]
+        let greetingPainted = showGreeting(line: greetingLine, label: "projects")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let greetingSaysOnlyTheQuestion = bodyLabel.stringValue == greetingLine
+        let greetingHasNoAgentYet = currentTarget == nil && goButton.isHidden
+        let greetingNamesItsDirectory = titleLabel.stringValue == "projects"
+        let bound = bindGreeting(sessionId: "g1", pid: 42, label: "projects", cwd: "/tmp")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let bindingGivesItTheAgent = bound && currentTarget?.sessionId == "g1"
+            && !goButton.isHidden
+        // Moved on: the grid is up, and a late registration must be ignored.
+        showIdle(note: nil, rows: [.init(id: "z1", name: "something else",
+                                         aux: "", lamp: .running)])
+        let lateBindingRefused = !bindGreeting(sessionId: "g2", pid: 7,
+                                               label: "elsewhere", cwd: "/tmp")
+        SelfTest.report("greeting", [
+            ("cardPaintsAtOnce", greetingPainted),
+            ("saysOnlyTheQuestion", greetingSaysOnlyTheQuestion),
+            ("namesItsDirectory", greetingNamesItsDirectory),
+            ("noAgentUntilBound", greetingHasNoAgentYet),
+            ("bindingGivesItTheAgent", bindingGivesItTheAgent),
+            ("lateBindingRefused", lateBindingRefused),
+        ])
 
         // The Controls drill. The collapse only pays if opening the note costs
         // nothing, so the claims are asserted rather than asserted about: the

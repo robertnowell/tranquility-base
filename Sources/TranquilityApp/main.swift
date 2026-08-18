@@ -3153,32 +3153,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// prompt. Everywhere else the greeting is the point: a launched agent is a
     /// waiting agent, and it says so.
     private func newSession(directory dir: String, command: String, greet: Bool = true) {
+        let label = (dir as NSString).lastPathComponent
+        let line = LaunchGreeting.nextLine()
+
+        // The card, FIRST — before Terminal is asked to do anything (ruled
+        // 18 Aug). Painting after the launch meant painting after a window
+        // opened, a CLI came up, a trust watcher settled and an id appeared in
+        // `claude agents --json`: seconds of nothing, in answer to a button.
+        // None of that is a precondition for asking the question, so none of it
+        // is waited on. The session is attached underneath when it exists.
+        if greet, hud.showGreeting(line: line, label: label) {
+            // Through the greeting cache, which is what it is for: one fixed
+            // sentence per voice, synthesized once and replayed from disk
+            // forever after — no model call, no round trip, no waiting for a
+            // brief that has not been written yet. Detached because the audio
+            // is not the panel's business and the panel is already up.
+            Task.detached(priority: .userInitiated) { await GreetingCache.speak(line) }
+        }
+
         Task.detached(priority: .userInitiated) { [weak self] in
             let before = Set((ClaudeAgentsCLI().sessions() ?? [])
                 .filter { $0.cwd == dir }.map(\.sessionId))
-            let result = SessionLauncher.launch(directory: dir, command: command)
-            if case .failure(let error) = result {
-                await MainActor.run { [weak self] in
-                    self?.hud.showResult("Couldn't start an agent: \(error.message). "
-                                         + "Terminal automation permission is the usual suspect.")
+            // `acceptTrustPrompt: false` — we run that watcher ourselves, in
+            // parallel, immediately below. It blocks for at least two settled
+            // polls and up to thirty seconds, and until now the registration
+            // this greeting binds to queued behind it.
+            let result = SessionLauncher.launch(directory: dir, command: command,
+                                                acceptTrustPrompt: false)
+            guard case .success(let tty) = result else {
+                if case .failure(let error) = result {
+                    await MainActor.run { [weak self] in
+                        self?.hud.showResult("Couldn't start an agent: \(error.message). "
+                                             + "Terminal automation permission is the usual suspect.")
+                    }
                 }
                 return
+            }
+            Task.detached(priority: .utility) {
+                SessionLauncher.watchForTrustPrompt(tty: tty)
             }
             await MainActor.run { [weak self] in
                 self?.lastStatusLine = "new session launched"
                 self?.rebuildMenu()
             }
 
-            // Wait for the session to register, on this detached task where the
-            // subprocess polling belongs. This is also the trust-prompt check
-            // that used to run as a bare 30s timer: registering IS the evidence
-            // the prompt was answered, so one watcher now answers both
-            // questions instead of two clocks answering one each.
-            //
             // First-run reality (ruled, docs/ws-b-ruling.md): the
             // directory-trust prompt is a security consent and is NEVER
-            // auto-answered. If nothing registers, say so with a quiet visual
-            // note — a walked-away launch must not be a silently stillborn
+            // auto-answered when it needs a human. If nothing registers, say so
+            // — a walked-away launch must not be a silently stillborn
             // investigation.
             guard let sessionId = LaunchGreeting.awaitRegistration(
                 directory: dir, excluding: before) else {
@@ -3191,36 +3213,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             guard greet, let store = await self?.store else { return }
+            let pid = (ClaudeAgentsCLI().sessions() ?? [])
+                .first(where: { $0.sessionId == sessionId })?.pid
             do {
-                // nil means this session already carries its greeting — the
-                // dedupe index caught a second call — and there is no second
-                // arrival to announce.
-                guard try LaunchGreeting.record(
-                    sessionId: sessionId, directory: dir, store: store) != nil else { return }
+                // The durable half. The card is already on screen; this is what
+                // makes it a row in the grid, a reply target, and a turn the
+                // session's own first Stop supersedes. nil means the session
+                // already carries its greeting.
+                guard try LaunchGreeting.record(sessionId: sessionId, directory: dir,
+                                                line: line, tty: tty, store: store) != nil
+                else { return }
                 Permissions.log("greeting: recorded for \(sessionId.prefix(8)) in \(dir)")
-                // And it says so, out loud, immediately (ruled 18 Aug). Not a
-                // chime and not a hail: you took an action, and speaking is the
-                // recognition that the agent is alive and ready for you.
-                //
-                // The same door ⌃⌥ and a row tap already use, deliberately.
-                // `announceNext` documents why the interruptibility gate does
-                // not apply to it — "you cannot interrupt someone who just
-                // asked" — and pressing NEW AGENT is exactly that ask. It also
-                // has to be this door rather than the ambient arrival path,
-                // which would skip the greeting nearly every time: that path
-                // stays quiet when the session's own tab is frontmost, and a
-                // launch activates Terminal by construction.
-                //
-                // One path for everybody. A first-run-only greeting would be a
-                // code path the person who ships this never runs, and an
-                // unrun path collects bugs — so the power user hears the same
-                // thing the new user does, on the day they both press it.
-                await MainActor.run { [weak self] in self?.announceNext(only: sessionId) }
             } catch {
                 // The agent is up either way. A greeting that failed to land
                 // costs a trip to the terminal, which is exactly where we were
                 // before it existed.
                 Permissions.log("greeting: not recorded for \(sessionId.prefix(8)): \(error)")
+                return
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                // The card acquires its session, and with it the doors and the
+                // reply routing. `activeConversation` is the same claim in the
+                // host's language — your attention is on this agent, so the
+                // next thing you say goes to it rather than to whatever a
+                // cursor last pointed at.
+                if self.hud.bindGreeting(sessionId: sessionId, pid: pid,
+                                         label: label, cwd: dir) {
+                    self.activeConversation = (sessionId, label, dir)
+                    Permissions.log("greeting: bound \(sessionId.prefix(8)) to the card")
+                }
             }
         }
     }

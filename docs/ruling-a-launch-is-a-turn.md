@@ -78,3 +78,50 @@ Two things follow, and both are the point:
 The hail-and-standby protocol is unchanged for turns an AGENT produces. This is
 the one turn the app produces, in answer to a button you just pressed, and
 answering out loud is what the button means.
+
+## The card comes first
+
+Ruled 18 Aug, third pass, on the first build:
+
+> "Absolutely not, not good at all. One, it focuses the terminal tab, which I
+> obviously don't want it to do. Second, it doesn't bring up the UI until after
+> the terminal is already initiated and started. […] We can create the card
+> immediately and then attach it to the session ID once that's initiated. And the
+> message is literally *How should we get started?* Or *What would you like to
+> work on?* Two, three seconds of audio. But it should be fast, and the terminal
+> window does not need to be focused."
+
+And, a minute later, on the callsign the card was wearing:
+
+> "What is this callsign? Why is there a callsign? You don't even know what we're
+> working on."
+
+Four things were wrong, and all four came from routing a launch through the
+machinery built for turns that had already happened:
+
+1. **Terminal was activated.** `launch` said `activate` because it always had.
+   Nothing needs it — the trust prompt is answered with `do script ""` addressed
+   to the tab by id, not with keystrokes — so it is gone. `resume` keeps its
+   `activate`, for the reason its own ruling gives: a revived session opens on a
+   question only you can answer.
+2. **The card waited on the world.** A window opening, a CLI starting, a trust
+   watcher settling (two polls, ~4s minimum), an id appearing in `claude agents
+   --json`. None of that is a precondition for asking a question, so the panel
+   waits on none of it: the card paints and speaks on the button press, and
+   `bindGreeting` attaches the session underneath when it exists. The trust
+   watcher now runs concurrently with the registration watch instead of in front
+   of it.
+3. **It narrated.** "New agent. It's up in Projects and hasn't been asked for
+   anything. How would you like to get started?" — three facts you can see on the
+   card, in front of the only part that was a question. Two lines now, alternating,
+   nothing else: *How should we get started?* / *What would you like to work on?*
+4. **It wore a callsign.** A name minted from a turn with no content, prefixed to
+   a sentence you did not need attributed, on the one card in the app where you
+   already know exactly which agent is talking, because you just pressed the
+   button that made it.
+
+The unbound card is nil-targeted, not placeholder-targeted: `currentTarget == nil`
+is what the panel already means by "no session on this face", so GO TO AGENT, the
+hub link, and the title-as-door all stay correctly shut until the binding lands.
+`bindGreeting` refuses once the face has moved on — a late registration must never
+repoint the reply routing at a session you have stopped looking at.
