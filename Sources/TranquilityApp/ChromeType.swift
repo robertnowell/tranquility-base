@@ -282,6 +282,26 @@ enum ChromeType {
         return out
     }
 
+    /// How far a mark drawn in its OWN VIEW must move to sit on the cap line of
+    /// the words beside it.
+    ///
+    /// `line(_:)` handles a mark inside a string. A mark in its own text field
+    /// is the other case, and centring the two FRAMES — which is what a
+    /// `centerY` constraint does — is not the same thing at all: a frame is
+    /// ascender-to-descender, and where the ink sits inside it differs per
+    /// glyph and per family. The chip's ▣ was frame-centred and sat visibly
+    /// low, which is the same defect the placards had, in the one place the
+    /// first audit did not look.
+    ///
+    /// Positive moves the mark UP, matching a `centerY` constraint's constant
+    /// being negative in AppKit's coordinates — callers pass `-value`.
+    static func capLineOffset(mark: Character, markFont: NSFont,
+                              textFont: NSFont) -> CGFloat {
+        guard let markInk = inkCentre(mark, in: markFont),
+              let cap = inkCentre("H", in: textFont) else { return 0 }
+        return snapped(cap - markInk)
+    }
+
     /// Every mark the panel draws, for the drill. The vocabulary is defined in
     /// `StateLegend.Glyph`; this is the same set as characters, because a drill
     /// that checks a hand-copied subset proves nothing about the one you added
