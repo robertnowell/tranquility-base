@@ -792,6 +792,43 @@ enum StateLegend {
     /// replacement. See docs/simplification-pass.md.
     static let controlsTitle = "Controls"
 
+    // MARK: - Which face, and why (ruled 18 Aug)
+
+    /// **The machine speaks in mono; the message speaks in prose.**
+    ///
+    /// One line, and it decides every font in the panel. Everything the app
+    /// says about ITSELF — placards, legends, session names, callsigns, ids,
+    /// durations, buttons, settings rows, the bottom line — is monospaced,
+    /// because it is scanned rather than read, it lines up in columns, and it
+    /// is the console's own voice. The one thing set in prose is what an AGENT
+    /// said: the card's body, and the empty room's sentence, which is the app
+    /// speaking as a person would.
+    ///
+    /// It was nearly true and looked arbitrary, which is worse than either
+    /// half: the title was mono, the words under it were not, the two doors
+    /// were mono and the quiet actions beside them were not, the hint line was
+    /// mono on two faces and proportional on the rest. "Do we have
+    /// consistency? Let's get this right."
+    ///
+    /// The evidence for the split, rather than for all-mono: continuous text is
+    /// measurably slower to read in a monospaced face, and HF-STD-001B asks for
+    /// mixed-case prose for the same reason (§5.6.2.5.8.1). A card body is the
+    /// only continuous text the panel has. Everything else is a label, and a
+    /// label in a column is what monospace is FOR.
+    ///
+    /// The two axes agree, which is how you can tell the rule is real: chrome
+    /// is mono AND capitalized; content is proportional AND mixed case.
+    enum Face {
+        /// The console's own voice.
+        static func chrome(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
+            ChromeType.mono(ofSize: size, weight: weight)
+        }
+        /// What an agent said, and nothing else.
+        static func message(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
+            .systemFont(ofSize: size, weight: weight)
+        }
+    }
+
     /// The placard face: the state's own label, one step up in weight from the
     /// row beneath it. Named here because two files draw it and a size that
     /// lives in one of them is a size the other one guesses.
