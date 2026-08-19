@@ -78,6 +78,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the panel names while you speak and what the send addresses must be the SAME
     /// stored fact, not two derivations that usually agree.
     private var recordingTarget: String?
+
+    /// The launch this capture is answering, when the agent has no id yet.
+    ///
+    /// Set instead of `recordingTarget` when you answer a greeting card before
+    /// its session has registered — which is the common case, not the rare one:
+    /// registration measured five to nine seconds across every launch in the
+    /// 18 Aug log, and the card exists precisely so you can answer immediately.
+    private var recordingLaunch: PendingLaunch?
+
+    /// The launch that is still coming up, if any.
+    private var pendingLaunch: PendingLaunch?
     /// Sessions this app is mid-delivery to, so the grid can say so. See
     /// `DeliveryInFlight`: the target's own transcript cannot know about a
     /// reply until it lands, so for the whole transcribe → confirm → dispatch
@@ -1850,7 +1861,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
 
                 handsFreeListening = true
-                if let ctx = context {
+                // Same rule as the tap path above: a launch in flight owns the
+                // reply, and the routing ladder must not be allowed to answer
+                // for it.
+                if let launch = pendingLaunch, launch.isPending {
+                    recordingLaunch = launch
+                    recordingTarget = nil
+                } else if let ctx = context {
+                    recordingLaunch = nil
                     hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
                                     label: ctx.label, cwd: ctx.cwd)
                     recordingTarget = ctx.sessionId
@@ -2072,7 +2090,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // reply window, and re-recording during transcription (replyGeneration
             // exists for exactly that). The predicate needs a rethink before it can
             // gate anything. See docs/ws-c-changes.md.
-            if let ctx = resolveReplyContext() {
+            // The agent you just launched owns this reply, even though it has
+            // no id yet. Resolving the routing here would walk past it to the
+            // PREVIOUS agent — the misroute this exists to end — so the launch
+            // is remembered instead and the words wait for it at submit time.
+            if let launch = pendingLaunch, launch.isPending {
+                recordingLaunch = launch
+                recordingTarget = nil
+            } else if let ctx = resolveReplyContext() {
+                recordingLaunch = nil
                 hud.adoptTarget(sessionId: ctx.sessionId, pid: ctx.pid,
                                 label: ctx.label, cwd: ctx.cwd)
                 recordingTarget = ctx.sessionId
@@ -2716,13 +2742,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     rebuildMenu()
                     return
                 }
-                guard let spokenTo = recordingTarget else {
-                    Permissions.log("send: recording has no captured address; refusing")
-                    hud.showResult("This recording lost its address. Audio kept; nothing sent.")
+                // The words wait for the agent they were spoken to.
+                //
+                // A capture that began on a greeting card carries the LAUNCH,
+                // not a session id, because there was no session when you
+                // started talking. By the time a reply has been spoken and
+                // transcribed the agent has almost always registered — five to
+                // nine seconds, against a reply that takes at least as long —
+                // so this usually returns instantly. When it does not, waiting
+                // is still the right answer: the alternative that shipped was
+                // typing your words into the previous agent without saying so.
+                var resolvedTarget = recordingTarget
+                if resolvedTarget == nil, let launch = recordingLaunch {
+                    lastStatusLine = "waiting for \(launch.label) to come up…"
+                    rebuildMenu()
+                    resolvedTarget = await launch.session(timeout: 30)
+                    let waited = Int(Date().timeIntervalSince(launch.startedAt))
+                    Permissions.log("launch: reply waited \(waited)s for \(launch.label) — "
+                        + (resolvedTarget.map { "went to \($0.prefix(8))" } ?? "never came up"))
+                }
+                guard let spokenTo = resolvedTarget else {
+                    // Two ways to be here, and they are different failures. A
+                    // launch that never came up is the one this path exists for:
+                    // the agent is genuinely absent, so the words go where you
+                    // can still get at them rather than into somebody else's tab.
+                    if let launch = recordingLaunch {
+                        recordingLaunch = nil
+                        Permissions.log("send: \(launch.label) never registered; nothing sent")
+                        hud.showResult("\(launch.label) never came up — nothing was sent. "
+                                       + "Your words are kept; check Terminal for a prompt.")
+                    } else {
+                        Permissions.log("send: recording has no captured address; refusing")
+                        hud.showResult("This recording lost its address. Audio kept; nothing sent.")
+                    }
                     rebuildMenu()
                     return
                 }
                 recordingTarget = nil
+                recordingLaunch = nil
                 // The delivery window opens HERE — at the capture's close, not
                 // at the dispatch — because this is the moment the words become
                 // ours to deliver, and every second from here to the outcome is
@@ -3299,6 +3356,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // back as another the first time you pressed ⌃⌥. The peek is bound to
         // the session at registration, so the two cannot diverge.
         let voice = (try? store?.nextVoiceInRotation(roster: VoiceRoster.load())) ?? nil
+        // The promise the card's answer waits on. Created with the card, because
+        // the whole point of the card is that you may answer it before there is
+        // an agent to answer — see PendingLaunch for what that cost before.
+        let launch = greet ? PendingLaunch(label: label, directory: dir) : nil
+        if let launch { pendingLaunch = launch }
         if greet, hud.showGreeting(line: line, label: label) {
             // Through the greeting cache, which is what it is for: one fixed
             // sentence per voice, synthesized once and replayed from disk
@@ -3320,6 +3382,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let result = SessionLauncher.launch(directory: dir, command: command,
                                                 acceptTrustPrompt: false)
             guard case .success(let tty) = result else {
+                // Every exit from here on releases the promise. A waiter left
+                // hanging is a reply that never lands and never says why, which
+                // is the one outcome worse than the misroute this replaces.
+                launch?.abandon()
                 if case .failure(let error) = result {
                     await MainActor.run { [weak self] in
                         self?.hud.showResult("Couldn't start an agent: \(error.message). "
@@ -3343,6 +3409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // investigation.
             guard let sessionId = LaunchGreeting.awaitRegistration(
                 directory: dir, excluding: before) else {
+                launch?.abandon()
                 Permissions.log("launcher: no session registered in \(dir) after 30s")
                 await MainActor.run { [weak self] in
                     guard let self, self.hud.canSurfaceAmbiently else { return }
@@ -3351,6 +3418,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
 
+            // Kept BEFORE the greeting row is written and before the card is
+            // bound: the promise is about the SESSION EXISTING, which is now
+            // true, and it must not be hostage to a store write or to whether
+            // the card is still on stage. Binding can fail — it does, whenever
+            // you started talking — and the words must reach the agent anyway.
+            launch?.resolve(sessionId: sessionId)
             guard greet, let store = await self?.store else { return }
             let pid = (ClaudeAgentsCLI().sessions() ?? [])
                 .first(where: { $0.sessionId == sessionId })?.pid

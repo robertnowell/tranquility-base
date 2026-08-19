@@ -79,6 +79,28 @@ final class CoordinatorTests: XCTestCase {
         func sessions() -> [LiveSession]? { nil }
     }
 
+    /// A session that is not listed yet and appears after a few probes — a
+    /// brand-new agent, which can register, bind, and briefly drop back out of
+    /// `claude agents --json` before it has taken any input.
+    final class LateAgents: ClaudeAgentsReading, @unchecked Sendable {
+        private let lock = NSLock()
+        private var calls = 0
+        let appearsOnCall: Int
+        let live: [LiveSession]
+
+        init(appearsOnCall: Int, live: [LiveSession]) {
+            self.appearsOnCall = appearsOnCall
+            self.live = live
+        }
+
+        var probes: Int { lock.lock(); defer { lock.unlock() }; return calls }
+
+        func sessions() -> [LiveSession]? {
+            lock.lock(); calls += 1; let n = calls; lock.unlock()
+            return n >= appearsOnCall ? live : []
+        }
+    }
+
     struct FixedTranscript: RecoveryTranscriptionProvider {
         let name = "fixed"
         let isConfigured = true
@@ -93,7 +115,11 @@ final class CoordinatorTests: XCTestCase {
         transport: RecordingTransport = RecordingTransport(),
         enrolled: Bool = true,
         sessionLive: Bool = true,
-        gate: InterruptGate = InterruptGate(minimumIdleSeconds: 0, signals: .quiescent)
+        gate: InterruptGate = InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+        // Zero by default: these tests assert the REFUSAL, and paying the
+        // production grace for each one added twelve seconds apiece to the
+        // suite. The grace has its own test, below.
+        readinessGrace: TimeInterval = 0
     ) throws -> Coordinator {
         let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
         if enrolled { try registry.enrol(sessionId: "sess-1") }
@@ -113,7 +139,8 @@ final class CoordinatorTests: XCTestCase {
                 : []),
             recovery: RecoveryChain(
                 providers: [FixedTranscript(text: "yes go ahead")],
-                maxAttemptsPerProvider: 1, backoff: [0]))
+                maxAttemptsPerProvider: 1, backoff: [0]),
+            readinessGrace: readinessGrace)
     }
 
     /// Append to the log. Nothing else ever writes an event.
@@ -175,7 +202,8 @@ final class CoordinatorTests: XCTestCase {
             enrolment: EnrolmentRegistry(url: tmpDir.appendingPathComponent("e2.json")),
             agents: FailingAgents(),
             recovery: RecoveryChain(providers: [FixedTranscript(text: "x")],
-                                    maxAttemptsPerProvider: 1, backoff: [0]))
+                                    maxAttemptsPerProvider: 1, backoff: [0]),
+            readinessGrace: 0)
         let blind = try failing.waiting().map(\.sessionId)
         XCTAssertTrue(blind.contains("human"),
                       "a probe failure must still surface real work")
@@ -638,7 +666,10 @@ final class CoordinatorTests: XCTestCase {
             agents: FailingAgents(),
             recovery: RecoveryChain(
                 providers: [FixedTranscript(text: "yes go ahead")],
-                maxAttemptsPerProvider: 1, backoff: [0]))
+                maxAttemptsPerProvider: 1, backoff: [0]),
+            // A probe that cannot answer will not answer in twelve seconds
+            // either, and this test is about the refusal, not the wait.
+            readinessGrace: 0)
         try append()
         _ = try await coordinator.announceNext()
 
@@ -739,5 +770,73 @@ final class CoordinatorTests: XCTestCase {
 
         XCTAssertNil(try coordinator.replyTarget(),
                      "you have not heard the thing you would be answering")
+    }
+
+    /// A new agent that has not appeared in `claude agents --json` yet is waited
+    /// for, not refused.
+    ///
+    /// Measured 19 Aug: session 0f327de7 registered at 00:21:34, bound to the
+    /// card correctly, and came back `notRegistered` at 00:22:17 — so the reply
+    /// was refused with "can't take this yet ... try again in a moment". Trying
+    /// again is a loop, and the loop belongs here rather than in the user's
+    /// hands.
+    func testASessionThatArrivesLateIsWaitedForRatherThanRefused() async throws {
+        let transport = RecordingTransport()
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("late.json"))
+        try registry.enrol(sessionId: "sess-1")
+        let agents = LateAgents(appearsOnCall: 3, live: [
+            LiveSession(pid: Int(ProcessInfo.processInfo.processIdentifier),
+                        sessionId: "sess-1", cwd: "/tmp/p", status: "idle",
+                        name: "p", waitingFor: nil)])
+        let coordinator = Coordinator(
+            store: store,
+            summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            transport: transport, enrolment: registry, agents: agents,
+            recovery: RecoveryChain(
+                providers: [FixedTranscript(text: "yes go ahead")],
+                maxAttemptsPerProvider: 1, backoff: [0]),
+            readinessGrace: 5)
+        try append()
+        // Addressed explicitly rather than through `announceNext`: the announce
+        // path probes `claude agents --json` too, and this fake is about the
+        // session being INVISIBLE at dispatch time, not unannounceable.
+        guard case .readyToSend(let utteranceId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence(), to: "sess-1")
+        else { return XCTFail("expected a pending send") }
+
+        let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        guard case .dispatched = outcome else {
+            return XCTFail("a late session must be waited for, got \(outcome)")
+        }
+        XCTAssertEqual(transport.sent.count, 1, "and the words were typed once")
+        XCTAssertGreaterThan(agents.probes, 1, "which took more than one probe")
+    }
+
+    /// The other half: the grace is bounded, so an agent that never appears is
+    /// still refused rather than holding the reply open.
+    func testASessionThatNeverArrivesIsStillRefused() async throws {
+        let transport = RecordingTransport()
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("never.json"))
+        try registry.enrol(sessionId: "sess-1")
+        let coordinator = Coordinator(
+            store: store,
+            summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            transport: transport, enrolment: registry,
+            agents: LateAgents(appearsOnCall: .max, live: []),
+            recovery: RecoveryChain(
+                providers: [FixedTranscript(text: "yes go ahead")],
+                maxAttemptsPerProvider: 1, backoff: [0]),
+            readinessGrace: 1)
+        try append()
+        guard case .readyToSend(let utteranceId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence(), to: "sess-1")
+        else { return XCTFail("expected a pending send") }
+        guard case .sessionNotReady = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("a session that never comes back must refuse") }
+        XCTAssertTrue(transport.sent.isEmpty)
     }
 }
