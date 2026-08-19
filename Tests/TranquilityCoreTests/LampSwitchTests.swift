@@ -14,15 +14,20 @@ import XCTest
 final class LampSwitchTests: XCTestCase {
 
     private var url: URL!
+    private var onUrl: URL!
 
     override func setUp() {
         super.setUp()
+        let stamp = UUID().uuidString
         url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("lamp-off-\(UUID().uuidString).json")
+            .appendingPathComponent("lamp-off-\(stamp).json")
+        onUrl = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-on-\(stamp).json")
     }
 
     override func tearDown() {
         try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(at: onUrl)
         super.tearDown()
     }
 
@@ -57,11 +62,11 @@ final class LampSwitchTests: XCTestCase {
     // MARK: - The set
 
     func testTurnOffThenOnRoundTripsThroughTheFile() {
-        LampSwitch.turnOff("a", at: url)
-        LampSwitch.turnOff("b", at: url)
+        LampSwitch.turnOff("a", at: url, onAt: onUrl)
+        LampSwitch.turnOff("b", at: url, onAt: onUrl)
         XCTAssertEqual(LampSwitch.load(from: url), ["a", "b"])
 
-        LampSwitch.turnOn("a", at: url)
+        LampSwitch.turnOn("a", at: url, onAt: onUrl)
         XCTAssertEqual(LampSwitch.load(from: url), ["b"])
     }
 
@@ -69,7 +74,7 @@ final class LampSwitchTests: XCTestCase {
     /// worse than no switch, because the panel comes back full of rows the user
     /// already dealt with and the gesture reads as broken.
     func testTheSwitchSurvivesARestart() {
-        LampSwitch.turnOff("a", at: url)
+        LampSwitch.turnOff("a", at: url, onAt: onUrl)
         XCTAssertTrue(LampSwitch.isOff("a", waiting: false,
                                        switchedOff: LampSwitch.load(from: url)))
     }
@@ -95,7 +100,51 @@ final class LampSwitchTests: XCTestCase {
 
     func testPruneDropsSessionsThePanelCanNoLongerSee() {
         LampSwitch.save(["gone", "here"], to: url)
-        XCTAssertEqual(LampSwitch.prune(keeping: ["here", "other"], at: url), ["here"])
+        XCTAssertEqual(LampSwitch.prune(keeping: ["here", "other"], at: url, onAt: onUrl), ["here"])
         XCTAssertEqual(LampSwitch.load(from: url), ["here"])
+    }
+
+    // MARK: - The other half of the switch (19 Aug)
+
+    /// The direction that was never stored. Turning a lamp on used to do
+    /// nothing but erase an off — so a session that was in the list because it
+    /// had gone QUIET, which since 18 Aug is the common way to get there, could
+    /// not be brought back at all.
+    func testTurningOneOnRecordsIt() {
+        XCTAssertFalse(LampSwitch.isOn("a", switchedOn: LampSwitch.loadOn(from: onUrl)))
+        LampSwitch.turnOn("a", at: url, onAt: onUrl)
+        XCTAssertTrue(LampSwitch.isOn("a", switchedOn: LampSwitch.loadOn(from: onUrl)))
+    }
+
+    /// A switch remembers being pressed in ONE direction. A session in both
+    /// sets is not a switch, it is two contradictory facts about one row.
+    func testASessionIsInAtMostOneSet() {
+        LampSwitch.turnOff("a", at: url, onAt: onUrl)
+        LampSwitch.turnOn("a", at: url, onAt: onUrl)
+        XCTAssertEqual(LampSwitch.load(from: url), [])
+        XCTAssertEqual(LampSwitch.loadOn(from: onUrl), ["a"])
+
+        LampSwitch.turnOff("a", at: url, onAt: onUrl)
+        XCTAssertEqual(LampSwitch.load(from: url), ["a"])
+        XCTAssertEqual(LampSwitch.loadOn(from: onUrl), [])
+    }
+
+    /// It outlives the launch, for the same reason the off half does: a
+    /// decision the user made with a click, silently undone by the next
+    /// restart, is worse than no switch at all.
+    func testItSurvivesAReload() {
+        LampSwitch.turnOn("a", at: url, onAt: onUrl)
+        XCTAssertEqual(LampSwitch.loadOn(from: onUrl), ["a"])
+    }
+
+    /// Pruning takes both sets, or the on-file grows for the life of the
+    /// install exactly as the off-file would have.
+    func testPruningTakesBothHalves() {
+        LampSwitch.turnOn("here", at: url, onAt: onUrl)
+        LampSwitch.turnOn("gone", at: url, onAt: onUrl)
+        LampSwitch.turnOff("filed", at: url, onAt: onUrl)
+        LampSwitch.prune(keeping: ["here", "filed"], at: url, onAt: onUrl)
+        XCTAssertEqual(LampSwitch.loadOn(from: onUrl), ["here"])
+        XCTAssertEqual(LampSwitch.load(from: url), ["filed"])
     }
 }
