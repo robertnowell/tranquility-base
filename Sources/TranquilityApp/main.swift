@@ -1440,7 +1440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
                 aux: activity?.shortReason ?? StateLegend.shortId(stored.sessionId),
-                lamp: lamp(for: activity, sessionId: stored.sessionId)))
+                lamp: lamp(for: activity, sessionId: stored.sessionId, live: live)))
         }
         // Live sessions with no stored events yet: nothing to rank them by,
         // so they close the live half of the grid.
@@ -1464,7 +1464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     liveName: Self.tabTitle(transcriptPath: nil, live: live),
                     callsign: nil, fallback: "session"),
                 aux: activity?.shortReason ?? StateLegend.shortId(live.sessionId),
-                lamp: lamp(for: activity, sessionId: live.sessionId)))
+                lamp: lamp(for: activity, sessionId: live.sessionId, live: live)))
         }
         // And the sessions that are not awake (ruled 11 Aug). Everything above
         // this line is enumerated from PROCESSES, which is why a machine
@@ -1514,12 +1514,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// exists to carry, to say something the user just did themselves. Quiet
     /// is the only lamp with nothing to lose, and it is exactly the lamp that
     /// was lying.
-    private func lamp(for activity: SessionActivity?, sessionId: String) -> StateLegend.Lamp {
+    ///
+    /// The PROCESS outranks the transcript, and that is the 18 Aug ruling. A
+    /// session blocked on a tool prompt — `AskUserQuestion`, a permission
+    /// dialog — writes nothing to its transcript, fires no hook, and from the
+    /// file alone is indistinguishable from an agent happily running Bash. But
+    /// `claude agents --json` has watched the process and says
+    /// `status: waiting · waitingFor: input needed`, which the app has read
+    /// every five seconds since the beginning and used only to decide whether
+    /// it was safe to type into a tab. It is the plainest needs-you signal in
+    /// the system and it reached no lamp until now. `busy` and `idle` are read
+    /// the same way, for the same reason: the process knows, and the file only
+    /// implies.
+    private func lamp(for activity: SessionActivity?, sessionId: String,
+                      live: LiveSession?) -> StateLegend.Lamp {
+        // Blocked on you, said by the process itself. Nothing in a transcript
+        // outranks this — including a stale `working` read from a tool call
+        // that IS the prompt the session is blocked on.
+        if live?.status == "waiting" { return .fault }
         let observed: StateLegend.Lamp = {
             switch activity {
-            case .working: return .working
+            case .working:
+                // The file says a turn is in flight. If the process says it is
+                // idle, the turn ended in a shape the file cannot express — an
+                // unanswered prompt with no turn-end marker, the 17:19 case.
+                // The process is right and it costs nothing to believe it.
+                return live?.status == "idle" ? .running : .working
             case .blocked: return .fault
-            case .idle, nil: return .running
+            case .idle, nil:
+                // And the mirror: the file has nothing to say, the process says
+                // it is chewing. Blue rather than quiet.
+                return live?.status == "busy" ? .working : .running
             }
         }()
         guard observed == .running, delivering.isInFlight(sessionId) else { return observed }

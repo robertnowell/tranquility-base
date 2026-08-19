@@ -23,7 +23,7 @@ import Foundation
 /// clear-sites are many — six outcome cases across two functions, two supersede
 /// paths, a cancel closure, two catch blocks — and one missed clear would pin a
 /// lamp blue on a session doing nothing at all, which is the precise failure
-/// `SessionActivity.freshness` already exists to prevent on the other side of
+/// `SessionActivity.stalled` already exists to surface on the other side of
 /// the seam. Bounding the entry means a missed clear costs seconds rather than
 /// forever, so correctness here does not depend on enumerating every exit.
 public struct DeliveryInFlight: Sendable, Equatable {

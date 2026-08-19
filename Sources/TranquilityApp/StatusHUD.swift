@@ -2263,24 +2263,28 @@ final class StatusHUD: NSObject {
         rows.dropFirst(gridRowsShown(rows, screen: screen))
     }
 
-    /// How many rows to draw right now: your top eight, or every ACTIVE
-    /// session, whichever is larger — clamped to what the screen can hold.
+    /// How many rows to draw right now: every LIVE session, or your top eight,
+    /// whichever is larger — clamped to what the screen can hold.
     ///
-    /// Ruled 12 Aug. Active means the panel is telling you something: green
-    /// (wants you), blue (working), amber (stopped). A session that is merely
-    /// alive with its lamp out is NOT guaranteed a place — it competes for the
-    /// eight, and past that it lives in the list. That is what keeps the
-    /// panel's height a measure of how much is happening rather than a measure
-    /// of how long the machine has been on.
+    /// RE-RULED 18 Aug, and the correction is which sessions are entitled to a
+    /// row. The 12 Aug rule counted only ACTIVE sessions — green, blue, amber —
+    /// so a live session whose lamp was out competed for the eight and lost.
+    /// With nine lit rows and a screen holding twenty, ten live sessions were
+    /// sent to page two with eleven slots standing empty; one of them had been
+    /// blocked on Robert for 41 minutes. "A session goes to the second page for
+    /// one of two reasons: I click the lamp and turn it off, or it gets booted
+    /// out because there are more than fit on my screen."
+    ///
+    /// So aliveness is the entitlement now, not brightness. Every session with
+    /// a process behind it holds a row until the glass runs out. Past that,
+    /// and for sessions that have exited, the list is the graveyard it was
+    /// always meant to be — the panel's height still measures what is
+    /// happening rather than how long the machine has been on, because what is
+    /// happening is what is RUNNING, not what happens to be lit this second.
     static func gridRowsShown(_ rows: [StateLegend.SessionRow],
                               screen: NSScreen? = NSScreen.main) -> Int {
-        let active = rows.filter {
-            switch $0.lamp {
-            case .ready, .working, .fault: return true
-            case .running, .unlit: return false
-            }
-        }.count
-        return min(gridRowCapacity(screen: screen), max(gridRowFloor, active))
+        let live = rows.filter { $0.lamp != .unlit }.count
+        return min(gridRowCapacity(screen: screen), max(gridRowFloor, live))
     }
 
     private func rebuildSessionRows() {
@@ -4400,6 +4404,7 @@ final class StatusHUD: NSObject {
         selectionDrill()
         hoverDrill()
         quietRowsDrill()
+        liveRowsHoldTheirPlaceDrill()
         closedRowsDrill()
         lampSwitchDrill()
         readIntensityDrill()
@@ -4877,6 +4882,49 @@ final class StatusHUD: NSObject {
             ("allQuietIsStillAllQuiet",
              StateLegend.quietRowsLast([row("i1", .running), row("i2", .running)])
                 .map(\.id) == ["i1", "i2"]),
+        ])
+    }
+
+    /// A live session holds its row until the glass runs out (18 Aug).
+    ///
+    /// The rule this replaces counted only LIT rows toward the grid's height,
+    /// so a live session whose lamp was out competed for eight slots and lost.
+    /// On 18 Aug that put ten live sessions on page two with eleven slots
+    /// standing empty, one of them blocked on Robert for 41 minutes. The
+    /// entitlement is aliveness now, and this drill holds the line: quiet is
+    /// not a reason to demote, only the edge of the screen is.
+    private func liveRowsHoldTheirPlaceDrill() {
+        func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
+            StateLegend.SessionRow(id: id, name: id, aux: id, lamp: lamp)
+        }
+        let capacity = Self.gridRowCapacity()
+        // Nine lit and ten quiet: the exact shape of the 18 Aug panel.
+        let asItWas = (0..<9).map { row("lit\($0)", .ready) }
+            + (0..<10).map { row("quiet\($0)", .running) }
+        let shown = Self.gridRowsShown(asItWas)
+        let exiled = Set(Self.pastAgents(asItWas).map(\.id))
+        // One live session per slot, and one more than there is room for.
+        let overflowing = (0..<(capacity + 1)).map { row("live\($0)", .running) }
+        // Closed rows are the graveyard's own population and may still be cut.
+        let withDead = (0..<3).map { row("live\($0)", .running) }
+            + (0..<40).map { row("dead\($0)", .unlit) }
+
+        SelfTest.report("liveRowsHoldTheirPlace", [
+            // The regression itself: nineteen live rows, none of them demoted,
+            // because the screen holds twenty.
+            ("noLiveRowIsDemotedWhileThereIsRoom",
+             capacity < asItWas.count || exiled.isEmpty),
+            ("quietDoesNotCostYouYourRow",
+             capacity < asItWas.count || shown == asItWas.count),
+            // The one demotion the user asked for: the edge of the glass.
+            ("theScreenIsStillTheLimit",
+             Self.gridRowsShown(overflowing) == capacity),
+            ("overflowGoesToTheList",
+             Self.pastAgents(overflowing).count == overflowing.count - capacity),
+            // A quiet day still shows its eight, and the dead fill them.
+            ("theFloorStillHolds", Self.gridRowsShown(withDead) >= Self.gridRowFloor),
+            ("nothingIsLostEitherWay",
+             Self.gridRowsShown(withDead) + Self.pastAgents(withDead).count == withDead.count),
         ])
     }
 
