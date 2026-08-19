@@ -232,4 +232,22 @@ final class PullRequestInTheHubTests: XCTestCase {
         XCTAssertTrue(GitHubPullRequests.isAskable("ui/the-grid-lights-its-words"))
         XCTAssertTrue(GitHubPullRequests.isAskable("maintenance/cleanup"))
     }
+
+    /// Every turn of a session shares one branch, so a row per turn is the
+    /// same pull request nine times down the page — which is the complaint
+    /// that started the rewrite, wearing different clothes. Once per branch,
+    /// on the newest turn that used it.
+    func testTheRowPrintsOncePerBranchNotPerTurn() {
+        let cwd = FileManager.default.currentDirectoryPath
+        try? XCTSkipIf(GitRemote.slug(cwd: cwd) == nil, "no origin remote here")
+        guard GitRemote.slug(cwd: cwd) != nil else { return }
+        stub(pr(117))
+        GitHubPullRequests.prime(repo: repo, branch: "ui/grid")
+        let turns = (0..<5).map {
+            HomeBase.Turn(at: Date(timeIntervalSince1970: 1_755_530_000 - Double($0) * 600),
+                          topic: "turn \($0)", happened: "Did it.", branch: "ui/grid")
+        }
+        let html = HomeBase.render(model(turns, cwd: cwd))
+        XCTAssertEqual(html.components(separatedBy: "class=\"pr\"").count - 1, 1)
+    }
 }

@@ -591,6 +591,7 @@ public enum HomeBase {
         let repo = model.cwd.flatMap(GitRemote.slug)
 
         // ---- the stack, downsampled by age ----------------------------------
+        var printedBranches: Set<String> = []
         var rows = ""
         for (i, turn) in ordered.enumerated() {
             var body = "<p class=\"h\">\(e(turn.happened))</p>"
@@ -630,7 +631,13 @@ public enum HomeBase {
             // it here was "whenever you need to look at a PR to merge it".
             // Absent when the snapshot is cold or the branch has none — the
             // lookup never blocks the render (see GitHubPullRequests.cached).
+            // Once per branch, on its NEWEST turn. Every turn of a session
+            // shares one branch, so printing the row per turn puts the same
+            // pull request down the page nine times — which is the "why does
+            // this hub have six PRs" complaint in another costume. The newest
+            // turn is the one you are reading when you decide to merge.
             if let repo, let branch = turn.branch,
+               printedBranches.insert(branch).inserted,
                let pr = GitHubPullRequests.cached(repo: repo, branch: branch) {
                 body += prItem(pr, e: e)
             }
