@@ -181,4 +181,39 @@ final class SpokenCompositionTests: XCTestCase {
                        "a rung speaks all of what its card shows")
     }
 
+
+    // MARK: - The first rung (19 Aug)
+
+    /// The rung the change exists for. The callsign used to say which work an
+    /// announcement was about and was removed deliberately, which left the
+    /// ladder opening on FINDINGS — the details of a turn whose subject nobody
+    /// had stated. Shipping the `goal` field without this rung produced exactly
+    /// that: a session pulled at ⌃⌃ and nothing named the work.
+    func testTheLadderOpensOnTheGoal() {
+        let brief = SessionBrief(
+            topic: "the lamp", goal: "fix the lamp so clicking it turns the session off",
+            happened: "Found the decay gate.",
+            rationale: "The lamp was lying about state.",
+            findings: "A fifteen minute freshness gate decayed working sessions to idle.",
+            solution: "Remove the gate; switch on the click.")
+        let rungs = SpokenComposition.ladderRungs(
+            for: announcement(callsign: "tranquility grid", brief: brief))
+        XCTAssertEqual(rungs.map(\.kind), [.goal, .findings, .solution, .why, .message])
+        XCTAssertTrue(rungs[0].spoken.text.contains("clicking it turns the session off"))
+    }
+
+    /// Skipped, never padded — the contract every other rung keeps.
+    func testALadderWithNoGoalOpensWhereItAlwaysDid() {
+        let brief = SessionBrief(topic: "export", happened: "done",
+                                 findings: "Three misfiled pieces recovered.")
+        let rungs = SpokenComposition.ladderRungs(
+            for: announcement(callsign: "promotions copy", brief: brief))
+        XCTAssertEqual(rungs.map(\.kind), [.findings, .why, .message])
+    }
+
+    /// The panel names a rung from the raw value, so the pill reads GOAL with
+    /// no UI change — in capitals, because the pill is a legend.
+    func testTheGoalRungNamesItself() {
+        XCTAssertEqual(SpokenComposition.RungKind.goal.rawValue, "GOAL")
+    }
 }
