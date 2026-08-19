@@ -827,7 +827,7 @@ final class StatusHUD: NSObject {
     func showAgentSettings() {
         guard transition(to: .settings, because: "settings opened") else { return }
         currentTarget = nil
-        face = Face(title: "Agents", body: "How every agent starts — new ones here, "
+        face = Face(title: "Agents", body: "How every agent starts, new ones here, "
                     + "revived ones in their own directory.")
         face.settingsTab = .agents
         render()
@@ -4451,6 +4451,7 @@ final class StatusHUD: NSObject {
         ])
 
         contrastDrill()
+        copyDrill()
         titleDoorDrill()
         selectionDrill()
         hoverDrill()
@@ -5432,6 +5433,79 @@ final class StatusHUD: NSObject {
     ///    and an inverted ramp is a hierarchy that lies;
     ///  - `hint` outranks `faint`, which is the entire point of having split
     ///    them. Re-merging them by accident is how the mushy key line comes back.
+    /// Nothing a human reads carries an em dash, and every row can be read in
+    /// full.
+    ///
+    /// Ruled 18 Aug, twice in one sentence: "there's no way to see the full
+    /// message, the full error, or whatever message is silent for 2h. Get rid
+    /// of the fucking em dash. Moreover, if I hover, show me the full message
+    /// in a tooltip."
+    ///
+    /// A sweep of the RENDERED labels rather than a grep of the source, because
+    /// the string that reaches the screen is usually assembled from two or three
+    /// that do not contain the character on their own — which is also why a
+    /// one-off fix to one constant would not have held. Log lines are
+    /// deliberately out of scope: they are diagnostics, not copy, and the app's
+    /// own log is the one place the dash still earns its keep.
+    private func copyDrill() {
+        func words(in view: NSView) -> [String] {
+            var found: [String] = []
+            if let field = view as? NSTextField {
+                let text = field.attributedStringValue.string
+                if !text.isEmpty { found.append(text) }
+            }
+            view.subviews.forEach { found += words(in: $0) }
+            return found
+        }
+        // A row whose message is longer than the column, which is the case the
+        // hover exists for.
+        let message = "silent for 2h, nothing written since it started this"
+        let stalled = StateLegend.SessionRow(
+            id: "stall", name: "a session name long enough to truncate against the callsign",
+            aux: message, lamp: .fault, detail: message)
+        showIdle(rows: [stalled, StateLegend.SessionRow(
+            id: "ok", name: "quiet one", aux: "ok", lamp: .ready)])
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        var seen = panel?.contentView.map { words(in: $0) } ?? []
+        let gridRow = waitingRows.arrangedSubviews
+            .compactMap { $0 as? GridRowView }
+            .first { $0.identifier?.rawValue == "stall" }
+        let gridTip = gridRow?.toolTip
+
+        // The same row on the other face.
+        showPastAgents(items: [PastAgentsList.Item(
+            row: stalled, revivable: false, haystack: stalled.name)])
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        seen += panel?.contentView.map { words(in: $0) } ?? []
+        let listTip = pastList.toolTipsForTesting.first
+        goHomeFromPastAgents()
+
+        // And the copy that only appears when something goes wrong, which is
+        // exactly the copy nobody re-reads.
+        seen += [StateLegend.noWordsNotice, StateLegend.slowTranscriptionNote]
+        let offenders = seen.filter { $0.contains("\u{2014}") }
+
+        SelfTest.report("copy", [
+            ("noEmDashOnScreen", offenders.isEmpty),
+            // Named, so a failure says WHICH string rather than sending the
+            // next reader back through every face by hand.
+            ("offenders", offenders.isEmpty),
+            ("theGridRowCarriesItsWholeMessage",
+             gridTip?.contains(message) == true),
+            ("theListRowCarriesItTheSameWay", listTip?.contains(message) == true),
+            ("bothFacesSayTheSameThing", gridTip == listTip),
+            // The name is in the hover too: it truncates against the callsign
+            // column and was the other half of what could not be read.
+            ("theHoverCarriesTheWholeName",
+             gridTip?.contains("truncate against the callsign") == true),
+        ])
+        if !offenders.isEmpty {
+            Permissions.log("selftest copy: em dashes in \(offenders.count) string(s): "
+                + offenders.prefix(5).joined(separator: " | "))
+        }
+        showIdle(rows: [])
+    }
+
     private func contrastDrill() {
         let surface = StateLegend.Palette.surface
         var checks: [(String, Bool)] = []
@@ -5615,17 +5689,17 @@ final class StatusHUD: NSObject {
         // before shipping rather than after.
         case "read-state":
             showIdle(rows: [
-                .init(id: "u0", name: "Unread — full ink, solid lamp",
+                .init(id: "u0", name: "Unread, full ink, solid lamp",
                       aux: "unread", lamp: .ready, read: .unread),
-                .init(id: "o0", name: "Opened — resting ink, hollow",
+                .init(id: "o0", name: "Opened, resting ink, hollow",
                       aux: "opened", lamp: .ready, read: .opened),
                 .init(id: "w0", name: "Working, unread",
                       aux: "working", lamp: .working, read: .unread),
                 .init(id: "w1", name: "Working, opened",
                       aux: "working", lamp: .working, read: .opened),
-                .init(id: "i0", name: "Idle — alive, asking nothing",
+                .init(id: "i0", name: "Idle, alive, asking nothing",
                       aux: "idle", lamp: .running, read: .none),
-                .init(id: "d0", name: "Gone — turned off is turned off",
+                .init(id: "d0", name: "Gone, turned off is turned off",
                       aux: "closed", lamp: .unlit, read: .none),
             ])
             return true
@@ -5753,7 +5827,7 @@ final class StatusHUD: NSObject {
 
         case "needsyou":
             adopt()
-            showResult("promotions copy's tab is gone — copied your words to the clipboard.")
+            showResult("promotions copy's tab is gone, copied your words to the clipboard.")
 
         case "no-audio":
             // The third tier. No adopted target on purpose: the fault is the
@@ -6542,7 +6616,7 @@ final class StatusHUD: NSObject {
                         Permissions.log("goToSession: tab not found for \(tty)")
                     case .timedOut(let seconds):
                         self.bodyLabel.stringValue =
-                            "Terminal didn't answer within \(seconds) seconds — it looks busy. The tab is still there; try again in a moment."
+                            "Terminal didn't answer within \(seconds) seconds, it looks busy. The tab is still there; try again in a moment."
                         Permissions.log("goToSession TIMEOUT after \(seconds)s for \(tty)")
                     case .failed(let message):
                         self.bodyLabel.stringValue = "Couldn't control Terminal: \(message)"
@@ -7550,6 +7624,10 @@ final class GridRowView: NSControl {
         identifier = NSUserInterfaceItemIdentifier(item.id)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
+        // Rest the pointer and read the whole thing. Both halves of this row
+        // truncate, so until 18 Aug the end of an error or a stall lived only
+        // in the log: "there's no way to see the full message."
+        toolTip = StateLegend.hoverText(for: item)
 
         let ready = item.lamp == .ready
 

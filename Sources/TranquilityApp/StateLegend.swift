@@ -597,10 +597,15 @@ enum StateLegend {
         /// file" — a waiting turn overrides the switch — and two readers
         /// evaluating that separately is how they start disagreeing.
         let switchedOff: Bool
+        /// The whole message, for the hover. The row shows `aux`, which is a
+        /// clause of it cut to a column and then truncated again by the label;
+        /// until 18 Aug that meant an error or a stall could only be READ in
+        /// the log. Nil where there is nothing more to say than the row says.
+        let detail: String?
 
         init(id: String, name: String, aux: String, lamp: Lamp,
              revivable: Bool = false, read: ReadState = .none,
-             switchedOff: Bool = false) {
+             switchedOff: Bool = false, detail: String? = nil) {
             self.id = id
             self.name = name
             self.aux = aux
@@ -608,6 +613,7 @@ enum StateLegend {
             self.revivable = revivable
             self.read = read
             self.switchedOff = switchedOff
+            self.detail = detail
         }
 
         /// The same row with its lamp out, as a session the user has filed.
@@ -619,8 +625,24 @@ enum StateLegend {
         /// repaint and never stored.
         func switchedOffCopy() -> SessionRow {
             SessionRow(id: id, name: name, aux: aux, lamp: .running,
-                       revivable: revivable, read: read, switchedOff: true)
+                       revivable: revivable, read: read, switchedOff: true,
+                       detail: detail)
         }
+    }
+
+    /// What the pointer gets when it rests on a row: the full name, and under
+    /// it the full message, neither of them cut.
+    ///
+    /// Ruled 18 Aug. Both halves of a row truncate — the name against the
+    /// callsign column, the reason against the row's edge — so a stalled or
+    /// blocked session showed "silent for 2h, no…" and the rest of the
+    /// sentence existed nowhere a human could reach. One function for both
+    /// faces, because a row that says one thing on the grid and another in the
+    /// list is worse than one that says nothing.
+    static func hoverText(for row: SessionRow) -> String? {
+        let message = row.detail ?? (row.aux == shortId(row.id) ? nil : row.aux)
+        guard let message, !message.isEmpty else { return row.name }
+        return "\(row.name)\n\(message)"
     }
 
     /// Quiet rows sink (ruled 10 Aug). A session that is merely alive never
@@ -1078,7 +1100,7 @@ enum StateLegend {
     /// classification of the agent — "Needs you" is our internal reading of a
     /// session's condition, and no session's condition changed. The triangle
     /// stays: it is the one mark that earns the amber.
-    static let noWordsNotice = "\(Glyph.needsYou) No words detected — try again"
+    static let noWordsNotice = "\(Glyph.needsYou) No words detected, try again"
 
     // MARK: - The device fault (ruled 08 Aug)
 
@@ -1120,11 +1142,11 @@ enum StateLegend {
                 + "Pick one under Microphone settings."
         }
         if device.isBluetooth {
-            return "Nothing arrived from \(device.name) — it opened and then sent "
+            return "Nothing arrived from \(device.name), it opened and then sent "
                 + "silence. Bluetooth mics do this when they re-rate themselves; "
                 + "switching to the built-in mic is the reliable fix."
         }
-        return "Nothing arrived from \(device.name) — the mic was open the whole "
+        return "Nothing arrived from \(device.name), the mic was open the whole "
             + "time and the level never moved. Check that it isn't muted, or "
             + "pick a different input."
     }
@@ -1141,7 +1163,7 @@ enum StateLegend {
 
     // MARK: - Slow transcription (sanctioned change: open issue #4)
 
-    static let slowTranscriptionNote = "Taking longer than usual — your audio is safe."
+    static let slowTranscriptionNote = "Taking longer than usual, your audio is safe."
     static let cancelTranscriptionTitle = "Cancel"
     static let retryTranscriptionTitle = "Retry"
     /// After this many seconds of transcribing, say so and offer a way out.
