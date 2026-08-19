@@ -1393,10 +1393,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // answered this") would be a lie, so the transcript's verdict wins.
         let boundaries = (try? store?.latestTurnBoundaries()) ?? [:]
         var rows = waiting.map { (event: WaitingSession) -> StateLegend.SessionRow in
-            let activity = event.transcriptPath.flatMap {
-                SessionActivity.read(transcriptPath: $0,
-                                     boundary: boundaries[event.sessionId])
+            let evidence = event.transcriptPath.flatMap {
+                SessionActivity.evidence(transcriptPath: $0,
+                                         boundary: boundaries[event.sessionId])
             }
+            // Blue here means "it is chewing on your last reply". A restarted
+            // session is not: the turn the file describes died with the process
+            // that wrote it. Green is the truth — you still owe it an answer,
+            // and now nothing at all moves until you type one.
+            let stranded = AgentRestart.stranded(
+                activity: evidence?.activity,
+                startedAt: liveById[event.sessionId]?.startedAtDate,
+                lastWord: AgentRestart.lastWord(observedAt: evidence?.observedAt,
+                                                boundary: boundaries[event.sessionId]))
             // Green says "you have not answered this". While a reply to
             // this very turn is in flight that is the most misleading thing
             // the grid can say — the cursor does not advance until the send
@@ -1410,8 +1419,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // The id, not the callsign — ruled 12 Aug, and the same in
                 // every band so a row means the same thing wherever it sits.
                 aux: StateLegend.shortId(event.sessionId),
-                lamp: activity == .working
-                    || delivering.supersedesWaiting(event.sessionId, latestId: event.latestId)
+                lamp: !stranded
+                    && (evidence?.activity == .working
+                        || delivering.supersedesWaiting(event.sessionId,
+                                                        latestId: event.latestId))
                     ? .working : .ready,
                 // This band is the only one with a real read state: these
                 // rows HAVE a waiting turn. Everywhere else the answer is
@@ -1447,12 +1458,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard !SessionDiscovery.isHeadless(transcriptPath: stored.transcriptPath)
             else { continue }
             placed.insert(stored.sessionId)
-            let activity = stored.transcriptPath.flatMap {
-                SessionActivity.read(transcriptPath: $0,
-                                     boundary: boundaries[stored.sessionId])
+            let evidence = stored.transcriptPath.flatMap {
+                SessionActivity.evidence(transcriptPath: $0,
+                                         boundary: boundaries[stored.sessionId])
             }
-            let storedLamp = lampAndReason(for: activity, sessionId: stored.sessionId,
-                                           live: live)
+            let storedLamp = lampAndReason(for: evidence, sessionId: stored.sessionId,
+                                           live: live,
+                                           boundary: boundaries[stored.sessionId])
             rows.append(StateLegend.SessionRow(
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
@@ -1471,12 +1483,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // unreadable path fails open exactly like everywhere else.
             guard !SessionDiscovery.isHeadless(transcriptPath: path) else { continue }
             placed.insert(live.sessionId)
-            let activity = path.flatMap {
-                SessionActivity.read(transcriptPath: $0,
-                                     boundary: boundaries[live.sessionId])
+            let evidence = path.flatMap {
+                SessionActivity.evidence(transcriptPath: $0,
+                                         boundary: boundaries[live.sessionId])
             }
-            let liveLamp = lampAndReason(for: activity, sessionId: live.sessionId,
-                                         live: live)
+            let liveLamp = lampAndReason(for: evidence, sessionId: live.sessionId,
+                                         live: live,
+                                         boundary: boundaries[live.sessionId])
             rows.append(StateLegend.SessionRow(
                 id: live.sessionId,
                 name: StateLegend.displayName(
@@ -1571,6 +1584,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the system and it reached no lamp until now. `busy` and `idle` are read
     /// the same way, for the same reason: the process knows, and the file only
     /// implies.
+    ///
+    /// A RESTART is the one place that ruling needed a third fact. The process
+    /// says idle and is right; the file says working and is right; the session
+    /// is stranded anyway, because the two of them are talking about different
+    /// processes. `AgentRestart` settles that one, above everything here except
+    /// `waiting`.
+    ///
     /// The lamp AND the words next to it, decided together.
     ///
     /// One function because they were two, and they disagreed in front of
@@ -1580,8 +1600,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// sentence, and the sentence is what he read. A lamp and its caption
     /// derived from two sources is the same class of bug as two sources for
     /// the lamp itself.
-    private func lampAndReason(for activity: SessionActivity?, sessionId: String,
-                               live: LiveSession?) -> (lamp: StateLegend.Lamp, reason: String?, detail: String?) {
+    private func lampAndReason(for evidence: SessionActivity.Evidence?, sessionId: String,
+                               live: LiveSession?,
+                               boundary: SessionActivity.TurnBoundary? = nil)
+        -> (lamp: StateLegend.Lamp, reason: String?, detail: String?) {
+        let activity = evidence?.activity
         // Blocked on you, said by the process itself. Nothing in a transcript
         // outranks this — including a stale `working` read from a tool call
         // that IS the prompt the session is blocked on.
@@ -1593,6 +1616,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if live?.status == "waiting" {
             return (.fault, "asking you a question",
                     "The agent has asked you something and is holding for an answer.")
+        }
+        // Stranded by a restart: the file's open turn was written by a process
+        // that has since been killed, and the one running now has heard
+        // nothing. Amber, and above the two downgrades below, which would
+        // otherwise read this session's brand-new idleness as "nothing here"
+        // and file the work away. See `AgentRestart`.
+        if AgentRestart.stranded(
+            activity: activity, startedAt: live?.startedAtDate,
+            lastWord: AgentRestart.lastWord(observedAt: evidence?.observedAt,
+                                            boundary: boundary)) {
+            return (.fault, AgentRestart.short, AgentRestart.full)
         }
         let observed: (StateLegend.Lamp, String?, String?) = {
             switch activity {

@@ -4502,6 +4502,7 @@ final class StatusHUD: NSObject {
         hoverDrill()
         quietRowsDrill()
         litLampsOnlyDrill()
+        restartedAgentDrill()
         closedRowsDrill()
         lampSwitchDrill()
         readIntensityDrill()
@@ -5056,6 +5057,59 @@ final class StatusHUD: NSObject {
             // regression on 18 Aug; see `gridRows`.
             ("theFloorIsStillGeometry",
              Self.gridRowsShown([row("q", .running)]) == Self.gridRowFloor),
+        ])
+    }
+
+    /// A restarted agent is on the grid, not in Past Agents.
+    ///
+    /// Ruled 19 Aug, on `04d50469`: killed between a tool call and its result,
+    /// resumed seven minutes later, and filed away by the panel while its owner
+    /// sat looking at it. Robert: *"when you restart an agent, the lamp should
+    /// immediately be on … it should be on the grid, not in past agents."*
+    ///
+    /// Drilled as the whole path rather than as the rule alone, because the
+    /// rule was never the doubtful part: `AgentRestart` is unit-tested and was
+    /// green while the row was still in the wrong place. What this asserts is
+    /// that the verdict reaches the LAMP and the lamp reaches the GRID — the
+    /// two joins that the 18 Aug downgrade sat between.
+    private func restartedAgentDrill() {
+        func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
+            StateLegend.SessionRow(id: id, name: id, aux: id, lamp: lamp)
+        }
+        // The real clocks off this machine at 22:32: the conversation's last
+        // word at 22:25:22, the process up at 22:32:22.
+        let lastWord = Date(timeIntervalSince1970: 1_787_178_322)
+        let restart = Date(timeIntervalSince1970: 1_787_178_742.354)
+        func lamp(_ activity: SessionActivity, startedAt: Date?) -> StateLegend.Lamp {
+            AgentRestart.stranded(activity: activity, startedAt: startedAt,
+                                  lastWord: lastWord)
+                ? .fault
+                // What the 18 Aug rule says about `working` + an idle process,
+                // which is where every one of these rows used to land.
+                : .running
+        }
+        let stranded = row("restarted", lamp(.working, startedAt: restart))
+        let stalled = row("stalledRestart",
+                          lamp(.stalled(reason: "silent for 2h"), startedAt: restart))
+        // The same file, read against a process that has been up all along.
+        let running = row("neverRestarted", lamp(.working, startedAt: lastWord
+            .addingTimeInterval(-600)))
+        let rows = StateLegend.quietRowsLast([stranded, stalled, running])
+        let drawn = Set(Self.gridRows(rows).map(\.id))
+        let listed = Set(Self.pastAgents(rows).map(\.id))
+
+        SelfTest.report("restartedAgent", [
+            ("aRestartLightsTheLamp", stranded.lamp == .fault),
+            ("aRestartedStallLightsToo", stalled.lamp == .fault),
+            ("itIsDrawnOnTheGrid", drawn.contains("restarted")),
+            ("itIsNotFiledAway", !listed.contains("restarted")),
+            // The narrowness is the point: this must not light every live row.
+            ("anUnrestartedSessionIsUntouched",
+             running.lamp == .running && listed.contains("neverRestarted")),
+            // And it retires itself the moment the session is spoken to.
+            ("typingEndsIt",
+             !AgentRestart.stranded(activity: .working, startedAt: restart,
+                                    lastWord: restart.addingTimeInterval(30))),
         ])
     }
 
