@@ -25,6 +25,13 @@ public struct Coordinator: Sendable {
     /// think, short enough that a reply can't land somewhere you've forgotten about.
     public let replyWindow: TimeInterval
 
+    /// How long a dispatch waits for a session that is not in
+    /// `claude agents --json` yet. A brand-new agent can register, bind, and
+    /// then briefly drop out again before it has taken any input; without this
+    /// the reply was refused and the user was told to try again by hand.
+    /// Zero in tests that assert the refusal itself.
+    public let readinessGrace: TimeInterval
+
     public init(
         store: QueueStore,
         summarizer: SummarizerChain = SummarizerChain(),
@@ -35,7 +42,8 @@ public struct Coordinator: Sendable {
         agents: ClaudeAgentsReading = ClaudeAgentsCLI(),
         recovery: RecoveryChain = RecoveryChain(),
         attachments: AttachmentStore = AttachmentStore(),
-        replyWindow: TimeInterval = 15 * 60
+        replyWindow: TimeInterval = 15 * 60,
+        readinessGrace: TimeInterval = 12
     ) {
         self.store = store
         self.prepared = PreparedSummaries()
@@ -48,6 +56,7 @@ public struct Coordinator: Sendable {
         self.recovery = recovery
         self.attachments = attachments
         self.replyWindow = replyWindow
+        self.readinessGrace = readinessGrace
     }
 
     // MARK: - Intake
@@ -994,8 +1003,33 @@ public struct Coordinator: Sendable {
     ) async throws -> ReplyOutcome {
         // Typing fails CLOSED: probe failure and genuine absence refuse alike,
         // because injecting into a session we cannot verify could answer a dialog.
-        guard let live = (agents.sessions() ?? [])
-            .first(where: { $0.sessionId == target.sessionId }) else {
+        // A session that has JUST registered can drop back out of
+        // `claude agents --json` before it has taken any input — measured
+        // 19 Aug: 0f327de7 registered at 00:21:34, bound correctly, and came
+        // back `notRegistered` at 00:22:17, which surfaced as "can't take this
+        // yet — try again in a moment". Trying again is a loop, and a loop is
+        // the machine's job. So the wait happens here, once, rather than being
+        // handed to the user as an instruction.
+        //
+        // Bounded and short: `notRegistered` also means blocked on a trust
+        // dialog, where no amount of waiting helps and the refusal below is the
+        // honest answer. This buys the booting case and costs the blocked case
+        // a few seconds it was going to lose anyway.
+        var live = (agents.sessions() ?? [])
+            .first(where: { $0.sessionId == target.sessionId })
+        if live == nil {
+            let deadline = Date().addingTimeInterval(readinessGrace)
+            while live == nil, Date() < deadline {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                live = (agents.sessions() ?? [])
+                    .first(where: { $0.sessionId == target.sessionId })
+            }
+            if live != nil {
+                Coordinator.trace?("dispatch: \(target.sessionId.prefix(8)) came back "
+                    + "inside the readiness grace")
+            }
+        }
+        guard let live else {
             // Absent from `claude agents --json` means blocked on a dialog or gone.
             // Injecting would answer the dialog, so we refuse and keep the audio.
             // The files did not land either; back to the chips. A later
