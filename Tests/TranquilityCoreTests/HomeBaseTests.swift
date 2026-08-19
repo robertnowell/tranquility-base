@@ -159,7 +159,9 @@ final class HomeBaseTests: XCTestCase {
                                          at: turns[15].at)
         let html = HomeBase.render(model(turns: turns, pages: [ancient]))
         let done = html.range(of: "What it has done")!
-        let shelf = html.range(of: "Earlier pages")!
+        // "Earlier work", not "Earlier pages": the shelf holds pull requests
+        // too since 18 Aug.
+        let shelf = html.range(of: "Earlier work")!
         XCTAssertTrue(shelf.lowerBound > done.lowerBound)
     }
 
