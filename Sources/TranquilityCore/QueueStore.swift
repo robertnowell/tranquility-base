@@ -902,6 +902,28 @@ public final class QueueStore: Sendable {
         }
     }
 
+    /// The most recent goal this session actually carried — the newest brief
+    /// that HAS one, not the newest brief.
+    ///
+    /// 20.6% of briefs write no goal: a plumbing turn genuinely has no aim to
+    /// state, and the summariser is told to use null rather than pad. Reading
+    /// `briefs(limit: 1)` therefore hands the next turn a nil about one turn in
+    /// five, the carry chain breaks, and the model starts over — which is the
+    /// drift the rung exists to remove, returning every few turns. Caught on
+    /// the first post-deploy sample: a session whose 14:42 turn wrote no goal
+    /// had a brand-new one at 14:47.
+    ///
+    /// A gap is not a change of subject. The goal survives it.
+    public func carriedGoal(for sessionId: String) throws -> String? {
+        try dbQueue.read { db in
+            try String.fetchOne(db, sql: """
+                SELECT goal FROM brief
+                WHERE sessionId = ? AND goal IS NOT NULL AND goal != ''
+                ORDER BY atMs DESC LIMIT 1
+                """, arguments: [sessionId])
+        }
+    }
+
     /// Newest first, for the lexicon harvest and future retention reads.
     public func recentBriefs(limit: Int = 400) throws -> [StoredBrief] {
         try dbQueue.read { db in

@@ -117,3 +117,52 @@ extension GoalRungTests {
         XCTAssertGreaterThan(note.lowerBound, message.lowerBound)
     }
 }
+
+extension GoalRungTests {
+    /// A turn with no goal is a gap, not a change of subject.
+    ///
+    /// 20.6% of briefs write none — a plumbing turn has no aim to state and the
+    /// summariser is told to use null rather than pad. Reading the newest brief
+    /// therefore handed the next turn a nil about one turn in five, breaking
+    /// the chain and restarting the drift the rung exists to remove. Caught on
+    /// the first post-deploy sample, not in review.
+    func testTheCarrySkipsTurnsThatWroteNoGoal() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vd-carry-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
+        let base = Date(timeIntervalSince1970: 1_755_530_000)
+        let aim = "fix the lamp so clicking it turns the session off"
+
+        try store.saveBrief(SessionBrief(topic: "the lamp", goal: aim, happened: "Found it."),
+                            sessionId: "s", eventRowid: 1, provider: "p", callsign: nil, at: base)
+        // Two plumbing turns in a row, neither with an aim to state.
+        try store.saveBrief(SessionBrief(topic: "plumbing", happened: "Renamed a symbol."),
+                            sessionId: "s", eventRowid: 2, provider: "p", callsign: nil,
+                            at: base.addingTimeInterval(600))
+        try store.saveBrief(SessionBrief(topic: "plumbing", happened: "Fixed a warning."),
+                            sessionId: "s", eventRowid: 3, provider: "p", callsign: nil,
+                            at: base.addingTimeInterval(1200))
+
+        XCTAssertEqual(try store.carriedGoal(for: "s"), aim,
+                       "the goal did not survive two turns that wrote none")
+        XCTAssertNil(try store.carriedGoal(for: "other"))
+    }
+
+    /// A newer goal still wins. Skipping gaps must not mean pinning the oldest.
+    func testTheNewestRealGoalWins() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vd-carry2-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
+        let base = Date(timeIntervalSince1970: 1_755_530_000)
+        try store.saveBrief(SessionBrief(topic: "a", goal: "the old aim", happened: "x"),
+                            sessionId: "s", eventRowid: 1, provider: "p", callsign: nil, at: base)
+        try store.saveBrief(SessionBrief(topic: "b", goal: "the new aim", happened: "y"),
+                            sessionId: "s", eventRowid: 2, provider: "p", callsign: nil,
+                            at: base.addingTimeInterval(600))
+        XCTAssertEqual(try store.carriedGoal(for: "s"), "the new aim")
+    }
+}
