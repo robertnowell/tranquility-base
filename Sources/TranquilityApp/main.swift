@@ -925,9 +925,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
                 let warm = !SystemVoiceCatalog.cachedRows().catalogue.isEmpty
-                let t0 = Date()
-                self.rebuildMenu()
-                let ms = Date().timeIntervalSince(t0) * 1000
+                // TWO rebuilds, and the gate reads the second (18 Aug).
+                //
+                // The drill's name is "cacheWarm" and its assertion was
+                // "warmRebuildIsQuick", but nothing here guaranteed the
+                // measured rebuild WAS warm: it raced whatever else had
+                // rebuilt the menu since launch, and it failed 9 of 24
+                // deploys, in both directions, on builds whose panel source
+                // was byte-identical. A drill that flips on an identical
+                // binary is measuring the hour, not the build — and a gate
+                // that is red a third of the time teaches everyone to read
+                // past a red gate, which costs more than the drill is worth.
+                //
+                // So the first rebuild pays whatever one-time price exists
+                // and is REPORTED, not asserted; the second is the warm one
+                // and is what the gate reads. The section split says which
+                // part of the function spent the time, because measuring it
+                // from outside the app ruled out every candidate the
+                // comments here name: the rows cache never blocks a reader
+                // (its loader runs on a global queue and the lock only
+                // guards assignments), the ElevenLabs cache file reads in
+                // 0.11 ms, and the CoreAudio resolves cost 5 to 9 ms with a
+                // Bluetooth device connected. What is left is a first-menu
+                // cost of 125 to 300 ms, which is the right magnitude for
+                // the slow mode and is exactly what a first-versus-second
+                // measurement tells apart.
+                let cold = self.timedRebuildMenu()
+                let hot = self.timedRebuildMenu()
                 SelfTest.report("voiceMenu.cacheWarm", [
                     ("snapshotLoaded", warm),
                     // statusMenu, not statusItem.menu: the item's menu slot is
@@ -936,9 +960,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // own first deploy reading the wrong one).
                     ("voiceSubmenuBuilt",
                      self.statusMenu?.items.contains { $0.title == "Voice" } ?? false),
-                    ("warmRebuildIsQuick", ms < 50),
+                    ("warmRebuildIsQuick", hot.total < 50),
                 ])
-                Permissions.log("selftest voiceMenu: warm rebuild \(Int(ms))ms")
+                Permissions.log(
+                    "selftest voiceMenu: warm rebuild \(Int(hot.total))ms "
+                    + "(voices \(Int(hot.voices)), mic \(Int(hot.mic))) · "
+                    + "first rebuild \(Int(cold.total))ms "
+                    + "(voices \(Int(cold.voices)), mic \(Int(cold.mic)))")
             }
             // The mic drill asks the one question a deploy can answer without
             // opening the real microphone (that boundary is relaunch.sh's,
@@ -3497,7 +3525,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// What one menu rebuild cost, split by section. Milliseconds.
+    ///
+    /// Only the drill reads this. `rebuildMenu()` keeps its own signature and
+    /// its own call sites untouched, because it runs on a poll tick and the
+    /// measurement must not become something the tick pays for.
+    struct RebuildCost { var total = 0.0; var voices = 0.0; var mic = 0.0 }
+
+    private var lastRebuildCost = RebuildCost()
+
+    private func timedRebuildMenu() -> RebuildCost {
+        let t0 = Date()
+        rebuildMenu()
+        var cost = lastRebuildCost
+        cost.total = Date().timeIntervalSince(t0) * 1000
+        return cost
+    }
+
     private func rebuildMenu() {
+        var cost = RebuildCost()
+        defer { lastRebuildCost = cost }
         let menu = NSMenu()
         menu.addItem(disabled(lastStatusLine))
         menu.addItem(.separator())
@@ -3528,6 +3575,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // a TextToSpeech semaphore plus four plists — is the nested blocker
         // in issue 14's spindump. The cache revalidates off-thread; the next
         // tick paints whatever it found.
+        let voicesStart = Date()
         let rows = SystemVoiceCatalog.cachedRows()
         let voices = VoiceCatalog.cached() + rows.catalogue + rows.downloads
         if !voices.isEmpty {
@@ -3554,6 +3602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.submenu = submenu
             menu.addItem(item)
         }
+        cost.voices = Date().timeIntervalSince(voicesStart) * 1000
 
         // Microphone, here rather than in the settings pane, for the same reason
         // the voice picker is here: it is a one-click choice, not an editor. The
@@ -3564,6 +3613,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // tells you nothing about whether you are about to record through the
         // earbuds that will fail — which is why the warning marks auto-detect and
         // not just the Bluetooth entry.
+        let micStart = Date()
         let micItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
         let micMenu = NSMenu()
         let preference = AudioInputPreference.current
@@ -3589,6 +3639,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         micItem.submenu = micMenu
         menu.addItem(micItem)
+        cost.mic = Date().timeIntervalSince(micStart) * 1000
 
         menu.addItem(.separator())
 
