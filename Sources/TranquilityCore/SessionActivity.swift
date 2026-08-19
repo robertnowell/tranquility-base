@@ -75,7 +75,7 @@ public enum SessionActivity: Equatable, Sendable {
     /// A `working` verdict older than this is not believable — the process is
     /// gone, or a tool call hung days ago. Prevents a lamp stuck on blue for
     /// a session nobody will ever come back to.
-    static let freshness: TimeInterval = 15 * 60
+    public static let freshness: TimeInterval = 15 * 60
 
     /// The last turn boundary the hooks recorded for a session.
     ///
@@ -99,9 +99,37 @@ public enum SessionActivity: Equatable, Sendable {
     public static func read(
         transcriptPath: String, boundary: TurnBoundary? = nil, now: Date = Date()
     ) -> SessionActivity? {
+        evidence(transcriptPath: transcriptPath, boundary: boundary, now: now)?.activity
+    }
+
+    /// The verdict WITH the two clocks it was weighed against, so an audit can
+    /// ask the question a lamp cannot answer by looking at itself: is this
+    /// verdict resting on something the conversation said, or on a file that
+    /// merely moved? `tbase lamps` prints the drift between them; a lamp lit by
+    /// a file is the failure that shipped on 18 Aug.
+    public struct Evidence: Sendable, Equatable {
+        public let activity: SessionActivity
+        /// Timestamp of the transcript entry the verdict was read from.
+        public let observedAt: Date?
+        /// The transcript file's own mtime.
+        public let modifiedAt: Date?
+        /// How far the file's clock has run past the conversation's. Large
+        /// drift is normal and harmless; it is only dangerous when something
+        /// dates a verdict by the file.
+        public var drift: TimeInterval? {
+            guard let observedAt, let modifiedAt else { return nil }
+            return modifiedAt.timeIntervalSince(observedAt)
+        }
+    }
+
+    public static func evidence(
+        transcriptPath: String, boundary: TurnBoundary? = nil, now: Date = Date()
+    ) -> Evidence? {
         guard let tail = tail(of: transcriptPath) else { return nil }
         let modified = (try? FileManager.default.attributesOfItem(atPath: transcriptPath))?[.modificationDate] as? Date
-        return classify(tail: tail, modified: modified, boundary: boundary, now: now)
+        let verdict = self.verdict(tail: tail, modified: modified, boundary: boundary, now: now)
+        return Evidence(activity: verdict.activity, observedAt: verdict.observedAt,
+                        modifiedAt: modified)
     }
 
     /// The decision itself, taking lines rather than a path so every rule
@@ -126,6 +154,14 @@ public enum SessionActivity: Equatable, Sendable {
     static func classify(
         tail: [String], modified: Date?, boundary: TurnBoundary? = nil, now: Date = Date()
     ) -> SessionActivity {
+        verdict(tail: tail, modified: modified, boundary: boundary, now: now).activity
+    }
+
+    /// `classify`, plus the date of the entry the verdict rests on — one walk,
+    /// so the audit and the lamp can never disagree about which line decided.
+    static func verdict(
+        tail: [String], modified: Date?, boundary: TurnBoundary? = nil, now: Date = Date()
+    ) -> (activity: SessionActivity, observedAt: Date?) {
         // Walk backwards to the first entry that says anything about the
         // conversation. system/attachment/summary lines are bookkeeping —
         // Claude Code writes several of them AFTER an error, which is why
@@ -135,6 +171,10 @@ public enum SessionActivity: Equatable, Sendable {
                   let entry = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { continue }
             let type = entry["type"] as? String
+            // The entry's OWN time is the age of the evidence — see
+            // `working(since:)`. mtime only stands in when the line carries
+            // no timestamp, which real user/assistant entries always do.
+            let observed = timestamp(of: entry) ?? modified
 
             if entry["isApiErrorMessage"] as? Bool == true {
                 let reason = text(of: entry)
@@ -149,9 +189,9 @@ public enum SessionActivity: Equatable, Sendable {
                 // retry works, the tail moves on and it never lights at all.
                 if isTransient(reason), let at = timestamp(of: entry),
                    now.timeIntervalSince(at) < transientGrace {
-                    return .idle
+                    return (.idle, observed)
                 }
-                return .blocked(reason: reason)
+                return (.blocked(reason: reason), observed)
             }
             switch type {
             case "assistant":
@@ -159,36 +199,51 @@ public enum SessionActivity: Equatable, Sendable {
                 // ends in prose LOOKS finished — but mid-turn prose is the
                 // same shape, so that verdict is the ambiguous one and the
                 // hooks get the final word on it.
-                return hasToolUse(entry)
-                    ? working(since: modified, now: now)
-                    : resolveIdle(boundary: boundary, modified: modified, now: now)
+                return (hasToolUse(entry)
+                    ? working(since: observed, now: now)
+                    : resolveIdle(boundary: boundary, observed: observed, now: now), observed)
             case "user":
                 // Either a real prompt (the agent owes an answer) or a tool
                 // result (the agent is mid-loop). Both mean working.
-                return working(since: modified, now: now)
+                return (working(since: observed, now: now), observed)
             default:
                 continue  // system, attachment, summary, ai-title…
             }
         }
-        return resolveIdle(boundary: boundary, modified: modified, now: now)
+        return (resolveIdle(boundary: boundary, observed: modified, now: now), nil)
     }
 
     /// The transcript said "idle". Ask the hooks whether that is a finished
     /// turn or a turn still in flight.
     private static func resolveIdle(
-        boundary: TurnBoundary?, modified: Date?, now: Date
+        boundary: TurnBoundary?, observed: Date?, now: Date
     ) -> SessionActivity {
         guard let boundary, boundary.kind == .userPromptSubmit else { return .idle }
         // Warmth from whichever source spoke last: the hook row is written at
-        // submit and never touched again, so a long turn's only fresh evidence
-        // is the transcript's own mtime.
-        let warmest = [modified, boundary.at].compactMap { $0 }.max()
+        // submit and never touched again, so a long turn's fresh evidence is
+        // the last thing the CONVERSATION wrote — never the file's mtime,
+        // which moves for reasons that are not the conversation at all.
+        let warmest = [observed, boundary.at].compactMap { $0 }.max()
         return working(since: warmest, now: now)
     }
 
     /// `working` only while the evidence is still warm — see `freshness`.
-    private static func working(since modified: Date?, now: Date) -> SessionActivity {
-        guard let modified, now.timeIntervalSince(modified) <= freshness else { return .idle }
+    ///
+    /// `observed` is the timestamp of the transcript ENTRY the verdict was read
+    /// from, not the file's mtime. They are not the same clock, and dating the
+    /// verdict by the file was the bug: Claude Code keeps writing to a finished
+    /// session's transcript — `file-history-snapshot` updates, `ai-title`,
+    /// `bridge-session`, `pr-link`, `mode` — none of which is the conversation
+    /// saying anything. Each such write re-armed the freshness gate, so an
+    /// hours-old "working" verdict was certified fresh over and over and the
+    /// lamp never decayed. Measured 18 Aug across the 30 most recent
+    /// transcripts: 19 carried an mtime newer than their last conversational
+    /// entry, by a median of 98 minutes and a maximum of four days; two of the
+    /// three blue lamps on the grid at 17:19 were sessions that had finished
+    /// 105 and 149 minutes earlier. The freshness gate was never broken — it
+    /// was being fed the wrong clock.
+    private static func working(since observed: Date?, now: Date) -> SessionActivity {
+        guard let observed, now.timeIntervalSince(observed) <= freshness else { return .idle }
         return .working
     }
 

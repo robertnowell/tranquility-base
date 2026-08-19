@@ -230,6 +230,78 @@ do {
         print("")
         print(String(format: "scanned in %.2fs", elapsed))
 
+    case "lamps":
+        // The audit Robert asked for on 18 Aug: "every 30 seconds or so we
+        // should be auditing and getting clarity on the current state of all
+        // of our agents." The panel already recomputes every 5s — being stale
+        // was never the failure. Being CONFIDENTLY WRONG was: a lamp read blue
+        // for a session that had finished two hours earlier, and no amount of
+        // recomputing fixes a verdict dated by the wrong clock.
+        //
+        // So this prints both clocks side by side. EVIDENCE is the timestamp of
+        // the transcript entry the verdict was read from; FILE is the mtime.
+        // They diverge constantly and harmlessly — Claude Code writes
+        // snapshots, titles, bridge rows and pr-links to a finished session's
+        // transcript for days. The bug was reading FILE as the age of the
+        // verdict. The gate at the bottom is the tripwire, and it must stay 0.
+        //
+        // Runs the SHIPPING classifier (SessionActivity.evidence), never a
+        // second implementation of it — an audit that reimplements the thing it
+        // audits only ever measures itself.
+        let lampDays = args.count > 1 ? Double(args[1]) ?? 2 : 2
+        let lampFound = SessionDiscovery.discover(window: lampDays * 86_400,
+                                                  limit: SessionDiscovery.defaultLimit)
+        let lampBoundaries = (try? store.latestTurnBoundaries()) ?? [:]
+        let lampNow = Date()
+        func ageText(_ seconds: TimeInterval?) -> String {
+            guard let seconds else { return "—" }
+            let s = abs(seconds)
+            let sign = seconds < 0 ? "-" : ""
+            if s < 90 { return "\(sign)\(Int(s))s" }
+            if s < 5400 { return "\(sign)\(Int(s / 60))m" }
+            if s < 172_800 { return "\(sign)\(Int(s / 3600))h" }
+            return "\(sign)\(Int(s / 86_400))d"
+        }
+        print("window \(Int(lampDays))d · \(lampFound.sessions.count) sessions · "
+            + "freshness \(Int(SessionActivity.freshness / 60))m")
+        print("")
+        print("\(pad("LAMP", 9))\(pad("EVIDENCE", 10))\(pad("FILE", 8))\(pad("DRIFT", 8))"
+            + "\(pad("SESSION", 10))TITLE")
+        var litByFile = 0, drifted = 0
+        var drifts: [TimeInterval] = []
+        for s in lampFound.sessions {
+            guard let e = SessionActivity.evidence(transcriptPath: s.transcriptPath,
+                                                   boundary: lampBoundaries[s.sessionId],
+                                                   now: lampNow) else { continue }
+            let lamp: String
+            switch e.activity {
+            case .working: lamp = "working"
+            case .blocked: lamp = "STOPPED"
+            case .idle: lamp = "idle"
+            }
+            let evidenceAge = e.observedAt.map { lampNow.timeIntervalSince($0) }
+            let fileAge = e.modifiedAt.map { lampNow.timeIntervalSince($0) }
+            if let d = e.drift, d > SessionActivity.freshness { drifted += 1; drifts.append(d) }
+            // The tripwire: a lit lamp whose evidence is older than the
+            // freshness window can only have been lit by the file.
+            if e.activity == .working, let a = evidenceAge, a > SessionActivity.freshness {
+                litByFile += 1
+            }
+            guard e.activity != .idle || (e.drift ?? 0) > SessionActivity.freshness else { continue }
+            print("\(pad(lamp, 9))\(pad(ageText(evidenceAge), 10))\(pad(ageText(fileAge), 8))"
+                + "\(pad(ageText(e.drift), 8))\(pad(String(s.sessionId.prefix(8)), 10))"
+                + truncate(s.title ?? "—", 44))
+        }
+        print("")
+        let sortedDrifts = drifts.sorted()
+        let medianDrift = sortedDrifts.isEmpty ? nil : sortedDrifts[sortedDrifts.count / 2]
+        print("  files touched past their last word   \(drifted) of \(lampFound.sessions.count)"
+            + "   normal — the file is not the conversation")
+        print("    median \(ageText(medianDrift))  ·  max \(ageText(sortedDrifts.last))"
+            + "   how far a lamp dated by mtime could be wrong")
+        print("  lamps lit by the file                \(litByFile)"
+            + "   \(litByFile == 0 ? "clean" : "LYING — a lamp is dated by an mtime")")
+
     case "revive":
         // The SAME path the panel's row takes, so exercising this exercises
         // what ships rather than a reimplementation of it: the fresh liveness
