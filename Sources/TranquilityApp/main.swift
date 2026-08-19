@@ -3351,6 +3351,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                          label: label, cwd: dir) {
                     self.activeConversation = (sessionId, label, dir)
                     Permissions.log("greeting: bound \(sessionId.prefix(8)) to the card")
+                } else {
+                    // The refusal was the only step in this flow that changes
+                    // where your words go and left no trace: three misroutes on
+                    // 18 Aug were visible in app.log only as a MISSING line, and
+                    // reconstructing them took a timeline built from absence.
+                    // A refusal is a fact about a launch, so it gets a fact in
+                    // the ledger.
+                    Permissions.log("greeting: NOT bound \(sessionId.prefix(8)) — "
+                        + "card moved on; replies go to the previous agent until PR B")
                 }
             }
         }
