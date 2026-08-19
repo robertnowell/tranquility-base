@@ -654,7 +654,7 @@ public struct Coordinator: Sendable {
             // The goal this session is already carrying, so the model keeps it
             // instead of writing its seventeenth restatement (measured 19 Aug:
             // 59 sessions, 17 turns each, 17 distinct goals each).
-            previousGoal: (try? store.briefs(for: event.sessionId, limit: 1))?.first?.goal,
+            previousGoal: try? store.carriedGoal(for: event.sessionId),
             gitBranch: Coordinator.branch(transcript: context?.gitBranch, cwd: event.cwd),
             cwd: event.cwd,
             hookEvent: event.hookEvent,
