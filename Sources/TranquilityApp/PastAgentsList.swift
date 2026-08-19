@@ -38,6 +38,12 @@ final class PastAgentsList: NSView {
     private var shown: [Item] = []
 
     var onPick: ((_ id: String, _ revivable: Bool) -> Void)?
+    /// A click on the LAMP COLUMN, which is the session's power switch and
+    /// never navigation — see `StateLegend.lampAction(for:)`. The whole row is
+    /// handed over rather than an id, because the switch's verb is a function
+    /// of the lamp and the caller must read it from the same place the grid
+    /// does, or the same dot means two things on two faces.
+    var onLamp: ((_ row: StateLegend.SessionRow) -> Void)?
     var onFilterChanged: (() -> Void)?
     /// Right-click → "Terminate" on a LIVE row (ruled 13 Aug). Dead sessions
     /// have no process to end and get no menu — an empty menu would promise a
@@ -144,6 +150,12 @@ final class PastAgentsList: NSView {
         for (index, item) in shown.enumerated() {
             let row = PastRowView(item: item, target: self,
                                   action: #selector(rowTapped(_:)))
+            // Set on EVERY row, not only the ones with something to switch.
+            // The grid's original set it on green alone, which is why the
+            // column read as inert everywhere else and a dark lamp sent you to
+            // a Terminal tab instead of turning the session on. A rule that
+            // holds on some rows is not a rule you can learn.
+            row.onLampTap = { [weak self] in self?.onLamp?(item.row) }
             // The menu item NAMES its target — "Terminate “promotions-f9”" —
             // which is the confirmation: a right-click then a click on a
             // sentence containing the right name. No dialog after that.
@@ -248,6 +260,17 @@ final class PastAgentsList: NSView {
         guard let id = sender.representedObject as? String,
               let item = shown.first(where: { $0.row.id == id }) else { return }
         onTerminate?(id, item.row.name)
+    }
+
+    /// For the lamp drill: which rows carry a switch in the lamp column.
+    /// Asserted rather than assumed, because "every row" IS the ruling — a
+    /// target on some rows is exactly what made the column unlearnable.
+    var lampTargetsForTesting: [String] {
+        stack.arrangedSubviews.compactMap {
+            guard let row = $0 as? PastRowView, row.onLampTap != nil,
+                  let id = row.identifier?.rawValue else { return nil }
+            return id
+        }
     }
 
     /// For the launch drill: which rows exist and whether each carries the
@@ -495,9 +518,20 @@ final class PastRowView: NSControl {
         verbLabel.isHidden = !on
     }
 
+    /// The lamp column, as a control — the same `lampHitWidth` at the same full
+    /// row height the grid uses, so the switch is in the same place and the same
+    /// size wherever you meet a session. Never falls through to the row's verb:
+    /// the point of a switch is that it is not a door.
+    var onLampTap: (() -> Void)?
+
     override func mouseDown(with event: NSEvent) {}
     override func mouseUp(with event: NSEvent) {
-        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(point) else { return }
+        if let onLampTap, point.x <= GridRowView.lampHitWidth {
+            onLampTap()
+            return
+        }
         sendAction(action, to: target)
     }
 }
