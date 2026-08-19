@@ -166,3 +166,4 @@ extension GoalRungTests {
         XCTAssertEqual(try store.carriedGoal(for: "s"), "the new aim")
     }
 }
+

@@ -29,6 +29,14 @@ public enum SpokenComposition {
     /// Which rung of the ⌃⌃ ladder a pull is — carried alongside the text so
     /// the panel can NAME what is being spoken ("◀ FINDINGS"), not just say it.
     public enum RungKind: String, Sendable {
+        /// The first rung (ruled 19 Aug): which piece of work this is.
+        ///
+        /// The callsign used to answer that and was removed deliberately, which
+        /// left the ladder opening on FINDINGS — the details of a turn whose
+        /// subject nobody had stated. Pulling ⌃⌃ on a session and hearing what
+        /// the work turned up, without being told what the work IS, is the gap
+        /// this closes.
+        case goal = "GOAL"
         case findings = "FINDINGS"
         case solution = "SOLUTION"
         case why = "WHY"
@@ -44,10 +52,10 @@ public enum SpokenComposition {
         public let spoken: SanitizedSpokenText
     }
 
-    /// The ⌃⌃ ladder, in the ruled order of the stack: FINDINGS (what the work
-    /// turned up), SOLUTION (the shape of what is proposed), then WHY (the
-    /// rationale — which alone falls back to the card fields for pre-rationale
-    /// rows). Empty rungs are skipped, never padded: a trivial turn's ladder is
+    /// The ⌃⌃ ladder, in the ruled order of the stack: GOAL (which work this
+    /// is), FINDINGS (what the work turned up), SOLUTION (the shape of what is
+    /// proposed), then WHY (the rationale — which alone falls back to the card
+    /// fields for pre-rationale rows). Empty rungs are skipped, never padded: a trivial turn's ladder is
     /// one rung. Every rung is sanitized, clamped at the same 40, and speaks
     /// without a callsign — the pull answers the agent that just spoke.
     /// Guaranteed non-empty: the why rung's fallback bottoms out at
@@ -65,6 +73,13 @@ public enum SpokenComposition {
             return sanitizer.strippingLeadingLabels(labels, from: sanitized)
         }
         var rungs: [LadderRung] = []
+        // First, because "which session is this?" is the question you have
+        // before any other, and nothing else on the ladder answers it since the
+        // callsign left. Skipped when the brief carries no goal, like every
+        // other rung — a ladder is never padded.
+        if let goal = rung(announcement.brief.goal) {
+            rungs.append(LadderRung(kind: .goal, spoken: goal))
+        }
         if let findings = rung(announcement.brief.findings) {
             rungs.append(LadderRung(kind: .findings, spoken: findings))
         }
