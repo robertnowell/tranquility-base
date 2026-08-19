@@ -271,4 +271,50 @@ extension GoalRungTests {
         let stored = try XCTUnwrap(store.storedBrief(sessionId: "s", eventRowid: 1))
         XCTAssertEqual(stored.brief.goal, "the old aim", "history was rewritten")
     }
+
+    /// A carried goal is COPIED forward, so the copy gets a fresh timestamp and
+    /// stale words. The first cutoff filtered on `atMs >= cutoff` and therefore
+    /// did nothing at all: this session's rejected sentence was re-recorded at
+    /// 16:17, 18:43, 18:46 and 20:07, every one of them "after the cutoff", and
+    /// the filter waved all four through.
+    ///
+    /// The exclusion follows the TEXT. This drill is the shape of that bug.
+    func testACopyOfAPreTemplateGoalIsStillNotCarried() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vd-copy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
+        let cutoff = Date(timeIntervalSince1970: Double(QueueStore.goalTemplateEpochMs) / 1000)
+        let stale = "Make goal-state carry testable and reduce goal drift across agent turns"
+
+        // Written before the template…
+        try store.saveBrief(SessionBrief(topic: "t", goal: stale, happened: "h"),
+                            sessionId: "s", eventRowid: 1, provider: "p", callsign: nil,
+                            at: cutoff.addingTimeInterval(-3600))
+        // …then copied forward twice AFTER it, exactly as the carry does.
+        try store.saveBrief(SessionBrief(topic: "t", goal: stale, happened: "h"),
+                            sessionId: "s", eventRowid: 2, provider: "p", callsign: nil,
+                            at: cutoff.addingTimeInterval(60))
+        try store.saveBrief(SessionBrief(topic: "t", goal: stale, happened: "h"),
+                            sessionId: "s", eventRowid: 3, provider: "p", callsign: nil,
+                            at: cutoff.addingTimeInterval(120))
+
+        XCTAssertNil(try store.carriedGoal(for: "s"),
+                     "a fresh timestamp on stale words let the old goal through")
+
+        // And it heals: the moment a turn writes something genuinely new, that
+        // text is not in the excluded set and carries forward normally.
+        let fresh = "We are fixing lamp click state in tranquility base"
+        try store.saveBrief(SessionBrief(topic: "t", goal: fresh, happened: "h"),
+                            sessionId: "s", eventRowid: 4, provider: "p", callsign: nil,
+                            at: cutoff.addingTimeInterval(180))
+        XCTAssertEqual(try store.carriedGoal(for: "s"), fresh)
+
+        // …and keeps carrying it, which is the whole point of the carry.
+        try store.saveBrief(SessionBrief(topic: "t", goal: fresh, happened: "h"),
+                            sessionId: "s", eventRowid: 5, provider: "p", callsign: nil,
+                            at: cutoff.addingTimeInterval(240))
+        XCTAssertEqual(try store.carriedGoal(for: "s"), fresh)
+    }
 }
