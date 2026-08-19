@@ -385,7 +385,7 @@ public final class Recorder: @unchecked Sendable {
         case .wedged:
             lock.unlock()
             throw RecorderError.engineFailed(
-                "microphone stack is wedged — capture suspended until it heals or the app relaunches")
+                "microphone stack is wedged, capture suspended until it heals or the app relaunches")
         case .opening, .capturing:
             // Idempotent, as before: a second start during a live capture
             // is a no-op, not an error.
@@ -483,7 +483,7 @@ public final class Recorder: @unchecked Sendable {
                 // The open never reached the hardware — the audio queue is
                 // stuck in a HAL call. Off-main now, so it reads as one
                 // honest fault instead of a beach-ball.
-                self.failPress(why: "audio stack unresponsive — the open never reached the hardware")
+                self.failPress(why: "audio stack unresponsive, the open never reached the hardware")
             }
         }
         verification = verdict
@@ -506,7 +506,7 @@ public final class Recorder: @unchecked Sendable {
         endMarkerHeartbeat()
         level = 0
         Permissions.log("mic: press failed — \(why)")
-        let message = "Couldn't open the microphone — \(why)."
+        let message = "Couldn't open the microphone, \(why)."
         DispatchQueue.main.async { [weak self] in self?.onCaptureFault?(message) }
     }
 
@@ -527,7 +527,7 @@ public final class Recorder: @unchecked Sendable {
         endMarkerHeartbeat()
         level = 0
         Permissions.log("mic: open failed (gen \(generation)) — \(why)")
-        let message = "Couldn't hear the microphone — \(why)."
+        let message = "Couldn't hear the microphone, \(why)."
         DispatchQueue.main.async { [weak self] in self?.onCaptureFault?(message) }
 
         if transition.effect == .enterWedge {

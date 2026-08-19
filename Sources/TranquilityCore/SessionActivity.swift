@@ -329,7 +329,7 @@ public enum SessionActivity: Equatable, Sendable {
         guard let observed else { return .idle }
         let silence = now.timeIntervalSince(observed)
         guard silence > stalled else { return .working }
-        return .stalled(reason: "silent for \(spoken(silence)) — no output since it started this")
+        return .stalled(reason: "silent for \(spoken(silence)), nothing written since it started this")
     }
 
     /// A duration a row can carry in its reason column, in the units a person
@@ -374,6 +374,18 @@ public enum SessionActivity: Equatable, Sendable {
 extension SessionActivity {
     /// The short reason a blocked row shows, in the row's own width: the
     /// first clause of the error, without the instructions that follow it.
+    /// The whole sentence, for the tooltip.  is cut to a row's
+    /// width and the row truncates what is left of it again, so on 18 Aug the
+    /// only place an error or a stall could be READ was the log — Robert:
+    /// "there's no way to see the full message, the full error." This is the
+    /// text the hover shows, uncut.
+    public var fullReason: String? {
+        switch self {
+        case .blocked(let r), .stalled(let r): return r
+        case .working, .idle: return nil
+        }
+    }
+
     public var shortReason: String? {
         let reason: String
         switch self {
