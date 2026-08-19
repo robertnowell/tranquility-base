@@ -250,6 +250,25 @@ final class CollapsedStrip: NSView {
         return url
     }
 
+    /// Ink in the LOGO slot — the drill's proof that the header is painted at
+    /// all, and by something with the mark's mass rather than a stray dot.
+    func headerInkForTesting() -> Int {
+        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return 0 }
+        cacheDisplay(in: bounds, to: rep)
+        let sx = CGFloat(rep.pixelsWide) / bounds.width
+        let sy = CGFloat(rep.pixelsHigh) / bounds.height
+        let top = max(0, Int((bounds.maxY - logoRect.maxY) * sy))
+        let bottom = min(rep.pixelsHigh, Int((bounds.maxY - logoRect.minY) * sy))
+        var ink = 0
+        for y in top..<bottom {
+            for x in 0..<Int(bounds.width * sx)
+            where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
+                ink += 1
+            }
+        }
+        return ink
+    }
+
     /// How many pixels of the bottom slot actually carry ink.
     ///
     /// Counted rather than sampled at a point: the mark is fifteen small
@@ -428,17 +447,21 @@ final class CollapsedStrip: NSView {
         if hovering {
             drawGlyph(StateLegend.Glyph.back, in: logoRect, color: StateLegend.Palette.secondary)
         } else {
-            // The mark: a filled ring, the same circle vocabulary as the lamps
-            // one size up. Not a glyph — the panel owns no typeface small
-            // enough to read as a mark at this size.
-            let d: CGFloat = 13
-            let r = NSRect(x: logoRect.midX - d / 2, y: logoRect.midY - d / 2, width: d, height: d)
-            StateLegend.Palette.secondary.setStroke()
-            let ring = NSBezierPath(ovalIn: r.insetBy(dx: 1, dy: 1))
-            ring.lineWidth = 1.5
-            ring.stroke()
-            StateLegend.Palette.secondary.setFill()
-            NSBezierPath(ovalIn: r.insetBy(dx: 4.5, dy: 4.5)).fill()
+            // The site mark, the same one the menu bar and the app icon wear
+            // (ruled 18 Aug: "I think that should be our mark on the collapsed
+            // state as well").
+            //
+            // What was here was a filled ring — the lamp vocabulary one size
+            // up, which was right when the panel had no mark of its own. It
+            // does now, and the mark is built from that same lamp, so this is
+            // not a change of vocabulary: it is the ring finally saying which
+            // app it belongs to. The strip is the surface where that matters
+            // most, because collapsed is the state the panel spends its day in.
+            //
+            // 17pt of ink in a 40pt slot: the same optical weight the ring had,
+            // and clear of the first lamp below by the slot's own margin.
+            SiteMark.draw(in: logoRect, height: 17,
+                          color: StateLegend.Palette.secondary)
         }
     }
 
