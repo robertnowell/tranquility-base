@@ -166,6 +166,13 @@ public enum SessionActivity: Equatable, Sendable {
         // conversation. system/attachment/summary lines are bookkeeping —
         // Claude Code writes several of them AFTER an error, which is why
         // "the last line" is the wrong question to ask.
+        //
+        // One system line is NOT bookkeeping: `turn_duration`. Claude Code
+        // writes it the moment a turn ends, and walking backwards means any
+        // one we pass is NEWER than the conversational entry we are about to
+        // find — which makes it a first-hand statement that the turn those
+        // words belonged to is over. See `endedAt`.
+        var endedAt: Date?
         for line in tail.reversed() {
             guard let data = line.data(using: .utf8),
                   let entry = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -175,6 +182,11 @@ public enum SessionActivity: Equatable, Sendable {
             // `working(since:)`. mtime only stands in when the line carries
             // no timestamp, which real user/assistant entries always do.
             let observed = timestamp(of: entry) ?? modified
+
+            if type == "system", entry["subtype"] as? String == "turn_duration" {
+                endedAt = endedAt ?? observed
+                continue
+            }
 
             if entry["isApiErrorMessage"] as? Bool == true {
                 let reason = text(of: entry)
@@ -194,7 +206,18 @@ public enum SessionActivity: Equatable, Sendable {
                 return (.blocked(reason: reason), observed)
             }
             switch type {
-            case "assistant":
+            case "assistant", "user":
+                // The turn these words belonged to has been declared over, and
+                // nothing has been submitted since. Whatever the words look
+                // like, the agent is not holding them any more.
+                if turnIsOver(endedAt: endedAt, boundary: boundary) {
+                    return (.idle, observed)
+                }
+                if type == "user" {
+                    // Either a real prompt (the agent owes an answer) or a tool
+                    // result (the agent is mid-loop). Both mean working.
+                    return (working(since: observed, now: now), observed)
+                }
                 // A turn that ends in a tool call is still running. One that
                 // ends in prose LOOKS finished — but mid-turn prose is the
                 // same shape, so that verdict is the ambiguous one and the
@@ -202,15 +225,36 @@ public enum SessionActivity: Equatable, Sendable {
                 return (hasToolUse(entry)
                     ? working(since: observed, now: now)
                     : resolveIdle(boundary: boundary, observed: observed, now: now), observed)
-            case "user":
-                // Either a real prompt (the agent owes an answer) or a tool
-                // result (the agent is mid-loop). Both mean working.
-                return (working(since: observed, now: now), observed)
             default:
                 continue  // system, attachment, summary, ai-title…
             }
         }
         return (resolveIdle(boundary: boundary, observed: modified, now: now), nil)
+    }
+
+    /// Whether the transcript has declared the turn over, with the hooks given
+    /// the one chance to overrule it that they legitimately have.
+    ///
+    /// `turn_duration` is written when a turn ends and is followed by the NEXT
+    /// prompt or by nothing at all — measured 18 Aug over the 25 most recently
+    /// touched transcripts: 59 occurrences, every one of them immediately after
+    /// the last message of a turn (57 assistant prose, 1 tool result), and not
+    /// once followed by the same turn continuing. So it settles the case the
+    /// hooks were introduced for, from inside the file, without depending on a
+    /// Stop that fires in only 1 of 10 usage-limit deaths.
+    ///
+    /// The exception the boundary earns: a prompt SUBMITTED after the turn
+    /// ended is a new turn whose first line may not be on disk yet (Claude Code
+    /// creates the transcript when the first user message lands, which is the
+    /// race #118 fixed on the send path). A `userPromptSubmit` newer than the
+    /// marker therefore wins; anything older cannot.
+    ///
+    /// Absence proves nothing. Older transcripts, and any Claude Code that does
+    /// not write the marker, fall through to the rules below exactly as before.
+    private static func turnIsOver(endedAt: Date?, boundary: TurnBoundary?) -> Bool {
+        guard let endedAt else { return false }
+        guard let boundary, boundary.kind == .userPromptSubmit else { return true }
+        return boundary.at <= endedAt
     }
 
     /// The transcript said "idle". Ask the hooks whether that is a finished
