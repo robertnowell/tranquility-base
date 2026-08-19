@@ -3,28 +3,28 @@
     "atMs": 1786258689436,
     "topic": "UI palette and headline redundancy",
     "old": "Reduce visual clutter and fix lamp discernibility",
-    "new": "In tranquility base, fix the status panel lamp array so ready and advisory states are told apart at a glance",
+    "new": "We are fixing lamp contrast and the card's second headline in Tranquility Base",
     "changed": false
   },
   {
     "atMs": 1786259135587,
     "topic": "Panel polarity research and telemetry wiring",
     "old": "Resolve polarity and lamp-value decisions for panel UI; instrument the app to measure actual usage patterns.",
-    "new": "In tranquility base, wire dogfood event emissions so telemetry counters actually measure what the app does",
+    "new": "We are wiring dogfood event emissions so telemetry counters measure what the app does in Tranquility Base",
     "changed": true
   },
   {
     "atMs": 1786259554207,
     "topic": "Palette redesign grounded in luminance, not polarity",
     "old": "Build a UI that signals work state clearly to peripheral vision, following NASA HIDH and mil-std-411F",
-    "new": "In tranquility base, fix lamp contrast so the states are told apart at a glance",
+    "new": "We are redesigning lamp contrast and hue to match dark cockpit philosophy and aviation standards in Tranquility Base",
     "changed": true
   },
   {
     "atMs": 1786292234431,
     "topic": "UI panel lamp color contrast",
     "old": "Find unambiguous lamp colors that stay calm on neglect",
-    "new": "In tranquility base, fix lamp contrast so the states are told apart at a glance",
-    "changed": false
+    "new": "We are testing lamp color pairs against small-angle discrimination thresholds in Tranquility Base",
+    "changed": true
   }
 ]

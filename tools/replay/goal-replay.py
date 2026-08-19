@@ -56,18 +56,26 @@ the ten words that tell them WHICH one this is and WHAT it is for.
 
 The shape, as guidance and not a form to fill in:
 
-    IN PROJECT X, WE ARE SOLVING PROBLEM Y.
+    WE ARE [doing X] [to/for Y] IN [Z].
 
-    "In tranquility base, we're solving a bug where clicking a lamp wouldn't
-    turn it off"
-    "For Time Machine backups, we're working out why they take twenty four
-    hours"
-    "In kopi dot ai, building a repeatable process for auditing Mailchimp
-    accounts"
-    "In kopi dot ai, planning the August and September content calendar for
-    U Vape"
+    "We are fixing the subject line versus title split in the kopi editor"
+    "We are analyzing Klaviyo flow health for U Vape in Kopi"
+    "We are working out why Time Machine backups take twenty four hours"
+    "We are fixing a bug where clicking a lamp wouldn't turn it off, in
+    tranquility base"
 
-BOTH halves are required.
+ALWAYS begin with "We are", then the verb in the present continuous. Z lands at
+the end, and the word "project" is never needed: "in the kopi editor" and "in
+Kopi" already say it.
+
+Z MUST BE A NAME THE WORK ITSELF USES. If this turn does not name a product,
+repository, brand or account, leave the trailing "in Z" off entirely - an
+invented Z is far worse than none, because it is read as fact. Two real answers
+got this wrong: "in Klaviyo" about a MAILCHIMP audit, and "in robertnowell's
+Mac" appended to a goal whose subject was already Time Machine. Where the
+subject names its own system, stop there.
+
+Both halves are required: what we are DOING, and what it is IN.
 
 The PROJECT is the product, repository, brand, machine or account the work is
 IN, and it is the name a person would SAY OUT LOUD. It is not the directory the
