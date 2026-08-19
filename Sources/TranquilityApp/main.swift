@@ -280,6 +280,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // cold start that the old design misclassified as a dead graph.
         recorder.warmUp()
 
+        // Fill the menu's device snapshot before anything draws it, so the
+        // first rebuild names a real device rather than blanking for a tick.
+        // Detached, because filling it is the very ~50 CoreAudio round trips
+        // the snapshot exists to keep off the main actor.
+        Task.detached(priority: .utility) { AudioInputDevice.primeCache() }
+
         // An open that died AFTER start() returned optimistically — the
         // async verification found no audio. The recorder has already torn
         // the capture down; unwind whatever face believed it was live, so
@@ -3637,7 +3643,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let micMenu = NSMenu()
         let preference = AudioInputPreference.current
         for option in AudioInputPreference.allCases {
-            let resolved = AudioInputDevice.resolve(option)
+            // The SNAPSHOT, not the hardware: this runs on the 1.5 s poll
+            // tick, and the live read costs a median of 34 ms and a p99 of
+            // one second when it is spaced the way a tick spaces it (measured
+            // 18 Aug; see AudioInputDevice.cachedResolve). Every call site
+            // that opens the microphone still reads live.
+            let resolved = AudioInputDevice.cachedResolve(option)
             let named = option == .systemDefault
                 ? resolved.map { " (\($0.name))" } ?? "" : ""
             let warning = (resolved?.isBluetooth ?? false) ? "  ⚠︎" : ""
