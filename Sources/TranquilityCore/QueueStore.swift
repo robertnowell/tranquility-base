@@ -919,9 +919,13 @@ public final class QueueStore: Sendable {
             try String.fetchOne(db, sql: """
                 SELECT goal FROM brief
                 WHERE sessionId = ? AND goal IS NOT NULL AND goal != ''
-                  AND atMs >= ?
+                  AND goal NOT IN (
+                      SELECT goal FROM brief
+                      WHERE sessionId = ? AND atMs < ? AND goal IS NOT NULL
+                  )
                 ORDER BY atMs DESC LIMIT 1
-                """, arguments: [sessionId, QueueStore.goalTemplateEpochMs])
+                """, arguments: [sessionId, sessionId,
+                                 QueueStore.goalTemplateEpochMs])
         }
     }
 
@@ -936,11 +940,27 @@ public final class QueueStore: Sendable {
     /// to improve it. The new template would never have reached a single live
     /// session.
     ///
+    /// The cutoff follows the TEXT, not the timestamp, and the first version
+    /// of this got that wrong.
+    ///
+    /// Filtering on `atMs >= cutoff` looks right and does nothing: a carried
+    /// goal is COPIED forward, so the copy carries a fresh timestamp and stale
+    /// words. This session's pre-template sentence was re-recorded at 16:17,
+    /// 18:43, 18:46 and 20:07 — every one of them "after the cutoff" and every
+    /// one of them the same rejected sentence. The filter waved them all
+    /// through and nothing changed, which is exactly what the operator was
+    /// looking at when he said the goal still says the same useless thing.
+    ///
+    /// So the exclusion is on the words: a goal is not carried if that exact
+    /// text ever appeared in this session before the template shipped. It
+    /// heals itself — the moment a turn writes something genuinely new, the
+    /// new text is not in the excluded set and carries forward normally.
+    ///
     /// A cutoff rather than a migration, deliberately. Clearing the column
     /// would blank the goal line on every historical hub, including sessions
     /// that will never run again to write a better one. This leaves history
-    /// exactly as it reads today and only stops the OLD values from being
-    /// handed forward, so every live session re-derives on its next turn.
+    /// exactly as it reads today and only stops the OLD WORDS from being handed
+    /// forward, so every live session re-derives on its next turn.
     ///
     /// Delete this when it stops mattering — it is a boundary in time, not a
     /// rule, and every session that predates it will have ended long before
