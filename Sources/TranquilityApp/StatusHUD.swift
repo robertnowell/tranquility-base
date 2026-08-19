@@ -116,6 +116,8 @@ final class StatusHUD: NSObject {
     var collapsedLampsClearTheMark: Bool {
         strip?.lampsClearTheMarkForTesting ?? false
     }
+    /// Ink in the strip's logo slot — the header mark, counted on the render.
+    var collapsedHeaderInk: Int { strip?.headerInkForTesting() ?? 0 }
     /// Which face the strip's bottom band last painted, and how much ink it
     /// put there — the mark at rest, the controls on hover.
     var collapsedFloorFace: CollapsedStrip.FloorFace? { strip?.lastFloorPaint }
@@ -4325,8 +4327,17 @@ final class StatusHUD: NSObject {
         // below which the mark stops being quiet and starts being absent.
         let markAtRest = collapsedFloorFace
         let inkAtRest = collapsedFloorInk
+        // The top of the column wears the site mark now, not a bare ring
+        // (ruled 18 Aug). Counted as ink rather than asserted as geometry: the
+        // header is one `draw` call away from painting nothing at all, and a
+        // rect that exists is not a mark that shows.
+        let headerInkAtRest = collapsedHeaderInk
         collapsedSetHovering(true)
         let faceOnHover = collapsedFloorFace
+        // On hover the slot becomes Expand, so the mark's own ink must drop —
+        // the chevron is a fraction of the mark's mass. This is the property
+        // that catches a header drawing BOTH at once.
+        let headerInkOnHover = collapsedHeaderInk
         collapsedSetHovering(false)
         let markReturns = collapsedFloorFace
         let markIsAlwaysThere = markAtRest == .mark && markReturns == .mark
@@ -4334,12 +4345,15 @@ final class StatusHUD: NSObject {
         let hoverTakesTheFloor = faceOnHover == .controls
         let controlsInsideTheMark = collapsedControlsSitInsideTheMark
         let markIsLegible = collapsedMarkTypeIsLegible
+        let headerWearsTheMark = headerInkAtRest > 60
+        let headerYieldsToExpand = headerInkOnHover < headerInkAtRest / 2
         // A picture of the column, every deploy — the panel's only visual
         // evidence, and the answer to "did anybody look at it".
         let shot = strip?.writeShot()
         Permissions.log("collapse drill: floor \(markAtRest.map { "\($0)" } ?? "-")"
             + " ink=\(inkAtRest) type=\(collapsedMarkTypeSize)pt"
             + " hover=\(faceOnHover.map { "\($0)" } ?? "-")"
+            + " header=\(headerInkAtRest)/\(headerInkOnHover)"
             + " lamps=\(collapsedLampCount)"
             + " shot=\(shot?.path ?? "-")")
 
@@ -4396,6 +4410,8 @@ final class StatusHUD: NSObject {
             ("hoverTakesTheFloor", hoverTakesTheFloor),
             ("controlsSitInsideTheMark", controlsInsideTheMark),
             ("markTypeClearsTheLegibilityFloor", markIsLegible),
+            ("headerWearsTheSiteMark", headerWearsTheMark),
+            ("headerYieldsToExpandOnHover", headerYieldsToExpand),
         ])
         showIdle(rows: [])
 
