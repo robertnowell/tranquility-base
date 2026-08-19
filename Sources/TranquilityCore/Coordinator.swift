@@ -651,6 +651,10 @@ public struct Coordinator: Sendable {
             // on a real branch — and the hub keys pull requests on the branch,
             // so "HEAD" means a hub with nothing on it. Read at turn end,
             // which is when this fires, so it is that turn's branch.
+            // The goal this session is already carrying, so the model keeps it
+            // instead of writing its seventeenth restatement (measured 19 Aug:
+            // 59 sessions, 17 turns each, 17 distinct goals each).
+            previousGoal: (try? store.briefs(for: event.sessionId, limit: 1))?.first?.goal,
             gitBranch: Coordinator.branch(transcript: context?.gitBranch, cwd: event.cwd),
             cwd: event.cwd,
             hookEvent: event.hookEvent,
