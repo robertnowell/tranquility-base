@@ -457,8 +457,9 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 public struct SummarizerChain: Sendable {
     public let providers: [any SummaryProvider]
     public let sanitizer = SpokenTextSanitizer()
-    /// A pull request is READ out of the turn's own text, never looked up and
-    /// never written by the model. See `PullRequestMentions`.
+    /// Pull requests are not the summariser's business at all. The hub asks
+    /// GitHub what pull request a BRANCH has, and `branch` is already
+    /// deterministic here. See `GitHubPullRequests`.
 
     public init(providers: [any SummaryProvider]? = nil) {
         self.providers = providers ?? [AnthropicSummaryProvider(), DeterministicSummarizer()]
@@ -507,16 +508,6 @@ public struct SummarizerChain: Sendable {
         var (brief, providerName) = produced
             ?? (SessionBrief(topic: request.projectLabel, happened: "finished a turn"), "none")
 
-        // The pull requests the turn named, read out of the turn's own text —
-        // deterministic, like `branch`, and applied to EVERY provider including
-        // the floor. Asking the model for this was the first design and it was
-        // nearly inert: it wanted a URL copied verbatim, and assistants write
-        // "PR #117". See PullRequestMentions.
-        brief.pullRequests = {
-            let found = PullRequestMentions.found(in: request.lastAssistantMessage,
-                                                  cwd: request.cwd)
-            return found.isEmpty ? nil : found
-        }()
 
         // Names the source itself used are speakable ("say Klaviyo, not 'an email
         // platform'"); everything identifier-shaped is still stripped.

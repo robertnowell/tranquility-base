@@ -352,8 +352,58 @@ public final class QueueStore: Sendable {
         // yet, and the operator opens a hub that still lists none of the pull
         // requests it has been opening all day. That is the complaint that
         // produced this migration, and it was the right complaint.
-        m.registerMigration("v13_backfill_pull_requests") { db in
-            try QueueStore.backfillPullRequests(db)
+        // v13 backfilled `pullRequests` from a regex over each turn's text.
+        // The migration is retired rather than removed — GRDB records which
+        // migrations have run, and deleting a registered name makes an already
+        // migrated database refuse to open. It does nothing now, and v15 wipes
+        // what it wrote.
+        m.registerMigration("v13_backfill_pull_requests") { _ in }
+
+        // The branch a turn was on. Already deterministic on `SessionBrief`
+        // and thrown away at the door until now, because nothing read it — the
+        // hub asks GitHub what pull request a BRANCH has, so this is the whole
+        // input (ruled 18 Aug, after two text-scraping mechanisms failed).
+        m.registerMigration("v14_brief_branch") { db in
+            try db.alter(table: "brief") { t in
+                t.add(column: "branch", .text)
+            }
+        }
+
+        // Everything the scrapers wrote, cleared. Not "the wrong-looking ones"
+        // — all of it: the column mixed pull requests a turn OPENED with ones
+        // it merely mentioned, at 172 rows for 107 distinct pull requests, and
+        // nothing in the data distinguishes them. One of them was a link to a
+        // pull request that never existed. Data you cannot tell apart from
+        // fabrication is not partly good.
+        m.registerMigration("v15_clear_scraped_pull_requests") { db in
+            try db.execute(sql: "UPDATE brief SET pullRequests = NULL")
+        }
+
+        // Give the old briefs their branch back, from the transcript the
+        // branch came from originally — recovery, not invention. Only for
+        // sessions whose transcript names exactly ONE branch: a session that
+        // moved between worktrees does not say which turn sat where, and
+        // attributing them all to the first branch found would hand some turns
+        // another branch's pull request. Unanimous or nothing.
+        m.registerMigration("v16_backfill_brief_branch") { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT b.rowid AS briefRowid, e.transcriptPath AS path
+                FROM brief b JOIN events e ON e.rowid = b.eventRowid
+                WHERE b.branch IS NULL AND e.transcriptPath IS NOT NULL
+                """)
+            var branchByPath: [String: String?] = [:]
+            for row in rows {
+                guard let path: String = row["path"] else { continue }
+                let branch: String?
+                if let cached = branchByPath[path] { branch = cached }
+                else {
+                    branch = TranscriptArchive.soleBranch(in: URL(fileURLWithPath: path))
+                    branchByPath[path] = branch
+                }
+                guard let branch else { continue }
+                try db.execute(sql: "UPDATE brief SET branch = ? WHERE rowid = ?",
+                               arguments: [branch, row["briefRowid"] as Int64])
+            }
         }
 
         // A callsign with a vowelless word in it was never sayable, and the
@@ -822,51 +872,8 @@ public final class QueueStore: Sendable {
             findings: brief.findings, solution: brief.solution,
             recap: brief.recap, proposal: brief.proposal,
             headline: brief.headline, deck: brief.deck,
-            pullRequests: StoredBrief.joinPRs(brief.pullRequests),
+            branch: brief.branch,
             callsign: callsign, provider: provider)
-    }
-
-    /// Fill `pullRequests` on every brief that has none, from the text of the
-    /// event it summarises. Shared by the v13 migration and its drill, so the
-    /// thing that ships and the thing that is tested are one function.
-    ///
-    /// A recomputation, not an invention: the same deterministic reader over
-    /// the same stored text. Without it the ruling would only apply to turns
-    /// that have not happened yet, and the operator would open a hub still
-    /// listing none of the pull requests they had been opening all day.
-    static func backfillPullRequests(_ db: Database) throws {
-        let rows = try Row.fetchAll(db, sql: """
-            -- e.rowid, NOT e.id: the events table has an `id` TEXT column
-            -- carrying a UUID, and `brief.eventRowid` references the SQLite
-            -- rowid. Joining on `id` matches nothing and returns zero rows
-            -- silently, which is how a backfill ships looking green and
-            -- changing nothing. (It did, in the first draft of this.)
-            SELECT b.rowid AS briefRowid, e.lastAssistantMessage AS message, e.cwd AS cwd
-            FROM brief b JOIN events e ON e.rowid = b.eventRowid
-            WHERE b.pullRequests IS NULL
-              AND e.lastAssistantMessage IS NOT NULL
-              AND (e.lastAssistantMessage LIKE '%#%'
-                   OR e.lastAssistantMessage LIKE '%/pull/%')
-            """)
-        for row in rows {
-            let message: String = row["message"] ?? ""
-            let found = PullRequestMentions.found(in: message, cwd: row["cwd"])
-            guard !found.isEmpty else { continue }
-            try db.execute(sql: "UPDATE brief SET pullRequests = ? WHERE rowid = ?",
-                           arguments: [found.joined(separator: "\n"),
-                                       row["briefRowid"] as Int64])
-        }
-    }
-
-    /// The drill's two doors into the above.
-    func runPullRequestBackfill() throws {
-        try dbQueue.write { db in try QueueStore.backfillPullRequests(db) }
-    }
-
-    func eventRowid(forEventId id: String) throws -> Int64? {
-        try dbQueue.read { db in
-            try Int64.fetchOne(db, sql: "SELECT rowid FROM events WHERE id = ?", arguments: [id])
-        }
     }
 
     /// The brief for one specific event — the read-through the in-memory
