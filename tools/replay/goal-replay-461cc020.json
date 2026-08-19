@@ -1,0 +1,44 @@
+[
+  {
+    "atMs": 1787108995437,
+    "topic": "Unlisted SKUs and weekly email routing",
+    "old": "Include unlisted SKUs in inventory tracking; send weekly email to Andy from Kopi infra on schedule.",
+    "new": "In Kopi, fix unlisted SKUs filtering and weekly email delivery system",
+    "changed": false
+  },
+  {
+    "atMs": 1787109736168,
+    "topic": "Shopify version pin and unlisted SKUs",
+    "old": null,
+    "new": "In Kopi, fix unlisted SKUs filtering and weekly email delivery system",
+    "changed": false
+  },
+  {
+    "atMs": 1787110155166,
+    "topic": "Unlisted SKUs and email infrastructure",
+    "old": "Ship unlisted product support to inventory tracker and migrate email send from dashboard to Kopi infrastructure",
+    "new": "In Kopi, fix unlisted SKUs filtering and weekly email delivery system",
+    "changed": false
+  },
+  {
+    "atMs": 1787112668254,
+    "topic": "kopi",
+    "old": null,
+    "new": "In Kopi, fix unlisted SKUs filtering and weekly email delivery system",
+    "changed": false
+  },
+  {
+    "atMs": 1787113183517,
+    "topic": "Unlisted SKUs and weekly email, preview pending",
+    "old": "Include unlisted SKUs in inventory tracker; route weekly email through kopi infra.",
+    "new": "In Kopi, fix unlisted SKUs filtering and weekly email delivery system",
+    "changed": false
+  },
+  {
+    "atMs": 1787114337827,
+    "topic": "Brochure inventory and email routing",
+    "old": "Include unlisted and zero-dollar SKUs in inventory tracker; route weekly email through kopi infra.",
+    "new": "In Kopi, fix unlisted SKUs filtering and weekly email delivery system",
+    "changed": false
+  }
+]
