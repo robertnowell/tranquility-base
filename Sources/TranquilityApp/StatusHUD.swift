@@ -2314,8 +2314,22 @@ final class StatusHUD: NSObject {
         for (index, item) in shown.enumerated() {
             let row = GridRowView(item: item, auxWidth: auxWidth, target: self,
                                   action: #selector(sessionRowTapped(_:)))
-            if item.lamp == .ready {
+            // The lamp column is the session's power switch, on every row.
+            // Until 18 Aug only `.ready` got a target, so the column was a
+            // control on one row in ten and part of the row everywhere else —
+            // and a dark lamp, the one people reach for to bring a session
+            // back, did whatever the ROW did. See `StateLegend.lampAction`.
+            switch StateLegend.lampAction(for: item) {
+            case .clear:
                 row.onLampTap = { [weak self] in self?.onClearLamp?(item.id) }
+            case .turnOn, .tryTurnOn:
+                row.onLampTap = { [weak self] in
+                    self?.onRevive?(item.id, item.name)
+                }
+            case .alreadyOn:
+                row.onLampTap = { [weak self] in
+                    self?.showReceipt(.alreadyAwake)
+                }
             }
             // GO TO AGENT and END SESSION ride the right-click, on exactly the
             // rows that have a process behind them — the same grammar the Past
@@ -2753,13 +2767,24 @@ final class StatusHUD: NSObject {
         /// and the tap, the session came back on its own — resuming it now
         /// would put two processes under one id, which crashed the app twice.
         case alreadyAwake
+        /// The switch was thrown and the session did NOT come back, for a
+        /// reason that is not "it was already running".
+        ///
+        /// Split out of `alreadyAwake` on 18 Aug. That case was carrying three
+        /// different outcomes — live, directory gone, liveness unprovable — and
+        /// telling you the same thing about all of them, so two thirds of the
+        /// time the panel's only word on the subject was false. Tolerable while
+        /// revive lived behind a hover verb; not tolerable now that the lamp is
+        /// the switch, because a switch that lies about why it did nothing is
+        /// worse than one that does nothing.
+        case notRevived(String)
 
         /// Green is for a thing that landed. Reviving is in flight, and a
         /// refusal did not land at all.
         var landed: Bool {
             switch self {
             case .sent, .queued: return true
-            case .sending, .reviving, .alreadyAwake: return false
+            case .sending, .reviving, .alreadyAwake, .notRevived: return false
             }
         }
 
@@ -2768,7 +2793,7 @@ final class StatusHUD: NSObject {
         var inFlight: Bool {
             switch self {
             case .sending, .reviving: return true
-            case .sent, .queued, .alreadyAwake: return false
+            case .sent, .queued, .alreadyAwake, .notRevived: return false
             }
         }
 
@@ -2780,6 +2805,7 @@ final class StatusHUD: NSObject {
                     : target
                 return "↺ \(name.uppercased()) · RESUMING"
             case .alreadyAwake: return "ALREADY RUNNING"
+            case .notRevived(let why): return "↺ \(why.uppercased())"
             case .sending(let target):
                 // The chip shares the top band with the placard and the gear;
                 // a long callsign would run into both.
@@ -4375,6 +4401,7 @@ final class StatusHUD: NSObject {
         hoverDrill()
         quietRowsDrill()
         closedRowsDrill()
+        lampSwitchDrill()
         readIntensityDrill()
         terminateDrill()
         pastAgentsDrill()
@@ -4905,6 +4932,68 @@ final class StatusHUD: NSObject {
             ("closedRowsStillRender", built.count == 3),
         ])
         showIdle(rows: [])
+    }
+
+    /// The lamp column is a switch, it goes BOTH ways, and it means the same
+    /// thing on the grid and in Past Agents.
+    ///
+    /// A drill rather than a unit test for the half that cannot be reached
+    /// otherwise: the mapping is a pure function and could be tested anywhere,
+    /// but "the list actually hands the lamp a target" lives in a view builder,
+    /// and that is the half that was missing on 18 Aug. The column was a control
+    /// on green rows of the grid and inert everywhere else, so a click on a dark
+    /// lamp in Past Agents fell through to the row and opened a Terminal tab —
+    /// which is how a user learns the gesture on one face and is refused it on
+    /// the other.
+    private func lampSwitchDrill() {
+        func row(_ id: String, _ lamp: StateLegend.Lamp,
+                 revivable: Bool = false) -> StateLegend.SessionRow {
+            StateLegend.SessionRow(id: id, name: id, aux: id,
+                                   lamp: lamp, revivable: revivable)
+        }
+        let unlit = StateLegend.Lamp.unlit
+
+        // Every row in Past Agents gets a lamp target — including the live
+        // ones, which is the case that used to navigate.
+        let items = [row("dead", unlit, revivable: true),
+                     row("unproven", unlit),
+                     row("quiet", .running),
+                     row("asking", .ready)].map {
+            PastAgentsList.Item(row: $0, revivable: $0.revivable, haystack: $0.name)
+        }
+        showPastAgents(items: items)
+        let everyRowHasASwitch = pastList.lampTargetsForTesting.count == items.count
+        goHomeFromPastAgents()
+
+        SelfTest.report("lampSwitch", [
+            // Off, and on, and the two refusals kept apart.
+            ("greenClears", StateLegend.lampAction(for: row("a", .ready)) == .clear),
+            ("darkAndProvenTurnsOn",
+             StateLegend.lampAction(for: row("b", unlit, revivable: true)) == .turnOn),
+            // The unproven row ASKS rather than doing nothing — `revive()`
+            // re-probes at ttl 0, so the safety is kept where it works and the
+            // silence is not. This is the one place `lampAction` deliberately
+            // parts company with `action(for:)`, whose `.none` stays silent.
+            ("darkAndUnprovenAsks",
+             StateLegend.lampAction(for: row("c", unlit)) == .tryTurnOn),
+            ("unprovenRowStillDoesNothingOnTheROW",
+             StateLegend.action(for: row("c", unlit)) == StateLegend.RowAction.none),
+            ("litButNotAskingAnswers",
+             StateLegend.lampAction(for: row("d", .running)) == .alreadyOn
+                && StateLegend.lampAction(for: row("e", .working)) == .alreadyOn
+                && StateLegend.lampAction(for: row("f", .fault)) == .alreadyOn),
+            // The switch is never a door. Stated as the divergence it has to
+            // hold: on a live row the ROW navigates and the LAMP does not, and
+            // it was those two collapsing into one target that sent a click on
+            // a dark-looking lamp to a Terminal tab.
+            ("theLampIsNotTheRow",
+             StateLegend.action(for: row("g", .fault)) == .goToAgent
+                && StateLegend.lampAction(for: row("g", .fault)) == .alreadyOn),
+            // The hit target is the grid's, at the grid's width, on both faces.
+            ("pastAgentsRowsCarryTheSwitch", everyRowHasASwitch),
+            ("switchIsTheSameSizeOnBothFaces",
+             GridRowView.lampHitWidth == GridRowView.lampColumn),
+        ])
     }
 
     /// The weight IS the read state (ruled 13 Aug): an unread ready row is
@@ -6031,6 +6120,26 @@ final class StatusHUD: NSObject {
             let name = pastListName(id)
             onBreadcrumbHome?()
             if revivable { onRevive?(id, name) } else { onGoToSession?(id) }
+        }
+        // The lamp, on this face too, and through the same function — so the
+        // dot means one thing wherever you meet it (ruled 18 Aug).
+        pastList.onLamp = { [weak self] row in
+            guard let self else { return }
+            switch StateLegend.lampAction(for: row) {
+            case .clear:
+                onClearLamp?(row.id)
+            case .turnOn, .tryTurnOn:
+                // Home first, exactly as the row's own REVIVE does: a Terminal
+                // window is about to open and the receipt belongs on the grid
+                // behind it, not on a list the revived session has left.
+                onBreadcrumbHome?()
+                onRevive?(row.id, row.name)
+            case .alreadyOn:
+                // Deliberately does NOT leave the list. You flipped a switch
+                // that was already on; nothing happened, so nothing should
+                // move under you. The chip answers over the list.
+                showReceipt(.alreadyAwake)
+            }
         }
         pastList.onTerminate = { [weak self] id, name in
             self?.onTerminateSession?(id, name)
