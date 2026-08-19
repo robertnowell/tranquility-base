@@ -51,20 +51,61 @@ You write one field for a developer running many coding-agent sessions at once.
 
 Reply with ONLY a JSON object: {"goal": "..."}
 
-"goal" answers "which piece of work is this?" for somebody who has ten sessions
-running and just heard a callsign that no longer exists. Not what happened, not
-what is next: what we are trying to do.
+The operator stepped away from ten running sessions and is coming back. This is
+the ten words that tell them WHICH one this is and WHAT it is for.
 
-Say it the way the operator would say it out loud, concretely, naming the thing:
-"we're solving a bug where clicking a lamp wouldn't turn it off" beats "resolve
-polarity and lamp-value decisions for panel UI". Twelve words at most. Plain verbs.
+The shape, as guidance and not a form to fill in:
 
-If a goal is carried below, COPY IT VERBATIM. Do not tidy it, do not re-word it,
-do not make it match this turn's topic. It is the same goal until the work
-actually moves, and a turn that continues the work changes nothing.
+    IN PROJECT X, WE ARE SOLVING PROBLEM Y.
+
+    "In tranquility base, we're solving a bug where clicking a lamp wouldn't
+    turn it off"
+    "For Time Machine backups, we're working out why they take twenty four
+    hours"
+    "In kopi dot ai, building a repeatable process for auditing Mailchimp
+    accounts"
+    "In kopi dot ai, planning the August and September content calendar for
+    U Vape"
+
+BOTH halves are required.
+
+The PROJECT is the product, repository, brand, machine or account the work is
+IN, and it is the name a person would SAY OUT LOUD. It is not the directory the
+agent is running from: a session started in Projects may be working in kopi dot
+ai, and "Projects" tells the listener nothing. It is never a class, a file, or a
+symbol either: StatusHUD is a file inside tranquility base, not a project, and
+naming it answers the wrong question.
+
+The PROBLEM is what is wrong, or what is being built. Concrete, and the thing
+itself rather than the method.
+
+These are real answers this field has produced, and all three are failures:
+
+    "Validate lamp contrast and hue choices against aviation human factors
+    standards" - names no project, and describes an activity instead of a
+    problem.
+    "Wire dogfood event emissions so telemetry counters actually measure what
+    the app does" - which app?
+    "Get robertnowell reliable backups within one year" - no system named, no
+    problem stated.
+
+Match the LENGTH of the examples above, which is the length a person says out
+loud in one breath. Do not exceed them. No number is given because counting
+words is not the skill; the four examples are the specification. What the extra words always are is method, tooling, or a standard's name,
+and none of those is the work: "redesign lamp contrast using luminance
+separation and position coding per aviation standards" says less than "fix lamp
+contrast so the states are told apart at a glance". Spend the words on the
+problem, never on how it is being approached. If you cannot name the project and
+the problem, say the plainest true thing you can and stop.
+
+If a goal is carried below, COPY IT VERBATIM. Do not tidy it, do not re-word
+it, do not make it match this turn's topic. It is the same goal until the work
+actually moves.
 
 Replace it only when this turn shows the session is now doing something the
 carried goal does not cover, and then write the NEW aim, not a summary of both.
+A replacement obeys every rule above - the shape, the real project name, twelve
+words, no method.
 """
 
 

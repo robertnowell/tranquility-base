@@ -47,7 +47,11 @@ final class GoalRungTests: XCTestCase {
         let system = AnthropicSummaryProvider.systemPrompt(projectLabel: "tranquility base")
         XCTAssertTrue(system.contains("wouldn't turn it off"),
                       "the worked example is the whole instruction")
-        XCTAssertTrue(system.contains("Twelve words at most"))
+        // The length rule moved from a count to the examples (see
+        // testTheInstructionGivesNoWordCount); what stays pinned is that the
+        // worked example is in the operator's register, because the failure it
+        // replaces was fluent, plausible project-speak.
+        XCTAssertTrue(system.contains("says out loud"))
         XCTAssertTrue(system.contains("COPY IT VERBATIM"))
     }
 
@@ -167,3 +171,35 @@ extension GoalRungTests {
     }
 }
 
+
+extension GoalRungTests {
+    /// The template, pinned. "In project X, we are solving problem Y" — both
+    /// halves, because a goal naming only the problem leaves the operator
+    /// asking which of ten sessions is talking, and one naming only the project
+    /// says nothing about the work.
+    func testTheInstructionCarriesTheTemplateAndItsWorkedExamples() {
+        let system = AnthropicSummaryProvider.systemPrompt(projectLabel: "tranquility base")
+        XCTAssertTrue(system.contains("IN PROJECT X, WE ARE SOLVING PROBLEM Y"))
+        XCTAssertTrue(system.contains("clicking a lamp"))
+        XCTAssertTrue(system.contains("Time Machine backups"))
+        XCTAssertTrue(system.contains("kopi dot ai"))
+    }
+
+    /// The project is not the directory, and not a symbol either. Both traps
+    /// were real: a session in ~/Projects working on kopi dot ai, and one that
+    /// answered "In StatusHUD" — a file inside tranquility base.
+    func testTheInstructionRulesOutDirectoriesAndSymbols() {
+        let system = AnthropicSummaryProvider.systemPrompt(projectLabel: "tranquility base")
+        XCTAssertTrue(system.contains("not the directory the agent is running from"))
+        XCTAssertTrue(system.contains("StatusHUD is a file inside tranquility base"))
+    }
+
+    /// No word count, deliberately, and the reason is recorded where the next
+    /// person to "helpfully" add one will read it: every number tried made the
+    /// answers longer.
+    func testTheInstructionGivesNoWordCount() {
+        let system = AnthropicSummaryProvider.systemPrompt(projectLabel: "tranquility base")
+        XCTAssertTrue(system.contains("No number is given, deliberately"))
+        XCTAssertFalse(system.contains("Twelve words at most"))
+    }
+}
