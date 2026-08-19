@@ -90,6 +90,31 @@ final class ManualRetryTests: XCTestCase {
         XCTAssertNotNil(retried?.lastError)
     }
 
+    func testCaptureAndTranscribeHonorsAPreMintedId() async throws {
+        // The panel's retry must know which row an attempt owns BEFORE the
+        // attempt resolves — that is the whole reason the id can be minted
+        // by the caller. The audio adopts the same stem.
+        let minted = UUID().uuidString
+        let row = try await store.captureAndTranscribe(
+            pcm16: samplePCM(), sampleRate: 16000, audioStore: audio,
+            chain: RecoveryChain(providers: [Says(text: "heard")]),
+            utteranceId: minted)
+        XCTAssertEqual(row.id, minted)
+        XCTAssertTrue(row.audioPath?.contains(minted) == true)
+    }
+
+    func testDiscardUtteranceRetiresTheRowAndKeepsTheRecord() async throws {
+        let row = try await store.captureAndTranscribe(
+            pcm16: samplePCM(), sampleRate: 16000, audioStore: audio,
+            chain: RecoveryChain(providers: [Says(text: "superseded words")]))
+        try store.discardUtterance(id: row.id, because: "superseded by the panel's retry")
+        let kept = try store.utterances(limit: 100).first { $0.id == row.id }
+        XCTAssertEqual(kept?.status, .discarded)
+        XCTAssertEqual(kept?.discardedReason, "superseded by the panel's retry")
+        XCTAssertEqual(kept?.transcriptText, "superseded words",
+                       "discard retires the row; it never erases what was heard")
+    }
+
     func testRetryOfAMissingRowOrMissingAudioIsNilNotAnInvention() async throws {
         let ghost = try await store.retryTranscription(
             utteranceId: "never-existed", chain: RecoveryChain(providers: [Says(text: "x")]))
