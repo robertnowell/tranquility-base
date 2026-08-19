@@ -2263,7 +2263,26 @@ final class StatusHUD: NSObject {
     /// does, with no second rule to keep in agreement.
     static func pastAgents(_ rows: [StateLegend.SessionRow],
                            screen: NSScreen? = NSScreen.main) -> ArraySlice<StateLegend.SessionRow> {
-        rows.dropFirst(gridRowsShown(rows, screen: screen))
+        rows.dropFirst(gridRows(rows, screen: screen).count)
+    }
+
+    /// The rows the grid actually DRAWS — the count above, minus the sessions
+    /// the user switched off.
+    ///
+    /// Split from `gridRowsShown` on 18 Aug, after folding the switch into that
+    /// function broke four assertions in `elasticGrid` on a deployed build. The
+    /// two are not the same question and cannot share a number: `gridRowsShown`
+    /// is a HEIGHT — how many row-slots the panel is worth, which is why it is
+    /// allowed to exceed the rows that exist and why the floor holds on an
+    /// empty machine. This is a SLICE. Capping the height at the row count to
+    /// exclude filed rows collapsed the floor with it.
+    ///
+    /// Filed rows sink below every band (`quietRowsLast`), so taking the
+    /// leading run of un-switched-off rows is all the exclusion needs to be.
+    static func gridRows(_ rows: [StateLegend.SessionRow],
+                         screen: NSScreen? = NSScreen.main) -> [StateLegend.SessionRow] {
+        Array(rows.prefix { !$0.switchedOff }
+                  .prefix(gridRowsShown(rows, screen: screen)))
     }
 
     /// How many rows to draw right now: every LIVE session, or your top eight,
@@ -2286,15 +2305,13 @@ final class StatusHUD: NSObject {
     /// happening is what is RUNNING, not what happens to be lit this second.
     static func gridRowsShown(_ rows: [StateLegend.SessionRow],
                               screen: NSScreen? = NSScreen.main) -> Int {
-        let live = rows.filter { $0.lamp != .unlit && !$0.switchedOff }.count
         // ...and the OTHER of the two reasons, added 18 Aug: a session the user
-        // switched off is not entitled to a row at all, however alive it is.
-        // `quietRowsLast` sinks those below every other band, so excluding them
-        // is a ceiling on the count rather than a filter on the slice — the
-        // grid is a prefix of this array and the filed rows are its tail.
-        let filed = rows.filter(\.switchedOff).count
-        return min(gridRowCapacity(screen: screen), max(gridRowFloor, live),
-                   rows.count - filed)
+        // switched off is not entitled to a row, however alive it is. It is
+        // dropped from the ENTITLEMENT here and from the SLICE in `gridRows`;
+        // this number stays a height, and must keep being allowed to exceed
+        // the rows that exist or the floor stops holding.
+        let live = rows.filter { $0.lamp != .unlit && !$0.switchedOff }.count
+        return min(gridRowCapacity(screen: screen), max(gridRowFloor, live))
     }
 
     private func rebuildSessionRows() {
@@ -2313,7 +2330,7 @@ final class StatusHUD: NSObject {
 
         // The strip's bottom rule, under "AGENTS ⚙".
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
-        let shown = Array(face.sessionRows.prefix(Self.gridRowsShown(face.sessionRows)))
+        let shown = Self.gridRows(face.sessionRows)
         // ONE callsign column (ruled 05 Aug): sized to the widest callsign on
         // show, capped at 38% of the grid. Per-row widths made every name
         // truncate at its own x and the right side read as a rag, not a
@@ -4563,6 +4580,12 @@ final class StatusHUD: NSObject {
             ("activeGrowsIt", Self.gridRowsShown(busy, screen: big) == 14),
             ("neverBelowTheFloor",
              Self.gridRowsShown([row("a", .ready)], screen: big) == Self.gridRowFloor),
+            // The regression that shipped 18 Aug: folding the switch into the
+            // height collapsed the floor. The height must not know about
+            // filed rows; the SLICE must.
+            ("filedRowsDoNotShortenTheFloor",
+             Self.gridRowsShown([row("f", .running)].map { $0.switchedOffCopy() },
+                                screen: big) == Self.gridRowFloor),
             ("clampedByTheScreen",
              Self.gridRowsShown(swamped, screen: big) <= Self.gridRowCapacity(screen: big)),
             ("capacityIsSane",
@@ -5021,7 +5044,7 @@ final class StatusHUD: NSObject {
             row("quiet", .running), row("filed", .running, off: true),
             row("dead", unlit, revivable: true),
         ])
-        let drawn = Array(rows.prefix(Self.gridRowsShown(rows)))
+        let drawn = Self.gridRows(rows)
         let listed = Array(Self.pastAgents(rows))
         let filedIsNeverOnTheGrid = !drawn.contains { $0.switchedOff }
         let filedIsInTheList = listed.contains { $0.id == "filed" }
