@@ -907,65 +907,29 @@ public final class QueueStore: Sendable {
     ///
     /// 20.6% of briefs write no goal: a plumbing turn genuinely has no aim to
     /// state, and the summariser is told to use null rather than pad. Reading
-    /// `briefs(limit: 1)` therefore hands the next turn a nil about one turn in
-    /// five, the carry chain breaks, and the model starts over — which is the
-    /// drift the rung exists to remove, returning every few turns. Caught on
-    /// the first post-deploy sample: a session whose 14:42 turn wrote no goal
-    /// had a brand-new one at 14:47.
+    /// the newest brief therefore handed the next turn a nil about one turn in
+    /// five, the carry chain broke, and the model started over — which is the
+    /// drift the rung exists to remove, returning every few turns.
     ///
     /// A gap is not a change of subject. The goal survives it.
+    ///
+    /// There was briefly a second clause here, excluding goals written before
+    /// the "we are X-ing, in Z" template shipped, so that live sessions would
+    /// stop handing forward answers written under the instruction it replaced.
+    /// It did its job in a day and is gone: a dated constant in a query that
+    /// runs every turn is a permanent cost for a one-time problem. Sessions
+    /// that predate the template keep whatever they were carrying, which is
+    /// the correct trade — they will end, and every session started since
+    /// writes to the template from its first turn.
     public func carriedGoal(for sessionId: String) throws -> String? {
         try dbQueue.read { db in
             try String.fetchOne(db, sql: """
                 SELECT goal FROM brief
                 WHERE sessionId = ? AND goal IS NOT NULL AND goal != ''
-                  AND goal NOT IN (
-                      SELECT goal FROM brief
-                      WHERE sessionId = ? AND atMs < ? AND goal IS NOT NULL
-                  )
                 ORDER BY atMs DESC LIMIT 1
-                """, arguments: [sessionId, sessionId,
-                                 QueueStore.goalTemplateEpochMs])
+                """, arguments: [sessionId])
         }
     }
-
-    /// When "in project X, we are solving problem Y" shipped (deploy bdefaf1,
-    /// 19 Aug 16:16:15Z). Goals written before it are not carried.
-    ///
-    /// The carry says COPY IT VERBATIM, which is what stops the churn — and it
-    /// also means a goal written under a REJECTED instruction is preserved
-    /// forever. 146 sessions were holding one, including the session that built
-    /// this: "Make goal-state carry testable and reduce goal drift across agent
-    /// turns" — no project, no problem, and frozen by the very mechanism meant
-    /// to improve it. The new template would never have reached a single live
-    /// session.
-    ///
-    /// The cutoff follows the TEXT, not the timestamp, and the first version
-    /// of this got that wrong.
-    ///
-    /// Filtering on `atMs >= cutoff` looks right and does nothing: a carried
-    /// goal is COPIED forward, so the copy carries a fresh timestamp and stale
-    /// words. This session's pre-template sentence was re-recorded at 16:17,
-    /// 18:43, 18:46 and 20:07 — every one of them "after the cutoff" and every
-    /// one of them the same rejected sentence. The filter waved them all
-    /// through and nothing changed, which is exactly what the operator was
-    /// looking at when he said the goal still says the same useless thing.
-    ///
-    /// So the exclusion is on the words: a goal is not carried if that exact
-    /// text ever appeared in this session before the template shipped. It
-    /// heals itself — the moment a turn writes something genuinely new, the
-    /// new text is not in the excluded set and carries forward normally.
-    ///
-    /// A cutoff rather than a migration, deliberately. Clearing the column
-    /// would blank the goal line on every historical hub, including sessions
-    /// that will never run again to write a better one. This leaves history
-    /// exactly as it reads today and only stops the OLD WORDS from being handed
-    /// forward, so every live session re-derives on its next turn.
-    ///
-    /// Delete this when it stops mattering — it is a boundary in time, not a
-    /// rule, and every session that predates it will have ended long before
-    /// anyone reads this twice.
-    static let goalTemplateEpochMs: Int64 = 1_787_156_175_000
 
     /// Newest first, for the lexicon harvest and future retention reads.
     public func recentBriefs(limit: Int = 400) throws -> [StoredBrief] {
