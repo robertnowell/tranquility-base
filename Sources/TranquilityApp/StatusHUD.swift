@@ -4011,6 +4011,24 @@ final class StatusHUD: NSObject {
         let wordBox = stackBox.map { cardControls.convert(cardControls.bounds, to: $0) }
             ?? .zero
         let bodyBox = stackBox.map { bodyLabel.convert(bodyLabel.bounds, to: $0) } ?? .zero
+        // Logged for eyes, asserted by nobody.
+        //
+        // This was a gate (`bottomLineHasAir >= 11.5`) and it was the wrong
+        // shape of check twice over. It measured a rendered gap to defend a
+        // quantity that is DECLARED — 6pt of stack spacing plus the row's own
+        // 6pt top inset — and while the layout underneath it was
+        // non-deterministic it spent a day failing the launches where the panel
+        // was RIGHT: the 12.0 it wanted came from a word centred in an
+        // over-tall row, and the 8.5 it rejected was the compact row the design
+        // describes (issue 26, measured).
+        //
+        // The layout is deterministic now, by construction, in
+        // `ControlsWordView` — which is where a guarantee about spacing
+        // belongs. Ruled 19 Aug: "this is a minor check on what should be a
+        // deterministic guarantee... I don't even know why we need a measured
+        // gate for this." The same conclusion the drill two above reached about
+        // the footer's floor gap, for the same reason, and it is logged there
+        // exactly like this.
         let bottomLineAir = max(bodyBox.minY - wordBox.maxY, wordBox.minY - bodyBox.maxY)
         setControlsNote(open: true, above: actionRow)
         panel?.contentView?.layoutSubtreeIfNeeded()
@@ -4054,7 +4072,6 @@ final class StatusHUD: NSObject {
             ("signatureReachesTheHost", signatureTapped),
             ("cardKeepsTheWord", cardKeepsTheWord),
             ("oneLexicon", oneLexicon),
-            ("bottomLineHasAir", bottomLineAir >= 11.5),
             ("cardNoteOpens", cardNoteOpens),
             ("cardNoteFitsThePanel", cardNoteFitsThePanel),
             ("captureDropsTheWord", captureDropsTheWord),
@@ -6357,6 +6374,34 @@ final class StatusHUD: NSObject {
         // the same place the grid puts it.
         cardControls = ControlsWordView()
         buttons.addView(cardControls, in: .center)
+        // And the row is exactly as tall as its contents: BOTH directions.
+        //
+        // Hugging alone was not enough and the difference is the whole bug.
+        // Hugging resists growing, so it stopped the row ballooning around a
+        // correctly-sized word — measured, that took the flip from 3-in-6 to
+        // 2-in-12 and no further. What remained was the row being SQUEEZED:
+        // compression resistance is what defends the 6pt top inset, and without
+        // it the stack could take that inset back whenever it wanted the space,
+        // landing the row at 25pt instead of 32 and the air at 8.5 instead of
+        // the ruled 12. A quantity you can only have when nothing else wants it
+        // is not a guarantee.
+        buttons.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        buttons.setContentCompressionResistancePriority(.defaultHigh, for: .vertical)
+        // And the air itself is PINNED, not inferred.
+        //
+        // The two priorities above took the flip from 3-in-6 to 1-in-12 and
+        // stopped there, which is the tell: priorities move the odds, they do
+        // not remove the freedom. The stack centres a `.center` view in
+        // whatever height it ends up with, so the word's distance from the row
+        // top was always a consequence of other things rather than a fact.
+        //
+        // Now it is the fact: 6pt below the row's top edge, which is the row's
+        // own inset, on top of the stack's 6pt spacing above the row. 12,
+        // always, by construction — the number the 18 Aug ruling asked for
+        // ("doubling it to 12 gives that row the same air the panel gives its
+        // own edges") and never reliably got.
+        cardControls.topAnchor.constraint(
+            equalTo: buttons.topAnchor, constant: 6).isActive = true
 
         hintLabel.maximumNumberOfLines = 0
         hintLabel.lineBreakMode = .byTruncatingMiddle
@@ -8093,7 +8138,25 @@ private final class ControlsWordView: NSView {
             word.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 8),
             word.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -8),
             word.centerYAnchor.constraint(equalTo: box.centerYAnchor),
-            box.heightAnchor.constraint(greaterThanOrEqualToConstant: 20),
+            // 20 is the target SIZE, exactly — not a floor.
+            //
+            // As `>=`, with the box pinned to all four edges, this view had no
+            // opinion about its own height: the constraint system was left with
+            // a degree of freedom, and in a stack with vertical slack the view
+            // took the slack. Measured 19 Aug over repeated runs of one
+            // unchanged binary, the same card laid this out at 20pt on some
+            // launches and 113pt on others — inside an action row that grew
+            // from 25pt to 125pt with it — so the word either sat under the
+            // body where it belongs or floated sixty points below it, and which
+            // one you got was a coin flip.
+            //
+            // Required, because the ruling that set the 20 set a size and not a
+            // minimum: "8pt of slack on each side and a 20pt floor makes it the
+            // same size target on both faces, which is the point: one
+            // affordance, one feel." A target that is sometimes five times its
+            // ruled height is not one feel, and a hover area that moves between
+            // launches is worse than a small one.
+            box.heightAnchor.constraint(equalToConstant: 20),
             box.leadingAnchor.constraint(equalTo: leadingAnchor),
             box.trailingAnchor.constraint(equalTo: trailingAnchor),
             box.topAnchor.constraint(equalTo: topAnchor),
