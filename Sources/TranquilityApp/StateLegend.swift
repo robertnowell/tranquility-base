@@ -1182,21 +1182,40 @@ enum StateLegend {
     /// The status item has exactly three states.
     enum MenuBarState { case normal, busy, permissionWarning }
 
+    /// What the menu bar wears in each state.
+    ///
+    /// RE-RULED 18 Aug, from the identity research. The first version borrowed
+    /// stock Apple symbols — `waveform.circle`, `waveform.circle.fill` — and a
+    /// text fallback of "VD", which is the app's *previous* name. The surface
+    /// the user sees all day was the one carrying none of the identity.
+    ///
+    /// It now wears the site mark (see `SiteMark`), and the state is told in
+    /// the panel's own grammar rather than by swapping to an unrelated glyph:
+    /// **solid means something wants you, hollow means nothing new** — the same
+    /// rule the grid and the collapsed strip already draw.
+    ///
+    /// The permission warning keeps an SF Symbol on purpose. It is not a state
+    /// of the roster, it is the app telling you it cannot do its job, and a
+    /// mark that says "this is us" is the wrong shape for that sentence.
     struct MenuBarAppearance {
-        let symbol: String
-        /// Used only when the SF Symbol fails to load.
+        /// Nil when the state wears the site mark rather than a system symbol.
+        let symbol: String?
+        /// Solid mark: a turn is waiting. Ignored when `symbol` is set.
+        let filled: Bool
+        /// Used only when the image cannot be built at all.
         let textFallback: String
     }
 
     static func menuBar(_ state: MenuBarState) -> MenuBarAppearance {
         switch state {
         case .normal:
-            return MenuBarAppearance(symbol: "waveform.circle", textFallback: "VD")
+            return MenuBarAppearance(symbol: nil, filled: false, textFallback: "TB")
         case .busy:
-            return MenuBarAppearance(symbol: "waveform.circle.fill",
-                                     textFallback: "VD\(Glyph.dot)")
+            return MenuBarAppearance(symbol: nil, filled: true,
+                                     textFallback: "TB\(Glyph.dot)")
         case .permissionWarning:
-            return MenuBarAppearance(symbol: "exclamationmark.bubble", textFallback: "VD")
+            return MenuBarAppearance(symbol: "exclamationmark.bubble", filled: false,
+                                     textFallback: "TB\(Glyph.needsYou)")
         }
     }
 

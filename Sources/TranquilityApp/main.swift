@@ -1731,9 +1731,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { state = .normal }
         let appearance = StateLegend.menuBar(state)
 
-        let image = NSImage(systemSymbolName: appearance.symbol,
+        // The site mark for the states that are ours to name; a system symbol
+        // only for the permission warning, which is the app saying it cannot
+        // work rather than the roster saying anything.
+        let image: NSImage?
+        if let symbol = appearance.symbol {
+            image = NSImage(systemSymbolName: symbol,
                             accessibilityDescription: "Tranquility Base")
-        image?.isTemplate = true
+            image?.isTemplate = true
+        } else {
+            image = SiteMark.templateImage(filled: appearance.filled)
+            image?.accessibilityDescription = "Tranquility Base"
+        }
         button.image = image
         // The annunciator at rest (WS-B, ruled): the waiting count rides next to
         // the symbol, quiet when nothing is. The liveness-filtered count — the
@@ -4039,6 +4048,28 @@ private final class Counter: @unchecked Sendable {
 import AVFoundation
 private func AVAuthorizationStatusIsUndetermined() -> Bool {
     AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined
+}
+
+// Draw the app's icon and exit, before any of the app exists.
+//
+// A build step rather than a checked-in binary asset: the mark is code, so the
+// icon is generated from the same path the menu bar draws, and the two can
+// never drift. `scripts/bundle.sh` calls this and hands the .iconset to
+// iconutil. Handled here, ahead of NSApplication, because this run is not a
+// launch — nothing should register a hotkey or take the single-instance lock
+// to write a PNG.
+if let flag = CommandLine.arguments.firstIndex(of: "--write-iconset"),
+   flag + 1 < CommandLine.arguments.count {
+    let directory = CommandLine.arguments[flag + 1]
+    do {
+        try SiteMark.writeIconset(to: directory)
+        print(directory)
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(
+            Data("could not write iconset: \(error)\n".utf8))
+        exit(1)
+    }
 }
 
 let app = NSApplication.shared

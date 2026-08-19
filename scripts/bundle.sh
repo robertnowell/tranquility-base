@@ -36,6 +36,29 @@ cp "$BUILD_DIR/TranquilityApp" "$APP_DIR/Contents/MacOS/TranquilityApp"
 # silent, and Earcons logs "no audio for <cue>".
 cp Resources/Sounds/*.wav "$APP_DIR/Contents/Resources/"
 
+# The app icon, drawn by the app itself.
+#
+# Generated rather than checked in: the mark lives in SiteMark.swift, so the
+# icon and the menu-bar glyph come from one path and cannot drift. The binary
+# is already built at this point, so it draws its own icon — `--write-iconset`
+# exits before NSApplication, taking no lock and registering no hotkey.
+#
+# Why this matters at all: the app shipped with NO icon for its whole life.
+# LSUIElement hides the Dock tile most of the time, so nobody noticed — but
+# onboarding flips the app to .regular, which put the GENERIC DEFAULT icon in
+# the Dock and ⌘-Tab at exactly the moment a new user meets it.
+ICONSET="$(mktemp -d)/AppIcon.iconset"
+if "$APP_DIR/Contents/MacOS/TranquilityApp" --write-iconset "$ICONSET" >/dev/null; then
+  if iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/AppIcon.icns"; then
+    echo "→ icon: AppIcon.icns"
+  else
+    echo "✗ iconutil failed — the bundle will show the default icon" >&2
+  fi
+else
+  echo "✗ could not draw the iconset — the bundle will show the default icon" >&2
+fi
+rm -rf "$(dirname "$ICONSET")"
+
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -45,6 +68,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>$APP_NAME</string>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleExecutable</key><string>TranquilityApp</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
