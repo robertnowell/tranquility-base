@@ -3523,6 +3523,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // an agent to answer — see PendingLaunch for what that cost before.
         let launch = greet ? PendingLaunch(label: label, directory: dir) : nil
         if let launch { pendingLaunch = launch }
+        // Where your attention was when the button was pressed, so the
+        // adoption below can tell "still here" from "moved on". See it for
+        // why the destination cannot wait for the card.
+        let conversationAtLaunch = activeConversation?.sessionId
         if greet, hud.showGreeting(line: line, label: label) {
             // Through the greeting cache, which is what it is for: one fixed
             // sentence per voice, synthesized once and replayed from disk
@@ -3586,7 +3590,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // the card is still on stage. Binding can fail — it does, whenever
             // you started talking — and the words must reach the agent anyway.
             launch?.resolve(sessionId: sessionId)
-            guard greet, let store = await self?.store else { return }
+            guard greet else { return }
+
+            // THE DESTINATION FOLLOWS THE LAUNCH (ruled 19 Aug), and it is
+            // claimed HERE — one line after the session provably exists, and
+            // before the store write, the greeting row, and the card binding
+            // that used to own it. The comment above says the promise must not
+            // be hostage to whether the card is still on stage; the reply
+            // target was, twenty lines further down, assigned only inside the
+            // successful-bind branch. So a microphone fault at 15:35:57 that
+            // moved the panel off the greeting card sent every word after it
+            // to the PREVIOUS agent, in a different repository, silently.
+            // Binding a card is a question about the panel. Where your words
+            // go is not, and no longer waits for an answer.
+            //
+            // Two conditions, because following the launch must not mean
+            // overriding you:
+            //   · this is still the newest launch — a second + NEW AGENT
+            //     supersedes the first, and the older one must not claim the
+            //     destination when it happens to register second;
+            //   · you have not deliberately moved on since — a lamp press or
+            //     a ⌃⌥ is an explicit statement about where your attention is,
+            //     and it outranks a launch you started before it.
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                guard LaunchAdoption.claimsTheReply(
+                    isNewestLaunch: launch != nil && self.pendingLaunch === launch,
+                    conversationAtLaunch: conversationAtLaunch,
+                    conversationNow: self.activeConversation?.sessionId)
+                else {
+                    Permissions.log("launch: \(sessionId.prefix(8)) registered, but you "
+                        + "moved on — replies stay where you put them")
+                    return
+                }
+                self.activeConversation = (sessionId, label, dir)
+                Permissions.log("launch: replies now go to \(sessionId.prefix(8))")
+            }
+
+            guard let store = await self?.store else { return }
             let pid = (ClaudeAgentsCLI().sessions() ?? [])
                 .first(where: { $0.sessionId == sessionId })?.pid
             do {
@@ -3608,24 +3649,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                // The card acquires its session, and with it the doors and the
-                // reply routing. `activeConversation` is the same claim in the
-                // host's language — your attention is on this agent, so the
-                // next thing you say goes to it rather than to whatever a
-                // cursor last pointed at.
+                // The card acquires its session, and with it the doors: GO TO
+                // AGENT, the hub link, the title. Only the doors — the reply
+                // routing was settled above, the moment the session existed.
+                // A door to an agent that does not exist is worse than no
+                // door (18 Aug, 22:37), so this may still refuse; refusing now
+                // costs a card, never a destination.
                 if self.hud.bindGreeting(sessionId: sessionId, pid: pid,
                                          label: label, cwd: dir) {
-                    self.activeConversation = (sessionId, label, dir)
                     Permissions.log("greeting: bound \(sessionId.prefix(8)) to the card")
                 } else {
-                    // The refusal was the only step in this flow that changes
-                    // where your words go and left no trace: three misroutes on
-                    // 18 Aug were visible in app.log only as a MISSING line, and
-                    // reconstructing them took a timeline built from absence.
-                    // A refusal is a fact about a launch, so it gets a fact in
-                    // the ledger.
+                    // Still logged, and still a fact worth having: three
+                    // misroutes on 18 Aug were visible in app.log only as a
+                    // MISSING line. It no longer reports a misroute, because
+                    // there no longer is one — only a card that moved on.
                     Permissions.log("greeting: NOT bound \(sessionId.prefix(8)) — "
-                        + "card moved on; replies go to the previous agent until PR B")
+                        + "card moved on; replies still go to it")
                 }
             }
         }
