@@ -48,6 +48,27 @@ public enum MicState: Equatable {
         return false
     }
 
+    /// The one question every teardown asks: does the machine currently want
+    /// audio flowing through this unit?
+    ///
+    /// Two callers, and they used to disagree by accident. `deliver` gated on
+    /// this pair inline to decide whether a render callback belonged to
+    /// anybody. The asynchronous teardowns in `stop`/`abandon` asked nothing at
+    /// all, and so could stop a unit that a NEWER press had already claimed —
+    /// or, worse, sit in a HAL call in front of that press's open. A ⌥⌥
+    /// produces exactly that ordering every time it is used, because the
+    /// gesture's own first tap opens and abandons before the second tap locks
+    /// listening; on 19 Aug at 15:35:56 the open lost the race and was
+    /// reported dead against hardware that was working.
+    ///
+    /// One predicate, named, in the layer that has tests.
+    public var wantsAudioFlowing: Bool {
+        switch self {
+        case .opening, .capturing: return true
+        case .cold, .warm, .wedged: return false
+        }
+    }
+
     /// The one question hands-free auto-arm asks. While wedged, an
     /// announcement finishing must NOT open the microphone on its own —
     /// each auto-open during the Aug 12 wedge burned ~2s of main thread

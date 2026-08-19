@@ -7,6 +7,34 @@ import Testing
 /// and the wedge is entered on evidence and left only on evidence.
 struct MicMachineTests {
 
+    // MARK: - Who wants the unit running
+
+    /// The predicate the asynchronous teardowns consult before stopping a
+    /// unit, and the one `deliver` uses to decide whether a render callback
+    /// belongs to anybody. Same question, so it is asked in one place.
+    @Test func onlyALiveOpenWantsAudioFlowing() {
+        #expect(!MicState.cold.wantsAudioFlowing)
+        #expect(!MicState.warm.wantsAudioFlowing)
+        #expect(MicState.opening(generation: 1).wantsAudioFlowing)
+        #expect(MicState.capturing(generation: 1).wantsAudioFlowing)
+        #expect(!MicState.wedged(failures: 2).wantsAudioFlowing)
+    }
+
+    /// The ⌥⌥ shape, as the machine sees it: the gesture's first tap opens and
+    /// abandons, and its second tap opens again. A teardown queued by the
+    /// abandon runs LATER than the re-open — which is the whole hazard — and
+    /// must find the machine wanting audio and leave the unit alone.
+    @Test func aReopenBeforeTheTeardownRunsKeepsTheUnit() {
+        var m = MicMachine()
+        #expect(m.submit(.unitPrepared).accepted)
+        #expect(m.submit(.openRequested).accepted)          // first tap opens
+        #expect(m.submit(.captureEnded).accepted)           // and abandons
+        #expect(!m.state.wantsAudioFlowing)                 // teardown queued here
+        #expect(m.submit(.openRequested).accepted)          // second tap re-opens
+        // The queued teardown finally runs. The unit is claimed; hands off.
+        #expect(m.state.wantsAudioFlowing)
+    }
+
     // MARK: - The happy path
 
     @Test func coldPreparesThenOpensThenCaptures() {
