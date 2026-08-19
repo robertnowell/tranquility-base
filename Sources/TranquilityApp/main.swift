@@ -188,6 +188,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// future one, because it asks "is this still the reply the user wants" rather
     /// than "is a particular UI state showing".
     private var replyGeneration = 0
+    /// The transcription attempt the panel is showing, held so the card's
+    /// Retry can actually reach it. Everything a fresh attempt needs to run
+    /// the SAME capture again: the audio (still in memory), the addressing
+    /// facts sendReply consumes (they are nulled as the attempt runs, so a
+    /// retry must restore them), and the attempt's pre-minted utterance row
+    /// so the superseded twin can be retired from the recent-audio pane.
+    /// Cleared when the attempt resolves while still current.
+    private struct InFlightTranscription {
+        let capture: Recorder.Capture
+        let utteranceId: String
+        let dictation: Bool
+        let target: String?
+        let launch: PendingLaunch?
+        var task: Task<Void, Never>?
+    }
+    private var inFlightTranscription: InFlightTranscription?
     /// What the idle grid is currently displaying — row DATA, not counts — so it
     /// is redrawn on content change rather than on every poll. Counts alone
     /// missed real changes: a newer turn replacing an older one leaves the count
@@ -2808,7 +2824,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
-    private func sendReply(_ capture: Recorder.Capture) {
+    /// `isRetry` marks a re-run of a capture the panel's Retry superseded: the
+    /// silence gate is skipped (these bytes already passed it once, and the
+    /// recorder's peak may belong to a later arm by now) and the face says
+    /// "Retrying" — re-entering `.transcribing` restarts the elapsed clock,
+    /// which is the visible acknowledgment the first Retry never had.
+    private func sendReply(_ capture: Recorder.Capture, isRetry: Bool = false) {
         guard let coordinator else { return }
         // Unpacked once, at the top, from the value stop() returned. Both of
         // these used to be read separately — the samples from the return, the
@@ -2825,7 +2846,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // noise floor is refused before any model touches it: hallucinated words
         // in a real terminal are worse than asking you to speak again.
         let seconds = Double(pcm.count) / 2.0 / 16_000.0
-        if seconds < 0.5 || recorder.peakLevel < 0.005 {
+        if !isRetry, seconds < 0.5 || recorder.peakLevel < 0.005 {
             Permissions.log(String(format:
                 "send: refused, silence gate (%.2fs, peak %.4f)", seconds, recorder.peakLevel))
             recordingTarget = nil
@@ -2833,15 +2854,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let mine = replyGeneration
+        // Pre-minted so the attempt's row is addressable BEFORE the attempt
+        // resolves — the panel's Retry retires it by this id (issue: the two
+        // 19 Aug retry taps that could not reach the capture on screen).
+        let attemptId = UUID().uuidString
+        inFlightTranscription = InFlightTranscription(
+            capture: capture, utteranceId: attemptId, dictation: dictationMode,
+            target: recordingTarget, launch: recordingLaunch, task: nil)
         lastStatusLine = "transcribing…"
         // Sanctioned change (open issue #4): the transcribing panel shows elapsed
         // seconds, and past 20s offers Cancel and Retry rather than looking hung.
-        hud.showTranscribing("Transcribing your reply…",
+        hud.showTranscribing(isRetry ? "Retrying transcription…" : "Transcribing your reply…",
                              onCancel: { [weak self] in self?.cancelTranscription() },
                              onRetry: { [weak self] in self?.retryTranscriptionFromPanel() })
         rebuildMenu()
 
-        Task { @MainActor in
+        let attempt = Task { @MainActor in
+            // The attempt clears its own tracking on the way out — unless a
+            // retry already replaced it with a newer attempt's record.
+            defer {
+                if self.inFlightTranscription?.utteranceId == attemptId {
+                    self.inFlightTranscription = nil
+                }
+            }
             do {
                 // Address exactly what the panel showed while you spoke — captured
                 // at mic-open, consumed here. Re-deriving at send time is how the
@@ -2851,14 +2886,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if dictationMode {
                     // Dictation: transcribe, copy, done. No terminal is touched.
                     dictationMode = false
-                    hud.showTranscribing("Transcribing…",
+                    hud.showTranscribing(isRetry ? "Retrying transcription…" : "Transcribing…",
                                          onCancel: { [weak self] in self?.cancelTranscription() },
                                          onRetry: { [weak self] in self?.retryTranscriptionFromPanel() })
                     guard let store = self.store else { return }
                     let streamed = await liveStream?.finish()
                     let utterance = try await store.captureAndTranscribe(
                         pcm16: pcm, sampleRate: 16_000, chain: RecoveryChain(), eventId: nil,
-                        streamed: streamed, preWritten: capturedFile)
+                        streamed: streamed, preWritten: capturedFile, utteranceId: attemptId)
                     // Cancelled (or replaced) while transcribing: the words must not
                     // be pasted anywhere. The audio row is durable and stays.
                     guard mine == replyGeneration else {
@@ -2955,7 +2990,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let streamed = await liveStream?.finish()
                 let outcome = try await coordinator.submitReply(
                     pcm16: pcm, to: spokenTo, streamed: streamed,
-                    preWritten: capturedFile)
+                    preWritten: capturedFile, utteranceId: attemptId)
 
                 // You started saying it again while this was still transcribing.
                 // Drop it rather than offering it: the words you replaced must never
@@ -3049,6 +3084,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             rebuildMenu()
         }
+        inFlightTranscription?.task = attempt
     }
 
     /// A reply that cannot be delivered goes to the clipboard — the one place the
@@ -3903,15 +3939,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Slow transcription (sanctioned change: open issue #4)
 
-    /// Cancel from the transcribing panel: discard the utterance and return to idle.
+    /// Cancel from the transcribing panel: drop the attempt and return to idle.
     ///
-    /// The in-flight network call is not interruptible, so cancellation is the same
-    /// mechanism that guards against re-recording: bump the generation, and the
-    /// result is dropped (reply path) or its send cancelled (readyToSend) when it
-    /// finally lands. The audio row was durable before the network was touched, so
-    /// nothing is lost — `tbase utterances` still has it.
+    /// Two mechanisms, both needed: the generation bump guarantees the result is
+    /// dropped (reply path) or its send cancelled (readyToSend) even if the
+    /// attempt cannot stop; the task cancel actually STOPS it where it can — a
+    /// cancelled upload unwinds in milliseconds instead of holding its rung's
+    /// full timeout. The audio row was durable before the network was touched,
+    /// so nothing is lost: the row lands failed-with-audio, which is exactly
+    /// what the recent-audio pane's per-row retry recovers from.
     private func cancelTranscription() {
         replyGeneration += 1
+        inFlightTranscription?.task?.cancel()
+        inFlightTranscription = nil
         recordingTarget = nil
         dictationMode = false
         lastStatusLine = "transcription cancelled, audio kept"
@@ -3923,17 +3963,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
-    /// Retry from the transcribing panel: the existing recovery path, exactly the
-    /// same as the "Retry failed transcriptions" menu item.
+    /// Retry from the transcribing panel: supersede the attempt on screen and run
+    /// the SAME capture again, from the top of the chain.
     ///
-    /// Honest limitation, stated: the recovery sweep re-runs utterances whose
-    /// transcription has FAILED, from their audio on disk. It cannot preempt the
-    /// one still in flight — no provider in the chain supports that — so mid-flight
-    /// this recovers any earlier failures and otherwise waits the current attempt
-    /// out. The panel keeps its elapsed counter either way.
+    /// This button used to run the failed-rows sweep, which by construction could
+    /// not touch the attempt the user was staring at — the 19 Aug 15:23 taps were
+    /// received, re-transcribed some old clips, and changed nothing on screen.
+    /// Now: the stalled attempt's result is disowned (generation), its network
+    /// work told to stop (cancel), its row retired once it unwinds (so the
+    /// recent-audio pane never grows a transcriptless twin), and a fresh attempt
+    /// starts over the same audio with the same addressing. The re-entered
+    /// transcribing face restarts the elapsed clock — the acknowledgment.
     private func retryTranscriptionFromPanel() {
-        Permissions.log("transcription: retry requested from the panel")
-        retryFailed()
+        guard let prior = inFlightTranscription else {
+            // A stale tap as the face leaves, or a retry with nothing in
+            // flight: sweep past failures, the one thing still worth doing.
+            Permissions.log("transcription: retry with nothing in flight; sweeping failed rows")
+            retryFailed()
+            return
+        }
+        Permissions.log("transcription: retry from the panel — superseding "
+            + "\(prior.utteranceId.prefix(8)) and rerunning the chain")
+        replyGeneration += 1
+        prior.task?.cancel()
+        if let store, let superseded = prior.task {
+            Task { @MainActor in
+                _ = await superseded.value
+                try? store.discardUtterance(id: prior.utteranceId,
+                                            because: "superseded by the panel's retry")
+            }
+        }
+        // Restore the addressing facts the superseded attempt consumed, so the
+        // re-run resolves to the same session (or launch) the words were
+        // spoken to — never a re-derivation (the HTML-button lesson).
+        recordingTarget = prior.target
+        recordingLaunch = prior.launch
+        dictationMode = prior.dictation
+        sendReply(prior.capture, isRetry: true)
     }
 
     private func open(_ urlString: String) {
