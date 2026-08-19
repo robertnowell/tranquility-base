@@ -710,7 +710,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? coordinator.dismiss(sessionId: id, through: target.latestId)
                 Permissions.log("lamp: cleared \(target.callsign ?? id.prefix(8).description) by click")
             }
+            // And the row leaves the grid (18 Aug). Dismissal alone was only
+            // ever half of what the gesture means: it silences the TURN, and
+            // the user is switching off the SESSION. Both, or a green row you
+            // just filed sits there quietly, still on the panel.
+            LampSwitch.turnOff(id)
+            Permissions.log("lamp: switched off \(id.prefix(8)) — filed to past agents")
             self.showIdleGrid()
+        }
+        // The other half of the switch: the list hands a session back.
+        // No process work at all — this row's agent has been running the whole
+        // time — so unlike revive there is nothing to launch, wait for, or
+        // announce. It is a line in a file and a repaint.
+        hud.onRestoreLamp = { [weak self] id in
+            LampSwitch.turnOn(id)
+            Permissions.log("lamp: switched on \(id.prefix(8)) — back on the grid")
+            self?.showIdleGrid()
         }
         hud.onLeaveSettings = { [weak self] in
             guard let self else { return }
@@ -1440,7 +1455,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
                 aux: activity?.shortReason ?? StateLegend.shortId(stored.sessionId),
-                lamp: lamp(for: activity, sessionId: stored.sessionId)))
+                lamp: lamp(for: activity, sessionId: stored.sessionId, live: live)))
         }
         // Live sessions with no stored events yet: nothing to rank them by,
         // so they close the live half of the grid.
@@ -1464,7 +1479,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     liveName: Self.tabTitle(transcriptPath: nil, live: live),
                     callsign: nil, fallback: "session"),
                 aux: activity?.shortReason ?? StateLegend.shortId(live.sessionId),
-                lamp: lamp(for: activity, sessionId: live.sessionId)))
+                lamp: lamp(for: activity, sessionId: live.sessionId, live: live)))
         }
         // And the sessions that are not awake (ruled 11 Aug). Everything above
         // this line is enumerated from PROCESSES, which is why a machine
@@ -1494,6 +1509,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 lamp: .unlit,
                 revivable: found.revivable))
         }
+        // The user's own switch, applied last and to every band at once.
+        //
+        // Derived on every repaint rather than stored on the row, so a session
+        // that starts waiting stops being filed the moment it does — see
+        // `LampSwitch.isOff`, where that exception is the whole policy. And the
+        // switch is CLEARED, not merely overridden, when a turn arrives: the
+        // file should hold only sessions that are filed right now, or the row
+        // would quietly drop off the grid again as soon as the user read it.
+        let switchedOff = LampSwitch.load()
+        if !switchedOff.isEmpty {
+            for row in rows where row.lamp == .ready && switchedOff.contains(row.id) {
+                LampSwitch.turnOn(row.id)
+                Permissions.log("lamp: \(row.id.prefix(8)) is waiting — switch cleared")
+            }
+            rows = rows.map { row in
+                // A dead session is in the list by liveness already; filing it
+                // as well would say the user switched off something that has
+                // no lamp to switch.
+                guard row.lamp != .unlit,
+                      LampSwitch.isOff(row.id, waiting: row.lamp == .ready,
+                                       switchedOff: switchedOff)
+                else { return row }
+                return row.switchedOffCopy()
+            }
+        }
         // Last, and after every band has been appended: a session that is merely
         // alive drops below the ones doing something, without disturbing the
         // recency order the bands above spent this whole function establishing.
@@ -1514,12 +1554,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// exists to carry, to say something the user just did themselves. Quiet
     /// is the only lamp with nothing to lose, and it is exactly the lamp that
     /// was lying.
-    private func lamp(for activity: SessionActivity?, sessionId: String) -> StateLegend.Lamp {
+    ///
+    /// The PROCESS outranks the transcript, and that is the 18 Aug ruling. A
+    /// session blocked on a tool prompt — `AskUserQuestion`, a permission
+    /// dialog — writes nothing to its transcript, fires no hook, and from the
+    /// file alone is indistinguishable from an agent happily running Bash. But
+    /// `claude agents --json` has watched the process and says
+    /// `status: waiting · waitingFor: input needed`, which the app has read
+    /// every five seconds since the beginning and used only to decide whether
+    /// it was safe to type into a tab. It is the plainest needs-you signal in
+    /// the system and it reached no lamp until now. `busy` and `idle` are read
+    /// the same way, for the same reason: the process knows, and the file only
+    /// implies.
+    private func lamp(for activity: SessionActivity?, sessionId: String,
+                      live: LiveSession?) -> StateLegend.Lamp {
+        // Blocked on you, said by the process itself. Nothing in a transcript
+        // outranks this — including a stale `working` read from a tool call
+        // that IS the prompt the session is blocked on.
+        if live?.status == "waiting" { return .fault }
         let observed: StateLegend.Lamp = {
             switch activity {
-            case .working: return .working
+            case .working:
+                // The file says a turn is in flight. If the process says it is
+                // idle, the turn ended in a shape the file cannot express — an
+                // unanswered prompt with no turn-end marker, the 17:19 case.
+                // The process is right and it costs nothing to believe it.
+                return live?.status == "idle" ? .running : .working
             case .blocked: return .fault
-            case .idle, nil: return .running
+            case .idle, nil:
+                // And the mirror: the file has nothing to say, the process says
+                // it is chewing. Blue rather than quiet.
+                return live?.status == "busy" ? .working : .running
             }
         }()
         guard observed == .running, delivering.isInFlight(sessionId) else { return observed }
