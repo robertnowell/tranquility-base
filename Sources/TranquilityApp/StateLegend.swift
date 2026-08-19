@@ -505,6 +505,21 @@ enum StateLegend {
         /// Ruled 16 Aug — "idk that blue should be empty circle?" — and the
         /// legend had said so all along.
         var asksForYou: Bool { self == .ready || self == .fault }
+
+        /// Is this lamp ON? Green, blue and amber are; the seated socket and
+        /// the empty one are not.
+        ///
+        /// The grid's whole membership rule, in one property (18 Aug): "the
+        /// grid is for lit lamps." `running` reads as off because it IS off —
+        /// alive with nothing in flight is exactly what the user means when he
+        /// turns a lamp off by hand, and the panel cannot treat the two
+        /// differently without the switch looking broken.
+        var isLit: Bool {
+            switch self {
+            case .ready, .working, .fault: return true
+            case .running, .unlit: return false
+            }
+        }
     }
 
     /// Has this row's turn been heard — and does it even HAVE a turn?

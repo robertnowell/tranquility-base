@@ -64,13 +64,34 @@ final class SessionActivityTests: XCTestCase {
         XCTAssertEqual(SessionActivity.classify(tail: tail, modified: warm), .working)
     }
 
+    /// The 18 Aug split. Both light amber; only one of them may be overruled
+    /// by a process that says it is idle, so they cannot be the same case.
+    ///
+    /// Measured that evening: `59181c6d` and `b18ebb61` were both textbook
+    /// stalls in the file — a real typed prompt, then four hours of nothing —
+    /// and the agents API reported `idle` for both. Robert: "in both of these
+    /// cases, the agent did return."
+    func testSilenceAndAnErrorAreDifferentVerdicts() {
+        let old = Date().addingTimeInterval(-4 * 3600)
+        let openPrompt = SessionActivity.classify(
+            tail: [userPrompt()], modified: old)
+        let error = SessionActivity.classify(tail: [apiError("session limit")], modified: old)
+        guard case .stalled = openPrompt else {
+            return XCTFail("silence should be a stall, got \(openPrompt)")
+        }
+        guard case .blocked = error else {
+            return XCTFail("an error should stay blocked, got \(error)")
+        }
+        XCTAssertNotEqual(openPrompt, error)
+    }
+
     func testALongSilenceAsksForAHumanRatherThanGoingOut() {
         // RE-RULED 18 Aug. This used to assert the opposite — that a tool call
         // hung yesterday decays to idle — and that decay is what hid a live
         // session blocked on Robert for 41 minutes. A lamp is never turned off
         // by the passage of time; it is turned UP.
         let old = Date().addingTimeInterval(-SessionActivity.stalled - 60)
-        guard case .blocked(let reason) = SessionActivity.classify(
+        guard case .stalled(let reason) = SessionActivity.classify(
             tail: [assistantToolUse()], modified: old)
         else { return XCTFail("an hour of silence from a live agent is amber, not off") }
         XCTAssertTrue(reason.contains("silent for"), reason)
@@ -243,7 +264,7 @@ final class SessionActivityTests: XCTestCase {
         // forever. It used to decay to idle, which is how a crashed session
         // became invisible; it turns amber now, which is how it gets looked at.
         let cold = Date().addingTimeInterval(-SessionActivity.stalled - 60)
-        guard case .blocked = SessionActivity.classify(
+        guard case .stalled = SessionActivity.classify(
             tail: [assistant(text: "Done.")], modified: cold,
             boundary: boundary(.userPromptSubmit, agoSeconds: SessionActivity.stalled + 60))
         else { return XCTFail("an hour of silence under an open prompt is amber") }
@@ -336,13 +357,13 @@ final class SessionActivityTests: XCTestCase {
         // Amber since the 18 Aug re-ruling, idle before it. Either way the
         // point stands and is the point of this test: NOT blue, because the
         // file moving is not the conversation speaking.
-        guard case .blocked = SessionActivity.classify(tail: tail, modified: warm)
+        guard case .stalled = SessionActivity.classify(tail: tail, modified: warm)
         else { return XCTFail("a fresh mtime must not date a two-hour-old prompt") }
     }
 
     func testAToolCallIsDatedByItsOwnEntryNotTheFile() {
         let tail = [timestamped(assistantToolUse(), agoSeconds: 7200)]
-        guard case .blocked = SessionActivity.classify(tail: tail, modified: warm)
+        guard case .stalled = SessionActivity.classify(tail: tail, modified: warm)
         else { return XCTFail("the tool call's own timestamp dates the verdict") }
     }
 
@@ -359,7 +380,7 @@ final class SessionActivityTests: XCTestCase {
         // and the mtime. A prompt submitted two hours ago whose turn ended in
         // prose two hours ago is finished, however recently the file moved.
         let tail = [timestamped(assistant(text: "Done."), agoSeconds: 7200)]
-        guard case .blocked = SessionActivity.classify(
+        guard case .stalled = SessionActivity.classify(
             tail: tail, modified: warm,
             boundary: boundary(.userPromptSubmit, agoSeconds: 7200))
         else { return XCTFail("a fresh mtime must not re-arm a two-hour-old boundary") }

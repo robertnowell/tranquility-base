@@ -16,8 +16,26 @@ public enum SessionActivity: Equatable, Sendable {
     /// The agent has work in hand: a prompt it has not answered, a tool call
     /// in flight, or a turn still being written.
     case working
-    /// The agent stopped on an error it cannot get past on its own.
+    /// The agent stopped on an error it cannot get past on its own. A FACT
+    /// read from the file — the transcript says so in as many words.
     case blocked(reason: String)
+    /// The file implies a turn is open and nothing has been written to it for
+    /// `stalled`. An INFERENCE from silence, and split out of `blocked` on
+    /// 18 Aug because the two must not be believed equally.
+    ///
+    /// Measured that evening on three amber rows Robert called wrong: two of
+    /// them (`59181c6d`, `b18ebb61`) had a real typed prompt as their last
+    /// conversational entry and nothing after it for four hours — so the file
+    /// says "stalled" and means it — while the PROCESS reported `idle` for
+    /// both. The prompt was sitting unsent in the composer; Claude Code had
+    /// already written it. The file cannot see that and the process can.
+    ///
+    /// So an error stands on its own evidence and this does not: a stall is
+    /// the absence of writing, and "is this agent actually doing anything" is
+    /// the one question the process answers better than the transcript. See
+    /// the lamp mapping, which lets `idle` and `busy` overrule this and never
+    /// overrule `blocked`.
+    case stalled(reason: String)
     /// Alive, turn complete, nothing in flight.
     case idle
 
@@ -311,7 +329,7 @@ public enum SessionActivity: Equatable, Sendable {
         guard let observed else { return .idle }
         let silence = now.timeIntervalSince(observed)
         guard silence > stalled else { return .working }
-        return .blocked(reason: "silent for \(spoken(silence)) — no output since it started this")
+        return .stalled(reason: "silent for \(spoken(silence)) — no output since it started this")
     }
 
     /// A duration a row can carry in its reason column, in the units a person
@@ -357,7 +375,11 @@ extension SessionActivity {
     /// The short reason a blocked row shows, in the row's own width: the
     /// first clause of the error, without the instructions that follow it.
     public var shortReason: String? {
-        guard case .blocked(let reason) = self else { return nil }
+        let reason: String
+        switch self {
+        case .blocked(let r), .stalled(let r): reason = r
+        case .working, .idle: return nil
+        }
         let firstSentence = reason.split(separator: ".").first.map(String.init) ?? reason
         return firstSentence
             .replacingOccurrences(of: "You've ", with: "")
