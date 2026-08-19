@@ -44,6 +44,63 @@ if [ -n "${VOICE_LOOP_MARKER:-}" ]; then
   exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# RECEIPT (deterministic). `gh pr create` prints the URL of the pull request it
+# just made. That line is the only unambiguous record of the act, and this hook
+# already sees every Bash call, so it is written down here and nowhere else.
+#
+# Three earlier mechanisms tried to work a pull request out of something
+# adjacent — prose the summariser copied, prose a regex read, the branch the
+# session was on — and each failed in a way the one before it could not see.
+# The last is the sharpest: a session whose turns touch the main checkout and
+# three worktrees has no single branch, and the branch it records is wherever
+# its final shell command happened to leave it. The turn that opened
+# `fix/the-cli-primes-the-hub` recorded `main`, because its last command was a
+# `cd` to poll a deploy log.
+#
+# A receipt cannot do that. It is written by the command that did the thing.
+python3 - "$PAYLOAD" <<'PY' 2>/dev/null || true
+import json, os, re, sys, time
+
+try:
+    p = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(0)
+
+session = p.get("session_id") or ""
+if not session or not re.fullmatch(r"[0-9a-fA-F-]{1,64}", session):
+    sys.exit(0)
+
+command = (p.get("tool_input") or {}).get("command") or ""
+# `gh pr create` only. `gh pr view`, `gh pr list` and a merge are all about a
+# pull request that already exists, and this file records the moment one comes
+# into being — once, by the session that made it.
+if not re.search(r"\bgh\s+pr\s+create\b", command):
+    sys.exit(0)
+
+# The URL comes from the OUTPUT, never from the command. A command can name a
+# branch, a title, a body full of prose; only the response carries the address
+# of the thing that now exists.
+response = p.get("tool_response")
+if isinstance(response, dict):
+    text = " ".join(str(response.get(k) or "") for k in ("stdout", "output", "stderr"))
+elif isinstance(response, list):
+    text = " ".join(str(x) for x in response)
+else:
+    text = str(response or "")
+
+urls = re.findall(r"https://[A-Za-z0-9.\-]+/[A-Za-z0-9._\-]+/[A-Za-z0-9._\-]+/pull/[0-9]+", text)
+if not urls:
+    sys.exit(0)
+
+root = os.path.expanduser("~/Library/Application Support/VoiceDispatch/pullrequests")
+os.makedirs(root, exist_ok=True)
+stamp = int(time.time() * 1000)
+with open(os.path.join(root, session), "a") as fh:
+    for url in dict.fromkeys(urls):
+        fh.write("%d\t%s\n" % (stamp, url))
+PY
+
 read -r SESSION FILE <<EOF
 $(python3 - "$PAYLOAD" <<'PY' 2>/dev/null || true
 import json, sys

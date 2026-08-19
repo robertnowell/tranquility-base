@@ -31,7 +31,7 @@ public enum ArtifactStore {
     /// A session id is a UUID from the harness, but it arrives here from a hook
     /// payload and ends up in a path, so it is checked rather than trusted:
     /// anything but hex and dashes could escape the directory.
-    static func isPlausibleSession(_ id: String) -> Bool {
+    public static func isPlausibleSession(_ id: String) -> Bool {
         !id.isEmpty && id.count <= 64
             && id.allSatisfy { $0.isHexDigit || $0 == "-" }
     }

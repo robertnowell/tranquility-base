@@ -85,6 +85,20 @@ public enum GitHubPullRequests {
         cache.refreshNow(repo: repo, branch: branch)
     }
 
+    /// The state of a pull request we already KNOW is ours, from its receipt.
+    ///
+    /// `gh pr view <url>` rather than `pr list --head <branch>`: there is
+    /// nothing to discover here, only to read. Same snapshot rules — never
+    /// blocks the render.
+    public static func cachedByURL(_ url: String) -> PR? {
+        cache.value(repo: "", branch: url)
+    }
+
+    @discardableResult
+    public static func primeByURL(_ url: String) -> PR? {
+        cache.refreshNow(repo: "", branch: url)
+    }
+
     static let cache = Cache()
 
     final class Cache: @unchecked Sendable {
@@ -96,7 +110,10 @@ public enum GitHubPullRequests {
         /// that never had one, on every render.
         private var entries: [String: (pr: PR?, at: Date)] = [:]
         private var inFlight: Set<String> = []
-        var fetch: @Sendable (String, String) -> PR? = GitHubPullRequests.run
+        var fetch: @Sendable (String, String) -> PR? = { repo, key in
+            repo.isEmpty ? GitHubPullRequests.view(url: key)
+                         : GitHubPullRequests.run(repo: repo, branch: key)
+        }
 
         init(maxAge: TimeInterval = 90) { self.maxAge = maxAge }
 
@@ -172,6 +189,27 @@ public enum GitHubPullRequests {
     /// page. Silence is the correct answer for all three.
     static func isAskable(_ branch: String) -> Bool {
         !["HEAD", "main", "master", "trunk"].contains(branch)
+    }
+
+    /// One pull request by URL. The receipt already said which one; this only
+    /// asks how it is doing.
+    static func view(url: String) -> PR? {
+        guard let gh = executable, PullRequestStore.isPullRequestURL(url) else { return nil }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: gh)
+        task.arguments = ["pr", "view", url,
+                          "--json", "number,title,state,url,reviewDecision,reviews"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do { try task.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard task.terminationStatus == 0 else { return nil }
+        // `pr view` returns an object where `pr list` returns an array.
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return parse(try! JSONSerialization.data(withJSONObject: [obj]))
     }
 
     static func parse(_ data: Data) -> PR? {
