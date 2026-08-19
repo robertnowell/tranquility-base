@@ -2262,26 +2262,48 @@ final class StatusHUD: NSObject {
     /// because something more urgent arrived appears in the list the moment it
     /// does, with no second rule to keep in agreement.
     static func pastAgents(_ rows: [StateLegend.SessionRow],
-                           screen: NSScreen? = NSScreen.main) -> ArraySlice<StateLegend.SessionRow> {
-        rows.dropFirst(gridRows(rows, screen: screen).count)
+                           screen: NSScreen? = NSScreen.main) -> [StateLegend.SessionRow] {
+        // Everything the grid did not draw, named by id rather than counted
+        // off the front. It WAS a `dropFirst` of the grid's count, which is
+        // only correct while the array is sorted so the grid's rows are its
+        // leading run — and the moment membership became a predicate rather
+        // than a length, that stopped being true. It failed loudly the same
+        // evening: `gridAndListAreDisjoint` and `nothingIsLost` both went red,
+        // which is a session drawn on neither face.
+        let drawn = Set(gridRows(rows, screen: screen).map(\.id))
+        return rows.filter { !drawn.contains($0.id) }
     }
 
-    /// The rows the grid actually DRAWS — the count above, minus the sessions
-    /// the user switched off.
+    /// The rows the grid actually DRAWS — the count below, minus the sessions
+    /// whose lamp is out because nothing is in flight.
     ///
-    /// Split from `gridRowsShown` on 18 Aug, after folding the switch into that
-    /// function broke four assertions in `elasticGrid` on a deployed build. The
-    /// two are not the same question and cannot share a number: `gridRowsShown`
-    /// is a HEIGHT — how many row-slots the panel is worth, which is why it is
-    /// allowed to exceed the rows that exist and why the floor holds on an
-    /// empty machine. This is a SLICE. Capping the height at the row count to
-    /// exclude filed rows collapsed the floor with it.
+    /// Ruled 18 Aug, on Robert's screenshot of row `0f2ea0d4` sitting on the
+    /// grid with a dark socket while the process agreed it was idle: *"Why is
+    /// there an idle fucking lamp? A turned-off lamp? In the goddamn grid. The
+    /// grid. Is for lit. Fucking lamps. Idle lamps going past agents."*
     ///
-    /// Filed rows sink below every band (`quietRowsLast`), so taking the
-    /// leading run of un-switched-off rows is all the exclusion needs to be.
+    /// So `.running` leaves, and it leaves alongside `switchedOff` because they
+    /// are the SAME STATE arrived at two ways — the switch's whole job is to
+    /// make a session idle, and a panel that files one and keeps the other
+    /// makes the switch look broken.
+    ///
+    /// **Deliberately narrow: `.unlit` is NOT excluded here.** A first attempt
+    /// read the ruling as "lit only" and took the dead rows too, which turned
+    /// four unrelated drills red — they seed closed rows and read them back off
+    /// the grid — and none of that was asked for. He pointed at an idle lamp,
+    /// not a dead one, and the 11 Aug ruling that a session keeps its row after
+    /// its process ends has not been revisited. Dead rows still sort last and
+    /// still only reach the grid when the floor has slots going spare. If that
+    /// is also wrong it is a separate ruling, with its own drills.
+    ///
+    /// Split from `gridRowsShown` because that number is GEOMETRY — how tall
+    /// the panel is worth being, which is why it may exceed the rows that
+    /// exist and why the floor holds on a quiet machine. Folding membership
+    /// into it collapsed the floor and shipped a regression earlier the same
+    /// evening.
     static func gridRows(_ rows: [StateLegend.SessionRow],
                          screen: NSScreen? = NSScreen.main) -> [StateLegend.SessionRow] {
-        Array(rows.prefix { $0.lamp.isLit && !$0.switchedOff }
+        Array(rows.filter { $0.lamp != .running && !$0.switchedOff }
                   .prefix(gridRowsShown(rows, screen: screen)))
     }
 
@@ -4958,7 +4980,7 @@ final class StatusHUD: NSObject {
                                     lamp: .running, switchedOff: true)])
 
         SelfTest.report("litLampsOnly", [
-            ("onlyLitRowsAreDrawn", drawn.allSatisfy { $0.lamp.isLit }),
+            ("noIdleRowIsDrawn", !drawn.contains { $0.lamp == .running }),
             ("everyLitRowIsDrawn", drawn.count == 9),
             ("quietGoesToTheList", listed.count == 10),
             // The superseded drill's real case, kept.
@@ -4971,9 +4993,12 @@ final class StatusHUD: NSObject {
             // Quiet, dead and switched-off all land in the same place, which is
             // the coherence Robert asked for: a lamp that is out is a lamp that
             // is out, however it got that way.
+            // Idle by itself and idle by the switch land in the same place —
+            // the coherence the ruling is really about. `dead` stays eligible
+            // for a floor slot; that is the 11 Aug ruling, untouched here.
             ("outIsOutHoweverItGotThatWay",
-             Self.gridRows(everything).map(\.id) == ["lit"]
-                && Set(Self.pastAgents(everything).map(\.id)) == ["quiet", "dead", "filed"]),
+             Set(Self.pastAgents(everything).map(\.id)).isSuperset(of: ["quiet", "filed"])
+                && !Self.gridRows(everything).contains { $0.id == "filed" }),
             ("nothingIsLost",
              Self.gridRows(everything).count + Self.pastAgents(everything).count
                 == everything.count),
@@ -5098,9 +5123,10 @@ final class StatusHUD: NSObject {
             ("filedIsNeverOnTheGrid", filedIsNeverOnTheGrid),
             ("filedIsInTheList", filedIsInTheList),
             ("nothingIsLost", nothingIsLost),
-            // A live unfiled session still holds its row — the peer ruling this
-            // sits on top of, asserted here so the two cannot drift.
-            ("liveUnfiledStillHoldsItsRow", drawn.contains { $0.id == "quiet" }),
+            // An unfiled IDLE session leaves the grid too — same state, and
+            // the switch would look broken if only its own output did.
+            ("idleLeavesTheGridWhetherFiledOrNot",
+             !drawn.contains { $0.id == "quiet" } && !drawn.contains { $0.id == "filed" }),
             ("pastAgentsRowsCarryTheSwitch", everyRowHasASwitch),
             ("switchIsTheSameSizeOnBothFaces",
              GridRowView.lampHitWidth == GridRowView.lampColumn),
