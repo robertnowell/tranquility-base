@@ -310,7 +310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recorder.onWedge = { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.lastStatusLine = "microphone suspended — capture stack wedged, heal scheduled"
+                self.lastStatusLine = "microphone suspended, capture stack wedged, heal scheduled"
                 self.rebuildMenu()
             }
         }
@@ -584,7 +584,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Permissions.log("terminate: \(name) NOT ended — \(why)")
                 case .survived:
                     Permissions.log("terminate: \(name) (pid \(live.pid)) survived "
-                        + "SIGTERM and SIGKILL — it is wedged, and nothing else can be sent")
+                        + "SIGTERM and SIGKILL, it is wedged, and nothing else can be sent")
                 case .alreadyGone, .died:
                     break   // SessionTermination.trace has already said it
                 }
@@ -919,7 +919,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .repaired(let rewired, let added):
                 Permissions.log("startup: hooks repaired — "
                     + "\(rewired) rewired, \(added) added")
-                hud.note("Hooks were out of date — fixed. "
+                hud.note("Hooks were out of date, fixed. "
                     + "New Claude Code sessions pick them up automatically.")
             case .unavailable(let reason):
                 Permissions.log("startup: hooks NOT repaired — \(reason)")
@@ -1202,7 +1202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // 05 Aug — "two further states, all saying different things").
                 case .queued:
                     hud.showReceipt(.queued)
-                    lastStatusLine = "queued in \(label) — sends when its turn finishes"
+                    lastStatusLine = "queued in \(label), sends when its turn finishes"
                     Permissions.log("send: queued in \(label)")
                 case .dispatched:
                     hud.showReceipt(.sent)
@@ -1214,7 +1214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // StateLegend.plainWords(for:).
                     Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult(
-                        "\(label) can't take this yet — \(StateLegend.plainWords(for: readiness)). "
+                        "\(label) can't take this yet, \(StateLegend.plainWords(for: readiness)). "
                         + "Your words are kept. Try again in a moment.")
                 case .dispatchFailed(.verificationTimedOut, _):
                     // Documented as ambiguous and never auto-retried: only a human
@@ -1230,7 +1230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Earcons.play(.needsYou, gate: earconGate())
                     let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
                     hud.showResult(copied
-                        ? "\(label)'s tab is gone — copied your words to the clipboard."
+                        ? "\(label)'s tab is gone, copied your words to the clipboard."
                         : "\(label)'s tab is gone. Your words are kept in the log.")
                 case .dispatchFailed(let failure, _):
                     Earcons.play(.needsYou, gate: earconGate())
@@ -1457,7 +1457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
                 aux: storedLamp.reason ?? StateLegend.shortId(stored.sessionId),
-                lamp: storedLamp.lamp))
+                lamp: storedLamp.lamp, detail: storedLamp.detail))
         }
         // Live sessions with no stored events yet: nothing to rank them by,
         // so they close the live half of the grid.
@@ -1483,7 +1483,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     liveName: Self.tabTitle(transcriptPath: nil, live: live),
                     callsign: nil, fallback: "session"),
                 aux: liveLamp.reason ?? StateLegend.shortId(live.sessionId),
-                lamp: liveLamp.lamp))
+                lamp: liveLamp.lamp, detail: liveLamp.detail))
         }
         // And the sessions that are not awake (ruled 11 Aug). Everything above
         // this line is enumerated from PROCESSES, which is why a machine
@@ -1511,7 +1511,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 aux: found.activity?.shortReason
                     ?? StateLegend.shortId(found.sessionId),
                 lamp: .unlit,
-                revivable: found.revivable))
+                revivable: found.revivable,
+                detail: found.activity?.fullReason))
         }
         // The user's own switch, applied last and to every band at once.
         //
@@ -1580,7 +1581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// derived from two sources is the same class of bug as two sources for
     /// the lamp itself.
     private func lampAndReason(for activity: SessionActivity?, sessionId: String,
-                               live: LiveSession?) -> (lamp: StateLegend.Lamp, reason: String?) {
+                               live: LiveSession?) -> (lamp: StateLegend.Lamp, reason: String?, detail: String?) {
         // Blocked on you, said by the process itself. Nothing in a transcript
         // outranks this — including a stale `working` read from a tool call
         // that IS the prompt the session is blocked on.
@@ -1589,19 +1590,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // is holding for an answer; that is the whole of why the lamp is lit,
         // and whatever the file was about to say about silence is a worse
         // description of the same moment.
-        if live?.status == "waiting" { return (.fault, "asking you a question") }
-        let observed: (StateLegend.Lamp, String?) = {
+        if live?.status == "waiting" {
+            return (.fault, "asking you a question",
+                    "The agent has asked you something and is holding for an answer.")
+        }
+        let observed: (StateLegend.Lamp, String?, String?) = {
             switch activity {
             case .working:
                 // The file says a turn is in flight. If the process says it is
                 // idle, the turn ended in a shape the file cannot express — an
                 // unanswered prompt with no turn-end marker, the 17:19 case.
                 // The process is right and it costs nothing to believe it.
-                return live?.status == "idle" ? (.running, nil) : (.working, nil)
+                return live?.status == "idle" ? (.running, nil, nil) : (.working, nil, nil)
             // An ERROR is a fact the transcript states outright, and no process
             // status contradicts it: a session sitting on a usage limit is idle
             // by every measure the API has.
-            case .blocked: return (.fault, activity?.shortReason)
+            case .blocked: return (.fault, activity?.shortReason, activity?.fullReason)
             // A STALL is an inference from silence, and silence is exactly what
             // a running process can speak to. Measured 18 Aug: `59181c6d` and
             // `b18ebb61` both had a real typed prompt as their last entry and
@@ -1610,21 +1614,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // of these cases, the agent did return."
             case .stalled:
                 switch live?.status {
-                case "idle": return (.running, nil)
-                case "busy": return (.working, nil)
+                case "idle": return (.running, nil, nil)
+                case "busy": return (.working, nil, nil)
                 // No process at all, or a status we do not recognise: the file
                 // is the only witness left and it says silence. Amber stands.
-                default: return (.fault, activity?.shortReason)
+                default: return (.fault, activity?.shortReason, activity?.fullReason)
                 }
             case .idle, nil:
                 // And the mirror: the file has nothing to say, the process says
                 // it is chewing. Blue rather than quiet.
-                return live?.status == "busy" ? (.working, nil) : (.running, nil)
+                return live?.status == "busy" ? (.working, nil, nil) : (.running, nil, nil)
             }
         }()
         guard observed.0 == .running, delivering.isInFlight(sessionId)
         else { return observed }
-        return (.working, nil)
+        return (.working, nil, nil)
     }
 
     /// The tab's string for a session, or nil while it has none: the
@@ -1875,7 +1879,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if case .transcribing = hud.state {
                 replyGeneration += 1        // orphans whatever is in flight
                 Permissions.log("⌃⇧: cancelled the transcription in flight")
-                lastStatusLine = "transcription cancelled — audio kept"
+                lastStatusLine = "transcription cancelled, audio kept"
                 hud.endCapture(because: "transcription cancelled by chord")
                 showIdleGrid(note: "Transcription cancelled. Audio kept.")
                 return
@@ -1942,7 +1946,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard micGranted else { return }
                 if recorder.isRecording {
                     Permissions.log("hands-free: refused, mic already live")
-                    lastStatusLine = "mic already live — tap ⌥ to send"
+                    lastStatusLine = "mic already live, tap ⌥ to send"
                     return
                 }
                 // ⌥⌥ from the read-back is Don't send, then ⌥⌥ (ruled 18 Aug).
@@ -2215,7 +2219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // stomped-pill incident left the recorder live behind an idle
                 // facade and every press landed here, invisibly.
                 Permissions.log("reply: refused, mic already live")
-                lastStatusLine = "mic already live — tap ⌥ to send"
+                lastStatusLine = "mic already live, tap ⌥ to send"
                 return
             }
             // Open issue #7 is NOT wired here, deliberately. `canStartReply` as a
@@ -2639,7 +2643,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 announceNext(only: session)
                 if !micGranted {
                     // Said once, on arrival, rather than discovered at the press.
-                    hud.note("The microphone isn't granted — Settings ▸ Privacy ▸ "
+                    hud.note("The microphone isn't granted: Settings ▸ Privacy ▸ "
                              + "Microphone before you can reply.")
                 }
             case "home":
@@ -2904,7 +2908,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if let launch = recordingLaunch {
                         recordingLaunch = nil
                         Permissions.log("send: \(launch.label) never registered; nothing sent")
-                        hud.showResult("\(launch.label) never came up — nothing was sent. "
+                        hud.showResult("\(launch.label) never came up, nothing was sent. "
                                        + "Your words are kept; check Terminal for a prompt.")
                     } else {
                         Permissions.log("send: recording has no captured address; refusing")
@@ -3004,8 +3008,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .sessionNotReady(let readiness):
                     // Sanctioned change (b): plain words for the actual condition.
                     let why = StateLegend.plainWords(for: readiness)
-                    lastStatusLine = "can't send — \(why); audio kept"
-                    hud.showResult("Can't send yet — \(why). Recording kept. Try again shortly.")
+                    lastStatusLine = "can't send, \(why); audio kept"
+                    hud.showResult("Can't send yet, \(why). Recording kept. Try again shortly.")
                 case .transcriptionFailed:
                     lastStatusLine = "couldn't transcribe, audio kept"
                     hud.showResult("Couldn't transcribe that. The audio is saved. Retry from the menu.")
@@ -3019,10 +3023,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // This path painted nothing at all before — a silently lost
                     // reply. Same rescue as the confirm path: clipboard + card.
                     let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
-                    lastStatusLine = copied ? "tab gone — words on the clipboard"
-                                            : "tab gone — words kept in the log"
+                    lastStatusLine = copied ? "tab gone, words on the clipboard"
+                                            : "tab gone, words kept in the log"
                     hud.showResult(copied
-                        ? "That tab is gone — copied your words to the clipboard."
+                        ? "That tab is gone, copied your words to the clipboard."
                         : "That tab is gone. Your words are kept in the log.")
                 case .dispatchFailed(let failure, _):
                     lastStatusLine = "send failed: \(failure), audio kept"
@@ -3059,14 +3063,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the open loop has retreated there and STILL failed, telling the user to
         // switch to the device that just failed is worse than no advice.
         if recorder.fellBackToBuiltIn {
-            return "Couldn't open the built-in microphone either — try again. (\(error))"
+            return "Couldn't open the built-in microphone either, try again. (\(error))"
         }
         if let device = AudioInputDevice.resolve(), device.isBluetooth {
             return "Couldn't open \(device.name). Bluetooth mics change their own "
-                + "sample rate when they open — switch to the built-in mic under "
+                + "sample rate when they open, switch to the built-in mic under "
                 + "Microphone in the menu bar."
         }
-        return "Couldn't open the microphone — try again. (\(error))"
+        return "Couldn't open the microphone, try again. (\(error))"
     }
 
     @objc private func chooseInput(_ sender: NSMenuItem) {

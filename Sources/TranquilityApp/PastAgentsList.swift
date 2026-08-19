@@ -262,6 +262,11 @@ final class PastAgentsList: NSView {
         onTerminate?(id, item.row.name)
     }
 
+    /// For the copy drill: what the pointer would show on each row.
+    var toolTipsForTesting: [String] {
+        stack.arrangedSubviews.compactMap { ($0 as? PastRowView)?.toolTip }
+    }
+
     /// For the lamp drill: which rows carry a switch in the lamp column.
     /// Asserted rather than assumed, because "every row" IS the ruling — a
     /// target on some rows is exactly what made the column unlearnable.
@@ -412,6 +417,10 @@ final class PastRowView: NSControl {
         identifier = NSUserInterfaceItemIdentifier(item.row.id)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
+        // The same hover as the grid, through the same function: a row that
+        // said one thing on one face and another on the other would be worse
+        // than one that said nothing.
+        toolTip = StateLegend.hoverText(for: item.row)
 
         highlight.wantsLayer = true
         highlight.layer?.cornerRadius = 6
