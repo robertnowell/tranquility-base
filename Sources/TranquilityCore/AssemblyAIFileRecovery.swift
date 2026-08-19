@@ -134,6 +134,12 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
             url: URL(string: "https://api.assemblyai.com/v2/transcript/\(transcriptId)")!)
         poll.setValue(key, forHTTPHeaderField: "Authorization")
         while Date() < deadline {
+            // Under cancellation (this rung lost the chain's floor race) both
+            // awaits below throw INSTANTLY, and their try? turns that into
+            // `continue` — a hot spin to the deadline. Leave honestly instead.
+            if Task.isCancelled {
+                throw TranscriptionFailure.providerUnavailable("cancelled while polling")
+            }
             try? await Task.sleep(nanoseconds: UInt64(Self.pollInterval * 1_000_000_000))
             guard let (data, _) = try? await URLSession.shared.data(for: poll),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]

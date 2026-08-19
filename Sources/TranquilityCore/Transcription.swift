@@ -309,7 +309,15 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
         if !lexicon.isEmpty { request.contextualStrings = lexicon }
 
-        return try await withCheckedThrowingContinuation { continuation in
+        // SFSpeech knows nothing about Swift cancellation, and this rung now
+        // runs in the chain's floor race — when the ordered lane wins, the
+        // group DRAINS this lane, so a recogniser that ignores cancel would
+        // hold the winner's result hostage for up to a whole pass. The handler
+        // cancels the recognition task, whose error callback resumes the
+        // continuation through the same Resumed guard as every other path.
+        let running = CancellableRecognition()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
             let resumed = Resumed()
 
             // Belt as well as braces. The guard above closes the failure we have
@@ -341,7 +349,7 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
             // to keep two. Measured on the offending file: one non-final callback
             // spanning 0.87–18.81s with 29 segments, then the final one with 6.
             let collected = Utterances()
-            recognizer.recognitionTask(with: request) { result, error in
+            let task = recognizer.recognitionTask(with: request) { result, error in
                 if let error {
                     if resumed.claim() {
                         continuation.resume(throwing: TranscriptionFailure.providerUnavailable("\(error)"))
@@ -378,6 +386,35 @@ public struct AppleSpeechRecovery: RecoveryTranscriptionProvider {
                     continuation.resume(returning: collected)
                 }
             }
+            running.begin(task)
+            }
+        } onCancel: {
+            running.cancelNow()
+        }
+    }
+
+    /// Holds the live `SFSpeechRecognitionTask` so a Swift cancellation can
+    /// reach it from off-continuation. The two orders both work: begin-then-
+    /// cancel cancels the held task; cancel-then-begin cancels at begin.
+    private final class CancellableRecognition: @unchecked Sendable {
+        private let lock = NSLock()
+        private var task: SFSpeechRecognitionTask?
+        private var cancelled = false
+
+        func begin(_ task: SFSpeechRecognitionTask) {
+            lock.lock()
+            self.task = task
+            let already = cancelled
+            lock.unlock()
+            if already { task.cancel() }
+        }
+
+        func cancelNow() {
+            lock.lock()
+            cancelled = true
+            let running = task
+            lock.unlock()
+            running?.cancel()
         }
     }
 

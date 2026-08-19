@@ -20,12 +20,24 @@ public struct RecoveryChain: Sendable {
     public let maxAttemptsPerProvider: Int
     /// Off the critical path — the user is not waiting — so backoff can be generous.
     public let backoff: [TimeInterval]
+    /// How long the ordered rungs may hold the chain before the LAST provider —
+    /// the on-device floor — starts alongside them; the first success wins and
+    /// the loser is cancelled. Nil disables the race.
+    ///
+    /// Earned 19 Aug: a 2m46s reply sat on a silently stalled OpenAI upload
+    /// while an on-device recognizer that answers such a file in well under a
+    /// minute waited its turn — a turn that, at 180s timeout × 2 attempts plus
+    /// backoff, was up to ~6 minutes away. The user gave up at 68s. The rung
+    /// order still encodes quality (cloud answers win any race they can); the
+    /// budget only bounds how long quality is allowed to cost availability.
+    public let floorAfter: TimeInterval?
 
     public init(
         providers: [any RecoveryTranscriptionProvider]? = nil,
         maxAttemptsPerProvider: Int = 2,
         backoff: [TimeInterval] = [2, 8, 20],
-        lexicon: [String] = []
+        lexicon: [String] = [],
+        floorAfter: TimeInterval? = 30
     ) {
         // Cloud first for quality, on-device last because it can never be
         // unavailable — and a second, independent cloud vendor between them,
@@ -41,6 +53,7 @@ public struct RecoveryChain: Sendable {
                 AppleSpeechRecovery(lexicon: lexicon)]
         self.maxAttemptsPerProvider = maxAttemptsPerProvider
         self.backoff = backoff
+        self.floorAfter = floorAfter
     }
 
     public struct Outcome: Sendable {
@@ -51,10 +64,84 @@ public struct RecoveryChain: Sendable {
     }
 
     public func transcribe(fileAt url: URL) async -> Outcome {
+        // The race exists only when there is a floor to race: a chain pinned
+        // to a single provider (tbase's --*-only probes) keeps the exact
+        // sequential behaviour, as does an unconfigured floor and floorAfter
+        // nil. The floor is BY POSITION the last provider — the same contract
+        // the init comment states (on-device last because it can never be
+        // unavailable) — not by name, so a test chain of fakes races too.
+        guard let floorAfter, providers.count > 1,
+              let floor = providers.last, floor.isConfigured
+        else { return await run(providers, fileAt: url) }
+
+        let ordered = Array(providers.dropLast())
+        struct Lane: Sendable {
+            let isFloor: Bool
+            let outcome: Outcome?  // nil: the floor was cancelled before it began
+        }
+        // Spent when the ordered ladder finishes empty-handed: the floor's
+        // wait exists to give quality a head start, and a ladder with nothing
+        // left to say has no start worth protecting — the floor goes now, not
+        // at the budget.
+        let ladderSpent = SpentFlag()
+        return await withTaskGroup(of: Lane.self) { group in
+            group.addTask {
+                let outcome = await run(ordered, fileAt: url)
+                if !outcome.succeeded { ladderSpent.spend() }
+                return Lane(isFloor: false, outcome: outcome)
+            }
+            group.addTask {
+                let deadline = Date().addingTimeInterval(floorAfter)
+                while Date() < deadline, !ladderSpent.isSpent {
+                    do { try await Task.sleep(nanoseconds: 20_000_000) }
+                    catch { return Lane(isFloor: true, outcome: nil) }  // ordered lane won
+                }
+                if Task.isCancelled { return Lane(isFloor: true, outcome: nil) }
+                return Lane(isFloor: true, outcome: await run([floor], fileAt: url))
+            }
+            // First success cancels the other lane; the group still drains it,
+            // which is why every rung must unwind promptly under cancellation
+            // (URLSession throws, the poll loops check, the recogniser's task
+            // is cancelled by recognizePass's cancellation handler).
+            var finished: [Lane] = []
+            while let lane = await group.next() {
+                finished.append(lane)
+                if lane.outcome?.succeeded == true { group.cancelAll() }
+            }
+            let attempts = finished.compactMap(\.outcome).flatMap(\.attempts)
+            if let winner = finished.first(where: { $0.outcome?.succeeded == true })?.outcome {
+                return Outcome(result: winner.result, attempts: attempts, lastFailure: nil)
+            }
+            // Both lanes failed: the ordered lane's failure is the one that
+            // names the better provider's reason, so it leads.
+            let failure = finished.first { !$0.isFloor }?.outcome?.lastFailure
+                ?? finished.compactMap { $0.outcome?.lastFailure }.first
+            return Outcome(result: nil, attempts: attempts, lastFailure: failure)
+        }
+    }
+
+    /// One bit, set once, read across the race's lanes.
+    private final class SpentFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var spent = false
+        var isSpent: Bool { lock.lock(); defer { lock.unlock() }; return spent }
+        func spend() { lock.lock(); spent = true; lock.unlock() }
+    }
+
+    /// The sequential ladder, exactly as it always ran — one lane of the race.
+    private func run(
+        _ providers: [any RecoveryTranscriptionProvider], fileAt url: URL
+    ) async -> Outcome {
         var attempts: [String] = []
         var lastFailure: TranscriptionFailure?
 
         for provider in providers {
+            // A cancelled lane lost the race; burning through its remaining
+            // rungs would be network work whose answer is already discarded.
+            if Task.isCancelled {
+                attempts.append("cancelled before \(provider.name)")
+                break
+            }
             guard provider.isConfigured else {
                 attempts.append("\(provider.name): not configured")
                 continue
@@ -135,6 +222,10 @@ extension QueueStore {
         }
     }
 
+    /// `utteranceId` pre-mints the row's id (default: random). It exists for the
+    /// panel's transcription retry: the caller must know which row an attempt
+    /// owns BEFORE the attempt resolves, or a superseded attempt's row can
+    /// neither be found nor retired.
     @discardableResult
     public func captureAndTranscribe(
         pcm16: Data,
@@ -143,9 +234,11 @@ extension QueueStore {
         chain: RecoveryChain = RecoveryChain(),
         eventId: String? = nil,
         streamed: TranscriptionResult? = nil,
-        preWritten: URL? = nil
+        preWritten: URL? = nil,
+        utteranceId: String? = nil
     ) async throws -> Utterance {
-        var utterance = Utterance(eventId: eventId, status: .recorded)
+        var utterance = Utterance(id: utteranceId ?? UUID().uuidString,
+                                  eventId: eventId, status: .recorded)
 
         // ── durability floor ──────────────────────────────────────────────
         // `preWritten` is a capture that was written to disk AS IT WAS SPOKEN
@@ -235,6 +328,18 @@ extension QueueStore {
         }
         try update(utterance: utterance)
         return utterance
+    }
+
+    /// Retire one utterance from every future sweep and pane, keeping the row
+    /// as the record of what happened. The panel's transcription retry uses
+    /// this on the attempt it superseded — without it every retry left a
+    /// transcriptless twin of the same recording in the recent-audio list.
+    public func discardUtterance(id: String, because reason: String) throws {
+        guard var utterance = try utterances(limit: 10_000).first(where: { $0.id == id })
+        else { return }
+        utterance.status = .discarded
+        utterance.discardedReason = reason
+        try update(utterance: utterance)
     }
 
     /// Retry every utterance whose transcription failed, from disk.
