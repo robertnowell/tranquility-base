@@ -60,26 +60,36 @@ public struct SessionBrief: Codable, Sendable, Equatable {
     // Deterministic — never written by the model.
     public var branch: String?
 
-    // There is no `pullRequest` field, and that is deliberate.
-    //
-    // Looking one up from the branch announced "pull request 2023 is merged" for a
-    // PR merged months earlier whose branch was still checked out — true, unrelated
-    // to the work, and indistinguishable from a hallucination. The fix is not a
-    // better query. It is noticing that the session already tells us: across every
-    // session here that ran `gh pr create`, the assistant's own next message named
-    // the PR correctly, 7 for 7. That text is already the summarizer's input.
-    //
-    // So a PR is spoken exactly when the session spoke about it. That is
-    // attributable by construction, needs no `gh`, no GitHub, no worktree
-    // convention, and no state — and it works the same for Codex or anything else
-    // that ends a turn with a sentence about what it just did.
+    /// The pull requests this turn's own text named, copied verbatim (ruled
+    /// 18 Aug: "the PR should absolutely be in the Hub"). A list, because one
+    /// turn can open two.
+    ///
+    /// What is still forbidden is the LOOKUP, and that is the whole of the old
+    /// rule. Resolving a PR from the branch announced "pull request 2023 is
+    /// merged" for a PR merged months earlier whose branch was still checked
+    /// out — true, unrelated to the work, and indistinguishable from a
+    /// hallucination. The fix was never a better query. It was noticing that
+    /// the session already tells us: across every session here that ran
+    /// `gh pr create`, the assistant's own next message named the PR
+    /// correctly, 7 for 7, and that text is already the summarizer's input.
+    ///
+    /// So a PR is spoken, and now filed, exactly when the session spoke about
+    /// it. Attributable by construction; needs no `gh`, no GitHub, no worktree
+    /// convention, and no state — and it works the same for Codex or anything
+    /// else that ends a turn with a sentence about what it just did.
+    ///
+    /// The field carries no STATE. Open, merged, closed is a fact about the
+    /// world at a moment, and this app has already learned once what it costs
+    /// to assert one of those from a stale read. The hub links; GitHub knows.
+    public var pullRequests: [String]?
 
     public init(
         topic: String, goal: String? = nil, happened: String, nextStep: String? = nil,
         question: String? = nil, risk: String? = nil, rationale: String? = nil,
         findings: String? = nil, solution: String? = nil,
         branch: String? = nil, recap: String? = nil, proposal: String? = nil,
-        headline: String? = nil, deck: String? = nil
+        headline: String? = nil, deck: String? = nil,
+        pullRequests: [String]? = nil
     ) {
         self.recap = recap
         self.proposal = proposal
@@ -95,6 +105,7 @@ public struct SessionBrief: Codable, Sendable, Equatable {
         self.findings = findings
         self.solution = solution
         self.branch = branch
+        self.pullRequests = pullRequests
     }
 
     /// The ~12 seconds you actually hear. Topic first so you know which session is
