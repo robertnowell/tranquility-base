@@ -171,8 +171,7 @@ public struct AnthropicSummaryProvider: SummaryProvider {
           "question": "the decision being put to the user, or null",
           "risk":     "a risk worth knowing before deciding, or null",
           "headline": "the agent's page headline: the FINDING, not the topic, 12 words max, or null",
-          "deck":     "the page's standfirst: where things stand and what is left, 25 words max, or null",
-          "pullRequests": ["every pull request URL that appears in the message, copied character for character; [] if none"]
+          "deck":     "the page's standfirst: where things stand and what is left, 25 words max, or null"
         }
 
 
@@ -278,16 +277,6 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         there is one. Both null when the turn was pure plumbing with nothing to \
         promote; the page then falls back to the card fields, which is the floor, \
         not a failure. Like card fields, these may name symbols and paths precisely.
-
-        ── "pullRequests": a copy, not a judgement ──
-
-        Scan the message for pull request URLs and COPY them, character for \
-        character, into the list. Do not shorten one, do not repair one, do not \
-        turn a bare "#117" into a URL, and never construct one from a branch name \
-        or a repository you know: if the message does not contain the URL, the \
-        list does not contain it either. An empty list is the correct and common \
-        answer. You are not being asked whether a pull request exists, only \
-        whether this message printed its address.
 
         Never use an em dash in any field, spoken or displayed (ruled 11 Aug); use a \
         period, comma, or colon and split the sentence.
@@ -457,52 +446,7 @@ public struct AnthropicSummaryProvider: SummaryProvider {
             recap: field("recap"),
             proposal: field("proposal"),
             headline: field("headline"),
-            deck: field("deck"),
-            pullRequests: Self.groundedPRs(obj["pullRequests"],
-                                           in: request.lastAssistantMessage))
-    }
-
-    /// The PR list, kept only where the source actually printed it.
-    ///
-    /// This is the same instrument as `groundDigits` and for the same reason:
-    /// the prompt asks for a COPY, and a copy is checkable against its
-    /// original. It is not a quality filter on a judgement the model made,
-    /// because no judgement was requested. A URL the message does not contain
-    /// is not a wrong answer to "which PR is this" — it is not an answer to
-    /// the question that was asked, and dropping it costs nothing a correct
-    /// model would have produced.
-    static func groundedPRs(_ raw: Any?, in source: String) -> [String]? {
-        var candidates: [String] = []
-        if let list = raw as? [Any] {
-            candidates = list.compactMap { $0 as? String }
-        } else if let one = raw as? String {
-            candidates = [one]
-        }
-        var kept: [String] = []
-        for candidate in candidates {
-            let url = candidate.trimmingCharacters(
-                in: CharacterSet(charactersIn: " \t\n\r\"'<>()[],."))
-            guard !url.isEmpty, url.lowercased() != "null",
-                  isPullRequestURL(url), source.contains(url),
-                  !kept.contains(url) else { continue }
-            kept.append(url)
-        }
-        return kept.isEmpty ? nil : kept
-    }
-
-    /// `<host>/<owner>/<repo>/pull(s)/<number>`, over https. Host-agnostic on
-    /// purpose: GitHub Enterprise and self-hosted forges wear the same path,
-    /// and the substring check above is what actually keeps this honest.
-    static func isPullRequestURL(_ url: String) -> Bool {
-        guard url.hasPrefix("https://") || url.hasPrefix("http://") else { return false }
-        let parts = url.split(separator: "/")
-        guard parts.count >= 5 else { return false }
-        for (i, part) in parts.enumerated() where part == "pull" || part == "pulls" {
-            guard i + 1 < parts.count else { continue }
-            let number = parts[i + 1].prefix { $0.isNumber }
-            if !number.isEmpty { return true }
-        }
-        return false
+            deck: field("deck"))
     }
 }
 
@@ -513,10 +457,8 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 public struct SummarizerChain: Sendable {
     public let providers: [any SummaryProvider]
     public let sanitizer = SpokenTextSanitizer()
-    /// A pull request is copied out of the turn's own text, never looked up —
-    /// the model is asked what the message printed, never whether a PR exists,
-    /// because the second question it would guess at. See
-    /// `AnthropicSummaryProvider.groundedPRs`.
+    /// A pull request is READ out of the turn's own text, never looked up and
+    /// never written by the model. See `PullRequestMentions`.
 
     public init(providers: [any SummaryProvider]? = nil) {
         self.providers = providers ?? [AnthropicSummaryProvider(), DeterministicSummarizer()]
@@ -564,6 +506,17 @@ public struct SummarizerChain: Sendable {
 
         var (brief, providerName) = produced
             ?? (SessionBrief(topic: request.projectLabel, happened: "finished a turn"), "none")
+
+        // The pull requests the turn named, read out of the turn's own text —
+        // deterministic, like `branch`, and applied to EVERY provider including
+        // the floor. Asking the model for this was the first design and it was
+        // nearly inert: it wanted a URL copied verbatim, and assistants write
+        // "PR #117". See PullRequestMentions.
+        brief.pullRequests = {
+            let found = PullRequestMentions.found(in: request.lastAssistantMessage,
+                                                  cwd: request.cwd)
+            return found.isEmpty ? nil : found
+        }()
 
         // Names the source itself used are speakable ("say Klaviyo, not 'an email
         // platform'"); everything identifier-shaped is still stripped.
