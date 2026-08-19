@@ -90,4 +90,66 @@ final class AudioInputDeviceTests: XCTestCase {
                            "\(device.name) cannot be both built-in and Bluetooth")
         }
     }
+
+    // MARK: - The display snapshot (18 Aug)
+
+    /// The whole point: a read that draws must never walk the hardware.
+    ///
+    /// The bound is 5 ms against a live read measured at a median of 34 ms and
+    /// a p99 of 1011 ms, so this is not a threshold sitting next to the thing
+    /// it measures — the two are orders of magnitude apart, which is what makes
+    /// it a drill rather than a coin toss.
+    func testAColdSnapshotReadDoesNotWalkTheHardware() {
+        let cache = AudioInputDevice.DeviceCache()
+        let t0 = Date()
+        let devices = cache.current()
+        let ms = Date().timeIntervalSince(t0) * 1000
+        XCTAssertTrue(devices.isEmpty, "a cold snapshot is empty, never loaded in line")
+        XCTAssertLessThan(ms, 5, "the cold read walked the hardware")
+    }
+
+    /// Empty is a real answer while the first refresh is in flight, and the
+    /// menu is written to survive it: no device name, no Bluetooth warning,
+    /// for one tick.
+    func testAColdResolveIsNilRatherThanAGuess() {
+        let cache = AudioInputDevice.DeviceCache()
+        XCTAssertNil(cache.current().first)
+        XCTAssertEqual(cache.currentDefaultId(), 0)
+    }
+
+    /// After the prime, the snapshot answers with the machine's real devices,
+    /// and agrees with the live read it stands in for.
+    func testThePrimedSnapshotAgreesWithTheLiveRead() throws {
+        let live = AudioInputDevice.allInputs()
+        try XCTSkipIf(live.isEmpty, "no input devices on this machine")
+        AudioInputDevice.primeCache()
+        let cache = AudioInputDevice.DeviceCache()
+        cache.refreshNow()
+        XCTAssertEqual(cache.current().map(\.id), live.map(\.id))
+        XCTAssertEqual(AudioInputDevice.cachedResolve(.builtIn)?.id,
+                       AudioInputDevice.resolve(.builtIn)?.id)
+        XCTAssertEqual(AudioInputDevice.cachedResolve(.systemDefault)?.id,
+                       AudioInputDevice.resolve(.systemDefault)?.id)
+    }
+
+    /// A fresh snapshot claims no refresh, so a poll tick reading it every
+    /// 1.5 s cannot start a walk every 1.5 s — which would move the cost off
+    /// the main actor and leave it on the machine.
+    func testAFreshSnapshotStartsNoSecondWalk() {
+        let cache = AudioInputDevice.DeviceCache(maxAge: 60)
+        cache.refreshNow()
+        let first = cache.current()
+        let second = cache.current()
+        XCTAssertEqual(first.map(\.id), second.map(\.id))
+    }
+
+    /// Reset is the tests' own door, and it must genuinely empty the snapshot —
+    /// a reset that leaves a stamp would make every later drill read stale.
+    func testResetEmptiesTheSnapshot() {
+        let cache = AudioInputDevice.DeviceCache()
+        cache.refreshNow()
+        cache.reset()
+        XCTAssertTrue(cache.current().isEmpty)
+        XCTAssertEqual(cache.currentDefaultId(), 0)
+    }
 }
