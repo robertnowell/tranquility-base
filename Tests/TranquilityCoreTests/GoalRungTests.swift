@@ -136,7 +136,11 @@ extension GoalRungTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
-        let base = Date(timeIntervalSince1970: 1_755_530_000)
+        // Anchored to the cutoff, not a fixed stamp: a goal written before
+        // the template shipped is deliberately not carried, so a drill about
+        // the CARRY has to sit after it.
+        let base = Date(timeIntervalSince1970: Double(QueueStore.goalTemplateEpochMs) / 1000)
+            .addingTimeInterval(60)
         let aim = "fix the lamp so clicking it turns the session off"
 
         try store.saveBrief(SessionBrief(topic: "the lamp", goal: aim, happened: "Found it."),
@@ -161,7 +165,8 @@ extension GoalRungTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
-        let base = Date(timeIntervalSince1970: 1_755_530_000)
+        let base = Date(timeIntervalSince1970: Double(QueueStore.goalTemplateEpochMs) / 1000)
+            .addingTimeInterval(60)
         try store.saveBrief(SessionBrief(topic: "a", goal: "the old aim", happened: "x"),
                             sessionId: "s", eventRowid: 1, provider: "p", callsign: nil, at: base)
         try store.saveBrief(SessionBrief(topic: "b", goal: "the new aim", happened: "y"),
@@ -179,10 +184,11 @@ extension GoalRungTests {
     /// says nothing about the work.
     func testTheInstructionCarriesTheTemplateAndItsWorkedExamples() {
         let system = AnthropicSummaryProvider.systemPrompt(projectLabel: "tranquility base")
-        XCTAssertTrue(system.contains("IN PROJECT X, WE ARE SOLVING PROBLEM Y"))
+        XCTAssertTrue(system.contains("WE ARE [doing X] [to/for Y] IN [Z]"))
+        XCTAssertTrue(system.contains("ALWAYS begin with \"We are\""))
+        XCTAssertTrue(system.contains("subject line versus title split"))
+        XCTAssertTrue(system.contains("Klaviyo flow health for U Vape"))
         XCTAssertTrue(system.contains("clicking a lamp"))
-        XCTAssertTrue(system.contains("Time Machine backups"))
-        XCTAssertTrue(system.contains("kopi dot ai"))
     }
 
     /// The project is not the directory, and not a symbol either. Both traps
@@ -194,6 +200,17 @@ extension GoalRungTests {
         XCTAssertTrue(system.contains("StatusHUD is a file inside tranquility base"))
     }
 
+    /// An invented project is read as fact. Two real replay answers got this
+    /// wrong — "in Klaviyo" about a MAILCHIMP audit, and "in robertnowell's
+    /// Mac" bolted onto a goal whose subject was already Time Machine — so the
+    /// trailing "in Z" is droppable and the ban is written into the prompt.
+    func testTheProjectMustBeANameTheWorkUses() {
+        let system = AnthropicSummaryProvider.systemPrompt(projectLabel: "tranquility base")
+        XCTAssertTrue(system.contains("Z MUST BE A NAME THE WORK ITSELF USES"))
+        XCTAssertTrue(system.contains("an invented Z is far worse than none"))
+        XCTAssertTrue(system.contains("MAILCHIMP audit"))
+    }
+
     /// No word count, deliberately, and the reason is recorded where the next
     /// person to "helpfully" add one will read it: every number tried made the
     /// answers longer.
@@ -201,5 +218,57 @@ extension GoalRungTests {
         let system = AnthropicSummaryProvider.systemPrompt(projectLabel: "tranquility base")
         XCTAssertTrue(system.contains("No number is given, deliberately"))
         XCTAssertFalse(system.contains("Twelve words at most"))
+    }
+}
+
+extension GoalRungTests {
+    /// The carry must not outlive the rule that produced the value.
+    ///
+    /// "COPY IT VERBATIM" is what stops the churn, and it also freezes a goal
+    /// written under a rejected instruction forever. 146 sessions were holding
+    /// one when the template shipped, including the session that built the
+    /// template: "Make goal-state carry testable and reduce goal drift across
+    /// agent turns" — no project, no problem, preserved by the very mechanism
+    /// meant to improve it. Without a cutoff the new template reaches no live
+    /// session at all.
+    func testAPreTemplateGoalIsNotCarried() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vd-cut-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
+        let cutoff = Date(timeIntervalSince1970: Double(QueueStore.goalTemplateEpochMs) / 1000)
+
+        try store.saveBrief(
+            SessionBrief(topic: "t", goal: "Make goal-state carry testable", happened: "h"),
+            sessionId: "s", eventRowid: 1, provider: "p", callsign: nil,
+            at: cutoff.addingTimeInterval(-60))
+        XCTAssertNil(try store.carriedGoal(for: "s"),
+                     "a goal from before the template was handed forward")
+
+        try store.saveBrief(
+            SessionBrief(topic: "t", goal: "In tranquility base, fix the lamp click",
+                         happened: "h"),
+            sessionId: "s", eventRowid: 2, provider: "p", callsign: nil,
+            at: cutoff.addingTimeInterval(60))
+        XCTAssertEqual(try store.carriedGoal(for: "s"),
+                       "In tranquility base, fix the lamp click")
+    }
+
+    /// History is untouched. A cutoff rather than a migration, so the goal line
+    /// on every historical hub reads exactly as it does today — including
+    /// sessions that will never run again to write a better one.
+    func testTheOldGoalsAreStillStored() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vd-cut2-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
+        let old = Date(timeIntervalSince1970: Double(QueueStore.goalTemplateEpochMs) / 1000)
+            .addingTimeInterval(-3600)
+        try store.saveBrief(SessionBrief(topic: "t", goal: "the old aim", happened: "h"),
+                            sessionId: "s", eventRowid: 1, provider: "p", callsign: nil, at: old)
+        let stored = try XCTUnwrap(store.storedBrief(sessionId: "s", eventRowid: 1))
+        XCTAssertEqual(stored.brief.goal, "the old aim", "history was rewritten")
     }
 }

@@ -919,10 +919,33 @@ public final class QueueStore: Sendable {
             try String.fetchOne(db, sql: """
                 SELECT goal FROM brief
                 WHERE sessionId = ? AND goal IS NOT NULL AND goal != ''
+                  AND atMs >= ?
                 ORDER BY atMs DESC LIMIT 1
-                """, arguments: [sessionId])
+                """, arguments: [sessionId, QueueStore.goalTemplateEpochMs])
         }
     }
+
+    /// When "in project X, we are solving problem Y" shipped (deploy bdefaf1,
+    /// 19 Aug 16:16:15Z). Goals written before it are not carried.
+    ///
+    /// The carry says COPY IT VERBATIM, which is what stops the churn — and it
+    /// also means a goal written under a REJECTED instruction is preserved
+    /// forever. 146 sessions were holding one, including the session that built
+    /// this: "Make goal-state carry testable and reduce goal drift across agent
+    /// turns" — no project, no problem, and frozen by the very mechanism meant
+    /// to improve it. The new template would never have reached a single live
+    /// session.
+    ///
+    /// A cutoff rather than a migration, deliberately. Clearing the column
+    /// would blank the goal line on every historical hub, including sessions
+    /// that will never run again to write a better one. This leaves history
+    /// exactly as it reads today and only stops the OLD values from being
+    /// handed forward, so every live session re-derives on its next turn.
+    ///
+    /// Delete this when it stops mattering — it is a boundary in time, not a
+    /// rule, and every session that predates it will have ended long before
+    /// anyone reads this twice.
+    static let goalTemplateEpochMs: Int64 = 1_787_156_175_000
 
     /// Newest first, for the lexicon harvest and future retention reads.
     public func recentBriefs(limit: Int = 400) throws -> [StoredBrief] {
