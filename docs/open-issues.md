@@ -483,7 +483,7 @@ Drills: `signatureIsADoor`, `signatureAnswersTheCursor`, `signatureReachesTheHos
 — three, because they fail separately, and a door wired to nothing is the same
 secret as a door with no cursor one layer further in.
 
-## 26. `bottomLineHasAir` is failing the CORRECT layout — OPEN, and not what it looks like
+## 26. The controls target is a size, not a floor — FIXED (19 Aug)
 
 It reads as a flaky drill. It is a flaky drill, but the flake is the symptom and
 the diagnosis is inverted: **the check passes on the broken layout and fails on
@@ -534,11 +534,41 @@ tell 50% from 33%, so that pair is unproven, and landing a half-verified layout
 change into an area another session is actively working is worse than leaving
 the gate red with the diagnosis written down.
 
-**For whoever picks this up:** the fix is probably those two constraints, but it
-needs a repeat count that can actually distinguish the distributions, and the
-drill's expectation has to be re-derived from the ruling (6pt stack spacing +
-6pt row inset = 12) rather than from whichever number the current layout happens
-to produce.
+### The resolution
+
+Ruled, after the above was reported as a finding rather than a fix:
+
+> "This is a minor check on what should be a deterministic guarantee that we
+> have enough space around the controls button for it to work reliably. I don't
+> even know why we need a measured gate for this. Just make it work."
+
+Both halves of that. **The gate is retired** — `bottomLineHasAir` is deleted and
+the quantity is logged for eyes and asserted by nobody, which is what the drill
+two above already does with the footer's floor gap, for the same reason. **And
+the layout is deterministic by construction**, which took three changes and the
+first two were not enough:
+
+1. `box.heightAnchor >= 20` becomes `== 20`. The ruling that set the 20 set a
+   size, not a minimum, and as a `>=` with the box pinned to all four edges the
+   view had no opinion about its own height at all.
+2. The action row hugs AND resists compression vertically. Hugging alone stopped
+   it ballooning; compression resistance is what defends the 6pt top inset from
+   being taken back whenever something else wanted the space.
+3. The word's top is **pinned** 6pt below the row's top. This is the one that
+   finished it. Priorities move the odds — measured, they took the flip from
+   3-in-6 to 1-in-12 and stopped — because a `.center` view's distance from the
+   row top stays a consequence of other things rather than a fact. Pinning makes
+   it a fact.
+
+Verified over **24 consecutive runs: 24 × `bottomLineAir=12.0`**, zero AppKit
+constraint conflicts. 12 is the number the 18 Aug ruling asked for and had never
+reliably been getting.
+
+It fixed the grid footer as a side effect, which is the same bug seen from the
+other end: the footer's own `ControlsWordView` was stretching too, and
+`floorGap` — the footer's distance to the panel's edge, also logged and also
+never asserted — went from **63.0** to **12.0**, the panel's own inset. Fifty
+points of dead air under the wordmark, gone.
 
 ## 25. The stalled row stopped naming its agent — FIXED (19 Aug)
 
