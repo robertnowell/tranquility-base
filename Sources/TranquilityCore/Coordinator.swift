@@ -918,9 +918,13 @@ public struct Coordinator: Sendable {
     /// user was speaking (`StreamedUtterance.finish`). Nil — the only value the
     /// app passes until streaming is wired — keeps this path byte-identical to
     /// before; a trustworthy final skips the recovery pass, nothing else changes.
+    /// `utteranceId:` pre-mints the row's id (see `captureAndTranscribe`), so
+    /// the panel's retry can retire the attempt this call created if a human
+    /// supersedes it mid-transcription.
     public func submitReply(
         pcm16: Data, sampleRate: Double = 16000, to sessionId: String? = nil,
-        streamed: TranscriptionResult? = nil, preWritten: URL? = nil
+        streamed: TranscriptionResult? = nil, preWritten: URL? = nil,
+        utteranceId: String? = nil
     ) async throws -> ReplyOutcome {
         let target: WaitingSession?
         if let sessionId {
@@ -933,7 +937,7 @@ public struct Coordinator: Sendable {
 
         var utterance = try await store.captureAndTranscribe(
             pcm16: pcm16, sampleRate: sampleRate, chain: recovery, eventId: nil,
-            streamed: streamed, preWritten: preWritten)
+            streamed: streamed, preWritten: preWritten, utteranceId: utteranceId)
 
         guard utterance.status == .transcribed, let text = utterance.transcriptText else {
             return .transcriptionFailed(utteranceId: utterance.id)

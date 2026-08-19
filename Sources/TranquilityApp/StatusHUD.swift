@@ -3369,6 +3369,14 @@ final class StatusHUD: NSObject {
             ("recentAudio", {
                 var retried: String?
                 var played: String?
+                // The host's wiring, held for restoration. The drill borrows
+                // these two handlers to prove taps arrive; assigning nil on
+                // the way out — which is what shipped — left EVERY deployed
+                // build with a dead ▶ and Retry, because the deploy path runs
+                // this drill after the real handlers are installed (19 Aug:
+                // Reveal logged all day, play/retry never once).
+                let hostRetry = self.onRetryAudioEvent
+                let hostPlay = self.onPlayAudioEvent
                 self.onRetryAudioEvent = { retried = $0 }
                 self.onPlayAudioEvent = { played = $0 }
                 self.showRecentAudio(events: [
@@ -3405,9 +3413,14 @@ final class StatusHUD: NSObject {
                     ("retryingRowIsSpent", row("e3")?.retryEnabled == false),
                     ("controlsClearTheScroller",
                      rows.allSatisfy(\.controlsClearTheScroller)),
+                    // Guards the restoration below, not the borrow above: on a
+                    // deploy the host wired real handlers before this drill, so
+                    // nil here means the drill (or a future edit to it) ate them.
+                    ("hostHandlersSurviveTheDrill",
+                     hostRetry != nil && hostPlay != nil),
                 ])
-                self.onRetryAudioEvent = nil
-                self.onPlayAudioEvent = nil
+                self.onRetryAudioEvent = hostRetry
+                self.onPlayAudioEvent = hostPlay
             }),
         ] as [(String, () -> Void)] {
             Permissions.log("selftest state=\(label)")
