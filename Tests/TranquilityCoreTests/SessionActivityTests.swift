@@ -236,6 +236,124 @@ final class SessionActivityTests: XCTestCase {
             .idle)
     }
 
+    // MARK: - The transcript says when a turn ended (18 Aug)
+    //
+    // Second report the same evening: one lamp still blue, and this time the
+    // two clocks agreed — the session had written 13 minutes ago. It had
+    // called ScheduleWakeup and parked itself for half an hour. The turn ended
+    // on a TOOL RESULT, which the classifier reads as "mid-loop, therefore
+    // working", and the only thing saying otherwise was the `turn_duration`
+    // system line 130ms later, which the walk was skipping as bookkeeping.
+    // Measured over the 25 most recently touched transcripts: 59 turn_duration
+    // entries, every one immediately after the last message of a turn, never
+    // once followed by that turn continuing.
+
+    private func turnEnded() -> String {
+        #"{"type":"system","subtype":"turn_duration","durationMs":17735}"#
+    }
+
+    func testATurnThatEndedOnAToolResultIsIdle() {
+        // A session parked on ScheduleWakeup: the last words are a tool result,
+        // and it is asleep until the wakeup fires.
+        let tail = [assistantToolUse(), userPrompt(), turnEnded()]
+        XCTAssertEqual(SessionActivity.classify(tail: tail, modified: warm), .idle)
+    }
+
+    func testAProseTurnDeclaredOverIgnoresAStalePromptBoundary() {
+        // The marker outranks a boundary that predates it — a submit from
+        // before the turn ended cannot mean the turn is still running.
+        let tail = [assistant(text: "Done."), turnEnded()]
+        XCTAssertEqual(
+            SessionActivity.classify(tail: tail, modified: warm,
+                                     boundary: boundary(.userPromptSubmit, agoSeconds: 600)),
+            .idle)
+    }
+
+    func testAPromptSubmittedAfterTheMarkerStillWins() {
+        // The one overrule the hooks legitimately have: a new turn whose first
+        // line has not been flushed to disk yet.
+        let tail = [timestamped(assistant(text: "Done."), agoSeconds: 600),
+                    timestamped(turnEnded(), agoSeconds: 600)]
+        XCTAssertEqual(
+            SessionActivity.classify(tail: tail, modified: warm,
+                                     boundary: boundary(.userPromptSubmit, agoSeconds: 2)),
+            .working)
+    }
+
+    func testANewPromptAfterTheMarkerIsWorking() {
+        // The commonest shape of all: the marker, then the next prompt. The
+        // walk meets the prompt first and never consults the marker.
+        let tail = [assistant(text: "Done."), turnEnded(), userPrompt()]
+        XCTAssertEqual(SessionActivity.classify(tail: tail, modified: warm), .working)
+    }
+
+    func testAnErrorStillOutranksTheEndOfTheTurn() {
+        // A turn that died on a usage limit also ends, and the marker must not
+        // paint over the one lamp that needs a human.
+        let tail = [apiError("You've hit your session limit"), turnEnded()]
+        guard case .blocked = SessionActivity.classify(tail: tail, modified: warm) else {
+            return XCTFail("amber outranks a finished turn")
+        }
+    }
+
+    // MARK: - The lamp dates its own evidence (18 Aug)
+    //
+    // Two of the three blue lamps on the grid at 17:19 belonged to sessions
+    // that had finished 105 and 149 minutes earlier. Nothing was stuck: the
+    // lamp was recomputed every five seconds and came back blue every time,
+    // because the freshness gate was reading the FILE's clock and Claude Code
+    // keeps writing to a finished session's transcript long after the
+    // conversation ends — snapshot updates, ai-title, bridge-session, pr-link.
+    // 30 of the 40 sessions in a two-day window had a file clock past their
+    // last conversational word by more than the freshness window — median 23
+    // hours, maximum five days (`tbase lamps`).
+
+    private func timestamped(_ line: String, agoSeconds: TimeInterval) -> String {
+        let at = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-agoSeconds))
+        return line.replacingOccurrences(
+            of: #"{"type":"#, with: #"{"timestamp":"\#(at)","type":"#)
+    }
+
+    func testBookkeepingWritesDoNotRearmAStaleWorkingVerdict() {
+        // The exact shape on disk: an unanswered prompt from two hours ago,
+        // and a file touched a minute ago by something that is not the
+        // conversation. The prompt is what the verdict rests on, so the
+        // prompt's age is the verdict's age.
+        let tail = [timestamped(userPrompt(), agoSeconds: 7200)]
+        XCTAssertEqual(SessionActivity.classify(tail: tail, modified: warm), .idle)
+    }
+
+    func testAToolCallIsDatedByItsOwnEntryNotTheFile() {
+        let tail = [timestamped(assistantToolUse(), agoSeconds: 7200)]
+        XCTAssertEqual(SessionActivity.classify(tail: tail, modified: warm), .idle)
+    }
+
+    func testALiveTurnStaysBlueOnAFileThatHasNotBeenTouched() {
+        // The other direction, and the reason this is not simply a stricter
+        // gate: a warm entry wins over a cold file.
+        let cold = Date().addingTimeInterval(-SessionActivity.freshness - 60)
+        let tail = [timestamped(userPrompt(), agoSeconds: 5)]
+        XCTAssertEqual(SessionActivity.classify(tail: tail, modified: cold), .working)
+    }
+
+    func testABoundaryCannotRearmOffTheFileEither() {
+        // resolveIdle had the same disease: it took the newest of the hook row
+        // and the mtime. A prompt submitted two hours ago whose turn ended in
+        // prose two hours ago is finished, however recently the file moved.
+        let tail = [timestamped(assistant(text: "Done."), agoSeconds: 7200)]
+        XCTAssertEqual(
+            SessionActivity.classify(
+                tail: tail, modified: warm,
+                boundary: boundary(.userPromptSubmit, agoSeconds: 7200)),
+            .idle)
+    }
+
+    func testUntimestampedEntriesStillFallBackToTheFile() {
+        // Fixtures and the odd real line carry no timestamp; mtime remains the
+        // stand-in there rather than a session going dark.
+        XCTAssertEqual(SessionActivity.classify(tail: [userPrompt()], modified: warm), .working)
+    }
+
     func testALongTurnStaysWorkingOnTranscriptWarmthAlone() {
         // The boundary row is written at submit and never touched again, so a
         // turn running longer than the freshness window must keep its lamp
