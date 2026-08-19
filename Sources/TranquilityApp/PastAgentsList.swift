@@ -267,6 +267,18 @@ final class PastAgentsList: NSView {
         stack.arrangedSubviews.compactMap { ($0 as? PastRowView)?.toolTip }
     }
 
+    /// For the name drill: how wide each row's NAME was actually laid out.
+    /// Read from the frame, because the failure this guards is a name that is
+    /// set correctly and rendered at zero points — a long stall reason in the
+    /// right column squeezing it out (19 Aug).
+    var nameWidthsForTesting: [(id: String, width: CGFloat)] {
+        stack.arrangedSubviews.compactMap {
+            guard let row = $0 as? PastRowView, let id = row.identifier?.rawValue
+            else { return nil }
+            return (id, row.nameWidthForTesting)
+        }
+    }
+
     /// For the lamp drill: which rows carry a switch in the lamp column.
     /// Asserted rather than assumed, because "every row" IS the ruling — a
     /// target on some rows is exactly what made the column unlearnable.
@@ -468,6 +480,31 @@ final class PastRowView: NSControl {
         idLabel.font = GridRowView.auxFont
         idLabel.textColor = StateLegend.Palette.muted.withAlphaComponent(ink)
         idLabel.alignment = .right
+        // The right column YIELDS to the name, and is capped besides.
+        //
+        // Both halves are needed and neither is enough alone. This column
+        // usually holds an eight-character id, so nothing ever pushed on the
+        // name — until a stopped session put its REASON here instead (16 Aug,
+        // and correctly: "an id would be the one row where this column says
+        // nothing useful"). A reason is a sentence. With the name at
+        // `.defaultLow` compression resistance and this label at the default,
+        // the sentence won every time: "silent for 24h, nothing written since
+        // it started" took the whole row and the agent's name was squeezed to
+        // ZERO WIDTH — the one row in the list that did not say which agent it
+        // was (screenshot, 19 Aug).
+        //
+        // The grid never had this bug because it measures one shared column
+        // across every row and caps it at `auxFraction`; the list, which builds
+        // each row alone, had neither. It gets both: the cap, so a long reason
+        // cannot claim more than the grid would give it, and a lower resistance
+        // than the name, so the name is the last thing to lose space rather
+        // than the first. What is cut off is reachable — the row's tooltip
+        // carries the name and the full message, uncut (`StateLegend.hoverText`).
+        idLabel.lineBreakMode = .byTruncatingTail
+        idLabel.setContentCompressionResistancePriority(
+            NSLayoutConstraint.Priority(name.contentCompressionResistancePriority(for: .horizontal)
+                                            .rawValue - 1),
+            for: .horizontal)
         idLabel.translatesAutoresizingMaskIntoConstraints = false
 
         verbLabel.attributedStringValue = letterspaced(
@@ -500,6 +537,8 @@ final class PastRowView: NSControl {
                                            constant: -12),
             idLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
             idLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            idLabel.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor,
+                                           multiplier: GridRowView.auxFraction),
             verbLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
             verbLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
@@ -507,6 +546,11 @@ final class PastRowView: NSControl {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// What the drill needs to see: the name's laid-out width. Read from the
+    /// FRAME rather than from the string, because the failure mode is a name
+    /// that is set correctly and rendered at zero points.
+    var nameWidthForTesting: CGFloat { nameLabel.frame.width }
 
     /// Rule 1 of the hover standard (18 Aug): the wash says which row, the
     /// cursor says it is a control.
