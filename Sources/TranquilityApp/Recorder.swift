@@ -611,9 +611,10 @@ public final class Recorder: @unchecked Sendable {
         // few render callbacks can trail the machine leaving `capturing` —
         // and audio for a capture nobody owns must vanish, not leak into
         // the counters or the next press's buffer.
-        switch machine.state {
-        case .opening, .capturing: break
-        default:
+        //
+        // The same predicate the teardowns consult, so the two cannot drift:
+        // audio is kept exactly when the machine wants it flowing.
+        guard machine.state.wantsAudioFlowing else {
             lock.unlock()
             return
         }
@@ -724,7 +725,7 @@ public final class Recorder: @unchecked Sendable {
         // The machine has already left `capturing`, so late render callbacks
         // are dropped by deliver()'s state check — the snapshot below cannot
         // be contaminated while the stop drains.
-        audioQueue.async { [weak self] in self?.unit?.stop() }
+        stopUnitUnlessReclaimed(because: "key-up")
         endMarkerHeartbeat()
         level = 0
         rebuildIfDeferred()
@@ -747,6 +748,41 @@ public final class Recorder: @unchecked Sendable {
         return Capture(pcm16: captured, fileURL: captureURL)
     }
 
+    /// Stop the unit — unless a newer press has since claimed it.
+    ///
+    /// Every teardown here is asynchronous, because a HAL call may not run on
+    /// a gesture's thread, and `audioQueue` is serial. That combination gives
+    /// ⌥⌥ a hazard of its own making: the gesture necessarily opens on the
+    /// first tap and abandons a moment later, so the second tap's open queues
+    /// behind the first tap's teardown — two HAL calls whose only observable
+    /// effect is to put the open behind them. On 19 Aug at 15:35:56 the open
+    /// lost that race. The one-second verdict fired against a machine still in
+    /// `warm`, reported "the open never reached the hardware", and the
+    /// microphone was fine the whole time.
+    ///
+    /// So the teardown asks, at the moment it finally runs, whether the unit is
+    /// still unwanted. `.opening`/`.capturing` is the same pair `deliver` gates
+    /// on — the states in which the machine wants audio flowing — and stopping
+    /// there would be tearing down a live capture that belongs to somebody
+    /// else's press.
+    ///
+    /// `failOpen`'s stop is deliberately NOT routed through here: it is already
+    /// generation-guarded, so a newer press's open makes its `openFailed`
+    /// stale and the table refuses it before any stop is reached.
+    private func stopUnitUnlessReclaimed(because reason: String) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let state = self.machine.state
+            self.lock.unlock()
+            guard !state.wantsAudioFlowing else {
+                Permissions.log("mic: teardown skipped (\(reason)) — a newer press owns the unit")
+                return
+            }
+            self.unit?.stop()
+        }
+    }
+
     /// Abandon without returning audio — a press cancelled before anything
     /// came of it.
     public func abandon() {
@@ -763,7 +799,7 @@ public final class Recorder: @unchecked Sendable {
         verification?.cancel(); verification = nil
         if ended.accepted {
             // Async for the same reason stop() is: no gesture waits on the HAL.
-            audioQueue.async { [weak self] in self?.unit?.stop() }
+            stopUnitUnlessReclaimed(because: "abandoned")
         }
         endMarkerHeartbeat()
         level = 0

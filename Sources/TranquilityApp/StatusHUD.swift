@@ -620,14 +620,23 @@ final class StatusHUD: NSObject {
 
     /// Attach the session to the greeting card once Claude Code has minted it.
     ///
-    /// Refuses unless the greeting card is still the one on stage — no target,
-    /// still speaking. A binding that arrived after you had moved on would
-    /// silently repoint the reply routing at a session you are not looking at,
-    /// which is the exact failure `showAnnouncement`'s own guard exists to
-    /// prevent. Late is not wrong here; late and unnoticed would be.
+    /// Refuses unless the greeting card is still the one on stage, unbound. A
+    /// binding that arrived after you had moved on would silently repoint the
+    /// reply routing at a session you are not looking at, which is the exact
+    /// failure `showAnnouncement`'s own guard exists to prevent. Late is not
+    /// wrong here; late and unnoticed would be.
+    ///
+    /// "Still on stage" is `awaitingGreetingBinding`, not `state.isSpeaking`
+    /// (changed 19 Aug). The flag says the thing this guard means — a greeting
+    /// card is up and has no session yet — and every face that takes the stage
+    /// clears it, so the invariant is unchanged. The STATE said something
+    /// narrower and accidentally: a microphone fault at 15:35:56 moved the
+    /// panel to `.result` without the card going anywhere, and the session that
+    /// registered four seconds later was refused a binding it should have had.
+    /// The card had not moved on; only the state had.
     @discardableResult
     func bindGreeting(sessionId: String, pid: Int?, label: String, cwd: String?) -> Bool {
-        guard state.isSpeaking, currentTarget == nil else { return false }
+        guard awaitingGreetingBinding, currentTarget == nil else { return false }
         // Closed FIRST: this is the one adoption the greeting card wants, and the
         // guard in `adoptTarget` would otherwise refuse the very call it exists
         // to make room for.
@@ -1023,11 +1032,20 @@ final class StatusHUD: NSObject {
         // invitation's failureIsStillAmber), which is exactly the overreach
         // they exist to refuse.
         let failedDuringCapture = state.ownsStage
+        // The third kind, added 19 Aug: a fault that arrives while a greeting
+        // card is waiting for its session. `.speaking` does not own the stage,
+        // so this used to take the branch below — which rebuilds the face and
+        // clears `awaitingGreetingBinding`, unbinding an agent that was six
+        // seconds from registering. The microphone failing is not a reason to
+        // throw away the launch you were answering, so it joins the strip like
+        // any other capture fault and the card keeps its stage, its identity,
+        // and its right to be bound.
+        let greetingAwaitsItsSession = awaitingGreetingBinding
         guard transition(to: .result, because: "reply failed") else { return }
         // A failure that happened TO a capture joins the strip, for the same
         // reason the read-back did. Amber either way; the channel does not
         // change, only the slot it speaks from.
-        if face.hasCard, failedDuringCapture {
+        if face.hasCard, failedDuringCapture || greetingAwaitsItsSession {
             face.captureFault = message
         } else {
             // The card names the agent the failure is ABOUT, and therefore carries
@@ -3844,6 +3862,29 @@ final class StatusHUD: NSObject {
         panel?.contentView?.layoutSubtreeIfNeeded()
         let failureKeepsItsAgent = currentTarget?.sessionId == "f1"
             && titleLabel.stringValue == "promotions" && !goButton.isHidden
+        // The 19 Aug incident, drilled. A microphone fault arrived while a
+        // greeting card was waiting for its session — and because `.speaking`
+        // does not own the stage, the fault took the whole card, cleared
+        // `awaitingGreetingBinding`, and the session that registered three
+        // seconds later was refused. The reply routing lived inside that
+        // refusal, so every word after it went to the previous agent, in
+        // another repository. The card must survive its microphone.
+        showGreeting(line: greetingLine, label: "projects")
+        showResult("Couldn't open the microphone, audio stack unresponsive.")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let micFaultKeepsTheCard = bodyLabel.stringValue == greetingLine
+            && titleLabel.stringValue == "projects" && currentTarget == nil
+        let micFaultSpeaksFromTheStrip = face.captureFault != nil
+        let boundAfterAMicFault = bindGreeting(sessionId: "g3", pid: 8,
+                                               label: "projects", cwd: "/tmp")
+            && currentTarget?.sessionId == "g3"
+        // And the refusal it must NOT weaken: once the panel has genuinely
+        // moved on, a late binding is still wrong. Same assertion as
+        // `lateBindingRefused`, re-asked after the fault path to prove the
+        // exemption above is scoped to a card that is still on stage.
+        showIdle(note: nil, rows: [])
+        let lateBindingStillRefusedAfterAFault = !bindGreeting(
+            sessionId: "g4", pid: 9, label: "elsewhere", cwd: "/tmp")
         SelfTest.report("greeting", [
             ("cardPaintsAtOnce", greetingPainted),
             ("saysOnlyTheQuestion", greetingSaysOnlyTheQuestion),
@@ -3853,6 +3894,10 @@ final class StatusHUD: NSObject {
             ("bindingGivesItTheAgent", bindingGivesItTheAgent),
             ("lateBindingRefused", lateBindingRefused),
             ("failureKeepsItsAgent", failureKeepsItsAgent),
+            ("micFaultKeepsTheCard", micFaultKeepsTheCard),
+            ("micFaultSpeaksFromTheStrip", micFaultSpeaksFromTheStrip),
+            ("boundAfterAMicFault", boundAfterAMicFault),
+            ("lateBindingStillRefusedAfterAFault", lateBindingStillRefusedAfterAFault),
         ])
 
         // The Controls drill. The collapse only pays if opening the note costs
