@@ -3676,7 +3676,7 @@ final class StatusHUD: NSObject {
         // A row lights in both registers. Asserted on the NAME as well as the
         // wash, because the wash was there all along and the question the audit
         // asked was whether it is enough on its own.
-        showIdle(note: nil, rows: [.init(id: "hr", name: "hover row", aux: "a1", lamp: .running)])
+        showIdle(note: nil, rows: [.init(id: "hr", name: "hover row", aux: "a1", lamp: .ready)])
         panel?.contentView?.layoutSubtreeIfNeeded()
         let row = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }.first
         let rowResting = row?.nameLabel.textColor
@@ -4535,14 +4535,17 @@ final class StatusHUD: NSObject {
                                    lamp: lamp, revivable: revivable)
         }
         let rows = [
-            row("ready", .ready), row("working", .working), row("running", .running),
+            // `busy` rather than `running` for the third live row: an IDLE
+            // session is no longer drawn on the grid (18 Aug), and this drill
+            // is about which LIVE rows carry the kill, not about membership.
+            row("ready", .ready), row("working", .working), row("busy", .working),
             row("fault", .fault),
             row("exited", .unlit, revivable: true),   // REVIVE's row: no kill
             row("unproven", .unlit),                  // liveness unknown: no kill
         ]
         showIdle(rows: rows)
         let menus = Dictionary(uniqueKeysWithValues: gridRowsForTesting)
-        let liveCarry = ["ready", "working", "running", "fault"]
+        let liveCarry = ["ready", "working", "busy", "fault"]
             .allSatisfy { menus[$0] == true }
         let deadDoNot = ["exited", "unproven"].allSatisfy { menus[$0] == false }
         let everyRowDrawn = rows.allSatisfy { menus[$0.id] != nil }
@@ -4729,7 +4732,7 @@ final class StatusHUD: NSObject {
             StateLegend.SessionRow(id: "s\($0)", name: "s\($0)", aux: "s\($0)",
                                    lamp: $0 < 3 ? .ready : ($0 < 30 ? .running : .unlit))
         }
-        let drawn = Array(sample.prefix(Self.gridRowsShown(sample)))
+        let drawn = Self.gridRows(sample)
         let rest = Array(Self.pastAgents(sample))
         let disjoint = Set(drawn.map(\.id)).isDisjoint(with: Set(rest.map(\.id)))
         let partitioned = drawn.count + rest.count
@@ -5139,7 +5142,7 @@ final class StatusHUD: NSObject {
     /// initializer no unit test can reach, and a weight that quietly stopped
     /// varying would put the grid back to two states it cannot tell apart.
     private func readIntensityDrill() {
-        showIdle(rows: [
+        let items = [
             StateLegend.SessionRow(id: "unread", name: "unread", aux: "u",
                                    lamp: .ready, read: .unread),
             StateLegend.SessionRow(id: "opened", name: "opened", aux: "o",
@@ -5150,8 +5153,16 @@ final class StatusHUD: NSObject {
                                    lamp: .working, read: .opened),
             StateLegend.SessionRow(id: "idle", name: "idle, nothing waiting", aux: "i",
                                    lamp: .running, read: .none),
-        ])
-        let built = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
+        ]
+        // Built directly rather than through `showIdle`, because the idle row
+        // is no longer drawn on the grid (18 Aug) and this drill's subject was
+        // never membership — it is the mapping from read state to ink and lamp,
+        // which lives in a view initializer no unit test can reach. Where each
+        // row LANDS is asserted at the bottom, through the real partition.
+        let built = items.map {
+            GridRowView(item: $0, auxWidth: 40, target: self,
+                        action: #selector(sessionRowTapped(_:)))
+        }
         let label = { (id: String) in
             built.first { $0.identifier?.rawValue == id }?.nameLabel
         }
@@ -5202,6 +5213,12 @@ final class StatusHUD: NSObject {
             // been read, which is a thing that never happened to it.
             ("idleLampIsUntouched", solid("idle")),
             ("allRendered", built.count == 5),
+            // ...and they still reach a face between them: the lit four on the
+            // grid, the idle one in the list.
+            ("theIdleRowLandsInTheList",
+             !Self.gridRows(items).contains { $0.id == "idle" }
+                && Self.pastAgents(items).contains { $0.id == "idle" }),
+            ("theLitRowsLandOnTheGrid", Self.gridRows(items).count == 4),
         ])
         showIdle(rows: [])
     }
