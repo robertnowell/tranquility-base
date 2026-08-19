@@ -4774,9 +4774,14 @@ final class StatusHUD: NSObject {
         showPastAgents(items: items)
         let entered = state == .pastAgents
         let scrolls = pastList.subviews.contains { $0 is NSScrollView }
-        // The id shown is the id the logs print, or the row and the log name
-        // the same session two different ways.
-        let idsMatch = items.allSatisfy { $0.row.aux == String($0.row.id.prefix(8)) }
+        // The right column says WHICH session or WHY it stopped, and nothing
+        // else. The id half is the original claim — the row and the log name
+        // the same session two different ways — and the reason half is the
+        // 16 Aug exception, which this drill did not know about until a stalled
+        // row was added to its sample and turned it red (19 Aug).
+        let idsMatch = items.allSatisfy {
+            $0.row.aux == StateLegend.shortId($0.row.id) || $0.row.aux == $0.row.detail
+        }
         let tookKeyboard = panel?.acceptsKey == true
         // The name holds its column against a sentence in the right one.
         //
