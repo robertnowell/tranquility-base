@@ -60,24 +60,23 @@ public enum HomeBase {
         public let findings: String?
         public let solution: String?
         public let rationale: String?
-        /// The pull requests this turn opened, as its own text named them
-        /// (ruled 18 Aug). They print in the turn's made-list beside the
-        /// pages, because a PR is a thing the agent made and this page is the
-        /// list of those. No state travels with them: the link is the feature,
-        /// and GitHub is the only thing that knows whether it is merged.
-        public let pullRequests: [String]
+        /// The branch this turn was on. The hub asks GitHub which pull
+        /// request that branch has (ruled 18 Aug); nothing about a PR is read
+        /// out of the turn's words, because two mechanisms that did read them
+        /// filed mentions as creations and once invented a link outright.
+        public let branch: String?
 
         public init(at: Date, topic: String, happened: String,
                     nextStep: String? = nil, question: String? = nil,
                     risk: String? = nil, headline: String? = nil,
                     deck: String? = nil, findings: String? = nil,
                     solution: String? = nil, rationale: String? = nil,
-                    pullRequests: [String] = []) {
+                    branch: String? = nil) {
             self.at = at; self.topic = topic; self.happened = happened
             self.nextStep = nextStep; self.question = question; self.risk = risk
             self.headline = headline; self.deck = deck
             self.findings = findings; self.solution = solution
-            self.rationale = rationale; self.pullRequests = pullRequests
+            self.rationale = rationale; self.branch = branch
         }
     }
 
@@ -449,43 +448,20 @@ public enum HomeBase {
         }.joined()
     }
 
-    /// One `<li>` per pull request, for the made-list under a turn.
+    /// The turn's pull request row: number, title, and state.
     ///
-    /// A PR wears its number, because that is what you say out loud and what
-    /// you type into `gh`; the branch is the subtitle, because that is what
-    /// tells two PRs on the same topic apart. It carries no state — an
-    /// "open"/"merged" badge on a page rewritten at every visit is a fact with
-    /// a shelf life, and this app has already paid once for asserting a stale
-    /// one (see SessionBrief.pullRequests).
-    static func prItems(_ urls: [String], e: (String) -> String) -> String {
-        urls.map { url -> String in
-            let label = prNumber(url).map { "PR #\($0)" } ?? "pull request"
-            return "<li class=\"prrow\"><a class=\"pr\" href=\"\(e(url))\""
-                + " target=\"_blank\" rel=\"noopener\">\(e(label))</a>"
-                + "<span class=\"where\">\(e(prRepo(url) ?? ""))</span></li>"
-        }.joined()
-    }
-
-    /// The digits after `/pull/`. Nil rather than a guess: a URL that got here
-    /// without a number is a URL the grounding check should have dropped, and
-    /// printing "PR #" with nothing after it would hide that.
-    static func prNumber(_ url: String) -> String? {
-        let parts = url.split(separator: "/")
-        for (i, part) in parts.enumerated() where part == "pull" || part == "pulls" {
-            guard i + 1 < parts.count else { continue }
-            let digits = parts[i + 1].prefix { $0.isNumber }
-            if !digits.isEmpty { return String(digits) }
-        }
-        return nil
-    }
-
-    /// `owner/repo`, so an agent that opened PRs against two repositories in
-    /// one session can be told which is which at a glance.
-    static func prRepo(_ url: String) -> String? {
-        let parts = url.split(separator: "/")
-        guard let host = parts.firstIndex(where: { $0.contains(".") }),
-              parts.count > host + 2 else { return nil }
-        return "\(parts[host + 1])/\(parts[host + 2])"
+    /// State is here on purpose, reversing the first design's refusal. That
+    /// refusal was right about a badge copied out of a turn's text, which goes
+    /// stale on a page rewritten at every visit, and wrong about one read from
+    /// GitHub at render — which is the answer to the question the page is
+    /// opened to settle. "open · 2 approvals" is what you came for.
+    static func prItem(_ pr: GitHubPullRequests.PR, e: (String) -> String) -> String {
+        "<ul class=\"made\"><li class=\"prrow\">"
+            + "<a class=\"pr\" href=\"\(e(pr.url))\" target=\"_blank\" rel=\"noopener\">"
+            + "PR #\(pr.number)</a>"
+            + "<span class=\"prtitle\">\(e(pr.title))</span>"
+            + "<span class=\"prstate s-\(e(pr.state.lowercased()))\">\(e(pr.status))</span>"
+            + "</li></ul>"
     }
 
     static func escape(_ s: String) -> String {
@@ -609,6 +585,11 @@ public enum HomeBase {
             }
         }
 
+        // One repository per hub, from the session's checkout. It does not
+        // decide WHICH pull request — the branch does that, through GitHub —
+        // it only says which repository the branch belongs to.
+        let repo = model.cwd.flatMap(GitRemote.slug)
+
         // ---- the stack, downsampled by age ----------------------------------
         var rows = ""
         for (i, turn) in ordered.enumerated() {
@@ -644,14 +625,18 @@ public enum HomeBase {
             }
             // The turn's own work, under the turn: a made thing reads as a
             // result here and as an orphan in a list somewhere else.
-            // Pull requests first inside the made-list: a branch waiting on
+            // The branch's pull request, above the pages: a branch waiting on
             // you outranks a page you can read later, and the ruling that put
             // it here was "whenever you need to look at a PR to merge it".
+            // Absent when the snapshot is cold or the branch has none — the
+            // lookup never blocks the render (see GitHubPullRequests.cached).
+            if let repo, let branch = turn.branch,
+               let pr = GitHubPullRequests.cached(repo: repo, branch: branch) {
+                body += prItem(pr, e: e)
+            }
             let made = pagesByTurn[i] ?? []
-            if !turn.pullRequests.isEmpty || !made.isEmpty {
-                body += "<ul class=\"made\">"
-                    + prItems(turn.pullRequests, e: e)
-                    + pageItems(made, e: e) + "</ul>"
+            if !made.isEmpty {
+                body += "<ul class=\"made\">" + pageItems(made, e: e) + "</ul>"
             }
             rows += """
                 <li class="\(cls)"><div class="when">\(e(stamp.string(from: turn.at)))</div>
@@ -785,7 +770,17 @@ public enum HomeBase {
           ul.made .where{font-family:var(--sans);font-size:12.5px;color:var(--faint);
                          text-transform:none;letter-spacing:0;font-weight:400;
                          margin:0}
-          ul.made .pr{min-width:5.4em;margin-right:10px}
+          ul.made .pr{min-width:5.4em;margin-right:10px;flex:none}
+          ul.made .prtitle{font-family:var(--sans);font-size:12.5px;color:var(--dim);
+                           text-transform:none;letter-spacing:0;font-weight:400;
+                           margin:0;flex:1;overflow:hidden;text-overflow:ellipsis;
+                           white-space:nowrap}
+          /* State, read from GitHub at render. Open is the one that wants you;
+             merged and closed are settled and recede. */
+          ul.made .prstate{font-family:var(--sans);font-size:11px;font-weight:700;
+                           letter-spacing:.06em;text-transform:uppercase;
+                           color:var(--faint);margin-left:12px;white-space:nowrap;flex:none}
+          ul.made .prstate.s-open{color:var(--accent)}
           ul.pages li{display:flex;align-items:baseline;gap:14px;padding:12px 0;
                       border-top:1px solid var(--rule)}
           ul.pages .page{color:var(--fg);text-decoration:none;font-size:18px;flex:1;
@@ -911,8 +906,14 @@ public extension HomeBase {
     /// content is "nothing summarized yet" is a file to clean up later, not a
     /// home base.
     @discardableResult
+    /// `priming` fetches each branch's pull request synchronously before
+    /// rendering, so the page written after an announcement lands complete.
+    /// The main-actor caller (the card's door) leaves it false and renders
+    /// from whatever the snapshot already holds — a subprocess on the main
+    /// thread is the frozen-frame class this codebase has paid for twice.
     static func write(sessionId: String, store: QueueStore,
-                      live: [LiveSession] = []) throws -> URL? {
+                      live: [LiveSession] = [],
+                      priming: Bool = false) throws -> URL? {
         let briefs = try store.briefs(for: sessionId)
         guard !briefs.isEmpty else { return nil }
         let latest = try store.latestStop(for: sessionId)
@@ -941,11 +942,17 @@ public extension HomeBase {
                      nextStep: $0.nextStep, question: $0.question, risk: $0.risk,
                      headline: $0.headline, deck: $0.deck,
                      findings: $0.findings, solution: $0.solution,
-                     rationale: $0.rationale,
-                     pullRequests: StoredBrief.splitPRs($0.pullRequests) ?? [])
+                     rationale: $0.rationale, branch: $0.branch)
             },
             pages: ArtifactStore.history(for: sessionId,
                                          root: QueueStore.supportDirectory.path))
+        if priming, let repo = model.cwd.flatMap(GitRemote.slug) {
+            var asked = Set<String>()
+            for branch in model.turns.compactMap(\.branch) where asked.insert(branch).inserted {
+                GitHubPullRequests.prime(repo: repo, branch: branch)
+            }
+        }
+
         let dir = root.appendingPathComponent(slug(for: model))
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("index.html")

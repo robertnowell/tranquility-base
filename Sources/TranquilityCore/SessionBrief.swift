@@ -60,36 +60,26 @@ public struct SessionBrief: Codable, Sendable, Equatable {
     // Deterministic — never written by the model.
     public var branch: String?
 
-    /// The pull requests this turn's own text named, copied verbatim (ruled
-    /// 18 Aug: "the PR should absolutely be in the Hub"). A list, because one
-    /// turn can open two.
-    ///
-    /// What is still forbidden is the LOOKUP, and that is the whole of the old
-    /// rule. Resolving a PR from the branch announced "pull request 2023 is
-    /// merged" for a PR merged months earlier whose branch was still checked
-    /// out — true, unrelated to the work, and indistinguishable from a
-    /// hallucination. The fix was never a better query. It was noticing that
-    /// the session already tells us: across every session here that ran
-    /// `gh pr create`, the assistant's own next message named the PR
-    /// correctly, 7 for 7, and that text is already the summarizer's input.
-    ///
-    /// So a PR is spoken, and now filed, exactly when the session spoke about
-    /// it. Attributable by construction; needs no `gh`, no GitHub, no worktree
-    /// convention, and no state — and it works the same for Codex or anything
-    /// else that ends a turn with a sentence about what it just did.
-    ///
-    /// The field carries no STATE. Open, merged, closed is a fact about the
-    /// world at a moment, and this app has already learned once what it costs
-    /// to assert one of those from a stale read. The hub links; GitHub knows.
-    public var pullRequests: [String]?
+    // There is no pull request field here, and the reason is no longer the
+    // one this comment used to give.
+    //
+    // Two mechanisms tried to put one here on 18 Aug. The first asked the
+    // summariser to copy a URL the turn printed: it filled 2 briefs in 1,299,
+    // because assistants write "PR #117" and paste the URL once. The second
+    // read "PR #117" with a regex and took the repository from the working
+    // directory: it filed a pull request every time a turn MENTIONED one, and
+    // it assembled a link to a pull request that had never existed.
+    //
+    // A pull request is not a property of a TURN'S TEXT. It is a property of a
+    // BRANCH, GitHub knows it, and `branch` below is already deterministic. So
+    // the hub asks. See `GitHubPullRequests`.
 
     public init(
         topic: String, goal: String? = nil, happened: String, nextStep: String? = nil,
         question: String? = nil, risk: String? = nil, rationale: String? = nil,
         findings: String? = nil, solution: String? = nil,
         branch: String? = nil, recap: String? = nil, proposal: String? = nil,
-        headline: String? = nil, deck: String? = nil,
-        pullRequests: [String]? = nil
+        headline: String? = nil, deck: String? = nil
     ) {
         self.recap = recap
         self.proposal = proposal
@@ -105,7 +95,6 @@ public struct SessionBrief: Codable, Sendable, Equatable {
         self.findings = findings
         self.solution = solution
         self.branch = branch
-        self.pullRequests = pullRequests
     }
 
     /// The ~12 seconds you actually hear. Topic first so you know which session is
