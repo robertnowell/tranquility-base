@@ -99,13 +99,18 @@ public enum HomeBase {
         /// detail, and a count without them is a dead end — a reader who cannot
         /// act on a label stops following the trail.
         public let pages: [ArtifactStore.Page]
+        /// The pull requests this agent OPENED, from the receipt `gh pr create`
+        /// printed. Filed under the turn that ran the command, like a page.
+        public let receipts: [PullRequestStore.Receipt]
 
         public init(sessionId: String, title: String?, callsign: String?,
                     cwd: String?, goal: String?, turns: [Turn],
-                    pages: [ArtifactStore.Page], lastActive: Date? = nil) {
+                    pages: [ArtifactStore.Page], lastActive: Date? = nil,
+                    receipts: [PullRequestStore.Receipt] = []) {
             self.sessionId = sessionId; self.title = title; self.callsign = callsign
             self.cwd = cwd; self.goal = goal; self.turns = turns
-            self.pages = pages; self.lastActive = lastActive ?? turns.first?.at
+            self.pages = pages; self.receipts = receipts
+            self.lastActive = lastActive ?? turns.first?.at
         }
     }
 
@@ -464,6 +469,14 @@ public enum HomeBase {
             + "</li></ul>"
     }
 
+    /// A receipt whose state has not been read yet. The number and the link
+    /// are already certain; only "open · 2 approvals" is missing.
+    static func prItemBare(number: Int, url: String, e: (String) -> String) -> String {
+        "<ul class=\"made\"><li class=\"prrow\">"
+            + "<a class=\"pr\" href=\"\(e(url))\" target=\"_blank\" rel=\"noopener\">"
+            + "PR #\(number)</a><span class=\"prtitle\"></span></li></ul>"
+    }
+
     static func escape(_ s: String) -> String {
         s.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
@@ -590,8 +603,22 @@ public enum HomeBase {
         // it only says which repository the branch belongs to.
         let repo = model.cwd.flatMap(GitRemote.slug)
 
+        // Receipts file exactly like pages: under the turn that was running
+        // when the command printed the URL.
+        var prsByTurn: [Int: [PullRequestStore.Receipt]] = [:]
+        for receipt in model.receipts {
+            let owner = ordered.indices.last { index in
+                (index == 0 || receipt.at <= ordered[index].at)
+                    && (index + 1 >= ordered.count || receipt.at > ordered[index + 1].at)
+            }
+            if let owner, owner < fullTurns + lineTurns {
+                prsByTurn[owner, default: []].append(receipt)
+            }
+        }
+
         // ---- the stack, downsampled by age ----------------------------------
         var printedBranches: Set<String> = []
+        var printedURLs: Set<String> = []
         var rows = ""
         for (i, turn) in ordered.enumerated() {
             var body = "<p class=\"h\">\(e(turn.happened))</p>"
@@ -631,14 +658,28 @@ public enum HomeBase {
             // it here was "whenever you need to look at a PR to merge it".
             // Absent when the snapshot is cold or the branch has none — the
             // lookup never blocks the render (see GitHubPullRequests.cached).
-            // Once per branch, on its NEWEST turn. Every turn of a session
-            // shares one branch, so printing the row per turn puts the same
-            // pull request down the page nine times — which is the "why does
-            // this hub have six PRs" complaint in another costume. The newest
-            // turn is the one you are reading when you decide to merge.
+            // The receipts first: a pull request this turn actually OPENED,
+            // recorded by the hook from the command's own output. No guessing
+            // is involved at any point in that path.
+            for receipt in prsByTurn[i] ?? [] where printedURLs.insert(receipt.url).inserted {
+                if let pr = GitHubPullRequests.cachedByURL(receipt.url) {
+                    body += prItem(pr, e: e)
+                } else if let number = receipt.number {
+                    // The receipt is the fact; the state is an enrichment. A
+                    // cold snapshot must not hide a pull request we KNOW this
+                    // turn opened — that was the whole failure being fixed.
+                    body += prItemBare(number: number, url: receipt.url, e: e)
+                }
+            }
+
+            // Then the branch, once, for sessions that sit on one all day —
+            // Kanban Code's mechanism, which is right whenever a session has a
+            // single branch and silent when it does not. Deduplicated against
+            // the receipts so a PR this session opened is never printed twice.
             if let repo, let branch = turn.branch,
                printedBranches.insert(branch).inserted,
-               let pr = GitHubPullRequests.cached(repo: repo, branch: branch) {
+               let pr = GitHubPullRequests.cached(repo: repo, branch: branch),
+               printedURLs.insert(pr.url).inserted {
                 body += prItem(pr, e: e)
             }
             let made = pagesByTurn[i] ?? []
@@ -952,11 +993,18 @@ public extension HomeBase {
                      rationale: $0.rationale, branch: $0.branch)
             },
             pages: ArtifactStore.history(for: sessionId,
-                                         root: QueueStore.supportDirectory.path))
-        if priming, let repo = model.cwd.flatMap(GitRemote.slug) {
-            var asked = Set<String>()
-            for branch in model.turns.compactMap(\.branch) where asked.insert(branch).inserted {
-                GitHubPullRequests.prime(repo: repo, branch: branch)
+                                         root: QueueStore.supportDirectory.path),
+            receipts: PullRequestStore.history(for: sessionId,
+                                               root: QueueStore.supportDirectory.path))
+        if priming {
+            for receipt in model.receipts {
+                GitHubPullRequests.primeByURL(receipt.url)
+            }
+            if let repo = model.cwd.flatMap(GitRemote.slug) {
+                var asked = Set<String>()
+                for branch in model.turns.compactMap(\.branch) where asked.insert(branch).inserted {
+                    GitHubPullRequests.prime(repo: repo, branch: branch)
+                }
             }
         }
 
