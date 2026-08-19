@@ -1,0 +1,30 @@
+[
+  {
+    "atMs": 1786636716980,
+    "topic": "Time Machine backup failures: disk full, destination overload",
+    "old": "Restore working backups to the Seagate external drive",
+    "new": "In Time Machine backups, fix why they fail after twenty four hours due to full disks",
+    "changed": false
+  },
+  {
+    "atMs": 1786651126579,
+    "topic": "Time Machine backup volume removal",
+    "old": "Free 288 GB on the external drive and prepare for a successful backup attempt",
+    "new": "In Time Machine backups, fix why they fail after twenty four hours due to full disks",
+    "changed": false
+  },
+  {
+    "atMs": 1786655350729,
+    "topic": "Mac Time Machine backup recovery",
+    "old": "Complete a backup to external drive after three failed attempts over three days",
+    "new": "In Time Machine backups, fix why they fail after twenty four hours due to full disks",
+    "changed": false
+  },
+  {
+    "atMs": 1786655376884,
+    "topic": "Time Machine backup unblocked",
+    "old": "Complete a full backup after thirteen months of failures",
+    "new": "In Time Machine backups, fix why they fail after twenty four hours due to full disks",
+    "changed": false
+  }
+]
