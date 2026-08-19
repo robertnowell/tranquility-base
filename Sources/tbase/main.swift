@@ -179,6 +179,7 @@ do {
             switch s.activity {
             case .working: lamp = "working"
             case .blocked: lamp = "STOPPED"
+            case .stalled: lamp = "SILENT"
             case .idle, nil: lamp = "idle"
             }
             let age = Date().timeIntervalSince(s.lastActivityAt)
@@ -277,6 +278,7 @@ do {
             switch e.activity {
             case .working: lamp = "working"
             case .blocked: lamp = "STOPPED"
+            case .stalled: lamp = "SILENT"
             case .idle: lamp = "idle"
             }
             let evidenceAge = e.observedAt.map { lampNow.timeIntervalSince($0) }

@@ -1451,11 +1451,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 SessionActivity.read(transcriptPath: $0,
                                      boundary: boundaries[stored.sessionId])
             }
+            let storedLamp = lampAndReason(for: activity, sessionId: stored.sessionId,
+                                           live: live)
             rows.append(StateLegend.SessionRow(
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
-                aux: activity?.shortReason ?? StateLegend.shortId(stored.sessionId),
-                lamp: lamp(for: activity, sessionId: stored.sessionId, live: live)))
+                aux: storedLamp.reason ?? StateLegend.shortId(stored.sessionId),
+                lamp: storedLamp.lamp))
         }
         // Live sessions with no stored events yet: nothing to rank them by,
         // so they close the live half of the grid.
@@ -1473,13 +1475,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 SessionActivity.read(transcriptPath: $0,
                                      boundary: boundaries[live.sessionId])
             }
+            let liveLamp = lampAndReason(for: activity, sessionId: live.sessionId,
+                                         live: live)
             rows.append(StateLegend.SessionRow(
                 id: live.sessionId,
                 name: StateLegend.displayName(
                     liveName: Self.tabTitle(transcriptPath: nil, live: live),
                     callsign: nil, fallback: "session"),
-                aux: activity?.shortReason ?? StateLegend.shortId(live.sessionId),
-                lamp: lamp(for: activity, sessionId: live.sessionId, live: live)))
+                aux: liveLamp.reason ?? StateLegend.shortId(live.sessionId),
+                lamp: liveLamp.lamp))
         }
         // And the sessions that are not awake (ruled 11 Aug). Everything above
         // this line is enumerated from PROCESSES, which is why a machine
@@ -1566,29 +1570,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the system and it reached no lamp until now. `busy` and `idle` are read
     /// the same way, for the same reason: the process knows, and the file only
     /// implies.
-    private func lamp(for activity: SessionActivity?, sessionId: String,
-                      live: LiveSession?) -> StateLegend.Lamp {
+    /// The lamp AND the words next to it, decided together.
+    ///
+    /// One function because they were two, and they disagreed in front of
+    /// Robert (18 Aug): `d40f56bc` lit amber correctly — the process reported
+    /// `waiting`, it was asking him a question — while the reason column, read
+    /// separately from the transcript, said "silent for 2h". Right lamp, wrong
+    /// sentence, and the sentence is what he read. A lamp and its caption
+    /// derived from two sources is the same class of bug as two sources for
+    /// the lamp itself.
+    private func lampAndReason(for activity: SessionActivity?, sessionId: String,
+                               live: LiveSession?) -> (lamp: StateLegend.Lamp, reason: String?) {
         // Blocked on you, said by the process itself. Nothing in a transcript
         // outranks this — including a stale `working` read from a tool call
         // that IS the prompt the session is blocked on.
-        if live?.status == "waiting" { return .fault }
-        let observed: StateLegend.Lamp = {
+        //
+        // And it names its own reason. `waiting` means the agent has asked and
+        // is holding for an answer; that is the whole of why the lamp is lit,
+        // and whatever the file was about to say about silence is a worse
+        // description of the same moment.
+        if live?.status == "waiting" { return (.fault, "asking you a question") }
+        let observed: (StateLegend.Lamp, String?) = {
             switch activity {
             case .working:
                 // The file says a turn is in flight. If the process says it is
                 // idle, the turn ended in a shape the file cannot express — an
                 // unanswered prompt with no turn-end marker, the 17:19 case.
                 // The process is right and it costs nothing to believe it.
-                return live?.status == "idle" ? .running : .working
-            case .blocked: return .fault
+                return live?.status == "idle" ? (.running, nil) : (.working, nil)
+            // An ERROR is a fact the transcript states outright, and no process
+            // status contradicts it: a session sitting on a usage limit is idle
+            // by every measure the API has.
+            case .blocked: return (.fault, activity?.shortReason)
+            // A STALL is an inference from silence, and silence is exactly what
+            // a running process can speak to. Measured 18 Aug: `59181c6d` and
+            // `b18ebb61` both had a real typed prompt as their last entry and
+            // nothing for four hours — a textbook stall by the file — and both
+            // reported `idle`. Robert, looking at the same two rows: "in both
+            // of these cases, the agent did return."
+            case .stalled:
+                switch live?.status {
+                case "idle": return (.running, nil)
+                case "busy": return (.working, nil)
+                // No process at all, or a status we do not recognise: the file
+                // is the only witness left and it says silence. Amber stands.
+                default: return (.fault, activity?.shortReason)
+                }
             case .idle, nil:
                 // And the mirror: the file has nothing to say, the process says
                 // it is chewing. Blue rather than quiet.
-                return live?.status == "busy" ? .working : .running
+                return live?.status == "busy" ? (.working, nil) : (.running, nil)
             }
         }()
-        guard observed == .running, delivering.isInFlight(sessionId) else { return observed }
-        return .working
+        guard observed.0 == .running, delivering.isInFlight(sessionId)
+        else { return observed }
+        return (.working, nil)
     }
 
     /// The tab's string for a session, or nil while it has none: the
