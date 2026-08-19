@@ -3,112 +3,28 @@
     "atMs": 1786258689436,
     "topic": "UI palette and headline redundancy",
     "old": "Reduce visual clutter and fix lamp discernibility",
-    "new": "fix silence-gate card title to be clickable, remove redundant button and topic",
+    "new": "In tranquility base, fix the status panel lamp array so ready and advisory states are told apart at a glance",
     "changed": false
   },
   {
     "atMs": 1786259135587,
     "topic": "Panel polarity research and telemetry wiring",
     "old": "Resolve polarity and lamp-value decisions for panel UI; instrument the app to measure actual usage patterns.",
-    "new": "wire dogfood event emissions so telemetry counters actually measure what the app does",
+    "new": "In tranquility base, wire dogfood event emissions so telemetry counters actually measure what the app does",
     "changed": true
   },
   {
     "atMs": 1786259554207,
     "topic": "Palette redesign grounded in luminance, not polarity",
     "old": "Build a UI that signals work state clearly to peripheral vision, following NASA HIDH and mil-std-411F",
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
+    "new": "In tranquility base, fix lamp contrast so the states are told apart at a glance",
     "changed": true
   },
   {
     "atMs": 1786292234431,
     "topic": "UI panel lamp color contrast",
     "old": "Find unambiguous lamp colors that stay calm on neglect",
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
-    "changed": false
-  },
-  {
-    "atMs": 1786293175905,
-    "topic": "UI V2 color research scope",
-    "old": "Finalize color palette rules and research direction for the interface.",
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
-    "changed": false
-  },
-  {
-    "atMs": 1786293849171,
-    "topic": "UI theme system and publish decision",
-    "old": "Ship a two-theme color system and decide whether to publish the shareable page before or after research.",
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
-    "changed": false
-  },
-  {
-    "atMs": 1786294439676,
-    "topic": "UI theme architecture and color contrast",
-    "old": "Eliminate redundant UI elements and fix color indistinguishability between blue and green; make theme completeness a compile error.",
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
-    "changed": false
-  },
-  {
-    "atMs": 1786294734747,
-    "topic": "UI palette contrast and accessibility floors",
-    "old": null,
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
-    "changed": false
-  },
-  {
-    "atMs": 1786330852711,
-    "topic": "UI contrast palette, light versus dark ground",
-    "old": "Eliminate redundant UI details and fix color legibility across panel surfaces",
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
-    "changed": false
-  },
-  {
-    "atMs": 1786331501882,
-    "topic": "Static page rebuild, contrast audit",
-    "old": "Fix accessibility and eliminate the script failure mode",
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
-    "changed": false
-  },
-  {
-    "atMs": 1786331687410,
-    "topic": "Dark theme contrast audit and render",
-    "old": "Decide whether to move from light to dark housing for the UI panel.",
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
-    "changed": false
-  },
-  {
-    "atMs": 1786331933829,
-    "topic": "Dark palette working lamp contrast",
-    "old": "Settle the UI palette for dark mode with correct working-session visibility",
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
-    "changed": false
-  },
-  {
-    "atMs": 1786336311535,
-    "topic": "UI contrast and card luminance tuning",
-    "old": "Resolve whether dark mode cards work at matched contrast, or revert to light",
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
-    "changed": false
-  },
-  {
-    "atMs": 1786336956865,
-    "topic": "UI card polarity and adaptation cost",
-    "old": "Decide whether light or dark card ground for the status panel, weighing readability against transient adaptation cycles.",
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
-    "changed": false
-  },
-  {
-    "atMs": 1786338230459,
-    "topic": "Dark palette with split tokens, contrast verified",
-    "old": null,
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
-    "changed": false
-  },
-  {
-    "atMs": 1786341447774,
-    "topic": "palette drill and ramp ordering",
-    "old": "validate the UI palette against contrast and hierarchy rules",
-    "new": "validate lamp contrast and hue choices against aviation human factors standards",
+    "new": "In tranquility base, fix lamp contrast so the states are told apart at a glance",
     "changed": false
   }
 ]
