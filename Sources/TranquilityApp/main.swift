@@ -710,7 +710,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? coordinator.dismiss(sessionId: id, through: target.latestId)
                 Permissions.log("lamp: cleared \(target.callsign ?? id.prefix(8).description) by click")
             }
+            // And the row leaves the grid (18 Aug). Dismissal alone was only
+            // ever half of what the gesture means: it silences the TURN, and
+            // the user is switching off the SESSION. Both, or a green row you
+            // just filed sits there quietly, still on the panel.
+            LampSwitch.turnOff(id)
+            Permissions.log("lamp: switched off \(id.prefix(8)) — filed to past agents")
             self.showIdleGrid()
+        }
+        // The other half of the switch: the list hands a session back.
+        // No process work at all — this row's agent has been running the whole
+        // time — so unlike revive there is nothing to launch, wait for, or
+        // announce. It is a line in a file and a repaint.
+        hud.onRestoreLamp = { [weak self] id in
+            LampSwitch.turnOn(id)
+            Permissions.log("lamp: switched on \(id.prefix(8)) — back on the grid")
+            self?.showIdleGrid()
         }
         hud.onLeaveSettings = { [weak self] in
             guard let self else { return }
@@ -1493,6 +1508,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     ?? StateLegend.shortId(found.sessionId),
                 lamp: .unlit,
                 revivable: found.revivable))
+        }
+        // The user's own switch, applied last and to every band at once.
+        //
+        // Derived on every repaint rather than stored on the row, so a session
+        // that starts waiting stops being filed the moment it does — see
+        // `LampSwitch.isOff`, where that exception is the whole policy. And the
+        // switch is CLEARED, not merely overridden, when a turn arrives: the
+        // file should hold only sessions that are filed right now, or the row
+        // would quietly drop off the grid again as soon as the user read it.
+        let switchedOff = LampSwitch.load()
+        if !switchedOff.isEmpty {
+            for row in rows where row.lamp == .ready && switchedOff.contains(row.id) {
+                LampSwitch.turnOn(row.id)
+                Permissions.log("lamp: \(row.id.prefix(8)) is waiting — switch cleared")
+            }
+            rows = rows.map { row in
+                // A dead session is in the list by liveness already; filing it
+                // as well would say the user switched off something that has
+                // no lamp to switch.
+                guard row.lamp != .unlit,
+                      LampSwitch.isOff(row.id, waiting: row.lamp == .ready,
+                                       switchedOff: switchedOff)
+                else { return row }
+                return row.switchedOffCopy()
+            }
         }
         // Last, and after every band has been appended: a session that is merely
         // alive drops below the ones doing something, without disturbing the

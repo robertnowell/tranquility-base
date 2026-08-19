@@ -573,15 +573,38 @@ enum StateLegend {
         let revivable: Bool
         /// Where this row sits in the read ladder.
         let read: ReadState
+        /// The user switched this session's lamp OFF (18 Aug). Its process is
+        /// untouched and its row is untouched; the flag decides only which of
+        /// the two faces draws it, and the lamp it draws with.
+        ///
+        /// Carried on the ROW rather than read from `LampSwitch` at every call
+        /// site, because the rule that produces it is not "is the id in the
+        /// file" — a waiting turn overrides the switch — and two readers
+        /// evaluating that separately is how they start disagreeing.
+        let switchedOff: Bool
 
         init(id: String, name: String, aux: String, lamp: Lamp,
-             revivable: Bool = false, read: ReadState = .none) {
+             revivable: Bool = false, read: ReadState = .none,
+             switchedOff: Bool = false) {
             self.id = id
             self.name = name
             self.aux = aux
             self.lamp = lamp
             self.revivable = revivable
             self.read = read
+            self.switchedOff = switchedOff
+        }
+
+        /// The same row with its lamp out, as a session the user has filed.
+        ///
+        /// The lamp is overridden rather than merely flagged because that is
+        /// what "off" LOOKS like — Robert, 18 Aug: "an idle session, that is,
+        /// the process is alive. But the lamp is off." Turning it back on hands
+        /// the row its real state again, because this copy is derived on every
+        /// repaint and never stored.
+        func switchedOffCopy() -> SessionRow {
+            SessionRow(id: id, name: name, aux: aux, lamp: .running,
+                       revivable: revivable, read: read, switchedOff: true)
         }
     }
 
@@ -640,48 +663,49 @@ enum StateLegend {
         }
     }
 
-    /// What a click on the LAMP does — the switch, as distinct from the row.
+    /// What a click on the LAMP does. The answer depends on WHICH FACE you
+    /// clicked it on, and that is the design rather than an inconsistency.
     ///
-    /// The lamp column has been a control since 06 Aug, but only in the OFF
-    /// direction: a green lamp could be cleared ("mischief managed") and every
-    /// other lamp in the column fell through to the row's own verb. That taught
-    /// the gesture and then refused it. Robert, 18 Aug, having clicked a dark
-    /// lamp in Past Agents and been handed a Terminal tab instead: *"clicking on
-    /// the lamp doesn't turn the lamp back on… if I want to revive an agent, I
-    /// should just turn on the lamp and then the session's alive again."*
+    /// Ruled 18 Aug, correcting a first attempt that read the lamp as power
+    /// over the PROCESS and so made "off" mean kill. It does not. Robert:
+    /// *"clicking an ON lamp turns it off. Turns it to idle. It does not kill
+    /// the process… if I'm on the grid and I click the lamp, the lamp turns off
+    /// and it goes to past agents. If I'm on past agents and I click the lamp
+    /// and it's idle, it goes back into the grid, takes the lamp colour
+    /// whatever the state is."*
     ///
-    /// So the switch gains its ON direction, and the column now means ONE thing
-    /// on both faces: this lamp's power, never navigation. The row keeps its own
-    /// verb everywhere to the right of `GridRowView.lampHitWidth`.
-    ///
-    /// Stated as a function for the same reason `action(for:)` is: a drill can
-    /// assert it without a window server, and the grid and the list cannot drift
-    /// into disagreeing about what the same dot does.
-    enum LampAction: Equatable {
-        /// Lit and asking: mark the turn heard, without inviting the session.
-        case clear
-        /// Dark, and the process is PROVEN gone with its directory still there:
-        /// `claude --resume`, and the lamp comes back on.
-        case turnOn
-        /// Dark, but liveness could not be proven. The click still ASKS —
-        /// `revive()` re-probes at ttl 0 and refuses safely — so the switch
-        /// gives an answer instead of doing nothing.
-        ///
-        /// This is deliberately NOT `RowAction.none`'s silence. The safety that
-        /// case protects is real (a `--resume` against a live session puts two
-        /// processes under one id, which crashed the app twice) but it lives in
-        /// `revive()`, which re-probes; refusing to even ask was the surplus.
-        case tryTurnOn
-        /// Lit, but not asking — advisory blue, the quiet socket, amber. There
-        /// is no switching to do, so it says so rather than sitting there.
-        case alreadyOn
+    /// So the lamp is the GRID'S MEMBERSHIP CONTROL, and it reads as one
+    /// sentence: on the grid it files a session away, in the list it brings one
+    /// back. The single exception is a session whose process has exited — you
+    /// cannot flip a terminated process on, so a dead lamp means resurrect on
+    /// either face: *"you can't just flip the lamp on, you got to resurrect
+    /// it. So a one-click revives the session."*
+    enum LampFace: Equatable {
+        /// The panel's grid — the sessions that are ON.
+        case grid
+        /// Past Agents — the ones that are off, and the ones that are gone.
+        case list
     }
 
-    static func lampAction(for row: SessionRow) -> LampAction {
+    enum LampAction: Equatable {
+        /// Alive, on the grid: turn it off. Idle, filed, drawn by the list.
+        /// The process is untouched.
+        case turnOff
+        /// Alive, in the list: turn it on. Back to the grid, wearing whatever
+        /// state it is actually in.
+        case turnOn
+        /// The process has exited. `claude --resume`, one click, either face.
+        case revive
+    }
+
+    static func lampAction(for row: SessionRow, on face: LampFace) -> LampAction {
         switch row.lamp {
-        case .ready: return .clear
-        case .working, .running, .fault: return .alreadyOn
-        case .unlit: return row.revivable ? .turnOn : .tryTurnOn
+        // Deliberately not gated on `revivable`. `revive()` re-probes at ttl 0
+        // and refuses safely with a reason, so the guard lives where it works;
+        // a switch that silently does nothing was the bug this replaced.
+        case .unlit: return .revive
+        case .ready, .working, .running, .fault:
+            return face == .grid ? .turnOff : .turnOn
         }
     }
 
@@ -708,14 +732,20 @@ enum StateLegend {
     /// Order WITHIN each band is untouched: the caller has already established
     /// recency, and a stable partition keeps it.
     static func quietRowsLast(_ rows: [SessionRow]) -> [SessionRow] {
-        func band(_ lamp: Lamp) -> Int {
-            switch lamp {
+        func band(_ row: SessionRow) -> Int {
+            // A session the user switched off sinks below even the dead ones,
+            // and the ORDER is load-bearing rather than cosmetic: the grid is
+            // a prefix of this array, so "last" is what makes `gridRowsShown`
+            // able to exclude filed rows by a count instead of a predicate,
+            // and keeps the floor free to pad with rows that are merely quiet.
+            if row.switchedOff { return 3 }
+            switch row.lamp {
             case .ready, .working, .fault: return 0
             case .running: return 1
             case .unlit: return 2
             }
         }
-        return (0...2).flatMap { rank in rows.filter { band($0.lamp) == rank } }
+        return (0...3).flatMap { rank in rows.filter { band($0) == rank } }
     }
 
     /// The one DISPLAYED identity — RE-RULED 05 Aug (twice): the terminal
