@@ -253,9 +253,36 @@ final class StatusHUD: NSObject {
     /// A deep link hands the panel its session before the mic opens, so Listening
     /// can show who the reply is addressed to.
     func adoptTarget(sessionId: String, pid: Int?, label: String, cwd: String?) {
+        // A greeting card that has not been bound yet belongs to an agent that
+        // does not exist. The capture path adopts whatever `resolveReplyContext`
+        // returned, which on that card is the PREVIOUS agent — and the card then
+        // grew a GO TO AGENT that opened somebody else's tab (18 Aug, caught in a
+        // screenshot at 22:37). A door to the wrong agent is worse than no door,
+        // because it is indistinguishable from a right one until you are in the
+        // wrong tab. So the greeting card keeps its emptiness until the session it
+        // is actually about arrives; `bindGreeting` is the only way in.
+        guard !awaitingGreetingBinding else { return }
         currentTarget = (sessionId, pid, label)
         currentEventId = sessionId
+        lastAddressed = (sessionId, pid, label)
     }
+
+    /// The last agent this panel addressed, kept so a failure card can name it.
+    ///
+    /// `send()` returns the panel to the grid before the outcome arrives — the
+    /// countdown was the confirmation, and waiting on a receipt would be a second
+    /// wait already served. That is right, and it left the failure card painting
+    /// from idle with no target: no title, and no door, on a card whose whole
+    /// message was "check the tab" (18 Aug).
+    private var lastAddressed: (sessionId: String, pid: Int?, label: String)?
+
+    /// True between a greeting card painting and its session binding to it.
+    ///
+    /// The window is five to nine seconds of Terminal opening and Claude Code
+    /// booting, and it is long enough to answer the card in — which is the point
+    /// of the card. Everything in it must therefore behave as though the agent is
+    /// still on its way, rather than silently substituting the last one.
+    private var awaitingGreetingBinding = false
 
     /// What arming replaced, kept whole so the abort path can restore the
     /// EXACT prior face — state, strings, rows, closures — including hidden:
@@ -537,6 +564,10 @@ final class StatusHUD: NSObject {
         cwd: String?, eventId: String? = nil,
         placard: String? = nil
     ) -> Bool {
+        // The greeting window belongs to the greeting card; any other face
+        // taking the stage ends it, so an unbound launch never mutes the next
+        // card's doors.
+        awaitingGreetingBinding = false
         // Take the stage BEFORE recording who owns it. These two assignments used
         // to run above the guard, so a refused announcement still repointed
         // `currentTarget` — the routing that decides which terminal your next
@@ -578,6 +609,7 @@ final class StatusHUD: NSObject {
         currentEventId = nil
         currentSpoken = nil
         currentTarget = nil
+        awaitingGreetingBinding = true
         face = Face(title: label, body: line)
         render()
         return true
@@ -593,6 +625,10 @@ final class StatusHUD: NSObject {
     @discardableResult
     func bindGreeting(sessionId: String, pid: Int?, label: String, cwd: String?) -> Bool {
         guard state.isSpeaking, currentTarget == nil else { return false }
+        // Closed FIRST: this is the one adoption the greeting card wants, and the
+        // guard in `adoptTarget` would otherwise refuse the very call it exists
+        // to make room for.
+        awaitingGreetingBinding = false
         adoptTarget(sessionId: sessionId, pid: pid, label: label, cwd: cwd)
         // The doors are derived from the target, so the card grows GO TO AGENT
         // and its hub link at the moment it acquires one.
@@ -991,6 +1027,16 @@ final class StatusHUD: NSObject {
         if face.hasCard, failedDuringCapture {
             face.captureFault = message
         } else {
+            // The card names the agent the failure is ABOUT, and therefore carries
+            // its door. Without this the panel had already gone home to the grid,
+            // so the card painted with no target: an empty title and no GO TO
+            // AGENT under a message that said "check the tab before repeating
+            // yourself". A card that names an action must afford it.
+            awaitingGreetingBinding = false
+            if currentTarget == nil, let last = lastAddressed {
+                currentTarget = last
+                currentEventId = last.sessionId
+            }
             face = Face(title: currentTarget?.label ?? "", body: message)
         }
         render()
@@ -1325,6 +1371,10 @@ final class StatusHUD: NSObject {
     /// and a one-line hint survive only in the true empty state (no sessions).
     func showIdle(note: String? = nil, rows: [StateLegend.SessionRow],
                   because reason: String = "idle repaint") {
+        // The greeting window belongs to the greeting card; any other face
+        // taking the stage ends it, so an unbound launch never mutes the next
+        // card's doors.
+        awaitingGreetingBinding = false
         // The transition that used to stomp a live listening pill (an interrupted
         // announce resuming after the gesture that killed it). Now the table
         // refuses it and this returns without painting.
@@ -1385,6 +1435,10 @@ final class StatusHUD: NSObject {
     func dismiss() { clearReceipt(); dismissTapped() }
 
     func hide() {
+        // The greeting window belongs to the greeting card; any other face
+        // taking the stage ends it, so an unbound launch never mutes the next
+        // card's doors.
+        awaitingGreetingBinding = false
         clearReceipt()
         // Hidden still allows ambient surfacing, which is the property that broke
         // when this left a non-idle flag behind: after one Dismiss the app went
@@ -3680,6 +3734,14 @@ final class StatusHUD: NSObject {
         let greetingSaysOnlyTheQuestion = bodyLabel.stringValue == greetingLine
         let greetingHasNoAgentYet = currentTarget == nil && goButton.isHidden
         let greetingNamesItsDirectory = titleLabel.stringValue == "projects"
+        // The door that opened somebody else's tab (18 Aug, 22:37). Starting a
+        // capture on the greeting card adopts whatever the reply routing last
+        // resolved — the PREVIOUS agent, because this one has not registered —
+        // and the unbound card grew a GO TO AGENT pointing at it. The adoption
+        // is refused now, so the card stays honestly empty until it is bound.
+        adoptTarget(sessionId: "someone-else", pid: 99, label: "elsewhere", cwd: "/tmp")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let unboundCardRefusesAForeignAgent = currentTarget == nil && goButton.isHidden
         let bound = bindGreeting(sessionId: "g1", pid: 42, label: "projects", cwd: "/tmp")
         panel?.contentView?.layoutSubtreeIfNeeded()
         let bindingGivesItTheAgent = bound && currentTarget?.sessionId == "g1"
@@ -3689,13 +3751,27 @@ final class StatusHUD: NSObject {
                                          aux: "", lamp: .running)])
         let lateBindingRefused = !bindGreeting(sessionId: "g2", pid: 7,
                                                label: "elsewhere", cwd: "/tmp")
+        // The failure card names the agent it is about, and therefore carries its
+        // door. `send()` returns the panel to the grid before the outcome arrives,
+        // so this paints from idle — where it used to paint with no target at all,
+        // giving an empty title and no GO TO AGENT under the words "check the tab
+        // before repeating yourself" (18 Aug).
+        showIdle(note: nil, rows: [])
+        adoptTarget(sessionId: "f1", pid: 314, label: "promotions", cwd: "/tmp")
+        showIdle(note: nil, rows: [])
+        showResult("Typed it into promotions, but couldn't confirm it landed.")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let failureKeepsItsAgent = currentTarget?.sessionId == "f1"
+            && titleLabel.stringValue == "promotions" && !goButton.isHidden
         SelfTest.report("greeting", [
             ("cardPaintsAtOnce", greetingPainted),
             ("saysOnlyTheQuestion", greetingSaysOnlyTheQuestion),
             ("namesItsDirectory", greetingNamesItsDirectory),
             ("noAgentUntilBound", greetingHasNoAgentYet),
+            ("unboundCardRefusesAForeignAgent", unboundCardRefusesAForeignAgent),
             ("bindingGivesItTheAgent", bindingGivesItTheAgent),
             ("lateBindingRefused", lateBindingRefused),
+            ("failureKeepsItsAgent", failureKeepsItsAgent),
         ])
 
         // The Controls drill. The collapse only pays if opening the note costs
