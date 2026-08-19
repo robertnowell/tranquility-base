@@ -81,6 +81,29 @@ public enum TranscriptArchive {
 
     /// The session's opening ask and its branch. Both come from the transcript
     /// envelope, so no extra process or lookup is needed.
+    /// The branch a transcript was on, but ONLY when it was on exactly one.
+    ///
+    /// For the v16 backfill. A brief written before v14 has no branch of its
+    /// own, and the transcript is where `gitBranch` came from in the first
+    /// place — so it is recoverable rather than guessable. The catch is that a
+    /// long session moves between branches (worktrees, especially), and the
+    /// file does not say which turn sat on which. Attributing all of them to
+    /// the first branch found would hand some turns another branch's pull
+    /// request, which is the exact class of error this whole rewrite exists to
+    /// stop. So: unanimous or nothing.
+    public static func soleBranch(in url: URL) -> String? {
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        var seen: Set<String> = []
+        for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let data = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let b = obj["gitBranch"] as? String, !b.isEmpty else { continue }
+            seen.insert(b)
+            if seen.count > 1 { return nil }
+        }
+        return seen.first
+    }
+
     public static func sessionContext(in url: URL) -> (firstUserMessage: String?, gitBranch: String?) {
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return (nil, nil) }
         var firstUser: String?

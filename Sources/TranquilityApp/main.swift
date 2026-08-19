@@ -2520,8 +2520,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Task.detached { [weak self] in
                         guard let store = await self?.store else { return }
                         do {
+                            // Detached, so the GitHub lookups may block here —
+                            // and this is the moment that makes the tapped
+                            // door instant later.
                             if let file = try HomeBase.write(sessionId: spokenSession,
-                                                             store: store) {
+                                                             store: store,
+                                                             priming: true) {
                                 Permissions.log("homebase: \(file.lastPathComponent) "
                                                 + "for \(spokenSession.prefix(8))")
                             }

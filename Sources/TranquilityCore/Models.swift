@@ -334,46 +334,33 @@ public struct StoredBrief: Codable, FetchableRecord, PersistableRecord, Sendable
     /// existed; the page renders its derived header instead.
     public var headline: String?
     public var deck: String?
-    /// The pull requests the turn's own text named (v12), newline-joined.
-    ///
-    /// One TEXT column rather than a child table: a PR here is a string the
-    /// turn already contained, it is read only ever as a whole list, and a URL
-    /// cannot contain a newline — so the separator is total and the join is
-    /// lossless. A table would buy referential integrity nothing here refers to.
+    /// Dead since 18 Aug: two scraping mechanisms wrote here, both wrong, and
+    /// v15 cleared it. The column stays because SQLite drops are not worth a
+    /// table rebuild; nothing reads or writes it. Pull requests come from
+    /// `GitHubPullRequests`, keyed on `branch`.
     public var pullRequests: String?
+    /// The branch this turn was on (v14) — deterministic, never model-written,
+    /// and the only input the hub needs to ask GitHub for the pull request.
+    public var branch: String?
     /// The minted callsign at generation time; nil when not yet minted.
     public var callsign: String?
     /// Which provider generated it ("anthropic", "anthropic+digit-scrubbed", …)
     /// so a restored brief carries its provenance.
     public var provider: String
 
-    /// The brief as the rest of the pipeline consumes it. `branch` is not
-    /// persisted — it is deterministic card metadata re-derivable from the
-    /// transcript, not part of the argument.
+    /// The brief as the rest of the pipeline consumes it. `branch` IS
+    /// persisted now (v14): the hub asks GitHub which pull request a branch
+    /// has, so a brief that drops its branch is a turn whose PR can never be
+    /// found again.
     public var brief: SessionBrief {
         SessionBrief(
             topic: topic, goal: goal, happened: happened, nextStep: nextStep,
             question: question, risk: risk, rationale: rationale,
-            findings: findings, solution: solution, branch: nil,
+            findings: findings, solution: solution, branch: branch,
             recap: recap, proposal: proposal,
-            headline: headline, deck: deck,
-            pullRequests: StoredBrief.splitPRs(pullRequests))
+            headline: headline, deck: deck)
     }
 
-    /// The column's two directions, kept adjacent so they cannot drift apart.
-    /// An empty list stores as nil, not as "": a row that says "no PRs" and a
-    /// row written before the column existed are the same fact, and giving
-    /// them two representations only invites a query that handles one.
-    static func splitPRs(_ joined: String?) -> [String]? {
-        guard let joined, !joined.isEmpty else { return nil }
-        let parts = joined.split(separator: "\n").map(String.init)
-        return parts.isEmpty ? nil : parts
-    }
-
-    static func joinPRs(_ list: [String]?) -> String? {
-        guard let list, !list.isEmpty else { return nil }
-        return list.joined(separator: "\n")
-    }
 }
 
 /// A session with something to say, as returned by the derived query.
