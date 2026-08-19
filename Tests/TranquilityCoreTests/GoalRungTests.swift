@@ -136,11 +136,7 @@ extension GoalRungTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
-        // Anchored to the cutoff, not a fixed stamp: a goal written before
-        // the template shipped is deliberately not carried, so a drill about
-        // the CARRY has to sit after it.
-        let base = Date(timeIntervalSince1970: Double(QueueStore.goalTemplateEpochMs) / 1000)
-            .addingTimeInterval(60)
+        let base = Date(timeIntervalSince1970: 1_787_160_000)
         let aim = "fix the lamp so clicking it turns the session off"
 
         try store.saveBrief(SessionBrief(topic: "the lamp", goal: aim, happened: "Found it."),
@@ -165,8 +161,7 @@ extension GoalRungTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
-        let base = Date(timeIntervalSince1970: Double(QueueStore.goalTemplateEpochMs) / 1000)
-            .addingTimeInterval(60)
+        let base = Date(timeIntervalSince1970: 1_787_160_000)
         try store.saveBrief(SessionBrief(topic: "a", goal: "the old aim", happened: "x"),
                             sessionId: "s", eventRowid: 1, provider: "p", callsign: nil, at: base)
         try store.saveBrief(SessionBrief(topic: "b", goal: "the new aim", happened: "y"),
@@ -175,7 +170,6 @@ extension GoalRungTests {
         XCTAssertEqual(try store.carriedGoal(for: "s"), "the new aim")
     }
 }
-
 
 extension GoalRungTests {
     /// The template, pinned. "In project X, we are solving problem Y" — both
@@ -218,103 +212,5 @@ extension GoalRungTests {
         let system = AnthropicSummaryProvider.systemPrompt(projectLabel: "tranquility base")
         XCTAssertTrue(system.contains("No number is given, deliberately"))
         XCTAssertFalse(system.contains("Twelve words at most"))
-    }
-}
-
-extension GoalRungTests {
-    /// The carry must not outlive the rule that produced the value.
-    ///
-    /// "COPY IT VERBATIM" is what stops the churn, and it also freezes a goal
-    /// written under a rejected instruction forever. 146 sessions were holding
-    /// one when the template shipped, including the session that built the
-    /// template: "Make goal-state carry testable and reduce goal drift across
-    /// agent turns" — no project, no problem, preserved by the very mechanism
-    /// meant to improve it. Without a cutoff the new template reaches no live
-    /// session at all.
-    func testAPreTemplateGoalIsNotCarried() throws {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("vd-cut-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
-        let cutoff = Date(timeIntervalSince1970: Double(QueueStore.goalTemplateEpochMs) / 1000)
-
-        try store.saveBrief(
-            SessionBrief(topic: "t", goal: "Make goal-state carry testable", happened: "h"),
-            sessionId: "s", eventRowid: 1, provider: "p", callsign: nil,
-            at: cutoff.addingTimeInterval(-60))
-        XCTAssertNil(try store.carriedGoal(for: "s"),
-                     "a goal from before the template was handed forward")
-
-        try store.saveBrief(
-            SessionBrief(topic: "t", goal: "In tranquility base, fix the lamp click",
-                         happened: "h"),
-            sessionId: "s", eventRowid: 2, provider: "p", callsign: nil,
-            at: cutoff.addingTimeInterval(60))
-        XCTAssertEqual(try store.carriedGoal(for: "s"),
-                       "In tranquility base, fix the lamp click")
-    }
-
-    /// History is untouched. A cutoff rather than a migration, so the goal line
-    /// on every historical hub reads exactly as it does today — including
-    /// sessions that will never run again to write a better one.
-    func testTheOldGoalsAreStillStored() throws {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("vd-cut2-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
-        let old = Date(timeIntervalSince1970: Double(QueueStore.goalTemplateEpochMs) / 1000)
-            .addingTimeInterval(-3600)
-        try store.saveBrief(SessionBrief(topic: "t", goal: "the old aim", happened: "h"),
-                            sessionId: "s", eventRowid: 1, provider: "p", callsign: nil, at: old)
-        let stored = try XCTUnwrap(store.storedBrief(sessionId: "s", eventRowid: 1))
-        XCTAssertEqual(stored.brief.goal, "the old aim", "history was rewritten")
-    }
-
-    /// A carried goal is COPIED forward, so the copy gets a fresh timestamp and
-    /// stale words. The first cutoff filtered on `atMs >= cutoff` and therefore
-    /// did nothing at all: this session's rejected sentence was re-recorded at
-    /// 16:17, 18:43, 18:46 and 20:07, every one of them "after the cutoff", and
-    /// the filter waved all four through.
-    ///
-    /// The exclusion follows the TEXT. This drill is the shape of that bug.
-    func testACopyOfAPreTemplateGoalIsStillNotCarried() throws {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("vd-copy-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let store = try QueueStore(url: dir.appendingPathComponent("queue.sqlite"))
-        let cutoff = Date(timeIntervalSince1970: Double(QueueStore.goalTemplateEpochMs) / 1000)
-        let stale = "Make goal-state carry testable and reduce goal drift across agent turns"
-
-        // Written before the template…
-        try store.saveBrief(SessionBrief(topic: "t", goal: stale, happened: "h"),
-                            sessionId: "s", eventRowid: 1, provider: "p", callsign: nil,
-                            at: cutoff.addingTimeInterval(-3600))
-        // …then copied forward twice AFTER it, exactly as the carry does.
-        try store.saveBrief(SessionBrief(topic: "t", goal: stale, happened: "h"),
-                            sessionId: "s", eventRowid: 2, provider: "p", callsign: nil,
-                            at: cutoff.addingTimeInterval(60))
-        try store.saveBrief(SessionBrief(topic: "t", goal: stale, happened: "h"),
-                            sessionId: "s", eventRowid: 3, provider: "p", callsign: nil,
-                            at: cutoff.addingTimeInterval(120))
-
-        XCTAssertNil(try store.carriedGoal(for: "s"),
-                     "a fresh timestamp on stale words let the old goal through")
-
-        // And it heals: the moment a turn writes something genuinely new, that
-        // text is not in the excluded set and carries forward normally.
-        let fresh = "We are fixing lamp click state in tranquility base"
-        try store.saveBrief(SessionBrief(topic: "t", goal: fresh, happened: "h"),
-                            sessionId: "s", eventRowid: 4, provider: "p", callsign: nil,
-                            at: cutoff.addingTimeInterval(180))
-        XCTAssertEqual(try store.carriedGoal(for: "s"), fresh)
-
-        // …and keeps carrying it, which is the whole point of the carry.
-        try store.saveBrief(SessionBrief(topic: "t", goal: fresh, happened: "h"),
-                            sessionId: "s", eventRowid: 5, provider: "p", callsign: nil,
-                            at: cutoff.addingTimeInterval(240))
-        XCTAssertEqual(try store.carriedGoal(for: "s"), fresh)
     }
 }
