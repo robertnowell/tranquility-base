@@ -29,6 +29,30 @@ final class PastAgentsList: NSView {
         let revivable: Bool
         /// Everything the filter matches against, lowercased once at build.
         let haystack: String
+        /// What THIS list's right column says, when it is not what the grid's
+        /// says. The grid answers "which one is this" and shows the short id;
+        /// this list answers "when did I last touch it" and shows the time
+        /// (ruled 19 Aug). Two faces, two questions, and the row is not
+        /// rewritten to serve one of them — the list carries its own column and
+        /// the grid is untouched.
+        ///
+        /// Nil falls back to `row.aux`, which is what the drills want: a fixture
+        /// that says nothing about time keeps the shape it always had.
+        let aux: String?
+        /// What the pointer says, when it is not what `hoverText` would say.
+        /// The id displaced from the column lands here, so nothing is lost by
+        /// the swap above — see `openPastAgents`, which is the one place that
+        /// knows both halves.
+        let tooltip: String?
+
+        init(row: StateLegend.SessionRow, revivable: Bool, haystack: String,
+             aux: String? = nil, tooltip: String? = nil) {
+            self.row = row
+            self.revivable = revivable
+            self.haystack = haystack
+            self.aux = aux
+            self.tooltip = tooltip
+        }
     }
 
     private let scroll = NSScrollView()
@@ -419,7 +443,7 @@ final class PastRowView: NSControl {
     private var restingName: NSColor = StateLegend.Palette.ink
 
     init(item: PastAgentsList.Item, target: AnyObject, action: Selector) {
-        idLabel = NSTextField(labelWithString: item.row.aux)
+        idLabel = NSTextField(labelWithString: item.aux ?? item.row.aux)
         // Green for a resurrection, advisory grey for a door — the same two
         // channels the card uses for the same two meanings.
         verbLabel = NSTextField(labelWithString: item.revivable ? "REVIVE ›" : "GO TO ›")
@@ -432,7 +456,7 @@ final class PastRowView: NSControl {
         // The same hover as the grid, through the same function: a row that
         // said one thing on one face and another on the other would be worse
         // than one that said nothing.
-        toolTip = StateLegend.hoverText(for: item.row)
+        toolTip = item.tooltip ?? StateLegend.hoverText(for: item.row)
 
         highlight.wantsLayer = true
         highlight.layer?.cornerRadius = 6
