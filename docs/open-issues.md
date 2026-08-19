@@ -483,6 +483,39 @@ Drills: `signatureIsADoor`, `signatureAnswersTheCursor`, `signatureReachesTheHos
 — three, because they fail separately, and a door wired to nothing is the same
 secret as a door with no cursor one layer further in.
 
+## 25. The stalled row stopped naming its agent — FIXED (19 Aug)
+
+A regression from the fix that made stall reasons visible at all. A stopped
+session puts its REASON in the right column instead of an id — correct, and
+ruled 16 Aug ("an id would be the one row where this column says nothing
+useful") — but a reason is a sentence, and in the LIST nothing capped it.
+
+`PastRowView` gave the name `.defaultLow` compression resistance and left the
+right column at the default, so "silent for 24h, nothing written since it
+started" took the whole row and the name was laid out at **zero width**. The one
+row in the list that could not tell you which agent it was.
+
+The user's reading of the original ask, which the implementation inverted:
+
+> "The default should still be the agent name. The error message, like space
+> allocation, is fine. But when you hover that row, the tooltip should show you
+> the full error message."
+
+Two changes, both needed: the right column is capped at `GridRowView.auxFraction`
+(0.38, the same share the grid gives it) and drops below the name in compression
+resistance, so the name is the last thing to lose space rather than the first.
+The grid never had the bug because it measures one shared column across every
+row and caps it; the list builds each row alone and had neither guard.
+
+The hover half already existed — `StateLegend.hoverText` has carried the name
+plus the uncut message since 18 Aug, and this face is the one that takes key
+status, so its tooltips fire.
+
+Drills: `stalledRowStillNamesItsAgent` asserts the laid-out WIDTH, not the
+string — the string was right the whole time and rendered at zero points, so
+every assertion about it would have passed. `theFullReasonIsReachable` pins the
+tooltip that catches what the column cuts.
+
 ## 21. Obfuscation welded two words together — FIXED (18 Aug)
 
 "Sometimes after we obfuscate variable names it removes the space between that

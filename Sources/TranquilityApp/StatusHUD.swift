@@ -4756,18 +4756,53 @@ final class StatusHUD: NSObject {
                 revivable: !live,
                 haystack: [name, id, cwd].joined(separator: " ").lowercased())
         }
+        // The last one is the row that broke: a stopped session puts its REASON
+        // in the right column instead of an id, and a reason is a sentence.
+        let stallReason = "silent for 24h, nothing written since it started this"
+        let stalled = PastAgentsList.Item(
+            row: StateLegend.SessionRow(
+                id: "9f0c2b71-4444", name: "Blankshirts Mailchimp audit",
+                aux: stallReason, lamp: .unlit, revivable: true,
+                detail: stallReason),
+            revivable: true,
+            haystack: "blankshirts mailchimp audit")
         let items = [
             item("a285f0a9-1111", "Plan Mirai campaign", live: false, cwd: "/tmp/kopi"),
             item("c53ce6f5-2222", "Review PR", live: true, cwd: "/tmp/kopi"),
             item("381c643c-3333", "Compare apartments", live: false, cwd: "/tmp/home"),
+            stalled,
         ]
         showPastAgents(items: items)
         let entered = state == .pastAgents
         let scrolls = pastList.subviews.contains { $0 is NSScrollView }
-        // The id shown is the id the logs print, or the row and the log name
-        // the same session two different ways.
-        let idsMatch = items.allSatisfy { $0.row.aux == String($0.row.id.prefix(8)) }
+        // The right column says WHICH session or WHY it stopped, and nothing
+        // else. The id half is the original claim — the row and the log name
+        // the same session two different ways — and the reason half is the
+        // 16 Aug exception, which this drill did not know about until a stalled
+        // row was added to its sample and turned it red (19 Aug).
+        let idsMatch = items.allSatisfy {
+            $0.row.aux == StateLegend.shortId($0.row.id) || $0.row.aux == $0.row.detail
+        }
         let tookKeyboard = panel?.acceptsKey == true
+        // The name holds its column against a sentence in the right one.
+        //
+        // Asserted as a WIDTH, because the name was set correctly the whole
+        // time — `displayName` had already resolved "Blankshirts Mailchimp
+        // audit" — and Auto Layout then rendered it at zero points, so every
+        // assertion about the string would have passed while the row on screen
+        // named no agent at all (screenshot, 19 Aug). Half the row is the
+        // claim: the reason is capped at `auxFraction` (0.38), so the name can
+        // never be the thing that loses.
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let nameWidths = pastList.nameWidthsForTesting
+        let stalledName = nameWidths.first { $0.id == "9f0c2b71-4444" }?.width ?? 0
+        let listWidth = pastList.frame.width
+        let stalledRowStillNamesItsAgent = stalledName > listWidth / 2
+        // And nothing is lost: the tooltip carries the name AND the full
+        // sentence, uncut, which is where the truncated half goes.
+        let stalledTip = StateLegend.hoverText(for: stalled.row) ?? ""
+        let theFullReasonIsReachable = stalledTip.contains(stallReason)
+            && stalledTip.contains("Blankshirts Mailchimp audit")
         // Read WHILE the face is up. Everything below `goHomeFromPastAgents`
         // is a fact about the grid, which is what the first version of these
         // two accidentally asserted.
@@ -4831,6 +4866,8 @@ final class StatusHUD: NSObject {
             ("backSitsInThePlacardRow", backInPlacardRow),
             ("noSecondBackButton", noSecondBack),
             ("idMatchesTheLogs", idsMatch),
+            ("stalledRowStillNamesItsAgent", stalledRowStillNamesItsAgent),
+            ("theFullReasonIsReachable", theFullReasonIsReachable),
             ("verbFollowsLiveness", verbs),
             ("placardClearsChevron", placardClearsChevron),
             ("terminateFollowsLiveness", terminateFollowsLiveness),
