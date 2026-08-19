@@ -483,6 +483,63 @@ Drills: `signatureIsADoor`, `signatureAnswersTheCursor`, `signatureReachesTheHos
 — three, because they fail separately, and a door wired to nothing is the same
 secret as a door with no cursor one layer further in.
 
+## 26. `bottomLineHasAir` is failing the CORRECT layout — OPEN, and not what it looks like
+
+It reads as a flaky drill. It is a flaky drill, but the flake is the symptom and
+the diagnosis is inverted: **the check passes on the broken layout and fails on
+the right one.** Measured 19 Aug; nothing changed as a result, and this is
+written so whoever owns the bottom line does not have to re-derive it.
+
+### The flake is real
+
+Six runs of one unchanged binary (`--allow-second-instance --selftest-hud`, main
+at 4461c0b) split 3/3 between `bottomLineAir=12.0` and `8.5`, with every other
+number on the drill's own log line byte-identical — `panelH 209.0->209.0
+noteW=275.5 column=352.0 lines=3 floorGap=63.0`. It is not the animating panel
+bounds the neighbouring drill warns about: the author already avoided that by
+measuring sibling geometry inside one settled pass, and an added multi-pass
+settle never fired (`needsLayout` is false after the first pass, every time).
+
+### What the two states actually are
+
+Instrumenting both boxes:
+
+| | action row | word view | measured air |
+|---|---|---|---|
+| A | **125.0pt** | **113.0pt** | 12.0 — **passes** |
+| B | 25.0pt | 20.0pt | 8.5 — **fails** |
+
+A is the broken one. The word is centred in a box five times its own height and
+floats roughly sixty points below the body it belongs to; B is the compact row
+the design describes. The 12.0 the check wants is an accident of centring inside
+a tall box, so the gate is red exactly when the panel is right — and green when
+it is not.
+
+### The unbounded constraint underneath
+
+`ControlsWordView` pins its `HoverBox` to all four edges and constrains it
+`heightAnchor >= 20`. A floor with no ceiling and no preferred value: the view
+has no opinion about its own height, so in a stack with vertical slack it takes
+the slack. The 20 was ruled 18 Aug as a hit-target SIZE ("8pt of slack on each
+side and a 20pt floor makes it the same size target on both faces"), which is a
+statement about how big the target should BE, not merely how small it may get.
+
+### What was tried, and why nothing shipped
+
+Giving the box a `.defaultHigh` preferred height of 20 plus vertical hugging on
+the action row produced 6/6 at 12.0 with the word at its ruled 20pt and the row
+at 32 — the value the ruling asked for, arrived at honestly. Re-running the same
+pair after trimming the instrumentation gave 4/6 at 8.5. Six-sample runs cannot
+tell 50% from 33%, so that pair is unproven, and landing a half-verified layout
+change into an area another session is actively working is worse than leaving
+the gate red with the diagnosis written down.
+
+**For whoever picks this up:** the fix is probably those two constraints, but it
+needs a repeat count that can actually distinguish the distributions, and the
+drill's expectation has to be re-derived from the ruling (6pt stack spacing +
+6pt row inset = 12) rather than from whichever number the current layout happens
+to produce.
+
 ## 25. The stalled row stopped naming its agent — FIXED (19 Aug)
 
 A regression from the fix that made stall reasons visible at all. A stopped
