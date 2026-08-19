@@ -615,7 +615,11 @@ final class StatusHUD: NSObject {
         text: String, label: String, seconds: TimeInterval,
         send: @escaping () -> Void, cancel: @escaping (_ restartListening: Bool) -> Void
     ) {
-        countdownTimer?.invalidate()
+        // Nil'd, not merely invalidated: `awaitingConfirm` reads the handle, so
+        // a dead timer left in place makes it answer true for a window that is
+        // already over — the shape that once left every gesture dead-ending on
+        // the read-back (12 Aug).
+        countdownTimer?.invalidate(); countdownTimer = nil
         // Transition first so a refused stage never arms the countdown. Safe for
         // `awaitingConfirm` (the old reason for the reversed order): it derives
         // from the countdown timer, which is invalidated above, so render() still
@@ -1201,9 +1205,41 @@ final class StatusHUD: NSObject {
             return false
         }
         if next != state {
+            leaving(for: next)
             Permissions.log("state: \(state.name) -> \(next.name)  (\(reason))")
             state = next
         }
+        entered(next)
+        return true
+    }
+
+    /// The user's door. Explicit actions (Dismiss, hiding the panel, committing a
+    /// send) are never stale, so they bypass the table — but they announce it.
+    private func forceTransition(to next: PanelState, because reason: String) {
+        guard next != state else { return }
+        leaving(for: next)
+        Permissions.log("state: \(state.name) -> \(next.name)  (\(reason), user door)")
+        state = next
+        entered(next)
+    }
+
+    /// What LEAVING the current state owes — run by BOTH doors, before the move.
+    ///
+    /// Its opposite number is `entered`. The pair exists because "leaving X tears
+    /// down X's machinery" is a property of leaving, not of whichever caller
+    /// happened to do it: every time that obligation lived at a call site instead,
+    /// some call site forgot, and the forgetting was silent.
+    private func leaving(for next: PanelState) {
+        releasePendingSend(for: next)
+    }
+
+    /// What ARRIVING somewhere owes, wherever the arrival came from.
+    ///
+    /// These two lines used to live in `transition` alone, so the user's door
+    /// quietly skipped the preparing-paint cancel. Nothing depended on that
+    /// asymmetry — the paint work item re-checks `.preparing` before it draws —
+    /// but a rule with one door out of two is not a rule.
+    private func entered(_ next: PanelState) {
         // Leaving Preparing cancels its pending paint wherever that happens, so
         // no path has to remember to. A card that arrives 250ms after the thing
         // it was covering for is worse than one that never arrived.
@@ -1217,17 +1253,48 @@ final class StatusHUD: NSObject {
         // its body runs, so a notice cleared down there survived a dismiss and
         // came back up with the panel.
         if case .idle = next {} else { clearNotice(); forgetEmptyRoom() }
-        return true
     }
 
-    /// The user's door. Explicit actions (Dismiss, hiding the panel, committing a
-    /// send) are never stale, so they bypass the table — but they announce it.
-    private func forceTransition(to next: PanelState, because reason: String) {
-        guard next != state else { return }
-        Permissions.log("state: \(state.name) -> \(next.name)  (\(reason), user door)")
-        state = next
-        if case .idle = next {} else { clearNotice(); forgetEmptyRoom() }
+    /// Do what `PanelState.releasesPendingSend` decides: leaving the read-back
+    /// cancels the send it was offering. Ruled 18 Aug.
+    ///
+    /// The countdown IS the send: `render()` hands the send closure to a one-shot
+    /// `Timer` BY VALUE, so clearing `onCommitSend` afterwards stops nothing and
+    /// only invalidating the timer does. That is why this is not a repaint
+    /// concern — a read-back that leaves the screen with its timer alive still
+    /// sends, and it sends silently.
+    ///
+    /// The incident (app.log 18 Aug 22:39): ⌥⌥ from the read-back opened a new
+    /// capture through `showListening`, the countdown kept running underneath it,
+    /// and four seconds later `state: listening -> idle (countdown completed)`
+    /// dispatched the words the gesture had just rejected — into a live
+    /// microphone, which the app noticed only well enough to drop its own send
+    /// earcon. The gesture was not the bug. The door was.
+    ///
+    /// So the obligation moves off the call sites and onto leaving itself. Every
+    /// legitimate exit already invalidates the timer BEFORE it transitions —
+    /// `commitPendingSendNow`, `cancelPendingSend`, `endCapture`, and the
+    /// countdown's own completion all do — so this is a no-op on all four and a
+    /// rescue on anything new. A commit can never be turned into a cancel here,
+    /// because a commit has already nil'd the timer by the time it moves.
+    private func releasePendingSend(for next: PanelState) {
+        guard !releasingPendingSend else { return }
+        guard state.releasesPendingSend(movingTo: next) else { return }
+        guard awaitingConfirm else { return }
+        releasingPendingSend = true
+        defer { releasingPendingSend = false }
+        Permissions.log("pendingSend: left for \(next.name) with the countdown live"
+                        + " — cancelling the send")
+        // FALSE for the same reason the button passes false: whatever is taking
+        // the stage is already the next thing, and restarting a capture from
+        // here would double-start it.
+        cancelPendingSend(restartListening: false)
     }
+
+    /// Guards `releasePendingSend` against a cancel closure that transitions.
+    /// Production's does not (it marks the utterance discarded and closes the
+    /// delivery window), but a door that can be re-entered is a door that will be.
+    private var releasingPendingSend = false
 
     /// Tear down a capture state for real before leaving it. The legality table
     /// refuses stale repaints over listening/transcribing/pendingSend; a person
@@ -2944,6 +3011,43 @@ final class StatusHUD: NSObject {
     /// Armed by `showPreparing`, cancelled the moment anything else takes the
     /// stage — so a fast announcement never flashes a loading card on its way in.
     private var preparingPaint: DispatchWorkItem?
+
+    /// Prove that LEAVING the read-back stops the send — not just pressing the
+    /// button whose name says so.
+    ///
+    /// `selfTestPendingSend` below calls `cancelPendingSend` directly, which is
+    /// the one door that was never broken; it could not have caught 18 Aug's
+    /// incident and did not. This drill goes through the door the GESTURE uses:
+    /// a new capture takes the stage out of `.pendingSend`, exactly as ⌥⌥ does.
+    ///
+    /// Synchronous, and it stands its own fixture down, so it must run BEFORE
+    /// `selfTestPendingSend` — that one owns the panel for five more seconds and
+    /// releases the drill hold when it finishes.
+    func selfTestReadbackDoor() {
+        var sent = false
+        var cancelled = false
+        currentTarget = ("selftest", 1, "promotions")
+        showPendingSend(text: "words a new capture rejected", label: "promotions",
+                        seconds: 4, send: { sent = true }, cancel: { _ in cancelled = true })
+        let armed = awaitingConfirm
+        // The gesture's door. `.pendingSend` admits `.listening` on purpose —
+        // re-recording during the window is the whole point — so this is a legal
+        // move, and the send must not survive it.
+        showListening(level: { 0 })
+        SelfTest.report("readbackDoor", [
+            ("armed", armed),
+            ("newCaptureTookTheStage", state.isCapturingAudio),
+            ("countdownReleased", countdownTimer == nil),
+            ("sendCancelled", cancelled),
+            ("notSent", !sent),
+        ])
+        endCapture(because: "selftest readbackDoor cleanup")
+        // And it must stay dead past the window it was armed for — the same
+        // assertion `pendingSend.afterWindow` makes, through the other door.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            SelfTest.report("readbackDoor.afterWindow", [("stillNotSent", !sent)])
+        }
+    }
 
     /// Prove a pending send can be stopped for its whole life.
     ///

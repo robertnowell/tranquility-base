@@ -902,6 +902,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if CommandLine.arguments.contains("--selftest-hud") {
             hud.selfTest()
+            // Before selfTestPendingSend: that one holds the panel for five more
+            // seconds and releases the drill hold when it is done.
+            hud.selfTestReadbackDoor()
             hud.selfTestPendingSend()
             // The voice-menu cache drill (issue 14, nested blocker). Three
             // seconds is far past the off-thread loader's worst case, so by
@@ -1796,6 +1799,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     lastStatusLine = "mic already live — tap ⌥ to send"
                     return
                 }
+                // ⌥⌥ from the read-back is Don't send, then ⌥⌥ (ruled 18 Aug).
+                // It was not: this path opened a new capture and never touched
+                // the countdown, so four seconds later the words the gesture had
+                // just rejected were dispatched into a live microphone (app.log
+                // 22:39:05). The hold path has always said these two lines; the
+                // tap path never got them. `StatusHUD.releasePendingSend` now
+                // catches the whole class at the door — this stays because the
+                // ORDER is a ruling in its own right, and the door cannot know it.
+                //
+                // BEFORE the microphone, unlike every mutation below it. The
+                // 10 Aug rule ("nothing is mutated until the microphone is
+                // actually recording") protects a waiting agent you could LOSE to
+                // a failed open; this is the opposite kind of mutation. You asked
+                // for these words NOT to be sent, and a microphone that fails to
+                // open is not a reason to send them. A failure lands on the mic
+                // card with the transcript discarded — kept in past utterances,
+                // out of the sendable set — which is where Don't send leaves it
+                // too. Same order `.replyBegan` already uses for the hold.
+                //
+                // The generation bump is not decoration and it is not the fix:
+                // `send(utteranceId:)` reads the generation when the timer FIRES,
+                // so it can never catch a countdown. What it does catch is the
+                // sibling case one state over — ⌥⌥ during `.transcribing`, which
+                // also admits `.listening` — where the replaced transcription
+                // would otherwise finish and open a read-back for the old words
+                // while you are already speaking the new ones.
+                replyGeneration += 1
+                hud.cancelPendingSend(restartListening: false)
                 // ORDER IS THE WHOLE FIX (10 Aug, second attempt). This block
                 // used to mark the session heard and stop the announcement
                 // BEFORE opening the microphone. When the open then failed —
