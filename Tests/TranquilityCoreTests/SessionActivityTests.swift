@@ -64,19 +64,32 @@ final class SessionActivityTests: XCTestCase {
         XCTAssertEqual(SessionActivity.classify(tail: tail, modified: warm), .working)
     }
 
-    func testStaleWorkingDecaysToIdle() {
-        // A tool call that hung yesterday is not "working" — a lamp stuck on
-        // blue for a dead session is worse than no lamp.
-        let old = Date().addingTimeInterval(-SessionActivity.freshness - 60)
-        XCTAssertEqual(SessionActivity.classify(tail: [assistantToolUse()], modified: old), .idle)
+    func testALongSilenceAsksForAHumanRatherThanGoingOut() {
+        // RE-RULED 18 Aug. This used to assert the opposite — that a tool call
+        // hung yesterday decays to idle — and that decay is what hid a live
+        // session blocked on Robert for 41 minutes. A lamp is never turned off
+        // by the passage of time; it is turned UP.
+        let old = Date().addingTimeInterval(-SessionActivity.stalled - 60)
+        guard case .blocked(let reason) = SessionActivity.classify(
+            tail: [assistantToolUse()], modified: old)
+        else { return XCTFail("an hour of silence from a live agent is amber, not off") }
+        XCTAssertTrue(reason.contains("silent for"), reason)
+        // No dated evidence at all is a different thing from silence: it is an
+        // unreadable file, and inventing an age for it would be a guess.
         XCTAssertEqual(SessionActivity.classify(tail: [assistantToolUse()], modified: nil), .idle)
+    }
+
+    func testAToolCallInsideTheHourIsStillJustWorking() {
+        let recent = Date().addingTimeInterval(-SessionActivity.stalled + 600)
+        XCTAssertEqual(
+            SessionActivity.classify(tail: [assistantToolUse()], modified: recent), .working)
     }
 
     func testBlockedDoesNotDecay() {
         // A session blocked an hour ago is still blocked: nothing has moved.
-        let old = Date().addingTimeInterval(-SessionActivity.freshness - 60)
+        let old = Date().addingTimeInterval(-SessionActivity.stalled - 60)
         guard case .blocked = SessionActivity.classify(tail: [apiError("limit")], modified: old) else {
-            return XCTFail("blocked must survive the freshness gate")
+            return XCTFail("amber is never retired by a clock")
         }
     }
 
@@ -225,15 +238,15 @@ final class SessionActivityTests: XCTestCase {
             .working)
     }
 
-    func testAnOpenPromptOnAColdSessionDecaysToIdle() {
+    func testAnOpenPromptOnASilentSessionAsksForAHuman() {
         // A session that crashed mid-turn leaves a prompt with no Stop
-        // forever. Without this the lamp would sit blue for all time.
-        let cold = Date().addingTimeInterval(-SessionActivity.freshness - 60)
-        XCTAssertEqual(
-            SessionActivity.classify(
-                tail: [assistant(text: "Done.")], modified: cold,
-                boundary: boundary(.userPromptSubmit, agoSeconds: SessionActivity.freshness + 60)),
-            .idle)
+        // forever. It used to decay to idle, which is how a crashed session
+        // became invisible; it turns amber now, which is how it gets looked at.
+        let cold = Date().addingTimeInterval(-SessionActivity.stalled - 60)
+        guard case .blocked = SessionActivity.classify(
+            tail: [assistant(text: "Done.")], modified: cold,
+            boundary: boundary(.userPromptSubmit, agoSeconds: SessionActivity.stalled + 60))
+        else { return XCTFail("an hour of silence under an open prompt is amber") }
     }
 
     // MARK: - The transcript says when a turn ended (18 Aug)
@@ -301,11 +314,11 @@ final class SessionActivityTests: XCTestCase {
     // Two of the three blue lamps on the grid at 17:19 belonged to sessions
     // that had finished 105 and 149 minutes earlier. Nothing was stuck: the
     // lamp was recomputed every five seconds and came back blue every time,
-    // because the freshness gate was reading the FILE's clock and Claude Code
+    // because the stale-verdict clock was reading the FILE's clock and Claude Code
     // keeps writing to a finished session's transcript long after the
     // conversation ends — snapshot updates, ai-title, bridge-session, pr-link.
     // 30 of the 40 sessions in a two-day window had a file clock past their
-    // last conversational word by more than the freshness window — median 23
+    // last conversational word by more than the stall window — median 23
     // hours, maximum five days (`tbase lamps`).
 
     private func timestamped(_ line: String, agoSeconds: TimeInterval) -> String {
@@ -320,18 +333,23 @@ final class SessionActivityTests: XCTestCase {
         // conversation. The prompt is what the verdict rests on, so the
         // prompt's age is the verdict's age.
         let tail = [timestamped(userPrompt(), agoSeconds: 7200)]
-        XCTAssertEqual(SessionActivity.classify(tail: tail, modified: warm), .idle)
+        // Amber since the 18 Aug re-ruling, idle before it. Either way the
+        // point stands and is the point of this test: NOT blue, because the
+        // file moving is not the conversation speaking.
+        guard case .blocked = SessionActivity.classify(tail: tail, modified: warm)
+        else { return XCTFail("a fresh mtime must not date a two-hour-old prompt") }
     }
 
     func testAToolCallIsDatedByItsOwnEntryNotTheFile() {
         let tail = [timestamped(assistantToolUse(), agoSeconds: 7200)]
-        XCTAssertEqual(SessionActivity.classify(tail: tail, modified: warm), .idle)
+        guard case .blocked = SessionActivity.classify(tail: tail, modified: warm)
+        else { return XCTFail("the tool call's own timestamp dates the verdict") }
     }
 
     func testALiveTurnStaysBlueOnAFileThatHasNotBeenTouched() {
         // The other direction, and the reason this is not simply a stricter
         // gate: a warm entry wins over a cold file.
-        let cold = Date().addingTimeInterval(-SessionActivity.freshness - 60)
+        let cold = Date().addingTimeInterval(-SessionActivity.stalled - 60)
         let tail = [timestamped(userPrompt(), agoSeconds: 5)]
         XCTAssertEqual(SessionActivity.classify(tail: tail, modified: cold), .working)
     }
@@ -341,11 +359,10 @@ final class SessionActivityTests: XCTestCase {
         // and the mtime. A prompt submitted two hours ago whose turn ended in
         // prose two hours ago is finished, however recently the file moved.
         let tail = [timestamped(assistant(text: "Done."), agoSeconds: 7200)]
-        XCTAssertEqual(
-            SessionActivity.classify(
-                tail: tail, modified: warm,
-                boundary: boundary(.userPromptSubmit, agoSeconds: 7200)),
-            .idle)
+        guard case .blocked = SessionActivity.classify(
+            tail: tail, modified: warm,
+            boundary: boundary(.userPromptSubmit, agoSeconds: 7200))
+        else { return XCTFail("a fresh mtime must not re-arm a two-hour-old boundary") }
     }
 
     func testUntimestampedEntriesStillFallBackToTheFile() {
@@ -356,9 +373,9 @@ final class SessionActivityTests: XCTestCase {
 
     func testALongTurnStaysWorkingOnTranscriptWarmthAlone() {
         // The boundary row is written at submit and never touched again, so a
-        // turn running longer than the freshness window must keep its lamp
-        // from the transcript's own mtime.
-        let oldPrompt = SessionActivity.freshness + 600
+        // turn running longer than a poll interval must keep its lamp from
+        // the transcript's own warmth.
+        let oldPrompt: TimeInterval = 1800
         XCTAssertEqual(
             SessionActivity.classify(
                 tail: [assistant(text: "Still going.")], modified: warm,

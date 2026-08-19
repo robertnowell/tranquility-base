@@ -263,7 +263,7 @@ do {
             return "\(sign)\(Int(s / 86_400))d"
         }
         print("window \(Int(lampDays))d · \(lampFound.sessions.count) sessions · "
-            + "freshness \(Int(SessionActivity.freshness / 60))m")
+            + "stalled-at \(Int(SessionActivity.stalled / 60))m")
         print("")
         print("\(pad("LAMP", 9))\(pad("EVIDENCE", 10))\(pad("FILE", 8))\(pad("DRIFT", 8))"
             + "\(pad("SESSION", 10))TITLE")
@@ -281,13 +281,13 @@ do {
             }
             let evidenceAge = e.observedAt.map { lampNow.timeIntervalSince($0) }
             let fileAge = e.modifiedAt.map { lampNow.timeIntervalSince($0) }
-            if let d = e.drift, d > SessionActivity.freshness { drifted += 1; drifts.append(d) }
+            if let d = e.drift, d > SessionActivity.stalled { drifted += 1; drifts.append(d) }
             // The tripwire: a lit lamp whose evidence is older than the
-            // freshness window can only have been lit by the file.
-            if e.activity == .working, let a = evidenceAge, a > SessionActivity.freshness {
+            // stall window can only have been lit by the file.
+            if e.activity == .working, let a = evidenceAge, a > SessionActivity.stalled {
                 litByFile += 1
             }
-            guard e.activity != .idle || (e.drift ?? 0) > SessionActivity.freshness else { continue }
+            guard e.activity != .idle || (e.drift ?? 0) > SessionActivity.stalled else { continue }
             print("\(pad(lamp, 9))\(pad(ageText(evidenceAge), 10))\(pad(ageText(fileAge), 8))"
                 + "\(pad(ageText(e.drift), 8))\(pad(String(s.sessionId.prefix(8)), 10))"
                 + truncate(s.title ?? "—", 44))

@@ -72,10 +72,26 @@ public enum SessionActivity: Equatable, Sendable {
         return f.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
     }
 
-    /// A `working` verdict older than this is not believable — the process is
-    /// gone, or a tool call hung days ago. Prevents a lamp stuck on blue for
-    /// a session nobody will ever come back to.
-    public static let freshness: TimeInterval = 15 * 60
+    /// How long a live session may say nothing at all before the lamp asks for
+    /// a human. RULED 18 Aug, and it replaces a timer that did the opposite.
+    ///
+    /// The old rule decayed `working` to idle after 15 minutes, which turned
+    /// the lamp OFF on a session that was provably running — the panel's live
+    /// bands are built from the process list, so a dead session never reaches
+    /// this code at all (it is drawn `.unlit` by a different band). That timer
+    /// was written 06 Aug, when the panel could not see processes and a clock
+    /// was the only defence against a lamp stuck blue forever; liveness landed
+    /// 11 Aug and answered the same question with an observation. Nobody
+    /// removed the clock, and on 18 Aug it hid a session that had been blocked
+    /// on Robert for 41 minutes.
+    ///
+    /// **The system never turns a lamp off. Only the user does.** A lamp may
+    /// be turned UP — toward the user — and that is what this is: an hour of
+    /// silence from a live agent is not "never mind", it is "come and look".
+    /// Blue past an hour is either working or stuck, and the panel cannot tell
+    /// which from a file that stopped changing; amber says so honestly and
+    /// puts the row in front of you instead of retiring it.
+    public static let stalled: TimeInterval = 60 * 60
 
     /// The last turn boundary the hooks recorded for a session.
     ///
@@ -149,8 +165,9 @@ public enum SessionActivity: Equatable, Sendable {
     ///    alone reads idle for 9.8% of the time an agent is actually working,
     ///    in 69 windows long enough for a poll to land inside one.
     ///
-    /// The freshness gate applies either way: a prompt with no Stop after it
-    /// would otherwise hold a lamp blue forever on a session that crashed.
+    /// The stall escalation applies either way: a prompt with no Stop after it
+    /// holds a lamp blue, and once an hour has passed with nothing written it
+    /// turns amber rather than quietly going out.
     static func classify(
         tail: [String], modified: Date?, boundary: TurnBoundary? = nil, now: Date = Date()
     ) -> SessionActivity {
@@ -271,24 +288,38 @@ public enum SessionActivity: Equatable, Sendable {
         return working(since: warmest, now: now)
     }
 
-    /// `working` only while the evidence is still warm — see `freshness`.
+    /// Blue while the agent is moving; amber once it has been silent long
+    /// enough that a human should look — see `stalled`. Never off: nothing
+    /// here can produce `.idle` from the passage of time alone.
     ///
     /// `observed` is the timestamp of the transcript ENTRY the verdict was read
     /// from, not the file's mtime. They are not the same clock, and dating the
     /// verdict by the file was the bug: Claude Code keeps writing to a finished
     /// session's transcript — `file-history-snapshot` updates, `ai-title`,
     /// `bridge-session`, `pr-link`, `mode` — none of which is the conversation
-    /// saying anything. Each such write re-armed the freshness gate, so an
+    /// saying anything. Each such write re-armed the stale-verdict clock, so an
     /// hours-old "working" verdict was certified fresh over and over and the
     /// lamp never decayed. Measured 18 Aug across the 30 most recent
     /// transcripts: 19 carried an mtime newer than their last conversational
     /// entry, by a median of 98 minutes and a maximum of four days; two of the
     /// three blue lamps on the grid at 17:19 were sessions that had finished
-    /// 105 and 149 minutes earlier. The freshness gate was never broken — it
+    /// 105 and 149 minutes earlier. The gate was never broken — it
     /// was being fed the wrong clock.
     private static func working(since observed: Date?, now: Date) -> SessionActivity {
-        guard let observed, now.timeIntervalSince(observed) <= freshness else { return .idle }
-        return .working
+        // No dated evidence at all is not silence, it is an unreadable file.
+        // Say idle rather than invent an age for it.
+        guard let observed else { return .idle }
+        let silence = now.timeIntervalSince(observed)
+        guard silence > stalled else { return .working }
+        return .blocked(reason: "silent for \(spoken(silence)) — no output since it started this")
+    }
+
+    /// A duration a row can carry in its reason column, in the units a person
+    /// would say: "1h", "3h", "2d".
+    static func spoken(_ seconds: TimeInterval) -> String {
+        if seconds < 5400 { return "\(Int(seconds / 60))m" }
+        if seconds < 172_800 { return "\(Int(seconds / 3600))h" }
+        return "\(Int(seconds / 86_400))d"
     }
 
     private static func hasToolUse(_ entry: [String: Any]) -> Bool {
