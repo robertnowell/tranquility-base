@@ -210,11 +210,23 @@ public struct TerminalAppTransport: DispatchTransport {
 
         // Step 3 — read back. Delivery is confirmed by OUR text appearing, not by
         // the agent's reply, which is unbounded (a long tool call takes minutes).
-        guard let transcriptPath = target.transcriptPath else {
-            return .failed(.verificationTimedOut)
-        }
+        //
+        // The path is NOT required up front, and demanding it was a bug with a
+        // guaranteed victim (18 Aug). Claude Code creates the transcript file when
+        // the first user message lands — measured to the second: session 8373bb2c's
+        // file was born at 21:54:51 and the send reported itself unconfirmed at
+        // 21:54:51. So on a session's first message the file cannot exist yet, the
+        // old `guard` returned `.verificationTimedOut` in one second flat without
+        // ever entering the ten-second window, and EVERY first reply to a new agent
+        // landed correctly and then said it might not have.
+        //
+        // Resolving inside the loop fixes it for free: the file appears at the same
+        // instant the text does, so a watcher that tolerates a missing file sees
+        // both together. Nothing changes for an established session, where the path
+        // resolves on the first poll.
         let landed = await TranscriptWatcher.waitForUserText(
-            payload, in: transcriptPath, timeout: verificationTimeout, pollInterval: pollInterval)
+            payload, sessionId: target.sessionId, knownPath: target.transcriptPath,
+            timeout: verificationTimeout, pollInterval: pollInterval)
 
         // One retry of the Return, and only the Return.
         //
@@ -226,7 +238,8 @@ public struct TerminalAppTransport: DispatchTransport {
         if !landed {
             _ = AppleScript.run(script: injectScript(tty: tty, literal: "\"\""))
             let landedAfterRetry = await TranscriptWatcher.waitForUserText(
-                payload, in: transcriptPath, timeout: 3, pollInterval: pollInterval)
+                payload, sessionId: target.sessionId, knownPath: target.transcriptPath,
+                timeout: 3, pollInterval: pollInterval)
             if landedAfterRetry {
                 return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
             }
@@ -599,6 +612,42 @@ public enum TranscriptWatcher {
         let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
         while Date() < deadline {
             if userMessages(in: path).contains(where: { $0.contains(needle) }) { return true }
+            try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+        }
+        return false
+    }
+
+    /// The same wait, for a transcript that may not exist yet.
+    ///
+    /// A session registers with `claude agents --json` before it has written a
+    /// line, and Claude Code creates `<sessionId>.jsonl` when the FIRST user
+    /// message lands — which is the very message this is watching for. Requiring
+    /// the path in advance therefore made a session's first reply unverifiable by
+    /// construction, so the path is looked up on every poll until it appears.
+    ///
+    /// `knownPath` short-circuits the lookup for callers that already hold one
+    /// (an established session, and the test harness, whose transcripts do not
+    /// live under `~/.claude/projects` at all). A path that is known but not yet
+    /// on disk is still fine: `userMessages` reads a missing file as no messages.
+    public static func waitForUserText(
+        _ text: String, sessionId: String, knownPath: String?,
+        timeout: TimeInterval, pollInterval: TimeInterval,
+        projects: URL = TranscriptArchive.projectsDirectory
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var path = knownPath
+        while Date() < deadline {
+            // Re-resolved rather than resolved once: the whole point is that the
+            // file arrives DURING the wait. Once found it is kept — the id names
+            // one file for the life of the session.
+            if path == nil {
+                path = TranscriptArchive.transcriptPath(forSessionId: sessionId,
+                                                        projects: projects)
+            }
+            if let path, userMessages(in: path).contains(where: { $0.contains(needle) }) {
+                return true
+            }
             try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
         }
         return false
