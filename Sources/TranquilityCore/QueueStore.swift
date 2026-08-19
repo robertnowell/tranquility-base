@@ -341,6 +341,21 @@ public final class QueueStore: Sendable {
             }
         }
 
+        // Backfill (18 Aug, same day). v12 shipped the column and the first
+        // filler asked the model for a URL copied verbatim; it filled 2 briefs
+        // in 1,299, because assistants write "PR #117" and paste the URL once.
+        // The reader is deterministic now, so every brief already in the table
+        // has an answer sitting in the event it summarises — the same function
+        // over the same text, which is a recomputation and not an invention.
+        //
+        // Without this the ruling only applies to turns that have not happened
+        // yet, and the operator opens a hub that still lists none of the pull
+        // requests it has been opening all day. That is the complaint that
+        // produced this migration, and it was the right complaint.
+        m.registerMigration("v13_backfill_pull_requests") { db in
+            try QueueStore.backfillPullRequests(db)
+        }
+
         // A callsign with a vowelless word in it was never sayable, and the
         // freeze made that permanent — "promotions stlth" (STLTH is a brand
         // spelled without vowels) sat frozen on a session for its whole life.
@@ -809,6 +824,49 @@ public final class QueueStore: Sendable {
             headline: brief.headline, deck: brief.deck,
             pullRequests: StoredBrief.joinPRs(brief.pullRequests),
             callsign: callsign, provider: provider)
+    }
+
+    /// Fill `pullRequests` on every brief that has none, from the text of the
+    /// event it summarises. Shared by the v13 migration and its drill, so the
+    /// thing that ships and the thing that is tested are one function.
+    ///
+    /// A recomputation, not an invention: the same deterministic reader over
+    /// the same stored text. Without it the ruling would only apply to turns
+    /// that have not happened yet, and the operator would open a hub still
+    /// listing none of the pull requests they had been opening all day.
+    static func backfillPullRequests(_ db: Database) throws {
+        let rows = try Row.fetchAll(db, sql: """
+            -- e.rowid, NOT e.id: the events table has an `id` TEXT column
+            -- carrying a UUID, and `brief.eventRowid` references the SQLite
+            -- rowid. Joining on `id` matches nothing and returns zero rows
+            -- silently, which is how a backfill ships looking green and
+            -- changing nothing. (It did, in the first draft of this.)
+            SELECT b.rowid AS briefRowid, e.lastAssistantMessage AS message, e.cwd AS cwd
+            FROM brief b JOIN events e ON e.rowid = b.eventRowid
+            WHERE b.pullRequests IS NULL
+              AND e.lastAssistantMessage IS NOT NULL
+              AND (e.lastAssistantMessage LIKE '%#%'
+                   OR e.lastAssistantMessage LIKE '%/pull/%')
+            """)
+        for row in rows {
+            let message: String = row["message"] ?? ""
+            let found = PullRequestMentions.found(in: message, cwd: row["cwd"])
+            guard !found.isEmpty else { continue }
+            try db.execute(sql: "UPDATE brief SET pullRequests = ? WHERE rowid = ?",
+                           arguments: [found.joined(separator: "\n"),
+                                       row["briefRowid"] as Int64])
+        }
+    }
+
+    /// The drill's two doors into the above.
+    func runPullRequestBackfill() throws {
+        try dbQueue.write { db in try QueueStore.backfillPullRequests(db) }
+    }
+
+    func eventRowid(forEventId id: String) throws -> Int64? {
+        try dbQueue.read { db in
+            try Int64.fetchOne(db, sql: "SELECT rowid FROM events WHERE id = ?", arguments: [id])
+        }
     }
 
     /// The brief for one specific event — the read-through the in-memory

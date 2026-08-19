@@ -14,65 +14,83 @@ final class PullRequestInTheHubTests: XCTestCase {
     private let real = "https://github.com/robertnowell/tranquility-base/pull/117"
     private let other = "https://github.com/robertnowell/tranquility-base/pull/118"
 
-    // MARK: - Extraction is a copy, not a judgement
+    // MARK: - Reading the turn's own text (18 Aug, second pass)
 
-    /// The ordinary case, and the one the ruling was made for.
-    func testATurnThatNamedAPRFilesIt() {
-        let source = "Opened \(real) for the grid change. Ready to merge."
-        XCTAssertEqual(AnthropicSummaryProvider.groundedPRs([real], in: source), [real])
+    private let cwd = "/Users/x/Projects/tranquility-base"
+    private func slug(_: String) -> String? { "robertnowell/tranquility-base" }
+
+    /// The shape that actually occurs. The first design demanded a URL copied
+    /// verbatim and filled 2 briefs in 1,299, because assistants write this.
+    func testPRHashNumberIsRead() {
+        let found = PullRequestMentions.found(
+            in: "So PR #121 lands the instrument, not a fix.", cwd: cwd, slug: slug)
+        XCTAssertEqual(found, ["https://github.com/robertnowell/tranquility-base/pull/121"])
     }
 
-    /// The common case. An empty list is nil, not `[]` — a turn that opened no
-    /// PR and a brief written before the field existed are the same fact.
-    func testATurnThatNamedNoneFilesNone() {
-        let source = "Rewrote the sanitizer's clamp and the tests are green."
-        XCTAssertNil(AnthropicSummaryProvider.groundedPRs([], in: source))
-        XCTAssertNil(AnthropicSummaryProvider.groundedPRs(nil, in: source))
+    /// The long form, and case does not matter.
+    func testPullRequestNumberIsRead() {
+        XCTAssertEqual(
+            PullRequestMentions.found(in: "Merged pull request #9 just now.", cwd: cwd, slug: slug),
+            ["https://github.com/robertnowell/tranquility-base/pull/9"])
+    }
+
+    /// A pasted URL still wins, and needs no repository to resolve.
+    func testAPastedURLIsTakenVerbatim() {
+        let url = "https://github.com/robertnowell/kopi/pull/2318"
+        XCTAssertEqual(PullRequestMentions.found(in: "Opened \(url) for review.",
+                                                 cwd: nil, slug: slug), [url])
+    }
+
+    /// A bare "#3" is an issue, a ticket, or a ranking as often as a PR. The
+    /// cue word is the evidence that the session meant a pull request, and
+    /// without it the hub would link "the #3 candidate".
+    func testABareHashNumberIsNotAPullRequest() {
+        XCTAssertTrue(PullRequestMentions.found(
+            in: "Went with the #3 candidate and closed #88.", cwd: cwd, slug: slug).isEmpty)
+    }
+
+    /// No repository, no derived link — the number alone is not an address.
+    func testNoRepositoryMeansNoDerivedLink() {
+        XCTAssertTrue(PullRequestMentions.found(
+            in: "PR #121 is up.", cwd: cwd, slug: { _ in nil }).isEmpty)
     }
 
     /// One turn can open two, which is why the field is a list.
-    func testATurnThatNamedTwoFilesTwo() {
-        let source = "Split it: \(real) carries the core, \(other) the panel."
-        XCTAssertEqual(AnthropicSummaryProvider.groundedPRs([real, other], in: source),
-                       [real, other])
+    func testTwoMentionsBecomeTwoLinks() {
+        let found = PullRequestMentions.found(
+            in: "Split it: PR #121 carries the core, PR #124 the panel.", cwd: cwd, slug: slug)
+        XCTAssertEqual(found.count, 2)
+        XCTAssertTrue(found[0].hasSuffix("/pull/121"))
+        XCTAssertTrue(found[1].hasSuffix("/pull/124"))
     }
 
-    /// The failure this whole design is against. A URL the message never
-    /// printed is not a wrong answer to "which PR is this" — it is not an
-    /// answer to the question that was asked, so it does not survive.
-    func testAURLTheMessageNeverPrintedIsDropped() {
-        let source = "Opened \(real) for the grid change."
-        XCTAssertEqual(
-            AnthropicSummaryProvider.groundedPRs([real, other], in: source), [real])
+    /// The same PR named twice in one turn is one PR, whichever way it is
+    /// written — a sentence that pastes the URL and then says "PR #121" about
+    /// it is one link, not two.
+    func testTheSamePRTwiceIsOneLink() {
+        let text = "Opened https://github.com/robertnowell/tranquility-base/pull/121. "
+            + "Then rebased PR #121 onto main."
+        XCTAssertEqual(PullRequestMentions.found(in: text, cwd: cwd, slug: slug).count, 1)
     }
 
-    /// "Do not turn a bare #117 into a URL." The prompt says it; the drill
-    /// holds it when the prompt is edited by someone who did not read this.
-    func testABarePRNumberIsNotPromotedToAURL() {
-        let source = "PR #117 is up for review."
-        XCTAssertNil(AnthropicSummaryProvider.groundedPRs(["#117"], in: source))
-        XCTAssertNil(AnthropicSummaryProvider.groundedPRs(
-            ["https://github.com/robertnowell/tranquility-base/pull/117"], in: source))
+    /// A turn that opened nothing files nothing.
+    func testATurnThatNamedNoneFilesNone() {
+        XCTAssertTrue(PullRequestMentions.found(
+            in: "Rewrote the sanitizer's clamp and the tests are green.",
+            cwd: cwd, slug: slug).isEmpty)
     }
 
-    /// Trailing punctuation is the message's, not the URL's: a model copying
-    /// out of prose brings the sentence's full stop with it.
-    func testPunctuationCarriedOutOfProseIsTrimmed() {
-        let source = "Landed it in \(real)."
-        XCTAssertEqual(AnthropicSummaryProvider.groundedPRs(["\(real)."], in: source), [real])
-    }
-
-    /// The same PR named twice in one turn is one PR.
-    func testTheSamePRTwiceIsFiledOnce() {
-        let source = "Opened \(real). Then rebased \(real) onto main."
-        XCTAssertEqual(AnthropicSummaryProvider.groundedPRs([real, real], in: source), [real])
-    }
-
-    /// A repository URL is not a pull request, however much of it appears in
-    /// the message.
-    func testANonPRGitHubURLIsNotAPullRequest() {
-        let repo = "https://github.com/robertnowell/tranquility-base"
-        XCTAssertNil(AnthropicSummaryProvider.groundedPRs([repo], in: "See \(repo) for context."))
+    /// Nothing is ever looked up: the number is the session's, and only the
+    /// repository comes from the checkout.
+    func testTheRepositoryComesFromTheRemote() {
+        XCTAssertEqual(PullRequestMentions.parseSlug("git@github.com:robertnowell/tb.git"),
+                       "robertnowell/tb")
+        XCTAssertEqual(PullRequestMentions.parseSlug("https://github.com/robertnowell/tb.git"),
+                       "robertnowell/tb")
+        XCTAssertEqual(PullRequestMentions.parseSlug("https://github.com/robertnowell/tb"),
+                       "robertnowell/tb")
+        XCTAssertNil(PullRequestMentions.parseSlug(""))
+        XCTAssertNil(PullRequestMentions.parseSlug("notaremote"))
     }
 
     // MARK: - The page
@@ -167,5 +185,42 @@ final class PullRequestInTheHubTests: XCTestCase {
         let without = try XCTUnwrap(reopened.storedBrief(sessionId: "sess-pr", eventRowid: 2))
         XCTAssertNil(without.brief.pullRequests)
         XCTAssertNil(without.pullRequests)
+    }
+
+    // MARK: - The backfill (v13)
+
+    /// The migration must actually join. `events.id` is a UUID TEXT column and
+    /// `brief.eventRowid` is the SQLite rowid; joining the wrong one returns
+    /// zero rows and ships a green backfill that changes nothing. This drill
+    /// exists because that is exactly what the first draft did.
+    func testTheBackfillFillsAnOldBrief() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vd-backfill-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("queue.sqlite")
+
+        let store = try QueueStore(url: url)
+        let message = "Opened https://github.com/robertnowell/tranquility-base/pull/119 "
+            + "for the hub change."
+        let event = QueuedEvent(hookEvent: .stop, sessionId: "sess-back",
+                                cwd: "/Users/x/Projects/tranquility-base",
+                                lastAssistantMessage: message)
+        _ = try store.insert(event: event)
+        let rowid = try XCTUnwrap(store.eventRowid(forEventId: event.id))
+        try store.saveBrief(
+            SessionBrief(topic: "pr hub", happened: "Opened it."),
+            sessionId: "sess-back", eventRowid: rowid, provider: "anthropic", callsign: nil)
+
+        // Before: the brief predates the reader, exactly like the 1,299 rows
+        // already on disk.
+        XCTAssertNil(try XCTUnwrap(
+            store.storedBrief(sessionId: "sess-back", eventRowid: rowid)).brief.pullRequests)
+
+        try store.runPullRequestBackfill()
+
+        let after = try XCTUnwrap(store.storedBrief(sessionId: "sess-back", eventRowid: rowid))
+        XCTAssertEqual(after.brief.pullRequests,
+                       ["https://github.com/robertnowell/tranquility-base/pull/119"])
     }
 }
