@@ -609,7 +609,13 @@ case "reconcile":
         }
         let live = ClaudeAgentsCLI().sessions() ?? []
         for id in ids {
-            guard let file = try HomeBase.write(sessionId: id, store: store, live: live)
+            // Priming: the CLI is not the main actor, and somebody typing
+            // `tbase homebase` is asking for the finished page — a hub written
+            // here with a cold snapshot has no pull request rows at all, which
+            // is how this shipped looking empty the first time it was rendered
+            // after the rewrite.
+            guard let file = try HomeBase.write(sessionId: id, store: store, live: live,
+                                                priming: true)
             else { print("no briefs for \(id.prefix(8)) — nothing to write yet"); continue }
             print(file.path)
             if wantsOpen, ids.count == 1 {
