@@ -236,6 +236,64 @@ final class SessionActivityTests: XCTestCase {
             .idle)
     }
 
+    // MARK: - The lamp dates its own evidence (18 Aug)
+    //
+    // Two of the three blue lamps on the grid at 17:19 belonged to sessions
+    // that had finished 105 and 149 minutes earlier. Nothing was stuck: the
+    // lamp was recomputed every five seconds and came back blue every time,
+    // because the freshness gate was reading the FILE's clock and Claude Code
+    // keeps writing to a finished session's transcript long after the
+    // conversation ends — snapshot updates, ai-title, bridge-session, pr-link.
+    // 30 of the 40 sessions in a two-day window had a file clock past their
+    // last conversational word by more than the freshness window — median 23
+    // hours, maximum five days (`tbase lamps`).
+
+    private func timestamped(_ line: String, agoSeconds: TimeInterval) -> String {
+        let at = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-agoSeconds))
+        return line.replacingOccurrences(
+            of: #"{"type":"#, with: #"{"timestamp":"\#(at)","type":"#)
+    }
+
+    func testBookkeepingWritesDoNotRearmAStaleWorkingVerdict() {
+        // The exact shape on disk: an unanswered prompt from two hours ago,
+        // and a file touched a minute ago by something that is not the
+        // conversation. The prompt is what the verdict rests on, so the
+        // prompt's age is the verdict's age.
+        let tail = [timestamped(userPrompt(), agoSeconds: 7200)]
+        XCTAssertEqual(SessionActivity.classify(tail: tail, modified: warm), .idle)
+    }
+
+    func testAToolCallIsDatedByItsOwnEntryNotTheFile() {
+        let tail = [timestamped(assistantToolUse(), agoSeconds: 7200)]
+        XCTAssertEqual(SessionActivity.classify(tail: tail, modified: warm), .idle)
+    }
+
+    func testALiveTurnStaysBlueOnAFileThatHasNotBeenTouched() {
+        // The other direction, and the reason this is not simply a stricter
+        // gate: a warm entry wins over a cold file.
+        let cold = Date().addingTimeInterval(-SessionActivity.freshness - 60)
+        let tail = [timestamped(userPrompt(), agoSeconds: 5)]
+        XCTAssertEqual(SessionActivity.classify(tail: tail, modified: cold), .working)
+    }
+
+    func testABoundaryCannotRearmOffTheFileEither() {
+        // resolveIdle had the same disease: it took the newest of the hook row
+        // and the mtime. A prompt submitted two hours ago whose turn ended in
+        // prose two hours ago is finished, however recently the file moved.
+        let tail = [timestamped(assistant(text: "Done."), agoSeconds: 7200)]
+        XCTAssertEqual(
+            SessionActivity.classify(
+                tail: tail, modified: warm,
+                boundary: boundary(.userPromptSubmit, agoSeconds: 7200)),
+            .idle)
+    }
+
+    func testUntimestampedEntriesStillFallBackToTheFile() {
+        // Fixtures and the odd real line carry no timestamp; mtime remains the
+        // stand-in there rather than a session going dark.
+        XCTAssertEqual(SessionActivity.classify(tail: [userPrompt()], modified: warm), .working)
+    }
+
     func testALongTurnStaysWorkingOnTranscriptWarmthAlone() {
         // The boundary row is written at submit and never touched again, so a
         // turn running longer than the freshness window must keep its lamp
