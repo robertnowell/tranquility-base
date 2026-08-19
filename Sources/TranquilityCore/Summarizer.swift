@@ -8,6 +8,22 @@ public struct SummaryRequest: Sendable {
     /// The session's opening ask. Without it the brief has no subject — which is
     /// exactly what made the first version unusable across ten parallel sessions.
     public var firstUserMessage: String?
+    /// The goal this session was carrying INTO this turn, so the model can
+    /// keep it rather than invent a new one.
+    ///
+    /// Measured 19 Aug, across 59 sessions of 5+ turns averaging 17.1 turns:
+    /// the average number of DISTINCT goals was 17.0, and not one session in 59
+    /// kept a single goal. The field's own doc said "the goal is the one field
+    /// that must not drift with the work" and the hub compensated by reading
+    /// the oldest brief's copy and discarding the rest.
+    ///
+    /// The cause was not sloppiness. Every other field answers "what happened
+    /// in THIS turn", which is in the model's input; `goal` asks "what is this
+    /// session for", which was not. Given one turn's text it inferred a
+    /// plausible aim from that turn and wrote a fresh one, sixteen times in a
+    /// row. Carrying the previous value in turns the question into one the
+    /// input can answer: keep this, or say what changed.
+    public var previousGoal: String?
     public var gitBranch: String?
     public var cwd: String?
     public var hookEvent: HookEventKind
@@ -21,6 +37,7 @@ public struct SummaryRequest: Sendable {
         lastAssistantMessage: String,
         projectLabel: String,
         firstUserMessage: String? = nil,
+        previousGoal: String? = nil,
         gitBranch: String? = nil,
         cwd: String? = nil,
         hookEvent: HookEventKind = .stop,
@@ -30,6 +47,7 @@ public struct SummaryRequest: Sendable {
         self.lastAssistantMessage = lastAssistantMessage
         self.projectLabel = projectLabel
         self.firstUserMessage = firstUserMessage
+        self.previousGoal = previousGoal
         self.gitBranch = gitBranch
         self.cwd = cwd
         self.hookEvent = hookEvent
@@ -151,6 +169,68 @@ public struct AnthropicSummaryProvider: SummaryProvider {
     // there; the system prompt is everything above the "Project:" line. The one
     // slot the system prompt itself uses — {project_label} in the recap rule — is
     // substituted here, exactly as the replay harness rendered it.
+
+    /// The user half of the prompt, assembled from the request.
+    ///
+    /// Extracted 19 Aug so a prompt change can be ASSERTED. The goal rung's
+    /// whole mechanism is that a carried value reaches the model framed as
+    /// state to keep, while the opening ask in the same prompt is framed as
+    /// stale background to ignore — two blocks whose difference is the feature,
+    /// and neither was reachable from a test while this lived inside a function
+    /// that needs an API key to run.
+    static func userPrompt(for request: SummaryRequest) -> String {
+        var context = "Project: \(request.projectLabel)"
+        if request.hookEvent == .notification {
+            context += """
+
+
+                THIS SESSION IS BLOCKED AND WAITING ON THE USER \
+                (\(request.notificationMatcher ?? "needs input")). The message below \
+                is what it is asking about. Say what it wants to do and what the \
+                decision is — approving a plan is a decision, and reading out \
+                "waiting for permission" tells them nothing they did not already know.
+                """
+        }
+        if let branch = request.gitBranch { context += "\nBranch: \(branch)" }
+        if let carried = request.previousGoal, !carried.isEmpty {
+            // Verbatim, and named as the thing to keep. Framed the opposite way
+            // to the opening ask above: that one is stale background the model
+            // must not narrate, this one is current state it must not lose.
+            context += """
+
+
+                The goal this session is already carrying. KEEP IT WORD FOR WORD \
+                unless this turn shows the work has moved to something it does \
+                not cover:
+                \(carried)
+                """
+        }
+        if let ask = request.firstUserMessage {
+            // Background only, and explicitly stale. A long session drifts far from
+            // how it opened, and without this the model narrates the original brief
+            // — describing a Kanban viewer hours after that idea was abandoned.
+            context += """
+
+
+                How this session opened, HOURS AGO and possibly abandoned since. \
+                Use it only to disambiguate names. Never describe it as current \
+                work, and never propose a next step from it:
+                \(ask)
+                """
+        }
+
+        var user = """
+            \(context)
+
+            The agent's final message this turn:
+            \(request.lastAssistantMessage)
+            """
+        if let note = request.correctiveNote {
+            user += "\n\n\(note)"
+        }
+        return user
+    }
+
     static func systemPrompt(projectLabel: String) -> String { """
         You are the dispatcher for a developer running many coding-agent sessions at \
         once. One just finished a turn. You write the ONE spoken update they will hear \
@@ -165,7 +245,7 @@ public struct AnthropicSummaryProvider: SummaryProvider {
           "findings": "spoken on the FINDINGS pull: what the work TURNED UP, about 30 words, or null",
           "solution": "spoken on the SOLUTION pull: the concrete shape of what is proposed, about 30 words, or null",
           "topic":    "3-6 words naming this work, for a list",
-          "goal":     "what this session is trying to achieve, or null",
+          "goal":     "the session's ONE aim, 12 words max: keep the carried goal verbatim unless the work moved",
           "happened": "what just concluded, one clause",
           "nextStep": "the proposed next action, or null",
           "question": "the decision being put to the user, or null",
@@ -278,6 +358,28 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         promote; the page then falls back to the card fields, which is the floor, \
         not a failure. Like card fields, these may name symbols and paths precisely.
 
+        ── "goal": the ladder's first rung, and the one field that is not about THIS turn ──
+
+        It answers "which piece of work is this?" for somebody who has ten \
+        sessions running and just heard a callsign that no longer exists. Not \
+        what happened, not what is next: what we are trying to do.
+
+        Say it the way the operator would say it out loud, concretely, naming \
+        the thing: "we're solving a bug where clicking a lamp wouldn't turn it \
+        off" beats "resolve polarity and lamp-value decisions for panel UI". \
+        Twelve words at most. Plain verbs.
+
+        If a goal is carried below, COPY IT VERBATIM. Do not tidy it, do not \
+        re-word it, do not make it match this turn's topic. It is the same goal \
+        until the work actually moves, and a turn that continues the work \
+        changes nothing. Measured before this instruction existed: 59 sessions, \
+        17 turns each, 17 different goals each, and every one of those rewrites \
+        was a restatement rather than a change.
+
+        Replace it only when this turn shows the session is now doing something \
+        the carried goal does not cover, and then write the NEW aim, not a \
+        summary of both.
+
         Never use an em dash in any field, spoken or displayed (ruled 11 Aug); use a \
         period, comma, or colon and split the sentence.
 
@@ -329,42 +431,8 @@ public struct AnthropicSummaryProvider: SummaryProvider {
             return try await DeterministicSummarizer().brief(for: request)
         }
 
-        var context = "Project: \(request.projectLabel)"
-        if request.hookEvent == .notification {
-            context += """
+        let user = Self.userPrompt(for: request)
 
-
-                THIS SESSION IS BLOCKED AND WAITING ON THE USER \
-                (\(request.notificationMatcher ?? "needs input")). The message below \
-                is what it is asking about. Say what it wants to do and what the \
-                decision is — approving a plan is a decision, and reading out \
-                "waiting for permission" tells them nothing they did not already know.
-                """
-        }
-        if let branch = request.gitBranch { context += "\nBranch: \(branch)" }
-        if let ask = request.firstUserMessage {
-            // Background only, and explicitly stale. A long session drifts far from
-            // how it opened, and without this the model narrates the original brief
-            // — describing a Kanban viewer hours after that idea was abandoned.
-            context += """
-
-
-                How this session opened, HOURS AGO and possibly abandoned since. \
-                Use it only to disambiguate names. Never describe it as current \
-                work, and never propose a next step from it:
-                \(ask)
-                """
-        }
-
-        var user = """
-            \(context)
-
-            The agent's final message this turn:
-            \(request.lastAssistantMessage)
-            """
-        if let note = request.correctiveNote {
-            user += "\n\n\(note)"
-        }
 
         let system = Self.systemPrompt(projectLabel: request.projectLabel)
         let body: [String: Any] = [
