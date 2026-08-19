@@ -3294,10 +3294,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let fresh = SessionDiscovery.discover(ttl: 0).sessions
                 .first { $0.sessionId == sessionId }
             guard let fresh, let command = fresh.reviveCommand else {
+                // One receipt per reason (18 Aug). `alreadyAwake` used to answer
+                // for all four, and it is only true for the first — so the
+                // panel's single word on a refusal was false in the three cases
+                // that are not "it came back on its own". That was survivable
+                // while REVIVE was a hover verb on a list; it is not, now that
+                // the lamp is the switch and this is what the switch says back.
+                let why = fresh?.liveness
                 Permissions.log("revive: refused \(sessionId.prefix(8)) — "
                     + (fresh.map { "liveness \($0.liveness.rawValue)" } ?? "no longer on disk"))
                 await MainActor.run { [weak self] in
-                    self?.hud.showReceipt(.alreadyAwake)
+                    switch why {
+                    case .live:
+                        self?.hud.showReceipt(.alreadyAwake)
+                    // `gone` with no revive command means the one other thing
+                    // `revivable` tests: the launch directory is no longer there,
+                    // so `--resume` would land nowhere.
+                    case .gone:
+                        self?.hud.showReceipt(.notRevived("its directory is gone"))
+                    case .unknown:
+                        self?.hud.showReceipt(.notRevived("can't tell if it's running"))
+                    case nil:
+                        self?.hud.showReceipt(.notRevived("no longer on disk"))
+                    }
                 }
                 return
             }

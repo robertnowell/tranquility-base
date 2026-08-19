@@ -640,6 +640,51 @@ enum StateLegend {
         }
     }
 
+    /// What a click on the LAMP does — the switch, as distinct from the row.
+    ///
+    /// The lamp column has been a control since 06 Aug, but only in the OFF
+    /// direction: a green lamp could be cleared ("mischief managed") and every
+    /// other lamp in the column fell through to the row's own verb. That taught
+    /// the gesture and then refused it. Robert, 18 Aug, having clicked a dark
+    /// lamp in Past Agents and been handed a Terminal tab instead: *"clicking on
+    /// the lamp doesn't turn the lamp back on… if I want to revive an agent, I
+    /// should just turn on the lamp and then the session's alive again."*
+    ///
+    /// So the switch gains its ON direction, and the column now means ONE thing
+    /// on both faces: this lamp's power, never navigation. The row keeps its own
+    /// verb everywhere to the right of `GridRowView.lampHitWidth`.
+    ///
+    /// Stated as a function for the same reason `action(for:)` is: a drill can
+    /// assert it without a window server, and the grid and the list cannot drift
+    /// into disagreeing about what the same dot does.
+    enum LampAction: Equatable {
+        /// Lit and asking: mark the turn heard, without inviting the session.
+        case clear
+        /// Dark, and the process is PROVEN gone with its directory still there:
+        /// `claude --resume`, and the lamp comes back on.
+        case turnOn
+        /// Dark, but liveness could not be proven. The click still ASKS —
+        /// `revive()` re-probes at ttl 0 and refuses safely — so the switch
+        /// gives an answer instead of doing nothing.
+        ///
+        /// This is deliberately NOT `RowAction.none`'s silence. The safety that
+        /// case protects is real (a `--resume` against a live session puts two
+        /// processes under one id, which crashed the app twice) but it lives in
+        /// `revive()`, which re-probes; refusing to even ask was the surplus.
+        case tryTurnOn
+        /// Lit, but not asking — advisory blue, the quiet socket, amber. There
+        /// is no switching to do, so it says so rather than sitting there.
+        case alreadyOn
+    }
+
+    static func lampAction(for row: SessionRow) -> LampAction {
+        switch row.lamp {
+        case .ready: return .clear
+        case .working, .running, .fault: return .alreadyOn
+        case .unlit: return row.revivable ? .turnOn : .tryTurnOn
+        }
+    }
+
     /// Is there a process behind this row — the question END SESSION and GO TO
     /// AGENT both have to answer.
     ///
