@@ -206,6 +206,26 @@ public enum GitHubPullRequests {
 /// checkout's remote is a fact on disk.
 public enum GitRemote {
 
+    /// The branch a checkout is on right now, or nil when it is detached or
+    /// not a checkout at all.
+    ///
+    /// Read at the END OF A TURN, which is when the hook fires, so it is the
+    /// branch that turn was on rather than a guess about history. It exists
+    /// because the transcript's `gitBranch` is only as good as the session's
+    /// own cwd: a session started from `~/Projects` — which is not a
+    /// repository — records "HEAD" on all 954 of its entries while doing every
+    /// piece of its work inside worktrees that are each on a real branch. That
+    /// session opened six pull requests and its hub could show none of them,
+    /// which is the failure this fixes.
+    public static func currentBranch(cwd: String) -> String? {
+        guard let out = run(["-C", cwd, "branch", "--show-current"], cwd: cwd) else { return nil }
+        let name = out.trimmingCharacters(in: .whitespacesAndNewlines)
+        // `--show-current` prints nothing on a detached HEAD, which is the
+        // honest answer: a detached worktree is not on a branch, so it has no
+        // pull request to find.
+        return name.isEmpty ? nil : name
+    }
+
     public static func slug(cwd: String) -> String? {
         cacheLock.lock()
         if let hit = cache[cwd] { cacheLock.unlock(); return hit }
@@ -236,12 +256,16 @@ public enum GitRemote {
     }
 
     private static func readRemote(_ cwd: String) -> String? {
+        run(["-C", cwd, "remote", "get-url", "origin"], cwd: cwd)
+    }
+
+    static func run(_ arguments: [String], cwd: String) -> String? {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory),
               isDirectory.boolValue else { return nil }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        task.arguments = ["-C", cwd, "remote", "get-url", "origin"]
+        task.arguments = arguments
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice

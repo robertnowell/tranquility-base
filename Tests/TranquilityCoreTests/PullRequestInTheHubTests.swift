@@ -250,4 +250,40 @@ final class PullRequestInTheHubTests: XCTestCase {
         let html = HomeBase.render(model(turns, cwd: cwd))
         XCTAssertEqual(html.components(separatedBy: "class=\"pr\"").count - 1, 1)
     }
+
+    // MARK: - "HEAD" is not a branch
+
+    /// The failure that made the operator ask whether any of this works: a
+    /// session started from ~/Projects, which is not a repository, records
+    /// "HEAD" on all 954 transcript entries while doing every piece of its
+    /// work inside worktrees that are each on a real branch. It opened six
+    /// pull requests and its own hub could show none of them.
+    func testHeadFallsThroughToTheWorkingDirectory() {
+        XCTAssertEqual(Coordinator.branch(transcript: "ui/grid", cwd: "/nope"), "ui/grid",
+                       "a real branch from the transcript wins")
+        XCTAssertNil(Coordinator.branch(transcript: "HEAD", cwd: "/nonexistent-path"),
+                     "HEAD is not a branch, and an unreadable cwd is not one either")
+        XCTAssertNil(Coordinator.branch(transcript: nil, cwd: nil))
+        XCTAssertNil(Coordinator.branch(transcript: "", cwd: nil))
+    }
+
+    /// This checkout answers for itself: whatever branch the test runs on is
+    /// what the fallback must produce.
+    func testTheWorkingDirectoryAnswersWithItsOwnBranch() throws {
+        let cwd = FileManager.default.currentDirectoryPath
+        let expected = GitRemote.currentBranch(cwd: cwd)
+        try XCTSkipIf(expected == nil, "this checkout is detached or not a repository")
+        XCTAssertEqual(Coordinator.branch(transcript: "HEAD", cwd: cwd), expected)
+        XCTAssertNotEqual(Coordinator.branch(transcript: "HEAD", cwd: cwd), "HEAD")
+    }
+
+    /// A detached worktree is genuinely not on a branch, so it has no pull
+    /// request to find, and saying so is better than naming one.
+    func testADetachedCheckoutHasNoBranch() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vd-detached-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        XCTAssertNil(GitRemote.currentBranch(cwd: dir.path), "a non-repository has no branch")
+    }
 }

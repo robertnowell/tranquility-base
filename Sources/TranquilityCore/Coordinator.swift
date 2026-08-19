@@ -645,7 +645,13 @@ public struct Coordinator: Sendable {
             lastAssistantMessage: lastMessage,
             projectLabel: event.projectLabel,
             firstUserMessage: context?.firstUserMessage,
-            gitBranch: context?.gitBranch,
+            // The transcript first, then the working directory. A session
+            // whose own cwd is not a repository records "HEAD" for every
+            // entry while doing all of its work inside worktrees that are each
+            // on a real branch — and the hub keys pull requests on the branch,
+            // so "HEAD" means a hub with nothing on it. Read at turn end,
+            // which is when this fires, so it is that turn's branch.
+            gitBranch: Coordinator.branch(transcript: context?.gitBranch, cwd: event.cwd),
             cwd: event.cwd,
             hookEvent: event.hookEvent,
             notificationMatcher: event.notificationMatcher),
@@ -1116,5 +1122,16 @@ public struct Coordinator: Sendable {
             try store.update(utterance: utterance)
             return .dispatchFailed(failure, utteranceId: utterance.id)
         }
+    }
+}
+
+extension Coordinator {
+    /// "HEAD" is not a branch — it is what git reports for a detached checkout
+    /// and what Claude Code records when the session's own directory is not a
+    /// repository. Treated as absent, so the working directory gets its turn.
+    static func branch(transcript: String?, cwd: String?) -> String? {
+        if let transcript, !transcript.isEmpty, transcript != "HEAD" { return transcript }
+        guard let cwd else { return nil }
+        return GitRemote.currentBranch(cwd: cwd)
     }
 }
