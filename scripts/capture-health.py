@@ -171,6 +171,13 @@ def main():
     if not any(os.path.exists(p) for p in paths):
         print(f"x no log at {args.log}", file=sys.stderr)
         return 2
+    if args.since:
+        # The rolled log is 32MB of days nobody asked about, and a check that
+        # runs every two hours should not re-read them every time. A file whose
+        # last write predates the window cannot contain a line inside it.
+        cutoff = datetime.strptime(args.since, "%Y-%m-%d")
+        paths = [p for p in paths if not os.path.exists(p)
+                 or datetime.fromtimestamp(os.path.getmtime(p)) >= cutoff]
 
     opens, launches = collect(parse(paths))
     if args.since:
