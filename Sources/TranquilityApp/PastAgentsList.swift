@@ -49,6 +49,12 @@ final class PastAgentsList: NSView {
     /// have no process to end and get no menu — an empty menu would promise a
     /// verb this row cannot perform.
     var onTerminate: ((_ id: String, _ name: String) -> Void)?
+    /// Right-click → "Go to agent", also on a LIVE row. It was the left-click
+    /// until 19 Aug, when Robert pointed out that a session he clicks is a
+    /// session he wants ON, not a Terminal window he did not ask for: *"that's
+    /// fine as a right-click behaviour."* It keeps the same company as
+    /// Terminate — the two verbs that reach past the panel to the process.
+    var onGoTo: ((_ id: String) -> Void)?
 
     /// What the key line says: how much you are looking at, and out of what.
     private(set) var summary = ""
@@ -161,6 +167,15 @@ final class PastAgentsList: NSView {
             // sentence containing the right name. No dialog after that.
             if !item.revivable {
                 let menu = NSMenu()
+                // Go to agent first: it is the ordinary one, and the
+                // destructive verb should never be the item under the pointer.
+                let goTo = NSMenuItem(
+                    title: "Go to \u{201C}\(item.row.name)\u{201D}",
+                    action: #selector(goToPicked(_:)), keyEquivalent: "")
+                goTo.target = self
+                goTo.representedObject = item.row.id
+                menu.addItem(goTo)
+                menu.addItem(.separator())
                 let terminate = NSMenuItem(
                     title: "Terminate \u{201C}\(item.row.name)\u{201D}",
                     action: #selector(terminatePicked(_:)), keyEquivalent: "")
@@ -256,10 +271,35 @@ final class PastAgentsList: NSView {
         onPick?(id, item.revivable)
     }
 
+    @objc private func goToPicked(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        onGoTo?(id)
+    }
+
     @objc private func terminatePicked(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String,
               let item = shown.first(where: { $0.row.id == id }) else { return }
         onTerminate?(id, item.row.name)
+    }
+
+    /// For the pick-up drill: the verb each row offers, by id. The label is
+    /// the row's promise about what a click does, and it went wrong silently
+    /// the last time the verb moved.
+    var verbsForTesting: [String: String] {
+        Dictionary(uniqueKeysWithValues: stack.arrangedSubviews.compactMap { view in
+            guard let row = view as? PastRowView, let id = row.identifier?.rawValue
+            else { return nil }
+            return (id, row.verbForTesting)
+        })
+    }
+
+    /// For the pick-up drill: the right-click menu on each row that has one.
+    var menuTitlesForTesting: [String: [String]] {
+        Dictionary(uniqueKeysWithValues: stack.arrangedSubviews.compactMap { view in
+            guard let row = view as? PastRowView, let id = row.identifier?.rawValue,
+                  let menu = row.menu else { return nil }
+            return (id, menu.items.map(\.title).filter { !$0.isEmpty })
+        })
     }
 
     /// For the copy drill: what the pointer would show on each row.
@@ -413,6 +453,11 @@ final class FilterField: NSTextField {
 final class PastRowView: NSControl {
     private let idLabel: NSTextField
     private let verbLabel: NSTextField
+
+    /// The verb this row is promising, read off the label itself rather than
+    /// recomputed — a drill that recomputes the answer cannot catch a label
+    /// that stopped being set from it.
+    var verbForTesting: String { verbLabel.stringValue }
     private let highlight = NSView()
     /// Held so the hover can step its ink and put it back — see `setHovered`.
     private var nameLabel: NSTextField!
@@ -422,7 +467,7 @@ final class PastRowView: NSControl {
         idLabel = NSTextField(labelWithString: item.row.aux)
         // Green for a resurrection, advisory grey for a door — the same two
         // channels the card uses for the same two meanings.
-        verbLabel = NSTextField(labelWithString: item.revivable ? "REVIVE ›" : "GO TO ›")
+        verbLabel = NSTextField(labelWithString: item.revivable ? "REVIVE ›" : "OPEN ›")
         super.init(frame: .zero)
         self.target = target
         self.action = action
@@ -508,7 +553,7 @@ final class PastRowView: NSControl {
         idLabel.translatesAutoresizingMaskIntoConstraints = false
 
         verbLabel.attributedStringValue = letterspaced(
-            item.revivable ? "REVIVE ›" : "GO TO ›", size: 9.5, tracking: 1.33,
+            item.revivable ? "REVIVE ›" : "OPEN ›", size: 9.5, tracking: 1.33,
             color: item.revivable ? StateLegend.Palette.ready : StateLegend.Palette.accent)
         verbLabel.alignment = .right
         verbLabel.isHidden = true

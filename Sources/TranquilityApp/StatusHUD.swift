@@ -4580,6 +4580,7 @@ final class StatusHUD: NSObject {
         restartedAgentDrill()
         closedRowsDrill()
         lampSwitchDrill()
+        pickUpDrill()
         readIntensityDrill()
         terminateDrill()
         pastAgentsDrill()
@@ -5356,6 +5357,74 @@ final class StatusHUD: NSObject {
             ("pastAgentsRowsCarryTheSwitch", everyRowHasASwitch),
             ("switchIsTheSameSizeOnBothFaces",
              GridRowView.lampHitWidth == GridRowView.lampColumn),
+        ])
+    }
+
+    /// Picking a session up: what a left-click on a LIVE row in Past Agents
+    /// does, and what it no longer does.
+    ///
+    /// Ruled 19 Aug, after a click sent him to a Terminal window he had not
+    /// asked for: *"when I click on an idle agent … it should turn the lamp on,
+    /// open the agent card. Because it's alive, clicking on it obviously means
+    /// I want it to be alive. Now it's in the grid."* GO TO AGENT keeps its
+    /// place on the right-click, next to END SESSION.
+    ///
+    /// The wiring is the whole risk here, so the drill calls the row's real tap
+    /// closure and watches which of the panel's doors open. The handlers are
+    /// swapped for recorders and put back — announcing for real inside a drill
+    /// would speak out loud on every launch.
+    private func pickUpDrill() {
+        let live = StateLegend.SessionRow(id: "alive", name: "alive", aux: "alive",
+                                          lamp: .running)
+        let dead = StateLegend.SessionRow(id: "gone", name: "gone", aux: "gone",
+                                          lamp: .unlit, revivable: true)
+        showPastAgents(items: [
+            PastAgentsList.Item(row: live, revivable: false, haystack: live.name),
+            PastAgentsList.Item(row: dead, revivable: true, haystack: dead.name),
+        ])
+        // The row says which verb it has.
+        let verbs = pastList.verbsForTesting
+        let liveSaysOpen = verbs["alive"] == "OPEN \u{203A}"
+        let deadStillRevives = verbs["gone"] == "REVIVE \u{203A}"
+        // Go to agent lives on the right-click now, on the live row only.
+        let menus = pastList.menuTitlesForTesting
+        let goToIsInTheMenu = menus["alive"]?.contains { $0.hasPrefix("Go to ") } == true
+        let terminateIsStillThere = menus["alive"]?.contains { $0.hasPrefix("Terminate ") } == true
+        let deadHasNoMenu = menus["gone"] == nil
+
+        // The tap itself, through the real closure.
+        let realRestore = onRestoreLamp, realPick = onPickWaiting
+        let realGoTo = onGoToSession, realHome = onBreadcrumbHome
+        var switchedOn: String?, cardOpened: String?, wentToTerminal: String?
+        onRestoreLamp = { switchedOn = $0 }
+        onPickWaiting = { cardOpened = $0 }
+        onGoToSession = { wentToTerminal = $0 }
+        onBreadcrumbHome = {}
+        pastList.onPick?("alive", false)
+        let tapStayedOnThePanel = wentToTerminal == nil
+        // …and the menu's verb, which must still reach the terminal.
+        pastList.onGoTo?("alive")
+        let menuWentToTerminal = wentToTerminal == "alive"
+        onRestoreLamp = realRestore; onPickWaiting = realPick
+        onGoToSession = realGoTo; onBreadcrumbHome = realHome
+        goHomeFromPastAgents()
+
+        SelfTest.report("pickUp", [
+            ("theTapTurnsTheLampOn", switchedOn == "alive"),
+            ("theTapOpensTheCard", cardOpened == "alive"),
+            // The regression this exists to prevent, stated as its own line.
+            ("theTapDoesNotJumpToTheTerminal", tapStayedOnThePanel),
+            ("theMenuStillDoes", menuWentToTerminal),
+            ("goToAgentIsOnTheRightClick", goToIsInTheMenu),
+            ("endSessionKeptItsPlace", terminateIsStillThere),
+            ("aDeadRowHasNeitherVerb", deadHasNoMenu),
+            ("theRowNamesItsVerb", liveSaysOpen && deadStillRevives),
+            // And what the switch it flips is worth: an idle session the user
+            // picked up is lit, so the grid draws it.
+            ("aPickedUpSessionIsDrawnOnTheGrid",
+             Self.gridRows([StateLegend.SessionRow(id: "alive", name: "alive",
+                                                   aux: "standing by", lamp: .fault)])
+                .contains { $0.id == "alive" }),
         ])
     }
 
@@ -6592,12 +6661,26 @@ final class StatusHUD: NSObject {
 
         pastList = PastAgentsList(width: Self.gridWidth, height: 420)
         pastList.isHidden = true
-        // One tap, the row's own verb. Dead comes back; live gets its tab.
+        // One tap, the row's own verb. Dead comes back; live is picked up.
+        //
+        // Ruled 19 Aug, on a click that jumped him to a terminal he had not
+        // asked for: *"when I click on an idle agent … it should turn the lamp
+        // on, open the agent card. Because it's alive, clicking on it obviously
+        // means I want it to be alive. It doesn't need to go to it — maybe
+        // that's a right-click behaviour."* So GO TO AGENT moved to the menu,
+        // where END SESSION already lives, and the tap now does the two things
+        // picking a session up means: it lights the lamp, which is what puts
+        // the row back on the grid, and it opens the agent's card.
+        //
+        // Order matters. The switch is written BEFORE the card is asked for,
+        // so the repaint the card triggers already knows this row is on.
         pastList.onPick = { [weak self] id, revivable in
             guard let self else { return }
             let name = pastListName(id)
             onBreadcrumbHome?()
-            if revivable { onRevive?(id, name) } else { onGoToSession?(id) }
+            guard !revivable else { onRevive?(id, name); return }
+            onRestoreLamp?(id)
+            onPickWaiting?(id)
         }
         // The lamp, on this face too, and through the same function — so the
         // dot means one thing wherever you meet it (ruled 18 Aug).
@@ -6615,6 +6698,11 @@ final class StatusHUD: NSObject {
                 Permissions.log("list: row \(row.id.prefix(8)) asked for turnOff "
                     + "in the list — the face and the verb have come apart")
             }
+        }
+        pastList.onGoTo = { [weak self] id in
+            guard let self else { return }
+            onBreadcrumbHome?()
+            onGoToSession?(id)
         }
         pastList.onTerminate = { [weak self] id, name in
             self?.onTerminateSession?(id, name)
