@@ -223,7 +223,7 @@ struct Permissions {
             }
         case .accessibility:
             return AXIsProcessTrusted() ? "granted"
-                : "not granted. Click Grant — dictation types at your cursor with it"
+                : "not granted. Click Grant, dictation types at your cursor with it"
         }
     }
 

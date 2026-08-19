@@ -73,7 +73,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
             size: 12, secondary: true, width: 420))
 
         stack.addArrangedSubview(spacer(4))
-        stack.addArrangedSubview(label("Permissions — each row updates the moment you grant it:",
+        stack.addArrangedSubview(label("Permissions: each row updates the moment you grant it:",
                                        size: 12, weight: .medium))
 
         for kind in Permissions.Kind.allCases {
@@ -82,7 +82,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
 
         stack.addArrangedSubview(spacer(8))
         let note = label(
-            "macOS only lists an app in a Privacy pane after it has asked once — "
+            "macOS only lists an app in a Privacy pane after it has asked once, "
             + "Grant does that ask. If a switch is off, flip it; the dot goes green "
             + "within a second.",
             size: 11, secondary: true, width: 420)
