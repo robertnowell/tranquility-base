@@ -479,6 +479,17 @@ public struct LiveSession: Sendable, Decodable {
     public var status: String?
     public var name: String?
     public var waitingFor: String?
+    /// When this PROCESS came up, in milliseconds since the epoch, as the CLI
+    /// reports it. Read since 19 Aug because it answers a question nothing
+    /// else in the system could: whether the conversation in the file was
+    /// written by the process that is running now, or by one that has since
+    /// been killed. See `AgentRestart`. Optional, so a CLI that stops emitting
+    /// it costs one rule rather than every row.
+    public var startedAt: Double?
+
+    public var startedAtDate: Date? {
+        startedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
+    }
 }
 
 public protocol ClaudeAgentsReading: Sendable {
