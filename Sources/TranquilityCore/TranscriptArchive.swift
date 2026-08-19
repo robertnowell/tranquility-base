@@ -46,6 +46,14 @@ public enum TranscriptArchive {
 
     /// Most recently modified sessions first, skipping any whose final message is
     /// too short to be worth summarizing.
+    ///
+    /// KNOWN CONTAMINATION, tolerated here on purpose: transcript mtime is not
+    /// "when the conversation last moved" — Claude Code touches dead transcripts
+    /// with untimestamped bookkeeping on open/resume/bridge-sync, which is the
+    /// 19 Aug closed-band ordering bug. This walk feeds only `tbase sample`,
+    /// where a browsed-but-old transcript is still real material, so the cheap
+    /// clock stands. Anything USER-FACING that ranks transcripts must use
+    /// `SessionDiscovery.lastMoved(tail:)` instead — do not copy this sort.
     public static func recentSamples(limit: Int = 20, minimumLength: Int = 120) -> [Sample] {
         let fm = FileManager.default
         guard let projects = try? fm.contentsOfDirectory(
