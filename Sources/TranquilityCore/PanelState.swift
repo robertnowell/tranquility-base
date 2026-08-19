@@ -138,6 +138,30 @@ public enum PanelState: Equatable {
         return false
     }
 
+    /// Leaving the read-back must cancel the send it was offering. Ruled 18 Aug.
+    ///
+    /// Separated from the doing for the same reason `OptionTapDecision` was: the
+    /// panel has no unit tests, so a rule that lives only in `StatusHUD` is a
+    /// rule whose evidence is somebody reading the code and saying so. The doing
+    /// stays there — invalidating the countdown, running the cancel closure —
+    /// and the reasoning is here, where `admits` already lives and where the two
+    /// tables can be checked against each other.
+    ///
+    /// Checked against each other is the point. `.pendingSend` admits three
+    /// states; exactly one of the call paths reaching them cancelled the send,
+    /// so ⌥⌥ from the read-back opened a new capture with the countdown still
+    /// running and dispatched the rejected words four seconds later (app.log
+    /// 18 Aug 22:39:05). Widening `admits` later must never re-open that hole,
+    /// which is why this asks about `self` rather than enumerating the exits:
+    /// ReadbackDoorTests asserts the pair holds for every state `admits` allows.
+    public func releasesPendingSend(movingTo next: PanelState) -> Bool {
+        guard case .pendingSend = self else { return false }
+        // Re-arming a read-back is not leaving one. Nothing does it today —
+        // `admits` refuses pendingSend -> pendingSend — and if anything ever
+        // does, cancelling the send it just armed is the one wrong answer.
+        return !next.isPendingSend
+    }
+
     /// The reply flow owns the stage from mic-open to resolution. These are the
     /// states a stale repaint must never replace. `.arming` owns it too — the
     /// mic is open — so an explicit dismiss tears it down honestly through
