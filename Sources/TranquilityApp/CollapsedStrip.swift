@@ -18,18 +18,16 @@ import TranquilityCore
 ///     │ ○  │  — solid unread, hollow once opened, exactly as the grid draws
 ///     │ ◉  │
 ///     │    │
-///     │ TB │  the wordmark, in the band the controls stand in
-///     │ RA │  — always there, whatever the roster; hidden on hover
-///     │ AS │
-///     │ NE │
-///     └────┘  X and + appear here on hover, in the wordmark's slot
+///     │ ── │  the designation plate: a hairline, and TB under it
+///     │ TB │  — always there, whatever the roster; hidden on hover
+///     └────┘  X and + appear here on hover, in the plate's own slots
 ///
 /// ## Why nothing moves
 ///
 /// The height is FIXED and the lamps are top-aligned, so a session lighting up
 /// never shifts the ones above it and never resizes the panel. Every control is
 /// a swap into a slot that already exists — the logo's slot becomes Expand, the
-/// wordmark's slot becomes X and +. A dedicated row for any of them would push
+/// plate's slot becomes X and +. A dedicated row for any of them would push
 /// the lamps down, and lamps holding still is the entire property that makes a
 /// 40px column readable at a glance. Any change that reflows this column on
 /// hover has lost the point of the design.
@@ -59,32 +57,34 @@ final class CollapsedStrip: NSView {
     ///
     /// So the cap is the ruling and the height is its consequence.
     ///
-    /// RE-RULED 17 Aug, and the two rulings are one trade seen from both ends.
-    /// Ten lamps bought the roster and spent the mark: with the wordmark moved
-    /// into the controls' 80pt floor, eleven letters landed at 5pt and Robert
-    /// could not read them — "too small not readable, maybe make bigger and go
-    /// back to 8 lamps". Eight it is. The two slots that buys go to the mark,
-    /// which is the thing you look at to know whose column this is.
-    static let lampCapacity = 8
+    /// RE-RULED twice more. 17 Aug: ten lamps bought the roster and spent the
+    /// mark — eleven letters in the controls' floor landed at 5pt, "too small
+    /// not readable" — so the cap came down to eight to buy a 136pt band for a
+    /// stacked wordmark. 18 Aug retired the stack altogether (see `drawPlate`),
+    /// and the band went with it: a designation needs one slot, not five, so
+    /// the two lamps come back.
+    ///
+    /// Ten, and the frame is untouched at 400 through all three rulings —
+    /// which is the point of deriving it. The column has held still while the
+    /// argument about what belongs in it went round twice.
+    static let lampCapacity = 10
 
-    /// The band the mark gets, and the reason the frame did not change.
+    /// The band the mark gets: the controls' own floor, and nothing more.
     ///
-    /// 136pt: two lamp slots handed back plus the controls' own 80. The X and
-    /// the + still stand in the bottom 80 of it — they are 40pt targets and
-    /// growing them was never the ask — so the mark simply has more room above
-    /// them than they use, and still shares their floor rather than reserving
-    /// its own.
+    /// It was 136pt — five slots — while the mark was a stacked wordmark that
+    /// needed eleven letters' worth of rhythm to stay legible. A designation
+    /// does not: `TB` at 12pt fits the bottom slot with room around it, so the
+    /// band collapses back onto the floor the X and the + already stand in and
+    /// the three extra slots return to the lamps.
     ///
-    /// Sized from the TYPE, not chosen and then filled: eleven letters need
-    /// `markTypeFloor` points of rhythm each to stay legible, and 136 is what
-    /// that comes to with the inset. That is the arithmetic that failed last
-    /// time, run in the right direction.
-    private static let markFloor: CGFloat = 136
+    /// Still a shared floor and still nothing reserved twice: the mark paints
+    /// at rest, the glyphs paint on hover, and the plate's own slot is the X's.
+    private static let markFloor: CGFloat = controlsFloor
 
     /// Fixed, so the strip never resizes under the user — the logo slot, every
     /// lamp slot, and the band the mark and the controls share. DERIVED: see
-    /// `lampCapacity`. Still 400: eight lamps and a readable mark cost exactly
-    /// what ten lamps and an unreadable one did.
+    /// `lampCapacity`. 400 through every ruling since: eight lamps with a
+    /// stacked mark, ten with a plate — the same column, argued about twice.
     static let height: CGFloat =
         logoSlot + CGFloat(lampCapacity) * lampSlot + markFloor
     /// The mark lives in the controls' slot, at every roster size.
@@ -101,10 +101,10 @@ final class CollapsedStrip: NSView {
     /// it is the same swap every other control on this column already is: one
     /// slot, two faces, nothing reflowing.
     ///
-    /// The band is `markFloor`, not `controlsFloor`. Fitting it to the two
-    /// button rows was the 17 Aug version and it shipped illegible — the mark
-    /// is the one thing here that has a MINIMUM size, so it sets the band's
-    /// height instead of accepting it.
+    /// The band is the controls' floor again as of 18 Aug, because the mark it
+    /// holds is no longer a wordmark. The 17 Aug version fitted eleven letters
+    /// to this space and shipped illegible; the answer was not a bigger band
+    /// but a smaller thing to put in it.
     private var wordmarkRect: NSRect {
         NSRect(x: 0, y: 0, width: bounds.width, height: Self.markFloor)
     }
@@ -116,7 +116,9 @@ final class CollapsedStrip: NSView {
     /// from the space it was given, drew it correctly, passed an ink count, and
     /// was unreadable on the actual screen. 8pt is where the mark sat for the
     /// whole life of the design before that pass, unremarked; below it the type
-    /// stops being quiet and starts being absent.
+    /// stops being quiet and starts being absent. The plate now renders at 12
+    /// and clears this by half again — the floor stays because it is what
+    /// stops the next edit quietly trading legibility for room.
     static let markTypeFloor: CGFloat = 8
 
     var onExpand: (() -> Void)?
@@ -375,7 +377,7 @@ final class CollapsedStrip: NSView {
             drawGlyph("+", in: newAgentRect, color: StateLegend.Palette.faint)
             lastFloorPaint = .controls
         } else {
-            drawWordmark()
+            drawPlate()
             lastFloorPaint = .mark
         }
     }
@@ -481,69 +483,62 @@ final class CollapsedStrip: NSView {
         }
     }
 
-    /// TRANQUILITY down the left, BASE down the right, both reading top to
-    /// bottom with every glyph upright.
+    /// The console designation: a hairline, and `TB` under it.
     ///
-    /// Upright and stacked, NOT rotated: a rotated run reads as a book spine,
-    /// which is a "look at me" the panel is built to avoid. Per-glyph placement
-    /// rather than an `NSTextField` with newlines, because the stack needs
-    /// optical centring per letter — `I` and `T` want different side bearings
-    /// than `Q` and `B`, and a text field would rag them against a shared box.
-    private func drawWordmark() {
-        let left = Array("TRANQUILITY")
-        let right = Array("BASE")
+    /// Ruled 18 Aug, off a design audit of the stacked wordmark it replaces.
+    /// Three things were wrong with the stack and only the third was taste.
+    /// It was painted in `faint`, which the palette rules DECORATIVE ONLY and
+    /// "never small text" at 2.18:1 — while the expanded face's signature, the
+    /// same identity one surface over, is set in `hint` at 4.57:1 for exactly
+    /// that reason. It put a second axis on a column where the logo, every
+    /// lamp, the X and the + all centre on x=20: BASE filled only the bottom
+    /// four rows, so for the top seven the only ink on the strip sat left of
+    /// that axis, which is the "off-centre" the report started from. And it
+    /// spent 136 of 400 points — a third of the column, three lamp slots — on
+    /// a name the expanded face already carries in its corner.
+    ///
+    /// A designation answers all three. It is one line on the axis, it is the
+    /// largest and most legible the mark has ever been, and it costs one slot,
+    /// so the roster goes back to ten. It is also what the thing being
+    /// imitated actually does: a console position is labelled GNC, FIDO,
+    /// EECOM, RETRO — an engraved abbreviation, never the product's name set
+    /// vertically down the bezel.
+    ///
+    /// `TB` is a PLACEHOLDER for a real mark, and knowingly so — the icon and
+    /// wordmark work is out for research as this lands. What is ruled here is
+    /// the slot, the ink and the size; what fills it is still open.
+    private func drawPlate() {
+        // The plate's own slot is the X's. Nothing is reserved twice: the
+        // hairline and the letters paint at rest, the glyphs paint on hover.
+        let plate = dismissRect
 
-        // Sized to a fixed BAND, and the band was sized to the type.
-        //
-        // The mark used to take whatever the lamps left, which made it a
-        // different size on every roster and nothing at all past five of them.
-        // The first fix put it in the controls' 80pt floor, which fixed the
-        // disappearing and produced 5pt letters: "too small not readable".
-        //
-        // So the arithmetic now runs the other way. Eleven letters at
-        // `markTypeFloor` set the band, the band set the frame, and the lamp
-        // cap came down to eight to pay for it. `wordmarkRect` is 136pt and the
-        // lamps are structurally forbidden from entering it (see
-        // `lampsClearTheMarkForTesting`); the X and the + stand in its bottom
-        // 80, so mark and controls still share one floor — mark at rest, glyphs
-        // on hover.
-        let inset: CGFloat = 6
-        let baseY = wordmarkRect.minY + inset
-        let available = wordmarkRect.height - inset * 2
+        // Filled rather than stroked, and half a point down: a 1pt line
+        // centred on the slot edge straddles the pixel boundary and renders as
+        // two half-lit rows on a 2x display. This one lands on the grid.
+        StateLegend.Palette.hairline.setFill()
+        NSBezierPath(rect: NSRect(x: 11, y: plate.maxY - 0.5,
+                                  width: bounds.width - 22, height: 1)).fill()
 
-        // Ambient, not ostentatious: the hint line's ink, a step below the
-        // chrome the lamps and controls sit in. Legible when looked at, quiet
-        // when not.
-        let rhythm = available / CGFloat(left.count)
-        // Clamped BELOW by the legibility floor rather than by whatever fits.
-        // If a future edit shrinks the band, the mark holds its size and the
-        // drill fails loudly — which is the opposite of what happened on 17
-        // Aug, where the type quietly followed the space down to 5pt and every
-        // property still passed.
-        let size = max(Self.markTypeFloor, min(10, rhythm * 0.78))
+        let size: CGFloat = 12
         lastMarkTypeSize = size
+        // Letterspaced, which is how this panel buys subtlety everywhere else
+        // — the 10 Aug signature ruling: "subtlety is bought with letterspacing
+        // and stillness", never by dimming the ink under its floor.
+        let kern: CGFloat = 2.6
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: ChromeType.mono(ofSize: size, weight: .regular),
-            .foregroundColor: StateLegend.Palette.faint,
+            .font: ChromeType.mono(ofSize: size, weight: .medium),
+            .foregroundColor: StateLegend.Palette.hint,
+            .kern: kern,
         ]
-
-        // Both columns END on the same baseline — the pair is related to each
-        // other rather than each centred in the column, which is what made the
-        // first version read as two ragged lists instead of one mark.
-        let leftX = bounds.width * 0.31
-        let rightX = bounds.width * 0.69
-
-        func stack(_ letters: [Character], centredOn x: CGFloat) {
-            for (i, ch) in letters.enumerated() {
-                let fromBottom = CGFloat(letters.count - 1 - i)
-                let str = String(ch) as NSString
-                let w = str.size(withAttributes: attrs).width
-                str.draw(at: NSPoint(x: x - w / 2, y: baseY + fromBottom * rhythm),
-                         withAttributes: attrs)
-            }
-        }
-        stack(left, centredOn: leftX)
-        stack(right, centredOn: rightX)
+        let text = "TB" as NSString
+        let measured = text.size(withAttributes: attrs)
+        // Kerning trails the LAST glyph too, so the measured width is 2.6pt
+        // wider than the ink. Centring on it would sit the pair left of the
+        // axis by half that — the exact fault this plate replaces.
+        let inkWidth = measured.width - kern
+        text.draw(at: NSPoint(x: plate.midX - inkWidth / 2,
+                              y: plate.midY - measured.height / 2),
+                  withAttributes: attrs)
     }
 
     private func drawGlyph(_ glyph: String, in rect: NSRect, color: NSColor) {
