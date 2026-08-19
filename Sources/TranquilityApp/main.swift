@@ -1397,12 +1397,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 SessionActivity.evidence(transcriptPath: $0,
                                          boundary: boundaries[event.sessionId])
             }
-            // Blue here means "it is chewing on your last reply". A restarted
+            // Blue here means "it is chewing on your last reply". A resumed
             // session is not: the turn the file describes died with the process
             // that wrote it. Green is the truth — you still owe it an answer,
             // and now nothing at all moves until you type one.
-            let stranded = AgentRestart.stranded(
-                activity: evidence?.activity,
+            let resumed = AgentRestart.resumed(
                 startedAt: liveById[event.sessionId]?.startedAtDate,
                 lastWord: AgentRestart.lastWord(observedAt: evidence?.observedAt,
                                                 boundary: boundaries[event.sessionId]))
@@ -1419,7 +1418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // The id, not the callsign — ruled 12 Aug, and the same in
                 // every band so a row means the same thing wherever it sits.
                 aux: StateLegend.shortId(event.sessionId),
-                lamp: !stranded
+                lamp: !resumed
                     && (evidence?.activity == .working
                         || delivering.supersedesWaiting(event.sessionId,
                                                         latestId: event.latestId))
@@ -1587,9 +1586,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///
     /// A RESTART is the one place that ruling needed a third fact. The process
     /// says idle and is right; the file says working and is right; the session
-    /// is stranded anyway, because the two of them are talking about different
-    /// processes. `AgentRestart` settles that one, above everything here except
-    /// `waiting`.
+    /// is standing to anyway, because the two of them are talking about
+    /// different processes. `AgentRestart` settles that one, above everything
+    /// here except `waiting` and a process that is visibly `busy`.
     ///
     /// The lamp AND the words next to it, decided together.
     ///
@@ -1617,16 +1616,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return (.fault, "asking you a question",
                     "The agent has asked you something and is holding for an answer.")
         }
-        // Stranded by a restart: the file's open turn was written by a process
-        // that has since been killed, and the one running now has heard
-        // nothing. Amber, and above the two downgrades below, which would
-        // otherwise read this session's brand-new idleness as "nothing here"
-        // and file the work away. See `AgentRestart`.
-        if AgentRestart.stranded(
-            activity: activity, startedAt: live?.startedAtDate,
-            lastWord: AgentRestart.lastWord(observedAt: evidence?.observedAt,
-                                            boundary: boundary)) {
-            return (.fault, AgentRestart.short, AgentRestart.full)
+        // Resumed, and told nothing since: whatever the file describes was
+        // written by a process that has since been killed. Ruled 19 Aug — a
+        // session you restart is no longer idle and belongs on the grid — so
+        // this sits above the two downgrades below, which read a resumed
+        // process's brand-new idleness as "nothing here" and filed the row.
+        //
+        // It supplies the colour ONLY where nothing else does. `busy` first,
+        // because a resumed session that is already chewing has simply not
+        // written its first line yet, and blue is the true state; `blocked`
+        // keeps its own words inside `reason`. See `AgentRestart`.
+        if live?.status != "busy",
+           AgentRestart.resumed(
+               startedAt: live?.startedAtDate,
+               lastWord: AgentRestart.lastWord(observedAt: evidence?.observedAt,
+                                               boundary: boundary)),
+           let said = AgentRestart.reason(for: activity) {
+            return (.fault, said.short, said.full)
         }
         let observed: (StateLegend.Lamp, String?, String?) = {
             switch activity {
