@@ -331,6 +331,16 @@ public final class QueueStore: Sendable {
             }
         }
 
+        // The pull requests a turn named, so the hub can link them (ruled
+        // 18 Aug). Old rows stay null and the turn renders exactly as before,
+        // which is also what a turn that opened no PR looks like — the two are
+        // the same fact and share one representation.
+        m.registerMigration("v12_brief_pull_requests") { db in
+            try db.alter(table: "brief") { t in
+                t.add(column: "pullRequests", .text)
+            }
+        }
+
         // A callsign with a vowelless word in it was never sayable, and the
         // freeze made that permanent — "promotions stlth" (STLTH is a brand
         // spelled without vowels) sat frozen on a session for its whole life.
@@ -797,6 +807,7 @@ public final class QueueStore: Sendable {
             findings: brief.findings, solution: brief.solution,
             recap: brief.recap, proposal: brief.proposal,
             headline: brief.headline, deck: brief.deck,
+            pullRequests: StoredBrief.joinPRs(brief.pullRequests),
             callsign: callsign, provider: provider)
     }
 
