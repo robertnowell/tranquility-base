@@ -98,6 +98,28 @@ enum SiteMark {
         return image
     }
 
+    /// Draw the mark centred in `rect`, scaled to `height` points tall.
+    ///
+    /// Sized and centred on the mark's own INK, not on its 16-unit box: the
+    /// drawing occupies about 13.1 of those units vertically and sits low in
+    /// them, so fitting the box would both undersize the mark and hang it below
+    /// the middle of whatever slot it is in.
+    static func draw(in rect: NSRect, height: CGFloat,
+                     filled: Bool = false, color: NSColor) {
+        let mark = path(filled: filled)
+        let ink = mark.bounds
+        let scale = height / ink.height
+        NSGraphicsContext.saveGraphicsState()
+        let transform = NSAffineTransform()
+        transform.translateX(by: rect.midX - ink.midX * scale,
+                             yBy: rect.midY - ink.midY * scale)
+        transform.scale(by: scale)
+        transform.concat()
+        color.setFill()
+        mark.fill()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
     /// The app icon's artwork at any pixel size: the console ground, rounded on
     /// Apple's grid, with the mark on it.
     ///
