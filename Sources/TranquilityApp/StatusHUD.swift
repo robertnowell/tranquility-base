@@ -4343,6 +4343,35 @@ final class StatusHUD: NSObject {
             + " lamps=\(collapsedLampCount)"
             + " shot=\(shot?.path ?? "-")")
 
+        // The mark, at the two sizes nobody looks at until they ship.
+        //
+        // Ruled 18 Aug: the identity is a lamp resting on a hairline, drawn
+        // from the panel's own vocabulary. Three properties, and the second is
+        // the one that has already caught a real defect — the 16px app icon
+        // was geometrically perfect and visually a grey blob, because the ring
+        // wall fell under a device pixel. Ink is counted on the rendered
+        // bitmap; nothing else sees that.
+        let markHollowInk = SiteMark.inkForTesting(size: 16, filled: false)
+        let markFilledInk = SiteMark.inkForTesting(size: 16, filled: true)
+        let markIsTemplate = SiteMark.templateImage().isTemplate
+        // Solid says something wants you, hollow says nothing new — the same
+        // rule the grid draws. If the two ever render the same, the menu bar
+        // has quietly stopped saying anything.
+        let markStatesDiffer = markFilledInk > markHollowInk + 12
+        let markReadsAt16 = markHollowInk > 30
+        // The app icon must show the MARK at the bottom of the ladder, not a
+        // dark tile with a rumour on it.
+        let iconInk16 = SiteMark.iconMarkInkForTesting(pixels: 16)
+        let iconReadsAt16 = iconInk16 > 12
+        Permissions.log("mark drill: hollow=\(markHollowInk) filled=\(markFilledInk)"
+            + " template=\(markIsTemplate) icon16=\(iconInk16)")
+        SelfTest.report("mark", [
+            ("templateForTheMenuBar", markIsTemplate),
+            ("readsAtSixteenPoints", markReadsAt16),
+            ("solidAndHollowDiffer", markStatesDiffer),
+            ("appIconShowsTheMarkAtSixteen", iconReadsAt16),
+        ])
+
         SelfTest.report("collapsed", [
             ("idleLampsOmitted", idleLampsOmitted),
             ("stripShown", stripShown),
