@@ -4577,6 +4577,7 @@ final class StatusHUD: NSObject {
         hoverDrill()
         quietRowsDrill()
         litLampsOnlyDrill()
+        restartedAgentDrill()
         closedRowsDrill()
         lampSwitchDrill()
         readIntensityDrill()
@@ -5168,6 +5169,70 @@ final class StatusHUD: NSObject {
             // regression on 18 Aug; see `gridRows`.
             ("theFloorIsStillGeometry",
              Self.gridRowsShown([row("q", .running)]) == Self.gridRowFloor),
+        ])
+    }
+
+    /// A restarted agent is on the grid, not in Past Agents.
+    ///
+    /// Ruled 19 Aug, on `04d50469`: killed between a tool call and its result,
+    /// resumed seven minutes later, and filed away by the panel while its owner
+    /// sat looking at it. Robert: *"when you restart an agent, the lamp should
+    /// immediately be on … it should be on the grid, not in past agents."*
+    /// Re-ruled the same evening, wider: *"anytime I click on an agent to
+    /// resurrect it, it is no longer idle."* So resumption is the membership
+    /// fact and it does not care what the old turn was doing — including a
+    /// conversation that had finished cleanly, which the first cut left quiet.
+    ///
+    /// Drilled as the whole path rather than as the rule alone, because the
+    /// rule was never the doubtful part: `AgentRestart` is unit-tested and was
+    /// green while the row was still in the wrong place. What this asserts is
+    /// that the verdict reaches the LAMP and the lamp reaches the GRID — the
+    /// two joins that the 18 Aug downgrade sat between.
+    private func restartedAgentDrill() {
+        func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
+            StateLegend.SessionRow(id: id, name: id, aux: id, lamp: lamp)
+        }
+        // The real clocks off this machine at 22:32: the conversation's last
+        // word at 22:25:22, the process up at 22:32:22.
+        let lastWord = Date(timeIntervalSince1970: 1_787_178_322)
+        let restart = Date(timeIntervalSince1970: 1_787_178_742.354)
+        // The lamp half of `lampAndReason`, for a process reporting `idle` —
+        // which is where every one of these rows used to land as quiet.
+        func lamp(_ activity: SessionActivity, startedAt: Date?)
+            -> (lamp: StateLegend.Lamp, aux: String) {
+            guard AgentRestart.resumed(startedAt: startedAt, lastWord: lastWord),
+                  let said = AgentRestart.reason(for: activity)
+            else { return (.running, "quiet") }
+            return (.fault, said.short)
+        }
+        let interrupted = lamp(.working, startedAt: restart)
+        let reopened = lamp(.idle, startedAt: restart)
+        let stalled = lamp(.stalled(reason: "silent for 2h"), startedAt: restart)
+        // The same file, read against a process that has been up all along.
+        let untouched = lamp(.working, startedAt: lastWord.addingTimeInterval(-600))
+        let rows = StateLegend.quietRowsLast([
+            row("interrupted", interrupted.lamp), row("reopened", reopened.lamp),
+            row("neverRestarted", untouched.lamp)])
+        let drawn = Set(Self.gridRows(rows).map(\.id))
+        let listed = Set(Self.pastAgents(rows).map(\.id))
+
+        SelfTest.report("restartedAgent", [
+            ("aRestartLightsTheLamp", interrupted.lamp == .fault),
+            ("aRestartedStallLightsToo", stalled.lamp == .fault),
+            // The 19 Aug widening: a clean finish is still a restart.
+            ("aReopenedConversationLightsToo", reopened.lamp == .fault),
+            ("theRowSaysWhichKindItIs", interrupted.aux != reopened.aux),
+            ("bothAreDrawnOnTheGrid",
+             drawn.isSuperset(of: ["interrupted", "reopened"])),
+            ("neitherIsFiledAway",
+             listed.isDisjoint(with: ["interrupted", "reopened"])),
+            // The narrowness that survives: this must not light every live row.
+            ("anUnrestartedSessionIsUntouched",
+             untouched.lamp == .running && listed.contains("neverRestarted")),
+            // And it retires itself the moment the session is spoken to.
+            ("typingEndsIt",
+             !AgentRestart.resumed(startedAt: restart,
+                                   lastWord: restart.addingTimeInterval(30))),
         ])
     }
 
