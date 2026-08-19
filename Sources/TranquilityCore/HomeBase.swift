@@ -60,17 +60,24 @@ public enum HomeBase {
         public let findings: String?
         public let solution: String?
         public let rationale: String?
+        /// The pull requests this turn opened, as its own text named them
+        /// (ruled 18 Aug). They print in the turn's made-list beside the
+        /// pages, because a PR is a thing the agent made and this page is the
+        /// list of those. No state travels with them: the link is the feature,
+        /// and GitHub is the only thing that knows whether it is merged.
+        public let pullRequests: [String]
 
         public init(at: Date, topic: String, happened: String,
                     nextStep: String? = nil, question: String? = nil,
                     risk: String? = nil, headline: String? = nil,
                     deck: String? = nil, findings: String? = nil,
-                    solution: String? = nil, rationale: String? = nil) {
+                    solution: String? = nil, rationale: String? = nil,
+                    pullRequests: [String] = []) {
             self.at = at; self.topic = topic; self.happened = happened
             self.nextStep = nextStep; self.question = question; self.risk = risk
             self.headline = headline; self.deck = deck
             self.findings = findings; self.solution = solution
-            self.rationale = rationale
+            self.rationale = rationale; self.pullRequests = pullRequests
         }
     }
 
@@ -442,6 +449,45 @@ public enum HomeBase {
         }.joined()
     }
 
+    /// One `<li>` per pull request, for the made-list under a turn.
+    ///
+    /// A PR wears its number, because that is what you say out loud and what
+    /// you type into `gh`; the branch is the subtitle, because that is what
+    /// tells two PRs on the same topic apart. It carries no state — an
+    /// "open"/"merged" badge on a page rewritten at every visit is a fact with
+    /// a shelf life, and this app has already paid once for asserting a stale
+    /// one (see SessionBrief.pullRequests).
+    static func prItems(_ urls: [String], e: (String) -> String) -> String {
+        urls.map { url -> String in
+            let label = prNumber(url).map { "PR #\($0)" } ?? "pull request"
+            return "<li class=\"prrow\"><a class=\"pr\" href=\"\(e(url))\""
+                + " target=\"_blank\" rel=\"noopener\">\(e(label))</a>"
+                + "<span class=\"where\">\(e(prRepo(url) ?? ""))</span></li>"
+        }.joined()
+    }
+
+    /// The digits after `/pull/`. Nil rather than a guess: a URL that got here
+    /// without a number is a URL the grounding check should have dropped, and
+    /// printing "PR #" with nothing after it would hide that.
+    static func prNumber(_ url: String) -> String? {
+        let parts = url.split(separator: "/")
+        for (i, part) in parts.enumerated() where part == "pull" || part == "pulls" {
+            guard i + 1 < parts.count else { continue }
+            let digits = parts[i + 1].prefix { $0.isNumber }
+            if !digits.isEmpty { return String(digits) }
+        }
+        return nil
+    }
+
+    /// `owner/repo`, so an agent that opened PRs against two repositories in
+    /// one session can be told which is which at a glance.
+    static func prRepo(_ url: String) -> String? {
+        let parts = url.split(separator: "/")
+        guard let host = parts.firstIndex(where: { $0.contains(".") }),
+              parts.count > host + 2 else { return nil }
+        return "\(parts[host + 1])/\(parts[host + 2])"
+    }
+
     static func escape(_ s: String) -> String {
         s.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
@@ -598,8 +644,14 @@ public enum HomeBase {
             }
             // The turn's own work, under the turn: a made thing reads as a
             // result here and as an orphan in a list somewhere else.
-            if let made = pagesByTurn[i], !made.isEmpty {
-                body += "<ul class=\"made\">" + pageItems(made, e: e) + "</ul>"
+            // Pull requests first inside the made-list: a branch waiting on
+            // you outranks a page you can read later, and the ruling that put
+            // it here was "whenever you need to look at a PR to merge it".
+            let made = pagesByTurn[i] ?? []
+            if !turn.pullRequests.isEmpty || !made.isEmpty {
+                body += "<ul class=\"made\">"
+                    + prItems(turn.pullRequests, e: e)
+                    + pageItems(made, e: e) + "</ul>"
             }
             rows += """
                 <li class="\(cls)"><div class="when">\(e(stamp.string(from: turn.at)))</div>
@@ -628,7 +680,7 @@ public enum HomeBase {
         var pages = ""
         if !shelved.isEmpty {
             pages = """
-                <h2>Earlier pages</h2>
+                <h2>Earlier work</h2>
                 <ul class="pages">\(pageItems(shelved, e: e))</ul>
                 """
         }
@@ -718,6 +770,22 @@ public enum HomeBase {
                         border-bottom:1px solid var(--rule)}
           ul.made .page:hover{color:var(--accent)}
           ul.made .on{display:none}
+          /* A pull request in the made-list. The number is set in the sans,
+             like every other label on this page that names an instrument
+             rather than saying a sentence; the repository trails it, quiet. */
+          ul.made .pr{font-family:var(--sans);font-size:13px;font-weight:700;
+                      letter-spacing:.02em;color:var(--accent);text-decoration:none}
+          ul.made .pr:hover{text-decoration:underline}
+          /* `.what span` sets every span on a turn in the field-tag caps, and
+             a repository is a proper noun rather than a label — the page's own
+             rule is that caps mark placards and nothing else. So this one opts
+             out, and aligns instead: the numbers form a column, the repos form
+             a column, and two PRs on one turn read as a pair. */
+          ul.made li.prrow{display:flex;align-items:baseline}
+          ul.made .where{font-family:var(--sans);font-size:12.5px;color:var(--faint);
+                         text-transform:none;letter-spacing:0;font-weight:400;
+                         margin:0}
+          ul.made .pr{min-width:5.4em;margin-right:10px}
           ul.pages li{display:flex;align-items:baseline;gap:14px;padding:12px 0;
                       border-top:1px solid var(--rule)}
           ul.pages .page{color:var(--fg);text-decoration:none;font-size:18px;flex:1;
@@ -873,7 +941,8 @@ public extension HomeBase {
                      nextStep: $0.nextStep, question: $0.question, risk: $0.risk,
                      headline: $0.headline, deck: $0.deck,
                      findings: $0.findings, solution: $0.solution,
-                     rationale: $0.rationale)
+                     rationale: $0.rationale,
+                     pullRequests: StoredBrief.splitPRs($0.pullRequests) ?? [])
             },
             pages: ArtifactStore.history(for: sessionId,
                                          root: QueueStore.supportDirectory.path))

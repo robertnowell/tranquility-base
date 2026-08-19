@@ -334,6 +334,13 @@ public struct StoredBrief: Codable, FetchableRecord, PersistableRecord, Sendable
     /// existed; the page renders its derived header instead.
     public var headline: String?
     public var deck: String?
+    /// The pull requests the turn's own text named (v12), newline-joined.
+    ///
+    /// One TEXT column rather than a child table: a PR here is a string the
+    /// turn already contained, it is read only ever as a whole list, and a URL
+    /// cannot contain a newline — so the separator is total and the join is
+    /// lossless. A table would buy referential integrity nothing here refers to.
+    public var pullRequests: String?
     /// The minted callsign at generation time; nil when not yet minted.
     public var callsign: String?
     /// Which provider generated it ("anthropic", "anthropic+digit-scrubbed", …)
@@ -349,7 +356,23 @@ public struct StoredBrief: Codable, FetchableRecord, PersistableRecord, Sendable
             question: question, risk: risk, rationale: rationale,
             findings: findings, solution: solution, branch: nil,
             recap: recap, proposal: proposal,
-            headline: headline, deck: deck)
+            headline: headline, deck: deck,
+            pullRequests: StoredBrief.splitPRs(pullRequests))
+    }
+
+    /// The column's two directions, kept adjacent so they cannot drift apart.
+    /// An empty list stores as nil, not as "": a row that says "no PRs" and a
+    /// row written before the column existed are the same fact, and giving
+    /// them two representations only invites a query that handles one.
+    static func splitPRs(_ joined: String?) -> [String]? {
+        guard let joined, !joined.isEmpty else { return nil }
+        let parts = joined.split(separator: "\n").map(String.init)
+        return parts.isEmpty ? nil : parts
+    }
+
+    static func joinPRs(_ list: [String]?) -> String? {
+        guard let list, !list.isEmpty else { return nil }
+        return list.joined(separator: "\n")
     }
 }
 
