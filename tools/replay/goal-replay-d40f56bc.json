@@ -3,42 +3,28 @@
     "atMs": 1787113722029,
     "topic": "SPF record verification and purge-history correction",
     "old": "Ensure the report to Seth is factually correct before send",
-    "new": "In Blank Apparel Mailchimp audit, fix the false SPF record claim before Seth's report",
+    "new": "We are updating the BlankShirts Mailchimp audit report with corrected SPF, purge history, and cart data before delivery",
     "changed": false
   },
   {
     "atMs": 1787115018612,
     "topic": "mailchimp-audit: Window Seat setup",
     "old": "Complete the Mailchimp audit capability across all client accounts.",
-    "new": "In Window Seat Coffee Mailchimp audit, get their API key so the audit runs weekly",
-    "changed": true
+    "new": "We are updating the BlankShirts Mailchimp audit report with corrected SPF, purge history, and cart data before delivery",
+    "changed": false
   },
   {
     "atMs": 1787116104021,
     "topic": "stray job clobber recovery",
     "old": null,
-    "new": "In Window Seat Coffee Mailchimp audit, fix stale deliverable copies showing incorrect Mailchimp configuration corrections",
-    "changed": true
+    "new": "We are updating the BlankShirts Mailchimp audit report with corrected SPF, purge history, and cart data before delivery",
+    "changed": false
   },
   {
     "atMs": 1787116157990,
     "topic": "Blankshirts audit report publication",
     "old": null,
-    "new": "In Window Seat Coffee Mailchimp audit, fix stale deliverable copies showing incorrect Mailchimp configuration corrections",
-    "changed": false
-  },
-  {
-    "atMs": 1787154111124,
-    "topic": "Window Seat Mailchimp audit baseline",
-    "old": "Complete the Mailchimp audit capability across all client accounts.",
-    "new": "In Window Seat Coffee Mailchimp account, activate abandoned cart automation to recover revenue from 1,463 opted-in customers",
-    "changed": true
-  },
-  {
-    "atMs": 1787154494942,
-    "topic": "Mailchimp audit rendering and analysis gaps",
-    "old": "Complete the Mailchimp audit capability across all client accounts.",
-    "new": "In Window Seat Coffee Mailchimp account, activate abandoned cart automation to recover revenue from 1,463 opted-in customers",
+    "new": "We are updating the BlankShirts Mailchimp audit report with corrected SPF, purge history, and cart data before delivery",
     "changed": false
   }
 ]
