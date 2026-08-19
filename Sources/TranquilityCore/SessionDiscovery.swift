@@ -38,7 +38,10 @@ public enum SessionDiscovery {
         public let cwd: String?
         public let transcriptPath: String
         public let title: String?
-        /// The transcript's own modification time: when this agent last moved.
+        /// When this agent last moved: the newest timestamp the conversation
+        /// itself wrote, with the file's mtime only as the fallback for a tail
+        /// holding no dated entry at all. NOT the file's clock — see
+        /// `lastMoved(tail:)` for why mtime cannot be trusted to mean this.
         public let lastActivityAt: Date
         /// Whether a user prompt follows the final assistant message. NOT the
         /// same question as "have you heard it", which lives in the cursor and
@@ -337,11 +340,16 @@ public enum SessionDiscovery {
             for file in files where file.pathExtension == "jsonl" {
                 let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?
                     .contentModificationDate ?? .distantPast
+                // mtime stays as the PRE-filter only. An append-only file's
+                // clock can only run ahead of its last written timestamp, so
+                // nothing inside the real window is lost to this test — but
+                // membership and rank are decided by `lastMoved`, below.
                 guard now.timeIntervalSince(modified) <= window else { continue }
                 candidates.append((file, modified))
             }
         }
 
+        var kept: [Session] = []
         for (url, modified) in candidates.sorted(by: { $0.1 > $1.1 }) {
             result.scanned += 1
             let path = url.path
@@ -353,27 +361,74 @@ public enum SessionDiscovery {
             if entry == nil { result.unclassifiable += 1 }
             guard !isHeadless(entry) else { result.headless += 1; continue }
 
-            guard result.sessions.count < limit else { result.beyondLimit += 1; continue }
-
             let sessionId = url.deletingPathExtension().lastPathComponent
             let cwd = firstCwd(head: head)
             let tail = SessionActivity.tail(of: path) ?? []
+            let moved = lastMoved(tail: tail) ?? modified
+
+            // The window re-applied to the conversation's own clock: a touched
+            // ancient transcript wears a fresh mtime — that is exactly the
+            // contamination — but its last written entry is still weeks old,
+            // and scope is defined by when the agent moved, not by when its
+            // file did.
+            guard now.timeIntervalSince(moved) <= window else { continue }
 
             // Liveness and revivability are deliberately absent here: they are
             // process facts, they go stale in seconds, and `discover` joins
             // them on afterwards so this whole walk can be cached.
-            result.sessions.append(Session(
+            kept.append(Session(
                 sessionId: sessionId,
                 cwd: cwd,
                 transcriptPath: path,
                 title: titles.latestTitle(transcriptPath: path),
-                lastActivityAt: modified,
+                lastActivityAt: moved,
                 answered: isAnswered(tail: tail),
                 activity: SessionActivity.classify(tail: tail, modified: modified, now: now),
                 liveness: .unknown,
                 revivable: false))
         }
+
+        // Ranked by when the agent moved, THEN cut. The old shape cut mid-walk
+        // in mtime order, so WHICH sessions survived the cap was decided by the
+        // contaminated clock too, not just where they sat. The cost is a tail
+        // read for every interactive candidate in the window (~44 on this
+        // machine) instead of the first `limit` — bounded by the window, and
+        // the walk is cached (see ScanCache), so it is paid once per TTL.
+        kept.sort { $0.lastActivityAt > $1.lastActivityAt }
+        if kept.count > limit {
+            result.beyondLimit = kept.count - limit
+            kept.removeLast(kept.count - limit)
+        }
+        result.sessions = kept
         return result
+    }
+
+    /// When the agent last moved, read from inside the file rather than off it.
+    ///
+    /// The transcript's mtime does not mean this. Claude Code appends
+    /// untimestamped bookkeeping (`bridge-session`, `atis-latch`, `last-prompt`,
+    /// `ai-title`, `permission-mode`…) when a session is merely opened, resumed,
+    /// or bridge-synced, and every such touch bumps the file's clock. Measured
+    /// 19 Aug, the first restart this feature lived through: every dead
+    /// transcript on the machine had been touched 1–7 hours after its last real
+    /// entry, in the order Robert clicked through them afterwards — so the
+    /// closed band ranked his BROWSE order and put a session idle since 08:38
+    /// at the top. Same disease `SessionActivity.working(since:)` was cured of
+    /// on 18 Aug ("the gate was never broken — it was being fed the wrong
+    /// clock"); this is the ranking's dose of the same cure.
+    ///
+    /// The last entry carrying its own timestamp is the newest thing the
+    /// conversation actually wrote; bookkeeping carries no timestamp at all, so
+    /// under this reading it simply stops counting. Nil when nothing in the
+    /// tail is dated — the caller falls back to mtime, which is then the only
+    /// clock there is.
+    static func lastMoved(tail lines: [String]) -> Date? {
+        for line in lines.reversed() {
+            guard let entry = json(line),
+                  let at = SessionActivity.timestamp(of: entry) else { continue }
+            return at
+        }
+        return nil
     }
 
     // MARK: - The classifiers, taking lines so every rule is testable

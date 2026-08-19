@@ -303,6 +303,117 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertEqual(result.beyondLimit, 2)
     }
 
+    // MARK: - lastMoved: the clock the ranking is allowed to believe
+
+    private func iso(_ date: Date) -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.string(from: date)
+    }
+    private func assistant(at date: Date) -> String {
+        #"{"type":"assistant","timestamp":"\#(iso(date))","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#
+    }
+    private func setMtime(_ root: URL, _ slug: String, _ id: String, to date: Date) throws {
+        try FileManager.default.setAttributes(
+            [.modificationDate: date],
+            ofItemAtPath: root.appendingPathComponent(slug)
+                .appendingPathComponent("\(id).jsonl").path)
+    }
+
+    /// The 19 Aug restart bug: browsing dead sessions touched their files, and
+    /// the closed band ranked the browse order. Rank must follow the last entry
+    /// the conversation wrote, not the file's clock.
+    func testRankingFollowsTheConversationNotTheFile() throws {
+        let now = Date()
+        let root = try makeArchive([
+            ("-tmp-a", "fresh", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#,
+                                 assistant(at: now.addingTimeInterval(-60))]),
+            ("-tmp-a", "stale", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#,
+                                 assistant(at: now.addingTimeInterval(-3600))]),
+        ])
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
+        // The stale conversation's file is touched LAST — a resume attempt, a
+        // bridge sync — and the fresh one's file sits quietly behind it.
+        try setMtime(root, "-tmp-a", "stale", to: now)
+        try setMtime(root, "-tmp-a", "fresh", to: now.addingTimeInterval(-600))
+
+        let result = SessionDiscovery.discover(
+            now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles())
+
+        XCTAssertEqual(result.sessions.map(\.sessionId), ["fresh", "stale"])
+        let stale = try XCTUnwrap(result.sessions.last)
+        XCTAssertEqual(stale.lastActivityAt.timeIntervalSince(now), -3600, accuracy: 1)
+    }
+
+    /// A touch is not a return: a transcript whose conversation ended weeks ago
+    /// does not re-enter the window because something brushed its file today.
+    func testATouchedAncientSessionStaysOutsideTheWindow() throws {
+        let now = Date()
+        let root = try makeArchive([
+            ("-tmp-a", "ancient", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#,
+                                   assistant(at: now.addingTimeInterval(-10 * 24 * 3600))]),
+        ])
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
+        try setMtime(root, "-tmp-a", "ancient", to: now)
+
+        let result = SessionDiscovery.discover(
+            now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles())
+
+        XCTAssertEqual(result.scanned, 1)
+        XCTAssertTrue(result.sessions.isEmpty)
+    }
+
+    /// No dated entry in the tail means mtime is the only clock there is — the
+    /// fallback, never the preference.
+    func testUndatedTailFallsBackToMtime() throws {
+        let now = Date()
+        let root = try makeArchive([
+            ("-tmp-a", "undated", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
+        ])
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
+        try setMtime(root, "-tmp-a", "undated", to: now.addingTimeInterval(-120))
+
+        let result = SessionDiscovery.discover(
+            now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles())
+
+        let session = try XCTUnwrap(result.sessions.first)
+        XCTAssertEqual(session.lastActivityAt.timeIntervalSince(now), -120, accuracy: 1)
+    }
+
+    /// The cap is applied AFTER ranking on the conversation's clock, so which
+    /// sessions survive it cannot be decided by the contaminated one either.
+    func testTheCapCutsByConversationRecency() throws {
+        let now = Date()
+        let root = try makeArchive((0..<4).map { i in
+            ("-tmp-a", "s\(i)", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#,
+                                 assistant(at: now.addingTimeInterval(Double(-60 * (i + 1))))])
+        })
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
+        // mtimes exactly inverted: the oldest conversation wears the newest
+        // file clock.
+        for i in 0..<4 {
+            try setMtime(root, "-tmp-a", "s\(i)", to: now.addingTimeInterval(Double(-60 * (4 - i))))
+        }
+
+        let result = SessionDiscovery.discover(
+            limit: 2, now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles())
+
+        XCTAssertEqual(result.sessions.map(\.sessionId), ["s0", "s1"])
+        XCTAssertEqual(result.beyondLimit, 2)
+    }
+
     /// A subagent is not an agent you can talk to, and there are three of them
     /// for every session on this machine.
     func testSubagentTranscriptsAreNotSessions() throws {
