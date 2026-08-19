@@ -120,6 +120,122 @@ public enum AudioInputDevice {
         }
     }
 
+    // MARK: - The display snapshot
+
+    /// The same answer as `resolve`, from a snapshot at most 15 seconds old,
+    /// refreshed off the calling thread. **For display only.**
+    ///
+    /// Measured 18 Aug, sampling the menu's own two `resolve` calls every 500 ms
+    /// for ninety seconds on a machine with six input devices and AirPods Pro
+    /// connected:
+    ///
+    ///     median 34.5 ms · p90 431 ms · p99 1011 ms · max 2081 ms
+    ///     62 of 136 samples over 50 ms
+    ///
+    /// A tight loop had said 5 to 9 ms, and a tight loop is the wrong
+    /// instrument: back to back, the HAL is warm and the round trip is nearly
+    /// free. Spaced the way a poll tick spaces them, every call pays
+    /// `coreaudiod` in full — six devices, four property reads each, roughly
+    /// fifty IPC round trips per rebuild.
+    ///
+    /// `rebuildMenu()` runs on the 1.5 s tick, on the main actor. Two seconds
+    /// there is a frozen app, and the poll loop's own comment already records
+    /// what else it costs: "which also risks the CGEvent tap timing out, and a
+    /// timed-out tap is dropped keystrokes."
+    ///
+    /// Stale is the right trade HERE and nowhere else. A menu naming the device
+    /// you plugged in fifteen seconds ago is a menu; capture binding to a device
+    /// that left fifteen seconds ago is a failed recording. So every call site
+    /// that OPENS something keeps `resolve`, and only the ones that DRAW use
+    /// this.
+    public static func cachedResolve(_ preference: AudioInputPreference = .current) -> Device? {
+        let devices = deviceCache.current()
+        switch preference {
+        case .builtIn:
+            return devices.first(where: \.isBuiltIn) ?? devices.first { $0.id == cachedDefaultId }
+        case .systemDefault:
+            return devices.first { $0.id == cachedDefaultId }
+        }
+    }
+
+    /// Fill the snapshot before anything draws, so the first menu names a real
+    /// device instead of blanking for one tick. Call it off the main thread.
+    public static func primeCache() { deviceCache.refreshNow() }
+
+    private static let deviceCache = DeviceCache()
+    private static var cachedDefaultId: AudioDeviceID { deviceCache.currentDefaultId() }
+
+    /// Stale-while-revalidate with a single in-flight refresh, copied in shape
+    /// from `SystemVoiceCatalog.RowsCache` because that pattern has already been
+    /// proved here on exactly this problem: every reader gets the previous
+    /// snapshot immediately, nobody ever waits on the loader, and the lock is
+    /// held only across the assignments.
+    final class DeviceCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private let maxAge: TimeInterval
+        private var devices: [Device] = []
+        private var defaultId = AudioDeviceID(0)
+        private var stamp: Date?
+        private var refreshing = false
+
+        init(maxAge: TimeInterval = 15) { self.maxAge = maxAge }
+
+        func current() -> [Device] {
+            lock.lock()
+            let snapshot = devices
+            let fresh = stamp.map { Date().timeIntervalSince($0) <= maxAge } ?? false
+            let claimed = !fresh && !refreshing
+            if claimed { refreshing = true }
+            lock.unlock()
+            if claimed {
+                DispatchQueue.global(qos: .utility).async { [self] in
+                    let loaded = AudioInputDevice.allInputs()
+                    let id = AudioInputDevice.systemDefaultId()
+                    lock.lock()
+                    devices = loaded; defaultId = id; stamp = Date(); refreshing = false
+                    lock.unlock()
+                }
+            }
+            return snapshot
+        }
+
+        func currentDefaultId() -> AudioDeviceID {
+            lock.lock(); defer { lock.unlock() }
+            return defaultId
+        }
+
+        /// Synchronous, for the launch prime. The only caller that may block.
+        func refreshNow() {
+            let loaded = AudioInputDevice.allInputs()
+            let id = AudioInputDevice.systemDefaultId()
+            lock.lock()
+            devices = loaded; defaultId = id; stamp = Date(); refreshing = false
+            lock.unlock()
+        }
+
+        /// Tests need a cache that has never been filled.
+        func reset() {
+            lock.lock()
+            devices = []; defaultId = 0; stamp = nil; refreshing = false
+            lock.unlock()
+        }
+    }
+
+    /// The default input's id alone — one property read, without the walk that
+    /// `systemDefault` does to turn it into a `Device`.
+    static func systemDefaultId() -> AudioDeviceID {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id) == noErr
+        else { return 0 }
+        return id
+    }
+
     // MARK: - Property reads
 
     private static func inputChannelCount(_ id: AudioDeviceID) -> Int {
