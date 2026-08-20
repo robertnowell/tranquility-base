@@ -15,7 +15,16 @@ public struct DispatchTarget: Sendable, Equatable {
     public var kind: TransportKind
     public var sessionId: String
     public var pid: Int?
+    /// A DISPLAY and identity-guard fact only, never an address. Two dead
+    /// Terminal windows once matched a tty the tmux server had recycled and a
+    /// reply was typed into a corpse (19 Aug misfire); addressing is the
+    /// transport's own live handle — a Terminal tab walked fresh, a tmux
+    /// `pane` below — resolved at dispatch time.
     public var tty: String?
+    /// The live tmux pane behind `pid`, when a tmux server owns it. Resolved
+    /// fresh by `TmuxOwnership.pane(forPid:)` at target construction; its
+    /// presence is what selects the tmux transport.
+    public var pane: TmuxPaneAddress?
     public var transcriptPath: String?
     public var label: String?
     public var readinessSource: ReadinessSource
@@ -25,6 +34,7 @@ public struct DispatchTarget: Sendable, Equatable {
         sessionId: String,
         pid: Int? = nil,
         tty: String? = nil,
+        pane: TmuxPaneAddress? = nil,
         transcriptPath: String? = nil,
         label: String? = nil,
         readinessSource: ReadinessSource = .claudeAgents
@@ -33,6 +43,7 @@ public struct DispatchTarget: Sendable, Equatable {
         self.sessionId = sessionId
         self.pid = pid
         self.tty = tty
+        self.pane = pane
         self.transcriptPath = transcriptPath
         self.label = label
         self.readinessSource = readinessSource
@@ -59,6 +70,11 @@ public enum Readiness: Sendable, Equatable {
     case waiting(String?)
     /// The process is gone.
     case targetGone
+    /// Somebody's half-typed text is sitting in the session's input box — the
+    /// human's, or a message they queued mid-turn. Pasting now would splice
+    /// our words into theirs, which is a corruption, not a delivery. tmux
+    /// transport only; the AppleScript transport cannot see the input box.
+    case floorHeld
 
     /// What `waitingFor` says when the session is sitting at a modal dialog.
     /// The CLI's own word, matched exactly rather than by substring: this
@@ -74,7 +90,7 @@ public enum Readiness: Sendable, Equatable {
         switch self {
         case .notRegistered: return true
         case .waiting(let what): return what == Readiness.dialogOpen
-        case .ready, .busy, .targetGone: return false
+        case .ready, .busy, .targetGone, .floorHeld: return false
         }
     }
 
@@ -96,11 +112,14 @@ public enum Readiness: Sendable, Equatable {
     /// dispatching only for known-good values — would defer every reply to an
     /// `AskUserQuestion`, which is the app's daily loop, on the strength of a
     /// string nobody has verified.
+    ///
+    /// `floorHeld` refuses for its own reason: pasting would splice our words
+    /// into somebody's half-typed message. Same gate, different hazard.
     public var canDispatch: Bool {
         switch self {
         case .ready, .busy: return true
         case .waiting: return !isDialog
-        case .notRegistered, .targetGone: return false
+        case .notRegistered, .targetGone, .floorHeld: return false
         }
     }
 }
@@ -206,6 +225,14 @@ public struct TerminalAppTransport: DispatchTransport {
     }
 
     public func send(text: String, to target: DispatchTarget) async -> DispatchOutcome {
+        // Defense in depth behind the Coordinator's per-target selection: a
+        // target a tmux server owns must never be typed at through Terminal —
+        // that is the exact shape of the 19 Aug misfire, where a recycled pty
+        // number matched a dead Terminal window and the reply went into it.
+        guard target.kind == .terminalApp, target.pane == nil else {
+            return .failed(.injectionFailed(
+                "target is \(target.kind.rawValue)-owned; refusing Terminal.app injection"))
+        }
         let state = await readiness(for: target)
         let wasBusy = state == .busy
         guard state.canDispatch else {
@@ -290,12 +317,18 @@ public struct TerminalAppTransport: DispatchTransport {
             : .failed(.verificationTimedOut)
     }
 
+    /// The tab must be ALIVE, not merely named. A closed tab's window can
+    /// survive in Terminal's model still reporting its old tty string, and a
+    /// pty NUMBER outlives its tab — the tmux server recycled ttys011 for a
+    /// pane while two dead windows still claimed it, and a reply typed into
+    /// one "succeeded" (19 Aug). `processes of t` is empty on a dead tab, so
+    /// requiring it non-empty makes a corpse unmatchable.
     private func injectScript(tty: String, literal: String) -> String {
         """
         tell application "Terminal"
           repeat with w in windows
             repeat with t in tabs of w
-              if (tty of t) as text is "\(tty)" then
+              if (tty of t) as text is "\(tty)" and (count of processes of t) > 0 then
                 do script \(literal) in t
                 return "ok"
               end if
@@ -513,6 +546,15 @@ public struct LiveSession: Sendable, Decodable {
     public var status: String?
     public var name: String?
     public var waitingFor: String?
+    /// The CLI's own hosting discriminator: "interactive" for a person's
+    /// session, "background" for one hosted by `claude --bg-pty-host` with no
+    /// tab and no supported input channel (PR #1 measured the correlation
+    /// across 11 live sessions; docs/open-issues.md §1 named decoding it "the
+    /// fourth guess that finally has evidence behind it"). Optional so a CLI
+    /// that stops emitting it costs one rule rather than every row, and the
+    /// asymmetry matches the sdk-cli filter: exclusion needs POSITIVE
+    /// evidence, so nil reads as interactive.
+    public var kind: String?
     /// When this PROCESS came up, in milliseconds since the epoch, as the CLI
     /// reports it. Read since 19 Aug because it answers a question nothing
     /// else in the system could: whether the conversation in the file was
@@ -524,6 +566,11 @@ public struct LiveSession: Sendable, Decodable {
     public var startedAtDate: Date? {
         startedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
     }
+
+    /// Positive evidence of a tab-less first-party background session. Only
+    /// the literal string counts — an unknown future value is somebody's
+    /// session, the same fail-open shape as `SessionDiscovery.isHeadless`.
+    public var isBackground: Bool { kind == "background" }
 }
 
 public protocol ClaudeAgentsReading: Sendable {
