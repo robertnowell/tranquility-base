@@ -14,6 +14,15 @@ The six-agent audit record behind every item:
 
 ## The rules of the arc
 
+0. **Every milestone ends with an audit gate** (ruled 20 Aug: "between every
+   stage of this build, deploy coding agents... is it cleaner than before?
+   Are we duplicating or creating mess? Are we creating bug surfaces?").
+   The gate = /code-review at high effort over the milestone's diff, plus an
+   architecture-coherence agent for milestone-scale changes; findings are
+   fixed or explicitly waived in the milestone's closing commit before the
+   next milestone starts. Decision-blockers go to Robert immediately;
+   everything else lands in the milestone note for later review.
+
 1. **One integration branch: `arc/beautiful-machine`, merged to main ONCE.**
    Intermediate commits on the arc may break features mid-branch; only the
    final merged state must be whole. Prod (the live app) never sees an
