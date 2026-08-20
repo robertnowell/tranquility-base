@@ -1251,6 +1251,7 @@ enum StateLegend {
             if let what, !what.isEmpty { return "it's waiting on \(what)" }
             return "it's waiting on something in its tab"
         case .targetGone: return "its tab is gone"
+        case .floorHeld: return "someone is mid-keystroke in its input box"
         }
     }
 }

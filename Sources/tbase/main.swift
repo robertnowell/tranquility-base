@@ -544,7 +544,9 @@ case "reconcile":
                                  : SessionLauncher.defaultDirectory
         switch SessionLauncher.launch(directory: dir) {
         case .success:
-            print("new Terminal window: `\(SessionLauncher.defaultCommand)` in \(dir)")
+            let surface = AgentDefaults.useTmux()
+                ? "detached tmux session (attach on demand)" : "new Terminal window"
+            print("\(surface): `\(SessionLauncher.defaultCommand)` in \(dir)")
             print("its turns enter the loop as soon as the session first stops")
         case .failure(let error):
             print("couldn't launch: \(error.message)")
@@ -719,10 +721,22 @@ case "reconcile":
         let transcript = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/projects/\(encoded)/\(sessionId).jsonl").path
 
+        if live.isBackground {
+            print("not dispatched: this is a first-party background session")
+            print("  (claude --bg-pty-host) with no tab and no supported input channel.")
+            exit(2)
+        }
+        // The same per-target selection the Coordinator makes: live tmux
+        // ownership decides the transport, never a tty string.
+        let pane = TmuxOwnership.pane(forPid: live.pid)
         let target = DispatchTarget(
+            kind: pane != nil ? .tmux : .terminalApp,
             sessionId: sessionId, pid: live.pid, tty: ProcessProbe.tty(of: live.pid),
-            transcriptPath: transcript, label: live.name, readinessSource: .claudeAgents)
-        report(await TerminalAppTransport().send(text: text, to: target))
+            pane: pane, transcriptPath: transcript, label: live.name,
+            readinessSource: .claudeAgents)
+        let transport: any DispatchTransport =
+            pane != nil ? TmuxTransport() : TerminalAppTransport()
+        report(await transport.send(text: text, to: target))
 
     case "send-raw":
         guard args.count > 4, let pid = Int(args[1]) else { usage() }
@@ -730,6 +744,28 @@ case "reconcile":
             sessionId: "harness-\(pid)", pid: pid, tty: args[2], transcriptPath: args[3],
             label: "test harness", readinessSource: .processAlive)
         report(await TerminalAppTransport().send(text: args.dropFirst(4).joined(separator: " "), to: target))
+
+    case "send-raw-tmux":
+        // The tmux twin of send-raw, and what scripts/test-dispatch-tmux.sh
+        // drives: <pid> <pane-id> <transcript> <text…> against the app's own
+        // socket (TB_TMUX_SOCKET overrides for throwaway drill servers).
+        guard args.count > 4, let pid = Int(args[1]) else { usage() }
+        let socket = ProcessInfo.processInfo.environment["TB_TMUX_SOCKET"] ?? Tmux.socketName
+        let pane = TmuxPaneAddress(socketName: socket, paneId: args[2],
+                                   sessionName: "harness", paneTty: "")
+        let target = DispatchTarget(
+            kind: .tmux, sessionId: "harness-\(pid)", pid: pid, pane: pane,
+            transcriptPath: args[3], label: "test harness", readinessSource: .processAlive)
+        report(await TmuxTransport().send(text: args.dropFirst(4).joined(separator: " "), to: target))
+
+    case "tmux":
+        guard args.count > 1, ["on", "off"].contains(args[1]) else {
+            print("usage: tbase tmux <on|off>   — whether NEW launches go into detached")
+            print("       tmux sessions on the app's own server instead of Terminal windows")
+            exit(2)
+        }
+        AgentDefaults.save(useTmux: args[1] == "on")
+        print("new-agent launches: \(args[1] == "on" ? "detached tmux sessions (tb- prefix)" : "Terminal windows")")
 
     // MARK: summarize
 

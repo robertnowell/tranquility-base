@@ -76,6 +76,26 @@ public enum SessionLauncher {
         command: String = defaultCommand,
         acceptTrustPrompt: Bool = true
     ) -> Result<String, ScriptError> {
+        // The machine's launches can opt into detached tmux sessions on the
+        // app's own server (`tbase tmux on`). Same contract either way: the
+        // returned string is the new agent's tty, which is what the greeting
+        // row records and what `watchForTrustPrompt(tty:)` accepts — that
+        // watcher resolves ownership itself, so existing callers that watch
+        // concurrently keep working without knowing which path ran.
+        if AgentDefaults.useTmux() {
+            return launchTmux(directory: directory, command: command,
+                              acceptTrustPrompt: acceptTrustPrompt)
+        }
+        return launchTerminal(directory: directory, command: command,
+                              acceptTrustPrompt: acceptTrustPrompt)
+    }
+
+    @discardableResult
+    static func launchTerminal(
+        directory: String,
+        command: String,
+        acceptTrustPrompt: Bool
+    ) -> Result<String, ScriptError> {
         // `quoted form of` is AppleScript's own shell-quoting — the directory
         // never touches the shell unescaped. The tab's tty comes back so the
         // follow-up can address exactly this window and no other.
@@ -100,6 +120,67 @@ public enum SessionLauncher {
             Self.trace?("newSession FAILED: \(error.message)")
             return .failure(error)
         }
+    }
+
+    /// The tmux launch path: a detached session on the app's own server, no
+    /// window anywhere until someone asks for one (`tmux attach`). Validated
+    /// live before it was written: registration as kind interactive, trust
+    /// prompt answered through capture-pane, 100/100 exact-once deliveries
+    /// (2026-08-19-tb-tmux-transport-validation and -delivery-protocol-proof).
+    ///
+    /// The command runs with an explicitly constructed environment — a
+    /// GUI-launched app's env is minimal, tmux panes start login shells whose
+    /// /etc/zprofile reorders PATH, and a reused server propagates almost
+    /// nothing (the trap claude-squad hit as issue #278). Nothing here trusts
+    /// inheritance.
+    @discardableResult
+    static func launchTmux(
+        directory: String,
+        command: String,
+        acceptTrustPrompt: Bool
+    ) -> Result<String, ScriptError> {
+        // The launch command re-quotes the directory through printf %q-style
+        // single-quote wrapping; the directory came from settings validation
+        // (must exist) but is still never trusted as shell syntax.
+        let quotedDir = "'" + directory.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let name = "tb-" + String(UUID().uuidString.prefix(8)).lowercased()
+        let path = ([
+            "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin",
+            "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
+        ]).joined(separator: ":")
+
+        switch Tmux.run([
+            "new-session", "-d", "-s", name, "-x", "220", "-y", "50",
+            "-c", directory,
+            "-e", "PATH=\(path)",
+            "-e", "LANG=en_US.UTF-8",
+            "/bin/zsh", "-c", "cd \(quotedDir) && \(command)",
+        ], socket: Tmux.socketName, timeout: 10) {
+        case .failure(let error):
+            Self.trace?("newSession(tmux) FAILED: \(error.message)")
+            return .failure(error)
+        case .success:
+            break
+        }
+        // Server posture, set AFTER new-session because a server only exists
+        // once it hosts something — `set -s` against no server fails silently
+        // and the default (exit-empty on) then takes the whole server down
+        // with its last session, which is exactly what happened on the first
+        // live termination test. Idempotent, so every launch re-asserts it.
+        Tmux.run(["set", "-s", "exit-empty", "off"], socket: Tmux.socketName)
+        Tmux.run(["set", "-t", name, "window-size", "manual"], socket: Tmux.socketName)
+        Tmux.run(["set", "-t", name, "mouse", "on"], socket: Tmux.socketName)
+
+        guard case .success(let tty) = Tmux.run(
+            ["display-message", "-p", "-t", name, "#{pane_tty}"],
+            socket: Tmux.socketName, timeout: 3)
+        else {
+            return .failure(ScriptError(message: "tmux session \(name) came up without a pane tty"))
+        }
+        Self.trace?("newSession: launched `\(command)` in \(directory) "
+            + "(tmux \(name), tty \(tty))")
+        if acceptTrustPrompt { watchForTrustPrompt(tty: tty) }
+        return .success(tty)
     }
 
     /// Bring a session that has exited back, in its own directory.
@@ -281,6 +362,14 @@ public enum SessionLauncher {
     ///    trap applies to `do script "" in t`, so both scripts address
     ///    directly.
     public static func watchForTrustPrompt(tty: String) {
+        // A tmux-owned tty is watched through capture-pane: the same needles,
+        // none of the AppleScript dereference pathology this doc block
+        // describes (that trap rotted twice and earned its own canary; it
+        // simply does not exist in tmux's read path).
+        if let pane = TmuxOwnership.pane(forTty: tty) {
+            watchForTrustPrompt(pane: pane)
+            return
+        }
         var settled = 0
         for _ in 0..<15 {
             usleep(2_000_000)
@@ -328,5 +417,38 @@ public enum SessionLauncher {
             }
         }
         Self.trace?("newSession: no trust prompt seen in \(tty) within 30s; leaving it be")
+    }
+
+    /// The tmux twin of the watcher above: identical contract (press Return
+    /// once on the known trust prompt, then STOP; the resume-choice screen
+    /// that can follow is a usage-limit spend and stays with the user),
+    /// identical needles, capture-pane instead of AppleScript. Verified live
+    /// 19 Aug: the v2.1 "trust this folder" screen read cleanly through
+    /// capture-pane and a single send-keys Enter accepted it, with
+    /// registration correctly absent until it did.
+    static func watchForTrustPrompt(pane: TmuxPaneAddress) {
+        var settled = 0
+        for _ in 0..<15 {
+            usleep(2_000_000)
+            guard case .success(let text) = Tmux.run(
+                ["capture-pane", "-p", "-t", pane.paneId],
+                socket: pane.socketName, timeout: 3)
+            else { continue }
+            if text.contains("trust this folder") || text.contains("Do you trust") {
+                Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
+                Self.trace?("newSession: accepted the trust prompt in \(pane.sessionName) "
+                    + "— user-commanded launch")
+                return
+            }
+            if text.contains("? for shortcuts") { return }
+            if text.contains("Claude") { settled += 1 } else { settled = 0 }
+            if settled >= 2 {
+                Self.trace?("newSession: started with no trust prompt in "
+                    + "\(pane.sessionName); watcher done")
+                return
+            }
+        }
+        Self.trace?("newSession: no trust prompt seen in \(pane.sessionName) "
+            + "within 30s; leaving it be")
     }
 }
