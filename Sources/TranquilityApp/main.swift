@@ -3478,22 +3478,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The directory is the one thing a row does not carry and the filter
         // wants, so it comes from the scan the rows were built from — already
         // warm, since sessionRowsNow just used it.
-        let cwds = Dictionary(
-            (SessionDiscovery.discoverIfScanned()?.sessions ?? [])
-                .map { ($0.sessionId, $0.cwd ?? "") },
-            uniquingKeysWith: { first, _ in first })
+        let scanned = SessionDiscovery.discoverIfScanned()?.sessions ?? []
+        let cwds = Dictionary(scanned.map { ($0.sessionId, $0.cwd ?? "") },
+                              uniquingKeysWith: { first, _ in first })
+        // When each agent last MOVED — the conversation's own clock, not the
+        // file's. It rides the same scan the rows and the directories came from,
+        // so the column, the lamp and the ranking are all reading one number;
+        // a second source here is how the list would start disagreeing with the
+        // band order it is drawn in.
+        let moved = Dictionary(scanned.map { ($0.sessionId, $0.lastActivityAt) },
+                               uniquingKeysWith: { first, _ in first })
+        let now = Date()
         let items = hidden.map { row -> PastAgentsList.Item in
             // Everything the filter matches, lowercased once: the name you half
             // remember, the id you would have grepped for, and the directory you
             // were working in.
             let haystack = [row.name, row.id, cwds[row.id] ?? ""]
                 .joined(separator: " ").lowercased()
+            // The column answers "when", because that is the question this face
+            // exists for (ruled 19 Aug). A stopped session used to spend the
+            // whole column on its stall reason — a 46-character sentence,
+            // right-aligned — and the name label yields its width to it, so the
+            // three longest-stalled rows on the list rendered with no visible
+            // name at all. The reason is not lost; it moves to the tooltip,
+            // uncut, next to the id it now shares that space with.
+            let when = moved[row.id].map { SessionActivity.lastMovedLabel($0, now: now) }
+            let hover = [StateLegend.hoverText(for: row), StateLegend.shortId(row.id)]
+                .compactMap { $0 }.joined(separator: "\n")
             // The row's OWN lamp, carried through. A session below the fold is
             // usually quiet, but it is not quiet by definition — on a small
             // screen an agent can be working and still not fit — and the lamp
             // must say which.
             return PastAgentsList.Item(row: row, revivable: row.revivable,
-                                       haystack: haystack)
+                                       haystack: haystack,
+                                       aux: when, tooltip: hover)
         }
         hud.showPastAgents(items: items)
     }
