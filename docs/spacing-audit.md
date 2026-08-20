@@ -133,6 +133,42 @@ still paint their first mark at 15.0 against 10.5 elsewhere, because the back
 chevron's box is taller than its glyph too. Same principle, different axis, not
 yet applied.
 
+## The card's floor: fixed, then REVERTED the same day — and it corrects this audit's thesis
+
+The card's floor was pulled from 21.5pt of painted air to 12.5 on the strength of
+the numbers in this document (#171). **It was a regression, and the numbers said
+it was an improvement.** Reverted in full.
+
+| | painted bottoms across eight faces |
+|---|---|
+| before | 12.5 · 14.5 · 19.5 · 21.5 · 23.5 · 24.5 |
+| after the change | 12.5 (4 faces) · 14.5 · 19.5 · 24.5 |
+
+By this document's own stated goal — *one value per edge* — the change was
+progress: two more faces moved onto 12.5. Rendered and looked at side by side,
+the two card faces were then visibly tighter than every other face, and on their
+own they read cramped against the panel's rounded edge.
+
+**Why the metric was wrong.** The eye does not compare painted margins. It
+compares optical air, and that depends on what sits ABOVE the margin: 12.5pt
+under the grid's hairline-and-wordmark looks settled, 12.5pt under a lone row of
+small caps looks squeezed. The 21.5 this audit filed as "per-face by accident"
+was doing real work — optical compensation for a light row against an edge — and
+nothing in `inkmap.py` can see that.
+
+**So the premise needs restating.** "One value per edge is the goal, two is a
+finding" is the wrong goal. Uniform painted margins are not uniform-looking
+margins. `inkmap.py` is a good detector of gross drift, and a good way to
+attribute a difference once an eye has found one. It is not a design oracle and
+must not be used as a target to optimise against.
+
+**And the procedure was the real defect.** Every step of that change was measured
+and none of it was looked at. A face renders to a PNG in one command — the pose
+harness already exists — and eight of them stacked in one image showed the
+problem in a second, after it shipped. For any change with a visual result:
+render the faces, stack them, LOOK, and only then decide whether the change is
+good. The measurement comes after, to say what moved and by how much.
+
 ## The recommendation
 
 **One principle, adopted centrally, closes Findings 1–3:**
