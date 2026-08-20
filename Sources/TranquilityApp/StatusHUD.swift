@@ -4910,11 +4910,22 @@ final class StatusHUD: NSObject {
                 detail: stallReason),
             revivable: true,
             haystack: "blankshirts mailchimp audit")
+        // And the row that broke NEXT: a title long enough to want the whole
+        // width. Before the column was fixed it took it, and the time — the
+        // one thing this face exists to say — rendered at zero points.
+        let longTitled = PastAgentsList.Item(
+            row: StateLegend.SessionRow(
+                id: "6d1a77e0-5555",
+                name: "Back to School 2026 Mailchimp email campaign for Blankshirts",
+                aux: StateLegend.shortId("6d1a77e0-5555"), lamp: .unlit, revivable: true),
+            revivable: true, haystack: "back to school",
+            aux: "88m ago")
         let items = [
             item("a285f0a9-1111", "Plan Mirai campaign", live: false, cwd: "/tmp/kopi"),
             item("c53ce6f5-2222", "Review PR", live: true, cwd: "/tmp/kopi"),
             item("381c643c-3333", "Compare apartments", live: false, cwd: "/tmp/home"),
             stalled,
+            longTitled,
         ]
         showPastAgents(items: items)
         let entered = state == .pastAgents
@@ -4942,6 +4953,18 @@ final class StatusHUD: NSObject {
         let stalledName = nameWidths.first { $0.id == "9f0c2b71-4444" }?.width ?? 0
         let listWidth = pastList.frame.width
         let stalledRowStillNamesItsAgent = stalledName > listWidth / 2
+        // The mirror claim, and the one Robert reported: the time is a FIXED
+        // column, so a title long enough to want the whole row cannot take it.
+        // Asserted as a width for the same reason — "88m ago" was set on the
+        // label the whole time and drawn at zero points.
+        let auxWidths = pastList.auxWidthsForTesting
+        let longTitleAux = auxWidths.first { $0.id == "6d1a77e0-5555" }?.width ?? 0
+        let theTimeSurvivesALongTitle = longTitleAux >= PastRowView.auxColumn
+        let everyRowKeepsItsColumn = auxWidths.allSatisfy { $0.width >= PastRowView.auxColumn }
+        // And the title yields instead, rather than being drawn over the verb.
+        let longTitleName = nameWidths.first { $0.id == "6d1a77e0-5555" }?.width ?? 0
+        let theTitleTruncatesInstead =
+            longTitleName > 0 && longTitleName <= listWidth - PastRowView.auxColumn
         // And nothing is lost: the tooltip carries the name AND the full
         // sentence, uncut, which is where the truncated half goes.
         let stalledTip = StateLegend.hoverText(for: stalled.row) ?? ""
@@ -5011,6 +5034,9 @@ final class StatusHUD: NSObject {
             ("noSecondBackButton", noSecondBack),
             ("idMatchesTheLogs", idsMatch),
             ("stalledRowStillNamesItsAgent", stalledRowStillNamesItsAgent),
+            ("theTimeSurvivesALongTitle", theTimeSurvivesALongTitle),
+            ("everyRowKeepsItsColumn", everyRowKeepsItsColumn),
+            ("theTitleTruncatesInstead", theTitleTruncatesInstead),
             ("theFullReasonIsReachable", theFullReasonIsReachable),
             ("verbFollowsLiveness", verbs),
             ("placardClearsChevron", placardClearsChevron),
