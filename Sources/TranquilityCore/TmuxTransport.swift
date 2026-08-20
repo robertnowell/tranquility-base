@@ -27,7 +27,27 @@ public enum Tmux {
     /// Locate the tmux binary without relying on PATH — a GUI-launched app
     /// inherits a minimal environment, the identical trap
     /// `ClaudeAgentsCLI.resolveBinary` exists for.
+    /// Memoised: the login-shell fallback costs seconds, and an uncached
+    /// miss on a tmux-less machine would pay it on every probe of every tick
+    /// (M1 gate finding V10). A binary that appears later costs one relaunch,
+    /// the same trade the claude binary's own resolution cache makes.
+    private final class BinaryCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var resolved = false
+        private var path: String?
+        func get(or locate: () -> String?) -> String? {
+            lock.lock(); defer { lock.unlock() }
+            if !resolved { path = locate(); resolved = true }
+            return path
+        }
+    }
+    private static let binaryCache = BinaryCache()
+
     public static func resolveBinary() -> String? {
+        binaryCache.get(or: locateBinary)
+    }
+
+    private static func locateBinary() -> String? {
         let candidates = [
             "/opt/homebrew/bin/tmux",
             "/usr/local/bin/tmux",
@@ -298,6 +318,15 @@ public struct TmuxTransport: DispatchTransport {
             }
             // Enter may have been swallowed while the words arrived.
             if screenContains(payload, pane) {
+                // The one-Return retry, with the #163 lesson applied: a
+                // session can pop a modal between the first Enter and this
+                // one, and a Return at a dialog ANSWERS it (gate finding V4).
+                // Re-probe and stand down if a dialog is up.
+                if target.readinessSource == .claudeAgents,
+                   Readiness.classify((agents.sessions() ?? [])
+                       .first(where: { $0.sessionId == target.sessionId })).isDialog {
+                    break
+                }
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
                 if await landedInTranscript(payload, target: target, timeout: 3,
                                             fromByteOffset: watermark) {
@@ -339,7 +368,7 @@ public struct TmuxTransport: DispatchTransport {
 
     private func screen(_ pane: TmuxPaneAddress) -> String? {
         guard case .success(let out) = Tmux.run(
-            ["capture-pane", "-p", "-t", pane.paneId],
+            ["capture-pane", "-p", "-J", "-t", pane.paneId],
             socket: pane.socketName, timeout: 3) else { return nil }
         return out
     }

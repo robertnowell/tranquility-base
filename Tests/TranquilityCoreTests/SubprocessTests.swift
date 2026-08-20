@@ -40,22 +40,29 @@ final class SubprocessTests: XCTestCase {
 
     // MARK: per-element liveness decode (audit R4)
 
-    func testLenientSessionsDecodeDropsBadRowsOnly() throws {
-        // Private type exercised through the JSON boundary it guards: one row
-        // missing the non-optional pid must not nil the machine's whole view.
+    func testLenientSessionsDecodeDropsBadRowsOnly() {
+        // The REAL decode path (gate finding V12 killed the test-local copy):
+        // one row missing the non-optional pid is dropped and traced, never
+        // allowed to nil the machine's whole view.
         let json = """
         [{"pid": 1, "sessionId": "a", "kind": "interactive", "status": "idle"},
          {"sessionId": "missing-pid"},
          {"pid": 3, "sessionId": "c", "status": "busy"}]
         """
-        struct LenientRow: Decodable {
-            let session: LiveSession?
-            init(from decoder: Decoder) { session = try? LiveSession(from: decoder) }
-        }
-        let rows = try JSONDecoder().decode([LenientRow].self, from: Data(json.utf8))
-        let sessions = rows.compactMap(\.session)
-        XCTAssertEqual(sessions.map(\.sessionId), ["a", "c"])
-        XCTAssertEqual(rows.count - sessions.count, 1)
+        let sessions = ClaudeAgentsCLI.decodeSessions(json, trace: nil)
+        XCTAssertEqual(sessions?.map(\.sessionId), ["a", "c"])
+    }
+
+    func testAllRowsUndecodableReadsAsUnknownNotEmpty() {
+        // nil means "could not determine"; [] means "nobody is home". A CLI
+        // whose schema moved under us must produce the former (gate V1) —
+        // collapsing it into [] is how one hiccup once hid every waiting
+        // session.
+        let sessions = ClaudeAgentsCLI.decodeSessions(
+            #"[{"sessionId": "no-pid-1"}, {"sessionId": "no-pid-2"}]"#, trace: nil)
+        XCTAssertNil(sessions)
+        // A genuinely empty array is still honestly empty.
+        XCTAssertEqual(ClaudeAgentsCLI.decodeSessions("[]", trace: nil)?.count, 0)
     }
 
     // MARK: shared readiness mapping

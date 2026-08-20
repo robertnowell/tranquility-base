@@ -53,15 +53,25 @@ public enum Subprocess {
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
         p.standardError = err
-        if let stdin {
-            let inPipe = Pipe()
-            p.standardInput = inPipe
-            do { try p.run() } catch { return .failure(ScriptError(message: "\(error)")) }
-            inPipe.fileHandleForWriting.write(stdin)
-            try? inPipe.fileHandleForWriting.close()
-        } else {
-            p.standardInput = FileHandle.nullDevice
-            do { try p.run() } catch { return .failure(ScriptError(message: "\(error)")) }
+        // The handler is set BEFORE run(), the AppleScript runner's hard-won
+        // rule: set after, an instantly-exiting child can terminate first and
+        // the handler never fires — the wait then burns the full deadline and
+        // SIGKILLs a recycled pid (M1 gate finding V2).
+        let exited = DispatchSemaphore(value: 0)
+        p.terminationHandler = { _ in exited.signal() }
+        let inPipe: Pipe? = stdin == nil ? nil : Pipe()
+        if let inPipe { p.standardInput = inPipe }
+        else { p.standardInput = FileHandle.nullDevice }
+        do { try p.run() } catch { return .failure(ScriptError(message: "\(error)")) }
+        if let stdin, let inPipe {
+            // Written off-thread: a child that fills its stdout pipe while we
+            // block writing a large stdin is a mutual-buffer deadlock
+            // (gate finding V8; payloads today are far under 64KB, this makes
+            // the property structural rather than circumstantial).
+            DispatchQueue.global(qos: .utility).async {
+                inPipe.fileHandleForWriting.write(stdin)
+                try? inPipe.fileHandleForWriting.close()
+            }
         }
 
         let stdout = PipeBuffer(), stderr = PipeBuffer()
@@ -74,15 +84,19 @@ public enum Subprocess {
                 drained.leave()
             }
         }
-        let exited = DispatchSemaphore(value: 0)
-        p.terminationHandler = { _ in exited.signal() }
         var timedOut = false
         if exited.wait(timeout: .now() + timeout) == .timedOut {
             timedOut = true
             kill(p.processIdentifier, SIGKILL)
             _ = exited.wait(timeout: .now() + 1)
         }
-        drained.wait()
+        // Bounded, not open-ended: a killed child's GRANDCHILDREN can hold
+        // the pipe write-ends open forever (a login shell that spawned a
+        // daemon), and EOF then never comes (gate finding V3). Two seconds of
+        // grace collects everything a well-behaved child wrote; after that
+        // the buffers hold whatever arrived and the drain threads are
+        // abandoned to die with their handles.
+        _ = drained.wait(timeout: .now() + 2)
         if timedOut {
             return .failure(ScriptError(
                 message: "\((executablePath as NSString).lastPathComponent) "
