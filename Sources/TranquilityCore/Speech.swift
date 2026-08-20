@@ -771,6 +771,13 @@ public struct SpeechChain: Sendable {
             } catch SpeechError.synthesisFailed(let reason) where reason.contains("401") {
                 ElevenLabsSpeechProvider.trace?("chain: 401 from elevenlabs: \(reason)")
                 degraded = "ElevenLabs returned 401"
+            } catch is CancellationError {
+                // Cancellation is not a voice failure. Treating it as one read a
+                // cancelled announcement aloud in the system voice (app.log
+                // 20 Aug 14:13:50); like the stop guard below, stay silent —
+                // nothing was heard, so nothing is marked read.
+                ElevenLabsSpeechProvider.trace?("chain: cancelled; staying silent")
+                return Spoken(provider: "none", completed: false, heardAny: heardAny)
             } catch {
                 degraded = "\(error)"
                 ElevenLabsSpeechProvider.trace?("chain: \(preferred.name) failed: \(error)")

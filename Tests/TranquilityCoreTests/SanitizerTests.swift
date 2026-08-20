@@ -144,6 +144,46 @@ final class SanitizerTests: XCTestCase {
         XCTAssertFalse(summary.spoken.text.isEmpty)
         XCTAssertEqual(summary.provider, "deterministic-fallback")
     }
+
+    /// The floor speaks the reply's opening up to the full budget — not a hard
+    /// two sentences. Two sentences spoke a cliffhanger and stopped ("…here's
+    /// the short version." — app.log 20 Aug 14:13:49).
+    func testFloorUsesTheFullSpokenBudget() async throws {
+        let provider = DeterministicSummarizer()
+        let reply = Array(repeating: "This sentence carries six words exactly here",
+                          count: 20).joined(separator: ". ") + "."
+        let brief = try await provider.brief(for: SummaryRequest(
+            lastAssistantMessage: reply, projectLabel: "recall"))
+        let words = brief.happened.split(whereSeparator: \.isWhitespace).count
+        XCTAssertGreaterThan(words, 40, "a floor cut to ~two sentences is the old cliffhanger")
+        XCTAssertLessThanOrEqual(words, SpokenTextSanitizer.maxWords)
+        XCTAssertTrue(brief.happened.hasSuffix("."), "never mid-sentence")
+    }
+
+    /// A cancelled summarize must not manufacture a floor. The provider dies of
+    /// the cancellation, `try?` makes that look like a failure, and the floor
+    /// built from it was spoken as if it were real — for an announcement the
+    /// user had already dismissed (app.log 20 Aug 14:13:49).
+    func testCancelledChainDoesNotManufactureAFloor() async {
+        struct HangsUntilCancelled: SummaryProvider {
+            let name = "hangs"
+            let isConfigured = true
+            func brief(for request: SummaryRequest) async throws -> SessionBrief {
+                try await Task.sleep(nanoseconds: 60_000_000_000)
+                return SessionBrief(topic: "never", happened: "never")
+            }
+        }
+        let chain = SummarizerChain(providers: [HangsUntilCancelled()])
+        let task = Task {
+            await chain.summarize(
+                SummaryRequest(lastAssistantMessage: "Did the thing.", projectLabel: "kopi"))
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        task.cancel()
+        let summary = await task.value
+        XCTAssertEqual(summary.provider, "none",
+                       "cancellation produced a floor that would be spoken or re-prepared")
+    }
 }
 
 // MARK: - Brief assembly
