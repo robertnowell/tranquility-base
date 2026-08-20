@@ -14,7 +14,7 @@ public struct SessionBrief: Codable, Sendable, Equatable {
     /// task, next action, and an explicit skip-list.
     public var recap: String?
     /// Spoken section two: what happens next and what it costs you to agree. Under
-    /// 30 words.
+    /// 40 words (raised from 30 — see `SpokenTextSanitizer.proposalWords`).
     ///
     /// Separate from the recap because they serve different purposes: one orients,
     /// the other asks. It must carry the risk, not just the proposal — the failure
@@ -35,9 +35,11 @@ public struct SessionBrief: Codable, Sendable, Equatable {
     /// A risk or uncertainty worth knowing before you answer.
     public var risk: String?
     /// The ⌃⌃ briefing, model-written: "We propose X because Y. We need to be
-    /// careful about Z." Spoken only on request; clamped to 40 words at
-    /// composition. Nil on briefs generated before the field existed — the
-    /// composition falls back to the card fields.
+    /// careful about Z." Spoken only on request, and spoken in full — the pull
+    /// is an explicit ask for depth, so no clamp applies (measured 20 Aug: the
+    /// model writes ~62 words median against the prompt's 40-word target, and
+    /// dropping the tail severed the thought). Nil on briefs generated before
+    /// the field existed — the composition falls back to the card fields.
     public var rationale: String?
     /// The ⌃⌃ ladder's first rung (ruled 05 Aug: findings → solution → why):
     /// what the work TURNED UP — results, numbers, surprises. Nil when the turn

@@ -93,33 +93,19 @@ public struct DeterministicSummarizer: SummaryProvider {
                 happened: Self.notificationLine(request),
                 question: "Does it have your go-ahead?")
         }
-        let happened = Self.firstSentences(
-            of: request.lastAssistantMessage.replacingOccurrences(of: "\n", with: " "), count: 2)
+        // Leading sentences up to the full spoken budget, not a hard two. Two
+        // sentences spoke a cliffhanger and stopped ("…here's the short
+        // version." — app.log 20 Aug 14:13:49); a reply's opening carries its
+        // outcome, so the floor gets the same ~30 seconds a model brief gets.
+        // `clamp` splits on punctuation-plus-whitespace, so `format.swift` and
+        // `3.14` survive intact, and it never cuts mid-sentence.
+        let happened = SpokenTextSanitizer.clamp(
+            request.lastAssistantMessage.replacingOccurrences(of: "\n", with: " "),
+            maxWords: SpokenTextSanitizer.maxWords)
         return SessionBrief(
             topic: request.projectLabel,
             happened: happened.isEmpty ? "finished a turn" : happened,
             branch: request.gitBranch)
-    }
-
-    /// Split on sentence-ending punctuation followed by whitespace — never on a bare
-    /// `.`, which would cut `format.swift` and `3.14` in half and leave debris the
-    /// sanitizer can no longer recognise as a filename.
-    static func firstSentences(of text: String, count: Int) -> String {
-        let pattern = try? NSRegularExpression(pattern: "(?<=[.!?])\\s+")
-        let full = NSRange(text.startIndex..., in: text)
-        var pieces: [String] = []
-        var cursor = text.startIndex
-
-        pattern?.enumerateMatches(in: text, range: full) { match, _, stop in
-            guard let match, let range = Range(match.range, in: text) else { return }
-            pieces.append(String(text[cursor..<range.lowerBound]))
-            cursor = range.upperBound
-            if pieces.count >= count { stop.pointee = true }
-        }
-        if pieces.count < count, cursor < text.endIndex {
-            pieces.append(String(text[cursor...]))
-        }
-        return pieces.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func notificationLine(_ request: SummaryRequest) -> String {
@@ -633,7 +619,14 @@ public struct SummarizerChain: Sendable {
                 }
             }
         }
-        if produced == nil,
+        // A cancelled call must not manufacture a floor. When the announce task
+        // is cancelled mid-summarize, the model call above dies of that same
+        // cancellation and `try?` makes it look like a provider failure — and
+        // the floor built here then gets spoken, or re-prepared, as if it were
+        // real (app.log 20 Aug 14:13:49). Leave `produced` nil instead; the
+        // "none" summary is never persisted, and the speak path gates on the
+        // same cancellation.
+        if produced == nil, !Task.isCancelled,
            let fallback = try? await DeterministicSummarizer().brief(for: request) {
             produced = (fallback, "deterministic-fallback")
         }
