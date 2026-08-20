@@ -1,137 +1,113 @@
-# Architecture program — the gathering
+# Architecture program — one arc, one merge, a beautiful machine
 
-Ruled 19 Aug 2026 ("I want the architecture to be significantly cleaner... let's
-be very careful. We don't want to get into development hell again."), from a
-six-agent full-codebase audit at bf7779e. The complete audit record with every
-finding, file:line, and citation lives in HQ:
+Ruled 19 Aug 2026, superseding the wave model ruled hours earlier (newest
+ruling wins; Robert, verbatim intent): "We're not gonna do feature flags.
+We're not gonna ship files that are not load-bearing. We're not gonna keep a
+legacy path and a new path simultaneously. We're gonna commit and be
+decisive... it's better if we rip out and throw away chunks of old
+architecture that we don't need anymore. Because we want a beautiful machine."
+The app is pre-launch; regressions on the way to the right architecture are
+acceptable, flag rot is not.
+
+The six-agent audit record behind every item:
 `~/Documents/deep-research/2026-08-19-tb-architecture-program/report.md`.
 
-The diagnosis, consistent across all six auditors: the reasons are written down
-at the call sites; the same fact is written down in four or five of them.
-Claude Code's liveness vocabulary is parsed in four places, its transcript
-dialect in five, the trust needles in three, the resume flag in two. Almost
-nothing needs redesign; everything needs a home.
+## The rules of the arc
 
-## How this program avoids development hell
+1. **One integration branch: `arc/beautiful-machine`, merged to main ONCE.**
+   Intermediate commits on the arc may break features mid-branch; only the
+   final merged state must be whole. Prod (the live app) never sees an
+   intermediate state, because merges deploy and only the end merges.
+2. **MAINLINE FREEZE while the arc is open.** Nothing merges to main
+   underneath it except emergency fixes to the live app, which the arc
+   rebases over immediately. Sessions wanting to help work ON the arc branch
+   (worktrees off `arc/beautiful-machine`, PRs target the arc, one session in
+   the app layer at a time still applies).
+3. **No flags, no dormant files, no dual paths.** A capability on the
+   HarnessAdapter describes a real difference between harnesses; a boolean
+   that chooses between an old path and a new path is banned. If the new path
+   is right, the old path is deleted in the same commit.
+4. **The drills run on the arc continuously**, not only at the final deploy:
+   `swift test`, `scripts/test-dispatch-tmux.sh`, and `--selftest-hud` against
+   a branch build gate every arc-stacked PR. The final merge additionally
+   passes preflight and the deploy self-tests like any other.
+5. **The arc is short in calendar time.** Days, not weeks. The freeze is the
+   forcing function; a stalled arc is the failure mode this rule watches for.
+6. **Deletion is a feature.** Expected net-negative surfaces are listed below;
+   an arc PR that only removes code is a good arc PR.
 
-- **Small PRs, one concern each.** Every entry below is one landable PR that
-  builds green, tests green, drills green on its own. No omnibus refactors.
-- **The drills are the regression net.** Nothing that the drills cover moves
-  until the drill passes against the moved code. Drill-covered surfaces move
-  LAST within their track.
-- **Two lanes, per the multi-session protocol.** Core PRs and app-layer PRs
-  proceed in parallel; the app layer keeps its one-session rule.
-- **Behavior-identical refactors say so.** A PR that is a pure move carries
-  "no behavior change" in its message and its diff should read that way.
-- **Check this file off as PRs land** (edit the checkbox in the landing PR).
+## The end state (what the merged arc contains, all load-bearing)
 
-## Track A — correctness fixes (land before everything else)
-
-- [x] A1. Watermark the delivery verification. TmuxTransport's dedupe and both
-      transports' landing checks match the payload by substring against the
-      ENTIRE transcript history; a short reply ("yes") that ever appeared
-      before false-confirms without sending. Fix: byte-offset watermark taken
-      at send() entry; only messages appended after it count. Also converts
-      the whole-file re-read per poll into a tail read (audit R1 + R2).
-      Regression drill: send the same payload twice; both must land.
-- [ ] A2. Per-element LiveSession decode (one bad row currently nils the whole
-      probe: announce noise, every reply refused). Drop + trace bad rows (R4).
-- [ ] A3. One bounded Subprocess runner; ClaudeAgentsCLI.sessions() and both
-      `zsh -lic` binary probes have no deadline today (R5). Collapses four
-      duplicate runners and two PipeBuffers (A4).
-- [ ] A4. launchTmux PATH must derive from the same candidate list
-      resolveBinary honors; today it omits ~/.claude/local, ~/.bun/bin,
-      ~/.npm-global (H4).
-- [ ] A5. GO TO AGENT for tmux agents (attach fallback) + alive-tab guard on
-      SessionLauncher.focus (the 19 Aug misfire shape survives there) + the
-      resume tmux twin (R3).
-- [ ] A6. QueueStore.reapAudio: per-row do/catch so a thrown update cannot
-      leave a deleted file recorded as present.
-- [ ] A7. ElevenLabs player joins the generationQueue lock discipline.
-- [ ] A8. Wire ObjCExceptionFirewall at the installTap site, or delete the
-      target. Built for a documented crash; called nowhere.
-- [ ] A9. StatusHUD.pose(): duplicate `case "settings"` makes the honest
-      fixture unreachable (app lane).
-- [x] A10. (rides A1) TranscriptWatcher tail-from-watermark.
-
-## Track B — the gathering
-
-### Core lane
-- [ ] B1. (= A2+A3) infrastructure dedupe + shared `classify(LiveSession?) ->
-      Readiness` used by both transports.
-- [x] B2. (= A1) verification watermark, so the adapter never inherits the
-      substring predicate as contract.
-- [ ] B3. Extract `ClaudeCodeLiveness` + `ClaudeCodeTranscripts` behind
-      protocols; the five hand-rolled JSONL parsers (TranscriptArchive,
-      TranscriptTitles, SessionDiscovery classifiers, SessionActivity,
-      TranscriptWatcher) consume one implementation.
-- [ ] B4. Extract `ClaudeCodeLaunch`: binary candidates, default args,
-      resumeArguments(sessionId:) AS A FUNCTION (Codex resumes via subcommand,
-      a suffix string is the wrong shape), trust needles, env. One generic
-      trust watcher over injected read()/press(). Delete reviveCommand's
-      second `--resume` copy.
-- [ ] B5. `HarnessAdapter` protocol: liveSessions()?, transcripts, launch,
-      trustPrompt?, hooks?, capabilities (queuesInputMidTurn, echoesPaste,
-      promptGlyph, registersWithLiveness, hasHooks), processCommandMatches.
-      Capabilities are named honestly per harness; the multi-harness survey's
-      one documented regret is an interface method that silently means
-      different things per backend.
-- [ ] B6. Coordinator split: Announcer / ReplyPipeline / SessionSweep (sweep
-      statics become an injectable instance; resetSweepStateForTesting is the
-      smell that says so).
-- [ ] B7. Store riders: one StaleWhileRevalidateCache (3 copies today), one
-      AppendOnlyAgentLog (ArtifactStore + PullRequestStore), one Core.Trace
-      sink (8 nonisolated(unsafe) statics), SpokenComposition depends on an
-      AnnouncementLike protocol not on Coordinator, fontSheetRoot moves out of
-      ~/.claude, PrivateStorage gets tests.
-- [ ] B8. Tooling riders: tbase send shares the Coordinator's target
-      resolution (today it drops the 12s readiness grace), hook-config
-      generated from HookManifest.expected, usage() covers all commands,
-      exit-code contract documented, capture-health-alert unpins the plugin
-      version path, tools/replay one-offs gitignored.
-
-### App lane (one session at a time; every PR gated on --selftest-hud)
-- [ ] P1. Delete dead code (list in the HQ record §4) + A9.
-- [ ] P2. `Widgets` struct + `TestSurface` (name the coupling before moving).
-- [ ] P3. Leaf views out (~1,640 lines; hoist DroppedItem/AudioEventRow).
-- [ ] P4. Drills + pose out via TestSurface (~3,200 lines).
-- [ ] P5. Receipt/build/geometry extensions; StatusHUD core lands ~2,500.
-- [ ] P6. SessionRow model + grid statics -> Core, with the first unit tests
-      for banding/verbs/contrast; drop StateLegend's blanket @MainActor.
-- [ ] P7. main.swift extension split (+Gestures/+Announce/+Reply/+Sessions/
-      +Menu/+DeepLinks/+Wiring/+SelfTests).
-- [ ] P8. GridAssembler -> Core (sessionRowsNow, lampAndReason, blockedOnYou,
-      tabTitle) + unify the twice-written dispatch-outcome->copy mapping.
-- [ ] P9. Recorder/CaptureUnit/log writer -> Core. Main-actor fixes ride their
-      nearest PR: async buffered logger (P9), async drill settles (P4),
-      Permissions async AppleScript (P1-sized), Recorder IO off the gesture
-      path (P9), resolveReplyContext pid off-main (P7).
-- [ ] P10. Transport conditionality: Permissions.isRequired(transport), the
-      Terminal-naming strings, goToSession routed through onGoToSession,
-      frontmost-suppression via a transport predicate.
-
-## Track C — Codex as a peer harness (gated on evidence)
-
-- [ ] C0. GATE: run the live validation battery against a Codex TUI in tmux
-      (registration-equivalent, composer echo check, two-step injection, busy
-      queue, long payload with quotes, copy-mode ambush, exact-once churn),
-      exactly as was done for the tmux transport before it was built. No
-      adapter code before this passes. Codex 0.144.6 is installed and
-      authenticated on this machine; 177 rollouts confirm busy/answered derive
-      from the rollout tail (task_started/task_complete pairs).
-- [ ] C1. CodexAdapter after B5: liveness = processAlive + rollout tail;
-      transcripts = rollout JSONL (session_meta/response_item/event_msg);
-      resume = ["resume", id] subcommand; trust needle "Do you trust the
-      contents of this directory?"; hooks = notify turn-complete only, and the
-      adapter WRAPS the existing notify program (the slot is already owned by
-      Codex Computer Use on this machine), never claims it.
-- [ ] C2. Decision recorded: both harnesses ride the same tmux closed loop.
-      Codex app-server (better busy/idle fidelity than Claude Code has
-      anywhere) stays shelved as a future status upgrade because a second
-      transport would undercut interchangeability; revisit only with evidence.
+- **One dispatch transport: the tmux closed loop.** DELETED: the AppleScript
+  injection walk, TerminalAppTransport, scripts/lib/canary-probe.applescript
+  and canary.sh's Terminal path, the tab-walk in SessionLauncher.focus, the
+  Automation (Terminal) permission and its onboarding gate, the four
+  Terminal-naming user strings, `AgentDefaults.useTmux` (launches are tmux,
+  full stop), the window-per-agent launch path and its ruling doc block
+  (rewritten as history).
+- **Hand-started sessions in plain terminal tabs become read-only rows**:
+  announced (hooks and transcripts are transport-independent) but not
+  dispatchable; the card says so and offers the fix ("start agents from the
+  panel or tbase; they live in tmux"). This is the decisive trade: no
+  AppleScript kept alive for the old habit.
+- **GO TO AGENT = attach**: opens a terminal window running
+  `tmux attach -t <session>`; detach leaves the agent running. Revive = tmux.
+  The frontmost-suppression check generalizes to the active tmux client, or
+  dies if it cannot be done cleanly (announce-always is the safe direction).
+- **HarnessAdapter with two real implementations, no optional stubs:**
+  ClaudeCodeAdapter and CodexAdapter land together, both load-bearing.
+  Capabilities (liveSessions?, hooks?, echoesPaste, queuesInputMidTurn,
+  promptGlyph, resumeArguments(), trustPromptSpec?) describe harness facts.
+  The five hand-rolled transcript parsers collapse into the adapter's
+  transcript store; the four status-vocabulary copies collapse into one
+  normalized enum; the two trust watchers collapse into one loop over
+  injected read()/press().
+- **Codex gate (C0) runs FIRST, inside the arc's first days**: the live
+  battery against a Codex TUI in tmux (echo check, two-step injection, busy
+  queue, long payload, copy-mode ambush, exact-once churn). Its findings set
+  the CodexAdapter's capability values. Codex rides the same tmux loop;
+  app-server stays out (second transport = dual path).
+- **Core correctness items land inside the arc** (A2 per-element decode, A3
+  bounded Subprocess runner, A4 launch PATH from the adapter's candidate
+  list, A5 attach affordance, A6 reapAudio, A7 speech lock, A8 firewall wired
+  or deleted): each is part of the surface the arc rebuilds anyway.
+- **Coordinator splits** (Announcer / ReplyPipeline / SessionSweep) and the
+  **app-layer decomposition** (P1-P10 from the audit: dead code deleted, leaf
+  views and drills out of StatusHUD, grid policy down to Core with unit
+  tests, main.swift extensions, the async logger) — executed as arc-stacked
+  PRs in the app lane, one session at a time.
+- **Store riders**: one cache, one append-only log, one trace sink,
+  PrivateStorage tests, fontSheetRoot out of ~/.claude.
+- **Vestigial code from the audit's dead lists is deleted, not preserved**:
+  SpeakTier, dormant hail, PlacardRowView/PaneLinkRowView, write-only state,
+  TransportKind.iTerm2/.wezterm/.kitty (YAGNI; tmux is the transport),
+  the no-op clearOldNotifications, tools/replay one-off JSONs.
 
 ## Untouched, by standing ruling
 
 The sdk-cli exclusion (robots stay out of the grid), typing fails closed, the
-one-Return retry, window-per-agent dissolves only WITH the tmux default flip,
-bundle id stays com.robertnowell.voice-dispatch (TCC).
+dialog gate, the one-Return retry, the delivery watermark, bundle id
+com.robertnowell.voice-dispatch (TCC).
+
+## Already landed on main before the freeze
+
+- [x] Program doc (PR #166), delivery watermark A1/A10/B2 (PR #167,
+      deployed b20d0fa), tmux transport + kind decode (PR #164).
+
+## Arc checklist (ticked by arc-stacked PRs; order is a guide, not a gate)
+
+- [ ] C0 Codex live battery; record capability values in the adapter
+- [ ] Subprocess runner + per-element decode + readiness classify dedupe
+- [ ] HarnessAdapter + ClaudeCodeAdapter (liveness, transcripts, launch,
+      hooks, trust spec); five parsers collapse
+- [ ] CodexAdapter (load-bearing on landing: grid shows Codex sessions,
+      dispatch delivers to them)
+- [ ] Single-transport cut: delete AppleScript dispatch machinery, Automation
+      permission gate, useTmux flag; launches are tmux; attach affordance in
+      the panel; read-only rows for plain-terminal sessions
+- [ ] Launcher: PATH/env from adapter; trust watcher unified; revive = tmux
+- [ ] Coordinator split
+- [ ] App lane P1-P10 (sequenced, drills green per step)
+- [ ] Store riders + dead-code deletions
+- [ ] Final: preflight, full drills, merge to main, deploy verified,
+      freeze lifted
