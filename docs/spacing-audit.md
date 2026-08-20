@@ -133,41 +133,6 @@ still paint their first mark at 15.0 against 10.5 elsewhere, because the back
 chevron's box is taller than its glyph too. Same principle, different axis, not
 yet applied.
 
-## Second fix: the card rests on the floor (20 Aug)
-
-Finding 1 at the bottom edge. The `Controls` word's pointer target — 20pt around
-a ~10pt mark, ruled deliberately — was landing ON the panel's inset rather than
-inside it, so every card face paid for the target twice.
-
-The stack's bottom inset is now measured to INK: `contentFloor` minus the tail
-of whichever row ends up last (`floorInset`, written in `render()` after
-visibility settles and read by `resizeToFit` on the next line). Only the action
-row carries a correction; a face that ends in plain text already paints what it
-should.
-
-Measured against the same commit, before and after:
-
-| face | before | after |
-|---|---|---|
-| speaking, waiting, depth1, no-audio, receipt-card, redacted | 21.5 | **12.5** |
-| needsyou | 23.5 | **14.5** |
-| grid, notice, read-state, receipt-sent | 15.5 | 15.5 (untouched) |
-
-The painted bottom margin across these faces went from a 15.5–23.5 spread to
-12.5–15.5. Not one value yet, but three points instead of eight.
-
-**Two corrections to this document while doing it.** The first attempt also
-subtracted a 0.5pt tail from the plain faces, reasoning that 12.5 painted minus
-12 declared was their overhang — and the grid answered **15.5**, not 12.0,
-because a panel's height is fitted to its content and the two do not move
-together. The constant is 0 now, measured rather than reasoned.
-
-And the grid's floor is **15.5 on today's main, not the 12.5 this audit
-recorded**. Nothing here moved it; it drifted through other work in the two days
-between the audit and this fix. A number in a document is only true on the
-commit it was measured against, which is an argument for the audit being a gate
-rather than a page.
-
 ## The recommendation
 
 **One principle, adopted centrally, closes Findings 1–3:**
