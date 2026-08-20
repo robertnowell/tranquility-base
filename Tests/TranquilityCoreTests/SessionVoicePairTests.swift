@@ -76,6 +76,34 @@ final class SessionVoicePairTests: XCTestCase {
         XCTAssertNotNil(pair.system, "an older session still needs a fallback voice")
     }
 
+    /// The row shape the mixed roster left behind: an APPLE id sitting in the
+    /// cloud column. It must become the session's system voice — that is what it
+    /// has actually been — and the session must gain a real cloud voice, because
+    /// ElevenLabs is used whenever it is available.
+    ///
+    /// Left unmigrated these sessions would never reach the cloud again, which is
+    /// the exact opposite of the rule.
+    func testAnAppleIdInTheCloudColumnBecomesTheSystemVoice() throws {
+        let legacy = "com.apple.voice.enhanced.en-US.Allison"
+        _ = try store.assignVoice(legacy, to: "mixed")
+
+        let pair = try store.voices(for: "mixed", roster: cloud, systemRoster: system)
+        XCTAssertEqual(pair.system, legacy,
+                       "the voice this session has been read in is its fallback, not a discard")
+        XCTAssertNotNil(pair.cloud, "and it gains a real ElevenLabs voice")
+        XCTAssertFalse(SystemVoiceCatalog.isSystemVoice(pair.cloud ?? ""),
+                       "an Apple id must never be the cloud voice")
+    }
+
+    /// And it sticks, so the re-mint happens once rather than every announcement.
+    func testTheRemintedPairIsStable() throws {
+        _ = try store.assignVoice("com.apple.voice.premium.en-US.Ava", to: "mixed")
+        let first = try store.voices(for: "mixed", roster: cloud, systemRoster: system)
+        let again = try store.voices(for: "mixed", roster: cloud, systemRoster: system)
+        XCTAssertEqual(first.cloud, again.cloud)
+        XCTAssertEqual(first.system, again.system)
+    }
+
     /// An empty system roster is a decision the user is allowed to make: no
     /// fallback voice is named and the provider uses its own default. It must not
     /// take the cloud voice down with it.
