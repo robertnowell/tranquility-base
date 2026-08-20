@@ -1,8 +1,9 @@
 import Foundation
 
-/// A4 depth-1, Core half. DORMANT: nothing in the current announce flow calls
-/// this — the app layer wires it to the ⌃⌃ double-tap (whose handler is a no-op
-/// today) once the stage arbiter lands. `announceNext` is unchanged.
+/// A4 depth-1, Core half. LIVE: the app layer wires `ladderRungs` to the ⌃⌃
+/// double-tap (walk + rung prewarm in main.swift). The DORMANT note this
+/// header carried outlived the wiring by weeks — corrected 20 Aug 2026.
+/// `announceNext` is unchanged.
 ///
 /// The ⌃⌃ pull goes one level deeper than the announcement: the rationale and
 /// the risk, composed from the brief's card fields. The prompt already instructs
@@ -56,7 +57,8 @@ public enum SpokenComposition {
     /// is), FINDINGS (what the work turned up), SOLUTION (the shape of what is
     /// proposed), then WHY (the rationale — which alone falls back to the card
     /// fields for pre-rationale rows). Empty rungs are skipped, never padded: a trivial turn's ladder is
-    /// one rung. Every rung is sanitized, clamped at the same 40, and speaks
+    /// one rung. Every rung is sanitized, spoken in full — a pull is an
+    /// explicit ask for depth, so no clamp applies — and speaks
     /// without a callsign — the pull answers the agent that just spoke.
     /// Guaranteed non-empty: the why rung's fallback bottoms out at
     /// "No further rationale recorded."
