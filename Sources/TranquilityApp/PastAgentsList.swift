@@ -60,6 +60,13 @@ final class PastAgentsList: NSView {
     private let filterField = FilterRowView()
     private var items: [Item] = []
     private var shown: [Item] = []
+    /// What each session SAID, as UTF-8, harvested in the background. Kept out
+    /// of `Item.haystack` deliberately: the haystack is matched inline on every
+    /// keystroke, and megabytes in there is the beach ball of 19 Aug.
+    private var content: [String: [UInt8]] = [:]
+    /// Bumped by every keystroke. A background content pass that returns after
+    /// the needle has moved on belongs to a question nobody is asking any more.
+    private var filterGeneration = 0
 
     var onPick: ((_ id: String, _ revivable: Bool) -> Void)?
     /// A click on the LAMP COLUMN, which is the session's power switch and
@@ -167,18 +174,15 @@ final class PastAgentsList: NSView {
     /// repaints through `filter`, which is the path every keystroke already
     /// takes. With no needle typed there is nothing to re-answer, so the items
     /// are swapped silently and the reader's scroll position is not touched.
-    func widen(_ extra: [String: String]) {
+    func widen(_ extra: [String: [UInt8]]) {
         guard !extra.isEmpty else { return }
-        items = items.map { item in
-            guard let more = extra[item.row.id], !more.isEmpty else { return item }
-            return Item(row: item.row, revivable: item.revivable,
-                        haystack: item.haystack + "\n" + more,
-                        aux: item.aux, tooltip: item.tooltip)
-        }
+        // Stored beside the items, never concatenated into them. Building a
+        // 2 MB String per row on the main actor was its own freeze, separate
+        // from the matching one, and neither was necessary.
+        content = extra
         let typed = filterField.currentText.trimmingCharacters(in: .whitespaces)
         guard !typed.isEmpty else { return }
         filter(typed)
-        onFilterChanged?()
     }
 
     /// Case-insensitive substring, over the name, the short id and the project
@@ -188,16 +192,72 @@ final class PastAgentsList: NSView {
     /// something without those five letters in it reads as a bug.
     private func filter(_ text: String) {
         let needle = text.trimmingCharacters(in: .whitespaces).lowercased()
-        shown = needle.isEmpty ? items : items.filter { $0.haystack.contains(needle) }
+        filterGeneration += 1
+        // The instant answer, over the three short strings — name, short id,
+        // directory. This is the whole of what the filter used to be, and it is
+        // back on the keystroke path unchanged: a few hundred bytes a row, so
+        // the list narrows under the finger with nothing to wait for.
+        let named = needle.isEmpty ? items : items.filter { $0.haystack.contains(needle) }
+        shown = named
+        namedCount = named.count
+        contentCount = 0
         summary = needle.isEmpty
             ? "\(items.count) session\(items.count == 1 ? "" : "s") · 7 days"
             : "\(shown.count) of \(items.count)"
         rebuild()
         setHovered(nil)
+        // And the slower answer, over what the sessions said, off the main
+        // thread. 88ms of `memmem` is five dropped frames if the keystroke pays
+        // it; nobody can feel it here. Results widen the list when they land.
+        scheduleContentPass(needle)
         // Filtering re-answers the question, so it re-answers it from the top:
         // being left half-way down a list you just narrowed is disorienting in
         // the same way opening at the bottom was.
         scrollToTop()
+    }
+
+    /// How the current result set was arrived at, so the summary can say it.
+    /// Robert, 19 Aug: "I searched Mirai and 32 agents returned — do all of
+    /// those contain Mirai?" A count he cannot decompose is a count he cannot
+    /// trust, and the honest answer has two halves.
+    private var namedCount = 0
+    private var contentCount = 0
+
+    /// Search what the sessions SAID, off the main actor, for one needle.
+    ///
+    /// Guarded by `filterGeneration` rather than by comparing needles: two
+    /// keystrokes can produce the same needle (type a letter, delete it, type
+    /// it again) and the older pass must still lose. Silent when it finds
+    /// nothing new, so a narrowing search does not repaint for no reason.
+    private func scheduleContentPass(_ needle: String) {
+        guard !needle.isEmpty, !content.isEmpty else { return }
+        let generation = filterGeneration
+        let already = Set(shown.map { $0.row.id })
+        let snapshot = content
+        let target = Array(needle.utf8)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var extra: Set<String> = []
+            for (id, hay) in snapshot where !already.contains(id) {
+                if TranscriptSearchText.contains(hay, target) { extra.insert(id) }
+            }
+            guard !extra.isEmpty else { return }
+            DispatchQueue.main.async {
+                guard let self, self.filterGeneration == generation else { return }
+                self.shown = self.items.filter {
+                    already.contains($0.row.id) || extra.contains($0.row.id)
+                }
+                self.contentCount = extra.count
+                self.summary = "\(self.shown.count) of \(self.items.count)"
+                    + " · \(self.namedCount) by name, \(self.contentCount) by what they said"
+                // No `scrollToTop` here, deliberately. The reader has been
+                // looking at these rows for a beat already; yanking them to the
+                // top because a background pass finished is the panel moving
+                // for its own reasons rather than for theirs.
+                self.rebuild()
+                self.setHovered(nil)
+                self.onFilterChanged?()
+            }
+        }
     }
 
     private func rebuild() {
