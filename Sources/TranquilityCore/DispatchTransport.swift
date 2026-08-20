@@ -113,6 +113,19 @@ public enum Readiness: Sendable, Equatable {
     /// `AskUserQuestion`, which is the app's daily loop, on the strength of a
     /// string nobody has verified.
     ///
+    /// The one mapping from the CLI's status vocabulary to a readiness verb,
+    /// shared by every transport so the gate cannot fork. nil means the
+    /// session is absent from the probe: blocked on a dialog, or gone.
+    public static func classify(_ live: LiveSession?) -> Readiness {
+        guard let live else { return .notRegistered }
+        switch live.status {
+        case "idle": return .ready
+        case "busy": return .busy
+        case "waiting": return .waiting(live.waitingFor)
+        default: return .notRegistered
+        }
+    }
+
     /// `floorHeld` refuses for its own reason: pasting would splice our words
     /// into somebody's half-typed message. Same gate, different hazard.
     public var canDispatch: Bool {
@@ -209,18 +222,8 @@ public struct TerminalAppTransport: DispatchTransport {
             // are treated the same, because injecting into a session we cannot
             // verify could answer a dialog. This is the opposite direction from
             // announcing, and the asymmetry is deliberate.
-            guard let live = (agents.sessions() ?? [])
-                .first(where: { $0.sessionId == target.sessionId })
-            else {
-                // Alive but unregistered — blocked on a dialog, or still booting.
-                return .notRegistered
-            }
-            switch live.status {
-            case "idle": return .ready
-            case "busy": return .busy
-            case "waiting": return .waiting(live.waitingFor)
-            default: return .notRegistered
-            }
+            return Readiness.classify((agents.sessions() ?? [])
+                .first(where: { $0.sessionId == target.sessionId }))
         }
     }
 
@@ -512,33 +515,17 @@ public enum ProcessProbe {
     /// hardware when the HAL reports no bundle id — daemons and helpers usually
     /// have none, and "pid 431" tells the reader nothing.
     public static func name(of pid: Int) -> String? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/ps")
-        p.arguments = ["-o", "comm=", "-p", "\(pid)"]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = Pipe()
-        try? p.run()
-        p.waitUntilExit()
-        let raw = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !raw.isEmpty else { return nil }
+        guard case .success(let raw) = Subprocess.run(
+            "/bin/ps", ["-o", "comm=", "-p", "\(pid)"], timeout: 3),
+              !raw.isEmpty else { return nil }
         return (raw as NSString).lastPathComponent
     }
 
     /// Controlling terminal of a process, as `/dev/ttysNNN`.
     public static func tty(of pid: Int) -> String? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/ps")
-        p.arguments = ["-o", "tty=", "-p", "\(pid)"]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = Pipe()
-        try? p.run()
-        p.waitUntilExit()
-        let raw = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !raw.isEmpty, raw != "??" else { return nil }
+        guard case .success(let raw) = Subprocess.run(
+            "/bin/ps", ["-o", "tty=", "-p", "\(pid)"], timeout: 3),
+              !raw.isEmpty, raw != "??" else { return nil }
         return raw.hasPrefix("/dev/") ? raw : "/dev/\(raw)"
     }
 }
@@ -611,19 +598,9 @@ public struct ClaudeAgentsCLI: ClaudeAgentsReading {
         if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
             return found
         }
-        // Last resort: ask a login shell, which does read the user's profile.
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let probe = Process()
-        probe.executableURL = URL(fileURLWithPath: shell)
-        probe.arguments = ["-lic", "command -v claude"]
-        let pipe = Pipe()
-        probe.standardOutput = pipe
-        probe.standardError = Pipe()
-        try? probe.run()
-        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        probe.waitUntilExit()
-        return out.isEmpty ? nil : out
+        // Last resort: ask a login shell, which does read the user's profile —
+        // bounded, because a blocking ~/.zprofile used to hang liveness forever.
+        return Subprocess.loginShellWhich("claude")
     }
 
     /// Set by the app so a failing liveness probe explains itself. Every previous
@@ -662,39 +639,45 @@ public struct ClaudeAgentsCLI: ClaudeAgentsReading {
     /// for six seconds reads as a broken control rather than a cached one.
     public static func invalidate() { cache.clear() }
 
+    /// One row per live session, decoded LENIENTLY: a row this build cannot
+    /// decode is dropped and traced, never allowed to nil the whole probe.
+    /// The old all-or-nothing decode meant one future session kind could
+    /// refuse every reply on the machine at once (audit R4) — the same
+    /// per-row asymmetry `LiveSession.kind` itself documents, applied at the
+    /// array level.
+    private struct LenientRow: Decodable {
+        let session: LiveSession?
+        init(from decoder: Decoder) {
+            session = try? LiveSession(from: decoder)
+        }
+    }
+
     public func sessions() -> [LiveSession]? {
         if let cached = Self.cache.get(maxAge: 6) { return cached }
         guard let binary = Self.resolveBinary() else {
             Self.trace?("liveness: claude binary not found")
             return nil
         }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: binary)
-        p.arguments = ["agents", "--json"]
-        let out = Pipe(), err = Pipe()
-        p.standardOutput = out
-        p.standardError = err
-        do { try p.run() } catch {
-            Self.trace?("liveness: spawn failed: \(error)")
+        // Bounded: a wedged CLI here used to block whichever thread asked,
+        // every tick, for as long as the wedge lasted (audit R5).
+        switch Subprocess.run(binary, ["agents", "--json"], timeout: 8) {
+        case .failure(let error):
+            Self.trace?("liveness: \(error.timedOut ? "deadline" : "probe failed"): \(error.message.prefix(160))")
             return nil
-        }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        let errData = err.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        guard p.terminationStatus == 0 else {
-            let stderr = String(data: errData, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines).prefix(160) ?? ""
-            Self.trace?("liveness: exit \(p.terminationStatus): \(stderr)")
-            return nil
-        }
-        do {
-            let sessions = try JSONDecoder().decode([LiveSession].self, from: data)
+        case .success(let out):
+            guard let data = out.data(using: .utf8),
+                  let rows = try? JSONDecoder().decode([LenientRow].self, from: data)
+            else {
+                Self.trace?("liveness: decode failed: body=\(out.prefix(120))")
+                return nil
+            }
+            let sessions = rows.compactMap(\.session)
+            let dropped = rows.count - sessions.count
+            if dropped > 0 {
+                Self.trace?("liveness: dropped \(dropped) undecodable row(s) of \(rows.count)")
+            }
             Self.cache.put(sessions)
             return sessions
-        } catch {
-            Self.trace?("liveness: decode failed: \(error) "
-                + "body=\(String(data: data, encoding: .utf8)?.prefix(120) ?? "")")
-            return nil
         }
     }
 }

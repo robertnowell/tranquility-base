@@ -36,18 +36,7 @@ public enum Tmux {
         if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
             return found
         }
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let probe = Process()
-        probe.executableURL = URL(fileURLWithPath: shell)
-        probe.arguments = ["-lic", "command -v tmux"]
-        let pipe = Pipe()
-        probe.standardOutput = pipe
-        probe.standardError = Pipe()
-        try? probe.run()
-        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        probe.waitUntilExit()
-        return out.isEmpty ? nil : out
+        return Subprocess.loginShellWhich("tmux")
     }
 
     /// Run one tmux command, bounded. `socket` nil addresses the user's
@@ -65,9 +54,8 @@ public enum Tmux {
         guard let binary = resolveBinary() else {
             return .failure(ScriptError(message: "tmux binary not found"))
         }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: binary)
         var env = ProcessInfo.processInfo.environment
+        var argv = arguments
         if let socket {
             // Only the app's OWN server relocates out of /tmp (the periodic
             // cleanup trap). Any other named socket — a drill's throwaway
@@ -78,73 +66,17 @@ public enum Tmux {
                     at: socketDirectory, withIntermediateDirectories: true)
                 env["TMUX_TMPDIR"] = socketDirectory.path
             }
-            p.arguments = ["-L", socket] + arguments
+            argv = ["-L", socket] + arguments
         } else {
             env.removeValue(forKey: "TMUX_TMPDIR")
-            p.arguments = arguments
         }
         // Never let a nested-TMUX guard misfire when the app itself was
         // launched from inside somebody's tmux.
         env.removeValue(forKey: "TMUX")
-        p.environment = env
-
-        let out = Pipe(), err = Pipe()
-        p.standardOutput = out
-        p.standardError = err
-        if let stdin {
-            let inPipe = Pipe()
-            p.standardInput = inPipe
-            do { try p.run() } catch { return .failure(ScriptError(message: "\(error)")) }
-            inPipe.fileHandleForWriting.write(stdin)
-            try? inPipe.fileHandleForWriting.close()
-        } else {
-            p.standardInput = FileHandle.nullDevice
-            do { try p.run() } catch { return .failure(ScriptError(message: "\(error)")) }
-        }
-
-        // Drain concurrently with the wait (the AppleScript runner's deadlock
-        // lesson, issue 14), and enforce the deadline with a kill.
-        let stdout = PipeBuffer(), stderr = PipeBuffer()
-        let drained = DispatchGroup()
-        for (pipe, buf) in [(out, stdout), (err, stderr)] {
-            let handle = pipe.fileHandleForReading
-            drained.enter()
-            DispatchQueue.global(qos: .utility).async {
-                buf.append(handle.readDataToEndOfFile())
-                drained.leave()
-            }
-        }
-        let exited = DispatchSemaphore(value: 0)
-        p.terminationHandler = { _ in exited.signal() }
-        var timedOut = false
-        if exited.wait(timeout: .now() + timeout) == .timedOut {
-            timedOut = true
-            kill(p.processIdentifier, SIGKILL)
-            _ = exited.wait(timeout: .now() + 1)
-        }
-        drained.wait()
-        if timedOut {
-            return .failure(ScriptError(
-                message: "tmux \(arguments.first ?? "") killed after \(Int(timeout))s deadline",
-                timedOut: true))
-        }
-        return p.terminationStatus == 0
-            ? .success(stdout.text)
-            : .failure(ScriptError(message: stderr.text))
+        return Subprocess.run(binary, argv, environment: env, stdin: stdin,
+                              timeout: timeout)
     }
 
-    /// PipeBuffer twin of the AppleScript runner's — Data safe to fill from a
-    /// GCD drain thread and read after the group is waited out.
-    final class PipeBuffer: @unchecked Sendable {
-        private let lock = NSLock()
-        private var data = Data()
-        func append(_ chunk: Data) { lock.lock(); data.append(chunk); lock.unlock() }
-        var text: String {
-            lock.lock(); defer { lock.unlock() }
-            return String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        }
-    }
 }
 
 // MARK: - Ownership
@@ -250,18 +182,9 @@ public struct TmuxTransport: DispatchTransport {
         case .processAlive:
             return .ready
         case .claudeAgents:
-            // Identical gate to the Terminal transport, deliberately: the
-            // registration facts are transport-independent, and typing still
-            // fails CLOSED on a session we cannot verify.
-            guard let live = (agents.sessions() ?? [])
-                .first(where: { $0.sessionId == target.sessionId })
-            else { return .notRegistered }
-            switch live.status {
-            case "idle": return .ready
-            case "busy": return .busy
-            case "waiting": return .waiting(live.waitingFor)
-            default: return .notRegistered
-            }
+            // The same gate as every transport, from the one shared mapping.
+            return Readiness.classify((agents.sessions() ?? [])
+                .first(where: { $0.sessionId == target.sessionId }))
         }
     }
 
@@ -286,17 +209,10 @@ public struct TmuxTransport: DispatchTransport {
         let watermark = TranscriptWatcher.fileSize(atPath: target.transcriptPath
             ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId))
 
-        // Claude Code's TUI echoes pasted text into its input box (verified
-        // live 19 Aug: the payload is visible on the ❯ line before Enter), so
-        // a real session gets the strict landing check below. A raw-mode
-        // harness target (`.processAlive`) has echo OFF at the termios level —
-        // the paste is invisible by design — so for it the check would refuse
-        // deliveries that are in fact landing; those targets go straight to
-        // Enter and let the transcript be the whole truth, which is the
-        // pre-tmux contract.
-        let expectsEcho = target.readinessSource == .claudeAgents
 
-        for _ in 0..<3 {
+        let attempts = 5
+        for attempt in 0..<attempts {
+            let lastAttempt = attempt == attempts - 1
             // Step 0 — dedupe against ground truth, EVERY attempt. This is
             // what makes every retry below safe: our payload appended after
             // the watermark is a delivery this send already made.
@@ -352,13 +268,15 @@ public struct TmuxTransport: DispatchTransport {
             // text delivered and submitted): here the two are distinguishable,
             // so "couldn't confirm" stops being an outcome the mechanism
             // can produce on its own.
-            if expectsEcho {
-                guard poll(deadline: 2.0, every: 0.05, until: { screenContains(payload, pane) }) else {
-                    continue    // a mode race ate the paste; loop — dedupe guards the retry
-                }
-            } else {
-                // No echo to observe; give the pty a beat to take the paste.
-                try? await Task.sleep(nanoseconds: 150_000_000)
+            // Every target echoes — Claude Code's TUI by design (verified
+            // live 19 Aug), the test harness by its own write-back — so the
+            // landing check is unconditional. An eaten paste is VISIBLE as
+            // absence within 2s and safely retried; an invisible input
+            // buffer is exactly what allowed a double-paste splice under
+            // churn (measured 20 Aug, 29-in-60), so a second no-echo path
+            // does not exist any more.
+            guard poll(deadline: 2.0, every: 0.05, until: { screenContains(payload, pane) }) else {
+                continue    // a mode race ate the paste; loop — dedupe guards the retry
             }
 
             // Step 6 — submit. A Return on an empty prompt does nothing, so
@@ -366,13 +284,20 @@ public struct TmuxTransport: DispatchTransport {
             // duplicates, and dedupe (step 0) already forbids that path.
             Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
 
-            // Step 7 — ground truth.
-            if await landedInTranscript(payload, target: target,
+            // Step 7 — ground truth. A no-echo target cannot show us an
+            // eaten paste, so betting the full verification window on every
+            // attempt turned one eaten paste into a burned attempt and, under
+            // enough churn, three burned attempts into a loud failure
+            // (measured 20 Aug: 2 of 30 under the adversarial drill). Short
+            // verifies on early attempts, the full window only on the last —
+            // the shape the 100/100 bash validation actually ran.
+            let window = lastAttempt ? verificationTimeout : 4
+            if await landedInTranscript(payload, target: target, timeout: window,
                                         fromByteOffset: watermark) {
                 return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
             }
             // Enter may have been swallowed while the words arrived.
-            if expectsEcho, screenContains(payload, pane) {
+            if screenContains(payload, pane) {
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
                 if await landedInTranscript(payload, target: target, timeout: 3,
                                             fromByteOffset: watermark) {
