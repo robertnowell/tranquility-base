@@ -902,12 +902,36 @@ case "reconcile":
     // MARK: speech + gate
 
     case "speak":
+        // `--voice` and `--system-voice` name the session's PAIR, which is the
+        // only way to exercise routing from outside the app. A 13 Aug commit
+        // message claimed `tbase speak --voice <apple id>` proved a local voice
+        // stayed local; there was no such flag, and the words landed in the
+        // spoken text instead — so the claim rested on an instrument that did not
+        // exist. It does now.
         guard args.count > 1 else { usage() }
-        let spoken = SpokenTextSanitizer().sanitize(args.dropFirst().joined(separator: " "))
+        var words: [String] = []
+        var voice: String?
+        var systemVoice: String?
+        var rest = Array(args.dropFirst())
+        while let head = rest.first {
+            rest.removeFirst()
+            switch head {
+            case "--voice" where !rest.isEmpty: voice = rest.removeFirst()
+            case "--system-voice" where !rest.isEmpty: systemVoice = rest.removeFirst()
+            case "--voice", "--system-voice":
+                print("\(head) needs a voice id"); exit(2)
+            default: words.append(head)
+            }
+        }
+        guard !words.isEmpty else { usage() }
+        let spoken = SpokenTextSanitizer().sanitize(words.joined(separator: " "))
         print("[\(spoken.wordCount) words, ~\(String(format: "%.0f", Double(spoken.wordCount) * 0.39))s]")
         print(spoken.text)
+        if let voice { print("cloud voice:  \(voice)") }
+        if let systemVoice { print("system voice: \(systemVoice)") }
         let start = Date()
-        let used = await SpeechChain(preferred: ElevenLabsSpeechProvider()).speak(spoken)
+        let used = await SpeechChain(preferred: ElevenLabsSpeechProvider())
+            .speak(spoken, voice: voice, systemVoice: systemVoice)
         print("spoken via \(used) in \(Int(Date().timeIntervalSince(start) * 1000))ms")
 
     case "gate":
