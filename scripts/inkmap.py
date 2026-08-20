@@ -78,6 +78,16 @@ def bands(path):
     return surface, width / SCALE, height / SCALE, out
 
 
+# A face whose paint reaches its own bottom edge is not a face with no margin —
+# it is almost certainly a face photographed before the panel finished growing
+# to fit its content. Earned 20 Aug: the first run of this script reported
+# `settings` with a painted bottom margin of 0.0 and it was written up as a
+# defect, when the pose had simply caught the panel mid-resize with its last row
+# cut in half. The instrument now says so itself, because the audit's own method
+# section warns about exactly this transient and the audit walked into it anyway.
+CLIPPED_BELOW = 6.0
+
+
 def margins(width, height, found):
     if not found:
         return None
@@ -93,6 +103,7 @@ def main(directory):
         sys.exit(f"no PNGs in {directory} — run scripts/faces.sh first")
 
     edges = defaultdict(lambda: defaultdict(list))
+    clipped = []
     for shot in shots:
         face = shot[:-4]
         surface, width, height, found = bands(os.path.join(directory, shot))
@@ -109,7 +120,16 @@ def main(directory):
         if m:
             print("   painted margins  " + "  ".join(
                 f"{k} {v:.1f}" for k, v in m.items()))
+            if m["bottom"] < CLIPPED_BELOW:
+                print(f"   ⚠ CLIPPED — bottom margin {m['bottom']:.1f}pt. The pose was very "
+                      "likely caught mid-resize; this face's bottom is not a measurement. "
+                      "Re-shoot before reading anything into it.")
+                clipped.append(face)
             for edge, value in m.items():
+                # A clipped face's BOTTOM is not a fact. Its other three edges
+                # still are — the panel grows downward.
+                if edge == "bottom" and m["bottom"] < CLIPPED_BELOW:
+                    continue
                 edges[edge][value].append(face)
         print()
 
@@ -117,6 +137,8 @@ def main(directory):
     print("SUMMARY — each painted margin, grouped by the value it takes")
     print("A single value per edge is the goal. Two is a finding.")
     print("=" * 72)
+    if clipped:
+        print(f"\nEXCLUDED as clipped: {', '.join(clipped)} — bottom not measured.")
     for edge in ("top", "right", "bottom", "left"):
         print(f"\n{edge.upper()}")
         for value in sorted(edges[edge]):
