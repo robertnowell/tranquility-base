@@ -244,6 +244,10 @@ public struct TerminalAppTransport: DispatchTransport {
         guard !payload.isEmpty else { return .failed(.injectionFailed("empty text")) }
 
         let start = Date()
+        // Everything appended before this instant is history, and history is
+        // not evidence about this delivery — see TranscriptWatcher.fileSize.
+        let watermark = TranscriptWatcher.fileSize(atPath: target.transcriptPath
+            ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId))
 
         // Step 1 — deliver the text.
         switch AppleScript.run(script: injectScript(tty: tty, literal: DispatchText.appleScriptLiteral(payload))) {
@@ -287,7 +291,8 @@ public struct TerminalAppTransport: DispatchTransport {
         // resolves on the first poll.
         let landed = await TranscriptWatcher.waitForUserText(
             payload, sessionId: target.sessionId, knownPath: target.transcriptPath,
-            timeout: verificationTimeout, pollInterval: pollInterval)
+            timeout: verificationTimeout, pollInterval: pollInterval,
+            fromByteOffset: watermark)
 
         // One retry of the Return, and only the Return.
         //
@@ -300,7 +305,8 @@ public struct TerminalAppTransport: DispatchTransport {
             _ = AppleScript.run(script: injectScript(tty: tty, literal: "\"\""))
             let landedAfterRetry = await TranscriptWatcher.waitForUserText(
                 payload, sessionId: target.sessionId, knownPath: target.transcriptPath,
-                timeout: 3, pollInterval: pollInterval)
+                timeout: 3, pollInterval: pollInterval,
+                fromByteOffset: watermark)
             if landedAfterRetry {
                 return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
             }
@@ -696,14 +702,40 @@ public struct ClaudeAgentsCLI: ClaudeAgentsReading {
 // MARK: - Read-back verification
 
 public enum TranscriptWatcher {
-    /// True once `text` appears as a user message in the transcript.
+
+    /// The transcript's size right now — the delivery watermark.
+    ///
+    /// Taken at send() entry by both transports, and every verification and
+    /// dedupe read afterwards starts from it. The rule it encodes: a payload
+    /// that ever appeared in HISTORY is not evidence about THIS delivery;
+    /// only bytes appended after dispatch start are. Without it, a short
+    /// reply ("yes", "go ahead") that appeared in any earlier message
+    /// false-confirmed without sending — found by the 19 Aug architecture
+    /// audit, in code that had passed a 100-message validation battery whose
+    /// payloads all happened to be unique.
+    ///
+    /// nil or missing path reads as 0: a transcript that does not exist yet
+    /// has no history to exclude, and the first-reply case (file born WITH
+    /// our message) keeps working unchanged.
+    public static func fileSize(atPath path: String?) -> Int64 {
+        guard let path,
+              let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? Int64
+        else { return 0 }
+        return size
+    }
+
+    /// True once `text` appears as a user message appended at or after
+    /// `fromByteOffset`.
     public static func waitForUserText(
-        _ text: String, in path: String, timeout: TimeInterval, pollInterval: TimeInterval
+        _ text: String, in path: String, timeout: TimeInterval, pollInterval: TimeInterval,
+        fromByteOffset: Int64 = 0
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
         while Date() < deadline {
-            if userMessages(in: path).contains(where: { $0.contains(needle) }) { return true }
+            if userMessages(in: path, fromByteOffset: fromByteOffset)
+                .contains(where: { $0.contains(needle) }) { return true }
             try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
         }
         return false
@@ -724,7 +756,8 @@ public enum TranscriptWatcher {
     public static func waitForUserText(
         _ text: String, sessionId: String, knownPath: String?,
         timeout: TimeInterval, pollInterval: TimeInterval,
-        projects: URL = TranscriptArchive.projectsDirectory
+        projects: URL = TranscriptArchive.projectsDirectory,
+        fromByteOffset: Int64 = 0
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -737,7 +770,8 @@ public enum TranscriptWatcher {
                 path = TranscriptArchive.transcriptPath(forSessionId: sessionId,
                                                         projects: projects)
             }
-            if let path, userMessages(in: path).contains(where: { $0.contains(needle) }) {
+            if let path, userMessages(in: path, fromByteOffset: fromByteOffset)
+                .contains(where: { $0.contains(needle) }) {
                 return true
             }
             try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
@@ -748,7 +782,26 @@ public enum TranscriptWatcher {
     /// Handles both real Claude transcripts (content is a string or a block array)
     /// and the simpler shape written by `tbase-test-target`.
     public static func userMessages(in path: String) -> [String] {
-        guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+        userMessages(in: path, fromByteOffset: 0)
+    }
+
+    /// The same read, starting at a byte offset — the tail from a watermark.
+    ///
+    /// This is also what stops verification re-reading a whole transcript on
+    /// every 100ms poll (they reach hundreds of megabytes; see
+    /// SessionActivity's tail discipline, which this mirrors from the other
+    /// direction). An offset that bisects a record mid-append is safe by
+    /// construction: the fragment fails JSON parse and is skipped, and the
+    /// record it belonged to began before the watermark, so excluding it is
+    /// not a loss — it is the point.
+    public static func userMessages(in path: String, fromByteOffset offset: Int64) -> [String] {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return [] }
+        defer { try? handle.close() }
+        if offset > 0 {
+            guard (try? handle.seek(toOffset: UInt64(offset))) != nil else { return [] }
+        }
+        guard let data = try? handle.readToEnd(),
+              let raw = String(data: data, encoding: .utf8) else { return [] }
         var found: [String] = []
         for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = line.data(using: .utf8),

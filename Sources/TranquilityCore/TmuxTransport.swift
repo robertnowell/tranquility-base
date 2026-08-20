@@ -278,6 +278,13 @@ public struct TmuxTransport: DispatchTransport {
         let payload = DispatchText.flatten(text)
         guard !payload.isEmpty else { return .failed(.injectionFailed("empty text")) }
         let start = Date()
+        // Everything appended before this instant is history, and history is
+        // not evidence about this delivery. Without the watermark, a short
+        // reply ("yes") that ever appeared in an earlier message
+        // false-confirmed without sending — found by the 19 Aug audit hours
+        // after this transport shipped. See TranscriptWatcher.fileSize.
+        let watermark = TranscriptWatcher.fileSize(atPath: target.transcriptPath
+            ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId))
 
         // Claude Code's TUI echoes pasted text into its input box (verified
         // live 19 Aug: the payload is visible on the ❯ line before Enter), so
@@ -291,9 +298,9 @@ public struct TmuxTransport: DispatchTransport {
 
         for _ in 0..<3 {
             // Step 0 — dedupe against ground truth, EVERY attempt. This is
-            // what makes every retry below safe: a payload already in the
-            // transcript is a delivery already made, whoever made it.
-            if alreadyDelivered(payload, target: target) {
+            // what makes every retry below safe: our payload appended after
+            // the watermark is a delivery this send already made.
+            if alreadyDelivered(payload, target: target, fromByteOffset: watermark) {
                 return .confirmed(latencyMs: Int(Date().timeIntervalSince1970 * 1000
                     - start.timeIntervalSince1970 * 1000))
             }
@@ -319,7 +326,8 @@ public struct TmuxTransport: DispatchTransport {
                 // Our text is already sitting unsubmitted — a previous
                 // attempt's paste landed and its Enter was eaten. Submit only.
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
-                if await landedInTranscript(payload, target: target) {
+                if await landedInTranscript(payload, target: target,
+                                            fromByteOffset: watermark) {
                     return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
                 }
                 continue
@@ -359,13 +367,15 @@ public struct TmuxTransport: DispatchTransport {
             Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
 
             // Step 7 — ground truth.
-            if await landedInTranscript(payload, target: target) {
+            if await landedInTranscript(payload, target: target,
+                                        fromByteOffset: watermark) {
                 return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
             }
             // Enter may have been swallowed while the words arrived.
             if expectsEcho, screenContains(payload, pane) {
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
-                if await landedInTranscript(payload, target: target, timeout: 3) {
+                if await landedInTranscript(payload, target: target, timeout: 3,
+                                            fromByteOffset: watermark) {
                     return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
                 }
             }
@@ -444,19 +454,27 @@ public struct TmuxTransport: DispatchTransport {
         return .holds(ours: false)
     }
 
-    private func alreadyDelivered(_ payload: String, target: DispatchTarget) -> Bool {
+    /// Dedupe makes within-send retries safe, and the watermark keeps it
+    /// honest: "already delivered" means delivered by THIS send — an earlier
+    /// attempt's paste that landed while its Enter was in doubt — never a
+    /// lookalike from history.
+    private func alreadyDelivered(_ payload: String, target: DispatchTarget,
+                                  fromByteOffset watermark: Int64) -> Bool {
         guard let path = target.transcriptPath
             ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId)
         else { return false }
-        return TranscriptWatcher.userMessages(in: path).contains { $0.contains(payload) }
+        return TranscriptWatcher.userMessages(in: path, fromByteOffset: watermark)
+            .contains { $0.contains(payload) }
     }
 
     private func landedInTranscript(
-        _ payload: String, target: DispatchTarget, timeout: TimeInterval? = nil
+        _ payload: String, target: DispatchTarget, timeout: TimeInterval? = nil,
+        fromByteOffset watermark: Int64
     ) async -> Bool {
         await TranscriptWatcher.waitForUserText(
             payload, sessionId: target.sessionId, knownPath: target.transcriptPath,
-            timeout: timeout ?? verificationTimeout, pollInterval: pollInterval)
+            timeout: timeout ?? verificationTimeout, pollInterval: pollInterval,
+            fromByteOffset: watermark)
     }
 
     private func poll(deadline: TimeInterval, every: TimeInterval,
