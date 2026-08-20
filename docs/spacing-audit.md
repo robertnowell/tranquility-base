@@ -41,7 +41,7 @@ Painted, across 19 faces:
 | **top** | 10.5 (16 faces), 11.5 (1), **15.0 (2)** | two outliers |
 | **left** | 14.0 (17), 13.5 (2) | effectively one value |
 | **right** | 14.0 (6), **17.5 (13)** | two populations |
-| **bottom** | **0.0, 12.0, 12.5, 14.5, 19.5, 21.5, 23.5, 24.5** | seven values |
+| **bottom** | ~~0.0~~ · 12.0, 12.5, 14.5, 19.5, 21.5, 23.5, 24.5 | seven values (the 0.0 was a clipped capture — Finding 4) |
 
 ### Finding 1 — one cause, three edges
 
@@ -74,10 +74,23 @@ with a different widget and each contributes its own internal padding:
 the capture strip (24.5), the amber notice (23.5), the level meter (19.5), the
 readback strip (14.5). Nobody chose those differences.
 
-### Finding 4 — `settings` has no bottom margin at all
+### Finding 4 — WITHDRAWN (20 Aug). It was the instrument, not the panel.
 
-Painted bottom margin **0.0**. Content runs to the housing edge. This one is a
-plain bug, not a pattern, and it is per-screen.
+Originally written up as "`settings` has no bottom margin at all — content runs
+to the housing edge, a plain bug". It is not. The pose was captured before the
+panel finished growing to fit its content, with the LAUNCH row cut in half at
+the frame edge. A face whose paint reaches its own bottom edge is not a face
+with no margin; it is a face photographed too early.
+
+Worth recording rather than quietly deleting, because this document's own method
+section warns about exactly this transient — the animating frame that the drills
+have been bitten by three times — and the audit walked into it anyway on its
+first run. `inkmap.py` now flags any face whose bottom margin is under 6pt as
+CLIPPED, excludes that face's bottom from the summary, and says why. The
+instrument had to learn the lesson the drills already knew.
+
+Nothing else in the audit is affected: `settings` was the only face near zero,
+and the other seven bottom values all sit well clear of the edge.
 
 ### Finding 5 — the row rules are not centred
 
@@ -132,8 +145,8 @@ than by inflating the box the stack aligns to. Then 12/14 in the code means
 12/14 on screen, on every edge of every face, and the bottom stops being a
 per-face accident.
 
-Findings 4 and 5 are separate and small: one missing inset, one shared
-row-with-rule component with symmetric padding.
+Finding 5 is separate and small: one shared row-with-rule component with
+symmetric padding. Finding 4 was withdrawn — see above.
 
 **And the audit becomes a gate.** `inkmap.py` is deterministic and already runs
 headless; the summary it prints is exactly the shape of a drill — one value per
