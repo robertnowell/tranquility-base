@@ -70,13 +70,29 @@ func runInputLoop(sessionId: String, transcriptPath: String) {
             if text.isEmpty {
                 // A bare Return with nothing buffered — what the submit step sends
                 // once the text has already arrived as its own AppleEvent.
-                print("  [bare return]\r")
+                print("\r\n  [bare return]\r")
             } else {
                 appendToTranscript(text, sessionId: sessionId, path: transcriptPath)
-                print("  [recorded \(text.count) chars] \(text.prefix(60))\r")
+                print("\r\n  [recorded \(text.count) chars] \(text.prefix(60))\r")
             }
+            // A fresh, empty input line, marked with the same glyph the real
+            // TUI uses. The transport's prompt-line classifier is the guard
+            // against double-pasting into an already-loaded input box; a
+            // glyph-less harness bypassed that guard and shipped concatenated
+            // deliveries under churn (20 Aug, 10-in-60). The harness renders
+            // what production renders so the drill drills the real guard.
+            print("\u{276F} ", terminator: "")
+            fflush(stdout)
         default:
             buffer.append(byte)
+            // Echo, like the real TUI this stands in for. Raw mode disables
+            // kernel echo, and an unobservable input buffer forced the
+            // transport to keep a second, weaker delivery path just for this
+            // harness — which shipped a double-paste splice under churn
+            // (measured 20 Aug: 29 concatenated deliveries in 60). The
+            // harness behaves like production so the drill drills production.
+            var echoed = byte
+            write(STDOUT_FILENO, &echoed, 1)
         }
     }
     terminal.restore()
@@ -103,5 +119,7 @@ print("pid=\(ProcessInfo.processInfo.processIdentifier)")
 print("sessionId=\(sessionId)")
 print("transcript=\(transcript.path)")
 print("---- raw mode; waiting for injected text (Ctrl-C to stop) ----")
+print("\u{276F} ", terminator: "")
+fflush(stdout)
 
 runInputLoop(sessionId: sessionId, transcriptPath: transcript.path)
