@@ -340,6 +340,53 @@ public enum SessionActivity: Equatable, Sendable {
         return "\(Int(seconds / 86_400))d"
     }
 
+    /// When this agent last moved, as a column can say it: "22m ago", "5h ago",
+    /// "Aug 15".
+    ///
+    /// The Past Agents list is a SEARCH surface — "there is a workstream I did a
+    /// week ago and I don't know which tab it is in" — and the question it has
+    /// to answer first is *when*. So the column carries this instead of the
+    /// short id (ruled 19 Aug); the id moves to the tooltip, where it is still a
+    /// click away and no longer costs the name its width.
+    ///
+    /// Relative under two days, absolute beyond it, and the cutoff is the whole
+    /// point rather than a tuning knob. "3d" is a duration a reader has to do
+    /// arithmetic on to place, and they will do it against the wrong anchor;
+    /// past about two days a person navigates by date, not by elapsed time, and
+    /// says "the Tuesday one". Under two days the reverse holds — "Aug 19" for
+    /// something that happened this morning is strictly less information than
+    /// "5h ago", because it drops the hours the reader still has in their head.
+    ///
+    /// Feed this `Session.lastActivityAt`, which since 19 Aug means the newest
+    /// timestamp the CONVERSATION wrote. It must never be fed a file's mtime:
+    /// Claude Code appends untimestamped bookkeeping whenever a session is
+    /// merely opened or resumed, so an mtime-dated column would rank Robert's
+    /// browse order and tell him a session idle since breakfast had just moved.
+    /// Two features have now been cured of exactly that (the lamp on 18 Aug,
+    /// the closed-band ranking on 19 Aug); this is the third reader of the same
+    /// clock and it inherits the cure rather than re-earning the bug.
+    public static func lastMovedLabel(_ moved: Date, now: Date = Date()) -> String {
+        let elapsed = now.timeIntervalSince(moved)
+        // A clock that has run backwards (a transcript stamped in the future,
+        // an NTP step mid-scan) is not "in 3 minutes" — say the thing that is
+        // true and unsurprising rather than inventing a tense for it.
+        guard elapsed > 0 else { return "now" }
+        if elapsed < 60 { return "now" }
+        if elapsed < 172_800 { return "\(spoken(elapsed)) ago" }
+        return absoluteDay.string(from: moved)
+    }
+
+    /// Built once. `DateFormatter` costs milliseconds to construct and this is
+    /// called per row, per opening of a list that can hold the whole archive.
+    /// Fixed to POSIX so the drill asserting "Aug 15" is not a claim about
+    /// whichever locale the test machine happens to carry.
+    private static let absoluteDay: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MMM d"
+        return f
+    }()
+
     private static func hasToolUse(_ entry: [String: Any]) -> Bool {
         guard let message = entry["message"] as? [String: Any],
               let content = message["content"] as? [[String: Any]] else { return false }
