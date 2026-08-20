@@ -25,7 +25,7 @@ final class TranscriptSearchTextTests: XCTestCase {
             #"{"type":"user","message":{"content":"the microphone never opened"}}"#,
             #"{"type":"assistant","message":{"content":[{"type":"text","text":"Recording lost."}]}}"#,
         ])
-        let text = TranscriptSearchText.shared.text(forTranscriptAt: p)
+        let text = String(decoding: TranscriptSearchText.shared.bytes(forTranscriptAt: p), as: UTF8.self)
         XCTAssertTrue(text.contains("microphone"))
         XCTAssertTrue(text.contains("recording lost"), "lowercased for the filter")
     }
@@ -40,7 +40,7 @@ final class TranscriptSearchTextTests: XCTestCase {
             #"{"type":"user","isMeta":true,"message":{"content":"klaviyo in a meta record"}}"#,
             #"{"type":"user","message":{"content":"but this turn is about earcons"}}"#,
         ])
-        let text = TranscriptSearchText.shared.text(forTranscriptAt: p)
+        let text = String(decoding: TranscriptSearchText.shared.bytes(forTranscriptAt: p), as: UTF8.self)
         XCTAssertFalse(text.contains("klaviyo"), "injected context must not match")
         XCTAssertTrue(text.contains("earcons"))
     }
@@ -59,7 +59,7 @@ final class TranscriptSearchTextTests: XCTestCase {
         ])
         let size = (try? FileManager.default.attributesOfItem(atPath: p)[.size] as? NSNumber)??.intValue ?? 0
         XCTAssertGreaterThan(size, TranscriptSearchText.byteCap, "fixture must exceed the cap")
-        let text = TranscriptSearchText.shared.text(forTranscriptAt: p)
+        let text = String(decoding: TranscriptSearchText.shared.bytes(forTranscriptAt: p), as: UTF8.self)
         XCTAssertTrue(text.contains("spectrometer"), "head is kept")
         XCTAssertTrue(text.contains("kaleidoscope"), "tail is kept")
         // The cap plus the one newline joining the two halves — the seam the
@@ -72,8 +72,31 @@ final class TranscriptSearchTextTests: XCTestCase {
         XCTAssertGreaterThan(kept, 0, "the fixture should still be mostly filler")
     }
 
+    /// The matcher itself. It is the one operation a keystroke pays for, so it
+    /// is byte-level and it is tested — 19 Aug shipped a `String.contains` over
+    /// megabytes and froze the panel at 2.9s per keystroke.
+    func testByteMatcher() {
+        let hay = Array("the microphone never opened".utf8)
+        XCTAssertTrue(TranscriptSearchText.contains(hay, Array("microphone".utf8)))
+        XCTAssertTrue(TranscriptSearchText.contains(hay, Array("the".utf8)), "matches at the head")
+        XCTAssertTrue(TranscriptSearchText.contains(hay, Array("opened".utf8)), "matches at the tail")
+        XCTAssertFalse(TranscriptSearchText.contains(hay, Array("earcon".utf8)))
+        XCTAssertFalse(TranscriptSearchText.contains([], Array("x".utf8)), "empty hay")
+        XCTAssertFalse(TranscriptSearchText.contains(hay, []), "empty needle matches nothing")
+        XCTAssertFalse(TranscriptSearchText.contains(Array("ab".utf8), Array("abc".utf8)),
+                       "needle longer than hay")
+    }
+
+    /// Case folding happens on the bytes, and the needle is lowercased by the
+    /// caller — the two have to agree or an upper-case transcript never matches.
+    func testUpperCaseTranscriptIsFound() {
+        let p = write([#"{"type":"user","message":{"content":"The MICROPHONE Never Opened"}}"#])
+        let hay = TranscriptSearchText.shared.bytes(forTranscriptAt: p)
+        XCTAssertTrue(TranscriptSearchText.contains(hay, Array("microphone".utf8)))
+    }
+
     func testUnreadableFileIsEmptyNotACrash() {
-        XCTAssertEqual(TranscriptSearchText.shared.text(
-            forTranscriptAt: dir.appendingPathComponent("nope.jsonl").path), "")
+        XCTAssertTrue(TranscriptSearchText.shared.bytes(
+            forTranscriptAt: dir.appendingPathComponent("nope.jsonl").path).isEmpty)
     }
 }
