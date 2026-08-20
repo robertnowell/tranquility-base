@@ -27,7 +27,7 @@ nothing needs redesign; everything needs a home.
 
 ## Track A — correctness fixes (land before everything else)
 
-- [ ] A1. Watermark the delivery verification. TmuxTransport's dedupe and both
+- [x] A1. Watermark the delivery verification. TmuxTransport's dedupe and both
       transports' landing checks match the payload by substring against the
       ENTIRE transcript history; a short reply ("yes") that ever appeared
       before false-confirms without sending. Fix: byte-offset watermark taken
@@ -52,14 +52,14 @@ nothing needs redesign; everything needs a home.
       target. Built for a documented crash; called nowhere.
 - [ ] A9. StatusHUD.pose(): duplicate `case "settings"` makes the honest
       fixture unreachable (app lane).
-- [ ] A10. (rides A1) TranscriptWatcher tail-from-watermark.
+- [x] A10. (rides A1) TranscriptWatcher tail-from-watermark.
 
 ## Track B — the gathering
 
 ### Core lane
 - [ ] B1. (= A2+A3) infrastructure dedupe + shared `classify(LiveSession?) ->
       Readiness` used by both transports.
-- [ ] B2. (= A1) verification watermark, so the adapter never inherits the
+- [x] B2. (= A1) verification watermark, so the adapter never inherits the
       substring predicate as contract.
 - [ ] B3. Extract `ClaudeCodeLiveness` + `ClaudeCodeTranscripts` behind
       protocols; the five hand-rolled JSONL parsers (TranscriptArchive,
