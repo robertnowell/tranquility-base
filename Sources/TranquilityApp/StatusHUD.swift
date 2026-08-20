@@ -5559,7 +5559,11 @@ final class StatusHUD: NSObject {
             ("theTapGoesToTheTerminal",
              StateLegend.action(for: locked) == .goToAgent),
             ("theRowNamesTheDialog", locked.aux == "waiting at the resume prompt"),
-            ("theWholeSentenceIsReachable", tip == at.full),
+            // The hover is "name, newline, reason" (see StateLegend.hoverText),
+            // so the assertion is that the sentence is IN it. The first version
+            // of this line compared the tooltip to the reason alone and failed
+            // on a build where nothing was wrong but the drill.
+            ("theWholeSentenceIsReachable", tip?.contains(at.full) == true),
             // The pair that must never disagree: the lamp says answer it there,
             // and the send path refuses to type into it.
             ("thePanelWillNotTypeIntoIt",
