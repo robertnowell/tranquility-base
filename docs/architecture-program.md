@@ -54,11 +54,23 @@ The six-agent audit record behind every item:
   Terminal-naming user strings, `AgentDefaults.useTmux` (launches are tmux,
   full stop), the window-per-agent launch path and its ruling doc block
   (rewritten as history).
-- **Hand-started sessions in plain terminal tabs become read-only rows**:
-  announced (hooks and transcripts are transport-independent) but not
-  dispatchable; the card says so and offers the fix ("start agents from the
-  panel or tbase; they live in tmux"). This is the decisive trade: no
-  AppleScript kept alive for the old habit.
+- **Hand-started sessions are adopted, never read-only** (ruled 20 Aug,
+  reversing the read-only-rows trade: "announced but not voice-repliable is
+  not acceptable... it should just work"). Every session on the machine
+  appears in the grid from its transcript, whatever terminal it was started
+  in — unchanged, and load-bearing for first-run users. The first voice
+  reply to a live NON-tmux session ADOPTS it: graceful end (the existing
+  clean SIGTERM path, "resumable via revive"), then `claude --resume <id>`
+  in a fresh tb- tmux session, then the closed-loop delivery. The user's
+  terminal is never typed into or manipulated — their process exits cleanly
+  and the conversation continues managed; GO TO AGENT attaches to it.
+  The resume-depth dialog, when Claude Code shows one, surfaces through the
+  dialog gate (a usage spend stays a human choice; one tap, then the reply
+  flows). Replies to dead sessions revive straight into tmux. Precedent:
+  vibe-kanban delivers every follow-up by spawning a fresh resume process
+  and never touches a terminal; adoption adds the graceful end because two
+  live processes on one session id is this repo's documented crash and
+  divergence hazard. Codex twin: `codex resume <id>`, same shape.
 - **GO TO AGENT = attach**: opens a terminal window running
   `tmux attach -t <session>`; detach leaves the agent running. Revive = tmux.
   The frontmost-suppression check generalizes to the active tmux client, or
@@ -105,12 +117,25 @@ com.robertnowell.voice-dispatch (TCC).
 
 ## Arc checklist (ticked by arc-stacked PRs; order is a guide, not a gate)
 
-- [ ] C0 Codex live battery; record capability values in the adapter
+- [x] C0 Codex live battery (19-20 Aug). Delivery mechanics ALL HOLD on the
+      real TUI: trust needle ("Do you trust the contents of this directory?",
+      Enter accepts), composer echoes paste (glyph "›"), Enter submits,
+      byte-exact user records in the rollout, task_started/complete pairs,
+      3/3 clean unique deliveries under copy-mode churn. New needle found:
+      the hooks-review dialog ("Hooks need review... Trust all and continue")
+      — the launcher watcher must handle it, and hook-trust is the USER's
+      choice, never auto-accepted. Discovery: Codex loads Claude plugins
+      (~/.codex/plugins/cache/claude-plugins-official/...), so hook/skill
+      surfaces are converging across harnesses — re-map on the current Codex
+      before the adapter freezes capability values. Model-reply leg blocked
+      by an account entitlement, not transport: config.toml pins gpt-5.6-sol,
+      unsupported on ChatGPT-account auth (400) — flagged to Robert.
 - [ ] Subprocess runner + per-element decode + readiness classify dedupe
 - [ ] HarnessAdapter + ClaudeCodeAdapter (liveness, transcripts, launch,
       hooks, trust spec); five parsers collapse
 - [ ] CodexAdapter (load-bearing on landing: grid shows Codex sessions,
-      dispatch delivers to them)
+      dispatch delivers to them; rollout parser test-driven against the 177
+      rollouts already on this machine)
 - [ ] Single-transport cut: delete AppleScript dispatch machinery, Automation
       permission gate, useTmux flag; launches are tmux; attach affordance in
       the panel; read-only rows for plain-terminal sessions
