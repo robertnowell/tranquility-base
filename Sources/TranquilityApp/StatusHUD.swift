@@ -1024,7 +1024,22 @@ final class StatusHUD: NSObject {
     /// only, immediate return to the grid). A failure is the case with work
     /// left to do, so it stays until dismissed, titled by the session it is
     /// about — the one displayed identity, in mono.
-    func showResult(_ message: String) {
+    /// `about` names the session the failure BELONGS to, when the caller knows
+    /// it. It exists because a dispatch failure outlives the attention that
+    /// started it: the verification round-trip runs for up to twelve seconds,
+    /// and by the time it fails the announce queue has moved the panel to
+    /// somebody else's card. On 19 Aug at 16:38 it fired fourteen seconds
+    /// late — the words had gone to `recall`, the panel had advanced to
+    /// "Microphone initiation issue", and the card said one session's name over
+    /// the other session's message. Robert could not place the alert at all,
+    /// which is the correct reaction to a card that is half about each of two
+    /// agents.
+    ///
+    /// Nil keeps the old behaviour exactly, for the callers that genuinely have
+    /// no session in hand — a microphone fault is about the machine, not about
+    /// an agent, and `showDeviceFault` says so by carrying no title at all.
+    func showResult(_ message: String,
+                    about: (sessionId: String, label: String)? = nil) {
         // Read BEFORE the transition, which is the only moment that can tell
         // the two kinds of failure apart: one that arrives while the capture
         // flow owns the stage happened TO the capture; one that arrives from
@@ -1043,11 +1058,17 @@ final class StatusHUD: NSObject {
         // any other capture fault and the card keeps its stage, its identity,
         // and its right to be bound.
         let greetingAwaitsItsSession = awaitingGreetingBinding
+        // A failure joins the card on stage only when it is a failure OF that
+        // card. `about` names the session that actually failed; if the panel has
+        // since moved to a different one, attaching the message here would
+        // print it under a stranger's name — and the strip is the one slot with
+        // no room to say whose it is. It gets its own card below instead.
+        let cardIsTheSubject = about.map { $0.sessionId == currentEventId } ?? true
         guard transition(to: .result, because: "reply failed") else { return }
         // A failure that happened TO a capture joins the strip, for the same
         // reason the read-back did. Amber either way; the channel does not
         // change, only the slot it speaks from.
-        if face.hasCard, failedDuringCapture || greetingAwaitsItsSession {
+        if face.hasCard, cardIsTheSubject, failedDuringCapture || greetingAwaitsItsSession {
             face.captureFault = message
         } else {
             // The card names the agent the failure is ABOUT, and therefore carries
@@ -1056,7 +1077,17 @@ final class StatusHUD: NSObject {
             // AGENT under a message that said "check the tab before repeating
             // yourself". A card that names an action must afford it.
             awaitingGreetingBinding = false
-            if currentTarget == nil, let last = lastAddressed {
+            // The failure's OWN session wins, when the caller knows it. The
+            // fallback below only ever covered "the panel went home" — it takes
+            // `lastAddressed` when there is no target at all — and said nothing
+            // about the case that actually bites: the panel moved ON, so
+            // `currentTarget` is non-nil and names the wrong agent. Reading the
+            // subject from whatever happens to be on stage is how a card ends up
+            // titled for one session and bodied for another.
+            if let about {
+                currentTarget = (sessionId: about.sessionId, pid: nil, label: about.label)
+                currentEventId = about.sessionId
+            } else if currentTarget == nil, let last = lastAddressed {
                 currentTarget = last
                 currentEventId = last.sessionId
             }
@@ -4488,6 +4519,33 @@ final class StatusHUD: NSObject {
             ("stayedGone", stayedGone),
             ("faultOffersDoor", faultOffersDoor),
             ("plainFailureHasNoDoor", plainFailureHasNoDoor),
+        ])
+
+        // Whose failure is it (19 Aug)? A dispatch's read-back verification runs
+        // for up to twelve seconds, and the announce queue does not wait for it.
+        // At 16:38 the words went to `recall`, the panel advanced to the next
+        // card, and the failure painted that card's title over this failure's
+        // message — one session's name above the other session's sentence.
+        // Robert could not place the alert, which is the right reaction to a
+        // card that is half about each of two agents.
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("a card already on the stage"),
+            sessionId: "on-stage", pid: 1, project: "promotions", cwd: "/tmp/promotions")
+        showResult("Typed it into recall, but couldn't confirm it landed.",
+                   about: (sessionId: "somebody-else", label: "recall"))
+        let namesTheFailingAgent = titleLabel.stringValue == "recall"
+        let notTheCardOnStage = titleLabel.stringValue != "promotions"
+        // The other direction, which must not regress: a failure that IS about
+        // the card on stage still wears its name.
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("a card already on the stage"),
+            sessionId: "on-stage", pid: 1, project: "promotions", cwd: "/tmp/promotions")
+        showResult("Its own failure.", about: (sessionId: "on-stage", label: "promotions"))
+        let ownFailureKeepsItsName = titleLabel.stringValue == "promotions"
+        SelfTest.report("result.subject", [
+            ("namesTheFailingAgent", namesTheFailingAgent),
+            ("notTheCardOnStage", notTheCardOnStage),
+            ("ownFailureKeepsItsName", ownFailureKeepsItsName),
         ])
 
         // The invitation (10 Aug). It waits like a failure and must not look
