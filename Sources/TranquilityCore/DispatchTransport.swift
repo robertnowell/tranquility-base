@@ -53,19 +53,53 @@ public enum Readiness: Sendable, Equatable {
     /// while it is still going. Deferring here bounced a perfectly good reply for
     /// no reason, so `busy` dispatches.
     case busy
-    /// Explicitly waiting on the user for something. Also dispatchable: waiting is
+    /// Explicitly waiting on the user for something. Dispatchable, EXCEPT when
+    /// what it is waiting at is a dialog — see `isDialog`. Waiting is otherwise
     /// the state most in need of an answer.
     case waiting(String?)
     /// The process is gone.
     case targetGone
 
-    /// The only real hazard is `notRegistered`: alive but absent from
-    /// `claude agents --json` means blocked on a modal dialog, where typed text
-    /// would ANSWER the dialog rather than reach the prompt. Everything else is a
-    /// session that can take input, even if it is mid-thought.
+    /// What `waitingFor` says when the session is sitting at a modal dialog.
+    /// The CLI's own word, matched exactly rather than by substring: this
+    /// decides whether text is typed at a menu, and a loose match is how a new
+    /// value would quietly acquire that power.
+    public static let dialogOpen = "dialog open"
+
+    /// Whether this state is a session sitting at a dialog, whatever route it
+    /// was detected by. `WaitingAt` classifies the same field for the lamp, from
+    /// the same constant, so the row and the send path cannot disagree about
+    /// what a session is stuck at.
+    public var isDialog: Bool {
+        switch self {
+        case .notRegistered: return true
+        case .waiting(let what): return what == Readiness.dialogOpen
+        case .ready, .busy, .targetGone: return false
+        }
+    }
+
+    /// The hazard is a DIALOG, and until 19 Aug it was recognised only by its
+    /// old symptom.
+    ///
+    /// The rule has always been right — typed text at a modal ANSWERS it rather
+    /// than reaching the prompt — but the witness went stale. Being absent from
+    /// `claude agents --json` was how a blocked session used to look; the CLI
+    /// now registers it and says so outright. Measured 19 Aug on a real one:
+    /// `status: waiting · waitingFor: dialog open`, a session sitting at the
+    /// resume prompt, which `canDispatch` waved through because it read the
+    /// status and not the reason. That prompt's default is "resume full session
+    /// as-is", so a dictated reply landing on it would not merely be swallowed —
+    /// its Return would pick the expensive option, silently, on the user's
+    /// behalf.
+    ///
+    /// Deliberately narrow: only the value we have seen refuses. Inverting it —
+    /// dispatching only for known-good values — would defer every reply to an
+    /// `AskUserQuestion`, which is the app's daily loop, on the strength of a
+    /// string nobody has verified.
     public var canDispatch: Bool {
         switch self {
-        case .ready, .busy, .waiting: return true
+        case .ready, .busy: return true
+        case .waiting: return !isDialog
         case .notRegistered, .targetGone: return false
         }
     }
