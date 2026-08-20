@@ -428,6 +428,18 @@ final class PastAgentsList: NSView {
         }
     }
 
+    /// For the column drill: how wide each row's RIGHT column was laid out.
+    /// The failure it guards is the mirror of the name one — a long TITLE
+    /// squeezing the time to zero, so three rows showed no time at all
+    /// (screenshot, 19 Aug).
+    var auxWidthsForTesting: [(id: String, width: CGFloat)] {
+        stack.arrangedSubviews.compactMap {
+            guard let row = $0 as? PastRowView, let id = row.identifier?.rawValue
+            else { return nil }
+            return (id, row.auxWidthForTesting)
+        }
+    }
+
     /// For the lamp drill: which rows carry a switch in the lamp column.
     /// Asserted rather than assumed, because "every row" IS the ruling — a
     /// target on some rows is exactly what made the column unlearnable.
@@ -561,6 +573,41 @@ final class FilterField: NSTextField {
 /// happens if I click". A permanent action column would cost ~78pt of name on
 /// every row forever to label something you need on one.
 final class PastRowView: NSControl {
+    /// The right-hand column is FIXED, not negotiated (ruled 19 Aug).
+    ///
+    /// It used to be negotiated, and both settings were right for the thing the
+    /// column held at the time and wrong for the next one. When it held a stall
+    /// REASON — a whole sentence — it had to yield, or a long reason ate the
+    /// name; so it was given a fraction cap and a resistance one step below the
+    /// name's. Then the column started holding the TIME, which is seven
+    /// characters, and yielding became the bug: a long title squeezed it to
+    /// nothing and three rows in Robert's list showed no time at all, while the
+    /// hover verb — which has no such cap — drew straight over the title.
+    ///
+    /// A time is not a sentence. It has a known maximum width, it is the
+    /// question this face exists to answer, and it must be on every row. So the
+    /// column is a constant and the TITLE truncates into it — Robert, 19 Aug:
+    /// "just slightly truncate the title if we need to, and always show the
+    /// time since". The full title stays in the tooltip.
+    ///
+    /// Measured, not guessed, and measured against the widest thing either
+    /// label can hold: `spoken` tops out at seven characters ("89m ago",
+    /// "47h ago"; a date is shorter), and the hover verb is "REVIVE ›" with its
+    /// tracking. The verb shares the same box, which is what stops it
+    /// overlapping the title — it was pinned to the trailing edge with no width
+    /// of its own before.
+    static let auxColumn: CGFloat = {
+        let time = ("88m ago" as NSString)
+            .size(withAttributes: [.font: GridRowView.auxFont]).width
+        let verb = letterspaced("REVIVE ›", size: 9.5, tracking: 1.33,
+                                color: .white).size().width
+        // Two points of air on each side. The column is measured, but a font
+        // substitution on a machine without Berkeley Mono moves the numbers,
+        // and clipping the last character of a time is a worse failure than
+        // spending four points.
+        return ceil(max(time, verb)) + 4
+    }()
+
     private let idLabel: NSTextField
     private let verbLabel: NSTextField
 
@@ -568,6 +615,7 @@ final class PastRowView: NSControl {
     /// recomputed — a drill that recomputes the answer cannot catch a label
     /// that stopped being set from it.
     var verbForTesting: String { verbLabel.stringValue }
+    var auxWidthForTesting: CGFloat { idLabel.frame.width }
     private let highlight = NSView()
     /// Held so the hover can step its ink and put it back — see `setHovered`.
     private var nameLabel: NSTextField!
@@ -655,11 +703,10 @@ final class PastRowView: NSControl {
         // than the name, so the name is the last thing to lose space rather
         // than the first. What is cut off is reachable — the row's tooltip
         // carries the name and the full message, uncut (`StateLegend.hoverText`).
-        idLabel.lineBreakMode = .byTruncatingTail
-        idLabel.setContentCompressionResistancePriority(
-            NSLayoutConstraint.Priority(name.contentCompressionResistancePriority(for: .horizontal)
-                                            .rawValue - 1),
-            for: .horizontal)
+        idLabel.lineBreakMode = .byClipping
+        // Nothing to negotiate: the column below is a constant, so the label
+        // neither claims more than its share nor gives any of it up. The
+        // resistance dance this replaces is described on `auxColumn`.
         idLabel.translatesAutoresizingMaskIntoConstraints = false
 
         verbLabel.attributedStringValue = letterspaced(
@@ -692,10 +739,13 @@ final class PastRowView: NSControl {
                                            constant: -12),
             idLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
             idLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            idLabel.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor,
-                                           multiplier: GridRowView.auxFraction),
+            idLabel.widthAnchor.constraint(equalToConstant: Self.auxColumn),
             verbLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
             verbLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // The verb stands in the time's box rather than beside it. Without
+            // a width it sized to its own text and drew over the title, because
+            // the title's only right-hand limit is `idLabel`'s leading edge.
+            verbLabel.widthAnchor.constraint(equalToConstant: Self.auxColumn),
         ])
     }
 
