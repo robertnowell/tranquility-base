@@ -650,6 +650,12 @@ public struct SpeechChain: Sendable {
         guard let eleven = preferred as? ElevenLabsSpeechProvider, eleven.isConfigured else {
             return false
         }
+        // Same guard as `speak`, and it belongs here independently: the 400 that
+        // exposed this arrived from a PREWARM, not from a live announcement, so the
+        // speculative path reaches ElevenLabs before any gesture does. Paying a
+        // network round trip to render a voice this session will not use would be
+        // wrong even if the id were valid.
+        if voice.map(SystemVoiceCatalog.isSystemVoice) ?? false { return false }
         let key = ClipCache.key(
             text: text.text, voice: voice ?? VoiceCatalog.selectedVoiceId, model: eleven.model)
         if await clips.hasClip(for: key) { return true }
@@ -714,13 +720,43 @@ public struct SpeechChain: Sendable {
     @discardableResult
     public func speak(
         _ text: SanitizedSpokenText, voice: String? = nil,
+        systemVoice: String? = nil,
         onWord: (@Sendable (Range<Int>) -> Void)? = nil
     ) async -> Spoken {
-        // Set every call, never conditionally: staleness is impossible when the
-        // override's whole lifetime is one utterance. The system fallback has one
-        // voice and ignores this — a degraded read loses the session's voice
-        // along with the nice one, which is honest.
-        (preferred as? ElevenLabsSpeechProvider)?.voiceOverride = voice
+        // Every session has TWO voices: the ElevenLabs voice it speaks in, and the
+        // system voice it falls back to. ElevenLabs is used whenever it is
+        // available; the system voice is a redundancy, not a preference, so this
+        // is not a mode switch and there is no state to get wrong.
+        //
+        // The one hard rule is that a system identifier is never handed to
+        // ElevenLabs as a voice id. That is what a single mixed roster did — the
+        // settings pane listed both families and its toggle appended any checked
+        // id to the one roster — and it cost an HTTP 400 `invalid_uid` on
+        // `com.apple.ttsbundle.siri_Nicky_en-US_premium` every five seconds,
+        // indefinitely, per prewarm.
+        //
+        // A system id arriving in `voice` is legacy data from that era. It is read
+        // as the FALLBACK voice rather than discarded: the id is a real voice the
+        // user checked, it just is not a cloud one.
+        let cloudVoice = voice.flatMap { SystemVoiceCatalog.isSystemVoice($0) ? nil : $0 }
+        let ownSystemVoice = systemVoice
+            ?? voice.flatMap { SystemVoiceCatalog.isSystemVoice($0) ? $0 : nil }
+        // Both set every call, never conditionally: staleness is impossible when
+        // the override's whole lifetime is one utterance.
+        (preferred as? ElevenLabsSpeechProvider)?.voiceOverride = cloudVoice
+        // The session's OWN fallback voice, so a degraded read still says who is
+        // talking. Before this the fallback used one machine-wide default, and
+        // every session that fell back became the same person.
+        (fallback as? SystemSpeechProvider)?.voiceIdentifier = ownSystemVoice
+        // The narrow case where the cloud is skipped even though it is available:
+        // this session has NO cloud voice but does have a system one. That is a
+        // legacy row from the single-roster era, and reaching for ElevenLabs here
+        // would render in the provider's default voice — a stranger, rather than
+        // the agent you have been listening to. Identity beats fidelity.
+        //
+        // Not a preference and not sticky: once the migration re-mints the pair,
+        // `cloudVoice` is present and the cloud is used like everywhere else.
+        let sessionHasNoCloudVoice = cloudVoice == nil && ownSystemVoice != nil
         var degraded: String?
         var heardAny = false
         // Anything that happens after a stop belongs to an announcement the user
@@ -730,7 +766,7 @@ public struct SpeechChain: Sendable {
         guard mine == generation.current else {
             return Spoken(provider: "none", completed: false)
         }
-        if let preferred, preferred.isConfigured {
+        if let preferred, preferred.isConfigured, !sessionHasNoCloudVoice {
             do {
                 ElevenLabsSpeechProvider.trace?("chain: trying \(preferred.name)")
                 if let eleven = preferred as? ElevenLabsSpeechProvider {
