@@ -1231,14 +1231,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult(
                         "\(label) can't take this yet, \(StateLegend.plainWords(for: readiness)). "
-                        + "Your words are kept. Try again in a moment.")
+                        + "Your words are kept. Try again in a moment.",
+                        about: (sessionId: sessionId, label: label))
                 case .dispatchFailed(.verificationTimedOut, _):
                     // Documented as ambiguous and never auto-retried: only a human
                     // can decide whether to repeat themselves. That is needs-you.
                     Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult(
                         "Typed it into \(label), but couldn't confirm it landed. "
-                        + "Check the tab before repeating yourself.")
+                        + "Check the tab before repeating yourself.",
+                        about: (sessionId: sessionId, label: label))
                 case .dispatchFailed(.tabNotFound, let utteranceId),
                      .dispatchFailed(.targetGone, let utteranceId):
                     // The destination no longer exists — "kept" must mean usable,
@@ -1247,22 +1249,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
                     hud.showResult(copied
                         ? "\(label)'s tab is gone, copied your words to the clipboard."
-                        : "\(label)'s tab is gone. Your words are kept in the log.")
+                        : "\(label)'s tab is gone. Your words are kept in the log.",
+                        about: (sessionId: sessionId, label: label))
                 case .dispatchFailed(let failure, _):
                     Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult("Couldn't type into \(label): \(failure). "
-                                   + "Your words are kept.")
+                                   + "Your words are kept.",
+                                   about: (sessionId: sessionId, label: label))
                 case .noTarget:
                     Earcons.play(.needsYou, gate: earconGate())
-                    hud.showResult("That reply lost its agent. Your words are kept.")
+                    hud.showResult("That reply lost its agent. Your words are kept.",
+                                   about: (sessionId: sessionId, label: label))
                 default:
                     Earcons.play(.needsYou, gate: earconGate())
-                    hud.showResult("Unexpected result: \(outcome). Your words are kept.")
+                    hud.showResult("Unexpected result: \(outcome). Your words are kept.",
+                                   about: (sessionId: sessionId, label: label))
                 }
             } catch {
                 Permissions.log("confirmAndSend threw: \(error)")
                 Earcons.play(.needsYou, gate: earconGate())
-                hud.showResult("Send failed: \(error). Your words are kept.")
+                hud.showResult("Send failed: \(error). Your words are kept.",
+                               about: (sessionId: sessionId, label: label))
             }
             rebuildMenu()
         }
