@@ -810,6 +810,21 @@ public struct Coordinator: Sendable {
         onWillSpeak: (@MainActor (Announcement) -> Bool)?,
         onWord: (@Sendable (Range<Int>) -> Void)?
     ) async throws -> AnnounceOutcome {
+        // A cancelled announce speaks nothing. Without this gate, a ⌃⌥ home
+        // during summarize sailed straight on: the summarizer chain read the
+        // cancellation as a model failure and degraded to the deterministic
+        // floor, the speech chain read it as a voice failure and degraded to
+        // the system voice — and an announcement already dismissed spoke
+        // anyway, cut short and in the wrong voice (app.log 20 Aug 14:13:49).
+        // A real summary goes back to `prepared` so the next press speaks it
+        // instantly; the "none" husk a cancelled summarize leaves is dropped,
+        // and that press re-summarizes fresh.
+        guard !Task.isCancelled else {
+            if summary.provider != "none" {
+                await prepared.put(summary, for: session.sessionId, latest: session.latestId)
+            }
+            return .interrupted(failure: nil)
+        }
         // Nothing is written before the audio. Marking it announced up front is what
         // let a stray tap spend a session's turn on something never heard, and what
         // let an interrupt handler write a stale copy back over a dismissal.
@@ -832,6 +847,13 @@ public struct Coordinator: Sendable {
             await prepared.put(summary, for: session.sessionId, latest: session.latestId)
             return .interrupted(failure: nil)
         }
+
+        // On the record which brief is about to be heard: `deterministic-fallback`
+        // here is the floor excerpt standing in for a model summary, and how often
+        // that happens was unanswerable from the logs when it mattered (20 Aug —
+        // the store only keeps the final brief, so the spoken one vanished).
+        Coordinator.trace?("announce: brief by \(summary.provider) "
+            + "for \(session.sessionId.prefix(8))")
 
         // The session's durable voice (ruled 05 Aug): assigned round-robin from
         // the roster on first announce, then identical for the session's life
