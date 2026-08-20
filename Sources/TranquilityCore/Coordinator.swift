@@ -10,6 +10,17 @@ public struct Coordinator: Sendable {
     public let speech: SpeechChain
     public let gate: InterruptGate
     public let transport: any DispatchTransport
+    /// The closed-loop tmux transport, selected per target when a live tmux
+    /// server owns the session's pane. `transport` remains the Terminal.app
+    /// path and the default for everything else — co-existence, not rip-out.
+    public let tmuxTransport: any DispatchTransport
+
+    /// Which transport reaches this target. The decision is the target's own
+    /// `pane` fact (resolved fresh from live server inventory at construction),
+    /// never a stored preference and never a tty string comparison.
+    func transport(for target: DispatchTarget) -> any DispatchTransport {
+        target.pane != nil ? tmuxTransport : transport
+    }
     public let enrolment: EnrolmentRegistry
     public let agents: ClaudeAgentsReading
     /// Injected rather than defaulted at the call site, so tests can run the whole
@@ -38,6 +49,7 @@ public struct Coordinator: Sendable {
         speech: SpeechChain = SpeechChain(),
         gate: InterruptGate = InterruptGate(),
         transport: any DispatchTransport = TerminalAppTransport(),
+        tmuxTransport: any DispatchTransport = TmuxTransport(),
         enrolment: EnrolmentRegistry = EnrolmentRegistry(),
         agents: ClaudeAgentsReading = ClaudeAgentsCLI(),
         recovery: RecoveryChain = RecoveryChain(),
@@ -51,6 +63,7 @@ public struct Coordinator: Sendable {
         self.speech = speech
         self.gate = gate
         self.transport = transport
+        self.tmuxTransport = tmuxTransport
         self.enrolment = enrolment
         self.agents = agents
         self.recovery = recovery
@@ -1062,16 +1075,36 @@ public struct Coordinator: Sendable {
         // one the APP writes (a launch greeting) is written before the session
         // has finished coming up, and a file that did not exist then usually
         // does by the time anyone replies.
+        // A first-party background session has no tab and no supported input
+        // channel (`claude --bg-pty-host`, PR #1). Typing at one routes into
+        // nothing — Anthropic's own agent-teams shipped exactly that silent
+        // drop (#58762) — so the refusal is loud and the reply stays queued.
+        if live.isBackground {
+            Coordinator.trace?("dispatch: \(target.sessionId.prefix(8)) is a background "
+                + "session (no input channel); refusing")
+            attachments.resolve(utteranceId: utterance.id, landed: false)
+            utterance.status = .ready
+            try store.update(utterance: utterance)
+            return .sessionNotReady(.notRegistered)
+        }
+
+        // Ownership decides the transport, from live server inventory only.
+        // The tty is recorded as an identity guard and a display fact; it is
+        // never again an address (19 Aug misfire: dead Terminal windows held
+        // a tty string the tmux server had recycled for this very pane).
+        let pane = TmuxOwnership.pane(forPid: live.pid)
         let dispatchTarget = DispatchTarget(
+            kind: pane != nil ? .tmux : .terminalApp,
             sessionId: target.sessionId,
             pid: live.pid,
             tty: ProcessProbe.tty(of: live.pid),
+            pane: pane,
             transcriptPath: target.transcriptPath
                 ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId),
             label: target.projectLabel)
 
         utterance.status = .dispatching
-        utterance.targetKind = transport.kind
+        utterance.targetKind = dispatchTarget.kind
         utterance.targetSessionId = target.sessionId
         utterance.targetPid = live.pid
         utterance.targetTty = dispatchTarget.tty
@@ -1082,7 +1115,7 @@ public struct Coordinator: Sendable {
         // The tray's fate rides the same exhaustive switch as the utterance's
         // status — one clear-site, not five. Landed (or possibly landed)
         // clears; everything else returns the files to the chips.
-        switch await transport.send(text: text, to: dispatchTarget) {
+        switch await transport(for: dispatchTarget).send(text: text, to: dispatchTarget) {
         case .queued:
             // Delivered into a session that is mid-turn. It will send itself when
             // that turn ends. Treated as answered, because it is: the words are in
