@@ -437,6 +437,26 @@ public final class QueueStore: Sendable {
             }
         }
 
+        // Every session gets TWO voices, not one: an ElevenLabs voice and a system
+        // voice, each assigned round-robin from its own roster. ElevenLabs is used
+        // whenever it is available; when it is not — no key, or the render fails —
+        // the session falls back to ITS OWN system voice, the same one every time.
+        //
+        // A redundancy rather than a mode switch, which is what makes it work
+        // identically with or without a key: the only difference is which of the
+        // session's two voices you hear. It also keeps "the voice says who" true
+        // through a fallback. Before this, a degraded read used one machine-wide
+        // default, so every session that fell back became the same person.
+        //
+        // Nullable, and backfilled on next ask rather than here: the system seed
+        // reads the installed voices, which is not something a migration should
+        // reach for.
+        m.registerMigration("v17_session_system_voice") { db in
+            try db.alter(table: "session_voice") { t in
+                t.add(column: "systemVoiceId", .text)
+            }
+        }
+
         return m
     }
 
@@ -963,6 +983,68 @@ public final class QueueStore: Sendable {
                             Int64(Date().timeIntervalSince1970 * 1000)])
             Self.trace?("voice: assigned \(assigned) to \(sessionId.prefix(8)) (assignment #\(count + 1))")
             return assigned
+        }
+    }
+
+    /// The session's pair: the cloud voice it speaks in, and the system voice it
+    /// falls back to. Both durable, both assigned on first ask.
+    ///
+    /// The system half is backfilled for sessions that predate it, so an agent
+    /// assigned a voice last week gains a consistent fallback rather than
+    /// inheriting the machine default.
+    ///
+    /// Deliberately ONE call rather than two: the two ids are established
+    /// together or not at all, and a caller that could ask for the cloud voice
+    /// without the fallback is a caller that will.
+    public func voices(for sessionId: String, roster: [String],
+                       systemRoster: [String]) throws -> (cloud: String?, system: String?) {
+        try dbQueue.write { db in
+            let row = try Row.fetchOne(
+                db, sql: "SELECT voiceId, systemVoiceId FROM session_voice WHERE sessionId = ?",
+                arguments: [sessionId])
+
+            // The rotation counter is the row count, exactly as the single-voice
+            // path defines it, so the two rosters advance in step and "next"
+            // stays one definition.
+            let count = try Int.fetchOne(db, sql: "SELECT count(*) FROM session_voice") ?? 0
+
+            guard let row else {
+                let cloud = roster.isEmpty ? nil : roster[count % roster.count]
+                let system = systemRoster.isEmpty
+                    ? nil : systemRoster[count % systemRoster.count]
+                guard cloud != nil || system != nil else { return (nil, nil) }
+                try db.execute(
+                    sql: """
+                        INSERT INTO session_voice (sessionId, voiceId, systemVoiceId, assignedAtMs)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                    arguments: [sessionId, cloud ?? "", system,
+                                Int64(Date().timeIntervalSince1970 * 1000)])
+                Self.trace?("voice: assigned \(cloud ?? "none") + system"
+                            + " \(system ?? "none") to \(sessionId.prefix(8))"
+                            + " (assignment #\(count + 1))")
+                return (cloud, system)
+            }
+
+            let cloud: String? = (row["voiceId"] as String?).flatMap { $0.isEmpty ? nil : $0 }
+            if let existingSystem = row["systemVoiceId"] as String? { return (cloud, existingSystem) }
+
+            // Backfill. Keyed on the session's own assignment slot rather than the
+            // live row count, so a session's fallback voice does not depend on how
+            // many other sessions happened to exist when it was first heard.
+            let slot = try Int.fetchOne(
+                db, sql: """
+                    SELECT count(*) FROM session_voice
+                    WHERE assignedAtMs < (SELECT assignedAtMs FROM session_voice WHERE sessionId = ?)
+                    """,
+                arguments: [sessionId]) ?? 0
+            guard !systemRoster.isEmpty else { return (cloud, nil) }
+            let system = systemRoster[slot % systemRoster.count]
+            try db.execute(
+                sql: "UPDATE session_voice SET systemVoiceId = ? WHERE sessionId = ?",
+                arguments: [system, sessionId])
+            Self.trace?("voice: backfilled system \(system) for \(sessionId.prefix(8))")
+            return (cloud, system)
         }
     }
 

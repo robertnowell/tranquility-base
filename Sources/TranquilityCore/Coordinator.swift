@@ -169,7 +169,10 @@ public struct Coordinator: Sendable {
     /// pull that 28% of announcements never get. The ladder warms lazily from the
     /// app layer once you are actually listening.
     private func prewarmAnnouncement(_ summary: Summary, for session: WaitingSession) async {
-        await speech.prewarm(summary.spoken, voice: voiceId(for: session.sessionId))
+        // The CLOUD voice only: prewarm exists to take the ElevenLabs round trip
+        // off the critical path, and the system voice has no network half to pay
+        // in advance.
+        await speech.prewarm(summary.spoken, voice: voices(for: session.sessionId).cloud)
     }
 
     /// The newest session waiting on you — that you are not already answering.
@@ -630,8 +633,22 @@ public struct Coordinator: Sendable {
     /// deepens, not like the narrator. The cast is the persisted, user-edited
     /// VoiceRoster (was a hardcoded array here; re-ruled 05 Aug when the
     /// settings pane became the roster editor).
-    public func voiceId(for sessionId: String) -> String? {
-        (try? store.voiceId(for: sessionId, roster: VoiceRoster.load())) ?? nil
+    public func voiceId(for sessionId: String) -> String? { voices(for: sessionId).cloud }
+
+    /// The session's PAIR: the ElevenLabs voice it speaks in and the system voice
+    /// it falls back to, each assigned round-robin from its own roster.
+    ///
+    /// Two rosters rather than one, because one was the bug: the settings pane
+    /// lists both families and its toggle appended any checked id to the single
+    /// roster, so a system identifier reached ElevenLabs as a voice id and took an
+    /// HTTP 400 for it every five seconds. Two lists make that unrepresentable.
+    ///
+    /// The fallback is per-session for the same reason the cloud voice is — a
+    /// degraded read still has to say WHO is talking. One machine-wide default
+    /// made every falling-back session the same person.
+    public func voices(for sessionId: String) -> (cloud: String?, system: String?) {
+        (try? store.voices(for: sessionId, roster: VoiceRoster.load(),
+                           systemRoster: VoiceRoster.loadSystem())) ?? (nil, nil)
     }
 
     private func summarize(_ event: WaitingSession) async -> Summary {
@@ -859,8 +876,9 @@ public struct Coordinator: Sendable {
         // the roster on first announce, then identical for the session's life
         // across runs — the ear binds a voice to a stream of work faster than a
         // name, and two sessions on the same subject stop being confusable.
+        let pair = voices(for: session.sessionId)
         let spoken = await speech.speak(
-            summary.spoken, voice: voiceId(for: session.sessionId), onWord: onWord)
+            summary.spoken, voice: pair.cloud, systemVoice: pair.system, onWord: onWord)
 
         // OPENED advances the cursor, not heard-to-the-end (re-ruled 13 Aug:
         // "honestly I never listen to the whole thing"). Audio started and the
