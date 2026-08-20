@@ -457,6 +457,25 @@ public final class QueueStore: Sendable {
             }
         }
 
+        // Rows minted from the single mixed roster carry an APPLE id in the cloud
+        // column. Left alone they would never use ElevenLabs again — the chain
+        // reads "no cloud voice" and skips it — which is the opposite of the rule
+        // that ElevenLabs is used whenever it is available.
+        //
+        // So the Apple id becomes the session's SYSTEM voice, which is what it
+        // has actually been for weeks, and the cloud column is emptied so the
+        // next ask mints a real one. Moved rather than dropped, and the same
+        // shape as v12_vowelless_callsigns: make the row re-mint instead of
+        // rewriting it into a guess.
+        m.registerMigration("v18_apple_ids_out_of_the_cloud_column") { db in
+            try db.execute(sql: """
+                UPDATE session_voice
+                   SET systemVoiceId = COALESCE(systemVoiceId, voiceId),
+                       voiceId = ''
+                 WHERE voiceId LIKE 'com.apple.%'
+                """)
+        }
+
         return m
     }
 
@@ -1026,24 +1045,40 @@ public final class QueueStore: Sendable {
                 return (cloud, system)
             }
 
-            let cloud: String? = (row["voiceId"] as String?).flatMap { $0.isEmpty ? nil : $0 }
-            if let existingSystem = row["systemVoiceId"] as String? { return (cloud, existingSystem) }
+            var cloud: String? = (row["voiceId"] as String?).flatMap { $0.isEmpty ? nil : $0 }
+            var system: String? = row["systemVoiceId"] as String?
+            // Defended on READ, not only by v18. An Apple id in the cloud column
+            // is the session's system pick — what it has actually been read in —
+            // so it moves, and the cloud half is re-minted below. The migration
+            // handles the rows that exist today; this handles the invariant, the
+            // same way the rosters filter on the way out rather than trusting
+            // what is on disk.
+            if let stored = cloud, SystemVoiceCatalog.isSystemVoice(stored) {
+                system = system ?? stored
+                cloud = nil
+            }
+            if cloud != nil, system != nil { return (cloud, system) }
 
-            // Backfill. Keyed on the session's own assignment slot rather than the
-            // live row count, so a session's fallback voice does not depend on how
-            // many other sessions happened to exist when it was first heard.
+            // Backfill whichever half is missing — the system one for a session
+            // that predates there being two, the cloud one for a session whose
+            // cloud column v18 emptied because it held an Apple id.
+            //
+            // Keyed on the session's own assignment SLOT rather than the live row
+            // count, so a session's voice does not depend on how many others
+            // happened to exist when it was first heard.
             let slot = try Int.fetchOne(
                 db, sql: """
                     SELECT count(*) FROM session_voice
                     WHERE assignedAtMs < (SELECT assignedAtMs FROM session_voice WHERE sessionId = ?)
                     """,
                 arguments: [sessionId]) ?? 0
-            guard !systemRoster.isEmpty else { return (cloud, nil) }
-            let system = systemRoster[slot % systemRoster.count]
+            if cloud == nil, !roster.isEmpty { cloud = roster[slot % roster.count] }
+            if system == nil, !systemRoster.isEmpty { system = systemRoster[slot % systemRoster.count] }
             try db.execute(
-                sql: "UPDATE session_voice SET systemVoiceId = ? WHERE sessionId = ?",
-                arguments: [system, sessionId])
-            Self.trace?("voice: backfilled system \(system) for \(sessionId.prefix(8))")
+                sql: "UPDATE session_voice SET voiceId = ?, systemVoiceId = ? WHERE sessionId = ?",
+                arguments: [cloud ?? "", system, sessionId])
+            Self.trace?("voice: completed the pair for \(sessionId.prefix(8)) —"
+                        + " \(cloud ?? "none") + system \(system ?? "none")")
             return (cloud, system)
         }
     }
