@@ -3521,6 +3521,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                        aux: when, tooltip: hover)
         }
         hud.showPastAgents(items: items)
+
+        // The list is on screen and usable before a single transcript is read.
+        // What the sessions SAID arrives afterwards, off-main, because it costs
+        // 0.26s over the sessions shown — nothing on a background queue, and a
+        // visibly frozen open if the main actor paid it (rule 9). Robert asked
+        // for this so that "microphone" finds "recording lost": the name tells
+        // you what a session was CALLED, and the turns tell you what it was
+        // about. See `TranscriptSearchText` for the bound and its measurement.
+        let paths = Dictionary(scanned.map { ($0.sessionId, $0.transcriptPath) },
+                               uniquingKeysWith: { first, _ in first })
+        let wanted = hidden.map(\.id)
+        Task.detached(priority: .userInitiated) {
+            var extra: [String: String] = [:]
+            for id in wanted {
+                guard let path = paths[id] else { continue }
+                let text = TranscriptSearchText.shared.text(forTranscriptAt: path)
+                if !text.isEmpty { extra[id] = text }
+            }
+            await MainActor.run { [weak self] in self?.hud.widenPastAgents(extra) }
+        }
     }
 
     /// Focus a live session's terminal tab, from the list.
