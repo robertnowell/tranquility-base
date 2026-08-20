@@ -2539,6 +2539,16 @@ final class StatusHUD: NSObject {
 
     /// Enter the list face. The rows are handed in whole and applied once —
     /// see `PastAgentsList`: this face does not refresh while it is read.
+    /// Widen the open list's haystacks with what the sessions said, once the
+    /// background read has finished. Refused unless the list is still the face
+    /// on stage: a harvest that lands after the reader has moved on must not
+    /// reach into a face nobody is looking at.
+    func widenPastAgents(_ extra: [String: String]) {
+        guard case .pastAgents = state else { return }
+        pastList?.widen(extra)
+        hintLabel.stringValue = pastList?.summary ?? ""
+    }
+
     func showPastAgents(items: [PastAgentsList.Item]) {
         guard transition(to: .pastAgents, because: "past agents opened") else { return }
         currentTarget = nil

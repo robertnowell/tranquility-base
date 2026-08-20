@@ -156,6 +156,31 @@ final class PastAgentsList: NSView {
         scrollToTop()
     }
 
+    /// Widen every haystack with what the sessions actually SAID, once the
+    /// background harvest has read them. See `TranscriptSearchText` for why
+    /// that read is bounded and why it cannot happen on the way in: it is
+    /// 0.26s over the sessions this list shows, which is a frozen frame if the
+    /// main actor pays it, and an unnoticed one if it does not.
+    ///
+    /// This is the one sanctioned exception to "built on open, never repainted
+    /// while you read it" — and it is not really an exception, because it only
+    /// repaints through `filter`, which is the path every keystroke already
+    /// takes. With no needle typed there is nothing to re-answer, so the items
+    /// are swapped silently and the reader's scroll position is not touched.
+    func widen(_ extra: [String: String]) {
+        guard !extra.isEmpty else { return }
+        items = items.map { item in
+            guard let more = extra[item.row.id], !more.isEmpty else { return item }
+            return Item(row: item.row, revivable: item.revivable,
+                        haystack: item.haystack + "\n" + more,
+                        aux: item.aux, tooltip: item.tooltip)
+        }
+        let typed = filterField.currentText.trimmingCharacters(in: .whitespaces)
+        guard !typed.isEmpty else { return }
+        filter(typed)
+        onFilterChanged?()
+    }
+
     /// Case-insensitive substring, over the name, the short id and the project
     /// directory — the three things you actually remember about a session you
     /// are trying to find again. Substring rather than fuzzy on purpose: a
@@ -427,6 +452,7 @@ private final class FilterRowView: NSView, NSTextFieldDelegate {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func reset() { input.stringValue = "" }
+    var currentText: String { input.stringValue }
 
     func controlTextDidChange(_ obj: Notification) { onChange?(input.stringValue) }
 }
