@@ -3533,10 +3533,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                uniquingKeysWith: { first, _ in first })
         let wanted = hidden.map(\.id)
         Task.detached(priority: .userInitiated) {
-            var extra: [String: String] = [:]
+            var extra: [String: [UInt8]] = [:]
             for id in wanted {
                 guard let path = paths[id] else { continue }
-                let text = TranscriptSearchText.shared.text(forTranscriptAt: path)
+                let text = TranscriptSearchText.shared.bytes(forTranscriptAt: path)
                 if !text.isEmpty { extra[id] = text }
             }
             await MainActor.run { [weak self] in self?.hud.widenPastAgents(extra) }

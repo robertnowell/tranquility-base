@@ -2543,7 +2543,7 @@ final class StatusHUD: NSObject {
     /// background read has finished. Refused unless the list is still the face
     /// on stage: a harvest that lands after the reader has moved on must not
     /// reach into a face nobody is looking at.
-    func widenPastAgents(_ extra: [String: String]) {
+    func widenPastAgents(_ extra: [String: [UInt8]]) {
         guard case .pastAgents = state else { return }
         pastList?.widen(extra)
         hintLabel.stringValue = pastList?.summary ?? ""
