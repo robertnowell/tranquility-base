@@ -28,6 +28,58 @@ final class StatusHUD: NSObject {
     /// `ConsoleButton.inkOverhang` from this so the MARK arrives here instead.
     static let contentColumn: CGFloat = 14
 
+    /// The floor: how much painted air sits under the last mark on any face.
+    ///
+    /// The same number as `contentColumn`'s siblings in the stack's insets, and
+    /// stated separately because the INSET is not the air. What the inset buys
+    /// depends on what the last element is, and the audit measured seven
+    /// different answers to that across nineteen faces.
+    static let contentFloor: CGFloat = 12
+
+    /// How far a face's last element extends BELOW its own last painted pixel.
+    ///
+    /// Measured off settled pose renders (`scripts/inkmap.py`), as
+    /// `painted bottom margin − the declared 12pt inset`:
+    ///
+    /// | last element | painted | tail |
+    /// |---|---|---|
+    /// | the grid's footer — a plain label | 12.5 | 0.5 |
+    /// | the card's action row | 21.5 | **9.5** |
+    ///
+    /// The action row's 9.5 is the `Controls` word's hover box — 20pt around a
+    /// ~10pt mark, ruled for the pointer — plus the row's own type descent. It
+    /// is deliberate padding that nobody chose to spend as MARGIN: the same
+    /// cause as the header's misalignment, at the bottom of the panel instead
+    /// of its sides.
+    ///
+    /// Measured constants rather than a runtime rasterise, because the row's
+    /// composition is fixed — 32pt tall, contents vertically centred — so the
+    /// tail does not vary with which buttons a face happens to show.
+    /// `cardRestsOnTheFloor` re-measures the result on every launch, which is
+    /// what stops constants like these from drifting into a lie.
+    static let actionRowInkTail: CGFloat = 9.5
+    /// Zero, and measured rather than assumed: a face that ends in plain text
+    /// or a hairline already paints 12.5pt of air under it, which is the target.
+    /// The first attempt subtracted 0.5 here on the theory that the tail was the
+    /// difference between 12.5 painted and the 12 declared — and the grid faces
+    /// answered 15.5, not 12.0, because a face's panel height is fitted to its
+    /// content and the two do not move together. Only the row that is actually
+    /// wrong gets a correction.
+    static let plainInkTail: CGFloat = 0
+
+    /// The last thing the stack will actually draw on this face.
+    private var lastVisibleRow: NSView? {
+        contentStack?.arrangedSubviews.last { !$0.isHidden }
+    }
+
+    /// The bottom inset that buys `contentFloor` of PAINTED air, whatever the
+    /// face happens to end with. A widget property the baseline writes, like
+    /// every other — see `render()`'s contract.
+    private var floorInset: CGFloat {
+        Self.contentFloor - (lastVisibleRow === actionRow ? Self.actionRowInkTail
+                                                          : Self.plainInkTail)
+    }
+
     private var panel: ConsolePanel?
     private var titleLabel: DoorLabel!
     private var bodyLabel: CardBodyLabel!
@@ -2073,6 +2125,16 @@ final class StatusHUD: NSObject {
         updateActionRowVisibility()
         // And the same rule for the line under it: an empty hint is not a line.
         syncHintVisibility()
+        // The floor, measured to INK. Set here because it depends on which row
+        // ends up last, which the two calls above have only just settled, and
+        // read by `resizeToFit` on the very next line.
+        //
+        // The card faces painted 21.5pt of air under their last mark against
+        // the grid's 12.5, and neither number was chosen — the difference is
+        // the `Controls` word's pointer target, which is 20pt around a ~10pt
+        // mark and was landing on top of the inset rather than inside it
+        // (spacing audit, Finding 1 at the bottom edge).
+        contentStack?.edgeInsets.bottom = floorInset
 
         Permissions.log("HUD.render state=\(state.name) title=\(titleLabel.stringValue)")
         resizeToFit(panel)
@@ -3880,7 +3942,35 @@ final class StatusHUD: NSObject {
         Permissions.log(String(format: "chrome: column %.1f · chevron ink %.1f · gear ink %.1f",
                                StatusHUD.contentColumn, chevronInk, gearInk))
 
+        // The card rests on the floor.
+        //
+        // Asserted as the wiring, not the pixels: that a card face ends with the
+        // action row, and that the stack's bottom inset is the floor MINUS that
+        // row's measured tail. The constant itself is guarded by
+        // `scripts/inkmap.py`, which measures the painted result — the two
+        // together are what stop a measured constant drifting into a lie.
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("Ready when you are."),
+            sessionId: "fl", pid: 1, project: "projects", cwd: "/tmp")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let cardEndsWithItsActions = lastVisibleRow === actionRow
+        let cardRestsOnTheFloor = cardEndsWithItsActions
+            && abs((contentStack?.edgeInsets.bottom ?? 0)
+                   - (Self.contentFloor - Self.actionRowInkTail)) < 0.01
+        showIdle(note: nil, rows: [
+            .init(id: "fl2", name: "a row", aux: "aaaaaaaa", lamp: .ready),
+        ])
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        // And a face that does NOT end with the action row keeps the plain
+        // floor — the correction is for the row that needs it, not for everyone.
+        let gridKeepsThePlainFloor = lastVisibleRow !== actionRow
+            && abs((contentStack?.edgeInsets.bottom ?? 0)
+                   - (Self.contentFloor - Self.plainInkTail)) < 0.01
+
         SelfTest.report("chrome", [
+            ("cardEndsWithItsActions", cardEndsWithItsActions),
+            ("cardRestsOnTheFloor", cardRestsOnTheFloor),
+            ("gridKeepsThePlainFloor", gridKeepsThePlainFloor),
             ("headerSitsOnTheColumn", headerSitsOnTheColumn),
             ("marksSitOnTheLine", worstMark <= 0.25),
             ("marksShareOneOpticalSize", markSpread <= 0.5),
