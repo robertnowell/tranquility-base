@@ -133,7 +133,18 @@ public final class HotkeyMonitor: @unchecked Sendable {
     private var armCheck: DispatchWorkItem?
     /// When the last clean bare-⌃ tap ended. Same window as the app's ⌥⌥ detector.
     private var lastControlTapAt: Date?
-    private let controlDoubleTapWindow: TimeInterval = 0.45
+    /// 0.45 → 0.80 (12 Aug, from the log). Six ⌃ taps at 21:48:44–49, every
+    /// one received and acknowledged, produced two recognitions from what
+    /// the user reports as three intended ⌃⌃ — the misses were pairs whose
+    /// release-to-release gap sat between the 450ms window and ~1s (the
+    /// old log's second-granularity could bound it no tighter). A pull
+    /// gesture that rejects the user's natural cadence one time in three
+    /// is not a gesture, it is a reflex test. The cost of widening is only
+    /// how long a LONE ⌃ tap waits before it can no longer become a pair —
+    /// a lone tap commands nothing, so nothing user-facing changes. The
+    /// pairing logs below now record the real gap on every hit and miss;
+    /// the next adjustment to this number cites them, not a report.
+    private let controlDoubleTapWindow: TimeInterval = 0.80
 
     /// Mutated only from the tap callback, which runs on the main run loop.
     public private(set) var isPressed = false
@@ -221,9 +232,27 @@ public final class HotkeyMonitor: @unchecked Sendable {
             // chord's ⌃ press cannot count as a tap.
             if let last = lastControlTapAt,
                Date().timeIntervalSince(last) < controlDoubleTapWindow {
+                // The gap, logged on every pairing: this number is the whole
+                // truth of whether the window fits the user's hand, and it
+                // was invisible until a 1-in-3 recognition rate forced the
+                // question (12 Aug).
+                Permissions.log(String(format: "hotkey: ⌃⌃ paired, gap %.0fms "
+                    + "(window %.0fms)",
+                    Date().timeIntervalSince(last) * 1000,
+                    controlDoubleTapWindow * 1000))
                 lastControlTapAt = nil
                 onTransition(.controlDoubleTapped)
             } else {
+                if let last = lastControlTapAt {
+                    // A tap that ARRIVED with a stale anchor is the miss
+                    // shape the user feels as "ignored": two taps meant as
+                    // one gesture, split by the window. Say the real gap, so
+                    // the window is tuned from measurements.
+                    Permissions.log(String(format: "hotkey: ⌃ tap +%.0fms after "
+                        + "the last — outside the %.0fms window, re-anchored",
+                        Date().timeIntervalSince(last) * 1000,
+                        controlDoubleTapWindow * 1000))
+                }
                 lastControlTapAt = Date()
                 // Say so. This tap commands nothing — it may yet become ⌃⌃, or
                 // it may have been the whole of what the user did — but it WAS
@@ -314,12 +343,31 @@ public final class HotkeyMonitor: @unchecked Sendable {
         }
     }
 
+    /// In-callback tap revivals, counted and (throttled) logged. The revival
+    /// itself always existed; what never existed was a TRACE — macOS delivers
+    /// keystrokes to nobody between the disable and this callback firing, so
+    /// a gesture lost in that window was indistinguishable from a gesture
+    /// never pressed. Issue 15's ⌃⌃ (21:12Z, zero log trace mid-speech) is
+    /// exactly that shape; from now on the gap has a timestamp and a count.
+    private var tapReEnables = 0
+    private var lastReEnableLogAt = Date.distantPast
+
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // The system disables a tap that times out or is interrupted by user input.
         // Silently re-enabling is the difference between "works" and "worked until
-        // the machine got busy once".
+        // the machine got busy once" — and LOGGING the re-enable is the
+        // difference between a diagnosable lost keystroke and a ghost.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            tapReEnables += 1
+            // Throttled: a genuinely busy stretch can fire this repeatedly,
+            // and the log line must never become its own hot-path cost.
+            if Date().timeIntervalSince(lastReEnableLogAt) > 1.0 {
+                lastReEnableLogAt = Date()
+                let why = type == .tapDisabledByTimeout ? "timeout" : "user input"
+                Permissions.log("hotkey: tap re-enabled in-callback after \(why) "
+                    + "(#\(tapReEnables)) — events during the gap were lost")
+            }
             return Unmanaged.passUnretained(event)
         }
 

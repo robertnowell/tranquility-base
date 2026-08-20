@@ -7170,11 +7170,19 @@ final class StatusHUD: NSObject {
         // ordinary prose and atomic across a name — the whole of
         // `dispatchAttempts` lights the moment "a variable" starts.
         let cursor = currentSpoken?.displayIndex(forSpoken: index) ?? index
-        Permissions.log("highlight upTo=\(index)→\(cursor) of \(body.count) "
-                        + "thread=\(Thread.isMainThread)")
         // The mapped cursor rides the face from here on. Stored BEFORE the
         // paint, so a face read mid-paint is never behind its own pixels.
         face.spokenUpTo = cursor
+        // Painted SYNCHRONOUSLY, and that is a contract, not an oversight:
+        // callers — the ink drills among them — read the pixels right after
+        // calling. A 10Hz coalescer was tried here (issue 15) and the launch
+        // gate failed it in minutes: reads between the call and the trailing
+        // paint saw stale ink. The issue's actual hot-path costs were the
+        // TWO log lines per word (formatter alloc + syscalls, now off-thread
+        // in Permissions.log) and the attribute-run enumeration in the paint
+        // log (now gone); one attributed rebuild per word at ~7Hz is cheap.
+        // If a future measurement says otherwise, the redesign must keep
+        // read-your-writes — the drills encode it.
         paintInk(displayCursor: cursor)
     }
 
@@ -7203,7 +7211,12 @@ final class StatusHUD: NSObject {
             .font, value: StateLegend.Face.message(12), range: full)
         bodyLabel.attributedStringValue = attributed
 
-        Permissions.log("highlight rendered bright=\(inkBrightLength)/\(full.length)")
+        // The cursor we just painted, not `inkBrightLength`: enumerating every
+        // attribute run of the whole string to compose a log line was pure
+        // hot-path tax (issue 15). The drills still read `inkBrightLength` —
+        // from the pixels, which is the point of it — this line just stops
+        // paying that price ten times a second.
+        Permissions.log("highlight painted upTo=\(clamped)/\(full.length)")
     }
 
     /// `paintInk` under a name that says why a drill is calling it: to repaint
