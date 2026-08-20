@@ -2009,8 +2009,10 @@ final class StatusHUD: NSObject {
 
             case .voices:
                 voiceList.isHidden = false
-                bodyLabel.stringValue =
-                    "\(face.roster.count) of \(face.voices.count) on roster. \(face.body)"
+                // The per-section legends carry the counts now, so the masthead
+                // stops reporting a total across two rosters — "26 of 56" was a
+                // sum of two things and described neither.
+                bodyLabel.stringValue = face.body
                 setHint("check = on roster · ▶ preview · drag ≡ to reorder")
                 rebuildVoiceRows()
 
@@ -2607,26 +2609,70 @@ final class StatusHUD: NSObject {
         let (offers, owned) = bench.reduce(into: ([Voice](), [Voice]())) { acc, v in
             if SystemVoiceCatalog.isDownloadRow(v.id) { acc.0.append(v) } else { acc.1.append(v) }
         }
-        for voice in cast + owned + offers {
-            let onRoster = face.roster.contains(voice.id)
-            let row = VoiceRowView(
-                voice: voice, onRoster: onRoster,
-                onPlay: { [weak self] in self?.onPreviewVoice?(voice.id) },
-                onToggle: { [weak self] in self?.onToggleVoice?(voice.id, !onRoster) },
-                onDragStep: { [weak self] row, step in self?.dragRosterRow(row, by: step) },
-                onDragEnd: { [weak self] in self?.commitRosterOrder() })
-            voiceStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+
+        // TWO lists, because there are two rosters.
+        //
+        // One flat list was not a presentation choice, it was the bug's habitat:
+        // the pane listed both families and its toggle appended whatever was
+        // checked to the single ElevenLabs roster, so checking a system voice put
+        // an Apple identifier into the cloud rotation and ElevenLabs answered
+        // HTTP 400 `invalid_uid` every five seconds. Storage is two files now, and
+        // this is the pane finally saying so.
+        //
+        // Order inside a section is unchanged — cast in roster order, then the
+        // bench in catalogue order, then rows you do not own — so nothing about
+        // reading a section is new. Only the boundary is.
+        func isSystem(_ v: Voice) -> Bool {
+            SystemVoiceCatalog.isSystemVoice(v.id) || SystemVoiceCatalog.isDownloadRow(v.id)
         }
-        // The door to the settings state's other pane, as a last row rather
-        // than masthead chrome: the placard band's lanes are drilled and
-        // spoken for (see the lane comment above), and a row costs nothing.
-        // The "Recent audio ▸" link row is gone: it is a TAB now, so the voices
-        // list stops carrying a door to somewhere else in the middle of itself.
-        // That row was the whole reason this pane read as one long column.
+        var headerAir: CGFloat = 0
+        let sections: [(title: String, note: String?, voices: [Voice], available: Int)] = [
+            ("ElevenLabs",
+             "spoken when available",
+             cast.filter { !isSystem($0) } + owned.filter { !isSystem($0) },
+             face.voices.filter { !isSystem($0) }.count),
+            ("System",
+             "the fallback, per agent",
+             cast.filter(isSystem) + owned.filter(isSystem) + offers,
+             face.voices.filter(isSystem).count),
+        ]
+
+        for section in sections {
+            // A section with nothing in it is not drawn. A machine with no
+            // ElevenLabs key has no paid rows at all, and an empty legend over
+            // empty space would be the pane describing something absent.
+            guard !section.voices.isEmpty else { continue }
+            let onRoster = section.voices.filter { face.roster.contains($0.id) }.count
+            let followingRows = !voiceStack.arrangedSubviews.isEmpty
+            headerAir += VoiceSectionHeaderView.height(followingRows: followingRows)
+            voiceStack.addArrangedSubview(VoiceSectionHeaderView(
+                title: section.title, onRoster: onRoster,
+                available: section.available, note: section.note,
+                followingRows: followingRows))
+            voiceStack.arrangedSubviews.last?
+                .widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+
+            for voice in section.voices {
+                let onRoster = face.roster.contains(voice.id)
+                let row = VoiceRowView(
+                    voice: voice, onRoster: onRoster,
+                    onPlay: { [weak self] in self?.onPreviewVoice?(voice.id) },
+                    onToggle: { [weak self] in self?.onToggleVoice?(voice.id, !onRoster) },
+                    onDragStep: { [weak self] row, step in self?.dragRosterRow(row, by: step) },
+                    onDragEnd: { [weak self] in self?.commitRosterOrder() })
+                voiceStack.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+            }
+        }
+        // Height counts BOTH kinds of view, or the list clips by one header per
+        // section — the rows are a fixed height and so is a legend, so this stays
+        // arithmetic rather than a layout pass.
+        let rowCount = voiceStack.arrangedSubviews.compactMap { $0 as? VoiceRowView }.count
+        let headerCount = voiceStack.arrangedSubviews.count - rowCount
         voiceListHeight.constant = min(
-            CGFloat(voiceStack.arrangedSubviews.count) * VoiceRowView.height, 340)
-        Permissions.log("roster pane: \(cast.count) cast + \(bench.count) bench rows")
+            CGFloat(rowCount) * VoiceRowView.height + headerAir, 340)
+        Permissions.log("roster pane: \(cast.count) cast + \(bench.count) bench rows"
+                        + " across \(headerCount) section(s)")
     }
 
     /// The recent-audio pane's rows, into the same stack the roster pane uses
@@ -2656,14 +2702,32 @@ final class StatusHUD: NSObject {
     /// Move a roster row by whole-row steps during a ≡ drag, clamped inside
     /// the roster segment (the bench below is sorted, not ordered — nothing
     /// can be dragged into it).
+    /// A drag reorders a voice within ITS OWN roster.
+    ///
+    /// Two things changed with the pane's two sections. The stack now holds
+    /// section legends as well as rows, so a filtered row index is no longer a
+    /// stack index — the old code used one as the other, which was correct only
+    /// while the two lists were one. And a voice cannot be dragged into the other
+    /// roster, because which roster it belongs to is a fact about the voice, not
+    /// a position in a list.
     private func dragRosterRow(_ row: VoiceRowView, by steps: Int) {
-        let rows = voiceStack.arrangedSubviews.compactMap { $0 as? VoiceRowView }
-        guard steps != 0, let current = rows.firstIndex(where: { $0 === row }) else { return }
-        let rosterCount = rows.filter(\.isOnRoster).count
-        let target = max(0, min(rosterCount - 1, current + steps))
-        guard target != current else { return }
+        guard steps != 0 else { return }
+        let views = voiceStack.arrangedSubviews
+        let system = SystemVoiceCatalog.isSystemVoice(row.voiceId)
+            || SystemVoiceCatalog.isDownloadRow(row.voiceId)
+        // The cast rows of this row's own section, as STACK indices.
+        let peers = views.indices.filter { index in
+            guard let peer = views[index] as? VoiceRowView, peer.isOnRoster else { return false }
+            let peerIsSystem = SystemVoiceCatalog.isSystemVoice(peer.voiceId)
+                || SystemVoiceCatalog.isDownloadRow(peer.voiceId)
+            return peerIsSystem == system
+        }
+        guard let from = views.firstIndex(of: row), let slot = peers.firstIndex(of: from)
+        else { return }
+        let targetSlot = max(0, min(peers.count - 1, slot + steps))
+        guard targetSlot != slot else { return }
         voiceStack.removeArrangedSubview(row)
-        voiceStack.insertArrangedSubview(row, at: target)
+        voiceStack.insertArrangedSubview(row, at: peers[targetSlot])
     }
 
     private func commitRosterOrder() {
@@ -6271,14 +6335,6 @@ final class StatusHUD: NSObject {
             panel?.contentView?.layoutSubtreeIfNeeded()
             countdownBar.freeze(fraction: 0.4)
 
-        case "settings":
-            showSettings(
-                voices: [Voice(id: "a", name: "Archer", category: "professional"),
-                         Voice(id: "b", name: "My Clone", category: "cloned"),
-                         Voice(id: "c", name: "Sarah", category: "premade")],
-                roster: ["c"],
-                note: "Checked voices are the cast agents speak with.")
-
         case "recent-audio":
             showRecentAudio(events: [
                 .init(id: "e1", timeLabel: "Aug 13 07:05", durationLabel: "39s",
@@ -6339,16 +6395,30 @@ final class StatusHUD: NSObject {
             // is NOT installed. The old pose was four ElevenLabs voices, so it could
             // not have shown any of the faults in the free-voice work — a pose that
             // cannot fail is not evidence.
+            //
+            // The ids are REAL SHAPES, not placeholders. The sections are split on
+            // `com.apple.` — the same test the routing uses — so a fixture with
+            // "sys1" in it would draw every voice under the ElevenLabs legend and
+            // still look fine. That is the pose-that-cannot-fail this comment
+            // already warns about, one layer down: the fault moved from the
+            // right-hand column to the id.
             showSettings(
-                voices: [Voice(id: "a", name: "Archer", category: "professional"),
-                         Voice(id: "sys1", name: "Ava (Premium)", category: "479 MB"),
-                         Voice(id: "sys2", name: "Alex", category: "885 MB"),
-                         Voice(id: "b", name: "My Clone", category: "cloned"),
-                         Voice(id: "sys3", name: "Allison (Enhanced)", category: "99 MB"),
+                voices: [Voice(id: "XrExE9yKIg1WjnnlVkGX", name: "Archer",
+                               category: "professional"),
+                         Voice(id: "com.apple.voice.premium.en-US.Ava",
+                               name: "Ava (Premium)", category: "479 MB"),
+                         Voice(id: "com.apple.speech.synthesis.voice.Alex",
+                               name: "Alex", category: "885 MB"),
+                         Voice(id: "EGxJIQ5TF187oclOp8aT", name: "My Clone",
+                               category: "cloned"),
+                         Voice(id: "com.apple.voice.enhanced.en-US.Allison",
+                               name: "Allison (Enhanced)", category: "99 MB"),
                          Voice(id: SystemVoiceCatalog.downloadPrefix + "Susan",
                                name: "Susan", category: "132 MB")],
-                roster: ["sys1", "a"],
-                note: "Pick one to hear it.")
+                roster: ["XrExE9yKIg1WjnnlVkGX", "com.apple.voice.premium.en-US.Ava"],
+                note: "Every agent gets a voice from each list. ElevenLabs speaks; "
+                    + "the system voice is its fallback.",
+                tab: .voices)
 
         default:
             return false
@@ -8977,6 +9047,82 @@ private final class AudioEventRowView: NSControl, NSMenuDelegate {
     @objc nonisolated private func revealFromMenu() {
         MainActor.assumeIsolated { onReveal() }
     }
+}
+
+/// A section legend in the voices pane.
+///
+/// There are two rosters — ElevenLabs and system — and one flat list could not
+/// say so. Set in capitals because that is what this panel's legends do (ruled
+/// 18 Aug), and carrying its own count because "26 of 56" across both told you
+/// nothing about either.
+private final class VoiceSectionHeaderView: NSView {
+    static let height: CGFloat = 28
+
+    /// Extra air above a legend that follows ROWS rather than the tab rule.
+    ///
+    /// The eye compares optical air, not painted margins, and that depends on
+    /// what sits above: the first legend sits under a hairline and reads settled
+    /// at 0, while the second sits under a row of names and reads cramped at the
+    /// same number. Measured by rendering the pane and looking at it, which is
+    /// the lesson the card-floor revert paid for (0f216b3).
+    static let airAboveFollowingSection: CGFloat = 9
+
+    static func height(followingRows: Bool) -> CGFloat {
+        height + (followingRows ? airAboveFollowingSection : 0)
+    }
+
+    init(title: String, onRoster: Int, available: Int, note: String?,
+         followingRows: Bool = false) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        let legend = NSTextField(labelWithString: title.uppercased())
+        legend.font = ChromeType.mono(ofSize: 9.5, weight: .regular)
+        legend.textColor = StateLegend.Palette.hint
+        legend.translatesAutoresizingMaskIntoConstraints = false
+
+        let count = NSTextField(labelWithString: "\(onRoster) of \(available)")
+        count.font = ChromeType.mono(ofSize: 9.5, weight: .regular)
+        count.textColor = StateLegend.Palette.faint
+        count.translatesAutoresizingMaskIntoConstraints = false
+
+        // The rule sits under the legend, not between the rows, so the two lists
+        // read as two lists rather than as one list with a caption in it.
+        let rule = NSView()
+        rule.wantsLayer = true
+        rule.layer?.backgroundColor = StateLegend.Palette.hairline.cgColor
+        rule.translatesAutoresizingMaskIntoConstraints = false
+
+        for v in [legend, count, rule] { addSubview(v) }
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(
+                equalToConstant: Self.height(followingRows: followingRows)),
+            legend.leadingAnchor.constraint(equalTo: leadingAnchor),
+            legend.bottomAnchor.constraint(equalTo: rule.topAnchor, constant: -5),
+            count.trailingAnchor.constraint(equalTo: trailingAnchor),
+            count.lastBaselineAnchor.constraint(equalTo: legend.lastBaselineAnchor),
+            rule.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rule.trailingAnchor.constraint(equalTo: trailingAnchor),
+            rule.bottomAnchor.constraint(equalTo: bottomAnchor),
+            rule.heightAnchor.constraint(equalToConstant: 1),
+        ])
+
+        if let note {
+            let sub = NSTextField(labelWithString: note)
+            sub.font = ChromeType.mono(ofSize: 9, weight: .regular)
+            sub.textColor = StateLegend.Palette.faint
+            sub.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(sub)
+            NSLayoutConstraint.activate([
+                sub.leadingAnchor.constraint(equalTo: legend.trailingAnchor, constant: 8),
+                sub.lastBaselineAnchor.constraint(equalTo: legend.lastBaselineAnchor),
+                sub.trailingAnchor.constraint(lessThanOrEqualTo: count.leadingAnchor,
+                                              constant: -8),
+            ])
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
 private final class VoiceRowView: NSControl {
