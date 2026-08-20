@@ -1440,22 +1440,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // they spoke to it. A newer turn arriving still wins: see
             // DeliveryInFlight.supersedesWaiting. A terminal reply wins the
             // same way: the transcript says working, so the row does too.
+            // The process outranks the stored turn, on this band too (19 Aug).
+            // A session locked at a dialog has not read your last reply and is
+            // not about to: green would offer to read out something it said
+            // before it was killed, while the only move that helps is in the
+            // terminal. See `blockedOnYou` for the case that is always here.
+            let blocked = Self.blockedOnYou(liveById[event.sessionId], resumed: resumed)
             return StateLegend.SessionRow(
                 id: event.sessionId,
                 name: tabDisplayName(for: event, live: liveById[event.sessionId]),
                 // The id, not the callsign — ruled 12 Aug, and the same in
                 // every band so a row means the same thing wherever it sits.
-                aux: StateLegend.shortId(event.sessionId),
-                lamp: !resumed
-                    && (evidence?.activity == .working
-                        || delivering.supersedesWaiting(event.sessionId,
-                                                        latestId: event.latestId))
-                    ? .working : .ready,
+                // A blocked row spends the column on its reason, like every
+                // other amber row on the panel.
+                aux: blocked?.reason ?? StateLegend.shortId(event.sessionId),
+                lamp: blocked?.lamp
+                    ?? (!resumed
+                        && (evidence?.activity == .working
+                            || delivering.supersedesWaiting(event.sessionId,
+                                                            latestId: event.latestId))
+                        ? .working : .ready),
                 // This band is the only one with a real read state: these
                 // rows HAVE a waiting turn. Everywhere else the answer is
                 // `.none`, which rests at the same intensity as `.opened`
                 // (16 Aug) — an idle session is not asking for you either.
-                read: event.heard ? .opened : .unread)
+                read: event.heard ? .opened : .unread,
+                // And the hover carries the whole sentence, as it does on every
+                // other amber row — the column can only hold a clause.
+                detail: blocked?.detail)
         }
         // Live sessions with nothing waiting: quiet rows, so a skipped or heard
         // session stays findable. Walked via `known` — already latestId DESC —
@@ -1629,24 +1641,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// sentence, and the sentence is what he read. A lamp and its caption
     /// derived from two sources is the same class of bug as two sources for
     /// the lamp itself.
+    /// The process says it is holding for a human — the lamp half of
+    /// `WaitingAt`, which carries the rule and the words.
+    ///
+    /// Amber, always, and above everything else the lamp rule weighs: this is a
+    /// process watched from outside saying it cannot go on alone, and amber's
+    /// tap is the one move that helps — it puts you in the terminal. Wired into
+    /// every band on 18 Aug EXCEPT the waiting band, whose rows are literally
+    /// about needing you and which computed green from stored turns without ever
+    /// asking the process. That gap had a permanent occupant; see `WaitingAt`.
+    private static func blockedOnYou(_ live: LiveSession?, resumed: Bool)
+        -> (lamp: StateLegend.Lamp, reason: String?, detail: String?)? {
+        guard let at = WaitingAt.read(status: live?.status,
+                                      waitingFor: live?.waitingFor,
+                                      resumed: resumed) else { return nil }
+        return (.fault, at.short, at.full)
+    }
+
     private func lampAndReason(for evidence: SessionActivity.Evidence?, sessionId: String,
                                live: LiveSession?,
                                boundary: SessionActivity.TurnBoundary? = nil,
                                pickedUp: Bool = false)
         -> (lamp: StateLegend.Lamp, reason: String?, detail: String?) {
         let activity = evidence?.activity
-        // Blocked on you, said by the process itself. Nothing in a transcript
-        // outranks this — including a stale `working` read from a tool call
-        // that IS the prompt the session is blocked on.
-        //
-        // And it names its own reason. `waiting` means the agent has asked and
-        // is holding for an answer; that is the whole of why the lamp is lit,
-        // and whatever the file was about to say about silence is a worse
-        // description of the same moment.
-        if live?.status == "waiting" {
-            return (.fault, "asking you a question",
-                    "The agent has asked you something and is holding for an answer.")
-        }
+        let resumed = AgentRestart.resumed(
+            startedAt: live?.startedAtDate,
+            lastWord: AgentRestart.lastWord(observedAt: evidence?.observedAt,
+                                            boundary: boundary))
+        // Blocked on you, said by the process itself, and it outranks everything
+        // else here — see `blockedOnYou`.
+        if let blocked = Self.blockedOnYou(live, resumed: resumed) { return blocked }
         // Resumed, and told nothing since: whatever the file describes was
         // written by a process that has since been killed. Ruled 19 Aug — a
         // session you restart is no longer idle and belongs on the grid — so
@@ -1657,11 +1681,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // because a resumed session that is already chewing has simply not
         // written its first line yet, and blue is the true state; `blocked`
         // keeps its own words inside `reason`. See `AgentRestart`.
-        if live?.status != "busy",
-           AgentRestart.resumed(
-               startedAt: live?.startedAtDate,
-               lastWord: AgentRestart.lastWord(observedAt: evidence?.observedAt,
-                                               boundary: boundary)),
+        if live?.status != "busy", resumed,
            let said = AgentRestart.reason(for: activity) {
             return (.fault, said.short, said.full)
         }
