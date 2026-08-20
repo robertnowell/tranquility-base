@@ -1408,6 +1408,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // TERMINAL the agent is already chewing — green ("you have not
         // answered this") would be a lie, so the transcript's verdict wins.
         let boundaries = (try? store?.latestTurnBoundaries()) ?? [:]
+        // The user's own half of the switch, read once for the whole repaint.
+        // The OFF half is applied at the bottom of this function, after every
+        // band; ON has to travel INTO the lamp rule, because it changes what
+        // colour a row is rather than which face draws it.
+        let switchedOn = LampSwitch.loadOn()
         var rows = waiting.map { (event: WaitingSession) -> StateLegend.SessionRow in
             let evidence = event.transcriptPath.flatMap {
                 SessionActivity.evidence(transcriptPath: $0,
@@ -1479,7 +1484,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             let storedLamp = lampAndReason(for: evidence, sessionId: stored.sessionId,
                                            live: live,
-                                           boundary: boundaries[stored.sessionId])
+                                           boundary: boundaries[stored.sessionId],
+                                           pickedUp: switchedOn.contains(stored.sessionId))
             rows.append(StateLegend.SessionRow(
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
@@ -1504,7 +1510,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             let liveLamp = lampAndReason(for: evidence, sessionId: live.sessionId,
                                          live: live,
-                                         boundary: boundaries[live.sessionId])
+                                         boundary: boundaries[live.sessionId],
+                                         pickedUp: switchedOn.contains(live.sessionId))
             rows.append(StateLegend.SessionRow(
                 id: live.sessionId,
                 name: StateLegend.displayName(
@@ -1617,7 +1624,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the lamp itself.
     private func lampAndReason(for evidence: SessionActivity.Evidence?, sessionId: String,
                                live: LiveSession?,
-                               boundary: SessionActivity.TurnBoundary? = nil)
+                               boundary: SessionActivity.TurnBoundary? = nil,
+                               pickedUp: Bool = false)
         -> (lamp: StateLegend.Lamp, reason: String?, detail: String?) {
         let activity = evidence?.activity
         // Blocked on you, said by the process itself. Nothing in a transcript
@@ -1682,9 +1690,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return live?.status == "busy" ? (.working, nil, nil) : (.running, nil, nil)
             }
         }()
-        guard observed.0 == .running, delivering.isInFlight(sessionId)
-        else { return observed }
-        return (.working, nil, nil)
+        guard observed.0 == .running else { return observed }
+        if delivering.isInFlight(sessionId) { return (.working, nil, nil) }
+        // Last, and only over a lamp that was going out anyway: the user picked
+        // this session up. Ruled 19 Aug — *"because it's alive, clicking on it
+        // obviously means I want it to be alive. Now it's in the grid."*
+        //
+        // Deliberately the LOWEST precedence of anything here. Every rule above
+        // is a fact about the agent, and none of them may be overwritten by a
+        // fact about the user; this speaks for exactly the rows that have
+        // nothing of their own to say, which is the only kind the switch was
+        // ever pressed on. Amber rather than a lit-but-colourless row, because
+        // amber is what this panel calls "your move", and a session standing by
+        // with nothing in flight is waiting on precisely one thing.
+        guard pickedUp else { return observed }
+        return (.fault, "standing by",
+                "You switched this session on. It is alive with nothing in flight, "
+                + "waiting for what you tell it next.")
     }
 
     /// The tab's string for a session, or nil while it has none: the
