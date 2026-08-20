@@ -69,6 +69,20 @@ expect "quotes and backslashes survive"      0 'He said "ship it" and the path i
 T copy-mode -t "$PANE"
 expect "delivery into copy-mode confirms"    0 "Mode was on when this was sent"
 
+# The watermark regression: the SAME payload delivered twice must land twice.
+# Before the 19 Aug watermark fix, the second send false-confirmed against the
+# first one's transcript record without ever pasting.
+"$BIN/tbase" send-raw-tmux "$PID" "$PANE" "$TRANSCRIPT" "yes" >/dev/null 2>&1
+RC1=$?
+"$BIN/tbase" send-raw-tmux "$PID" "$PANE" "$TRANSCRIPT" "yes" >/dev/null 2>&1
+RC2=$?
+YES_COUNT=$(grep -c '"content":"yes"' "$TRANSCRIPT" 2>/dev/null || echo 0)
+if [ "$RC1" -eq 0 ] && [ "$RC2" -eq 0 ] && [ "$YES_COUNT" -eq 2 ]; then
+  echo "  ok    repeated payload lands twice (watermark)"; PASS=$((PASS+1))
+else
+  echo "  FAIL  repeated payload (rc=$RC1/$RC2 landed=$YES_COUNT wanted 2)"; FAIL=$((FAIL+1))
+fi
+
 # Failure paths.
 "$BIN/tbase" send-raw-tmux 999999 "$PANE" "$TRANSCRIPT" x >/dev/null 2>&1
 [ $? -eq 5 ] && { echo "  ok    dead pid fails closed"; PASS=$((PASS+1)); } \
