@@ -681,9 +681,14 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertTrue(transport.sent.isEmpty, "and nothing was typed")
     }
 
+    /// A dialog and a dead target are the only refusals — and as of 19 Aug a
+    /// dialog has two witnesses, not one: absent from the list (how it used to
+    /// look) and `waitingFor: dialog open` (what the CLI says now). See
+    /// `WaitingAtTests` for the rest of that pair.
     func testDialogBlockedAndGoneAreTheOnlyRefusals() {
         XCTAssertFalse(Readiness.notRegistered.canDispatch)
         XCTAssertFalse(Readiness.targetGone.canDispatch)
+        XCTAssertFalse(Readiness.waiting("dialog open").canDispatch)
         XCTAssertTrue(Readiness.busy.canDispatch)
         XCTAssertTrue(Readiness.waiting(nil).canDispatch)
     }

@@ -4649,6 +4649,7 @@ final class StatusHUD: NSObject {
         closedRowsDrill()
         lampSwitchDrill()
         pickUpDrill()
+        resumePromptDrill()
         readIntensityDrill()
         terminateDrill()
         pastAgentsDrill()
@@ -5519,6 +5520,55 @@ final class StatusHUD: NSObject {
              Self.gridRows([StateLegend.SessionRow(id: "alive", name: "alive",
                                                    aux: "standing by", lamp: .fault)])
                 .contains { $0.id == "alive" }),
+        ])
+    }
+
+    /// The state that is permanently on this machine and had no name until
+    /// 19 Aug: a session locked at the resume prompt.
+    ///
+    /// Robert: *"it happens every single time, and it's locked. But not
+    /// detectable. You can see it's treated as green, like a ready state."* The
+    /// row had a stored waiting turn, so the waiting band drew it green from the
+    /// store without ever asking the process — which was saying `status: waiting
+    /// · waitingFor: dialog open` the whole time.
+    ///
+    /// Drilled at the join rather than at the rule (`WaitingAtTests` has the
+    /// rule): the words have to reach the row, the row has to reach the grid,
+    /// the tap has to reach the terminal — and the SEND path has to refuse the
+    /// same session the lamp is describing. A panel that shows "answer this in
+    /// the terminal" while quietly typing into the dialog would be worse than
+    /// the green row it replaced.
+    private func resumePromptDrill() {
+        let at = WaitingAt.resumePrompt
+        let locked = StateLegend.SessionRow(
+            id: "locked", name: "PRs in the Hub", aux: at.short,
+            lamp: .fault, detail: at.full)
+        showIdle(rows: [locked])
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let drawn = Self.gridRows([locked]).contains { $0.id == "locked" }
+        let tip = waitingRows.arrangedSubviews
+            .compactMap { $0 as? GridRowView }
+            .first { $0.identifier?.rawValue == "locked" }?.toolTip
+
+        SelfTest.report("resumePrompt", [
+            // Not green. That is the whole complaint.
+            ("aLockedSessionIsNotReady", locked.lamp != .ready),
+            ("itIsDrawnOnTheGrid", drawn),
+            // Amber's tap is the one move that helps: it puts you in the tab
+            // where the dialog is.
+            ("theTapGoesToTheTerminal",
+             StateLegend.action(for: locked) == .goToAgent),
+            ("theRowNamesTheDialog", locked.aux == "waiting at the resume prompt"),
+            ("theWholeSentenceIsReachable", tip == at.full),
+            // The pair that must never disagree: the lamp says answer it there,
+            // and the send path refuses to type into it.
+            ("thePanelWillNotTypeIntoIt",
+             !Readiness.waiting(Readiness.dialogOpen).canDispatch
+                && !at.acceptsTypedReply),
+            // And the daily loop is untouched — a question still takes a reply.
+            ("aQuestionStillTakesAReply",
+             Readiness.waiting("input needed").canDispatch
+                && WaitingAt.question.acceptsTypedReply),
         ])
     }
 
