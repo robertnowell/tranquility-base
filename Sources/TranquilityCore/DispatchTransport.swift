@@ -665,20 +665,35 @@ public struct ClaudeAgentsCLI: ClaudeAgentsReading {
             Self.trace?("liveness: \(error.timedOut ? "deadline" : "probe failed"): \(error.message.prefix(160))")
             return nil
         case .success(let out):
-            guard let data = out.data(using: .utf8),
-                  let rows = try? JSONDecoder().decode([LenientRow].self, from: data)
-            else {
-                Self.trace?("liveness: decode failed: body=\(out.prefix(120))")
-                return nil
-            }
-            let sessions = rows.compactMap(\.session)
-            let dropped = rows.count - sessions.count
-            if dropped > 0 {
-                Self.trace?("liveness: dropped \(dropped) undecodable row(s) of \(rows.count)")
-            }
+            guard let sessions = Self.decodeSessions(out, trace: Self.trace) else { return nil }
             Self.cache.put(sessions)
             return sessions
         }
+    }
+
+    /// Lenient at the row, honest at the array: dropped rows are traced, and
+    /// a probe where EVERY row failed returns nil ("could not determine"),
+    /// never [] ("nobody is home") — the exact nil-vs-empty distinction this
+    /// protocol documents as load-bearing, applied at the boundary a future
+    /// CLI schema change would hit first (M1 gate finding V1). Internal so
+    /// the tests exercise THIS code, not a copy (finding V12).
+    static func decodeSessions(_ body: String, trace: (@Sendable (String) -> Void)?) -> [LiveSession]? {
+        guard let data = body.data(using: .utf8),
+              let rows = try? JSONDecoder().decode([LenientRow].self, from: data)
+        else {
+            trace?("liveness: decode failed: body=\(body.prefix(120))")
+            return nil
+        }
+        let sessions = rows.compactMap(\.session)
+        let dropped = rows.count - sessions.count
+        if dropped > 0 {
+            trace?("liveness: dropped \(dropped) undecodable row(s) of \(rows.count)")
+        }
+        if sessions.isEmpty, !rows.isEmpty {
+            trace?("liveness: ALL \(rows.count) rows undecodable — treating as unknown, not empty")
+            return nil
+        }
+        return sessions
     }
 }
 
