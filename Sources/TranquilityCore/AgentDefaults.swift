@@ -45,6 +45,13 @@ public enum AgentDefaults {
         var command: String
         /// Absent in files written before 15 Aug, which read as "unset".
         var directory: String?
+        /// Absent in files written before 19 Aug, which read as "off": new
+        /// agents keep launching in Terminal windows until this machine opts
+        /// its launches into detached tmux sessions. Externally-started tmux
+        /// agents are reachable either way — the transport is selected per
+        /// target from live ownership, not from this setting; this only
+        /// chooses what the LAUNCH button makes.
+        var tmux: Bool?
     }
 
     /// The configured command, or the fallback when nothing has been set.
@@ -73,7 +80,19 @@ public enum AgentDefaults {
     }
 
     public static func save(_ command: String) {
-        write(Stored(command: command, directory: stored()?.directory))
+        let old = stored()
+        write(Stored(command: command, directory: old?.directory, tmux: old?.tmux))
+    }
+
+    /// Whether NEW launches go into detached tmux sessions on the app's own
+    /// server instead of Terminal windows. Off by default; flipped with
+    /// `tbase tmux on` while the launch path earns trust.
+    public static func useTmux() -> Bool { stored()?.tmux ?? false }
+
+    public static func save(useTmux: Bool) {
+        let old = stored()
+        write(Stored(command: old?.command ?? fallback, directory: old?.directory,
+                     tmux: useTmux))
     }
 
     /// The configured start directory, or home when nothing is set.
@@ -98,7 +117,9 @@ public enum AgentDefaults {
     public static func directoryAsTyped() -> String { stored()?.directory ?? "" }
 
     public static func save(directory: String) {
-        write(Stored(command: stored()?.command ?? fallback, directory: directory))
+        let old = stored()
+        write(Stored(command: old?.command ?? fallback, directory: directory,
+                     tmux: old?.tmux))
     }
 
     /// The same command, pointed at a conversation that already exists.
