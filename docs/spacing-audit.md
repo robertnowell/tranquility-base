@@ -86,6 +86,40 @@ above** the rule below it. In recent-audio the same asymmetry runs the other
 way. A rule that sits closer to one neighbour reads as belonging to it, which is
 exactly what a separator must not do.
 
+## First fix, and the before/after (20 Aug)
+
+Reported from the panel, not from this audit: *"the rows of agents' widths expand
+beyond the top bar a little bit."* Correct, and it is Finding 1 wearing different
+clothes — the same hit-target boxes, seen as INTERNAL misalignment rather than as
+an outer margin. It is the most visible instance because the hairline directly
+under the header spans the full column and acts as a ruler.
+
+| grid face | left mark | right mark |
+|---|---|---|
+| the column (rules, rows) | 14.0 | 365.5 |
+| header **before** | **21.0** (−7.0) | **362.0** (−3.5) |
+| header **after** | 14.5 | 365.5 |
+
+Fixed by pinning the two chrome buttons by their MARK instead of their box —
+`StatusHUD.contentColumn` minus `ConsoleButton.inkOverhang`. The 26pt pointer
+target is untouched; it now overhangs outward into the panel's own margin, where
+nothing else is competing for the space.
+
+`inkOverhang` had to go **two boxes deep**. A symbol button centres its image in
+the 26pt target, and the image is itself padded around the glyph, so aligning by
+`image.size` still left the chevron at 16.5 against a column at 14 — measured.
+It rasterises the image once at build and finds the columns that actually carry
+alpha.
+
+Side effect across every face measured: the **right** edge collapsed from two
+populations (14.0 and 17.5) to one — 14.0 everywhere. The gear was the only
+thing holding the second value open.
+
+Still open from Finding 1: the **vertical** half. `settings` and `recent-audio`
+still paint their first mark at 15.0 against 10.5 elsewhere, because the back
+chevron's box is taller than its glyph too. Same principle, different axis, not
+yet applied.
+
 ## The recommendation
 
 **One principle, adopted centrally, closes Findings 1–3:**

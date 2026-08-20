@@ -19,6 +19,15 @@ import TranquilityCore
 /// superseded by the next state or explicitly dismissed.
 @MainActor
 final class StatusHUD: NSObject {
+    /// The content column: where every mark on the panel begins and ends.
+    ///
+    /// Named because it was a coincidence between three numbers rather than a
+    /// fact — the stack's own 14pt inset, which the rules and rows paint to
+    /// exactly, and a 10 and a 12 in the header's chrome, whose glyphs then
+    /// landed 7pt and 3.5pt inside it. Anything pinned by its BOX subtracts
+    /// `ConsoleButton.inkOverhang` from this so the MARK arrives here instead.
+    static let contentColumn: CGFloat = 14
+
     private var panel: ConsolePanel?
     private var titleLabel: DoorLabel!
     private var bodyLabel: CardBodyLabel!
@@ -3851,7 +3860,28 @@ final class StatusHUD: NSObject {
         }
         let everyMarkComposed = loose.isEmpty
 
+        // The header's MARKS sit on the content column, not its boxes.
+        //
+        // Asserted through `inkOverhang` rather than by reading pixels, so the
+        // drill states the intent: box origin plus the box's own padding is
+        // where the glyph starts, and that is what must equal the column the
+        // rules and rows paint to. Reported 20 Aug — "the rows of agents'
+        // widths expand beyond the top bar a little bit" — and it was 7pt on
+        // the left, 3.5 on the right.
+        showIdle(note: nil, rows: [
+            .init(id: "hc", name: "Validate hero image binding", aux: "a8323d60", lamp: .ready),
+        ])
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let chevronInk = collapseButton.frame.minX + collapseButton.inkOverhang.leading
+        let gearInk = (panel?.contentView?.bounds.maxX ?? 0)
+            - (gearButton.frame.maxX - gearButton.inkOverhang.trailing)
+        let headerSitsOnTheColumn = abs(chevronInk - StatusHUD.contentColumn) <= 0.5
+            && abs(gearInk - StatusHUD.contentColumn) <= 0.5
+        Permissions.log(String(format: "chrome: column %.1f · chevron ink %.1f · gear ink %.1f",
+                               StatusHUD.contentColumn, chevronInk, gearInk))
+
         SelfTest.report("chrome", [
+            ("headerSitsOnTheColumn", headerSitsOnTheColumn),
             ("marksSitOnTheLine", worstMark <= 0.25),
             ("marksShareOneOpticalSize", markSpread <= 0.5),
             ("marksAreSmallerThanTheCaps", (markHeights.max() ?? 0) < capBand),
@@ -6884,6 +6914,7 @@ final class StatusHUD: NSObject {
         stack.alignment = .leading
         stack.spacing = 6
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        assert(stack.edgeInsets.left == StatusHUD.contentColumn)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         background.addSubview(stack)
@@ -6951,8 +6982,9 @@ final class StatusHUD: NSObject {
             pastBackButton.widthAnchor.constraint(equalToConstant: 26),
             pastBackButton.heightAnchor.constraint(equalToConstant: 26),
             pastBackButton.centerYAnchor.constraint(equalTo: gearButton.centerYAnchor),
-            pastBackButton.leadingAnchor.constraint(equalTo: background.leadingAnchor,
-                                                    constant: 10),
+            pastBackButton.leadingAnchor.constraint(
+                equalTo: background.leadingAnchor,
+                constant: StatusHUD.contentColumn - pastBackButton.inkOverhang.leading),
         ])
         NSLayoutConstraint.activate([
             collapseButton.centerYAnchor.constraint(equalTo: gearButton.centerYAnchor),
@@ -6960,8 +6992,17 @@ final class StatusHUD: NSObject {
             // receipt's — "→ SENDING", "▶ SENT" — and a second control parked
             // there is a collision waiting for the next send, which is exactly
             // what it looked like. The two corners now own one thing each.
-            collapseButton.leadingAnchor.constraint(equalTo: background.leadingAnchor,
-                                                    constant: 10),
+            // The MARK on the content column, not the box on some other
+            // number. The rules and the rows below establish the column at 14
+            // and paint to it exactly; the chevron's box was pinned at 10 and
+            // its 9pt glyph landed at 21, so the header read 7pt narrower than
+            // every row under it — visibly, because the hairline directly below
+            // spans the full width and acts as a ruler (measured 19 Aug,
+            // reported 20 Aug: "the rows of agents' widths expand beyond the
+            // top bar a little bit").
+            collapseButton.leadingAnchor.constraint(
+                equalTo: background.leadingAnchor,
+                constant: StatusHUD.contentColumn - collapseButton.inkOverhang.leading),
         ])
         // Held, so collapsing can DEACTIVATE them. The stack pins the panel to
         // 380pt through these; leaving them active while narrowing the window is
@@ -6993,7 +7034,9 @@ final class StatusHUD: NSObject {
             titleLabel.widthAnchor.constraint(equalToConstant: 348),
             stateLabel.widthAnchor.constraint(equalToConstant: 348),
             // Same margin as every text row, so the eye reads one column.
-            gearButton.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -12),
+            gearButton.trailingAnchor.constraint(
+                equalTo: background.trailingAnchor,
+                constant: -(StatusHUD.contentColumn - gearButton.inkOverhang.trailing)),
             gearButton.centerYAnchor.constraint(equalTo: stateLabel.centerYAnchor),
             meter.widthAnchor.constraint(equalToConstant: 348),
             meter.heightAnchor.constraint(equalToConstant: 28),
@@ -8041,6 +8084,52 @@ final class ConsoleButton: NSButton {
     override func resetCursorRects() {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    /// The pointer target this control keeps, whatever size its mark is.
+    /// Ruled at 26 — "a hit target well under the ~24pt a fingertip-sized
+    /// control needs even for a mouse".
+    var pointerTarget: CGFloat = 26
+
+    /// How far this control's box reaches past the MARK inside it, per side.
+    ///
+    /// Two boxes deep, and the second one is why the first attempt at this
+    /// still missed. A symbol button centres its image in the 26pt target, and
+    /// the image is itself padded around the glyph — so aligning by
+    /// `image.size` put the chevron's paint at 16.5 when the column is at 14
+    /// (measured). This rasterises the image once, at build, and finds the
+    /// columns that actually carry alpha.
+    ///
+    /// Nothing here shrinks the target. These are the numbers a call site
+    /// subtracts so the MARK lands on `StatusHUD.contentColumn` and the target
+    /// overhangs outward, into the panel's own margin, where nothing else is
+    /// competing for the space.
+    var inkOverhang: (leading: CGFloat, trailing: CGFloat) {
+        guard let image, image.size.width > 0 else { return (0, 0) }
+        let slack = (pointerTarget - image.size.width) / 2
+        let width = Int(image.size.width.rounded(.up))
+        let height = max(1, Int(image.size.height.rounded(.up)))
+        guard width > 0,
+              let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return (slack, slack) }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+        NSGraphicsContext.restoreGraphicsState()
+
+        var first = width, last = -1
+        for x in 0..<width {
+            for y in 0..<height where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
+                first = min(first, x); last = max(last, x)
+                break
+            }
+        }
+        guard last >= first else { return (slack, slack) }
+        return (slack + CGFloat(first),
+                slack + (image.size.width - CGFloat(last + 1)))
     }
 
     /// The hover ink, for the drill. Reading it off the button rather than
