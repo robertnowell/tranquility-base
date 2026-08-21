@@ -30,12 +30,18 @@ public protocol HarnessAdapter: Sendable {
     var trustPrompt: TrustPromptSpec? { get }
 
     /// Facts about the TUI a launcher/transport needs and must never guess:
-    /// does pasted text echo into a visible composer line (the closed-loop
-    /// delivery protocol's strict landing check depends on this), what
-    /// glyph marks the composer's own line, does the harness queue typed
-    /// input while mid-turn rather than reject it, does it register with a
-    /// liveness probe TB can poll, does it have a hook system TB's intake
-    /// can lean on.
+    /// does pasted text echo into a visible composer line, what glyph marks
+    /// the composer's own line, does the harness queue typed input while
+    /// mid-turn rather than reject it, does it register with a liveness
+    /// probe TB can poll, does it have a hook system TB's intake can lean
+    /// on. NOT YET CONSUMED (M2 gate finding, honest as of this milestone):
+    /// TmuxTransport's landing check still hardcodes its own "every target
+    /// echoes" belief rather than reading `echoesPaste` per target, because
+    /// `DispatchTarget` carries no adapter reference yet. A parity test
+    /// (`HarnessAdapterTests.testClaudeCodeEchoesPasteMatchesWhatTmuxTransportAssumes`)
+    /// pins the two together until the wiring itself lands — presumably M3,
+    /// alongside the per-target harness selection the transcript-parser
+    /// collapse needs anyway.
     var capabilities: HarnessCapabilities { get }
 }
 
@@ -117,16 +123,23 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
 /// call this with their own `read`/`press`, and a `TrustPromptSpec` supplies
 /// every needle. `nil` spec (a harness with no trust prompt) never calls in.
 public enum TrustPromptWatcher {
+    /// `pollInterval` is injectable (M2 gate finding): a test proving control
+    /// flow ("accept on the needle", "stand down on the sentinel") does not
+    /// need to pay the real 2s-per-poll wall-clock cost this loop uses live —
+    /// three such tests once cost ~10s of `swift test` for zero additional
+    /// evidence.
     public static func watch(
         spec: TrustPromptSpec,
         read: () -> String?,
         press: () -> Void,
         trace: (@Sendable (String) -> Void)? = nil,
-        label: String = ""
+        label: String = "",
+        pollInterval: TimeInterval = 2.0,
+        maxPolls: Int = 15
     ) {
         var settled = 0
-        for _ in 0..<15 {
-            usleep(2_000_000)
+        for _ in 0..<maxPolls {
+            usleep(UInt32(pollInterval * 1_000_000))
             guard let text = read() else { continue }
             if spec.promptNeedles.contains(where: { text.contains($0) }) {
                 press()
@@ -142,6 +155,7 @@ public enum TrustPromptWatcher {
                 return
             }
         }
-        trace?("newSession: no trust prompt seen in \(label) within 30s; leaving it be")
+        let waited = Int(pollInterval * Double(maxPolls))
+        trace?("newSession: no trust prompt seen in \(label) within \(waited)s; leaving it be")
     }
 }
