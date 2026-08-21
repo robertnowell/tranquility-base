@@ -20,12 +20,32 @@
 
 set -u
 
-# Headless runs (claude -p from launchd or cron) have nobody at a browser —
-# popping windows out of scheduled jobs is noise. The spool hook records its
-# tty and lets the app decide; HERE deciding at the source is safe, because
-# skipping only skips an instruction, never data.
-OWN_TTY=$(ps -o tty= -p $$ 2>/dev/null | tr -d '[:space:]')
-if [ -z "$OWN_TTY" ] || [ "$OWN_TTY" = "??" ]; then
+# Headless runs (claude -p from launchd or cron) have nobody at a browser --
+# popping windows out of scheduled jobs is noise.
+#
+# THE TTY TEST SUPPRESSED EVERY SESSION, INCLUDING YOURS. A hook is spawned
+# without a controlling terminal whoever started it, so `ps -o tty=` reports
+# `??` or nothing for an interactive session exactly as it does for cron: this
+# guard exited 0 every time and the instruction below has never reached a
+# single session on this machine. Measured by running the hook the way Claude
+# Code runs it -- zero bytes out.
+#
+# What that cost: sessions rendered visual work as terminal text because they
+# were never told not to. A full statistical power matrix went inline into a
+# terminal on 21 Aug, in a conversation whose whole point was a decision to
+# put in front of a client.
+#
+# The same dead discriminator as open-issues item 1, which concluded "the tty
+# approach is dead" and moved to the entrypoint. That conclusion shipped in
+# SessionDiscovery.isHeadless and never reached this file. CLAUDE_CODE_ENTRYPOINT
+# is `cli` for a terminal someone is sitting at and `sdk-cli` for `claude -p`,
+# a cron job or the replay harness -- positive evidence, and the same string
+# the app already filters the grid on.
+#
+# Unknown is treated as INTERACTIVE, deliberately: the cost of a stray
+# instruction is one wasted sentence, and the cost of suppressing it is what
+# this comment is about.
+if [ "${CLAUDE_CODE_ENTRYPOINT:-cli}" = "sdk-cli" ]; then
   exit 0
 fi
 

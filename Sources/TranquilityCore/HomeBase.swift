@@ -337,6 +337,28 @@ public enum HomeBase {
         }
     }
 
+    /// The agent's own ink, in the tab strip.
+    ///
+    /// `forAgent` already moves one ink per agent, for the stated reason that
+    /// "two hubs in the house style look identical, and which agent am I reading
+    /// is the question the page exists to answer". That distinction stopped at
+    /// the page: a hub emitted no icon at all, so the place you ACTUALLY choose
+    /// between fifteen of them — the tab strip — showed fifteen identical blanks.
+    /// The same problem the accent solves, one layer out.
+    ///
+    /// An inline SVG rather than a base64 PNG: the colour is the whole payload,
+    /// so encoding a bitmap to carry one fill would be ceremony. Kept to a plain
+    /// rounded square because a glyph at 16px is a smudge, and a smudge is not an
+    /// identity. `#` has to be percent-escaped or it terminates the data URI and
+    /// silently yields no icon at all — which is indistinguishable from having
+    /// written none.
+    static func favicon(_ accent: String) -> String {
+        let fill = accent.replacingOccurrences(of: "#", with: "%23")
+        let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>"
+            + "<rect width='16' height='16' rx='4' fill='\(fill)'/></svg>"
+        return "<link rel=\"icon\" href=\"data:image/svg+xml,\(svg)\">"
+    }
+
     /// "Kopi · promotions", but never "Tranquility Base · tranquility-base".
     /// A nameplate that says the same thing twice reads as a template that
     /// forgot to fill itself in.
@@ -729,6 +751,7 @@ public enum HomeBase {
         <title>\(e(name)) — agent</title>
         <meta name="intranet:type" content="agent">
         <meta name="intranet:visibility" content="local">
+        \(favicon(theme.accent))
         \(theme.fontSheet.map {
             // The brand's faces, from one shared file on disk. A hub is local
             // by ruling, so a file:// stylesheet is the honest way to set in a

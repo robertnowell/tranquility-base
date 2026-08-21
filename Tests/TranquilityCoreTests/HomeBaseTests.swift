@@ -407,3 +407,25 @@ final class HomeBaseTests: XCTestCase {
             .contains("Pages this agent made"))
     }
 }
+
+/// The tab strip is where you actually choose between fifteen hubs, and it
+/// showed fifteen identical blanks because a hub emitted no icon at all — the
+/// same "two hubs look identical" problem the per-agent accent was introduced to
+/// solve, one layer out.
+extension HomeBaseTests {
+
+    func testTheFaviconCarriesTheAgentsOwnInk() {
+        let icon = HomeBase.favicon("#a32c28")
+        XCTAssertTrue(icon.contains("rel=\"icon\""), "a hub must name an icon")
+        XCTAssertTrue(icon.contains("%23a32c28"),
+                      "the accent must be percent-escaped: a bare # ends the data URI")
+        XCTAssertFalse(icon.contains("fill='#"),
+                       "an unescaped # yields no icon, which looks exactly like emitting none")
+    }
+
+    /// Two agents whose accents differ must not share an icon, or the tab strip
+    /// is back to being a wall of identical marks.
+    func testTwoAgentsDoNotShareAnIcon() {
+        XCTAssertNotEqual(HomeBase.favicon("#a32c28"), HomeBase.favicon("#1f6f6b"))
+    }
+}
