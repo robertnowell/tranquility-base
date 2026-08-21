@@ -820,8 +820,49 @@ final class StatusHUD: NSObject {
     // behavior; the frozen speaking card — highlight stopped mid-word — IS the
     // pause indication. No pill switch, no hint.
 
+    /// Notes that arrived before there was a panel to put them in.
+    ///
+    /// `note()` wrote straight into `hintLabel`, an IUO created inside `build()`,
+    /// while the guard one line below covered `panel` and not the label — the
+    /// same condition, one line apart. So the one note that fires before any
+    /// panel exists, the hook-repair receipt from
+    /// `applicationDidFinishLaunching`, trapped the process instead of printing.
+    ///
+    /// Earned 13 Aug and again 20 Aug: `relaunch.sh` reported "did not stay up"
+    /// and its restore path brought the app back WITHOUT `--selftest-hud`, so the
+    /// correct build ran undrilled behind a green-looking log. It fires only when
+    /// hook repair actually CHANGES something, which means it repairs its own
+    /// trigger and hides after one occurrence — the second sighting was diagnosed
+    /// from scratch because the first fix never landed.
+    ///
+    /// Buffered rather than nil-guarded, deliberately. A bare guard trades the
+    /// crash for silence about hooks having been repaired, and the reason that
+    /// receipt exists at all is that a hook's own contract — exit 0 whatever
+    /// happens — means nothing else will ever mention it.
+    private var deferredNotes: [String] = []
+
+    /// Replay anything said before the label existed. Called once `build()` has
+    /// somewhere for the text to land.
+    private func flushDeferredNotes() {
+        guard !deferredNotes.isEmpty else { return }
+        let queued = deferredNotes
+        deferredNotes = []
+        for message in queued { note(message) }
+    }
+
+    /// Drill seam: attach a label without building a panel, so the flush can be
+    /// exercised without opening a stray window.
+    func attachLabelForDrill() {
+        hintLabel = NSTextField(labelWithString: "")
+        flushDeferredNotes()
+    }
+
     /// Append a line to the current panel without disturbing what it is showing.
     func note(_ message: String) {
+        guard hintLabel != nil else {
+            deferredNotes.append(message)
+            return
+        }
         hintLabel.stringValue = [message, hintLabel.stringValue]
             .filter { !$0.isEmpty }.joined(separator: "\n")
         syncHintVisibility()
@@ -3412,7 +3453,30 @@ final class StatusHUD: NSObject {
 
     /// Render every state with worst-case text and confirm nothing is clipped.
     /// Run with `--selftest-hud`.
+    /// A note arriving before the panel exists must not trap.
+    ///
+    /// This cannot be drilled on the live HUD — by the time self-tests run the
+    /// panel is already built, which is precisely why the crash reached
+    /// production twice and never a test. So the drill builds a fresh, unbuilt
+    /// HUD and speaks to it: the launch condition reproduced, not simulated.
+    private func selfTestNoteBeforePanel() {
+        let fresh = StatusHUD()
+        fresh.note("hooks were repaired")   // trapped here before the fix
+        let buffered = fresh.deferredNotes == ["hooks were repaired"]
+        // Flushing is what makes buffering honest rather than a quieter drop.
+        fresh.attachLabelForDrill()
+        let flushed = fresh.hintLabel?.stringValue.contains("hooks were repaired") ?? false
+        let drained = fresh.deferredNotes.isEmpty
+        SelfTest.report("noteBeforePanel", [
+            ("a note before build does not trap", true),
+            ("it is buffered, not dropped", buffered),
+            ("it reaches the label once one exists", flushed),
+            ("the buffer drains, so it prints once", drained),
+        ])
+    }
+
     func selfTest() {
+        selfTestNoteBeforePanel()
         beginDrills()
         let long = String(repeating: "Product image binding is fixed across the stack. ", count: 8)
         currentTarget = ("selftest", 1, "promotions")
@@ -7149,6 +7213,9 @@ final class StatusHUD: NSObject {
         ]
         self.strip = column
         self.panel = panel
+        // Anything said before there was a label to say it in. Last, so every
+        // view the flush repaints through already exists.
+        flushDeferredNotes()
         return panel
     }
 
