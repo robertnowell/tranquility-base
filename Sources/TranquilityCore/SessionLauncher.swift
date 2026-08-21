@@ -245,14 +245,25 @@ public enum SessionLauncher {
         //
         // The id comes from a transcript FILENAME, so it cannot contain a
         // quote or a space — but it is still passed through AppleScript's own
-        // shell quoting rather than trusted, because "cannot" is a property of
-        // today's Claude Code and not of this function.
-        // Each resume argument goes through AppleScript's OWN `quoted form
-        // of` at script-run time, same as the directory — not because a
-        // resume flag or a filename-derived id is expected to contain
-        // anything dangerous, but because "cannot" is a property of today's
-        // harness, not of this function.
-        let resumeSegment = adapter.resumeArguments(sessionId: sessionId)
+        // `quoted form of` at script-run time, same as the directory, rather
+        // than trusted: "cannot" is a property of today's harness, not of
+        // this function.
+        //
+        // An adapter returning [] here is a programmer error, not a shape to
+        // render around: a joined-empty segment leaves the script's trailing
+        // `&` with nothing after it, which osacompile confirms is a syntax
+        // error — AppleScript.run would then fail with a compile error that
+        // points nowhere near the real cause (M2 gate finding). Every
+        // resumable harness resumes SOME conversation by SOME argument;
+        // failing loudly here, before the AppleScript ever runs, is more
+        // honest than emitting a script that cannot compile.
+        let resumeArgs = adapter.resumeArguments(sessionId: sessionId)
+        guard !resumeArgs.isEmpty else {
+            Self.trace?("revive: \(adapter.id) adapter returned no resume arguments "
+                + "for \(sessionId.prefix(8)) — refusing rather than emitting broken AppleScript")
+            return .failure(ScriptError(message: "\(adapter.id) adapter: empty resume arguments"))
+        }
+        let resumeSegment = resumeArgs
             .map { "quoted form of \"\($0)\"" }
             .joined(separator: " & \" \" & ")
         let script = """
