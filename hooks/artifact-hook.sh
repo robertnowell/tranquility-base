@@ -201,6 +201,35 @@ case "$FILE" in
   */body.html|*/ClaudeWork/*-build/*) exit 0;;
 esac
 
+# RESOLVE TO WHAT RENDERS.
+#
+# Every HTML a session writes is a report and belongs on the hub. What the hub
+# may not do is link something that renders unstyled -- share-as-page writes a
+# bare <body> (no doctype, no stylesheet, no footer) and the built page into the
+# same folder, and on 21 Aug a hub served the fragment: default Times with the
+# stat block collapsed into running prose.
+#
+# Excluding fragments was the first answer and it is wrong -- it deletes the
+# report rather than showing it properly. So there is no skip list. One question
+# is asked of every file: what is the faithful rendering of this? A complete
+# document renders as itself; a fragment renders as the index.html beside it.
+#
+# A doctype is the test, because a name is not: the pipeline produced four
+# shapes in two days (body.html, body.snippet.html, x.body.html,
+# x-page-body.html) and the pattern written for the first shipped hours before
+# the next two appeared. Bytes cannot be renamed.
+if [ -r "$FILE" ] && ! head -c 512 "$FILE" 2>/dev/null | grep -qiE '<!doctype|<html'; then
+  SIBLING="$(dirname "$FILE")/index.html"
+  if [ -r "$SIBLING" ] && head -c 512 "$SIBLING" 2>/dev/null \
+       | grep -qiE '<!doctype|<html'; then
+    FILE="$SIBLING"
+  else
+    # Mid-build: nothing faithful to show yet. The finished page records itself
+    # when it is written, so nothing is lost by waiting for it.
+    exit 0
+  fi
+fi
+
 # 1. RECORD. Append `ms<TAB>path`, the same line ArtifactStore.record writes —
 #    the file stopped being "the latest page" the day the hub grew a page LIST,
 #    and this hook kept replacing it: one truncating printf clobbered a
