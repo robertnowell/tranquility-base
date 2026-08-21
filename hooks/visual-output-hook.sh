@@ -49,8 +49,26 @@ if [ "${CLAUDE_CODE_ENTRYPOINT:-cli}" = "sdk-cli" ]; then
   exit 0
 fi
 
+# WHERE, not just WHETHER.
+#
+# The instruction told sessions to write a page and open it, and never said
+# where. So they wrote wherever they happened to be, and the hub could not find
+# the result: ~/Projects/contract-proof/brief-coframe.html (168KB) and
+# ~/Projects/coframe-issues/index.html (164KB) were both real reports recorded
+# nowhere, and their agents' pages listed nothing.
+#
+# The hook already had a home for this -- ~/Documents/deep-research, which it
+# calls the HQ, scans for unattributed pages and stamps footers into. That
+# directory is EMPTY. The convention was designed and never taught, so nobody
+# ever used it.
+#
+# So the location is named here, and it is the shape sessions already produce
+# rather than a new one to learn: ~/Projects/<slug>-page/index.html is what
+# share-as-page builds and deploys from, so a report written there is both
+# trackable and shippable. Teaching the location is the fix; hunting the disk
+# for pages afterwards is what that replaces.
 cat <<'JSON'
-{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The user runs Tranquility Base: they hear sessions by voice and are usually NOT looking at this terminal. TREAT THE TERMINAL AS INVISIBLE. Anything you leave there, they will probably never see.\n\nSo: whenever you PRESENT A RESULT to them -- a finding, evidence, a comparison, a recommendation, numbers they are meant to weigh, anything they need in order to make a decision -- write it as a self-contained HTML file and open it. The test is NOT 'is this visual?'. The test is 'is this FOR THEM, rather than working notes for me?'. A findings table with an argued conclusion and three options at the end is exactly this, even though it is prose and numbers rather than a chart. If you are about to end a turn by asking them to choose something, the thing they are choosing between belongs on a page.\n\nALWAYS BOTH STEPS: (1) write a self-contained HTML file (inline CSS/SVG, no external assets, a favicon), then (2) run `open <path>`. Writing the file without opening it is a failure -- they will never find it. Then keep the terminal message to a one-line pointer at what opened.\n\nWhat does NOT need a page: conversational replies, progress narration, a one-line answer, and your own intermediate reasoning. When in doubt, ask whether you would be happy for them to miss it entirely -- if not, it is a page."}}
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The user runs Tranquility Base: they hear sessions by voice and are usually NOT looking at this terminal. TREAT THE TERMINAL AS INVISIBLE. Anything you leave there, they will probably never see.\n\nWhenever you PRESENT A RESULT to them -- a finding, evidence, a comparison, a recommendation, numbers they are meant to weigh, anything they need in order to make a decision -- it goes on a page, not in the terminal. The test is NOT 'is this visual?'. The test is 'is this FOR THEM, rather than working notes for me?'. A findings table with an argued conclusion and three options at the end is exactly this, even though it is prose and numbers rather than a chart. If you are about to end a turn by asking them to choose something, the thing they are choosing between belongs on a page.\n\nWHERE IT GOES, so it is trackable and not just written: ~/Projects/<short-slug>-page/index.html -- one directory per report, a slug naming the subject. That is the same shape the share-as-page skill builds and deploys from, and it is the location their agent hub reads to list what you made. A page written anywhere else is invisible to the hub even if it is perfect.\n\nALWAYS ALL THREE STEPS: (1) write ~/Projects/<slug>-page/index.html, self-contained -- inline CSS/SVG, no external assets, and a favicon; (2) run `open` on it; (3) leave the terminal a one-line pointer at what opened, nothing more. Writing without opening is a failure -- they will never find it.\n\nWhat does NOT need a page: conversational replies, progress narration, a one-line answer, and your own intermediate reasoning. When in doubt, ask whether you would be happy for them to miss it entirely -- if not, it is a page."}}
 JSON
 
 exit 0
