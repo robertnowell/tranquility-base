@@ -126,9 +126,40 @@ path = (p.get("tool_input") or {}).get("file_path") or ""
 # the failure it replaces was total silence.
 if not path:
     import glob, os, time
-    hq = os.path.expanduser("~/Documents/deep-research")
-    recent = [f for f in glob.glob(os.path.join(hq, "*", "*.html"))
-              if time.time() - os.path.getmtime(f) < 180]
+    # WHERE PAGES ACTUALLY GET BUILT, not just the HQ.
+    #
+    # This scanned ~/Documents/deep-research alone, so a page built by a script
+    # anywhere else was invisible to BOTH attribution paths: no file_path because
+    # it was not a Write, and not in the HQ so the fallback never saw it either.
+    # Measured 21 Aug: ~/Projects/contract-proof/brief-coframe.html (168KB, full
+    # document) and ~/Projects/coframe-issues/index.html (164KB) were recorded
+    # NOWHERE, so their sessions' hubs listed no report at all -- which is the
+    # whole point of a hub.
+    #
+    # The cwd first, because the session's own directory is the strongest signal
+    # of its own work, then the two trees this house builds pages in. Depth is
+    # capped at the project dir and one level under it: pages live at
+    # <project>/index.html or <project>/<name>.html, and an unbounded walk of
+    # ~/Projects would stat thousands of node_modules files on every Bash call.
+    roots = []
+    cwd = p.get("cwd") or ""
+    if cwd.startswith("/"):
+        roots += [os.path.join(cwd, "*.html"), os.path.join(cwd, "*", "*.html")]
+    for tree in ("~/Documents/deep-research", "~/Projects", "~/ClaudeWork"):
+        base = os.path.expanduser(tree)
+        roots += [os.path.join(base, "*", "*.html"), os.path.join(base, "*.html")]
+    seen_paths = set()
+    recent = []
+    for pattern in roots:
+        for f in glob.glob(pattern):
+            if f in seen_paths or "/node_modules/" in f or "/.git/" in f:
+                continue
+            seen_paths.add(f)
+            try:
+                if time.time() - os.path.getmtime(f) < 180:
+                    recent.append(f)
+            except OSError:
+                pass
 
     # Recency alone is not authorship. With several sessions running, every
     # one of them runs a shell command inside any three-minute window, so a
