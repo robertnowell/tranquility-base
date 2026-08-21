@@ -410,9 +410,19 @@ public enum HomeBase {
             + "<circle cx='8' cy='6.2' r='4.1' fill='none' stroke-width='1.6'/>"
             + "<rect x='1.5' y='12.8' width='13' height='1.6'/>"
             + "</svg>"
+        // `<` and `>` are percent-encoded too, not just `#`.
+        //
+        // Left raw they sit inside an HTML attribute value, where a `<` is not
+        // legal and every naive "find the end of this tag" scan stops at the
+        // first `>` -- which is the one closing `<svg ...>`, INSIDE the URI. That
+        // is not hypothetical: it silently broke a test that strips the icon
+        // before asserting on the page's own CSS, by leaving half the data URI
+        // (media query included) in the document.
         let encoded = svg
             .replacingOccurrences(of: "#", with: "%23")
-            .replacingOccurrences(of: "\n", with: "")
+            .replacingOccurrences(of: "<", with: "%3C")
+            .replacingOccurrences(of: ">", with: "%3E")
+            .replacingOccurrences(of: "\"", with: "%22")
         return "<link rel=\"icon\" href=\"data:image/svg+xml,\(encoded)\">"
     }
 
