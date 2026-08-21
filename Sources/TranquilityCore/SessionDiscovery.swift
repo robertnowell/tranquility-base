@@ -76,9 +76,16 @@ public enum SessionDiscovery {
         }
 
         /// What brings this session back. Nil when it must not be offered.
+        /// The resume flag comes from the adapter now — this used to be a
+        /// second, independent `["--resume", sessionId]` literal that could
+        /// drift from `AgentDefaults`'s, and did not even have the shape to
+        /// represent a subcommand-style resume (Codex: `resume <id>`, not a
+        /// flag) when that day comes. Every row is Claude Code today, same
+        /// scope `SessionLauncher.launch`'s default keeps — this becomes a
+        /// per-row adapter lookup when discovery itself goes multi-harness.
         public var reviveCommand: (cwd: String, arguments: [String])? {
             guard revivable, let cwd else { return nil }
-            return (cwd, ["--resume", sessionId])
+            return (cwd, ClaudeCodeAdapter().resumeArguments(sessionId: sessionId))
         }
     }
 

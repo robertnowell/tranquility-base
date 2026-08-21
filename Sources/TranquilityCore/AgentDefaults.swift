@@ -121,12 +121,4 @@ public enum AgentDefaults {
         write(Stored(command: old?.command ?? fallback, directory: directory,
                      tmux: old?.tmux))
     }
-
-    /// The same command, pointed at a conversation that already exists.
-    ///
-    /// The id is appended as a separate argument by the caller rather than
-    /// interpolated here, so nothing about a session id can reach a shell as
-    /// syntax. It comes from a transcript filename and cannot contain a space
-    /// today, which is a property of this Claude Code and not of this function.
-    public static func resumeSuffix() -> String { "--resume" }
 }

@@ -228,7 +228,8 @@ public enum SessionLauncher {
         sessionId: String,
         directory: String,
         command: String = AgentDefaults.load(),
-        acceptTrustPrompt: Bool = true
+        acceptTrustPrompt: Bool = true,
+        adapter: any HarnessAdapter = ClaudeCodeAdapter()
     ) -> Result<Void, ScriptError> {
         // The SAME command a new session gets, plus the conversation to open.
         // Ruled 12 Aug: "any new or revived session gets launched under the
@@ -246,11 +247,19 @@ public enum SessionLauncher {
         // quote or a space — but it is still passed through AppleScript's own
         // shell quoting rather than trusted, because "cannot" is a property of
         // today's Claude Code and not of this function.
+        // Each resume argument goes through AppleScript's OWN `quoted form
+        // of` at script-run time, same as the directory — not because a
+        // resume flag or a filename-derived id is expected to contain
+        // anything dangerous, but because "cannot" is a property of today's
+        // harness, not of this function.
+        let resumeSegment = adapter.resumeArguments(sessionId: sessionId)
+            .map { "quoted form of \"\($0)\"" }
+            .joined(separator: " & \" \" & ")
         let script = """
             tell application "Terminal"
               activate
               set newTab to do script "cd " & quoted form of "\(directory)" \
-                & " && \(command) \(AgentDefaults.resumeSuffix()) " & quoted form of "\(sessionId)"
+                & " && \(command) " & \(resumeSegment)
               return tty of newTab
             end tell
             """
@@ -259,7 +268,7 @@ public enum SessionLauncher {
             let tty = tty.trimmingCharacters(in: .whitespacesAndNewlines)
             Self.trace?("revive: resumed \(sessionId.prefix(8)) in \(directory) "
                 + "as `\(command)` (tty \(tty))")
-            if acceptTrustPrompt { watchForTrustPrompt(tty: tty) }
+            if acceptTrustPrompt { watchForTrustPrompt(tty: tty, adapter: adapter) }
             return .success(())
         case .failure(let error):
             Self.trace?("revive FAILED for \(sessionId.prefix(8)): \(error.message)")
@@ -361,33 +370,36 @@ public enum SessionLauncher {
     ///    (`contents of tab i of window id wid`) reads the screen. The same
     ///    trap applies to `do script "" in t`, so both scripts address
     ///    directly.
-    public static func watchForTrustPrompt(tty: String) {
+    public static func watchForTrustPrompt(tty: String, adapter: any HarnessAdapter = ClaudeCodeAdapter()) {
         // A tmux-owned tty is watched through capture-pane: the same needles,
         // none of the AppleScript dereference pathology this doc block
         // describes (that trap rotted twice and earned its own canary; it
         // simply does not exist in tmux's read path).
         if let pane = TmuxOwnership.pane(forTty: tty) {
-            watchForTrustPrompt(pane: pane)
+            watchForTrustPrompt(pane: pane, adapter: adapter)
             return
         }
-        var settled = 0
-        for _ in 0..<15 {
-            usleep(2_000_000)
-            guard case .success(let text) = AppleScript.run(script: """
-                tell application "Terminal"
-                  repeat with w in windows
-                    set wid to id of w
-                    set n to count of tabs of w
-                    repeat with i from 1 to n
-                      if (tty of tab i of window id wid) as text is "\(tty)" then
-                        return contents of tab i of window id wid
-                      end if
-                    end repeat
-                  end repeat
-                  return ""
-                end tell
-                """) else { continue }
-            if text.contains("trust this folder") || text.contains("Do you trust") {
+        guard let spec = adapter.trustPrompt else { return }
+        TrustPromptWatcher.watch(
+            spec: spec,
+            read: {
+                guard case .success(let text) = AppleScript.run(script: """
+                    tell application "Terminal"
+                      repeat with w in windows
+                        set wid to id of w
+                        set n to count of tabs of w
+                        repeat with i from 1 to n
+                          if (tty of tab i of window id wid) as text is "\(tty)" then
+                            return contents of tab i of window id wid
+                          end if
+                        end repeat
+                      end repeat
+                      return ""
+                    end tell
+                    """) else { return nil }
+                return text
+            },
+            press: {
                 _ = AppleScript.run(script: """
                     tell application "Terminal"
                       repeat with w in windows
@@ -403,52 +415,27 @@ public enum SessionLauncher {
                       return "notfound"
                     end tell
                     """)
-                Self.trace?("newSession: accepted the trust prompt in \(tty) — user-commanded launch")
-                return
-            }
-            // Interactive without a trust prompt: nothing to accept. Kept
-            // alongside the banner check, not instead of it — an old CLI on
-            // this machine would still exit on its hint line.
-            if text.contains("? for shortcuts") { return }
-            if text.contains("Claude") { settled += 1 } else { settled = 0 }
-            if settled >= 2 {
-                Self.trace?("newSession: started with no trust prompt in \(tty); watcher done")
-                return
-            }
-        }
-        Self.trace?("newSession: no trust prompt seen in \(tty) within 30s; leaving it be")
+            },
+            trace: Self.trace, label: tty)
     }
 
-    /// The tmux twin of the watcher above: identical contract (press Return
-    /// once on the known trust prompt, then STOP; the resume-choice screen
-    /// that can follow is a usage-limit spend and stays with the user),
-    /// identical needles, capture-pane instead of AppleScript. Verified live
-    /// 19 Aug: the v2.1 "trust this folder" screen read cleanly through
-    /// capture-pane and a single send-keys Enter accepted it, with
-    /// registration correctly absent until it did.
-    static func watchForTrustPrompt(pane: TmuxPaneAddress) {
-        var settled = 0
-        for _ in 0..<15 {
-            usleep(2_000_000)
-            guard case .success(let text) = Tmux.run(
-                ["capture-pane", "-p", "-t", pane.paneId],
-                socket: pane.socketName, timeout: 3)
-            else { continue }
-            if text.contains("trust this folder") || text.contains("Do you trust") {
+    /// The tmux twin, identical contract, capture-pane instead of
+    /// AppleScript. Verified live 19 Aug: the v2.1 "trust this folder"
+    /// screen read cleanly through capture-pane and a single send-keys
+    /// Enter accepted it, with registration correctly absent until it did.
+    static func watchForTrustPrompt(pane: TmuxPaneAddress, adapter: any HarnessAdapter = ClaudeCodeAdapter()) {
+        guard let spec = adapter.trustPrompt else { return }
+        TrustPromptWatcher.watch(
+            spec: spec,
+            read: {
+                guard case .success(let text) = Tmux.run(
+                    ["capture-pane", "-p", "-t", pane.paneId],
+                    socket: pane.socketName, timeout: 3) else { return nil }
+                return text
+            },
+            press: {
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
-                Self.trace?("newSession: accepted the trust prompt in \(pane.sessionName) "
-                    + "— user-commanded launch")
-                return
-            }
-            if text.contains("? for shortcuts") { return }
-            if text.contains("Claude") { settled += 1 } else { settled = 0 }
-            if settled >= 2 {
-                Self.trace?("newSession: started with no trust prompt in "
-                    + "\(pane.sessionName); watcher done")
-                return
-            }
-        }
-        Self.trace?("newSession: no trust prompt seen in \(pane.sessionName) "
-            + "within 30s; leaving it be")
+            },
+            trace: Self.trace, label: pane.sessionName)
     }
 }
