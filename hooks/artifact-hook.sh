@@ -190,15 +190,6 @@ EOF
 case "$FILE" in
   */scratchpad/*|/tmp/*|/private/tmp/*|/var/folders/*|*/.claude/*) exit 0;;
   */Documents/agents/*) exit 0;;   # a hub is the index over artifacts, not one
-  # share-as-page assembles a page from an intermediate FRAGMENT: a bare <body>
-  # carrying an unsubstituted LOGO_ROOT_DATA_URI placeholder, which it then
-  # wraps in the template to produce index.html. The fragment is a build input,
-  # never a page -- but it is .html, so hubs listed it and the file:// link
-  # rendered raw unstyled markup with a broken logo. Found on four separate
-  # session hubs (20 Aug); same shape as the 15 Aug skill-template case above.
-  # Match the basename anywhere: a fragment sitting inside a deploy dir is
-  # still not the page.
-  */body.html|*/ClaudeWork/*-build/*) exit 0;;
 esac
 
 # RESOLVE TO WHAT RENDERS.
