@@ -75,10 +75,23 @@ public enum ArtifactStore {
                                    FileManager.default.fileExists(atPath: $0)
                                }) -> [Page] {
         guard isPlausibleSession(session) else { return [] }
-        let target = (directory(root: root) as NSString)
-            .appendingPathComponent(session)
-        guard let text = try? String(contentsOfFile: target, encoding: .utf8)
-        else { return [] }
+        // TWO record files, merged: the full session id, and the SLUG.
+        //
+        // A report at agents/<slug>/<name>.html carries only the slug — that is
+        // all a path has room for — so the hook keys those records by slug while
+        // everything else is keyed by the full id. Reading both is what lets a
+        // page name its own author in its own path and still be found by the hub
+        // that owns it. The slug is derived from the id, never stored, so the two
+        // cannot drift.
+        let dir = directory(root: root) as NSString
+        let slug = HomeBase.slug(forSessionId: session)
+        var targets = [dir.appendingPathComponent(session)]
+        let slugTarget = dir.appendingPathComponent(slug)
+        if slugTarget != targets[0] { targets.append(slugTarget) }
+        let text = targets
+            .compactMap { try? String(contentsOfFile: $0, encoding: .utf8) }
+            .joined(separator: "\n")
+        guard !text.isEmpty else { return [] }
         var seen: [String: Date] = [:]
         var order: [String] = []
         for raw in text.split(separator: "\n") {
@@ -225,7 +238,37 @@ public extension ArtifactStore {
             // hub of some OTHER agent — which is what the card's OPEN REPORT
             // opened on 15 Aug. Hubs are reached by the door and the footer,
             // never by the list.
-            || path.contains("/Documents/agents/")
+            // The HUB is not an artifact -- it is the index over them, rewritten
+            // every turn, and recording one made the newest "report" of any
+            // session that regenerated a page the hub of some OTHER agent
+            // (15 Aug). But that was written as "everything under agents/", and
+            // the tree is now where reports LIVE: a report at
+            // agents/<slug>/<name>.html names its own author in its own path, so
+            // excluding the whole directory excluded exactly the pages that need
+            // no attribution guess at all. Only index.html is the hub.
+            || (path.contains("/Documents/agents/")
+                && (path as NSString).lastPathComponent == "index.html")
+    }
+
+    /// The agent a page belongs to, read off its own path.
+    ///
+    /// `agents/<slug>/<report>.html` needs no heuristic: the directory IS the
+    /// session. That is the whole reason to put reports there. Everything else
+    /// -- globbing likely directories, reading a transcript tail to see who
+    /// named the file, hoping two simultaneous sessions do not both claim it --
+    /// exists only because nothing was ever agreed about where pages go, and it
+    /// is what put one page on four hubs (16 Aug).
+    ///
+    /// Returns nil for a path outside the tree, and for the hub itself.
+    public static func agentSlug(forPageAt path: String) -> String? {
+        let parts = (path as NSString).pathComponents
+        guard let i = parts.lastIndex(of: "agents"), i + 2 < parts.count,
+              parts[i - 1] == "Documents",
+              parts[i + 2] != "index.html" || i + 3 < parts.count
+        else { return nil }
+        let slug = parts[i + 1]
+        guard (path as NSString).lastPathComponent != "index.html" else { return nil }
+        return slug.isEmpty ? nil : slug
     }
 
     // MARK: - The faithful rendering

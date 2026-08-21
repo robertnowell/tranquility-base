@@ -103,13 +103,36 @@ PY
 
 read -r SESSION FILE <<EOF
 $(python3 - "$PAYLOAD" <<'PY' 2>/dev/null || true
-import json, sys
+import json, os, sys
 try:
     p = json.loads(sys.argv[1])
 except Exception:
     sys.exit(0)
 session = p.get("session_id") or ""
 path = (p.get("tool_input") or {}).get("file_path") or ""
+
+# THE PATH ANSWERS FIRST.
+#
+# A page at ~/Documents/agents/<slug>/<name>.html states its own author, so
+# there is nothing to infer: no glob over likely directories, no transcript tail,
+# no hoping that two simultaneous sessions do not both claim it. That guessing
+# machinery exists only because nothing was ever agreed about where pages go, and
+# it is what put one page on four hubs (16 Aug). Sessions are told the location
+# by visual-output-hook now, so this is the common case, not the exception.
+#
+# The session in the payload still wins if they disagree -- it is the more direct
+# fact -- but a page filed under another agent's slug is recorded for THAT agent,
+# because the path is a deliberate act and the payload is just whoever ran the
+# tool.
+# The record is keyed by the SLUG here, not the full session id, because the slug
+# is all a path carries. ArtifactStore.history reads both files for a session, so
+# a slug-keyed record is found by the hub that owns it.
+if path and "/Documents/agents/" in path and os.path.basename(path) != "index.html":
+    parts = path.split(os.sep)
+    if "agents" in parts:
+        _i = parts.index("agents")
+        if _i + 1 < len(parts) and parts[_i + 1]:
+            session = parts[_i + 1]
 
 # THE ARCHIVE ANSWERS, NOT THE TOOL.
 #
@@ -220,7 +243,11 @@ EOF
 # the blank template on a hub as "page.html" (15 Aug).
 case "$FILE" in
   */scratchpad/*|/tmp/*|/private/tmp/*|/var/folders/*|*/.claude/*) exit 0;;
-  */Documents/agents/*) exit 0;;   # a hub is the index over artifacts, not one
+  # The HUB is not an artifact. But the agents tree is now where reports LIVE
+  # -- agents/<slug>/<name>.html names its own author in its own path -- so only
+  # index.html is excluded, not the whole directory. Mirrors
+  # ArtifactStore.excluded.
+  */Documents/agents/*/index.html) exit 0;;
 esac
 
 # RESOLVE TO WHAT RENDERS.

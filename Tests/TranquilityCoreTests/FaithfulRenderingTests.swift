@@ -88,3 +88,43 @@ final class FaithfulRenderingTests: XCTestCase {
         XCTAssertTrue(ArtifactStore.excluded("/Users/x/Documents/agents/4fed02db/index.html"))
     }
 }
+
+/// A report states its own author in its own path.
+///
+/// Everything else — globbing likely directories, reading a transcript tail to
+/// see who named a file, hoping two simultaneous sessions do not both claim it —
+/// exists only because nothing was ever agreed about where pages go, and it is
+/// what put one page on four hubs (16 Aug). `agents/<slug>/<name>.html` needs
+/// none of it.
+final class ReportAttributionTests: XCTestCase {
+
+    func testAReportUnderAnAgentDirectoryNamesItsAuthor() {
+        XCTAssertEqual(
+            ArtifactStore.agentSlug(forPageAt:
+                "/Users/x/Documents/agents/b7ad81cb/power-matrix.html"),
+            "b7ad81cb")
+    }
+
+    /// The hub is the index over reports, never one of them (15 Aug). The
+    /// exclusion used to be the whole directory, which excluded exactly the
+    /// pages that need no attribution guess at all.
+    func testTheHubItselfIsNotAReport() {
+        let hub = "/Users/x/Documents/agents/b7ad81cb/index.html"
+        XCTAssertNil(ArtifactStore.agentSlug(forPageAt: hub))
+        XCTAssertTrue(ArtifactStore.excluded(hub), "the hub is still not an artifact")
+    }
+
+    /// A report beside the hub must now be recorded, where the old rule dropped
+    /// it along with the hub.
+    func testAReportBesideTheHubIsRecorded() {
+        XCTAssertFalse(
+            ArtifactStore.excluded("/Users/x/Documents/agents/b7ad81cb/power-matrix.html"),
+            "a page in the agents tree that is not the hub is that agent's report")
+    }
+
+    /// Outside the tree there is nothing to read off the path, and the caller
+    /// falls back to the guessing it always did.
+    func testAPageOutsideTheTreeHasNoSlug() {
+        XCTAssertNil(ArtifactStore.agentSlug(forPageAt: "/Users/x/Projects/thing-page/index.html"))
+    }
+}
