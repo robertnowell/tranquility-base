@@ -131,6 +131,14 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
         if let chosen, let voice = AVSpeechSynthesisVoice(identifier: chosen) {
             utterance.voice = voice
         }
+        // WHICH voice, on the record. The fallback exists so that a degraded read
+        // still says who is talking, and nothing anywhere recorded whether it
+        // used the session's assigned voice or the machine default — so the one
+        // claim this path makes was the one thing unobservable in it. `assigned`
+        // vs `default` is the whole distinction, so the line names which.
+        ElevenLabsSpeechProvider.trace?(
+            "system: speaking as \(chosen ?? "the synthesiser's own default")"
+                + " (\(voiceIdentifier == nil ? "default" : "assigned"))")
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             lock.lock()

@@ -929,6 +929,10 @@ case "reconcile":
         print(spoken.text)
         if let voice { print("cloud voice:  \(voice)") }
         if let systemVoice { print("system voice: \(systemVoice)") }
+        // The chain's own commentary, which `tbase` never wired — so the CLI
+        // could tell you WHAT spoke and never WHY. Testing a fallback without
+        // it means reading a provider name and inferring the rest.
+        ElevenLabsSpeechProvider.trace = { print("  \($0)") }
         let start = Date()
         let used = await SpeechChain(preferred: ElevenLabsSpeechProvider())
             .speak(spoken, voice: voice, systemVoice: systemVoice)
