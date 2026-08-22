@@ -568,6 +568,49 @@ public enum ProcessProbe {
         return raw.hasPrefix("/dev/") ? raw : "/dev/\(raw)"
     }
 
+    /// The reverse of `tty(of:)`: which pid on a tty has `needle` in its
+    /// command line — how `attemptCodexResume` finds the REAL agent process
+    /// behind a freshly-spawned tmux pane, not tmux's own `#{pane_pid}`.
+    ///
+    /// Measured live, 22 Aug: `launchTmux`'s command is always
+    /// `/bin/zsh -c "cd 'dir' && <command> <args>"`, a compound statement,
+    /// which looked like it should leave a wrapping zsh pid distinct from
+    /// the harness's own — it does not. zsh's own last-command exec
+    /// optimization replaces the shell with the final command even inside a
+    /// `&&` chain, confirmed against both launch shapes this app uses (a
+    /// bare command, and `cd X && command args`): the harness sits directly
+    /// on the tty every time. Matching a NEEDLE (the session id, present in
+    /// any resume argv) rather than a binary-name prefix, because a
+    /// harness's own children can share the tty — measured live: a resumed
+    /// Codex process on this machine spawned its own MCP-server children on
+    /// the same tty, and a prefix match on "codex" alone would have no way
+    /// to prefer the parent over them.
+    public static func pid(onTty tty: String, containing needle: String) -> Int? {
+        guard !needle.isEmpty else { return nil }
+        let short = tty.hasPrefix("/dev/") ? String(tty.dropFirst(5)) : tty
+        guard case .success(let raw) = Subprocess.run(
+            "/bin/ps", ["-t", short, "-o", "pid=,command="], timeout: 3)
+        else { return nil }
+        return matchPid(psOutput: raw, containing: needle)
+    }
+
+    /// Pure half, testable against captured `ps` text without a live
+    /// process table — the same split `TmuxOwnership.match` and
+    /// `ClaudeAgentsCLI.decodeSessions` already keep between reading and
+    /// deciding.
+    static func matchPid(psOutput: String, containing needle: String) -> Int? {
+        guard !needle.isEmpty else { return nil }
+        for line in psOutput.split(separator: "\n", omittingEmptySubsequences: true) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let spaceIdx = trimmed.firstIndex(of: " "),
+                  let pid = Int(trimmed[trimmed.startIndex..<spaceIdx])
+            else { continue }
+            let command = trimmed[trimmed.index(after: spaceIdx)...]
+            if command.contains(needle) { return pid }
+        }
+        return nil
+    }
+
 }
 
 // MARK: - claude agents --json
