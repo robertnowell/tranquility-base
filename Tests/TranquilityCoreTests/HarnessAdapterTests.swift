@@ -29,6 +29,37 @@ final class HarnessAdapterTests: XCTestCase {
         XCTAssertEqual(spec!.settledBannerNeedle, "Claude")
     }
 
+    // MARK: CodexAdapter — measured live 21 Aug, codex-cli 0.149.0, real tmux pane
+
+    func testCodexResumeArguments() {
+        let adapter = CodexAdapter()
+        XCTAssertEqual(adapter.resumeArguments(sessionId: "abc-123"), ["resume", "abc-123"])
+    }
+
+    func testCodexCapabilitiesMatchWhatWasMeasuredLive() {
+        let caps = CodexAdapter().capabilities
+        XCTAssertTrue(caps.echoesPaste, "confirmed live: composer shows pasted text before Enter")
+        XCTAssertEqual(caps.promptGlyph, "›", "distinct from Claude Code's ❯")
+        XCTAssertTrue(caps.queuesInputMidTurn,
+                      "confirmed live: a plain Enter mid-turn queued a second message, " +
+                      "answered as its own turn once the first completed")
+        XCTAssertFalse(caps.registersWithLiveness, "no `agents --json` equivalent exists")
+        XCTAssertTrue(caps.hasHooks, "confirmed live: two real SessionStart firings")
+        XCTAssertFalse(caps.allowsConcurrentResume,
+                       "measured live: a second resume on a held thread fails with -32600")
+    }
+
+    func testCodexTrustPromptNeedles() {
+        let spec = CodexAdapter().trustPrompt
+        XCTAssertNotNil(spec)
+        XCTAssertTrue(spec!.promptNeedles.contains("Do you trust the contents of this directory?"))
+        XCTAssertNil(spec!.startedWithNoPromptNeedle,
+                     "Codex shows \"? for shortcuts\" even WHILE the trust prompt is up, " +
+                     "unlike Claude Code — it cannot mean \"nothing to accept\" here")
+        XCTAssertEqual(spec!.settledBannerNeedle, "OpenAI Codex")
+        XCTAssertTrue(spec!.neverAutoAcceptNeedles.contains("Hooks need review"))
+    }
+
     // MARK: TrustPromptWatcher — the one loop both transports now share
 
     func testWatcherAcceptsOnPromptNeedle() {
@@ -73,6 +104,25 @@ final class HarnessAdapterTests: XCTestCase {
         XCTAssertEqual(reads.count, 1, "watcher should have stopped, leaving the third read unconsumed")
     }
 
+    func testWatcherNeverPressesThroughAHookReviewDialog() {
+        // Codex's hooks-review dialog: hook-trust is the user's own choice,
+        // never auto-accepted, unlike the directory-trust prompt this same
+        // loop DOES press through under standing 05 Aug consent. Even a
+        // needle that would also match `promptNeedles` must not be pressed —
+        // never-auto-accept wins, checked first.
+        let spec = TrustPromptSpec(promptNeedles: ["Do you trust"],
+                                   startedWithNoPromptNeedle: nil,
+                                   settledBannerNeedle: "OpenAI Codex",
+                                   neverAutoAcceptNeedles: ["Hooks need review"])
+        var pressed = false
+        var reads = ["Hooks need review… Trust all and continue"]
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: { pressed = true },
+                                 pollInterval: 0.001)
+        XCTAssertFalse(pressed, "a dialog needing a human choice must never be pressed through")
+    }
+
     // MARK: reviveCommand goes through the adapter now, not a second literal
 
     // MARK: empty resumeArguments must refuse, never emit broken AppleScript
@@ -84,7 +134,8 @@ final class HarnessAdapterTests: XCTestCase {
             var trustPrompt: TrustPromptSpec? { nil }
             var capabilities: HarnessCapabilities {
                 HarnessCapabilities(echoesPaste: false, promptGlyph: "", queuesInputMidTurn: false,
-                                    registersWithLiveness: false, hasHooks: false)
+                                    registersWithLiveness: false, hasHooks: false,
+                                    allowsConcurrentResume: false)
             }
         }
         let result = SessionLauncher.resume(sessionId: "x", directory: NSTemporaryDirectory(),
@@ -98,18 +149,24 @@ final class HarnessAdapterTests: XCTestCase {
 
     // MARK: capabilities parity — until TmuxTransport reads these values live,
     // a test is what stops them silently drifting from what it hardcodes
-    // (M2 gate finding: 5 capability fields had zero consumers).
+    // (M2 gate finding: capability fields had zero consumers; still true
+    // with CodexAdapter landed — the wiring itself is separate work).
 
     func testClaudeCodeEchoesPasteMatchesWhatTmuxTransportAssumes() {
         // TmuxTransport.swift's landing check is unconditional on the belief
         // that "every target echoes" — true for Claude Code (measured 19
         // Aug) and for the raw-mode test harness (which writes its own
-        // echo). This pins the Claude Code half of that belief to the
-        // adapter's declared capability, so the day they diverge, THIS
-        // fails instead of a delivery silently misbehaving.
+        // echo), AND true for Codex (measured 21 Aug) — so the belief
+        // happens to hold for both real harnesses today, coincidentally,
+        // not because it was ever checked per-target. This pins the Claude
+        // Code half specifically, so the day the two diverge, THIS fails
+        // instead of a delivery silently misbehaving.
         XCTAssertTrue(ClaudeCodeAdapter().capabilities.echoesPaste,
                       "TmuxTransport's landing check assumes every target echoes; " +
-                      "wiring it to read this value per-target is M3+ scope")
+                      "wiring it to read this value per-target is still open work")
+        XCTAssertTrue(CodexAdapter().capabilities.echoesPaste,
+                      "the SAME hardcoded assumption, now also true for the second " +
+                      "real harness — coincidence, not verification; still not read per-target")
     }
 
     func testReviveCommandUsesAdapterResumeArguments() {

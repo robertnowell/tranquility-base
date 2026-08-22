@@ -54,14 +54,28 @@ public struct HarnessCapabilities: Sendable {
     public var queuesInputMidTurn: Bool
     public var registersWithLiveness: Bool
     public var hasHooks: Bool
+    /// Whether this harness tolerates a SECOND process resuming a
+    /// conversation the first is still holding open. Named 21 Aug
+    /// (2026-08-21-tb-dual-live-harness-parity, 2026-08-21-tb-codex-tmux-
+    /// prior-art), measured live on both harnesses: Claude Code allows it
+    /// (and arbitrates it with its own "Remote Control" feature) — true.
+    /// Codex's app-server enforces a hard single-writer-per-thread lock; a
+    /// second `resume` fails immediately and cleanly with JSON-RPC `-32600`
+    /// ("already has an active writer"), and OpenAI was asked for a first-
+    /// party way around it (`codex inject`, issue #11415) and closed it "not
+    /// planned" — false. `Coordinator`'s adoption logic branches on this:
+    /// true means launch a tmux twin and leave the original process alone;
+    /// false means graceful end, then resume, with the user's approval.
+    public var allowsConcurrentResume: Bool
 
     public init(echoesPaste: Bool, promptGlyph: String, queuesInputMidTurn: Bool,
-               registersWithLiveness: Bool, hasHooks: Bool) {
+               registersWithLiveness: Bool, hasHooks: Bool, allowsConcurrentResume: Bool) {
         self.echoesPaste = echoesPaste
         self.promptGlyph = promptGlyph
         self.queuesInputMidTurn = queuesInputMidTurn
         self.registersWithLiveness = registersWithLiveness
         self.hasHooks = hasHooks
+        self.allowsConcurrentResume = allowsConcurrentResume
     }
 }
 
@@ -83,13 +97,26 @@ public struct TrustPromptSpec: Sendable {
     /// Consecutive settled-banner sightings required before giving up on a
     /// prompt ever appearing.
     public var settledThreshold: Int
+    /// Needles this loop must NEVER press through, checked before
+    /// `promptNeedles`. Added for Codex's hooks-review dialog ("Hooks need
+    /// review... Trust all and continue"): hook-trust is the user's own
+    /// choice, never auto-accepted — the same bar the directory-trust prompt
+    /// clears only because Robert's 05 Aug ruling gave TB standing consent
+    /// for THAT one specific prompt. Seeing one of these stops the watcher
+    /// exactly as "nothing appeared at all" does; no user-facing escalation
+    /// is wired yet (open, see docs/architecture-program.md's CodexAdapter
+    /// item) but the failure direction is safe either way — a prompt left
+    /// sitting, never a consent TB had no authority to give.
+    public var neverAutoAcceptNeedles: [String]
 
     public init(promptNeedles: [String], startedWithNoPromptNeedle: String?,
-               settledBannerNeedle: String, settledThreshold: Int = 2) {
+               settledBannerNeedle: String, settledThreshold: Int = 2,
+               neverAutoAcceptNeedles: [String] = []) {
         self.promptNeedles = promptNeedles
         self.startedWithNoPromptNeedle = startedWithNoPromptNeedle
         self.settledBannerNeedle = settledBannerNeedle
         self.settledThreshold = settledThreshold
+        self.neverAutoAcceptNeedles = neverAutoAcceptNeedles
     }
 }
 
@@ -116,7 +143,49 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
     public var capabilities: HarnessCapabilities {
         HarnessCapabilities(echoesPaste: true, promptGlyph: "❯",
                             queuesInputMidTurn: true, registersWithLiveness: true,
-                            hasHooks: true)
+                            hasHooks: true, allowsConcurrentResume: true)
+    }
+}
+
+/// Codex, as a HarnessAdapter. Measured live 21 Aug against codex-cli 0.149.0
+/// in a real tmux pane (the same live-verify battery this file's gate
+/// requires — see the audit-gate commit for the process): directory-trust
+/// needle and glyph confirmed against a live prompt and composer, echo and
+/// mid-turn queueing confirmed by actually sending two messages back to
+/// back (a plain Enter mid-turn queued the second one and it was answered
+/// as its own turn — the same mechanism TB's transport already uses, not a
+/// new one it needs), hooks confirmed by two real SessionStart firings.
+/// `allowsConcurrentResume` is 19-20 Aug + repeated this session, not new
+/// today: a second `resume` on a thread still held open fails with -32600.
+///
+/// NOT reconfirmed today, honestly: `hooksReviewNeedle`'s exact text is the
+/// 19-20 Aug C0 finding, carried forward — this scratch directory had no
+/// project-level hook config to trigger it again live. `startedWithNoPrompt`
+/// has no Codex equivalent found: unlike Claude Code's "? for shortcuts",
+/// which appears ONLY when there is nothing to accept, Codex shows
+/// "? for shortcuts" even WHILE the trust prompt is up, so it cannot mean
+/// the same thing here — nil, relying on the settled-banner fallback alone.
+public struct CodexAdapter: HarnessAdapter {
+    public let id = "codex"
+
+    public init() {}
+
+    public func resumeArguments(sessionId: String) -> [String] {
+        ["resume", sessionId]
+    }
+
+    public var trustPrompt: TrustPromptSpec? {
+        TrustPromptSpec(
+            promptNeedles: ["Do you trust the contents of this directory?"],
+            startedWithNoPromptNeedle: nil,
+            settledBannerNeedle: "OpenAI Codex",
+            neverAutoAcceptNeedles: ["Hooks need review"])
+    }
+
+    public var capabilities: HarnessCapabilities {
+        HarnessCapabilities(echoesPaste: true, promptGlyph: "›",
+                            queuesInputMidTurn: true, registersWithLiveness: false,
+                            hasHooks: true, allowsConcurrentResume: false)
     }
 }
 
@@ -144,6 +213,10 @@ public enum TrustPromptWatcher {
         for _ in 0..<maxPolls {
             usleep(UInt32(pollInterval * 1_000_000))
             guard let text = read() else { continue }
+            if spec.neverAutoAcceptNeedles.contains(where: { text.contains($0) }) {
+                trace?("newSession: \(label) needs a human choice, never auto-accepted; leaving it be")
+                return
+            }
             if spec.promptNeedles.contains(where: { text.contains($0) }) {
                 press()
                 trace?("newSession: accepted the trust prompt in \(label) — user-commanded launch")
