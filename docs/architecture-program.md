@@ -436,6 +436,33 @@ com.robertnowell.voice-dispatch (TCC).
       rollouts — never runs on the panel's own thread. `revive(sessionId:
       name:)` in the app itself is now harness-aware too, mirroring `tbase
       revive`'s already-proved branch.
+      **`tbase send`/`end` reach Codex (d6694d1, 22 Aug)** — the mechanism
+      the ownership record was built toward. Getting there live found three
+      real bugs, all found by actually dispatching to and ending a genuine
+      codex-cli 0.149.0 session, none reasoned in advance: (1) the floor
+      check read Codex's own idle-composer hint text as a human's unsent
+      message (`capture-pane -p` carries no color to tell them apart),
+      refusing every dispatch to an idle session — fixed with
+      `DispatchTarget.idlePlaceholder`; (2) `TranscriptWatcher`'s dedup and
+      landing-verification only ever parsed Claude Code's transcript shape,
+      which a Codex rollout never has, so both silently failed for Codex and
+      a retry actually double-pasted a payload into a live session (caught
+      live, "PONG" landed twice) — fixed with `codexUserMessages`/
+      `waitForCodexUserText`, read through `CodexRollout.parse`; (3)
+      `SessionTermination`'s pid-reuse identity guard was hardcoded to
+      Claude Code and refused to end a real, ownership-verified Codex
+      process ("pid 71800 is `codex`, not a Claude session") — generalized
+      to an `expectedCommand` parameter (default `"claude"`, every
+      pre-existing caller unchanged) rather than bypassed, since the guard
+      itself is the safety property. `HarnessAdapter` gained
+      `processCommandFragment`, deliberately distinct from `id` (Claude
+      Code's id is `"claude-code"`, its binary is `claude`) so a future
+      harness can't silently reintroduce the same mismatch. Live-verified
+      end to end: `tbase end 01a02b5f` on the exact session bug #3 was
+      found on — died on SIGTERM in 261ms, pid confirmed gone, ownership
+      record removed, tmux torn down with it. Production TB instance
+      (single pid, confirmed) was never touched throughout — held off on
+      any relaunch for Robert's demo.
       Still open, concretely:
         - A live `--selftest-hud` run against the panel itself, per rule
           7's own standard — declined this pass because a real production
@@ -443,10 +470,9 @@ com.robertnowell.voice-dispatch (TCC).
           instance risks the documented global-hotkey collision; Core-level
           correctness is thoroughly verified, the panel's actual rendering
           is not yet confirmed the way this repo's own rule asks for.
-        - `send`/`end` for Codex, now that the ownership record exists to
-          read from — the mechanism this whole piece was building toward.
-        - A drill exercising attach-then-dispatch end to end, once `send`
-          gives it something real to drill.
+        - A drill exercising attach-then-dispatch-then-end end to end for
+          Codex, now that all three legs are real and live-verified
+          individually.
         - Launch-flag compensation for Codex specifically (force scrollback,
           warm-up beat before first injection — AWS cli-agent-orchestrator's
           own Codex provider, and Anthropic's own unresolved send-keys race,
