@@ -767,3 +767,29 @@ Iterating `windows` while other sessions open and close theirs also raises
 Any future work here must assert the canary **PASSES**, not merely that no
 window leaked, and must prove its leftover-count predicate against a known
 leftover first. Two separate false greens came from measuring the wrong thing.
+
+---
+
+## 27. A second `case "settings":` in StatusHUD's pose-fixture switch is dead code
+
+Named in the ORIGINAL architecture brief (2026-08-19-tb-architecture-program,
+Track A item 9 — "Duplicate case 'settings' makes a pose fixture
+unreachable") but never carried into `docs/architecture-program.md`'s tracked
+checklist or into this file, so it sat unflagged for two days across the M1
+through resumeTmux work. Found again by a fresh 21 Aug audit sweep
+(2026-08-21-tb-arc-checkpoint-m2 follow-up) cross-checking the original brief
+against current code.
+
+`Sources/TranquilityApp/StatusHUD.swift:6274` and `:6336` are both
+`case "settings":` inside the same unbroken switch (a pose-fixture dispatch,
+not a state machine an event drives) — Swift resolves to the first match, so
+whatever the second case's body does is unreachable dead code, silently.
+Cosmetic in current behavior (nothing has observably broken), but it means a
+future edit to "settings" pose behavior has a 50/50 chance of landing in the
+branch that never runs.
+
+Not fixed here: it's in `Sources/TranquilityApp/`, the app layer, subject to
+the one-session-at-a-time rule (CLAUDE.md #5) and out of scope for the
+Core-only CodexAdapter work this pass was auditing. Fix is mechanical once
+picked up: read both bodies, decide which is the intended one (or merge), and
+delete the other case.
