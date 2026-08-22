@@ -297,12 +297,35 @@ com.robertnowell.voice-dispatch (TCC).
       only — an honest "unverified" for Codex's mid-turn dialog risk, not a
       measured "safe". Mechanism only, same shape as the two before it: no
       call site constructs a `.rolloutTail` target yet.
+      **`CodexProcesses` landed (395cedb, 22 Aug)** — the pid-attribution
+      primitive session-discovery wiring turned out to actually need, found
+      by spinning up a real Codex session to measure rather than assuming
+      "reuse `SessionDiscovery`'s pattern" would be enough. Claude Code's
+      `agents --json` is a registry (every live pid, its session id, one
+      call); Codex has nothing like it. Measured shape: a fresh `codex`
+      launch's argv is exactly `["codex"]`, a resume (TB's or a human's) is
+      `["codex", "resume", "<id>"]` — the id lands in argv, unambiguous
+      whenever present. `CodexProcesses.liveness(...)` reuses
+      `SessionDiscovery.Liveness`'s existing three states for exactly the
+      gap this surfaced: **a bare, unresumed Codex process cannot be told
+      apart from an unrelated one in the same directory by argv alone** —
+      genuinely unsolved, not an oversight, reads `.unknown` rather than
+      guessing. Also closed: the desktop ChatGPT/Codex.app runs its own
+      bundled `codex` binary internally (`app-server`, confirmed live on
+      this machine) — same name, unrelated process, and the exact shape a
+      broad `pkill -f codex` came within one command of hitting during this
+      arc's own Codex measurement work. `CodexProcesses.parse` allowlists
+      the two measured interactive shapes rather than blocking known-bad
+      ones, verified against this machine's real full process table.
       Still open, concretely:
-        - Both transport-layer halves of the M2-gate debt are now done
-          (glyph + readiness). What's left is wiring: `CodexRollout` into
-          session discovery/liveness so the grid actually shows Codex
-          sessions, and a real call site building `.rolloutTail` /
-          Codex-glyph `DispatchTarget`s so replies actually deliver.
+        - Transport-layer (glyph + readiness) and pid-attribution are now
+          all done. What's left is wiring: `CodexRollout` + `CodexProcesses`
+          into session discovery so the grid actually shows Codex sessions,
+          and a real call site building `.rolloutTail` / Codex-glyph
+          `DispatchTarget`s so replies actually deliver. The `.unknown`
+          gap above means hand-started Codex sessions may need a narrower
+          adoption story than Claude Code's — worth an explicit decision
+          when this wiring lands, not a silent default either way.
         - The explicit ownership-handoff state machine (observed →
           handoff-requested → releasing-writer → managed) — nothing built.
           **A requirement for it, surfaced late and worth stating explicitly**
