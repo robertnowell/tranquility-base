@@ -102,4 +102,47 @@ final class SubprocessTests: XCTestCase {
         // wrong id) must never read as safe to inject into.
         XCTAssertFalse(Readiness.classify(rollout: nil).canDispatch)
     }
+
+    // MARK: ProcessProbe.matchPid — the real agent pid behind a tmux pane
+
+    func testMatchPidFindsTheRealAgentProcessVerbatim() {
+        // Captured live, 22 Aug: `codex resume <id>` sitting directly on a
+        // tty after zsh's own last-command exec optimization replaced the
+        // wrapping shell — confirming the process this needs to find is
+        // not tmux's own `#{pane_pid}`.
+        let ps = "13928 codex resume 01a02b49-fd58-7852-8cfe-25ea386db7a3"
+        XCTAssertEqual(
+            ProcessProbe.matchPid(psOutput: ps, containing: "01a02b49-fd58-7852-8cfe-25ea386db7a3"),
+            13928)
+    }
+
+    func testMatchPidPrefersTheParentOverItsOwnChildren() {
+        // Captured live, 22 Aug: a resumed Codex process spawning its own
+        // MCP-server children on the SAME tty. A needle match on the
+        // session id — present only in the parent's argv — is what tells
+        // them apart; a bare "codex"-prefix match could not.
+        let ps = """
+          3798 codex resume 01a02a91-e209-7bc0-a873-36127f9586e8
+          3884 /Applications/Codex.app/Contents/Resources/cua_node/bin/node_repl
+          3885 npm exec tsx /Users/robertnowell/Projects/konid/src/index.ts
+        """
+        XCTAssertEqual(
+            ProcessProbe.matchPid(psOutput: ps, containing: "01a02a91-e209-7bc0-a873-36127f9586e8"),
+            3798)
+    }
+
+    func testMatchPidReturnsNilWhenNothingMatches() {
+        XCTAssertNil(ProcessProbe.matchPid(psOutput: "1 /sbin/launchd", containing: "abc-123"))
+        XCTAssertNil(ProcessProbe.matchPid(psOutput: "", containing: "abc-123"))
+    }
+
+    func testMatchPidRefusesAnEmptyNeedle() {
+        // An empty needle would match every row's command line — the exact
+        // shape of "find literally anything," never a real answer.
+        XCTAssertNil(ProcessProbe.matchPid(psOutput: "1 codex resume abc", containing: ""))
+    }
+
+    func testMatchPidIgnoresMalformedLines() {
+        XCTAssertNil(ProcessProbe.matchPid(psOutput: "garbage\n\nnot-a-pid codex", containing: "codex"))
+    }
 }

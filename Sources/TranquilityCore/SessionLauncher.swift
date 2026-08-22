@@ -299,7 +299,8 @@ public enum SessionLauncher {
         deathCheckInterval: TimeInterval = 0.25,
         deathCheckCount: Int = 12,
         settlePollInterval: TimeInterval = 1.0,
-        settleMaxPolls: Int = 20
+        settleMaxPolls: Int = 20,
+        ownership: any SessionOwnershipStore = FileSessionOwnershipStore.shared
     ) -> Result<CodexResumeOutcome, ScriptError> {
         switch resumeTmux(sessionId: sessionId, directory: directory, command: "codex",
                           acceptTrustPrompt: false, adapter: adapter) {
@@ -352,6 +353,24 @@ public enum SessionLauncher {
                         + "(conflict text matched)")
                     return .success(.alreadyLive)
                 case .attached:
+                    // The real agent pid, not tmux's own `#{pane_pid}` —
+                    // see `ProcessProbe.pid(onTty:containing:)`'s doc
+                    // comment for why the two can differ and why a needle
+                    // match, not a prefix match, is what finds it correctly.
+                    // A miss (nil) records nothing, on purpose: a record
+                    // whose pid this function does not actually trust is
+                    // exactly what `verifiedCurrent` exists to refuse later
+                    // anyway, so there is no point writing one now.
+                    if let pid = ProcessProbe.pid(onTty: tty, containing: sessionId) {
+                        ownership.record(SessionOwnershipRecord(
+                            sessionId: sessionId, harness: adapter.id, pid: pid,
+                            paneId: pane.paneId, socketName: pane.socketName,
+                            sessionName: pane.sessionName, paneTty: pane.paneTty))
+                    } else {
+                        Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) attached but "
+                            + "its real pid could not be found on \(tty) — pane recorded, "
+                            + "pid-based liveness checks on this record will fail closed")
+                    }
                     Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) attached")
                     return .success(.attached(tty: tty))
                 case .inconclusive:
