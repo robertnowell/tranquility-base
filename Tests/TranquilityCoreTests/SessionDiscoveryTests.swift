@@ -780,4 +780,62 @@ final class SessionDiscoveryTests: XCTestCase {
             window: 0, now: Date().addingTimeInterval(3600), sessions: root)
         XCTAssertEqual(result.sessions.count, 0)
     }
+
+    // MARK: discoverCodexIfScanned — the cache twin (rule 9: never walk the
+    // archive on the caller's thread)
+
+    @MainActor
+    func testDiscoverCodexIfScannedReturnsNothingUntilAScanExists() throws {
+        let root = try makeCodexSessions([
+            ("s1", [#"{"type":"session_meta","payload":{"id":"s1","cwd":"/tmp"}}"#]),
+        ])
+        defer {
+            SessionDiscovery.settleCodexForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        XCTAssertNil(SessionDiscovery.discoverCodexIfScanned(sessions: root),
+                     "a cold cache must not block the caller")
+
+        // The cold call above already started a background refresh; wait
+        // for it rather than calling the raw, cache-blind `discoverCodex`
+        // (that IS the uncached walk `discoverCodexIfScanned` wraps, the
+        // same relationship `scan` has to `discover` — calling it directly
+        // never touches the cache).
+        SessionDiscovery.settleCodexForTesting()
+
+        let warm = SessionDiscovery.discoverCodexIfScanned(sessions: root)
+        XCTAssertEqual(warm?.sessions.map(\.sessionId), ["s1"])
+    }
+
+    func testDiscoverCodexCacheIsKeyedByDirectory() throws {
+        let a = try makeCodexSessions([
+            ("from-a", [#"{"type":"session_meta","payload":{"id":"from-a","cwd":"/tmp"}}"#]),
+        ])
+        let b = try makeCodexSessions([
+            ("from-b", [#"{"type":"session_meta","payload":{"id":"from-b","cwd":"/tmp"}}"#]),
+        ])
+        defer {
+            try? FileManager.default.removeItem(at: a)
+            try? FileManager.default.removeItem(at: b)
+        }
+        XCTAssertEqual(SessionDiscovery.discoverCodex(sessions: a).sessions.map(\.sessionId),
+                       ["from-a"])
+        XCTAssertEqual(SessionDiscovery.discoverCodex(sessions: b).sessions.map(\.sessionId),
+                       ["from-b"])
+    }
+
+    func testWarmCodexFillsTheCacheOffMain() throws {
+        let root = try makeCodexSessions([
+            ("s1", [#"{"type":"session_meta","payload":{"id":"s1","cwd":"/tmp"}}"#]),
+        ])
+        defer {
+            SessionDiscovery.settleCodexForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
+        SessionDiscovery.warmCodex(sessions: root)
+        SessionDiscovery.settleCodexForTesting()
+        XCTAssertEqual(SessionDiscovery.discoverCodexIfScanned(sessions: root)?.sessions
+            .map(\.sessionId), ["s1"])
+    }
 }

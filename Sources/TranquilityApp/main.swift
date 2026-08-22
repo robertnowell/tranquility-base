@@ -416,6 +416,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // refused. The deploy check reads that refusal as a panel stuck
                 // holding the stage.
                 Task.detached(priority: .utility) { SessionDiscovery.warm() }
+                Task.detached(priority: .utility) { SessionDiscovery.warmCodex() }
 
                 // Write the summary before it is asked for. Doing it on demand meant
                 // every use opened with a model call you had to sit through.
@@ -1567,6 +1568,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 lamp: .unlit,
                 revivable: found.revivable,
                 detail: found.activity?.fullReason))
+        }
+        // Codex's own history, the same additive shape as the band just
+        // above — disk-enumerated, never guessed live (the settled design,
+        // 2026-08-21-tb-codex-hand-started-adoption): every row is
+        // `.unlit`, exactly what that lamp already means ("no lamp at all —
+        // the session exited, or the liveness probe could not say",
+        // StateLegend.swift) and precisely what a Codex row's never-guessed
+        // liveness is. A separate loop rather than merged into the one
+        // above: `discoverCodexIfScanned` never joins a live-process result
+        // the way `discoverIfScanned` does (nothing to join — see its own
+        // doc comment), so there is no liveness value here to filter
+        // `!= .live` against; every row this produces already belongs.
+        // `detail` names the harness in the hover rather than the row
+        // itself, matching this app's own rule that explanatory text lives
+        // in a tooltip, not inline.
+        for found in (SessionDiscovery.discoverCodexIfScanned()?.sessions ?? [])
+        where !placed.contains(found.sessionId) {
+            placed.insert(found.sessionId)
+            rows.append(StateLegend.SessionRow(
+                id: found.sessionId,
+                name: StateLegend.displayName(
+                    liveName: found.title,
+                    callsign: closedCallsigns[found.sessionId],
+                    fallback: found.cwd.map { ($0 as NSString).lastPathComponent } ?? "session"),
+                aux: StateLegend.shortId(found.sessionId),
+                lamp: .unlit,
+                revivable: found.revivable,
+                detail: "Codex session"))
         }
         // The user's own switch, applied last and to every band at once.
         //
@@ -3580,16 +3609,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task.detached {
             let fresh = SessionDiscovery.discover(ttl: 0).sessions
                 .first { $0.sessionId == sessionId }
-            guard let fresh, let command = fresh.reviveCommand else {
+            guard let fresh else {
+                // Not a Claude Code session — check Codex history before
+                // refusing outright. A genuinely different mechanism below,
+                // not a reimplementation: Codex attach goes through
+                // `attemptCodexResume`, never `SessionLauncher.resume`,
+                // because Codex's own single-writer lock is what answers
+                // "already live", not a probe run beforehand (the settled
+                // design, 2026-08-22-tb-codex-hand-started-adoption — the
+                // same branch `tbase revive` already has and already
+                // proved live).
+                let codexFound = SessionDiscovery.discoverCodex().sessions
+                    .first { $0.sessionId == sessionId }
+                guard let codexFound, codexFound.revivable, let cwd = codexFound.cwd else {
+                    Permissions.log("revive: refused \(sessionId.prefix(8)) — "
+                        + (codexFound == nil ? "no longer on disk"
+                           : "its directory is gone"))
+                    await MainActor.run { [weak self] in
+                        self?.hud.showReceipt(.notRevived(
+                            codexFound == nil ? "no longer on disk" : "its directory is gone"))
+                    }
+                    return
+                }
+                await MainActor.run { [weak self] in self?.announceNext(only: sessionId) }
+                switch SessionLauncher.attemptCodexResume(sessionId: sessionId, directory: cwd) {
+                case .success(.attached):
+                    Permissions.log("revive: attached codex \(sessionId.prefix(8))")
+                case .success(.alreadyLive):
+                    Permissions.log("revive: refused \(sessionId.prefix(8)) — already live elsewhere")
+                    await MainActor.run { [weak self] in
+                        self?.hud.showReceipt(.notRevived(
+                            "it's already running somewhere I don't control — end it in that terminal"))
+                    }
+                case .failure(let error):
+                    Permissions.log("revive: failed codex \(sessionId.prefix(8)) — \(error.message)")
+                    await MainActor.run { [weak self] in
+                        self?.hud.showReceipt(.notRevived("couldn't attach"))
+                    }
+                }
+                return
+            }
+            guard let command = fresh.reviveCommand else {
                 // One receipt per reason (18 Aug). `alreadyAwake` used to answer
                 // for all four, and it is only true for the first — so the
                 // panel's single word on a refusal was false in the three cases
                 // that are not "it came back on its own". That was survivable
                 // while REVIVE was a hover verb on a list; it is not, now that
                 // the lamp is the switch and this is what the switch says back.
-                let why = fresh?.liveness
-                Permissions.log("revive: refused \(sessionId.prefix(8)) — "
-                    + (fresh.map { "liveness \($0.liveness.rawValue)" } ?? "no longer on disk"))
+                let why = fresh.liveness
+                Permissions.log("revive: refused \(sessionId.prefix(8)) — liveness \(why.rawValue)")
                 await MainActor.run { [weak self] in
                     switch why {
                     case .live:
@@ -3601,8 +3669,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self?.hud.showReceipt(.notRevived("its directory is gone"))
                     case .unknown:
                         self?.hud.showReceipt(.notRevived("can't tell if it's running"))
-                    case nil:
-                        self?.hud.showReceipt(.notRevived("no longer on disk"))
                     }
                 }
                 return
