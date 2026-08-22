@@ -463,16 +463,30 @@ com.robertnowell.voice-dispatch (TCC).
       record removed, tmux torn down with it. Production TB instance
       (single pid, confirmed) was never touched throughout — held off on
       any relaunch for Robert's demo.
+      **`--selftest-hud` run against the panel (d9b9bd5 deployed, 22 Aug)** —
+      the demo that was blocking this cleared, Robert cleared touching the
+      running app, and `arc/beautiful-machine` went live via
+      `scripts/relaunch.sh arc/beautiful-machine` (the sanctioned
+      branch-build path, `main` untouched): 49/49 self-test verdicts passed,
+      panel accepting input idle, canary green (Claude Code contract holds).
+      One unrelated pre-existing finding surfaced by the deploy's
+      `tbase doctor` gate: 3 content-engine hub pages (dated 19–21 Aug, not
+      touched by this arc) carry duplicate agent footers — noted, not yet
+      fixed, `tbase homebase <id>` is the documented one-line repair.
+      **`scripts/test-codex-lifecycle.sh` landed (4302804, 22 Aug)** — the
+      roadmap's last "still open" item. Seeds a real session via `codex exec`
+      rather than a stand-in harness (attach needs a genuine
+      `~/.codex/sessions` rollout and a real `codex resume`), then drives
+      `tbase revive` → `enroll` → `send` → `end` and asserts each leg,
+      cleaning up unconditionally on exit. Caught one more live bug getting
+      there: plain `codex delete` silently no-ops without a tty (prompts for
+      confirmation that never comes); `--force` fixed it, confirmed by
+      checking the rollout file was actually gone afterward rather than
+      trusting a zero exit code. 6/6, run twice.
       Still open, concretely:
-        - A live `--selftest-hud` run against the panel itself, per rule
-          7's own standard — declined this pass because a real production
-          TB instance was running on this machine at the time and a second
-          instance risks the documented global-hotkey collision; Core-level
-          correctness is thoroughly verified, the panel's actual rendering
-          is not yet confirmed the way this repo's own rule asks for.
-        - A drill exercising attach-then-dispatch-then-end end to end for
-          Codex, now that all three legs are real and live-verified
-          individually.
+        - The 3 duplicate-footer hub pages found by the `--selftest-hud`
+          deploy's `tbase doctor` gate — unrelated to this arc, not yet
+          repaired.
         - Launch-flag compensation for Codex specifically (force scrollback,
           warm-up beat before first injection — AWS cli-agent-orchestrator's
           own Codex provider, and Anthropic's own unresolved send-keys race,
