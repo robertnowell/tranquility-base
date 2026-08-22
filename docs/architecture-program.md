@@ -368,11 +368,34 @@ com.robertnowell.voice-dispatch (TCC).
       Live-verified end to end, both outcomes, via a temporary real-machine
       smoke test (deleted after passing, per convention). Mechanism only:
       no call site wires this into a real dispatch/discovery flow yet.
+      **`discoverCodex` landed (d95d9f9, 22 Aug)** — session history off
+      disk, Core-only, roadmap step 1 (2026-08-22-tb-codex-verified-and-
+      roadmap). `SessionDiscovery.discoverCodex` walks `~/.codex/sessions`
+      and produces the same `Session` rows Claude Code's own `scan` does;
+      `Session` gained a `harness` field (defaulted everywhere, nothing
+      else needed to change) and `reviveCommand` now does the per-row
+      adapter lookup its own doc comment had anticipated since M2. Liveness
+      is never guessed — every row reads `.unknown`; `revivable` follows
+      the launch directory existing, not `liveness == .gone`, since
+      attempting a resume is always safe to try. Verified against this
+      machine's real `~/.codex/sessions` (19/19 real files scanned and
+      correctly classified) via a temporary smoke test, deleted after
+      passing. Honest gaps carried forward, not hidden: no title mechanism
+      for Codex yet, no `SessionActivity`-equivalent classifier, no
+      per-message timestamp in `CodexRollout`'s parsed shape (file mtime
+      stands in for all three).
       Still open, concretely:
-        - Wiring: `CodexRollout` into session discovery so the grid shows
-          Codex history, and a real call site calling `attemptCodexResume`
-          / building `.rolloutTail` / Codex-glyph `DispatchTarget`s once a
-          resume succeeds.
+        - Roadmap step 2: the real grid call site — a session row calling
+          `attemptCodexResume` / building `.rolloutTail` / Codex-glyph
+          `DispatchTarget`s once a resume succeeds. App-layer work;
+          14 other worktrees were live on this repo when step 1 landed —
+          check what else is in flight there before starting, per the
+          one-session-in-the-app-layer-at-a-time rule.
+        - Roadmap step 3: kill/quiet for a TB-owned Codex session — should
+          be close to free once step 2 lands (the pid is known with
+          certainty by construction).
+        - Roadmap step 4: a drill exercising attach-then-dispatch end to
+          end, once steps 2-3 give it something real to drill.
         - Launch-flag compensation for Codex specifically (force scrollback,
           warm-up beat before first injection — AWS cli-agent-orchestrator's
           own Codex provider, and Anthropic's own unresolved send-keys race,
