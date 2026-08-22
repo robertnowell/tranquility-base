@@ -23,12 +23,17 @@ public struct SessionOwnershipRecord: Codable, Sendable, Equatable {
     public var socketName: String?
     public var sessionName: String?
     public var paneTty: String?
+    /// The launch directory — carried so `EnrolmentRegistry`'s cwd-prefix
+    /// rail works for a session found through this store the same way it
+    /// already does for one found through `agents --json`, not just the
+    /// narrower exact-sessionId form.
+    public var cwd: String?
     public var attachedAt: Date
 
     public init(sessionId: String, harness: String, pid: Int,
                paneId: String? = nil, socketName: String? = nil,
                sessionName: String? = nil, paneTty: String? = nil,
-               attachedAt: Date = Date()) {
+               cwd: String? = nil, attachedAt: Date = Date()) {
         self.sessionId = sessionId
         self.harness = harness
         self.pid = pid
@@ -36,6 +41,7 @@ public struct SessionOwnershipRecord: Codable, Sendable, Equatable {
         self.socketName = socketName
         self.sessionName = sessionName
         self.paneTty = paneTty
+        self.cwd = cwd
         self.attachedAt = attachedAt
     }
 

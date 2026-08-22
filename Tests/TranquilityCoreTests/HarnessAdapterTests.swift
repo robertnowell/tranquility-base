@@ -153,6 +153,7 @@ final class HarnessAdapterTests: XCTestCase {
     func testEmptyResumeArgumentsRefusesRatherThanBuildingBrokenScript() {
         struct SilentAdapter: HarnessAdapter {
             let id = "silent"
+            let processCommandFragment = "silent"
             func resumeArguments(sessionId: String) -> [String] { [] }
             var trustPrompt: TrustPromptSpec? { nil }
             var capabilities: HarnessCapabilities {
@@ -177,6 +178,7 @@ final class HarnessAdapterTests: XCTestCase {
         // `resume` (Terminal.app) already does.
         struct SilentAdapter: HarnessAdapter {
             let id = "silent"
+            let processCommandFragment = "silent"
             func resumeArguments(sessionId: String) -> [String] { [] }
             var trustPrompt: TrustPromptSpec? { nil }
             var capabilities: HarnessCapabilities {

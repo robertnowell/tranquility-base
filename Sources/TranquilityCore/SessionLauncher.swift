@@ -365,7 +365,8 @@ public enum SessionLauncher {
                         ownership.record(SessionOwnershipRecord(
                             sessionId: sessionId, harness: adapter.id, pid: pid,
                             paneId: pane.paneId, socketName: pane.socketName,
-                            sessionName: pane.sessionName, paneTty: pane.paneTty))
+                            sessionName: pane.sessionName, paneTty: pane.paneTty,
+                            cwd: directory))
                     } else {
                         Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) attached but "
                             + "its real pid could not be found on \(tty) — pane recorded, "

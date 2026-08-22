@@ -347,7 +347,8 @@ public struct TmuxTransport: DispatchTransport {
             // Step 3 — the floor check. A non-empty input line that is not
             // our payload is somebody's half-typed message (the human's, or
             // a reply they queued mid-turn); pasting would splice into it.
-            switch promptLine(pane, payload: payload, glyph: target.promptGlyph) {
+            switch promptLine(pane, payload: payload, glyph: target.promptGlyph,
+                              placeholder: target.idlePlaceholder) {
             case .empty, .unreadable:
                 break                       // unreadable fails toward pasting:
                                             // landing is verified either way
@@ -488,15 +489,20 @@ public struct TmuxTransport: DispatchTransport {
     /// and reads as empty, which is right — its "input line" is wherever the
     /// cursor is, and the landing check in step 5 is the guard that matters
     /// there.
-    private func promptLine(_ pane: TmuxPaneAddress, payload: String, glyph: String) -> PromptLine {
+    private func promptLine(
+        _ pane: TmuxPaneAddress, payload: String, glyph: String, placeholder: String?
+    ) -> PromptLine {
         guard let text = screen(pane) else { return .unreadable }
-        return Self.classifyPromptLine(screen: text, payload: payload, glyph: glyph)
+        return Self.classifyPromptLine(screen: text, payload: payload, glyph: glyph,
+                                       placeholder: placeholder)
     }
 
     /// Pure half, testable against captured screens. `glyph` defaults to
     /// Claude Code's own so every existing call site (and every existing
     /// test) keeps meaning exactly what it always has.
-    static func classifyPromptLine(screen: String, payload: String, glyph: String = "❯") -> PromptLine {
+    static func classifyPromptLine(
+        screen: String, payload: String, glyph: String = "❯", placeholder: String? = nil
+    ) -> PromptLine {
         let lines = screen.split(separator: "\n", omittingEmptySubsequences: false)
         guard let box = lines.last(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix(glyph) })
         else { return .empty }
@@ -504,6 +510,19 @@ public struct TmuxTransport: DispatchTransport {
             .dropFirst(glyph.count)                         // the glyph itself
             .trimmingCharacters(in: .whitespaces)
         if content.isEmpty { return .empty }
+        // A live bug, found only by actually dispatching to a real idle
+        // Codex composer (22 Aug): its own idle hint text ("Ask Codex to do
+        // anything") renders on the SAME glyph-prefixed line an empty box
+        // would, plain-text-indistinguishable from something a human
+        // typed — `capture-pane -p` carries no color/dimness to tell a
+        // greyed-out placeholder apart from real input. Read literally, an
+        // idle composer classified as `.holds(ours: false)` — floor held by
+        // a "message" nobody wrote, refusing every dispatch permanently.
+        // `placeholder`, when the caller's harness has one, is checked
+        // BEFORE the payload match below: an exact match to the harness's
+        // OWN known idle string reads as genuinely empty, never as someone
+        // else's floor.
+        if let placeholder, content == placeholder { return .empty }
         // A truncated echo is a PREFIX of what we sent — the TUI elides
         // trailing characters while long input renders — never the reverse,
         // and never an unanchored substring test. `payload.contains(content)`
@@ -528,6 +547,16 @@ public struct TmuxTransport: DispatchTransport {
     /// lookalike from history.
     private func alreadyDelivered(_ payload: String, target: DispatchTarget,
                                   fromByteOffset watermark: Int64) -> Bool {
+        // Branches on the transcript's own schema, not just which path to
+        // read: a Codex rollout parses through CodexRollout, never Claude
+        // Code's `{"type":"user",…}` line shape — reading it with the
+        // wrong parser found zero messages, always, deterministically
+        // (found live, 22 Aug, not reasoned about in advance).
+        if target.readinessSource == .rolloutTail {
+            guard let path = target.transcriptPath else { return false }
+            return TranscriptWatcher.codexUserMessages(in: path, fromByteOffset: watermark)
+                .contains { $0.contains(payload) }
+        }
         guard let path = target.transcriptPath
             ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId)
         else { return false }
@@ -539,7 +568,13 @@ public struct TmuxTransport: DispatchTransport {
         _ payload: String, target: DispatchTarget, timeout: TimeInterval? = nil,
         fromByteOffset watermark: Int64
     ) async -> Bool {
-        await TranscriptWatcher.waitForUserText(
+        if target.readinessSource == .rolloutTail {
+            guard let path = target.transcriptPath else { return false }
+            return await TranscriptWatcher.waitForCodexUserText(
+                payload, path: path, timeout: timeout ?? verificationTimeout,
+                pollInterval: pollInterval, fromByteOffset: watermark)
+        }
+        return await TranscriptWatcher.waitForUserText(
             payload, sessionId: target.sessionId, knownPath: target.transcriptPath,
             timeout: timeout ?? verificationTimeout, pollInterval: pollInterval,
             fromByteOffset: watermark)
