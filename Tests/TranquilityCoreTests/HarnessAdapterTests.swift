@@ -170,6 +170,50 @@ final class HarnessAdapterTests: XCTestCase {
         XCTAssertTrue(error.message.contains("silent"))
     }
 
+    func testResumeTmuxRefusesRatherThanSpawningWithNothingToResume() {
+        // The tmux twin of the test above: `resumeTmux` is the mechanism
+        // BOTH Claude Code's dual-live twin and Codex's graceful-end-then-
+        // resume adoption need underneath, so it owes the same refusal
+        // `resume` (Terminal.app) already does.
+        struct SilentAdapter: HarnessAdapter {
+            let id = "silent"
+            func resumeArguments(sessionId: String) -> [String] { [] }
+            var trustPrompt: TrustPromptSpec? { nil }
+            var capabilities: HarnessCapabilities {
+                HarnessCapabilities(echoesPaste: false, promptGlyph: "", queuesInputMidTurn: false,
+                                    registersWithLiveness: false, hasHooks: false,
+                                    allowsConcurrentResume: false)
+            }
+        }
+        let result = SessionLauncher.resumeTmux(sessionId: "x", directory: NSTemporaryDirectory(),
+                                                command: "true", acceptTrustPrompt: false,
+                                                adapter: SilentAdapter())
+        guard case .failure(let error) = result else {
+            return XCTFail("an adapter with no resume arguments must refuse, not spawn a pane")
+        }
+        XCTAssertTrue(error.message.contains("silent"))
+    }
+
+    // MARK: shellQuoted — the one implementation resumeTmux's arguments and
+    // launchTmux's directory both go through now
+
+    func testShellQuotedWrapsAPlainString() {
+        XCTAssertEqual(SessionLauncher.shellQuoted("01a02782-25fd-7342-b383-eb0fa5323b92"),
+                       "'01a02782-25fd-7342-b383-eb0fa5323b92'")
+    }
+
+    func testShellQuotedEscapesEmbeddedSingleQuotes() {
+        // A resume argument reaches `resumeTmux` from data — a session id
+        // read out of a filename, or, for Codex, out of a rollout's own
+        // JSON — not from a constant. This is what stands between that and
+        // shell injection if one were ever adversarial.
+        XCTAssertEqual(SessionLauncher.shellQuoted("it's"), "'it'\\''s'")
+    }
+
+    func testShellQuotedHandlesEmptyString() {
+        XCTAssertEqual(SessionLauncher.shellQuoted(""), "''")
+    }
+
     // MARK: capabilities parity — until TmuxTransport reads these values live,
     // a test is what stops them silently drifting from what it hardcodes
     // (M2 gate finding: capability fields had zero consumers; still true
