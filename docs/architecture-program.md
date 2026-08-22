@@ -281,16 +281,28 @@ com.robertnowell.voice-dispatch (TCC).
       on the floor check and silently skipped the never-splice-into-
       unsent-text guard. Mechanism only, same shape as `resumeTmux`: no
       call site builds a non-Claude-Code target yet.
+      **`readinessSource` half landed (b878125, 22 Aug)**: new
+      `DispatchTarget.ReadinessSource.rolloutTail` case, and
+      `Readiness.classify(rollout:)` mirroring the existing
+      `classify(_:LiveSession?)` — no rollout found fails closed
+      (`.notRegistered`), found-and-busy dispatches (`.busy`, Codex queues
+      mid-turn same as Claude Code), found-and-idle is `.ready`. Both
+      transports' pid-alive check already runs before `readinessSource` is
+      consulted, which for free covers `CodexRollout.Parsed.isBusy`'s own
+      documented gap (a process killed mid-turn is indistinguishable from
+      one still working, from the rollout alone) — `.targetGone` fires
+      first. Deliberately narrower than Claude Code's mapping: no
+      Codex-specific dialog/waiting state exists in a rollout, so
+      `TmuxTransport`'s V4 dialog re-probe stays scoped to `.claudeAgents`
+      only — an honest "unverified" for Codex's mid-turn dialog risk, not a
+      measured "safe". Mechanism only, same shape as the two before it: no
+      call site constructs a `.rolloutTail` target yet.
       Still open, concretely:
-        - The READINESS half of the same debt is NOT done:
-          `DispatchTarget.ReadinessSource` is still `.claudeAgents` /
-          `.processAlive` only. Codex's `registersWithLiveness == false`
-          needs `processAlive` + rollout-tail (per the prior-art report),
-          which needs `CodexRollout` wired into a real readiness path —
-          a distinct, larger piece from the glyph fix above, not done by it.
-        - Wire `CodexRollout` into session discovery/liveness so the grid
-          actually shows Codex sessions, and into dispatch so replies
-          actually deliver once the readiness half above lands too.
+        - Both transport-layer halves of the M2-gate debt are now done
+          (glyph + readiness). What's left is wiring: `CodexRollout` into
+          session discovery/liveness so the grid actually shows Codex
+          sessions, and a real call site building `.rolloutTail` /
+          Codex-glyph `DispatchTarget`s so replies actually deliver.
         - The explicit ownership-handoff state machine (observed →
           handoff-requested → releasing-writer → managed) — nothing built.
           **A requirement for it, surfaced late and worth stating explicitly**
