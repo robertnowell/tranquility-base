@@ -28,6 +28,14 @@ public struct DispatchTarget: Sendable, Equatable {
     public var transcriptPath: String?
     public var label: String?
     public var readinessSource: ReadinessSource
+    /// The glyph `TmuxTransport`'s floor check (`classifyPromptLine`) looks
+    /// for to find the input box on screen — Claude Code's TUI draws `❯`,
+    /// Codex's draws `›` (`CodexAdapter.capabilities.promptGlyph`, measured
+    /// live 21 Aug). Defaults to Claude Code's own, so every existing
+    /// construction site keeps meaning exactly what it always has; a caller
+    /// building a target for a different harness passes its adapter's glyph.
+    /// Unused by `TerminalAppTransport`, which has no screen to read.
+    public var promptGlyph: String
 
     public init(
         kind: TransportKind = .terminalApp,
@@ -37,7 +45,8 @@ public struct DispatchTarget: Sendable, Equatable {
         pane: TmuxPaneAddress? = nil,
         transcriptPath: String? = nil,
         label: String? = nil,
-        readinessSource: ReadinessSource = .claudeAgents
+        readinessSource: ReadinessSource = .claudeAgents,
+        promptGlyph: String = "❯"
     ) {
         self.kind = kind
         self.sessionId = sessionId
@@ -47,6 +56,7 @@ public struct DispatchTarget: Sendable, Equatable {
         self.transcriptPath = transcriptPath
         self.label = label
         self.readinessSource = readinessSource
+        self.promptGlyph = promptGlyph
     }
 }
 

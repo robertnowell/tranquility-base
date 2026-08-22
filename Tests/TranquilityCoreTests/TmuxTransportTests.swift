@@ -119,6 +119,21 @@ final class TmuxTransportTests: XCTestCase {
                        .empty)
     }
 
+    func testClassifyPromptLineHonorsACustomGlyph() {
+        // Codex's composer echoes behind `›`, not Claude Code's `❯`
+        // (measured live 21 Aug, CodexAdapter.capabilities.promptGlyph).
+        // Reading the SAME screen with the wrong glyph is the exact gap
+        // that made the floor check silently a no-op for any harness other
+        // than Claude Code before DispatchTarget carried its own glyph.
+        let screen = "────\n› deploy the fix please\n────"
+        XCTAssertEqual(TmuxTransport.classifyPromptLine(
+            screen: screen, payload: "deploy the fix please", glyph: "›"),
+            .holds(ours: true))
+        XCTAssertEqual(TmuxTransport.classifyPromptLine(
+            screen: screen, payload: "deploy the fix please"),
+            .empty)
+    }
+
     // MARK: selection defaults
 
     func testDispatchTargetDefaultsStayTerminal() {
@@ -127,6 +142,13 @@ final class TmuxTransportTests: XCTestCase {
         let target = DispatchTarget(sessionId: "s")
         XCTAssertEqual(target.kind, .terminalApp)
         XCTAssertNil(target.pane)
+    }
+
+    func testDispatchTargetDefaultPromptGlyphIsClaudeCodes() {
+        // Same co-existence guarantee as the transport default above: no
+        // caller constructing a target today passes promptGlyph, so it must
+        // stay Claude Code's own until something explicitly asks for another.
+        XCTAssertEqual(DispatchTarget(sessionId: "s").promptGlyph, "❯")
     }
 
     func testFloorHeldRefusesDispatch() {

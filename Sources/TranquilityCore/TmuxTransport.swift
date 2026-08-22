@@ -339,7 +339,7 @@ public struct TmuxTransport: DispatchTransport {
             // Step 3 — the floor check. A non-empty input line that is not
             // our payload is somebody's half-typed message (the human's, or
             // a reply they queued mid-turn); pasting would splice into it.
-            switch promptLine(pane, payload: payload) {
+            switch promptLine(pane, payload: payload, glyph: target.promptGlyph) {
             case .empty, .unreadable:
                 break                       // unreadable fails toward pasting:
                                             // landing is verified either way
@@ -471,23 +471,29 @@ public struct TmuxTransport: DispatchTransport {
         case unreadable
     }
 
-    /// What sits on the input line right now. The Claude Code TUI draws its
-    /// input box as a `❯`-prefixed line; the last such line on screen is the
-    /// box. A plain-shell target (the test harness) has no `❯` and reads as
-    /// empty, which is right — its "input line" is wherever the cursor is,
-    /// and the landing check in step 5 is the guard that matters there.
-    private func promptLine(_ pane: TmuxPaneAddress, payload: String) -> PromptLine {
+    /// What sits on the input line right now. Each harness's TUI draws its
+    /// input box prefixed with its own glyph — Claude Code's `❯`, Codex's
+    /// `›` — read from `target.promptGlyph` (`DispatchTransport.swift`),
+    /// never hardcoded here; this is what makes the floor check (never
+    /// splice into someone's unsent text) mean something on more than one
+    /// harness. A plain-shell target (the test harness) has no glyph match
+    /// and reads as empty, which is right — its "input line" is wherever the
+    /// cursor is, and the landing check in step 5 is the guard that matters
+    /// there.
+    private func promptLine(_ pane: TmuxPaneAddress, payload: String, glyph: String) -> PromptLine {
         guard let text = screen(pane) else { return .unreadable }
-        return Self.classifyPromptLine(screen: text, payload: payload)
+        return Self.classifyPromptLine(screen: text, payload: payload, glyph: glyph)
     }
 
-    /// Pure half, testable against captured screens.
-    static func classifyPromptLine(screen: String, payload: String) -> PromptLine {
+    /// Pure half, testable against captured screens. `glyph` defaults to
+    /// Claude Code's own so every existing call site (and every existing
+    /// test) keeps meaning exactly what it always has.
+    static func classifyPromptLine(screen: String, payload: String, glyph: String = "❯") -> PromptLine {
         let lines = screen.split(separator: "\n", omittingEmptySubsequences: false)
-        guard let box = lines.last(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("❯") })
+        guard let box = lines.last(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix(glyph) })
         else { return .empty }
         let content = box.trimmingCharacters(in: .whitespaces)
-            .dropFirst()                                    // the ❯ itself
+            .dropFirst(glyph.count)                         // the glyph itself
             .trimmingCharacters(in: .whitespaces)
         if content.isEmpty { return .empty }
         // A truncated echo is a PREFIX of what we sent — the TUI elides
