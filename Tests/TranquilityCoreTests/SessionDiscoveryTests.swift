@@ -137,11 +137,19 @@ final class SessionDiscoveryTests: XCTestCase {
 
     private func session(_ liveness: SessionDiscovery.Liveness,
                          revivable: Bool,
-                         cwd: String? = "/Users/x/Projects/kopi") -> SessionDiscovery.Session {
+                         cwd: String? = "/Users/x/Projects/kopi",
+                         harness: String = ClaudeCodeAdapter().id) -> SessionDiscovery.Session {
         SessionDiscovery.Session(
             sessionId: "abc", cwd: cwd, transcriptPath: "/t.jsonl", title: nil,
             lastActivityAt: now, answered: false, activity: .idle,
-            liveness: liveness, revivable: revivable)
+            liveness: liveness, revivable: revivable, harness: harness)
+    }
+
+    /// The per-row adapter lookup `reviveCommand`'s own doc comment
+    /// anticipated back when every row was still Claude Code.
+    func testCodexHarnessReviveCommandUsesTheCodexAdapter() {
+        let command = session(.unknown, revivable: true, harness: CodexAdapter().id).reviveCommand
+        XCTAssertEqual(command?.arguments, ["resume", "abc"])
     }
 
     func testGoneAndLandableOffersResume() {
@@ -679,5 +687,97 @@ final class SessionDiscoveryTests: XCTestCase {
         }
         AgentDefaults.save("   ")
         XCTAssertEqual(AgentDefaults.load(), AgentDefaults.fallback)
+    }
+
+    // MARK: - discoverCodex
+
+    private func makeCodexSessions(_ files: [(id: String, lines: [String])]) throws -> URL {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("codex-discover-\(UUID().uuidString)")
+        let dated = root.appendingPathComponent("2026/08/22")
+        try FileManager.default.createDirectory(at: dated, withIntermediateDirectories: true)
+        for file in files {
+            try file.lines.joined(separator: "\n").write(
+                to: dated.appendingPathComponent("rollout-x-\(file.id).jsonl"),
+                atomically: true, encoding: .utf8)
+        }
+        return root
+    }
+
+    func testDiscoverCodexReadsRealRolloutShapes() throws {
+        let root = try makeCodexSessions([
+            ("s1", [
+                #"{"type":"session_meta","payload":{"id":"s1","cwd":"/tmp"}}"#,
+                #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}"#,
+                #"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}}"#,
+            ]),
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = SessionDiscovery.discoverCodex(sessions: root)
+
+        XCTAssertEqual(result.scanned, 1)
+        XCTAssertEqual(result.sessions.count, 1)
+        let row = try XCTUnwrap(result.sessions.first)
+        XCTAssertEqual(row.sessionId, "s1")
+        XCTAssertEqual(row.cwd, "/tmp")
+        XCTAssertEqual(row.harness, CodexAdapter().id)
+        // The agent spoke last: not yet answered, same semantic Claude
+        // Code's own isAnswered uses.
+        XCTAssertFalse(row.answered)
+        XCTAssertEqual(row.liveness, .unknown)
+        XCTAssertTrue(result.livenessUnavailable)
+    }
+
+    func testDiscoverCodexMarksAnsweredWhenTheUserSpokeLast() throws {
+        let root = try makeCodexSessions([
+            ("s1", [
+                #"{"type":"session_meta","payload":{"id":"s1","cwd":"/tmp"}}"#,
+                #"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}"#,
+                #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"thanks"}]}}"#,
+            ]),
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        XCTAssertTrue(SessionDiscovery.discoverCodex(sessions: root).sessions.first?.answered ?? false)
+    }
+
+    /// A rollout with no `session_meta` at all (never taken a turn, or
+    /// unreadable) is counted, never silently dropped — same discipline
+    /// `scan`'s own `unclassifiable` counter follows for Claude Code.
+    func testDiscoverCodexCountsUnclassifiableRatherThanDroppingSilently() throws {
+        let root = try makeCodexSessions([
+            ("s1", [#"{"type":"response_item","payload":{"type":"message","role":"user","content":[]}}"#]),
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let result = SessionDiscovery.discoverCodex(sessions: root)
+        XCTAssertEqual(result.sessions.count, 0)
+        XCTAssertEqual(result.unclassifiable, 1)
+    }
+
+    /// `revivable` follows the directory existing, NOT liveness — the
+    /// deliberate divergence from Claude Code's own semantics: Codex rows
+    /// never gate on a `.gone` this function never even computes.
+    func testDiscoverCodexRevivableFollowsDirectoryNotLiveness() throws {
+        let root = try makeCodexSessions([
+            ("real", [#"{"type":"session_meta","payload":{"id":"real","cwd":"/tmp"}}"#]),
+            ("fake", [#"{"type":"session_meta","payload":{"id":"fake","cwd":"/definitely/not/a/real/path/xyz"}}"#]),
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let rows = SessionDiscovery.discoverCodex(sessions: root).sessions
+        XCTAssertTrue(rows.first { $0.sessionId == "real" }?.revivable ?? false)
+        XCTAssertFalse(rows.first { $0.sessionId == "fake" }?.revivable ?? true)
+        // Both read .unknown regardless — revivability never implies a
+        // liveness guess in either direction.
+        XCTAssertTrue(rows.allSatisfy { $0.liveness == .unknown })
+    }
+
+    func testDiscoverCodexRespectsTheWindow() throws {
+        let root = try makeCodexSessions([
+            ("s1", [#"{"type":"session_meta","payload":{"id":"s1","cwd":"/tmp"}}"#]),
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let result = SessionDiscovery.discoverCodex(
+            window: 0, now: Date().addingTimeInterval(3600), sessions: root)
+        XCTAssertEqual(result.sessions.count, 0)
     }
 }
