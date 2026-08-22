@@ -3592,7 +3592,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Focus a live session's terminal tab, from the list.
+    /// Focus a live session — tmux attach, or a Terminal.app tab for a
+    /// hand-started one — from the list. Same door `StatusHUD.goToSession()`
+    /// uses from the card; this one is reached from a session id rather than
+    /// from the card's current target.
     private func goToSession(_ sessionId: String) {
         Task.detached {
             guard let live = (ClaudeAgentsCLI().sessions() ?? [])
@@ -3600,7 +3603,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("goTo: \(sessionId.prefix(8)) is not live any more")
                 return
             }
-            _ = SessionLauncher.focus(pid: live.pid)
+            guard let tty = ProcessProbe.tty(of: live.pid) else {
+                Permissions.log("goTo: no tty for pid \(live.pid)")
+                return
+            }
+            switch await TerminalTabFocus.focus(tty: tty) {
+            case .focused: Permissions.log("goTo: focused \(tty)")
+            case .tabGone: Permissions.log("goTo: tab not found for \(tty)")
+            case .timedOut(let seconds): Permissions.log("goTo TIMEOUT after \(seconds)s for \(tty)")
+            case .failed(let message): Permissions.log("goTo FAILED: \(message)")
+            }
         }
     }
 

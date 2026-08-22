@@ -29,6 +29,46 @@ final class TerminalTabFocusTests: XCTestCase {
             "over-long tty")
     }
 
+    // MARK: - tmux attach (the 22 Aug fix: every launch is tmux, so the tab
+    // walk above never matches TB's own sessions any more)
+
+    func testAttachScriptOnOurSocketSetsTmuxTmpDirAndDashL() throws {
+        let script = try XCTUnwrap(TerminalTabFocus.attachScript(
+            binary: "/opt/homebrew/bin/tmux", socket: "tb",
+            tmuxTmpDir: "/Users/robert/Library/Application Support/VoiceDispatch/tmux",
+            sessionName: "tb-e8c484b1"))
+        XCTAssertTrue(script.contains("TMUX_TMPDIR"))
+        XCTAssertTrue(script.contains("-L "))
+        XCTAssertTrue(script.contains("\"tb-e8c484b1\""))
+        XCTAssertTrue(script.contains("attach -t"))
+        XCTAssertTrue(script.contains("do script"))
+    }
+
+    func testAttachScriptOnTheDefaultServerSkipsTmuxTmpDirAndDashL() throws {
+        let script = try XCTUnwrap(TerminalTabFocus.attachScript(
+            binary: "/opt/homebrew/bin/tmux", socket: nil,
+            tmuxTmpDir: "/unused", sessionName: "tb-probe"))
+        XCTAssertFalse(script.contains("TMUX_TMPDIR"))
+        XCTAssertFalse(script.contains("-L"))
+        XCTAssertTrue(script.contains("\"tb-probe\""))
+    }
+
+    func testAttachScriptRefusesAnUnexpectedSessionName() {
+        // A live tmux server's own listing is the one input here that did
+        // not originate inside this process — filtered the same way
+        // `script(focusing:)` filters a tty, on principle even though every
+        // session name this app creates is `tb-<hex>`.
+        XCTAssertNil(TerminalTabFocus.attachScript(
+            binary: "/opt/homebrew/bin/tmux", socket: "tb", tmuxTmpDir: "/x",
+            sessionName: "tb-e8c\" then do shell script \"rm -rf ~\""))
+        XCTAssertNil(TerminalTabFocus.attachScript(
+            binary: "/opt/homebrew/bin/tmux", socket: "tb", tmuxTmpDir: "/x",
+            sessionName: ""))
+        XCTAssertNil(TerminalTabFocus.attachScript(
+            binary: "/opt/homebrew/bin/tmux", socket: "tb", tmuxTmpDir: "/x",
+            sessionName: String(repeating: "a", count: 65)))
+    }
+
     // MARK: - Outcome mapping (pure, no Terminal required)
 
     func testOutcomeMapping() {

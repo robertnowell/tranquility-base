@@ -493,59 +493,6 @@ public enum SessionLauncher {
         }
     }
 
-    /// Bring a LIVE session's terminal tab to the front.
-    ///
-    /// The other half of the list's one click: a session that is still running
-    /// does not need reviving, it needs finding — which is the whole complaint
-    /// the list exists to answer ("I don't know which terminal tab it's in").
-    /// Same AppleScript the card's GO TO AGENT has always used; this one is
-    /// reached from a session id rather than from the card's current target.
-    @discardableResult
-    public static func focus(pid: Int) -> Result<Bool, ScriptError> {
-        guard let tty = ProcessProbe.tty(of: pid) else {
-            Self.trace?("goTo: no tty for pid \(pid)")
-            return .success(false)
-        }
-        // Order matters, and it is the whole fix (ruled 18 Aug: "it brought all
-        // the terminal windows to the top"). Selecting the tab and promoting
-        // its window to index 1 FIRST makes the agent's window Terminal's own
-        // frontmost; activating afterwards through `NSRunningApplication`
-        // brings that window forward and leaves the rest where they were.
-        // AppleScript's `activate` cannot do this — it is an app-level
-        // activation that raises every window the app owns, which is how one
-        // click on GO TO AGENT buried the screen under nine other terminals.
-        let script = """
-            tell application "Terminal"
-              repeat with w in windows
-                repeat with t in tabs of w
-                  if (tty of t) as text is "\(tty)" then
-                    set selected tab of w to t
-                    set index of w to 1
-                    return "ok"
-                  end if
-                end repeat
-              end repeat
-              return "notfound"
-            end tell
-            """
-        switch AppleScript.run(script: script) {
-        case .success(let out) where out.contains("notfound"):
-            Self.trace?("goTo: tab not found for \(tty)")
-            return .success(false)
-        case .success:
-            // Without `.activateAllWindows`, which is the option that would
-            // reproduce exactly what we just stopped doing.
-            NSRunningApplication
-                .runningApplications(withBundleIdentifier: "com.apple.Terminal")
-                .first?.activate()
-            Self.trace?("goTo: focused \(tty)")
-            return .success(true)
-        case .failure(let error):
-            Self.trace?("goTo FAILED: \(error.message)")
-            return .failure(error)
-        }
-    }
-
     /// Watch the just-launched tab; if Claude's trust prompt renders, press
     /// Return once and STOP. The single press and immediate return are
     /// load-bearing (ruled 12 Aug, PR #34): on a resume, the screen after
