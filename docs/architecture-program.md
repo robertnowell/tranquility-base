@@ -350,16 +350,29 @@ com.robertnowell.voice-dispatch (TCC).
       terminal, on their own judgment about their own unsaved keystrokes —
       strictly safer than TB inferring when it's safe to do so itself, and
       no state machine is needed to get there.
+      **`attemptCodexResume` landed (db29620, 22 Aug)** — the detection this
+      item used to describe as not-yet-built. `SessionLauncher.
+      attemptCodexResume` tries `codex resume <id>` and returns
+      `.attached`/`.alreadyLive`, whichever Codex's own server actually
+      says. Two real bugs found only by running it against a genuinely live
+      conflicting session (twice), not by reasoning: (1) the first version
+      launched `claude resume <id>` by accident — `resumeTmux`'s `command`
+      defaults to the Claude-Code-specific `AgentDefaults.load()`, now
+      passed explicitly as `"codex"`; (2) a losing resume does NOT keep its
+      error on screen for several seconds — timed precisely at under a
+      second, twice — correcting a WRONG mid-conversation claim to the
+      contrary that had itself come from a measuring script's own trailing
+      `sleep` propping a dead pane open, not real Codex behavior. Rebuilt
+      around the reliable signal (pane survival through a short grace
+      window) with screen-text matching kept as a bonus, not the mechanism.
+      Live-verified end to end, both outcomes, via a temporary real-machine
+      smoke test (deleted after passing, per convention). Mechanism only:
+      no call site wires this into a real dispatch/discovery flow yet.
       Still open, concretely:
         - Wiring: `CodexRollout` into session discovery so the grid shows
-          Codex history; a real call site building `.rolloutTail` /
-          Codex-glyph `DispatchTarget`s once a resume succeeds; hooking the
-          resume-attempt's `-32600` detection into the actual message shown
-          (needs a specific check — the launched pane's process exiting
-          within ~1-2s of spawn, screen text matching the known error
-          string — not yet built, `resumeTmux` today just launches and
-          returns a tty, it doesn't yet distinguish this failure mode from
-          a successful launch).
+          Codex history, and a real call site calling `attemptCodexResume`
+          / building `.rolloutTail` / Codex-glyph `DispatchTarget`s once a
+          resume succeeds.
         - Launch-flag compensation for Codex specifically (force scrollback,
           warm-up beat before first injection — AWS cli-agent-orchestrator's
           own Codex provider, and Anthropic's own unresolved send-keys race,
