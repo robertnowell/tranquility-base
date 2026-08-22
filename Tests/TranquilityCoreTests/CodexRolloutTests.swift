@@ -25,11 +25,15 @@ final class CodexRolloutTests: XCTestCase {
         XCTAssertEqual(parsed.meta?.cliVersion, "0.133.0-alpha.1")
     }
 
-    func testSessionMetaPrefersIdWhenSessionIdAlsoPresent() {
+    func testSessionMetaReadsIdEvenWhenSessionIdDiffers() {
+        // Distinct values on purpose (gate finding, 21 Aug): the prior
+        // fixture used the SAME string for both fields, so an
+        // implementation reading `session_id` — the exact bug this pins
+        // against — would have passed identically.
         let text = #"""
-        {"type":"session_meta","payload":{"session_id":"same-id","id":"same-id","cwd":"/tmp","cli_version":"0.149.0"}}
+        {"type":"session_meta","payload":{"session_id":"wrong-field","id":"right-field","cwd":"/tmp","cli_version":"0.149.0"}}
         """#
-        XCTAssertEqual(CodexRollout.parse(text).meta?.sessionId, "same-id")
+        XCTAssertEqual(CodexRollout.parse(text).meta?.sessionId, "right-field")
     }
 
     func testOnlyTheFirstSessionMetaCounts() {
@@ -81,6 +85,32 @@ final class CodexRolloutTests: XCTestCase {
         XCTAssertEqual(parsed.completions.count, 1)
     }
 
+    func testTurnAbortedClearsBusyState() {
+        // The user hit Esc. Gate finding, 21 Aug: unhandled, this alone
+        // made 55/192 real rollouts on this machine (29%) read as falsely
+        // busy — 13 purely from this, no task_complete ever coming.
+        let text = #"""
+        {"type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}
+        {"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t1","reason":"interrupted"}}
+        """#
+        let parsed = CodexRollout.parse(text)
+        XCTAssertFalse(parsed.isBusy)
+        XCTAssertEqual(parsed.completions, [], "an abort is not a completion — no last_agent_message exists")
+    }
+
+    func testTaskCompleteWithNoMatchingTaskStartedIsNotFatal() {
+        // A rollout read starting mid-turn (or a `task_started` this parse
+        // never saw for any other reason) — Set.remove on an absent
+        // element is a documented no-op. The turn IS complete; isBusy must
+        // still read false, and the completion is still recorded.
+        let text = #"""
+        {"type":"event_msg","payload":{"type":"task_complete","turn_id":"orphaned","last_agent_message":"done"}}
+        """#
+        let parsed = CodexRollout.parse(text)
+        XCTAssertFalse(parsed.isBusy)
+        XCTAssertEqual(parsed.completions, [.init(turnId: "orphaned", lastAgentMessage: "done")])
+    }
+
     func testExternalImportTurnIdsAreOpaqueStringsNotUUIDs() {
         // A real 0.133.0-alpha.1 rollout on this machine uses turn ids like
         // "external-import-turn-1" — never assume UUID shape.
@@ -102,6 +132,60 @@ final class CodexRolloutTests: XCTestCase {
         XCTAssertEqual(messages.count, 1, "the environment_context wrapper is not conversation content")
         XCTAssertEqual(messages.first?.text, "reply with exactly ADAPTER-PROBE-OK and nothing else")
         XCTAssertEqual(messages.first?.role, "user")
+    }
+
+    func testEnvironmentContextIsFilteredAtAnyPosition() {
+        // Gate finding, 21 Aug: measured across 192 real rollouts, the
+        // wrapper is not a first-of-turn heuristic — one real file carries
+        // it only at message #22, several carry it more than once. A
+        // position-based filter would have missed those; this one doesn't
+        // check position at all, and this pins that down.
+        let text = #"""
+        {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"first real message"}]}}
+        {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"first reply"}]}}
+        {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/tmp</cwd>\n</environment_context>"}]}}
+        {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"second real message"}]}}
+        """#
+        let messages = CodexRollout.parse(text).messages
+        XCTAssertEqual(messages.map(\.text), ["first real message", "first reply", "second real message"])
+    }
+
+    func testTextThatOnlyStartsLikeTheWrapperIsNotFiltered() {
+        // The over-breadth case the gate specifically asked about: someone
+        // pasting a snippet of rollout debugging output that happens to
+        // START with the wrapper's opening tag, but is not actually the
+        // wrapper (no matching close). Without the closing-tag check this
+        // is a real, if rare, false positive — a human's real message
+        // silently dropped.
+        let text = #"""
+        {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context> is the XML wrapper Codex injects, right? I was reading the rollout format docs."}]}}
+        """#
+        XCTAssertEqual(CodexRollout.parse(text).messages.count, 1,
+                       "starts with the tag but never closes it — real content, must not be filtered")
+    }
+
+    func testDeveloperRoleMessagesAreExcluded() {
+        // Sampled across 614 real occurrences on this machine: every one is
+        // injected system context (output-style instructions, permission
+        // profile XML, multi-agent preambles), the same category
+        // environment_context exists to strip — never anything a human or
+        // TB typed (gate finding, 21 Aug — keeping these while filtering
+        // environment_context was an inconsistency, not a decision).
+        let text = #"""
+        {"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"You are in 'learning' output style mode..."}]}}
+        """#
+        XCTAssertEqual(CodexRollout.parse(text).messages, [])
+    }
+
+    func testAgentMessageRoutingRecordsAreExcluded() {
+        // A real response_item payload type (142 occurrences on this
+        // machine), but its own author/recipient fields and "Message Type:
+        // FINAL_ANSWER" framing show it is Codex's own inter-agent routing
+        // protocol, not a conversational turn — deliberately excluded.
+        let text = #"""
+        {"type":"response_item","payload":{"type":"agent_message","author":"/root/sub","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER"}]}}
+        """#
+        XCTAssertEqual(CodexRollout.parse(text).messages, [])
     }
 
     func testAssistantMessagesAreKept() {
@@ -134,6 +218,7 @@ final class CodexRolloutTests: XCTestCase {
         """#
         let parsed = CodexRollout.parse(text)
         XCTAssertEqual(parsed.meta?.sessionId, "s1")
+        XCTAssertEqual(parsed.skippedLines, 0, "recognized-and-ignored is not the same as undecodable")
         XCTAssertEqual(parsed.messages, [])
         XCTAssertEqual(parsed.completions, [])
         XCTAssertFalse(parsed.isBusy)
@@ -141,7 +226,9 @@ final class CodexRolloutTests: XCTestCase {
 
     func testMalformedLineIsSkippedNotFatal() {
         let text = "not json at all\n" + #"{"type":"session_meta","payload":{"id":"s1"}}"#
-        XCTAssertEqual(CodexRollout.parse(text).meta?.sessionId, "s1")
+        let parsed = CodexRollout.parse(text)
+        XCTAssertEqual(parsed.meta?.sessionId, "s1")
+        XCTAssertEqual(parsed.skippedLines, 1, "undecodable, not recognized-and-ignored — must be visible")
     }
 
     func testEmptyTextParsesToNothing() {

@@ -195,7 +195,11 @@ com.robertnowell.voice-dispatch (TCC).
       `SessionLauncher`, `AgentDefaults`, `Coordinator`, `HarnessAdapter`,
       `SessionTermination` still describing the deleted Terminal.app launch
       path as current. 739 tests, all green.
-- [~] CodexAdapter — in progress. Landed (21 Aug, this commit):
+- [~] CodexAdapter — in progress. Landed (21 Aug, two commits — the second a
+      gate-driven correction, not a formality: the gate independently
+      re-measured live against a fresh Codex process rather than just
+      reading the diff, and found a real bug plus a wrong claim in the
+      first):
         - [x] `CodexAdapter: HarnessAdapter`, every value measured live
           against codex-cli 0.149.0 in a real tmux pane, not carried forward
           from 19-20 Aug guesses: `resumeArguments` = `["resume", id]`;
@@ -206,32 +210,69 @@ com.robertnowell.voice-dispatch (TCC).
           new one needed); `hasHooks` reconfirmed by two real SessionStart
           firings (re-map done, not just cited from C0); `registersWithLiveness
           = false`. `allowsConcurrentResume = false` is 19-20 Aug + repeated
-          this session, not new today.
+          this session, not new today. **`settledBannerNeedle` corrected by
+          the gate**: shipped as "OpenAI Codex" (the header box), independently
+          re-verified live and found to scroll into scrollback within ~1s of
+          any real output — invisible to the plain `capture-pane -p` read
+          `SessionLauncher` actually does, which would have burned the
+          watcher's full ~30s timeout on every ordinary Codex launch. Now
+          "Ask Codex to do anything", the composer's own idle placeholder,
+          confirmed 10/10 across repeated polls because it sits at the
+          bottom of the pane, not in scrollable history.
         - [x] `HarnessCapabilities.allowsConcurrentResume` named and wired on
           both adapters (true / Claude Code, false / Codex) — the field this
           item used to say would land here, done.
         - [x] The hooks-review needle ("Hooks need review... Trust all and
           continue") has its own home: `TrustPromptSpec.neverAutoAcceptNeedles`,
-          a new watcher primitive that stops rather than presses — hook-trust
-          is the user's choice, enforced by construction now, not just by
-          policy. NOT reconfirmed live today (this scratch dir had no
-          project-level hook config to retrigger it) — carried from C0,
-          flagged as such in `CodexAdapter`'s own doc comment.
+          a new watcher primitive that stops rather than presses — checked
+          before `promptNeedles`, verified (by the gate, reading the control
+          flow directly) to never press on a screen matching both lists.
+          NOT reconfirmed live today (this scratch dir had no project-level
+          hook config to retrigger it) — carried from C0. Honestly scoped,
+          not "true by construction" alone: no call site passes `CodexAdapter`
+          into `SessionLauncher.watchForTrustPrompt` yet, so the guarantee
+          lives in the type, not in anything that runs; and even once wired,
+          Codex loads hooks only AFTER directory trust is granted, so a
+          first-run untrusted launch presses trust and returns before a
+          hooks-review dialog could render — this fires on an already-
+          trusted launch whose hooks changed since the last review, not the
+          common first-run case.
         - [x] `CodexRollout.swift`: parses `session_meta`, `task_started`/
-          `task_complete` (busy/idle + `last_agent_message` — no
-          `response_item` scanning needed for "what did it just say"),
+          `task_complete`/`task_aborted` (busy/idle + `last_agent_message` —
+          no `response_item` scanning needed for "what did it just say"),
           `response_item` messages (filtering Codex's own injected
-          `<environment_context>` wrapper out of the first "user" message
-          per turn — found live, not anticipated), tolerates `compacted`/
-          `world_state`/`turn_context`/`inter_agent_communication_metadata`.
+          `<environment_context>` wrapper — found live, not anticipated —
+          out of user-role messages at ANY position in a turn, plus
+          `developer`-role and `agent_message`-type records, all confirmed
+          by sampling real occurrences to be injected system context or
+          inter-agent routing, never anything a human or TB typed), tolerates
+          `compacted`/`world_state`/`turn_context`/`inter_agent_communication_metadata`.
           `rolloutPath(forSessionId:)` finds a thread's file by the filename
-          Codex itself writes, no directory-layout guessing. Fixture-tested
-          (portable, matching this repo's own convention) AND run against
-          all 192 real rollouts on this machine (six Codex versions,
-          0.133.0-alpha.1 → 0.149.0) as a one-time sanity pass: 192/192
-          parsed with meta, messages, and completions extracted — the
-          `session_id`-absent-on-old-versions and `<environment_context>`
-          fixtures both came from that sweep, not invention.
+          Codex itself writes, no directory-layout guessing. `skippedLines`
+          on `Parsed` makes an undecodable line visible instead of silently
+          absent — this file's own doc block already cited the "one bad row
+          nilling an entire probe" lesson; the gate found the inverse gap
+          (a bad row disappearing with no signal at all) wasn't closed yet.
+          **`turn_aborted` was unhandled at first landing — a real bug, not
+          a nitpick**: the gate measured that alone made 55/192 real
+          rollouts on this machine (29%) read as falsely busy, 13 of them
+          purely from an unhandled abort. Fixed; `isBusy`'s own doc comment
+          now says plainly what it still can't do — distinguish "still
+          working" from "killed mid-turn with no cleanup event at all"
+          (42/192 on this machine), which needs `processAlive` or rollout
+          mtime at the wiring call site, not in this pure parser.
+          Fixture-tested (portable, matching this repo's own convention:
+          every fixture that matters — the wrapper at a non-first position,
+          content that only starts like the wrapper but isn't, the abort
+          case, the orphaned-completion case, an `id`/`session_id` mismatch
+          — traces to something the 192-real-file sweep or the gate's
+          re-reading actually found, not invention) AND run against all 192
+          real rollouts on this machine (six Codex versions, 0.133.0-alpha.1
+          → 0.149.0) as a one-time sanity pass. That sweep is honestly
+          qualified now: meta/messages/completions extracted cleanly on
+          192/192, but `isBusy` was the one field it didn't check — the
+          exact field the `turn_aborted` bug lived in, until the gate reran
+          the numbers.
       Still open, concretely:
         - Wire `CodexRollout` into session discovery/liveness so the grid
           actually shows Codex sessions (`registersWithLiveness == false`
