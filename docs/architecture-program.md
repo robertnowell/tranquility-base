@@ -291,6 +291,18 @@ com.robertnowell.voice-dispatch (TCC).
         - `thread/queue/add` requiring pre-existing writer ownership is
           still a strong inference, not verified against
           `codex-rs/app-server/src/` — cheap to confirm before leaning on it.
+      **`resumeTmux` landed (00b060d, 21 Aug)**: the one mechanism both
+      adoption strategies bottom out in — build resume arguments through
+      the adapter, spawn a fresh TB-owned detached tmux pane, watch that
+      harness's trust prompt — factored out of `launchTmux` rather than
+      duplicated. `launch`/`launchTmux` now take the adapter as a real
+      parameter instead of `launchTmux` silently defaulting to
+      `ClaudeCodeAdapter()` regardless of what was being launched (latent
+      since nothing called it with Codex yet). Refuses loudly on empty
+      `resumeArguments`, mirroring `resume()`'s existing guard. This is
+      mechanism only — no policy, no call site yet, no ownership-handoff
+      state machine above it; the three "still open" items above are
+      unchanged by this. 772 tests, both drills green.
 - [ ] Single-transport cut, remainder: delete AppleScript dispatch machinery
       (TerminalAppTransport, the Automation permission gate); attach
       affordance in the panel (folds in the GO TO AGENT fix above); the
