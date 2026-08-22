@@ -224,6 +224,15 @@ extension Array where Element == LiveSession {
         if tmuxOwned.count == 1 { return tmuxOwned[0] }
         trace?("dispatch: \(sessionId.prefix(8)) has \(matches.count) duplicate rows, "
             + "\(tmuxOwned.count) tmux-owned; picking the first, arbitrarily")
+        // The fallback still owes its OWN doc's reuse promise: if the row it is
+        // about to return happens to be one of the tmux-owned ones (the only
+        // way this branch is reached with count > 1 — two tmux panes on one
+        // pid's tty), returning its already-resolved pane here is what stops
+        // the caller re-querying and risking the two live lookups disagreeing.
+        // Found by the codebase audit, 21 Aug: this used to discard it.
+        if let reuse = tmuxOwned.first(where: { $0.0.pid == firstMatch.pid }) {
+            return reuse
+        }
         return (firstMatch, nil)
     }
 }
@@ -267,6 +276,17 @@ public struct TmuxTransport: DispatchTransport {
         }
     }
 
+    /// The V4 re-probe (gate finding, PR #163): a session can pop a modal
+    /// between an Enter that landed nothing and the retry that would submit
+    /// it, and a Return at a dialog ANSWERS it. Shared by both places `send`
+    /// presses a bare Enter with no fresh text underneath it — codebase audit
+    /// (21 Aug) found the second one had been built without this call.
+    private func dialogIsUp(target: DispatchTarget, pid: Int) -> Bool {
+        target.readinessSource == .claudeAgents
+            && Readiness.classify((agents.sessions() ?? [])
+                .matching(sessionId: target.sessionId, pid: pid)).isDialog
+    }
+
     public func send(text: String, to target: DispatchTarget) async -> DispatchOutcome {
         guard let pane = target.pane else {
             return .failed(.injectionFailed("tmux target has no pane address"))
@@ -296,7 +316,7 @@ public struct TmuxTransport: DispatchTransport {
 
 
         let attempts = 5
-        for attempt in 0..<attempts {
+        attemptLoop: for attempt in 0..<attempts {
             let lastAttempt = attempt == attempts - 1
             // Step 0 — dedupe against ground truth, EVERY attempt. This is
             // what makes every retry below safe: our payload appended after
@@ -325,7 +345,14 @@ public struct TmuxTransport: DispatchTransport {
                                             // landing is verified either way
             case .holds(ours: true):
                 // Our text is already sitting unsubmitted — a previous
-                // attempt's paste landed and its Enter was eaten. Submit only.
+                // attempt's paste landed and its Enter was eaten. Submit
+                // only — but re-probe first (gate finding V4, codebase audit
+                // 21 Aug: this branch has MORE elapsed time behind it than
+                // step 7's own re-check, since it only runs on attempt >= 2,
+                // after a full failed attempt's wait — the exact window a
+                // resume-depth dialog can pop in. A Return at a dialog spends
+                // a usage tier silently; standing down and retrying is free.
+                if dialogIsUp(target: target, pid: pid) { break attemptLoop }
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
                 if await landedInTranscript(payload, target: target,
                                             fromByteOffset: watermark) {
@@ -387,11 +414,7 @@ public struct TmuxTransport: DispatchTransport {
                 // session can pop a modal between the first Enter and this
                 // one, and a Return at a dialog ANSWERS it (gate finding V4).
                 // Re-probe and stand down if a dialog is up.
-                if target.readinessSource == .claudeAgents,
-                   Readiness.classify((agents.sessions() ?? [])
-                       .matching(sessionId: target.sessionId, pid: pid)).isDialog {
-                    break
-                }
+                if dialogIsUp(target: target, pid: pid) { break attemptLoop }
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
                 if await landedInTranscript(payload, target: target, timeout: 3,
                                             fromByteOffset: watermark) {
@@ -467,7 +490,19 @@ public struct TmuxTransport: DispatchTransport {
             .dropFirst()                                    // the ❯ itself
             .trimmingCharacters(in: .whitespaces)
         if content.isEmpty { return .empty }
-        if !payload.isEmpty, content.contains(payload) || payload.contains(content) {
+        // A truncated echo is a PREFIX of what we sent — the TUI elides
+        // trailing characters while long input renders — never the reverse,
+        // and never an unanchored substring test. `payload.contains(content)`
+        // used to accept ANY shared substring in either direction: a human's
+        // half-typed "go" on the floor classified as OURS against a
+        // dispatched "go ahead and merge it" and got Enter pressed under it
+        // (codebase audit finding, 21 Aug — this is the exact splice
+        // `floorHeld` exists to prevent, arrived at from the other side).
+        // The length floor keeps a short, coincidental prefix match from
+        // reading as truncation evidence when it is more likely chance.
+        if !payload.isEmpty,
+           content.contains(payload)
+           || (content.count >= 8 && payload.hasPrefix(content)) {
             return .holds(ours: true)
         }
         return .holds(ours: false)

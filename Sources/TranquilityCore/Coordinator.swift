@@ -11,8 +11,12 @@ public struct Coordinator: Sendable {
     public let gate: InterruptGate
     public let transport: any DispatchTransport
     /// The closed-loop tmux transport, selected per target when a live tmux
-    /// server owns the session's pane. `transport` remains the Terminal.app
-    /// path and the default for everything else — co-existence, not rip-out.
+    /// server owns the session's pane. `transport` (Terminal.app) is the
+    /// fallback for everything else — every NEW launch is tmux now (ruled 21
+    /// Aug), so what still reaches this path is a hand-started session TB
+    /// never launched, or a revived one (`SessionLauncher.resume` still opens
+    /// a Terminal.app window). Scheduled for deletion at the single-transport
+    /// cut, not a standing co-existence design.
     public let tmuxTransport: any DispatchTransport
 
     /// Which transport reaches this target. The decision is the target's own

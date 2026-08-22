@@ -1,7 +1,9 @@
 import AppKit
 import Foundation
 
-/// Spawn a fresh Claude session in a new Terminal window.
+/// Spawn a fresh Claude session in a detached tmux pane (ruled 21 Aug — see
+/// `launch()` below; `launchTerminal`, the Terminal.app path this replaced,
+/// is deleted, not kept as a second one).
 ///
 /// The dispatch loop is reactive by construction — sessions announce, the user
 /// answers. This is the proactive half (ruled 05 Aug): "sometimes I want to
@@ -10,11 +12,10 @@ import Foundation
 /// knobs worth a UI (directory, agent command) arrive with the grid's
 /// new-session affordance; adding options before the habit exists is furniture.
 ///
-/// Lives in Core so `tbase new` and the app's menu item are the same code path,
-/// and because the only capability it needs — Terminal automation via
-/// AppleScript — is already Core's (`AppleScript.run`, the dispatcher's own
-/// transport). The Automation permission the app holds covers this identically:
-/// same target app, same entitlement.
+/// Lives in Core so `tbase new` and the app's menu item are the same code
+/// path. `resume` (reviving a dead session) still opens a Terminal.app window
+/// and still needs the Automation permission and `AppleScript.run` — that is
+/// the one remaining consumer of both, not `launch`.
 public enum SessionLauncher {
 
     /// Same shape as Coordinator.trace / QueueStore.trace: Core stays silent
@@ -28,7 +29,7 @@ public enum SessionLauncher {
     /// became a second launch path and the two disagreed about permissions.
     public static var defaultCommand: String { AgentDefaults.load() }
 
-    /// Opens a new Terminal window in `directory` running `command`, and — by
+    /// Opens a detached tmux pane in `directory` running `command`, and — by
     /// explicit ruling — clicks through Claude's own directory-trust prompt if
     /// it appears.
     ///
@@ -36,40 +37,33 @@ public enum SessionLauncher {
     /// start this. I told you to start the session. Start the session." The
     /// consent happened at the button press; the prompt is asking permission
     /// for the thing the user just commanded. The scope is surgical and stays
-    /// that way: ONLY the tab this call just created (addressed by its tty),
+    /// that way: ONLY the pane this call just created (addressed by its tty),
     /// ONLY the known trust prompt, ONLY within thirty seconds of launch. The
     /// dispatcher's rule — never type into unregistered sessions — is intact
-    /// everywhere else; this tab is not "some session", it is our own launch.
+    /// everywhere else; this pane is not "some session", it is our own launch.
     ///
     /// Blocks while watching for the prompt — ~4s in the common case (two
-    /// settled polls), up to ~30s if the tab never looks started; call
+    /// settled polls), up to ~30s if the session never looks started; call
     /// off-main.
-    /// Returns the new tab's tty, so a caller can watch exactly this window.
+    /// Returns the new pane's tty, so a caller can watch exactly this session.
     ///
-    /// **Terminal is not activated** (ruled 18 Aug: "the terminal window does
-    /// not need to be focused"). Starting an agent is a background act — the
-    /// panel is the interface, and the whole point of the greeting is that you
-    /// never have to look at the tab. Nothing here needs focus either: the
-    /// trust prompt is answered with `do script ""` into the tab by id, not
-    /// with keystrokes, so it works on a window you were never shown.
-    ///
-    /// `resume` still activates, and that ruling stands for its own reason —
+    /// Nothing is activated or brought forward — the pane exists on the app's
+    /// own tmux server with no window anywhere until someone asks for one
+    /// (`tmux attach`). Starting an agent is a background act; the panel is
+    /// the interface, and the whole point of the greeting is that you never
+    /// have to look at the pane. `resume`, below, is the opposite by design:
     /// a revived session asks a question (summary or full context) that only
-    /// you can answer, in its own window.
+    /// you can answer, so it activates a Terminal window for that one turn.
     ///
-    /// **A window per agent, and that is settled** (ruled 18 Aug). A tab would
-    /// be tidier and Terminal.app cannot make one: its dictionary marks tabs
-    /// `<element type="tab" access="r">`, there is no `make new tab`, and the
-    /// near-miss — `do script … in window 1` — does not create anything, it
-    /// types into that window's SELECTED tab, which on a machine running ten
-    /// agents is somebody's live conversation.
-    ///
-    /// The only mechanism that works is pressing ⌘T through System Events,
-    /// which requires Terminal frontmost, which is the focus theft removed
-    /// directly above. Juggling it — activate, keystroke, run, hand focus back —
-    /// was scoped, costed and refused: "that's brittle and is gonna break." So
-    /// this stays a window, deliberately, and a session that reads this file
-    /// and thinks of ⌘T should read this paragraph instead of writing it.
+    /// History, kept because it explains a shape still visible in the tmux
+    /// path (one pane per agent, never a shared window someone else's reply
+    /// could land in): before 21 Aug this opened a Terminal.app WINDOW, ruled
+    /// 18 Aug because Terminal.app cannot script a new TAB (`do script …
+    /// in window 1` types into that window's SELECTED tab, not a fresh one)
+    /// and the only mechanism that works, ⌘T via System Events, needs
+    /// Terminal frontmost — "that's brittle and is gonna break," scoped,
+    /// costed, and refused. tmux has no such constraint (`new-session` always
+    /// creates fresh), which is part of why the launch path moved there.
     @discardableResult
     public static func launch(
         directory: String = defaultDirectory,

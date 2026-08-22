@@ -86,8 +86,9 @@ public enum AgentDefaults {
     ///
     /// A path that does not EXIST falls back rather than being honoured: the
     /// setting is typed by hand, a typo is one keystroke away, and a launch
-    /// into a directory that is not there fails in Terminal where the panel
-    /// cannot see it. Home always exists.
+    /// into a directory that is not there fails inside a detached tmux pane
+    /// the panel cannot see into any more easily than a Terminal window it
+    /// once failed in. Home always exists.
     public static func directory() -> String {
         guard let path = stored()?.directory?.trimmingCharacters(in: .whitespaces),
               !path.isEmpty else { return fallbackDirectory }

@@ -226,4 +226,24 @@ final class SessionTerminationTests: XCTestCase {
         XCTAssertNil(LiveProcessControl.parse(psLine: ""))
         XCTAssertNil(LiveProcessControl.parse(psLine: "no-pgid ttys000 claude"))
     }
+
+    /// `identity(of:)` itself, not just its parser — against a real `ps`,
+    /// live. Routed through `Subprocess.run` (codebase audit, 21 Aug: it used
+    /// to be a raw, unbounded `Process`, the one spawn in this repo M1 didn't
+    /// catch, on the path re-read before every rung of the kill ladder). This
+    /// is the swap that matters: proving the bounded runner still finds this
+    /// test's own process, not just that the string parser is unchanged.
+    func testLiveIdentityFindsTheRunningTestProcess() {
+        let pid = Int(ProcessInfo.processInfo.processIdentifier)
+        let id = LiveProcessControl().identity(of: pid)
+        XCTAssertNotNil(id, "a live pid must resolve to an identity")
+        XCTAssertGreaterThan(id?.pgid ?? 0, 0)
+    }
+
+    func testLiveIdentityIsNilForADeadPid() {
+        // A pid astronomically unlikely to be live; `ps -p` exits non-zero
+        // and `Subprocess.run` must surface that as .failure, same as the
+        // raw `Process` this replaced did via `terminationStatus`.
+        XCTAssertNil(LiveProcessControl().identity(of: 999_999))
+    }
 }

@@ -18,11 +18,18 @@ import Foundation
 ///    REVIVE having lost at most the turn in flight.
 ///
 /// 2. `claude` leads its own process group (pid == pgid) and its MCP servers are
-///    children inside it, while the tab's shell sits in a DIFFERENT group and is
-///    the tty's session leader. So signalling the GROUP takes the agent and
-///    everything it spawned, and is structurally incapable of reaching the shell
-///    — which is what makes "end the session without closing the tab" free
-///    rather than delicate. We never address the tab at all.
+///    children inside it. In a Terminal.app tab the shell sits in a DIFFERENT
+///    group and is the tty's session leader, so signalling the GROUP takes the
+///    agent and everything it spawned, structurally incapable of reaching the
+///    shell — "end the session without closing the tab" was free there, not
+///    delicate, and never addressed the tab at all. Every launch is a tmux
+///    pane now (ruled 21 Aug), where the pane's shell execs `claude` as its
+///    last command (`/bin/zsh -c "cd … && claude …"`): ending the agent's
+///    group there ends the pane's own controlling process, closing the pane
+///    and the tmux session with it — not delicate either (there is no stray
+///    empty pane to leave behind, and the tmux SERVER, `exit-empty off`,
+///    outlives it), just a different mechanism than the paragraph above
+///    describes. Reasoned from the exec chain, not independently re-measured.
 ///
 /// 3. The liveness cache is six seconds deep, so a pid handed to us can already
 ///    be dead — and on a busy machine, reused. Every rung therefore re-reads the
@@ -296,18 +303,16 @@ public struct LiveProcessControl: SessionTermination.ProcessControlling {
     /// string on purpose — it is the only field that can contain a space, so
     /// everything after the second column is the command and nothing has to be
     /// guessed about where it ends.
+    ///
+    /// Routed through `Subprocess.run` (codebase audit, 21 Aug): this is
+    /// re-read before EVERY rung of the kill ladder as the pid-reuse guard,
+    /// so a wedged `ps` used to block the terminating thread indefinitely —
+    /// the exact unbounded-spawn shape `Subprocess` exists to close, on the
+    /// one path where a hang means END SESSION never ends.
     public func identity(of pid: Int) -> SessionTermination.Identity? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/ps")
-        p.arguments = ["-o", "pgid=,tty=,comm=", "-p", "\(pid)"]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = Pipe()
-        do { try p.run() } catch { return nil }
-        let raw = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        p.waitUntilExit()
-        guard p.terminationStatus == 0 else { return nil }
+        guard case .success(let raw) = Subprocess.run(
+            "/bin/ps", ["-o", "pgid=,tty=,comm=", "-p", "\(pid)"], timeout: 3)
+        else { return nil }
         return Self.parse(psLine: raw)
     }
 

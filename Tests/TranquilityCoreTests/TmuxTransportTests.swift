@@ -99,6 +99,19 @@ final class TmuxTransportTests: XCTestCase {
                        .holds(ours: true))
     }
 
+    func testShortForeignPrefixDoesNotReadAsTruncatedEcho() {
+        // Codebase audit, 21 Aug: `payload.contains(content)` (an unanchored
+        // substring test, either direction) classified a human's half-typed
+        // "go" as OURS against a dispatched "go ahead and merge it" — the
+        // splice-corruption class `floorHeld` exists to prevent, arrived at
+        // from the other side. A short coincidental prefix must hold the
+        // floor, not submit under the human's half-typed message.
+        let screen = "────\n❯ go\n────"
+        XCTAssertEqual(TmuxTransport.classifyPromptLine(
+            screen: screen, payload: "go ahead and merge it"),
+            .holds(ours: false))
+    }
+
     func testNoPromptCharReadsAsEmpty() {
         // A plain-shell harness target has no ❯; the landing check is the
         // guard that matters there, and the floor check stands aside.
@@ -219,15 +232,27 @@ final class TmuxTransportTests: XCTestCase {
 
     func testPreferringTmuxOwnedTracesWhenMoreThanOneIsTmuxOwned() {
         // Should not occur (two tmux panes cannot share one pid's tty), but
-        // the fallback must still be deterministic and visible, not a crash.
+        // the fallback must still be deterministic and visible, not a crash —
+        // and it must still honor the function's own reuse promise (codebase
+        // audit, 21 Aug: this used to discard the pane it had just resolved
+        // for the row it was about to return, forcing the caller into a
+        // second live lookup that could disagree with the first).
+        let firstPane = TmuxPaneAddress(socketName: "tb", paneId: "%1",
+                                        sessionName: "tb-first", paneTty: "/dev/ttys001")
+        let secondPane = TmuxPaneAddress(socketName: "tb", paneId: "%2",
+                                         sessionName: "tb-second", paneTty: "/dev/ttys002")
         let live = [
             LiveSession(pid: 1, sessionId: "dup", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
             LiveSession(pid: 2, sessionId: "dup", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
         ]
         let mailbox = Mailbox()
-        let chosen = live.preferringTmuxOwned(sessionId: "dup", resolvePane: { _ in Self.fakePane },
-                                              trace: { mailbox.value = $0 })
+        let chosen = live.preferringTmuxOwned(
+            sessionId: "dup",
+            resolvePane: { $0 == 1 ? firstPane : secondPane },
+            trace: { mailbox.value = $0 })
         XCTAssertEqual(chosen?.session.pid, 1)
+        XCTAssertEqual(chosen?.pane, firstPane,
+                       "must reuse the pane already resolved for the row it's returning, not discard it")
         XCTAssertTrue(mailbox.value?.contains("2 tmux-owned") ?? false)
     }
 

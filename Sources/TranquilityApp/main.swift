@@ -3727,7 +3727,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if case .failure(let error) = result {
                     await MainActor.run { [weak self] in
                         self?.hud.showResult("Couldn't start an agent: \(error.message). "
-                                             + "Terminal automation permission is the usual suspect.")
+                                             + "A missing tmux binary is the usual suspect.")
                     }
                 }
                 return
@@ -3751,7 +3751,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("launcher: no session registered in \(dir) after 30s")
                 await MainActor.run { [weak self] in
                     guard let self, self.hud.canSurfaceAmbiently else { return }
-                    self.showIdleGrid(note: "New agent is waiting on a prompt in Terminal.")
+                    self.showIdleGrid(note: "New agent is waiting on a prompt (attach to see it).")
                 }
                 return
             }

@@ -34,14 +34,17 @@ public protocol HarnessAdapter: Sendable {
     /// the composer's own line, does the harness queue typed input while
     /// mid-turn rather than reject it, does it register with a liveness
     /// probe TB can poll, does it have a hook system TB's intake can lean
-    /// on. NOT YET CONSUMED (M2 gate finding, honest as of this milestone):
+    /// on. STILL NOT CONSUMED (M2 gate finding; M3 landed — dispatch-target
+    /// resolution, not harness wiring — and did not touch this either):
     /// TmuxTransport's landing check still hardcodes its own "every target
     /// echoes" belief rather than reading `echoesPaste` per target, because
     /// `DispatchTarget` carries no adapter reference yet. A parity test
     /// (`HarnessAdapterTests.testClaudeCodeEchoesPasteMatchesWhatTmuxTransportAssumes`)
-    /// pins the two together until the wiring itself lands — presumably M3,
-    /// alongside the per-target harness selection the transcript-parser
-    /// collapse needs anyway.
+    /// pins the two together until the wiring itself lands. That now lands
+    /// WITH CodexAdapter by design, not after it: a second adapter is what
+    /// makes per-target harness selection a real question rather than a
+    /// field with one possible answer — see `docs/architecture-program.md`'s
+    /// CodexAdapter checklist item.
     var capabilities: HarnessCapabilities { get }
 }
 

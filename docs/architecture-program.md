@@ -60,27 +60,54 @@ The six-agent audit record behind every item:
   reversing the read-only-rows trade: "announced but not voice-repliable is
   not acceptable... it should just work"). Every session on the machine
   appears in the grid from its transcript, whatever terminal it was started
-  in — unchanged, and load-bearing for first-run users. The first voice
-  reply to a live NON-tmux session ADOPTS it: graceful end (the existing
-  clean SIGTERM path, "resumable via revive"), then `claude --resume <id>`
-  in a fresh tb- tmux session, then the closed-loop delivery. The user's
-  terminal is never typed into or manipulated — their process exits cleanly
-  and the conversation continues managed; GO TO AGENT attaches to it.
-  The resume-depth dialog, when Claude Code shows one, surfaces through the
-  dialog gate (a usage spend stays a human choice; one tap, then the reply
-  flows). Replies to dead sessions revive straight into tmux. Precedent:
-  vibe-kanban delivers every follow-up by spawning a fresh resume process
-  and never touches a terminal; adoption adds the graceful end because two
-  live processes on one session id is this repo's documented crash and
-  divergence hazard. Codex twin: `codex resume <id>`, same shape.
+  in — unchanged, and load-bearing for first-run users.
+  **Corrected 21 Aug** (2026-08-21-tb-dual-live-harness-parity,
+  2026-08-21-tb-codex-tmux-prior-art): the mechanism branches by harness, it
+  is not one universal graceful-end. **Claude Code**: dual-live is measured
+  safe, live, twice (first the raw experiment, then again through the real
+  M3 dispatch path, 846dcbd) — Claude Code tolerates two processes on one
+  conversation and arbitrates it with its own "Remote Control" feature. TB
+  launches a tmux twin via `claude --resume <id>` and dispatches to it,
+  **the user's original terminal untouched and left running** — no SIGTERM,
+  no adoption in the graceful-end sense, just a second live process TB owns.
+  `Coordinator`'s `preferringTmuxOwned` (846dcbd) is what makes replies land
+  in TB's twin deterministically rather than an arbitrary one of the two.
+  **Codex**: cannot dual-live — `codex-rs/app-server/README.md` states the
+  single-writer lock directly ("only one app-server process can hold a
+  paginated thread open for writing at a time... `thread/resume` fails with
+  JSON-RPC `-32600`"), a second Codex process was measured live hitting
+  exactly that error, and OpenAI was asked for the exact alternative
+  (`codex inject`, issue #11415) and closed it "not planned." So Codex keeps
+  the original design: graceful end (the existing clean SIGTERM path,
+  "resumable via revive"), THEN `codex resume <id>` in a fresh tb- tmux
+  session, then the closed-loop delivery — with the user's explicit approval
+  on first attempted reply to a hand-started Codex session, never automatic.
+  Both: the resume-depth dialog, when Claude Code shows one, surfaces
+  through the dialog gate (a usage spend stays a human choice; one tap, then
+  the reply flows). Replies to dead sessions revive straight into tmux.
+  This is `allowsConcurrentResume` on `HarnessCapabilities` (not yet added —
+  lands with CodexAdapter, since a capability with one harness to compare
+  against is a field with no real question to answer).
 - **GO TO AGENT = attach**: opens a terminal window running
   `tmux attach -t <session>`; detach leaves the agent running. Revive = tmux.
   The frontmost-suppression check generalizes to the active tmux client, or
   dies if it cannot be done cleanly (announce-always is the safe direction).
+  **NOT YET BUILT, and currently a regression, not a pending enhancement**
+  (codebase audit, 21 Aug): `SessionLauncher.focus(pid:)` walks Terminal.app
+  tabs by tty; since every launch became tmux (cc7bf4e) that walk always
+  misses, so the grid/past-agents "Go to agent" is a silent no-op for every
+  session TB launches. `TerminalTabFocus` (the card's own door,
+  `StatusHUD.swift:7132`) is the better-built implementation but is the same
+  Terminal.app-tab mechanism underneath, so it is not a working fallback for
+  a tmux-hosted session either. Fix direction: delete `SessionLauncher.focus`
+  outright, route both call sites through one door, and give that door the
+  `tmux attach` branch this bullet already describes as the design.
 - **HarnessAdapter with two real implementations, no optional stubs:**
   ClaudeCodeAdapter and CodexAdapter land together, both load-bearing.
   Capabilities (liveSessions?, hooks?, echoesPaste, queuesInputMidTurn,
-  promptGlyph, resumeArguments(), trustPromptSpec?) describe harness facts.
+  promptGlyph, resumeArguments(), trustPromptSpec?, and
+  `allowsConcurrentResume` — named 21 Aug, see the adoption bullet above)
+  describe harness facts.
   The five hand-rolled transcript parsers collapse into the adapter's
   transcript store; the four status-vocabulary copies collapse into one
   normalized enum; the two trust watchers collapse into one loop over
@@ -149,19 +176,74 @@ com.robertnowell.voice-dispatch (TCC).
       transport cut below — see "The end state" note above. `resume()`
       (revive) still opens Terminal.app; NOT yet decided whether that
       also moves now or waits for the full cut.
+- [x] Audit gate, 21 Aug (self-reviewed, no external gate agent — noted, not
+      hidden): a fresh no-priors sweep of Sources/ plus a doc/tracker
+      reconciliation against git reality and all six research reports found
+      and fixed: `tbase send`'s hand-derived transcript path (wrong for any
+      session under `.claude/worktrees/`, i.e. every session working this
+      arc — replies landed but could never confirm); an unbounded raw
+      `Process` spawn on `SessionTermination`'s kill ladder (re-read before
+      every rung; a wedged `ps` hung END SESSION with no trace) routed
+      through `Subprocess.run`; a missing V4 dialog re-check on
+      `TmuxTransport`'s OTHER Enter-press (could silently answer a
+      resume-depth dialog — a real usage spend — under retry timing); a
+      floor-check substring bug (`payload.contains(content)` could classify
+      a human's half-typed message as TB's own and submit it); and
+      `preferringTmuxOwned` discarding an already-resolved pane on its own
+      "should not occur" fallback, forcing exactly the double-lookup its doc
+      comment says the caller must avoid. Plus stale comments/strings across
+      `SessionLauncher`, `AgentDefaults`, `Coordinator`, `HarnessAdapter`,
+      `SessionTermination` still describing the deleted Terminal.app launch
+      path as current. 739 tests, all green.
 - [ ] CodexAdapter (load-bearing on landing: grid shows Codex sessions,
       dispatch delivers to them; rollout parser test-driven against the 177
       rollouts already on this machine); harness-conditional adoption
       capability + explicit ownership-handoff state machine land with it —
       see 2026-08-21-tb-codex-tmux-prior-art for why these three are one
-      milestone, not `HarnessCapabilities` field first.
+      milestone, not `HarnessCapabilities` field first. Carries forward from
+      that report and from C0 (19-20 Aug), concretely:
+        - The `-32600` single-writer constraint (cited in the adoption bullet
+          above) is what `allowsConcurrentResume` encodes; branch
+          `Coordinator`'s adoption logic on it, don't re-derive it.
+        - Launch-flag compensation, from AWS cli-agent-orchestrator's own
+          Codex provider: force scrollback (Codex's approval UI breaks
+          `capture-pane` otherwise) and a warm-up beat before first
+          injection into a freshly spawned pane — Anthropic's own agent-teams
+          hits the send-keys-before-shell-ready race in its own tracker,
+          unresolved (claude-code #23513); Codex gets the same discipline
+          from day one rather than discovering the race live.
+        - Re-map the hook/skill surface on the CURRENT Codex before capability
+          values freeze (C0 found it loads Claude plugins and runs
+          SessionStart hooks — the "no hooks" parity read is stale) and give
+          the hooks-review needle ("Hooks need review... Trust all and
+          continue") its own `TrustPromptSpec` — hook-trust is the user's
+          choice, never auto-accepted, and nothing enforces that today
+          because no spec for it exists yet.
+        - `thread/queue/add` requiring pre-existing writer ownership is a
+          strong inference from the prior-art report, not verified against
+          `codex-rs/app-server/src/` — cheap to confirm empirically before
+          leaning on it.
 - [ ] Single-transport cut, remainder: delete AppleScript dispatch machinery
       (TerminalAppTransport, the Automation permission gate); attach
-      affordance in the panel; the useTmux/launchTerminal half of this is
-      already done, above.
+      affordance in the panel (folds in the GO TO AGENT fix above); the
+      useTmux/launchTerminal half of this is already done, above.
 - [ ] Launcher: PATH/env from adapter; trust watcher unified; revive = tmux
 - [ ] Coordinator split
 - [ ] App lane P1-P10 (sequenced, drills green per step)
-- [ ] Store riders + dead-code deletions
+- [ ] Store riders + dead-code deletions: `TransportKind.iTerm2/.wezterm/
+      .kitty` (never constructed; `Codable` + persisted, needs a decode-
+      tolerance check, not a bare case removal), `Event.isHeadless` (`tty ==
+      "??"`, zero callers — the tty discriminator open-issues.md #1 already
+      calls dead; `SessionDiscovery.isHeadless(entrypoint:)` is the real,
+      wired signal), `ProcessProbe.name(of:)` (zero callers).
+- [ ] `SessionDiscovery.firstCwd` mis-homes a relocated session (found by
+      2026-08-21-tb-division-of-labor: unfindable by project name, and
+      `reviveCommand` would resume it in `~` rather than its real repo) —
+      real defect, tracked in no doc until now.
+- [ ] tmux server survival across a macOS logout/reboot — untested since the
+      19 Aug validation battery, and now the highest-stakes gap on the board:
+      after cc7bf4e tmux is the ONLY launch path, so a reboot that kills the
+      server has no fallback. One manual test; launchd `KeepAlive` is the
+      presumed fix if it's needed.
 - [ ] Final: preflight, full drills, merge to main, deploy verified,
       freeze lifted

@@ -9,7 +9,20 @@ Companion to `docs/state-machine.html`, which maps every state against every inp
 
 ## 1. Headless sessions flood the queue — ROOT CAUSE OF THE "SAME MESSAGE" LOOP
 
-**Status:** open. This explains three separate symptoms that looked unrelated.
+**Status:** CLOSED (found by the 21 Aug reconciliation pass; this issue itself
+had gone stale — the fix shipped on a fifth signal this entry never got
+updated to record). `SessionDiscovery.isHeadless(_ entrypoint:)` reads the
+transcript's own `entrypoint` field and excludes exactly `"sdk-cli"` —
+neither the dead `tty` approach below nor the `kind` field this entry calls
+"the fourth guess." Wired at `Coordinator.swift:305` and
+`Sources/TranquilityApp/main.swift:1497,1524`; tested at
+`Tests/TranquilityCoreTests/SessionDiscoveryTests.swift:97-101`.
+`docs/architecture-program.md` already lists "the sdk-cli exclusion (robots
+stay out of the grid)" among standing rulings — this entry is that ruling's
+own history, kept below for the post-mortem, not as open work.
+
+**Status (history, before the entrypoint signal):** open. This explains three
+separate symptoms that looked unrelated.
 
 `content-engine` is a launchd job running `claude -p`. **Every run is a new session
 id**, so supersession — which collapses older turns *within a session* — never fires.
@@ -642,7 +655,12 @@ focusing, so the tab it raised was stale by construction.
 selecting it). Not gated on a file-date check: the answer would be "yes" almost
 every time, and it would be wrong in the direction that teaches you not to trust
 the door. Chrome restores scroll position across the reload. `reloading: false`
-stays available; nothing needs it.
+stays available — **corrected 21 Aug, reconciliation pass: this line was
+wrong the day #24 shipped.** The repository door (#24, same day) is exactly
+the caller that needs `reloading: false`: a live GitHub page nobody here
+rewrote, where reloading would throw away whatever the user was reading.
+`BrowserFocus.swift`'s own doc comment had the same stale claim; fixed there
+too.
 
 ## 23. The card's title took the pointer and said nothing — FIXED (18 Aug)
 
