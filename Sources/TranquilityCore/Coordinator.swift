@@ -1064,21 +1064,21 @@ public struct Coordinator: Sendable {
         // dialog, where no amount of waiting helps and the refusal below is the
         // honest answer. This buys the booting case and costs the blocked case
         // a few seconds it was going to lose anyway.
-        var live = (agents.sessions() ?? [])
-            .first(where: { $0.sessionId == target.sessionId })
-        if live == nil {
+        var resolved = (agents.sessions() ?? [])
+            .preferringTmuxOwned(sessionId: target.sessionId, trace: Coordinator.trace)
+        if resolved == nil {
             let deadline = Date().addingTimeInterval(readinessGrace)
-            while live == nil, Date() < deadline {
+            while resolved == nil, Date() < deadline {
                 try? await Task.sleep(nanoseconds: 500_000_000)
-                live = (agents.sessions() ?? [])
-                    .first(where: { $0.sessionId == target.sessionId })
+                resolved = (agents.sessions() ?? [])
+                    .preferringTmuxOwned(sessionId: target.sessionId, trace: Coordinator.trace)
             }
-            if live != nil {
+            if resolved != nil {
                 Coordinator.trace?("dispatch: \(target.sessionId.prefix(8)) came back "
                     + "inside the readiness grace")
             }
         }
-        guard let live else {
+        guard let (live, resolvedPane) = resolved else {
             // Absent from `claude agents --json` means blocked on a dialog or gone.
             // Injecting would answer the dialog, so we refuse and keep the audio.
             // The files did not land either; back to the chips. A later
@@ -1114,7 +1114,14 @@ public struct Coordinator: Sendable {
         // The tty is recorded as an identity guard and a display fact; it is
         // never again an address (19 Aug misfire: dead Terminal windows held
         // a tty string the tmux server had recycled for this very pane).
-        let pane = TmuxOwnership.pane(forPid: live.pid)
+        //
+        // Reused from selection when duplicates forced a live lookup there —
+        // a second `pane(forPid:)` call for the same pid, moments later, can
+        // disagree with the first if a pane closes in between, and a row
+        // chosen BECAUSE it was tmux-owned dispatching a beat later as
+        // `.terminalApp` is the 19 Aug misfire's shape exactly. The common
+        // single-row path never paid that lookup, so it resolves fresh here.
+        let pane = resolvedPane ?? TmuxOwnership.pane(forPid: live.pid)
         let dispatchTarget = DispatchTarget(
             kind: pane != nil ? .tmux : .terminalApp,
             sessionId: target.sessionId,

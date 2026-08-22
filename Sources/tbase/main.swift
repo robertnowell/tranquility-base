@@ -706,7 +706,13 @@ case "reconcile":
         let sessionId = args[1]
         let text = args.dropFirst(2).joined(separator: " ")
 
-        guard let live = (ClaudeAgentsCLI().sessions() ?? []).first(where: { $0.sessionId == sessionId }) else {
+        // The same per-target selection Coordinator makes: a duplicate
+        // sessionId (Claude Code tolerates two processes dual-live on one
+        // conversation) resolves to TB's own tmux-owned row when one exists,
+        // never an arbitrary one of the two — this CLI is a second real
+        // dispatch door onto the same targets, per CLAUDE.md rule 7.
+        guard let (live, resolvedPane) = (ClaudeAgentsCLI().sessions() ?? [])
+            .preferringTmuxOwned(sessionId: sessionId) else {
             print("not dispatched: session is not registered in `claude agents --json`.")
             print("  It is either blocked on a dialog or still starting. Injecting now")
             print("  would answer that dialog, so we refuse.")
@@ -726,9 +732,10 @@ case "reconcile":
             print("  (claude --bg-pty-host) with no tab and no supported input channel.")
             exit(2)
         }
-        // The same per-target selection the Coordinator makes: live tmux
-        // ownership decides the transport, never a tty string.
-        let pane = TmuxOwnership.pane(forPid: live.pid)
+        // Reused from selection above rather than re-resolved: two live
+        // lookups for the same pid, moments apart, can disagree if a pane
+        // closes in between (the 19 Aug misfire's shape).
+        let pane = resolvedPane ?? TmuxOwnership.pane(forPid: live.pid)
         let target = DispatchTarget(
             kind: pane != nil ? .tmux : .terminalApp,
             sessionId: sessionId, pid: live.pid, tty: ProcessProbe.tty(of: live.pid),

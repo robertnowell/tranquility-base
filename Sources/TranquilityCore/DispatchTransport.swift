@@ -223,7 +223,7 @@ public struct TerminalAppTransport: DispatchTransport {
             // verify could answer a dialog. This is the opposite direction from
             // announcing, and the asymmetry is deliberate.
             return Readiness.classify((agents.sessions() ?? [])
-                .first(where: { $0.sessionId == target.sessionId }))
+                .matching(sessionId: target.sessionId, pid: pid))
         }
     }
 
@@ -564,6 +564,22 @@ public struct LiveSession: Sendable, Decodable {
     /// the literal string counts — an unknown future value is somebody's
     /// session, the same fail-open shape as `SessionDiscovery.isHeadless`.
     public var isBackground: Bool { kind == "background" }
+}
+
+extension Array where Element == LiveSession {
+    /// The one row that IS this pid — sessionId alone stopped being unique
+    /// the day dual-live proved safe: Claude Code tolerates two processes
+    /// resuming the same conversation (its own "Remote Control" arbitrates
+    /// exactly this), so `agents --json` can legitimately return two rows
+    /// sharing a sessionId with different pids. A transport probing readiness
+    /// always already knows which pid it is about to type into — Coordinator
+    /// resolved that once, deterministically — so matching sessionId alone
+    /// here risked reading the OTHER process's busy/dialog state and
+    /// deferring or answering a dialog that belongs to somebody else's
+    /// terminal. Matching both closes it without a live-server call.
+    public func matching(sessionId: String, pid: Int) -> LiveSession? {
+        first(where: { $0.sessionId == sessionId && $0.pid == pid })
+    }
 }
 
 public protocol ClaudeAgentsReading: Sendable {
