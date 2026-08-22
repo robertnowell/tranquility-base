@@ -399,23 +399,54 @@ com.robertnowell.voice-dispatch (TCC).
       outcomes: attach, and refuse-because-already-live).
       Also surfaced, only by actually scoping this: voice-dispatch into an
       already-attached Codex session, and kill/quiet, both need TB to
-      remember which pid it currently holds for a session id — Claude Code
-      gets this for free from `agents --json`; Codex has no registry, so
-      this needs a small persisted ownership record (sessionId → pid/pane)
-      that does not exist yet. A real, well-defined next piece, found by
-      building toward it rather than reasoned out in advance.
+      remember which pid it currently holds for a session id.
+      **Corrected same day (2026-08-22-tb-codex-remaining-design, then
+      Robert directly): the grid-integration caution above overshot, and
+      the ownership record was scoped too narrowly.**
+      **`SessionOwnershipStore` landed (bac6855, 22 Aug)** — general by
+      design, not `CodexOwnership`: a protocol (`record`/`current`/
+      `remove`/`all`, plus `verifiedCurrent` as a liveness-gated extension
+      any conformance gets for free), the same posture `ClaudeAgentsReading`
+      and `DispatchTransport` already take, so a future hosted backend is a
+      second conformance, not a rewrite. `FileSessionOwnershipStore` is
+      today's only one — one JSON file, `AgentDefaults`'s own shape. Codex
+      is the only writer today because nothing reads this for Claude Code
+      yet (`agents --json` still answers everything Claude Code's own paths
+      ask) — stated as a scope call, not silently narrower than it looks.
+      Solving this needed one more real primitive: `ProcessProbe.
+      pid(onTty:containing:)` finds the actual agent pid inside a tmux pane
+      (not tmux's own `#{pane_pid}`) by matching the session id in argv —
+      measured live that zsh's own last-command exec optimization replaces
+      the wrapping shell even inside `launchTmux`'s `cd X && command args`,
+      and that a resumed Codex process can spawn its own children (MCP
+      servers) on the same tty, so a name-prefix match alone could not tell
+      parent from child. `attemptCodexResume`'s `.attached` path now records
+      ownership on every successful attach — live-verified against a real
+      session, recorded pid confirmed against `ps` to be the genuine
+      `codex resume <id>` process.
+      **The grid itself landed too (eae2f9c, 22 Aug)** — re-reading
+      `sessionRowsNow()` (prompted by being told this should not have been
+      presented as a decision) found the caution above was wrong: Codex
+      rows never needed the dense waiting/lamp precedence logic at all,
+      only the already-generic closed-band loop, which took every field a
+      Codex row has (nil title, nil activity, a real `revivable` bool)
+      without modification. New `discoverCodexIfScanned`/`warmCodex`
+      (a second `ScanCache` instance, not a second implementation) so the
+      per-refresh cost — measured close to a second against 19 real
+      rollouts — never runs on the panel's own thread. `revive(sessionId:
+      name:)` in the app itself is now harness-aware too, mirroring `tbase
+      revive`'s already-proved branch.
       Still open, concretely:
-        - The grid call site (original roadmap step 2) — deliberately not
-          attempted this pass; needs its own design pass for how a Codex
-          row fits `sessionRowsNow()`'s band/lamp model, not a rushed
-          addition. 14 other worktrees were live on this repo when this
-          landed (all confirmed stale — see 2026-08-22-tb-goals-checkin)
-          but the file's own density is the real reason to slow down here,
-          not worktree contention.
-        - The ownership-record gap above — needed before `send`/`end` can
-          exist for Codex at all, TB-launched or hand-adopted alike.
-        - A drill exercising attach-then-dispatch end to end, once the
-          above give it something real to drill.
+        - A live `--selftest-hud` run against the panel itself, per rule
+          7's own standard — declined this pass because a real production
+          TB instance was running on this machine at the time and a second
+          instance risks the documented global-hotkey collision; Core-level
+          correctness is thoroughly verified, the panel's actual rendering
+          is not yet confirmed the way this repo's own rule asks for.
+        - `send`/`end` for Codex, now that the ownership record exists to
+          read from — the mechanism this whole piece was building toward.
+        - A drill exercising attach-then-dispatch end to end, once `send`
+          gives it something real to drill.
         - Launch-flag compensation for Codex specifically (force scrollback,
           warm-up beat before first injection — AWS cli-agent-orchestrator's
           own Codex provider, and Anthropic's own unresolved send-keys race,
