@@ -273,6 +273,8 @@ public struct TmuxTransport: DispatchTransport {
             // The same gate as every transport, from the one shared mapping.
             return Readiness.classify((agents.sessions() ?? [])
                 .matching(sessionId: target.sessionId, pid: pid))
+        case .rolloutTail:
+            return Readiness.classify(rollout: CodexRollout.parse(sessionId: target.sessionId))
         }
     }
 
@@ -281,6 +283,12 @@ public struct TmuxTransport: DispatchTransport {
     /// it, and a Return at a dialog ANSWERS it. Shared by both places `send`
     /// presses a bare Enter with no fresh text underneath it — codebase audit
     /// (21 Aug) found the second one had been built without this call.
+    ///
+    /// Scoped to `.claudeAgents` on purpose, not every `readinessSource`:
+    /// `Readiness.classify(rollout:)` never produces `.waiting`, so a Codex
+    /// target reads `isDialog == false` here unconditionally. That is an
+    /// honest "unverified", not a measured "safe" — nothing has confirmed
+    /// whether Codex can pop an equivalent modal in this exact window.
     private func dialogIsUp(target: DispatchTarget, pid: Int) -> Bool {
         target.readinessSource == .claudeAgents
             && Readiness.classify((agents.sessions() ?? [])

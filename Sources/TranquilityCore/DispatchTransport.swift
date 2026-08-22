@@ -10,6 +10,16 @@ public struct DispatchTarget: Sendable, Equatable {
         case claudeAgents
         /// Test harness: the process being alive is the gate.
         case processAlive
+        /// Codex session: `HarnessCapabilities.registersWithLiveness == false`
+        /// — no `agents --json` equivalent exists, so busy/idle comes from
+        /// tailing the session's own rollout file (`CodexRollout.parse`)
+        /// instead of a CLI-reported status. The process-alive check every
+        /// transport already runs before consulting `readinessSource` is
+        /// what covers `CodexRollout.Parsed.isBusy`'s own documented gap (a
+        /// process killed mid-turn reads identically to one still working,
+        /// from the rollout alone) — `.targetGone` fires first; this case is
+        /// only reached once the process is confirmed alive.
+        case rolloutTail
     }
 
     public var kind: TransportKind
@@ -136,6 +146,23 @@ public enum Readiness: Sendable, Equatable {
         }
     }
 
+    /// The Codex equivalent of `classify(_:LiveSession?)` above — same
+    /// shape, different ground truth. No rollout found (nil — the session
+    /// hasn't written its first turn yet, or the id is wrong) fails closed
+    /// the same way an absent `LiveSession` does: `.notRegistered`, refuse
+    /// rather than guess, matching "typing fails CLOSED" everywhere else in
+    /// this file. Deliberately narrower than the Claude Code mapping: no
+    /// Codex-specific dialog/waiting state is read here — nothing measured
+    /// yet distinguishes "idle" from "sitting at a mid-turn dialog" the way
+    /// `waitingFor` does for Claude Code, so that hazard, if it exists at
+    /// all, is not covered by this classification. An honest gap, not a
+    /// silent one — `Readiness.waiting` is simply never produced from a
+    /// rollout.
+    public static func classify(rollout parsed: CodexRollout.Parsed?) -> Readiness {
+        guard let parsed else { return .notRegistered }
+        return parsed.isBusy ? .busy : .ready
+    }
+
     /// `floorHeld` refuses for its own reason: pasting would splice our words
     /// into somebody's half-typed message. Same gate, different hazard.
     public var canDispatch: Bool {
@@ -234,6 +261,8 @@ public struct TerminalAppTransport: DispatchTransport {
             // announcing, and the asymmetry is deliberate.
             return Readiness.classify((agents.sessions() ?? [])
                 .matching(sessionId: target.sessionId, pid: pid))
+        case .rolloutTail:
+            return Readiness.classify(rollout: CodexRollout.parse(sessionId: target.sessionId))
         }
     }
 

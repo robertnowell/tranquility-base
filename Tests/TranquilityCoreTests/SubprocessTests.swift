@@ -84,4 +84,22 @@ final class SubprocessTests: XCTestCase {
         XCTAssertFalse(try Readiness.classify(live("waiting", waitingFor: "dialog open")).canDispatch)
         XCTAssertTrue(try Readiness.classify(live("waiting", waitingFor: "user input")).canDispatch)
     }
+
+    // MARK: shared readiness mapping — Codex's rollout-tail half
+
+    func testClassifyRolloutCoversTheVocabulary() {
+        // Same shape as testClassifyCoversTheVocabulary above, different
+        // ground truth: Codex has no `agents --json`, so `isBusy` off its
+        // own rollout stands in for `LiveSession.status`.
+        XCTAssertEqual(Readiness.classify(rollout: nil), .notRegistered)
+        XCTAssertEqual(Readiness.classify(rollout: CodexRollout.Parsed(isBusy: false)), .ready)
+        XCTAssertEqual(Readiness.classify(rollout: CodexRollout.Parsed(isBusy: true)), .busy)
+        // Busy still dispatches (Codex queues mid-turn input, same as Claude
+        // Code) — canDispatch composes for free, exactly as it does above.
+        XCTAssertTrue(Readiness.classify(rollout: CodexRollout.Parsed(isBusy: true)).canDispatch)
+        // No rollout found fails CLOSED, matching the absent-LiveSession
+        // case: a session that hasn't written its first turn yet (or a
+        // wrong id) must never read as safe to inject into.
+        XCTAssertFalse(Readiness.classify(rollout: nil).canDispatch)
+    }
 }
