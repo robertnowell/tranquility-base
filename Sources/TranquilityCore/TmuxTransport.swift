@@ -180,18 +180,23 @@ extension Array where Element == LiveSession {
     /// arbitrates it with its own "Remote Control" feature) rather than an
     /// arbitrary one of the rows `agents --json` happens to list first.
     ///
-    /// Scoped to the tmux-owned half of the ambiguity, honestly: tmux launches
-    /// are opt-in (`AgentDefaults.useTmux`, off by default), so a duplicate
-    /// where NEITHER row is tmux-owned — two Terminal.app-hosted processes —
-    /// is the expected shape while that setting is off, not an anomaly, and
-    /// still resolves arbitrarily here exactly as it did before this fix. Not
-    /// a regression: Terminal.app dispatch carried the same ambiguity
-    /// beforehand. Closing it needs a live Terminal.app-tab discriminator
-    /// analogous to `TmuxOwnership`, which is legacy-path investment this arc
-    /// is deliberately not making — the plan already deletes Terminal.app
-    /// dispatch once Codex is proven (single-transport cut). More than one
-    /// tmux-owned row for one sessionId is the genuine anomaly (two tmux panes
-    /// cannot share a pid's tty) and is traced identically.
+    /// Scoped to the tmux-owned half of the ambiguity, honestly: ruled 21 Aug,
+    /// every NEW launch is tmux, no flag, no opt-in — but a hand-started
+    /// session (Claude Code, opened by the user in their own plain Terminal
+    /// tab, never launched by TB at all) is a real, load-bearing shape
+    /// (`docs/architecture-program.md`'s adoption ruling: every session is
+    /// adoptable, wherever it started). Two such rows for one sessionId, or
+    /// one of TB's own resumed into a Terminal.app window while a Terminal.app
+    /// row already exists, still resolves arbitrarily here — that is not a
+    /// regression (Terminal.app dispatch carried the same ambiguity before
+    /// this fix), and closing it fully needs either the adoption/handoff
+    /// state machine (which never leaves TWO Terminal.app rows for the
+    /// SAME conversation live at once by construction) or a live
+    /// Terminal.app-tab discriminator analogous to `TmuxOwnership` — the arc
+    /// is not building the latter, since the plan deletes Terminal.app
+    /// dispatch entirely once Codex is proven (single-transport cut). More
+    /// than one tmux-owned row for one sessionId is the genuine anomaly (two
+    /// tmux panes cannot share a pid's tty) and is traced identically.
     ///
     /// Returns the pane resolved while deciding, when deciding required
     /// resolving one at all — the common single-row case never queries a live

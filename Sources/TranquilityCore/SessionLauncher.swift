@@ -76,50 +76,16 @@ public enum SessionLauncher {
         command: String = defaultCommand,
         acceptTrustPrompt: Bool = true
     ) -> Result<String, ScriptError> {
-        // The machine's launches can opt into detached tmux sessions on the
-        // app's own server (`tbase tmux on`). Same contract either way: the
-        // returned string is the new agent's tty, which is what the greeting
-        // row records and what `watchForTrustPrompt(tty:)` accepts — that
-        // watcher resolves ownership itself, so existing callers that watch
-        // concurrently keep working without knowing which path ran.
-        if AgentDefaults.useTmux() {
-            return launchTmux(directory: directory, command: command,
-                              acceptTrustPrompt: acceptTrustPrompt)
-        }
-        return launchTerminal(directory: directory, command: command,
-                              acceptTrustPrompt: acceptTrustPrompt)
-    }
-
-    @discardableResult
-    static func launchTerminal(
-        directory: String,
-        command: String,
-        acceptTrustPrompt: Bool
-    ) -> Result<String, ScriptError> {
-        // `quoted form of` is AppleScript's own shell-quoting — the directory
-        // never touches the shell unescaped. The tab's tty comes back so the
-        // follow-up can address exactly this window and no other.
-        let script = """
-            tell application "Terminal"
-              set newTab to do script "cd " & quoted form of "\(directory)" & " && \(command)"
-              return tty of newTab
-            end tell
-            """
-        switch AppleScript.run(script: script) {
-        case .success(let tty):
-            let tty = tty.trimmingCharacters(in: .whitespacesAndNewlines)
-            Self.trace?("newSession: launched `\(command)` in \(directory) (tty \(tty))")
-            // Callers that drive their own watcher pass false and run
-            // `watchForTrustPrompt` CONCURRENTLY: this blocks for at least two
-            // settled polls (~4s) and up to 30, and everything waiting behind
-            // it — the registration the greeting card binds to, in particular —
-            // was paying that latency for a prompt that usually never appears.
-            if acceptTrustPrompt { watchForTrustPrompt(tty: tty) }
-            return .success(tty)
-        case .failure(let error):
-            Self.trace?("newSession FAILED: \(error.message)")
-            return .failure(error)
-        }
+        // Ruled 21 Aug: no flags, no parallel launch paths. A launch is a
+        // detached tmux session on the app's own server, full stop — the
+        // opt-in this replaced (`tbase tmux on`, 19-21 Aug) is gone along
+        // with the setting behind it, and `launchTerminal`, the Terminal.app
+        // launch path it used to choose between, is deleted outright rather
+        // than left as an unreachable second path. `resume` (below) still
+        // opens a Terminal.app window for a REVIVED session — a separate,
+        // not-yet-decided piece of this same cleanup; see its doc comment.
+        launchTmux(directory: directory, command: command,
+                  acceptTrustPrompt: acceptTrustPrompt)
     }
 
     /// The tmux launch path: a detached session on the app's own server, no

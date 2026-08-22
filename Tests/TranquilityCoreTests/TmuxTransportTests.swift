@@ -199,10 +199,11 @@ final class TmuxTransportTests: XCTestCase {
     }
 
     func testPreferringTmuxOwnedTracesAndFallsBackWhenNoneAreTmuxOwned() {
-        // Neither duplicate is TB's — the EXPECTED shape while
-        // `AgentDefaults.useTmux` is off (the default): both rows are
-        // Terminal.app-hosted, and this helper is scoped to the tmux half of
-        // the ambiguity only. Must still resolve to SOMETHING deterministic,
+        // Neither duplicate is TB's own — two hand-started Terminal.app rows
+        // for one conversation, a real shape even with no flag to cause it
+        // (every TB-made launch is tmux; a session the user started by hand
+        // is not TB-made). This helper is scoped to the tmux half of the
+        // ambiguity only. Must still resolve to SOMETHING deterministic,
         // with the ambiguity traced rather than hidden.
         let live = [
             LiveSession(pid: 1, sessionId: "dup", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
