@@ -218,6 +218,21 @@ public struct CodexAdapter: HarnessAdapter {
             neverAutoAcceptNeedles: ["Hooks need review"])
     }
 
+    /// Codex's own single-writer-lock refusal — measured live, 22 Aug,
+    /// against real codex-cli 0.149.0: resuming a session a second process
+    /// already holds does NOT exit immediately (an earlier, app-server-level
+    /// JSON-RPC measurement said "exits immediately, status 1" — that
+    /// described a different code path than the CLI's own TUI takes). The
+    /// TUI instead shows the error INSIDE its normal interface and stays
+    /// open for several seconds: "Error: Failed to resume session from
+    /// .../rollout-....jsonl: thread/resume failed during TUI bootstrap:
+    /// thread/resume failed: thread <id> already has an active writer
+    /// (code -32600)". This substring is the stable part — legible on its
+    /// own in a trace line, unlike the bare code — and is what
+    /// `SessionLauncher.attemptCodexResume` polls for to tell "the session
+    /// is live elsewhere" apart from an ordinary successful resume.
+    public static let resumeConflictNeedle = "already has an active writer"
+
     public var capabilities: HarnessCapabilities {
         HarnessCapabilities(echoesPaste: true, promptGlyph: "›",
                             queuesInputMidTurn: true, registersWithLiveness: false,

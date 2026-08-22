@@ -206,6 +206,169 @@ public enum SessionLauncher {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    /// What actually happened when TB tried to bring a Codex session under
+    /// its control via `attemptCodexResume`. `resumeTmux` alone only
+    /// confirms a PANE came up — not whether the resume itself succeeded,
+    /// since a losing `codex resume <id>` does not exit immediately
+    /// (`CodexAdapter.resumeConflictNeedle`'s doc comment has the measured
+    /// detail); "the pane exists" is not evidence of anything here.
+    public enum CodexResumeOutcome: Sendable, Equatable {
+        /// The resume succeeded; TB now owns this session's pid, on the
+        /// same footing as any session it launched itself.
+        case attached(tty: String)
+        /// Codex's own single-writer lock refused a second writer. The
+        /// session is live somewhere TB does not control — resolved design
+        /// (2026-08-22-tb-codex-hand-started-adoption): TB signals nothing
+        /// to it, the caller asks the human to end it in their own
+        /// terminal, then retries.
+        case alreadyLive
+    }
+
+    /// Pure half of `attemptCodexResume`'s poll loop, testable against
+    /// captured screens without a live tmux pane — the same split
+    /// `TmuxTransport.classifyPromptLine` already keeps between reading a
+    /// screen and deciding what it means.
+    enum CodexResumePoll: Equatable {
+        case alreadyLive
+        case attached
+        case inconclusive
+    }
+
+    static func classifyCodexResumeScreen(_ text: String, settledNeedle: String?) -> CodexResumePoll {
+        if text.contains(CodexAdapter.resumeConflictNeedle) { return .alreadyLive }
+        if let settledNeedle, text.contains(settledNeedle) { return .attached }
+        return .inconclusive
+    }
+
+    /// Attempts to bring a Codex session under TB's control, and reads
+    /// Codex's OWN answer rather than trusting the spawn alone — the
+    /// resolved design in full: no pid is ever guessed at, TB simply tries
+    /// the resume and reports whichever of the two real outcomes actually
+    /// happens.
+    ///
+    /// Two real bugs, both caught only by running this against a genuinely
+    /// live conflicting session (22 Aug), not by reasoning about the
+    /// measured error text alone:
+    ///
+    /// 1. `command` must be passed explicitly as `"codex"`. `resumeTmux`'s
+    ///    own default is `defaultCommand` (`AgentDefaults.load()`), a
+    ///    Claude-Code-specific, user-configurable setting — leaving it off
+    ///    launches `claude resume <id>`, not `codex resume <id>`. The first
+    ///    run of this function hit Claude Code's own directory-trust prompt
+    ///    instead of Codex's resume-conflict screen, because that is
+    ///    genuinely what it ran.
+    ///
+    /// 2. A losing `codex resume <id>` does NOT keep its error visible for
+    ///    several seconds. Timed precisely (0.25s samples): the process,
+    ///    and with it the only window in its tmux session, is gone within
+    ///    under a second — confirmed twice. An earlier pass through this
+    ///    same investigation concluded the opposite ("stays open for
+    ///    several seconds") from a manual capture that turned out to have
+    ///    its own trailing `sleep` propping the pane open after codex had
+    ///    already exited — an artifact of the measuring harness, not real
+    ///    Codex behavior, and wrong to have generalized from. Polling
+    ///    screen text on a ~1s interval, as the first version of this
+    ///    function did, reliably missed the whole window: it would not
+    ///    even take its first sample until after the pane was already gone.
+    ///    The reliable signal is therefore PANE SURVIVAL through a short
+    ///    grace window, checked tightly (`deathCheckInterval`/
+    ///    `deathCheckCount`, ~3s by default) — not matched screen text,
+    ///    which is kept only as a defense-in-depth bonus in phase two below
+    ///    for whatever fraction of cases it happens to still be visible in.
+    ///
+    /// `resumeTmux` is called with `acceptTrustPrompt: false`: its usual
+    /// path (`watchForTrustPrompt`) has no needle for a resume-conflict
+    /// screen and would burn its own ~30s budget waiting for something
+    /// that, per the above, is gone in under a second — consuming the one
+    /// window this function needs before its own polling even starts. This
+    /// function's phase two covers trust needles itself instead.
+    ///
+    /// Neither phase reaching a conclusive answer within its budget is
+    /// reported as a failure, never silently read as success — the same
+    /// "typing fails CLOSED" doctrine `DispatchTransport` already applies
+    /// to injecting into a session TB cannot verify.
+    ///
+    /// Blocks up to `(deathCheckInterval * deathCheckCount) +
+    /// (settlePollInterval * settleMaxPolls)` seconds (~23s by default);
+    /// call off-main, same contract `resume` already carries.
+    @discardableResult
+    public static func attemptCodexResume(
+        sessionId: String,
+        directory: String,
+        adapter: CodexAdapter = CodexAdapter(),
+        deathCheckInterval: TimeInterval = 0.25,
+        deathCheckCount: Int = 12,
+        settlePollInterval: TimeInterval = 1.0,
+        settleMaxPolls: Int = 20
+    ) -> Result<CodexResumeOutcome, ScriptError> {
+        switch resumeTmux(sessionId: sessionId, directory: directory, command: "codex",
+                          acceptTrustPrompt: false, adapter: adapter) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let tty):
+            guard let pane = TmuxOwnership.pane(forTty: tty) else {
+                // Already gone before we even looked — the fastest possible
+                // shape of the same signal phase one polls for below.
+                Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) had no pane immediately "
+                    + "after spawn — already live elsewhere")
+                return .success(.alreadyLive)
+            }
+
+            // Phase one: does the pane survive the grace window at all?
+            for _ in 0..<deathCheckCount {
+                usleep(UInt32(deathCheckInterval * 1_000_000))
+                if case .failure = Tmux.run(["has-session", "-t", pane.sessionName],
+                                            socket: pane.socketName, timeout: 2) {
+                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) exited within "
+                        + "\(deathCheckInterval * Double(deathCheckCount))s — already live elsewhere")
+                    return .success(.alreadyLive)
+                }
+            }
+
+            // Phase two: survived the grace window — wait for it to
+            // actually settle (or handle a trust prompt on the way).
+            let spec = adapter.trustPrompt
+            for _ in 0..<settleMaxPolls {
+                usleep(UInt32(settlePollInterval * 1_000_000))
+                guard case .success(let text) = Tmux.run(
+                    ["capture-pane", "-p", "-t", pane.paneId], socket: pane.socketName, timeout: 3)
+                else {
+                    // Exited late, past the fast-death window checked
+                    // above — still the same verdict: an ordinary
+                    // interactive resume does not otherwise exit on its own.
+                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) exited during "
+                        + "settle-wait — already live elsewhere")
+                    return .success(.alreadyLive)
+                }
+                if let spec, spec.neverAutoAcceptNeedles.contains(where: { text.contains($0) }) {
+                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) needs a human "
+                        + "choice (hook review or similar); standing down")
+                    return .failure(ScriptError(
+                        message: "attemptCodexResume: \(sessionId.prefix(8)) needs a human choice"))
+                }
+                switch Self.classifyCodexResumeScreen(text, settledNeedle: spec?.settledBannerNeedle) {
+                case .alreadyLive:
+                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) already live elsewhere "
+                        + "(conflict text matched)")
+                    return .success(.alreadyLive)
+                case .attached:
+                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) attached")
+                    return .success(.attached(tty: tty))
+                case .inconclusive:
+                    if let spec, spec.promptNeedles.contains(where: { text.contains($0) }) {
+                        Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
+                        Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) accepted the "
+                            + "trust prompt on resume")
+                    }
+                    continue
+                }
+            }
+            let waited = Int(settlePollInterval * Double(settleMaxPolls))
+            return .failure(ScriptError(message: "attemptCodexResume: \(sessionId.prefix(8)) "
+                + "survived the death check but never settled within \(waited)s"))
+        }
+    }
+
     /// Bring a session that has exited back, in its own directory.
     ///
     /// Ruled 11 Aug: an agent does not stop existing when its process ends, and

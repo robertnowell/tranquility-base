@@ -214,6 +214,59 @@ final class HarnessAdapterTests: XCTestCase {
         XCTAssertEqual(SessionLauncher.shellQuoted(""), "''")
     }
 
+    // MARK: classifyCodexResumeScreen — the pure half of attemptCodexResume
+
+    func testClassifyCodexResumeScreenRecognizesTheRealRefusalText() {
+        // Captured live, 22 Aug, against real codex-cli 0.149.0: a second
+        // `codex resume <id>` while the first process stayed alive. Verbatim
+        // screen text, not a paraphrase.
+        let screen = """
+        ╭────────────────────────────────────────────────────╮
+        │ >_ OpenAI Codex (v0.149.0)                         │
+        │                                                    │
+        │ model:     loading   /model to change              │
+        │ directory: ~/Projects/…/.claude/worktrees/arc-work │
+        ╰────────────────────────────────────────────────────╯
+          Resuming session…
+
+        › Error: Failed to resume session from /Users/robertnowell/.codex/sessions/2026/08/22/rollout-2026-08-22T10-29-11-01a02a84-f33c-7223-88f0-f5c6e7ecc7ff.jsonl: thread/resume failed during TUI bootstrap: thread/resume failed: thread 01a02a84-f33c-7223-88f0-f5c6e7ecc7ff already has an active writer (code -32600)
+          ? for shortcuts
+        """
+        XCTAssertEqual(
+            SessionLauncher.classifyCodexResumeScreen(screen, settledNeedle: "Ask Codex to do anything"),
+            .alreadyLive)
+    }
+
+    func testClassifyCodexResumeScreenRecognizesASuccessfulAttach() {
+        let screen = "› Ask Codex to do anything\n\n  gpt-5.6-sol high · ~/Projects/foo"
+        XCTAssertEqual(
+            SessionLauncher.classifyCodexResumeScreen(screen, settledNeedle: "Ask Codex to do anything"),
+            .attached)
+    }
+
+    func testClassifyCodexResumeScreenIsInconclusiveMidBoot() {
+        // Neither needle has appeared yet — the boot banner alone proves
+        // nothing either way, and must not be misread as either outcome.
+        let screen = "╭──────────────────╮\n│ >_ OpenAI Codex   │\n╰──────────────────╯\n  Resuming session…"
+        XCTAssertEqual(
+            SessionLauncher.classifyCodexResumeScreen(screen, settledNeedle: "Ask Codex to do anything"),
+            .inconclusive)
+    }
+
+    func testClassifyCodexResumeScreenRefusalWinsEvenIfTextCoincidentallyOverlaps() {
+        // The refusal check runs first: a screen carrying both substrings
+        // (implausible live, but the ordering itself is the contract worth
+        // pinning) must still read as the refusal, never the success.
+        let screen = "already has an active writer (code -32600) ... Ask Codex to do anything"
+        XCTAssertEqual(
+            SessionLauncher.classifyCodexResumeScreen(screen, settledNeedle: "Ask Codex to do anything"),
+            .alreadyLive)
+    }
+
+    func testCodexAdapterResumeConflictNeedleMatchesWhatWasMeasured() {
+        XCTAssertEqual(CodexAdapter.resumeConflictNeedle, "already has an active writer")
+    }
+
     // MARK: capabilities parity — until TmuxTransport reads these values live,
     // a test is what stops them silently drifting from what it hardcodes
     // (M2 gate finding: capability fields had zero consumers; still true
