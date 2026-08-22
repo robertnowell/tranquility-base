@@ -22,10 +22,13 @@ func usage() -> Never {
       tbase voices              installed free voices, and what is a download away
       tbase secrets             which credentials are readable, and from where
       tbase discover [days] [n] every session in the window, awake or not,
-                                with what would bring each dead one back
+                                with what would bring each dead one back —
+                                Claude Code, then a Codex table underneath
       tbase agent-command [cmd] how new AND revived sessions are launched
       tbase revive <id> [--dry-run]
-                                bring a dead session back, same path as the panel
+                                bring a dead session back, same path as the panel;
+                                falls back to Codex (attemptCodexResume) if the id
+                                isn't a Claude Code session
       tbase end <id|prefix|name>
                                 end a live session, same path as the grid's
                                 right-click: SIGTERM to its process group, and
@@ -231,6 +234,32 @@ do {
         print("")
         print(String(format: "scanned in %.2fs", elapsed))
 
+        // Codex's own half — a separate table, not merged into the one above:
+        // `discoverCodex` never joins a store (no waiting/known/enrolled
+        // concepts exist for Codex yet) and never guesses liveness (the
+        // settled design, 2026-08-22-tb-codex-hand-started-adoption) — every
+        // row prints `idle`, whether it is actually running somewhere or
+        // genuinely gone, on purpose. `tbase revive` is how you find out.
+        let codexFound = SessionDiscovery.discoverCodex(window: days * 86_400, limit: limit)
+        if codexFound.scanned > 0 {
+            print("")
+            print("codex: \(codexFound.sessions.count) of \(codexFound.scanned) rollouts "
+                + "(\(codexFound.unclassifiable) unclassifiable)"
+                + (codexFound.beyondLimit > 0 ? " · \(codexFound.beyondLimit) past the cap" : ""))
+            print("")
+            print("\(pad("STATE", 9))\(pad("ANSWERED", 10))\(pad("AGE", 8))"
+                + "\(pad("SESSION", 10))CWD")
+            for s in codexFound.sessions {
+                let age = Date().timeIntervalSince(s.lastActivityAt)
+                let ageText = age < 3600 ? "\(Int(age / 60))m"
+                            : age < 86_400 ? "\(Int(age / 3600))h" : "\(Int(age / 86_400))d"
+                let state = s.revivable ? "idle ↺" : "gone"
+                print("\(pad(state, 9))\(pad(s.answered ? "yes" : "no", 10))"
+                    + "\(pad(ageText, 8))\(pad(String(s.sessionId.prefix(8)), 10))"
+                    + "\(truncate(s.cwd, 60))")
+            }
+        }
+
     case "lamps":
         // The audit Robert asked for on 18 Aug: "every 30 seconds or so we
         // should be auditing and getting clarity on the current state of all
@@ -307,18 +336,17 @@ do {
     case "revive":
         // The SAME path the panel's row takes, so exercising this exercises
         // what ships rather than a reimplementation of it: the fresh liveness
-        // probe, the directory check, then SessionLauncher.resume.
+        // probe, the directory check, then SessionLauncher.resume — Claude
+        // Code first, Codex as a fallback if the needle isn't a Claude Code
+        // session (see below; a genuinely different mechanism, not a
+        // reimplementation of the same one).
         guard args.count > 1 else {
             print("usage: tbase revive <sessionId>   (8 chars is enough)")
             exit(1)
         }
         let needle = args[1]
         let found = SessionDiscovery.discover(ttl: 0).sessions
-        guard let session = found.first(where: { $0.sessionId.hasPrefix(needle) }) else {
-            print("no session in the window starts with \(needle)")
-            print("(tbase discover 7 lists them)")
-            exit(1)
-        }
+        if let session = found.first(where: { $0.sessionId.hasPrefix(needle) }) {
         print("session    \(session.sessionId)")
         print("title      \(truncate(session.title, 60))")
         print("cwd        \(session.cwd ?? "—")")
@@ -339,6 +367,51 @@ do {
         switch SessionLauncher.resume(sessionId: session.sessionId, directory: command.cwd) {
         case .success:
             print("launched — Terminal should be opening it now")
+        case .failure(let error):
+            print("failed — \(error.message)")
+            exit(3)
+        }
+        break
+        }
+
+        // Not a Claude Code session — check Codex history. A separate
+        // branch, not a merged lookup: Codex rows carry no liveness verdict
+        // to print (the settled design never guesses one, 2026-08-22-tb-
+        // codex-hand-started-adoption), and attaching one is a genuinely
+        // different mechanism — attemptCodexResume, not SessionLauncher.
+        // resume — because Codex's own single-writer lock is what answers
+        // "already live", not a probe run beforehand.
+        let codexFound = SessionDiscovery.discoverCodex().sessions
+        guard let codexSession = codexFound.first(where: { $0.sessionId.hasPrefix(needle) }) else {
+            print("no session in the window starts with \(needle)")
+            print("(tbase discover 7 lists them)")
+            exit(1)
+        }
+        print("session    \(codexSession.sessionId)  (codex)")
+        print("cwd        \(codexSession.cwd ?? "—")")
+        guard codexSession.revivable, let cwd = codexSession.cwd else {
+            print("")
+            print("REFUSED — its directory is gone, so `codex resume` would land nowhere.")
+            exit(2)
+        }
+        if args.contains("--dry-run") {
+            print("")
+            print("would attempt  codex resume \(codexSession.sessionId)")
+            print("in             \(cwd)")
+            print("")
+            print("dry run — nothing launched")
+            break
+        }
+        print("")
+        print("attempting codex resume \(codexSession.sessionId.prefix(8)) …")
+        switch SessionLauncher.attemptCodexResume(sessionId: codexSession.sessionId, directory: cwd) {
+        case .success(.attached(let tty)):
+            print("attached — tmux pane is live on tty \(tty)")
+            print("  tmux attach to continue the conversation directly")
+        case .success(.alreadyLive):
+            print("REFUSED — it is already running somewhere TB does not control.")
+            print("  End it in that terminal, then run this again.")
+            exit(2)
         case .failure(let error):
             print("failed — \(error.message)")
             exit(3)
