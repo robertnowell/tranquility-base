@@ -632,12 +632,13 @@ public enum SessionDiscovery {
     /// onto — `.unknown` is deliberately the whole, final answer for every
     /// row, not a first half waiting for a second.
     ///
-    /// No caching, unlike `discover`/`scan` above (`ScanCache`) — this has
-    /// no wired call site yet to measure a real cost against, and 192
-    /// rollout files on this machine at last count is a different order of
-    /// magnitude from the hundreds of Claude Code transcripts that cache
-    /// earns its keep against. Worth revisiting once this is on a live
-    /// polling path, not before.
+    /// The uncached full walk — `discoverCodexIfScanned` below is what the
+    /// grid actually calls. Caching landed the same day this function did
+    /// support a wired call site (22 Aug): CLAUDE.md rule 9 is explicit that
+    /// an archive walk must never run inline on the main actor, and this one
+    /// measured close to a second against 19 real rollouts on this machine
+    /// — a number that only grows, the same shape `ScanCache` already exists
+    /// to solve for Claude Code's own hundreds of transcripts.
     public static func discoverCodex(
         window: TimeInterval = defaultWindow,
         limit: Int = defaultLimit,
@@ -693,5 +694,65 @@ public enum SessionDiscovery {
         result.sessions = kept
         result.livenessUnavailable = true   // by design here, not a probe failure
         return result
+    }
+
+    /// A second `ScanCache` instance, not shared with Claude Code's own —
+    /// the class itself is already generic (a TTL cache of `Result` keyed by
+    /// a string; nothing in its body is Claude-Code-specific), so a second
+    /// instance is the whole change, not a second implementation.
+    private static let codexScans = ScanCache()
+
+    /// The Codex twin of `discoverIfScanned`: non-blocking, returns nothing
+    /// on a genuinely cold cache (the first tick after launch) rather than
+    /// pay a synchronous walk on the caller's thread. No `join` step here,
+    /// unlike Claude Code's — `discoverCodex` already IS the whole, final
+    /// answer for every row (see its own doc comment on why liveness is
+    /// never guessed), so there is nothing left to attach after the cache
+    /// hit.
+    public static func discoverCodexIfScanned(
+        window: TimeInterval = defaultWindow,
+        limit: Int = defaultLimit,
+        now: Date = Date(),
+        sessions: URL = CodexRollout.sessionsDirectory,
+        ttl: TimeInterval = scanTTL
+    ) -> Result? {
+        let key = ScanCache.key(window, limit, sessions)
+        let held = codexScans.get(key: key, now: now, ttl: ttl)
+        if held == nil || held?.stale == true, codexScans.beginRefresh(key: key) {
+            Task.detached(priority: .utility) {
+                let fresh = discoverCodex(window: window, limit: limit, now: Date(),
+                                          sessions: sessions)
+                codexScans.put(key: key, now: Date(), result: fresh)
+                codexScans.endRefresh(key: key)
+            }
+        }
+        guard let held else { return nil }
+        return held.result
+    }
+
+    /// Fill the Codex cache off-main at launch, the same reason `warm` does
+    /// for Claude Code — without this the grid's Codex rows arrive a tick
+    /// late instead of being there on the first paint.
+    public static func warmCodex(
+        window: TimeInterval = defaultWindow,
+        limit: Int = defaultLimit,
+        sessions: URL = CodexRollout.sessionsDirectory
+    ) {
+        let key = ScanCache.key(window, limit, sessions)
+        guard codexScans.get(key: key, now: Date(), ttl: scanTTL) == nil,
+              codexScans.beginRefresh(key: key) else { return }
+        let result = discoverCodex(window: window, limit: limit, now: Date(), sessions: sessions)
+        codexScans.put(key: key, now: Date(), result: result)
+        codexScans.endRefresh(key: key)
+    }
+
+    /// The Codex twin of `settleForTesting` — waits for any background
+    /// Codex scan to finish, same reason: a detached scan that outlives its
+    /// test keeps doing disk I/O into whatever suite runs next.
+    static func settleCodexForTesting(timeout: TimeInterval = 5) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while codexScans.isRefreshing, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
     }
 }
