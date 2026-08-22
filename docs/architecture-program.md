@@ -195,34 +195,61 @@ com.robertnowell.voice-dispatch (TCC).
       `SessionLauncher`, `AgentDefaults`, `Coordinator`, `HarnessAdapter`,
       `SessionTermination` still describing the deleted Terminal.app launch
       path as current. 739 tests, all green.
-- [ ] CodexAdapter (load-bearing on landing: grid shows Codex sessions,
-      dispatch delivers to them; rollout parser test-driven against the 177
-      rollouts already on this machine); harness-conditional adoption
-      capability + explicit ownership-handoff state machine land with it —
-      see 2026-08-21-tb-codex-tmux-prior-art for why these three are one
-      milestone, not `HarnessCapabilities` field first. Carries forward from
-      that report and from C0 (19-20 Aug), concretely:
-        - The `-32600` single-writer constraint (cited in the adoption bullet
-          above) is what `allowsConcurrentResume` encodes; branch
-          `Coordinator`'s adoption logic on it, don't re-derive it.
-        - Launch-flag compensation, from AWS cli-agent-orchestrator's own
-          Codex provider: force scrollback (Codex's approval UI breaks
-          `capture-pane` otherwise) and a warm-up beat before first
-          injection into a freshly spawned pane — Anthropic's own agent-teams
-          hits the send-keys-before-shell-ready race in its own tracker,
-          unresolved (claude-code #23513); Codex gets the same discipline
-          from day one rather than discovering the race live.
-        - Re-map the hook/skill surface on the CURRENT Codex before capability
-          values freeze (C0 found it loads Claude plugins and runs
-          SessionStart hooks — the "no hooks" parity read is stale) and give
-          the hooks-review needle ("Hooks need review... Trust all and
-          continue") its own `TrustPromptSpec` — hook-trust is the user's
-          choice, never auto-accepted, and nothing enforces that today
-          because no spec for it exists yet.
-        - `thread/queue/add` requiring pre-existing writer ownership is a
-          strong inference from the prior-art report, not verified against
-          `codex-rs/app-server/src/` — cheap to confirm empirically before
-          leaning on it.
+- [~] CodexAdapter — in progress. Landed (21 Aug, this commit):
+        - [x] `CodexAdapter: HarnessAdapter`, every value measured live
+          against codex-cli 0.149.0 in a real tmux pane, not carried forward
+          from 19-20 Aug guesses: `resumeArguments` = `["resume", id]`;
+          `echoesPaste`/`promptGlyph` ("›") confirmed on the composer;
+          `queuesInputMidTurn` confirmed by actually sending two messages
+          back to back (plain Enter mid-turn queued the second, answered as
+          its own turn — the SAME mechanism TB's transport already uses, no
+          new one needed); `hasHooks` reconfirmed by two real SessionStart
+          firings (re-map done, not just cited from C0); `registersWithLiveness
+          = false`. `allowsConcurrentResume = false` is 19-20 Aug + repeated
+          this session, not new today.
+        - [x] `HarnessCapabilities.allowsConcurrentResume` named and wired on
+          both adapters (true / Claude Code, false / Codex) — the field this
+          item used to say would land here, done.
+        - [x] The hooks-review needle ("Hooks need review... Trust all and
+          continue") has its own home: `TrustPromptSpec.neverAutoAcceptNeedles`,
+          a new watcher primitive that stops rather than presses — hook-trust
+          is the user's choice, enforced by construction now, not just by
+          policy. NOT reconfirmed live today (this scratch dir had no
+          project-level hook config to retrigger it) — carried from C0,
+          flagged as such in `CodexAdapter`'s own doc comment.
+        - [x] `CodexRollout.swift`: parses `session_meta`, `task_started`/
+          `task_complete` (busy/idle + `last_agent_message` — no
+          `response_item` scanning needed for "what did it just say"),
+          `response_item` messages (filtering Codex's own injected
+          `<environment_context>` wrapper out of the first "user" message
+          per turn — found live, not anticipated), tolerates `compacted`/
+          `world_state`/`turn_context`/`inter_agent_communication_metadata`.
+          `rolloutPath(forSessionId:)` finds a thread's file by the filename
+          Codex itself writes, no directory-layout guessing. Fixture-tested
+          (portable, matching this repo's own convention) AND run against
+          all 192 real rollouts on this machine (six Codex versions,
+          0.133.0-alpha.1 → 0.149.0) as a one-time sanity pass: 192/192
+          parsed with meta, messages, and completions extracted — the
+          `session_id`-absent-on-old-versions and `<environment_context>`
+          fixtures both came from that sweep, not invention.
+      Still open, concretely:
+        - Wire `CodexRollout` into session discovery/liveness so the grid
+          actually shows Codex sessions (`registersWithLiveness == false`
+          means `processAlive` + rollout-tail, per the prior-art report —
+          not built yet) and into dispatch so replies actually deliver
+          (needs a Codex-specific `DispatchTransport` or `TmuxTransport`
+          generalized to read `HarnessCapabilities` per-target instead of
+          hardcoding Claude Code's, which is also the M2-gate debt this
+          would finally pay off).
+        - The explicit ownership-handoff state machine (observed →
+          handoff-requested → releasing-writer → managed) — nothing built.
+        - Launch-flag compensation for Codex specifically (force scrollback,
+          warm-up beat before first injection — AWS cli-agent-orchestrator's
+          own Codex provider, and Anthropic's own unresolved send-keys race,
+          claude-code #23513) — not yet in the launch path.
+        - `thread/queue/add` requiring pre-existing writer ownership is
+          still a strong inference, not verified against
+          `codex-rs/app-server/src/` — cheap to confirm before leaning on it.
 - [ ] Single-transport cut, remainder: delete AppleScript dispatch machinery
       (TerminalAppTransport, the Automation permission gate); attach
       affordance in the panel (folds in the GO TO AGENT fix above); the
