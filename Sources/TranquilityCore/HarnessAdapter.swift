@@ -107,6 +107,20 @@ public struct TrustPromptSpec: Sendable {
     /// is wired yet (open, see docs/architecture-program.md's CodexAdapter
     /// item) but the failure direction is safe either way — a prompt left
     /// sitting, never a consent TB had no authority to give.
+    ///
+    /// Honest about scope (gate finding, 21 Aug): the check itself is
+    /// correct by construction — a screen matching both this and
+    /// `promptNeedles` still never gets pressed, this list wins, always —
+    /// but it is currently unreachable in the running app. No call site
+    /// passes `CodexAdapter` to `SessionLauncher.watchForTrustPrompt` yet
+    /// (both overloads default to `ClaudeCodeAdapter()`, whose own
+    /// `neverAutoAcceptNeedles` is empty), so today this guarantee lives in
+    /// the type, not in anything that runs. And even once wired: Codex
+    /// loads hooks only AFTER directory trust is granted, so on a first-run
+    /// untrusted launch the watcher presses the trust prompt and returns
+    /// before a hooks-review dialog could ever render — the path where this
+    /// actually fires is an already-trusted launch whose hooks changed
+    /// since the last review, not the common first-run case.
     public var neverAutoAcceptNeedles: [String]
 
     public init(promptNeedles: [String], startedWithNoPromptNeedle: String?,
@@ -116,7 +130,12 @@ public struct TrustPromptSpec: Sendable {
         self.startedWithNoPromptNeedle = startedWithNoPromptNeedle
         self.settledBannerNeedle = settledBannerNeedle
         self.settledThreshold = settledThreshold
-        self.neverAutoAcceptNeedles = neverAutoAcceptNeedles
+        // An empty string here would match every screen — `"".isEmpty ==
+        // false` for `text.contains("")` — and permanently disable the
+        // watcher on the very first poll. Can't happen from either adapter
+        // today; making it impossible is cheaper than trusting that stays
+        // true (gate finding, 21 Aug).
+        self.neverAutoAcceptNeedles = neverAutoAcceptNeedles.filter { !$0.isEmpty }
     }
 }
 
@@ -158,13 +177,20 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
 /// `allowsConcurrentResume` is 19-20 Aug + repeated this session, not new
 /// today: a second `resume` on a thread still held open fails with -32600.
 ///
-/// NOT reconfirmed today, honestly: `hooksReviewNeedle`'s exact text is the
-/// 19-20 Aug C0 finding, carried forward — this scratch directory had no
+/// NOT reconfirmed today, honestly: `neverAutoAcceptNeedles`'s exact text is
+/// the 19-20 Aug C0 finding, carried forward — this scratch directory had no
 /// project-level hook config to trigger it again live. `startedWithNoPrompt`
-/// has no Codex equivalent found: unlike Claude Code's "? for shortcuts",
-/// which appears ONLY when there is nothing to accept, Codex shows
-/// "? for shortcuts" even WHILE the trust prompt is up, so it cannot mean
-/// the same thing here — nil, relying on the settled-banner fallback alone.
+/// has no Codex equivalent found — see the needle-choice note below, which
+/// the gate corrected: the first version of this comment claimed "? for
+/// shortcuts" appears WHILE the trust prompt is up (measured with a
+/// scrollback-inclusive `capture-pane -S`), which is not what
+/// `SessionLauncher` reads. A second live pass (gate, 21 Aug, plain
+/// `capture-pane -p`, matching the real read path exactly) found the
+/// opposite problem: on an UNTRUSTED dir, the trust-prompt screen shows
+/// ONLY the prompt block — no hint line, no banner, both pushed into
+/// scrollback a plain capture cannot see. `nil` for `startedWithNoPrompt`
+/// is still the right call (costs latency, never a wrong press), but the
+/// settled-banner fallback below had to change with it — see its own note.
 public struct CodexAdapter: HarnessAdapter {
     public let id = "codex"
 
@@ -178,7 +204,17 @@ public struct CodexAdapter: HarnessAdapter {
         TrustPromptSpec(
             promptNeedles: ["Do you trust the contents of this directory?"],
             startedWithNoPromptNeedle: nil,
-            settledBannerNeedle: "OpenAI Codex",
+            // NOT "OpenAI Codex" (the header box) — the first version of
+            // this needle, wrong: the gate's live re-verification (plain
+            // `capture-pane -p`, 21 Aug) found the header scrolls into
+            // scrollback within ~1s of any real output, invisible to the
+            // exact read `SessionLauncher` does. A watcher relying on it
+            // would burn its full ~30s timeout on every ordinary, no-
+            // trust-prompt Codex launch. "Ask Codex to do anything" is the
+            // composer's own idle placeholder — sits at the bottom of the
+            // pane, not scrollable history, confirmed 10/10 across repeated
+            // polls of a resumed (already-trusted) session.
+            settledBannerNeedle: "Ask Codex to do anything",
             neverAutoAcceptNeedles: ["Hooks need review"])
     }
 

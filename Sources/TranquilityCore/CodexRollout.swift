@@ -30,9 +30,20 @@ public enum CodexRollout {
     }
 
     /// One `response_item` carrying real conversation content — a message
-    /// with visible text, from any role. Reasoning items (`encrypted_content`,
-    /// no plain text) and tool-call items are not turned into one of these;
-    /// there is nothing here for a summary or a delivery check to read.
+    /// with visible text, from a human or the assistant. Reasoning items
+    /// (`encrypted_content`, no plain text) and tool-call items are not
+    /// turned into one of these; there is nothing here for a summary or a
+    /// delivery check to read. Neither is `developer`-role content: sampled
+    /// across 614 real occurrences on this machine, every one is injected
+    /// system context (output-style instructions, permission-profile XML,
+    /// multi-agent-mode preambles) — the same category `<environment_context>`
+    /// exists to strip, never anything a human or TB typed. Nor is
+    /// `agent_message` turned into one: a real payload type (142 occurrences),
+    /// but its own `author`/`recipient` fields and "Message Type: FINAL_ANSWER
+    /// / NEW_TASK" framing show it is Codex's own inter-agent routing
+    /// protocol, not a conversational turn — deliberately excluded, not
+    /// missed (gate finding, 21 Aug; the exclusion looked like a gap until
+    /// a real example showed what it actually is).
     public struct Message: Sendable, Equatable {
         public var role: String
         public var text: String
@@ -46,37 +57,58 @@ public enum CodexRollout {
         public var completions: [TurnCompletion]
         public var messages: [Message]
         /// A `task_started` has been seen with no matching `task_complete`
-        /// yet — the busy/idle signal this harness has no `agents --json`
-        /// equivalent for (`HarnessCapabilities.registersWithLiveness ==
-        /// false`), read from the one ground truth that does exist.
+        /// OR `task_aborted` yet — the busy/idle signal this harness has no
+        /// `agents --json` equivalent for (`HarnessCapabilities.
+        /// registersWithLiveness == false`), read from the one ground truth
+        /// that does exist. NOT a liveness signal on its own: a process
+        /// killed mid-turn (no completion, no abort — 42/192 real rollouts
+        /// on this machine) reads exactly like a session still working,
+        /// because from the rollout's own record, it is indistinguishable —
+        /// closing that gap needs `processAlive` or rollout mtime at the
+        /// call site, which this pure parser has no way to know (gate
+        /// finding, 21 Aug: unhandled `turn_aborted` alone made 55/192 real
+        /// rollouts, 29%, read as falsely busy before this fix).
         public var isBusy: Bool
+        /// Lines this parse could not decode at all — not a record type
+        /// recognized-and-ignored (`compacted`, `world_state`, ...), a line
+        /// that failed to become JSON, or JSON missing `type`/`payload`.
+        /// Zero on every real rollout on this machine today, but the file
+        /// this repo's own `TranscriptArchive`/`ClaudeAgentsCLI` lesson
+        /// applies here too: a schema change silently emptying every field
+        /// must be visible somewhere, not indistinguishable from "nothing
+        /// happened in this session" (gate finding, 21 Aug).
+        public var skippedLines: Int
 
         public init(meta: SessionMeta? = nil, completions: [TurnCompletion] = [],
-                   messages: [Message] = [], isBusy: Bool = false) {
+                   messages: [Message] = [], isBusy: Bool = false, skippedLines: Int = 0) {
             self.meta = meta
             self.completions = completions
             self.messages = messages
             self.isBusy = isBusy
+            self.skippedLines = skippedLines
         }
     }
 
-    /// Parse one already-read rollout. A line this cannot decode is
-    /// skipped, not fatal — `compacted`, `world_state`, `turn_context`,
-    /// `inter_agent_communication_metadata` all appear on real rollouts on
-    /// this machine and carry nothing this type models; a version that adds
-    /// a new record type tomorrow costs nothing here either.
+    /// Parse one already-read rollout. A RECOGNIZED-type line this cannot
+    /// otherwise decode is skipped, not fatal — `compacted`, `world_state`,
+    /// `turn_context`, `inter_agent_communication_metadata` all appear on
+    /// real rollouts on this machine and carry nothing this type models; a
+    /// version that adds a new record type tomorrow costs nothing here
+    /// either. A line that fails to decode AT ALL increments `skippedLines`
+    /// rather than vanishing silently.
     public static func parse(_ text: String) -> Parsed {
         var meta: SessionMeta?
         var completions: [TurnCompletion] = []
         var messages: [Message] = []
         var openTurns = Set<String>()
+        var skipped = 0
 
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = line.data(using: .utf8),
                   let row = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type = row["type"] as? String,
                   let payload = row["payload"] as? [String: Any]
-            else { continue }
+            else { skipped += 1; continue }
 
             switch type {
             case "session_meta":
@@ -97,6 +129,13 @@ public enum CodexRollout {
                     openTurns.remove(turnId)
                     completions.append(TurnCompletion(
                         turnId: turnId, lastAgentMessage: payload["last_agent_message"] as? String))
+                } else if kind == "turn_aborted" {
+                    // The user hit Esc. No completion to record (there is no
+                    // `last_agent_message` on this event), but the turn is
+                    // just as over as a `task_complete` — `openTurns.remove`
+                    // on an absent element is a documented no-op, so this is
+                    // safe even if `task_started` was never seen either.
+                    openTurns.remove(turnId)
                 }
 
             case "response_item":
@@ -104,15 +143,28 @@ public enum CodexRollout {
                       let role = payload["role"] as? String,
                       let content = payload["content"] as? [[String: Any]]
                 else { continue }
-                // Both `input_text` (user, developer) and `output_text`
-                // (assistant) carry the field under the same key.
+                guard role == "user" || role == "assistant" else { continue }
+                // Both `input_text` (user) and `output_text` (assistant)
+                // carry the field under the same key.
                 let text = content.compactMap { $0["text"] as? String }.joined()
                 guard !text.isEmpty else { continue }
-                // The FIRST user-role message of a turn is Codex's own
-                // injected `<environment_context>` (cwd, shell, permission
-                // profile as XML) — not anything a human or TB ever typed.
-                // Real conversation content, never this wrapper alone.
-                if role == "user", text.hasPrefix("<environment_context>") { continue }
+                // Codex's own injected `<environment_context>` (cwd, shell,
+                // permission profile as XML) — not anything a human or TB
+                // ever typed. Found at the first user-message position of a
+                // turn in a live probe, but that is not where it always
+                // sits: measured across 192 real rollouts, the SAME wrapper
+                // recurs at later positions too (one file only at message
+                // #22; several appear it more than once) — every occurrence
+                // is filtered, not just a first-of-turn heuristic (gate
+                // finding, 21 Aug — the earlier doc comment claimed
+                // "first" and was wrong). The closing-tag check guards
+                // against the one real risk: someone pasting a snippet of
+                // rollout debugging output that happens to START with the
+                // same literal string as genuine content.
+                if role == "user", text.hasPrefix("<environment_context>"),
+                   text.contains("</environment_context>") {
+                    continue
+                }
                 messages.append(Message(role: role, text: text))
 
             default:
@@ -120,7 +172,7 @@ public enum CodexRollout {
             }
         }
         return Parsed(meta: meta, completions: completions, messages: messages,
-                      isBusy: !openTurns.isEmpty)
+                      isBusy: !openTurns.isEmpty, skippedLines: skipped)
     }
 
     // MARK: - Filesystem

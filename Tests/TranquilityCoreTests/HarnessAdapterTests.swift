@@ -54,9 +54,14 @@ final class HarnessAdapterTests: XCTestCase {
         XCTAssertNotNil(spec)
         XCTAssertTrue(spec!.promptNeedles.contains("Do you trust the contents of this directory?"))
         XCTAssertNil(spec!.startedWithNoPromptNeedle,
-                     "Codex shows \"? for shortcuts\" even WHILE the trust prompt is up, " +
-                     "unlike Claude Code — it cannot mean \"nothing to accept\" here")
-        XCTAssertEqual(spec!.settledBannerNeedle, "OpenAI Codex")
+                     "no reliable Codex equivalent found: a plain (non-scrollback) " +
+                     "capture-pane read — the exact read SessionLauncher does — shows " +
+                     "ONLY the prompt block on an untrusted-dir screen; no hint line, " +
+                     "no banner, both are already in scrollback (gate finding, 21 Aug)")
+        XCTAssertEqual(spec!.settledBannerNeedle, "Ask Codex to do anything",
+                       "not the header box — measured to scroll into scrollback within " +
+                       "~1s of any real output; the composer's own idle placeholder " +
+                       "sits at the bottom of the pane and survives (gate finding, 21 Aug)")
         XCTAssertTrue(spec!.neverAutoAcceptNeedles.contains("Hooks need review"))
     }
 
@@ -107,9 +112,7 @@ final class HarnessAdapterTests: XCTestCase {
     func testWatcherNeverPressesThroughAHookReviewDialog() {
         // Codex's hooks-review dialog: hook-trust is the user's own choice,
         // never auto-accepted, unlike the directory-trust prompt this same
-        // loop DOES press through under standing 05 Aug consent. Even a
-        // needle that would also match `promptNeedles` must not be pressed —
-        // never-auto-accept wins, checked first.
+        // loop DOES press through under standing 05 Aug consent.
         let spec = TrustPromptSpec(promptNeedles: ["Do you trust"],
                                    startedWithNoPromptNeedle: nil,
                                    settledBannerNeedle: "OpenAI Codex",
@@ -121,6 +124,26 @@ final class HarnessAdapterTests: XCTestCase {
                                  press: { pressed = true },
                                  pollInterval: 0.001)
         XCTAssertFalse(pressed, "a dialog needing a human choice must never be pressed through")
+    }
+
+    func testNeverAutoAcceptWinsEvenWhenTheSameScreenAlsoMatchesAPromptNeedle() {
+        // Gate finding (21 Aug): the prior test's fixture never actually
+        // exercised the overlap it claimed to — "Hooks need review… Trust
+        // all and continue" does not contain "Do you trust" (capital
+        // "Trust", not "trust"). This one genuinely overlaps both needle
+        // lists on the SAME screen, so the never-first ordering is the only
+        // thing standing between this and a press.
+        let spec = TrustPromptSpec(promptNeedles: ["Trust all"],   // matches exactly (needles are case-sensitive)
+                                   startedWithNoPromptNeedle: nil,
+                                   settledBannerNeedle: "OpenAI Codex",
+                                   neverAutoAcceptNeedles: ["Hooks need review"])
+        var pressed = false
+        var reads = ["Hooks need review… Trust all and continue"]
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: { pressed = true },
+                                 pollInterval: 0.001)
+        XCTAssertFalse(pressed, "the screen matches BOTH needle lists; never-auto-accept must still win")
     }
 
     // MARK: reviveCommand goes through the adapter now, not a second literal
