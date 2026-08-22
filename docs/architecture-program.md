@@ -284,6 +284,20 @@ com.robertnowell.voice-dispatch (TCC).
           would finally pay off).
         - The explicit ownership-handoff state machine (observed →
           handoff-requested → releasing-writer → managed) — nothing built.
+          **A requirement for it, surfaced late and worth stating explicitly**
+          (2026-08-21-tb-foreground-adoption-mechanism, written 07:08 —
+          BEFORE dual-live-harness-parity at 11:54 corrected the Claude Code
+          half of that brief's recommendation, but its Codex-specific UX
+          finding still holds because Codex still adopts by graceful-end):
+          the SIGTERM that ends the foreground Codex process before
+          `resumeTmux` must fire only when that session is answered-and-idle,
+          never mid-keystroke — the same floor-check `TmuxTransport` already
+          enforces on typed input (never splice into someone's unsent words),
+          one level up. Firing on a live keystroke silently discards whatever
+          the user was mid-typing when their terminal exits out from under
+          them. Not yet a bug (no call site exists yet to have the gap), but
+          the state machine that gets built needs this gate from its first
+          version, not bolted on after.
         - Launch-flag compensation for Codex specifically (force scrollback,
           warm-up beat before first injection — AWS cli-agent-orchestrator's
           own Codex provider, and Anthropic's own unresolved send-keys race,
@@ -303,6 +317,23 @@ com.robertnowell.voice-dispatch (TCC).
       mechanism only — no policy, no call site yet, no ownership-handoff
       state machine above it; the three "still open" items above are
       unchanged by this. 772 tests, both drills green.
+- [x] Second audit gate, 21 Aug (two fresh agents, no priors: a codebase
+      drift/smell sweep of everything since 686f11a, and a docs/tracker
+      reconciliation against the ORIGINAL 19 Aug architecture brief). Clean:
+      no new adapter-abstraction bypass, no new dictionary-trap risk (the
+      1eefac5 fix pattern held; CodexRollout doesn't reintroduce it — its
+      `openTurns` is a `Set`, insert/remove on a duplicate is a correct
+      no-op, not a trap), no self-inconsistency in the last four commits,
+      every `[x]` checklist item traces to a real matching commit. Two real
+      findings, both folded in rather than just noted: the mid-keystroke
+      SIGTERM gate above, and open-issues.md #27 (a duplicate
+      `case "settings":` in `StatusHUD.swift`'s pose-fixture switch, named in
+      the ORIGINAL brief's Track A item 9 and then dropped from every doc
+      for two days until this pass re-found it — cosmetic today, but the
+      kind of drift this gate exists to catch). One theoretical, declined
+      finding: `CodexRollout.rolloutPath(forSessionId:)` takes the first
+      filename match on a thread-id suffix with no duplicate check —
+      speculative given Codex thread ids are UUIDs, not actioned.
 - [ ] Single-transport cut, remainder: delete AppleScript dispatch machinery
       (TerminalAppTransport, the Automation permission gate); attach
       affordance in the panel (folds in the GO TO AGENT fix above); the
