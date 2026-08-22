@@ -169,6 +169,60 @@ public enum TmuxOwnership {
     }
 }
 
+extension Array where Element == LiveSession {
+    /// Which of possibly-several rows sharing a sessionId to dispatch into,
+    /// the first time a target is chosen — before any pid is known, unlike
+    /// `matching(sessionId:pid:)` in DispatchTransport.swift, which a
+    /// transport uses once Coordinator has already decided. Preferring the
+    /// tmux-owned pid means a reply lands in TB's own pane when a session is
+    /// dual-live (resumed by TB alongside a foreground process the user
+    /// never asked TB to touch — Claude Code tolerates this, and even
+    /// arbitrates it with its own "Remote Control" feature) rather than an
+    /// arbitrary one of the rows `agents --json` happens to list first.
+    ///
+    /// Scoped to the tmux-owned half of the ambiguity, honestly: tmux launches
+    /// are opt-in (`AgentDefaults.useTmux`, off by default), so a duplicate
+    /// where NEITHER row is tmux-owned — two Terminal.app-hosted processes —
+    /// is the expected shape while that setting is off, not an anomaly, and
+    /// still resolves arbitrarily here exactly as it did before this fix. Not
+    /// a regression: Terminal.app dispatch carried the same ambiguity
+    /// beforehand. Closing it needs a live Terminal.app-tab discriminator
+    /// analogous to `TmuxOwnership`, which is legacy-path investment this arc
+    /// is deliberately not making — the plan already deletes Terminal.app
+    /// dispatch once Codex is proven (single-transport cut). More than one
+    /// tmux-owned row for one sessionId is the genuine anomaly (two tmux panes
+    /// cannot share a pid's tty) and is traced identically.
+    ///
+    /// Returns the pane resolved while deciding, when deciding required
+    /// resolving one at all — the common single-row case never queries a live
+    /// tmux server, so `pane` is nil there and the caller resolves fresh
+    /// exactly as before. When there WAS more than one row, the caller must
+    /// reuse this pane rather than re-querying: two live `pane(forPid:)` calls
+    /// milliseconds apart for the same fact can disagree if a pane closes in
+    /// between, and a row chosen BECAUSE it was tmux-owned dispatched moments
+    /// later as `.terminalApp` is the 19 Aug misfire's shape exactly.
+    ///
+    /// `resolvePane` defaults to the live check but is injectable: it is the
+    /// only thing standing between this decision and a live tmux server, and
+    /// a fake makes the decision itself testable without one.
+    public func preferringTmuxOwned(
+        sessionId: String,
+        resolvePane: (Int) -> TmuxPaneAddress? = { TmuxOwnership.pane(forPid: $0) },
+        trace: (@Sendable (String) -> Void)? = nil
+    ) -> (session: LiveSession, pane: TmuxPaneAddress?)? {
+        let matches = filter { $0.sessionId == sessionId }
+        guard let firstMatch = matches.first else { return nil }
+        guard matches.count > 1 else { return (firstMatch, nil) }
+        let tmuxOwned = matches.compactMap { row -> (LiveSession, TmuxPaneAddress)? in
+            resolvePane(row.pid).map { (row, $0) }
+        }
+        if tmuxOwned.count == 1 { return tmuxOwned[0] }
+        trace?("dispatch: \(sessionId.prefix(8)) has \(matches.count) duplicate rows, "
+            + "\(tmuxOwned.count) tmux-owned; picking the first, arbitrarily")
+        return (firstMatch, nil)
+    }
+}
+
 // MARK: - Transport
 
 /// The closed-loop tmux transport. Validated before it was written: 100/100
@@ -204,7 +258,7 @@ public struct TmuxTransport: DispatchTransport {
         case .claudeAgents:
             // The same gate as every transport, from the one shared mapping.
             return Readiness.classify((agents.sessions() ?? [])
-                .first(where: { $0.sessionId == target.sessionId }))
+                .matching(sessionId: target.sessionId, pid: pid))
         }
     }
 
@@ -212,6 +266,12 @@ public struct TmuxTransport: DispatchTransport {
         guard let pane = target.pane else {
             return .failed(.injectionFailed("tmux target has no pane address"))
         }
+        // Local on purpose, not re-derived from `target.pid` 90 lines below:
+        // the V4 dialog re-check needs this pid to run, and today it only
+        // does because `readiness(for:)` already fails closed on a nil one —
+        // a non-local invariant whose failure mode, if it ever changed, would
+        // be the check silently skipping rather than erroring.
+        guard let pid = target.pid else { return .failed(.targetGone) }
         let state = await readiness(for: target)
         let wasBusy = state == .busy
         guard state.canDispatch else {
@@ -324,7 +384,7 @@ public struct TmuxTransport: DispatchTransport {
                 // Re-probe and stand down if a dialog is up.
                 if target.readinessSource == .claudeAgents,
                    Readiness.classify((agents.sessions() ?? [])
-                       .first(where: { $0.sessionId == target.sessionId })).isDialog {
+                       .matching(sessionId: target.sessionId, pid: pid)).isDialog {
                     break
                 }
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)

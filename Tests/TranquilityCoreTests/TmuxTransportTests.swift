@@ -134,4 +134,119 @@ final class TmuxTransportTests: XCTestCase {
         }
         XCTAssertTrue(why.contains("refusing Terminal.app injection"))
     }
+
+    // MARK: dual-live dispatch-target resolution (M3)
+
+    private static let fakePane = TmuxPaneAddress(
+        socketName: "tb", paneId: "%1", sessionName: "tb-x", paneTty: "/dev/ttys011")
+
+    /// A one-value mailbox, so a `@Sendable` trace closure can report back to
+    /// a synchronous test without the compiler mistaking it for a race —
+    /// nothing here ever runs concurrently, `preferringTmuxOwned` calls the
+    /// closure inline, on the calling thread. Also counts calls, so the
+    /// single-row fast path's whole reason to exist (never paying a live
+    /// tmux round trip when there is nothing to disambiguate) is provable,
+    /// not assumed.
+    final class Mailbox: @unchecked Sendable {
+        var value: String?
+        var resolveCalls = 0
+        func resolve(_ pane: TmuxPaneAddress?) -> (Int) -> TmuxPaneAddress? {
+            { _ in self.resolveCalls += 1; return pane }
+        }
+    }
+
+    func testPreferringTmuxOwnedIsANoOpWithOneRowAndNeverTouchesTmux() {
+        let live = [LiveSession(pid: 1, sessionId: "s", cwd: "/tmp",
+                                status: "idle", name: nil, waitingFor: nil)]
+        let mailbox = Mailbox()
+        let chosen = live.preferringTmuxOwned(sessionId: "s",
+                                              resolvePane: mailbox.resolve(nil))
+        XCTAssertEqual(chosen?.session.pid, 1)
+        XCTAssertNil(chosen?.pane, "single-row path never resolves a pane")
+        XCTAssertEqual(mailbox.resolveCalls, 0,
+                       "the whole point of the fast path is skipping the live lookup")
+    }
+
+    func testPreferringTmuxOwnedPicksTheTmuxRowAmongDuplicatesAndReturnsItsPane() {
+        // The dual-live shape itself: Claude Code resumed by a foreground
+        // Terminal process (pid 1) AND, independently, by TB's own tmux
+        // pane (pid 2) — proven safe live 19 Aug, arbitrary before this fix.
+        let live = [
+            LiveSession(pid: 1, sessionId: "dup", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
+            LiveSession(pid: 2, sessionId: "dup", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
+        ]
+        let chosen = live.preferringTmuxOwned(
+            sessionId: "dup", resolvePane: { $0 == 2 ? Self.fakePane : nil })
+        XCTAssertEqual(chosen?.session.pid, 2)
+        XCTAssertEqual(chosen?.pane, Self.fakePane,
+                       "the caller must reuse this, not re-resolve — see Coordinator.dispatch")
+    }
+
+    func testPreferringTmuxOwnedIgnoresATmuxOwnedRowFromAnotherSession() {
+        // The cross-session misroute this fixture exists to rule out: an
+        // implementation that filtered `self` instead of the sessionId-
+        // matched subset would happily return "unrelated"'s pane here.
+        let live = [
+            LiveSession(pid: 1, sessionId: "dup", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
+            LiveSession(pid: 2, sessionId: "dup", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
+            LiveSession(pid: 3, sessionId: "unrelated", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
+        ]
+        let chosen = live.preferringTmuxOwned(
+            sessionId: "dup", resolvePane: { $0 == 3 ? Self.fakePane : nil })
+        XCTAssertEqual(chosen?.session.sessionId, "dup")
+        XCTAssertEqual(chosen?.session.pid, 1, "neither dup row is tmux-owned; falls back within dup")
+        XCTAssertNil(chosen?.pane)
+    }
+
+    func testPreferringTmuxOwnedTracesAndFallsBackWhenNoneAreTmuxOwned() {
+        // Neither duplicate is TB's — the EXPECTED shape while
+        // `AgentDefaults.useTmux` is off (the default): both rows are
+        // Terminal.app-hosted, and this helper is scoped to the tmux half of
+        // the ambiguity only. Must still resolve to SOMETHING deterministic,
+        // with the ambiguity traced rather than hidden.
+        let live = [
+            LiveSession(pid: 1, sessionId: "dup", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
+            LiveSession(pid: 2, sessionId: "dup", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
+        ]
+        let mailbox = Mailbox()
+        let chosen = live.preferringTmuxOwned(sessionId: "dup", resolvePane: { _ in nil },
+                                              trace: { mailbox.value = $0 })
+        XCTAssertEqual(chosen?.session.pid, 1, "falls back to the first row, deterministically")
+        XCTAssertNil(chosen?.pane)
+        XCTAssertTrue(mailbox.value?.contains("0 tmux-owned") ?? false)
+    }
+
+    func testPreferringTmuxOwnedTracesWhenMoreThanOneIsTmuxOwned() {
+        // Should not occur (two tmux panes cannot share one pid's tty), but
+        // the fallback must still be deterministic and visible, not a crash.
+        let live = [
+            LiveSession(pid: 1, sessionId: "dup", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
+            LiveSession(pid: 2, sessionId: "dup", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
+        ]
+        let mailbox = Mailbox()
+        let chosen = live.preferringTmuxOwned(sessionId: "dup", resolvePane: { _ in Self.fakePane },
+                                              trace: { mailbox.value = $0 })
+        XCTAssertEqual(chosen?.session.pid, 1)
+        XCTAssertTrue(mailbox.value?.contains("2 tmux-owned") ?? false)
+    }
+
+    func testPreferringTmuxOwnedReturnsNilWhenAbsent() {
+        let live = [LiveSession(pid: 1, sessionId: "other", cwd: "/tmp",
+                                status: "idle", name: nil, waitingFor: nil)]
+        XCTAssertNil(live.preferringTmuxOwned(sessionId: "dup", resolvePane: { _ in Self.fakePane }))
+    }
+
+    func testMatchingRequiresBothSessionIdAndPid() {
+        // The transport-layer half of the same fix: once Coordinator has
+        // already chosen a pid, a readiness probe matching sessionId alone
+        // could read the OTHER duplicate's busy/dialog state.
+        let live = [
+            LiveSession(pid: 1, sessionId: "dup", cwd: "/tmp", status: "busy", name: nil, waitingFor: nil),
+            LiveSession(pid: 2, sessionId: "dup", cwd: "/tmp", status: "idle", name: nil, waitingFor: nil),
+        ]
+        XCTAssertEqual(live.matching(sessionId: "dup", pid: 2)?.status, "idle")
+        XCTAssertEqual(live.matching(sessionId: "dup", pid: 1)?.status, "busy")
+        XCTAssertNil(live.matching(sessionId: "dup", pid: 99))
+        XCTAssertNil(live.matching(sessionId: "other", pid: 2))
+    }
 }
