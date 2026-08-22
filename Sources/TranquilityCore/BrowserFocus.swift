@@ -95,8 +95,11 @@ public enum BrowserFocus {
     /// door. The cost of being wrong the other way is a repaint of a page the
     /// click already asked for, and Chrome restores scroll position across it.
     ///
-    /// `reloading: false` stays available for a caller that only wants to find
-    /// a tab; nothing needs it today.
+    /// `reloading: false` is real, not spare capacity: the repository door
+    /// (open-issues.md #24) uses it — a live GitHub page nobody here
+    /// rewrote, where reloading would throw away whatever the user was
+    /// reading, unlike the hub pages this app rewrites immediately before
+    /// raising them.
     @discardableResult
     public static func focusExistingTab(_ url: URL,
                                         reloading: Bool = true,

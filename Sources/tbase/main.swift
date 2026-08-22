@@ -549,7 +549,8 @@ case "reconcile":
             print("its turns enter the loop as soon as the session first stops")
         case .failure(let error):
             print("couldn't launch: \(error.message)")
-            print("(Terminal automation permission is the usual suspect)")
+            print("(a missing tmux binary or `new-session` failing is the usual suspect —")
+            print(" launches stopped touching Terminal automation 21 Aug)")
         }
 
     case "end":
@@ -721,10 +722,16 @@ case "reconcile":
             print("not dispatched: session is not enrolled. Run:  tbase enroll \(sessionId)")
             exit(2)
         }
-        // Real Claude transcripts live at ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl
-        let encoded = (live.cwd ?? "").replacingOccurrences(of: "/", with: "-")
-        let transcript = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/projects/\(encoded)/\(sessionId).jsonl").path
+        // FOUND, not derived (codebase audit, 21 Aug): a hand-rolled `/` → `-`
+        // encoding lived here and was wrong for exactly this repo's own
+        // worktrees — Claude Code also maps `.` → `-`, so a session running
+        // under `.claude/worktrees/…` (every session working this arc, per
+        // CLAUDE.md rule 5) resolved to a path that does not exist. The text
+        // still landed; delivery just could never confirm it, burning every
+        // retry and the extra one-Return attempt each time before timing out.
+        // See TranscriptArchive.transcriptPath's own doc for why this must
+        // never be reproduced by hand a second time.
+        let transcript = TranscriptArchive.transcriptPath(forSessionId: sessionId)
 
         if live.isBackground {
             print("not dispatched: this is a first-party background session")
