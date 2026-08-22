@@ -544,9 +544,8 @@ case "reconcile":
                                  : SessionLauncher.defaultDirectory
         switch SessionLauncher.launch(directory: dir) {
         case .success:
-            let surface = AgentDefaults.useTmux()
-                ? "detached tmux session (attach on demand)" : "new Terminal window"
-            print("\(surface): `\(SessionLauncher.defaultCommand)` in \(dir)")
+            print("detached tmux session (attach on demand): "
+                + "`\(SessionLauncher.defaultCommand)` in \(dir)")
             print("its turns enter the loop as soon as the session first stops")
         case .failure(let error):
             print("couldn't launch: \(error.message)")
@@ -764,15 +763,6 @@ case "reconcile":
             kind: .tmux, sessionId: "harness-\(pid)", pid: pid, pane: pane,
             transcriptPath: args[3], label: "test harness", readinessSource: .processAlive)
         report(await TmuxTransport().send(text: args.dropFirst(4).joined(separator: " "), to: target))
-
-    case "tmux":
-        guard args.count > 1, ["on", "off"].contains(args[1]) else {
-            print("usage: tbase tmux <on|off>   — whether NEW launches go into detached")
-            print("       tmux sessions on the app's own server instead of Terminal windows")
-            exit(2)
-        }
-        AgentDefaults.save(useTmux: args[1] == "on")
-        print("new-agent launches: \(args[1] == "on" ? "detached tmux sessions (tb- prefix)" : "Terminal windows")")
 
     // MARK: summarize
 

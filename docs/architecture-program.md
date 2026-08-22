@@ -51,9 +51,11 @@ The six-agent audit record behind every item:
   injection walk, TerminalAppTransport, scripts/lib/canary-probe.applescript
   and canary.sh's Terminal path, the tab-walk in SessionLauncher.focus, the
   Automation (Terminal) permission and its onboarding gate, the four
-  Terminal-naming user strings, `AgentDefaults.useTmux` (launches are tmux,
-  full stop), the window-per-agent launch path and its ruling doc block
-  (rewritten as history).
+  Terminal-naming user strings, the window-per-agent launch path and its
+  ruling doc block (rewritten as history). `AgentDefaults.useTmux` and
+  `launchTerminal` are DONE, ahead of the rest of this cut (ruled 21 Aug: "no
+  feature flags... tmux is on" — a launch is tmux, unconditionally, full
+  stop; no opt-in ever existed to remove by the time Codex is proven).
 - **Hand-started sessions are adopted, never read-only** (ruled 20 Aug,
   reversing the read-only-rows trade: "announced but not voice-repliable is
   not acceptable... it should just work"). Every session on the machine
@@ -130,15 +132,33 @@ com.robertnowell.voice-dispatch (TCC).
       before the adapter freezes capability values. Model-reply leg blocked
       by an account entitlement, not transport: config.toml pins gpt-5.6-sol,
       unsupported on ChatGPT-account auth (400) — flagged to Robert.
-- [ ] Subprocess runner + per-element decode + readiness classify dedupe
-- [ ] HarnessAdapter + ClaudeCodeAdapter (liveness, transcripts, launch,
-      hooks, trust spec); five parsers collapse
+- [x] M1 (e090c92, gate e486743): Subprocess runner + per-element decode +
+      readiness classify dedupe.
+- [x] M2 (c8a837e, gate 99d81d8): HarnessAdapter + ClaudeCodeAdapter
+      (launch, trust spec, capabilities); resume flag stops being written
+      twice. Transcript-parser collapse (five parsers → one) NOT done —
+      still open, folds into CodexAdapter below.
+- [x] M3 (846dcbd): dispatch resolves the tmux-owned row deterministically
+      when a session is dual-live, instead of an arbitrary `.first(where:)`
+      pick — 4 real call sites (Coordinator + 3 transport-layer readiness
+      probes) plus a 5th the gate caught (`tbase send`). Scoped to the
+      tmux-owned half only; see the waiver in `preferringTmuxOwned`'s doc
+      comment.
+- [x] `AgentDefaults.useTmux` + `launchTerminal` deleted (ruled 21 Aug, "no
+      feature flags... tmux is on"). Pulled forward out of the single-
+      transport cut below — see "The end state" note above. `resume()`
+      (revive) still opens Terminal.app; NOT yet decided whether that
+      also moves now or waits for the full cut.
 - [ ] CodexAdapter (load-bearing on landing: grid shows Codex sessions,
       dispatch delivers to them; rollout parser test-driven against the 177
-      rollouts already on this machine)
-- [ ] Single-transport cut: delete AppleScript dispatch machinery, Automation
-      permission gate, useTmux flag; launches are tmux; attach affordance in
-      the panel; read-only rows for plain-terminal sessions
+      rollouts already on this machine); harness-conditional adoption
+      capability + explicit ownership-handoff state machine land with it —
+      see 2026-08-21-tb-codex-tmux-prior-art for why these three are one
+      milestone, not `HarnessCapabilities` field first.
+- [ ] Single-transport cut, remainder: delete AppleScript dispatch machinery
+      (TerminalAppTransport, the Automation permission gate); attach
+      affordance in the panel; the useTmux/launchTerminal half of this is
+      already done, above.
 - [ ] Launcher: PATH/env from adapter; trust watcher unified; revive = tmux
 - [ ] Coordinator split
 - [ ] App lane P1-P10 (sequenced, drills green per step)

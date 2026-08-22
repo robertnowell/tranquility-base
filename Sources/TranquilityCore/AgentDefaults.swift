@@ -45,13 +45,11 @@ public enum AgentDefaults {
         var command: String
         /// Absent in files written before 15 Aug, which read as "unset".
         var directory: String?
-        /// Absent in files written before 19 Aug, which read as "off": new
-        /// agents keep launching in Terminal windows until this machine opts
-        /// its launches into detached tmux sessions. Externally-started tmux
-        /// agents are reachable either way — the transport is selected per
-        /// target from live ownership, not from this setting; this only
-        /// chooses what the LAUNCH button makes.
-        var tmux: Bool?
+        // A `tmux: Bool?` opt-in lived here 19 Aug through 21 Aug — new
+        // launches keep loading files written during that window fine
+        // (Decodable ignores unknown keys), they just never read the field
+        // again. Ruled 21 Aug: no flags, tmux is simply how a launch works;
+        // an old machine's stored `true`/`false` is inert, not honored.
     }
 
     /// The configured command, or the fallback when nothing has been set.
@@ -81,18 +79,7 @@ public enum AgentDefaults {
 
     public static func save(_ command: String) {
         let old = stored()
-        write(Stored(command: command, directory: old?.directory, tmux: old?.tmux))
-    }
-
-    /// Whether NEW launches go into detached tmux sessions on the app's own
-    /// server instead of Terminal windows. Off by default; flipped with
-    /// `tbase tmux on` while the launch path earns trust.
-    public static func useTmux() -> Bool { stored()?.tmux ?? false }
-
-    public static func save(useTmux: Bool) {
-        let old = stored()
-        write(Stored(command: old?.command ?? fallback, directory: old?.directory,
-                     tmux: useTmux))
+        write(Stored(command: command, directory: old?.directory))
     }
 
     /// The configured start directory, or home when nothing is set.
@@ -118,7 +105,6 @@ public enum AgentDefaults {
 
     public static func save(directory: String) {
         let old = stored()
-        write(Stored(command: old?.command ?? fallback, directory: directory,
-                     tmux: old?.tmux))
+        write(Stored(command: old?.command ?? fallback, directory: directory))
     }
 }
