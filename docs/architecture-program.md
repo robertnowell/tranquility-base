@@ -99,18 +99,26 @@ The six-agent audit record behind every item:
   answer, above).
 - **GO TO AGENT = attach**: opens a terminal window running
   `tmux attach -t <session>`; detach leaves the agent running. Revive = tmux.
-  The frontmost-suppression check generalizes to the active tmux client, or
-  dies if it cannot be done cleanly (announce-always is the safe direction).
-  **NOT YET BUILT, and currently a regression, not a pending enhancement**
-  (codebase audit, 21 Aug): `SessionLauncher.focus(pid:)` walks Terminal.app
-  tabs by tty; since every launch became tmux (cc7bf4e) that walk always
-  misses, so the grid/past-agents "Go to agent" is a silent no-op for every
-  session TB launches. `TerminalTabFocus` (the card's own door,
-  `StatusHUD.swift:7132`) is the better-built implementation but is the same
-  Terminal.app-tab mechanism underneath, so it is not a working fallback for
-  a tmux-hosted session either. Fix direction: delete `SessionLauncher.focus`
-  outright, route both call sites through one door, and give that door the
-  `tmux attach` branch this bullet already describes as the design.
+  **Fixed (3a641d2, 22 Aug)** — caught live by Robert clicking it, not by any
+  gate: reproduced immediately on a session launched seconds earlier, so this
+  was never one stale row, it was universal since `cc7bf4e`. Neither
+  `swift test` nor `--selftest-hud` cover this path (a real AppleScript/
+  Terminal.app interaction, and no click-through drill exists for the
+  button specifically), which is the honest reason it sat on this checklist,
+  correctly labeled a regression, until it was actually clicked. Built per
+  this bullet's own design: `TerminalTabFocus.focus(tty:)` now tries
+  `TmuxOwnership.pane(forTty:)` first and opens a fresh Terminal window
+  running `tmux attach` when it resolves — the original Terminal.app tab
+  walk stays, unchanged, as the fallback for a hand-started session opened
+  directly in the user's own tab (the one case where a tmux pane genuinely
+  doesn't exist). `SessionLauncher.focus(pid:)`, the other copy of the same
+  broken walk, deleted outright; its one call site now routes through the
+  same door the card already used. Live-verified against the exact session
+  from the bug report: hand-built the identical AppleScript, ran it, and
+  `tmux list-clients` confirmed a real client attached.
+  The frontmost-suppression check generalizing to the active tmux client is
+  still open — not addressed by this fix, not previously scoped as blocking
+  it either.
 - **HarnessAdapter with two real implementations, no optional stubs:**
   ClaudeCodeAdapter and CodexAdapter land together, both load-bearing.
   Capabilities (liveSessions?, hooks?, echoesPaste, queuesInputMidTurn,
@@ -525,9 +533,10 @@ com.robertnowell.voice-dispatch (TCC).
       filename match on a thread-id suffix with no duplicate check —
       speculative given Codex thread ids are UUIDs, not actioned.
 - [ ] Single-transport cut, remainder: delete AppleScript dispatch machinery
-      (TerminalAppTransport, the Automation permission gate); attach
-      affordance in the panel (folds in the GO TO AGENT fix above); the
-      useTmux/launchTerminal half of this is already done, above.
+      (TerminalAppTransport, the Automation permission gate) — the attach
+      affordance itself landed separately (3a641d2, 22 Aug, GO TO AGENT fix
+      above) and is NOT part of what's left here; the useTmux/launchTerminal
+      half of this is already done, above.
 - [ ] Launcher: PATH/env from adapter; trust watcher unified; revive = tmux
 - [ ] Coordinator split
 - [ ] App lane P1-P10 (sequenced, drills green per step)
