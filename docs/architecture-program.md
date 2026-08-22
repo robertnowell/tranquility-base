@@ -77,17 +77,26 @@ The six-agent audit record behind every item:
   paginated thread open for writing at a time... `thread/resume` fails with
   JSON-RPC `-32600`"), a second Codex process was measured live hitting
   exactly that error, and OpenAI was asked for the exact alternative
-  (`codex inject`, issue #11415) and closed it "not planned." So Codex keeps
-  the original design: graceful end (the existing clean SIGTERM path,
-  "resumable via revive"), THEN `codex resume <id>` in a fresh tb- tmux
-  session, then the closed-loop delivery — with the user's explicit approval
-  on first attempted reply to a hand-started Codex session, never automatic.
-  Both: the resume-depth dialog, when Claude Code shows one, surfaces
-  through the dialog gate (a usage spend stays a human choice; one tap, then
-  the reply flows). Replies to dead sessions revive straight into tmux.
-  This is `allowsConcurrentResume` on `HarnessCapabilities` (not yet added —
-  lands with CodexAdapter, since a capability with one harness to compare
-  against is a field with no real question to answer).
+  (`codex inject`, issue #11415) and closed it "not planned."
+  **Superseded 22 Aug** (2026-08-22-tb-codex-hand-started-adoption, revised
+  twice same day): the original design here was TB-initiated graceful end
+  (SIGTERM the foreground process, with the user's approval) THEN
+  `codex resume <id>`. That needed knowing WHICH process to end — the exact
+  problem `CodexProcesses` was built and then deleted over (see the
+  CodexAdapter checklist item below). Settled instead: TB never ends a
+  Codex process itself, ever. It attempts `codex resume <id>` directly;
+  success means the session wasn't live and TB now owns it; the measured
+  `-32600` failure IS the "it's live elsewhere" signal, authoritatively,
+  with zero side effects either way — TB asks the human to end it in their
+  own terminal, then retries. This also means Codex needs no adoption
+  approval prompt the way the line above once implied: there is nothing to
+  approve, only a resume that either works or doesn't.
+  Both harnesses: the resume-depth dialog, when Claude Code shows one,
+  surfaces through the dialog gate (a usage spend stays a human choice; one
+  tap, then the reply flows). Replies to dead sessions revive straight into
+  tmux. This is `allowsConcurrentResume` on `HarnessCapabilities` — true for
+  Claude Code (always resume a twin), false for Codex (attempt-and-read the
+  answer, above).
 - **GO TO AGENT = attach**: opens a terminal window running
   `tmux attach -t <session>`; detach leaves the agent running. Revive = tmux.
   The frontmost-suppression check generalizes to the active tmux client, or
@@ -297,58 +306,68 @@ com.robertnowell.voice-dispatch (TCC).
       only — an honest "unverified" for Codex's mid-turn dialog risk, not a
       measured "safe". Mechanism only, same shape as the two before it: no
       call site constructs a `.rolloutTail` target yet.
-      **`CodexProcesses` landed (395cedb, 22 Aug)** — the pid-attribution
-      primitive session-discovery wiring turned out to actually need, found
-      by spinning up a real Codex session to measure rather than assuming
-      "reuse `SessionDiscovery`'s pattern" would be enough. Claude Code's
-      `agents --json` is a registry (every live pid, its session id, one
-      call); Codex has nothing like it. Measured shape: a fresh `codex`
-      launch's argv is exactly `["codex"]`, a resume (TB's or a human's) is
-      `["codex", "resume", "<id>"]` — the id lands in argv, unambiguous
-      whenever present. `CodexProcesses.liveness(...)` reuses
-      `SessionDiscovery.Liveness`'s existing three states for exactly the
-      gap this surfaced: **a bare, unresumed Codex process cannot be told
-      apart from an unrelated one in the same directory by argv alone** —
-      genuinely unsolved, not an oversight, reads `.unknown` rather than
-      guessing. Also closed: the desktop ChatGPT/Codex.app runs its own
-      bundled `codex` binary internally (`app-server`, confirmed live on
-      this machine) — same name, unrelated process, and the exact shape a
-      broad `pkill -f codex` came within one command of hitting during this
-      arc's own Codex measurement work. `CodexProcesses.parse` allowlists
-      the two measured interactive shapes rather than blocking known-bad
-      ones, verified against this machine's real full process table.
+      **`CodexProcesses` landed (395cedb, 22 Aug) then deleted (ef0600b, same
+      day)** — a real pid-attribution primitive, built after spinning up a
+      real Codex session to measure rather than assume, then found
+      unnecessary within the same day once the adoption question it served
+      was talked through properly. Worth recording the shape of the mistake
+      honestly: it tried to answer "which process IS this session" from OS
+      state (argv, cwd) before acting, and for a bare unresumed process
+      sharing a directory with another one, that question has no reliable
+      answer — confirmed by survey (2026-08-22-tb-codex-hand-started-adoption):
+      claude-squad, vibe-kanban, and AWS's cli-agent-orchestrator all avoid
+      it entirely, architecturally (one directory per session, always
+      self-launched), rather than inferring it. The fix wasn't a better
+      heuristic, it was asking a narrower question Codex's own protocol
+      already answers for free — see the adoption design below, now settled.
+      **Adoption design, settled (22 Aug, same two reports)**: TB never
+      identifies a live Codex process before acting. It attempts
+      `codex resume <id>` directly (`resumeTmux`, already built) and reads
+      Codex's own answer:
+        - Succeeds → the session was not actually live; TB now owns the pid
+          with certainty, same footing as anything it launched itself.
+        - Fails, `-32600` → the session IS live, somewhere TB doesn't
+          control — measured live with zero side effects on either side
+          (the attempt just exits, status 1; the original process and its
+          rollout are untouched). TB reports "already running — end it in
+          that terminal, then try again," citing the session's own
+          directory/last-known content so the user can find the right tab.
+      This closes the hand-started-adoption question completely, including
+      the same-directory-collision case (two sessions, e.g. one on Mars, one
+      on New Horizons): TB never needs to tell them apart, because it is
+      always resuming ONE specific session id — the one the user picked
+      from TB's own history — never guessing from a directory. Kill and
+      quiet inherit this for free: both only ever apply to a pid TB
+      currently holds, and TB only ever comes to hold a Codex pid through a
+      resume that already succeeded, so there is no code path where either
+      reaches an unverified process. **This also retires the
+      ownership-handoff state machine** (observed → handoff-requested →
+      releasing-writer → managed) **entirely, for both harnesses** — Claude
+      Code never needed one (dual-live), and Codex's version of it
+      (TB-initiated graceful-end, with the mid-keystroke SIGTERM gate that
+      would have required) is superseded: TB never sends a Codex process it
+      doesn't own any signal at all. The human ends it, in their own
+      terminal, on their own judgment about their own unsaved keystrokes —
+      strictly safer than TB inferring when it's safe to do so itself, and
+      no state machine is needed to get there.
       Still open, concretely:
-        - Transport-layer (glyph + readiness) and pid-attribution are now
-          all done. What's left is wiring: `CodexRollout` + `CodexProcesses`
-          into session discovery so the grid actually shows Codex sessions,
-          and a real call site building `.rolloutTail` / Codex-glyph
-          `DispatchTarget`s so replies actually deliver. The `.unknown`
-          gap above means hand-started Codex sessions may need a narrower
-          adoption story than Claude Code's — worth an explicit decision
-          when this wiring lands, not a silent default either way.
-        - The explicit ownership-handoff state machine (observed →
-          handoff-requested → releasing-writer → managed) — nothing built.
-          **A requirement for it, surfaced late and worth stating explicitly**
-          (2026-08-21-tb-foreground-adoption-mechanism, written 07:08 —
-          BEFORE dual-live-harness-parity at 11:54 corrected the Claude Code
-          half of that brief's recommendation, but its Codex-specific UX
-          finding still holds because Codex still adopts by graceful-end):
-          the SIGTERM that ends the foreground Codex process before
-          `resumeTmux` must fire only when that session is answered-and-idle,
-          never mid-keystroke — the same floor-check `TmuxTransport` already
-          enforces on typed input (never splice into someone's unsent words),
-          one level up. Firing on a live keystroke silently discards whatever
-          the user was mid-typing when their terminal exits out from under
-          them. Not yet a bug (no call site exists yet to have the gap), but
-          the state machine that gets built needs this gate from its first
-          version, not bolted on after.
+        - Wiring: `CodexRollout` into session discovery so the grid shows
+          Codex history; a real call site building `.rolloutTail` /
+          Codex-glyph `DispatchTarget`s once a resume succeeds; hooking the
+          resume-attempt's `-32600` detection into the actual message shown
+          (needs a specific check — the launched pane's process exiting
+          within ~1-2s of spawn, screen text matching the known error
+          string — not yet built, `resumeTmux` today just launches and
+          returns a tty, it doesn't yet distinguish this failure mode from
+          a successful launch).
         - Launch-flag compensation for Codex specifically (force scrollback,
           warm-up beat before first injection — AWS cli-agent-orchestrator's
           own Codex provider, and Anthropic's own unresolved send-keys race,
           claude-code #23513) — not yet in the launch path.
-        - `thread/queue/add` requiring pre-existing writer ownership is
-          still a strong inference, not verified against
-          `codex-rs/app-server/src/` — cheap to confirm before leaning on it.
+        - `thread/queue/add` — no longer relevant to the chosen design (it
+          never engages `app-server`'s queue surface at all, only plain
+          `codex resume`); the earlier note about verifying it against
+          `codex-rs/app-server/src/` is moot, not merely stale.
       **`resumeTmux` landed (00b060d, 21 Aug)**: the one mechanism both
       adoption strategies bottom out in — build resume arguments through
       the adapter, spawn a fresh TB-owned detached tmux pane, watch that
