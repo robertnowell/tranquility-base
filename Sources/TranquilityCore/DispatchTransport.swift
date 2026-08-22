@@ -567,6 +567,23 @@ public enum ProcessProbe {
               !raw.isEmpty, raw != "??" else { return nil }
         return raw.hasPrefix("/dev/") ? raw : "/dev/\(raw)"
     }
+
+    /// Working directory of a process. macOS has no `/proc`, so `lsof` is
+    /// the only source — used to attribute a bare, unresumed Codex process
+    /// to a directory when nothing else names it (`CodexProcesses`; Codex
+    /// has no `agents --json` equivalent to ask directly). `-Fn`, not the
+    /// tabular form: a project directory containing a space would otherwise
+    /// merge into the column split, the same hazard `TmuxOwnership.match`
+    /// already guards against on its own tab-separated inventory.
+    public static func cwd(of pid: Int) -> String? {
+        guard case .success(let raw) = Subprocess.run(
+            "/usr/sbin/lsof", ["-a", "-p", "\(pid)", "-d", "cwd", "-Fn"], timeout: 3)
+        else { return nil }
+        for line in raw.split(separator: "\n") where line.hasPrefix("n") {
+            return String(line.dropFirst())
+        }
+        return nil
+    }
 }
 
 // MARK: - claude agents --json
