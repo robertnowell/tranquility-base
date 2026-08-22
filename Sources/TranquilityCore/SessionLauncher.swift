@@ -68,7 +68,8 @@ public enum SessionLauncher {
     public static func launch(
         directory: String = defaultDirectory,
         command: String = defaultCommand,
-        acceptTrustPrompt: Bool = true
+        acceptTrustPrompt: Bool = true,
+        adapter: any HarnessAdapter = ClaudeCodeAdapter()
     ) -> Result<String, ScriptError> {
         // Ruled 21 Aug: no flags, no parallel launch paths. A launch is a
         // detached tmux session on the app's own server, full stop — the
@@ -79,7 +80,7 @@ public enum SessionLauncher {
         // opens a Terminal.app window for a REVIVED session — a separate,
         // not-yet-decided piece of this same cleanup; see its doc comment.
         launchTmux(directory: directory, command: command,
-                  acceptTrustPrompt: acceptTrustPrompt)
+                  acceptTrustPrompt: acceptTrustPrompt, adapter: adapter)
     }
 
     /// The tmux launch path: a detached session on the app's own server, no
@@ -97,12 +98,13 @@ public enum SessionLauncher {
     static func launchTmux(
         directory: String,
         command: String,
-        acceptTrustPrompt: Bool
+        acceptTrustPrompt: Bool,
+        adapter: any HarnessAdapter = ClaudeCodeAdapter()
     ) -> Result<String, ScriptError> {
         // The launch command re-quotes the directory through printf %q-style
         // single-quote wrapping; the directory came from settings validation
         // (must exist) but is still never trusted as shell syntax.
-        let quotedDir = "'" + directory.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let quotedDir = Self.shellQuoted(directory)
         let name = "tb-" + String(UUID().uuidString.prefix(8)).lowercased()
         let path = ([
             "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin",
@@ -139,8 +141,69 @@ public enum SessionLauncher {
         }
         Self.trace?("newSession: launched `\(command)` in \(directory) "
             + "(tmux \(name), tty \(tty))")
-        if acceptTrustPrompt { watchForTrustPrompt(tty: tty) }
+        if acceptTrustPrompt { watchForTrustPrompt(tty: tty, adapter: adapter) }
         return .success(tty)
+    }
+
+    /// Resume any adaptable session in a fresh detached tmux pane — the one
+    /// mechanism both harness-specific adoption strategies need underneath,
+    /// whatever their policy differences: Claude Code's dual-live twin
+    /// (spawn a TB-owned pane alongside a foreground process the user never
+    /// asked TB to touch, original left running — 2026-08-21-tb-dual-live-
+    /// harness-parity) and Codex's graceful-end-then-resume (spawn only
+    /// AFTER the original process has exited, since Codex's app-server
+    /// refuses a second writer with -32600). The policy — whether anything
+    /// gets asked to end first, whose approval that needs — belongs to the
+    /// caller, same division `resume` already draws for Terminal.app: this
+    /// function is the mechanism, not the policy.
+    ///
+    /// Shares `launchTmux`'s server posture and trust-watching rather than
+    /// re-deriving them; the only difference is the argv — `command` PLUS
+    /// the adapter's own resume arguments, built through `resumeArguments`
+    /// like `resume` and `SessionDiscovery.reviveCommand` already are, never
+    /// a hand-built suffix (the exact duplication M2 collapsed — a second
+    /// copy here would reopen it for the tmux leg specifically).
+    ///
+    /// An adapter returning `[]` is a programmer error, not a shape to
+    /// render around, same reasoning `resume` uses: refuses loudly before
+    /// any tmux call, rather than spawning a pane running a command with
+    /// nothing to resume.
+    @discardableResult
+    static func resumeTmux(
+        sessionId: String,
+        directory: String,
+        command: String = defaultCommand,
+        acceptTrustPrompt: Bool = true,
+        adapter: any HarnessAdapter = ClaudeCodeAdapter()
+    ) -> Result<String, ScriptError> {
+        let resumeArgs = adapter.resumeArguments(sessionId: sessionId)
+        guard !resumeArgs.isEmpty else {
+            Self.trace?("resumeTmux: \(adapter.id) adapter returned no resume arguments "
+                + "for \(sessionId.prefix(8)) — refusing rather than spawning a pane with "
+                + "nothing to resume")
+            return .failure(ScriptError(message: "\(adapter.id) adapter: empty resume arguments"))
+        }
+        // Quoted individually, same discipline as `directory` a few lines
+        // into `launchTmux`: a resume argument reaches here from data (a
+        // session id read out of a filename, or — for Codex — out of a
+        // rollout's own JSON, which is not guaranteed shell-safe just
+        // because it looks like a uuid), not from a constant, and it lands
+        // in the same raw `/bin/zsh -c "..."` string `directory` does.
+        let quotedArgs = resumeArgs.map(Self.shellQuoted)
+        let fullCommand = ([command] + quotedArgs).joined(separator: " ")
+        return launchTmux(directory: directory, command: fullCommand,
+                          acceptTrustPrompt: acceptTrustPrompt, adapter: adapter)
+    }
+
+    /// Single-quote wrapping, the shell's own escape for "trust nothing
+    /// inside this": embedded single quotes close the quote, insert an
+    /// escaped literal one, and reopen it. The one implementation —
+    /// `launchTmux`'s directory quoting used to be a second, identical copy
+    /// of this exact expression; collapsed here rather than reintroduced
+    /// for `resumeTmux`'s arguments. Not `private`: pinned directly by a
+    /// test, the way a security-relevant string transform earns.
+    static func shellQuoted(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Bring a session that has exited back, in its own directory.
