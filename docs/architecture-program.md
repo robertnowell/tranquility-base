@@ -384,18 +384,38 @@ com.robertnowell.voice-dispatch (TCC).
       for Codex yet, no `SessionActivity`-equivalent classifier, no
       per-message timestamp in `CodexRollout`'s parsed shape (file mtime
       stands in for all three).
+      **`tbase discover`/`revive` went multi-harness (bbccfef, 22 Aug)** —
+      the roadmap's "real call site" step, landed narrower than originally
+      scoped and on purpose. Original step 2 said "the grid" — but
+      `sessionRowsNow()` (`main.swift:1380+`) turned out to be dense,
+      extensively-tuned, Claude-Code-specific precedence logic (lamp state,
+      blocked-on-you, resumed-vs-working) with zero unit coverage (rule 7:
+      StatusHUD has none), and merging a second data source into it with no
+      established band/lamp semantics is a real app-layer design task, not
+      something to rush riding a Codex push. `tbase discover`/`revive` call
+      the SAME mechanism the panel's row already does (`SessionDiscovery`,
+      `SessionLauncher`) with none of the panel's risk — landed there
+      instead, live-verified end to end against a real Codex session (both
+      outcomes: attach, and refuse-because-already-live).
+      Also surfaced, only by actually scoping this: voice-dispatch into an
+      already-attached Codex session, and kill/quiet, both need TB to
+      remember which pid it currently holds for a session id — Claude Code
+      gets this for free from `agents --json`; Codex has no registry, so
+      this needs a small persisted ownership record (sessionId → pid/pane)
+      that does not exist yet. A real, well-defined next piece, found by
+      building toward it rather than reasoned out in advance.
       Still open, concretely:
-        - Roadmap step 2: the real grid call site — a session row calling
-          `attemptCodexResume` / building `.rolloutTail` / Codex-glyph
-          `DispatchTarget`s once a resume succeeds. App-layer work;
-          14 other worktrees were live on this repo when step 1 landed —
-          check what else is in flight there before starting, per the
-          one-session-in-the-app-layer-at-a-time rule.
-        - Roadmap step 3: kill/quiet for a TB-owned Codex session — should
-          be close to free once step 2 lands (the pid is known with
-          certainty by construction).
-        - Roadmap step 4: a drill exercising attach-then-dispatch end to
-          end, once steps 2-3 give it something real to drill.
+        - The grid call site (original roadmap step 2) — deliberately not
+          attempted this pass; needs its own design pass for how a Codex
+          row fits `sessionRowsNow()`'s band/lamp model, not a rushed
+          addition. 14 other worktrees were live on this repo when this
+          landed (all confirmed stale — see 2026-08-22-tb-goals-checkin)
+          but the file's own density is the real reason to slow down here,
+          not worktree contention.
+        - The ownership-record gap above — needed before `send`/`end` can
+          exist for Codex at all, TB-launched or hand-adopted alike.
+        - A drill exercising attach-then-dispatch end to end, once the
+          above give it something real to drill.
         - Launch-flag compensation for Codex specifically (force scrollback,
           warm-up beat before first injection — AWS cli-agent-orchestrator's
           own Codex provider, and Anthropic's own unresolved send-keys race,
