@@ -46,6 +46,16 @@ public struct DispatchTarget: Sendable, Equatable {
     /// building a target for a different harness passes its adapter's glyph.
     /// Unused by `TerminalAppTransport`, which has no screen to read.
     public var promptGlyph: String
+    /// The harness's own idle-composer hint text, when it has one that
+    /// renders on the SAME glyph-prefixed line an empty box would — found
+    /// live, 22 Aug, dispatching to a real idle Codex composer: its
+    /// placeholder ("Ask Codex to do anything") is plain-text-
+    /// indistinguishable from something a human typed (`capture-pane -p`
+    /// carries no color/dimness), so the floor check read an idle session
+    /// as permanently held. nil for Claude Code (no placeholder text
+    /// measured on its own idle composer) and every existing construction
+    /// site, unchanged.
+    public var idlePlaceholder: String?
 
     public init(
         kind: TransportKind = .terminalApp,
@@ -56,7 +66,8 @@ public struct DispatchTarget: Sendable, Equatable {
         transcriptPath: String? = nil,
         label: String? = nil,
         readinessSource: ReadinessSource = .claudeAgents,
-        promptGlyph: String = "❯"
+        promptGlyph: String = "❯",
+        idlePlaceholder: String? = nil
     ) {
         self.kind = kind
         self.sessionId = sessionId
@@ -67,6 +78,7 @@ public struct DispatchTarget: Sendable, Equatable {
         self.label = label
         self.readinessSource = readinessSource
         self.promptGlyph = promptGlyph
+        self.idlePlaceholder = idlePlaceholder
     }
 }
 
@@ -916,5 +928,56 @@ public enum TranscriptWatcher {
             }
         }
         return found
+    }
+
+    /// The Codex twin of `userMessages(in:fromByteOffset:)` — same
+    /// contract, read through `CodexRollout.parse` instead of Claude
+    /// Code's own `{"type":"user",…}` line shape, which a Codex rollout
+    /// never has (every line is `session_meta`/`event_msg`/
+    /// `response_item`) and would silently never match, forever.
+    ///
+    /// A real bug, found only by actually sending to a real Codex session
+    /// (22 Aug), not by reasoning about the two schemas: the send landed
+    /// and got a reply, but this — reading the wrong format — could not
+    /// see it, timed out, and because `alreadyDelivered`'s dedup check
+    /// reads the exact same (wrong) function, retried and injected the
+    /// SAME payload a second time into the live session. Two real bugs
+    /// from one root cause, closed together.
+    ///
+    /// Safe against a byte offset that bisects a line, the same guarantee
+    /// the Claude Code version documents: a truncated first fragment
+    /// fails `CodexRollout.parse`'s own per-line JSON decode and is
+    /// counted in `skippedLines`, never mistaken for a message.
+    public static func codexUserMessages(in path: String, fromByteOffset offset: Int64) -> [String] {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return [] }
+        defer { try? handle.close() }
+        if offset > 0 {
+            guard (try? handle.seek(toOffset: UInt64(offset))) != nil else { return [] }
+        }
+        guard let data = try? handle.readToEnd(),
+              let raw = String(data: data, encoding: .utf8) else { return [] }
+        return CodexRollout.parse(raw).messages
+            .filter { $0.role == "user" }
+            .map(\.text)
+    }
+
+    /// The Codex twin of `waitForUserText` — polls `codexUserMessages`
+    /// instead. `path` is required rather than resolved by session id: a
+    /// Codex `DispatchTarget` always carries its rollout path already
+    /// (`CodexRollout.rolloutPath`, resolved at construction), so there is
+    /// no "the file arrives during the wait" race to handle the way Claude
+    /// Code's transcript-creation-on-first-message timing needed.
+    public static func waitForCodexUserText(
+        _ text: String, path: String, timeout: TimeInterval, pollInterval: TimeInterval,
+        fromByteOffset: Int64 = 0
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        while Date() < deadline {
+            if codexUserMessages(in: path, fromByteOffset: fromByteOffset)
+                .contains(where: { $0.contains(needle) }) { return true }
+            try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+        }
+        return false
     }
 }

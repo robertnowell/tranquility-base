@@ -47,6 +47,11 @@ private func claude(pid: Int = 4242, pgid: Int = 4242,
     SessionTermination.Identity(command: "claude", pgid: pgid, tty: tty)
 }
 
+private func codex(pid: Int = 71800, pgid: Int = 71800,
+                   tty: String? = "/dev/ttys003") -> SessionTermination.Identity {
+    SessionTermination.Identity(command: "codex", pgid: pgid, tty: tty)
+}
+
 final class SessionTerminationTests: XCTestCase {
 
     // MARK: - The ordinary case
@@ -204,6 +209,52 @@ final class SessionTerminationTests: XCTestCase {
         XCTAssertTrue(why.contains("process group 4242"), why)
     }
 
+    // MARK: - Per-harness expectedCommand (generalized 22 Aug: the guard was
+    // hardcoded to Claude Code, and live-tested REFUSED to end a genuine,
+    // ownership-verified Codex session — "pid 71800 is `codex`, not a Claude
+    // session" — until this parameter existed.)
+
+    func testEndsACodexProcessWhenToldToExpectCodex() {
+        let control = FakeControl(identities: [codex()])
+        control.onSignal[SIGTERM] = .some(nil)
+
+        let outcome = SessionTermination.end(
+            pid: 71800, named: "01a02b5f", expectedCommand: "codex", control: control)
+
+        XCTAssertEqual(outcome, .died(rung: .term, afterMs: 250,
+                                      target: .group(pgid: 71800)))
+        XCTAssertTrue(outcome.isGone)
+    }
+
+    func testDefaultExpectedCommandStillRefusesACodexProcess() {
+        // The default is "claude" so every pre-existing caller (Claude
+        // Code's own terminate paths) is byte-for-byte unchanged by this
+        // generalization — it must still refuse a Codex pid it never asked
+        // to be told about.
+        let control = FakeControl(identities: [codex()])
+
+        let outcome = SessionTermination.end(pid: 71800, named: "01a02b5f", control: control)
+
+        guard case .refused(let why) = outcome else {
+            return XCTFail("expected a refusal, got \(outcome)")
+        }
+        XCTAssertTrue(why.contains("not a claude session"), why)
+    }
+
+    func testExpectedCommandCodexRefusesAClaudeProcess() {
+        // The guard still works the other direction: a stray Claude pid must
+        // not be signalled by a caller that believes it is ending Codex.
+        let control = FakeControl(identities: [claude()])
+
+        let outcome = SessionTermination.end(
+            pid: 4242, named: "not-codex", expectedCommand: "codex", control: control)
+
+        guard case .refused(let why) = outcome else {
+            return XCTFail("expected a refusal, got \(outcome)")
+        }
+        XCTAssertTrue(why.contains("not a codex session"), why)
+    }
+
     // MARK: - Reading ps
 
     func testParsesThePsLineIntoAnIdentity() {
@@ -212,14 +263,24 @@ final class SessionTerminationTests: XCTestCase {
         XCTAssertEqual(id?.pgid, 97590)
         XCTAssertEqual(id?.tty, "/dev/ttys000")
         XCTAssertEqual(id?.command, "claude")
-        XCTAssertEqual(id?.looksLikeClaude, true)
+        XCTAssertEqual(id?.matches(expected: "claude"), true)
     }
 
     func testAProcessWithNoControllingTerminalParsesWithNoTty() {
         let id = LiveProcessControl.parse(psLine: "412 ?? /usr/libexec/somed")
         XCTAssertNil(id?.tty)
         XCTAssertEqual(id?.command, "somed")
-        XCTAssertEqual(id?.looksLikeClaude, false)
+        XCTAssertEqual(id?.matches(expected: "claude"), false)
+    }
+
+    func testIdentityMatchesIsPerHarnessNotHardcodedToClaude() {
+        // The exact regression this generalization exists to prevent: a
+        // genuine Codex process must be recognized as Codex, not refused as
+        // "not a Claude session" — live-tested 22 Aug against a real
+        // codex-cli 0.149.0 resume before this fix landed.
+        let id = LiveProcessControl.parse(psLine: "71800 ttys003 codex")
+        XCTAssertEqual(id?.matches(expected: "codex"), true)
+        XCTAssertEqual(id?.matches(expected: "claude"), false)
     }
 
     func testGarbageFromPsIsNotAnIdentity() {

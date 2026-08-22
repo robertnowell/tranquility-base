@@ -15,6 +15,13 @@ public protocol HarnessAdapter: Sendable {
     /// exists so a log line or a card can say which harness it means.
     var id: String { get }
 
+    /// What `ps -o comm=` actually prints for a live process of this harness
+    /// — deliberately NOT `id`: Claude Code's id is "claude-code" but its
+    /// binary is `claude`, and conflating the two would silently break the
+    /// pid-reuse guard in `SessionTermination` the day it looks up an
+    /// adapter by id and expects the result to match a process listing.
+    var processCommandFragment: String { get }
+
     /// The command a launcher runs, and how it appends a resume target.
     /// A FUNCTION, not a string suffix: Claude Code resumes with a flag
     /// (`--resume <id>`), Codex with a subcommand (`resume <id>`), and a
@@ -145,6 +152,7 @@ public struct TrustPromptSpec: Sendable {
 /// tmux composer, resume flag unchanged from `AgentDefaults.resumeSuffix()`.
 public struct ClaudeCodeAdapter: HarnessAdapter {
     public let id = "claude-code"
+    public let processCommandFragment = "claude"
 
     public init() {}
 
@@ -193,6 +201,7 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
 /// settled-banner fallback below had to change with it — see its own note.
 public struct CodexAdapter: HarnessAdapter {
     public let id = "codex"
+    public let processCommandFragment = "codex"
 
     public init() {}
 

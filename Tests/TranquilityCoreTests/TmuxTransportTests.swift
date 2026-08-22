@@ -134,6 +134,39 @@ final class TmuxTransportTests: XCTestCase {
             .empty)
     }
 
+    func testClassifyPromptLineTreatsTheHarnessIdlePlaceholderAsEmpty() {
+        // A real bug, found only by actually dispatching to a real idle
+        // Codex composer (22 Aug): its own idle hint text renders on the
+        // same glyph-prefixed line an empty box would, plain-text-
+        // indistinguishable from something a human typed — `capture-pane
+        // -p` carries no color/dimness to mark it as a placeholder. Without
+        // this, an idle composer read as `.holds(ours: false)`, refusing
+        // every dispatch permanently.
+        let screen = "────\n› Ask Codex to do anything\n────"
+        XCTAssertEqual(TmuxTransport.classifyPromptLine(
+            screen: screen, payload: "reply now", glyph: "›",
+            placeholder: "Ask Codex to do anything"),
+            .empty)
+        // No placeholder configured (Claude Code's own targets, and every
+        // pre-existing call site): the exact same screen still reads as
+        // held, unchanged — this is opt-in per harness, not a global
+        // change to what counts as "empty."
+        XCTAssertEqual(TmuxTransport.classifyPromptLine(
+            screen: screen, payload: "reply now", glyph: "›"),
+            .holds(ours: false))
+    }
+
+    func testClassifyPromptLinePlaceholderMustMatchExactly() {
+        // A prefix or partial match must not count — only an exact
+        // placeholder match is safe to read as empty; anything else really
+        // could be a human's message that merely starts the same way.
+        let screen = "────\n› Ask Codex to do anything else\n────"
+        XCTAssertEqual(TmuxTransport.classifyPromptLine(
+            screen: screen, payload: "reply now", glyph: "›",
+            placeholder: "Ask Codex to do anything"),
+            .holds(ours: false))
+    }
+
     // MARK: selection defaults
 
     func testDispatchTargetDefaultsStayTerminal() {
@@ -149,6 +182,13 @@ final class TmuxTransportTests: XCTestCase {
         // caller constructing a target today passes promptGlyph, so it must
         // stay Claude Code's own until something explicitly asks for another.
         XCTAssertEqual(DispatchTarget(sessionId: "s").promptGlyph, "❯")
+    }
+
+    func testDispatchTargetDefaultIdlePlaceholderIsNil() {
+        // Same co-existence guarantee: no caller constructing a target
+        // today passes idlePlaceholder, so the floor check's new behavior
+        // must be opt-in, not a silent change for every existing target.
+        XCTAssertNil(DispatchTarget(sessionId: "s").idlePlaceholder)
     }
 
     func testFloorHeldRefusesDispatch() {

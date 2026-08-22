@@ -644,7 +644,39 @@ case "reconcile":
         guard let live = (ClaudeAgentsCLI().sessions() ?? []).first(where: {
             $0.sessionId == needle || $0.sessionId.hasPrefix(needle) || $0.name == needle
         }) else {
-            print("no live session matching \(needle) — `tbase status` lists them")
+            // Not a live Claude Code session — check the ownership record.
+            // Kill is only ever offered on a pid TB currently holds through
+            // that record; there is no code path that guesses a Codex pid
+            // to end, matching the resolved design
+            // (2026-08-22-tb-codex-hand-started-adoption).
+            let matchedId = FileSessionOwnershipStore.shared.all()
+                .first(where: { $0.sessionId == needle || $0.sessionId.hasPrefix(needle) })?.sessionId
+            guard let matchedId,
+                  let record = FileSessionOwnershipStore.shared.verifiedCurrent(sessionId: matchedId)
+            else {
+                print("no live session matching \(needle) — `tbase status` lists Claude Code, "
+                    + "`tbase discover` lists Codex")
+                break
+            }
+            let label = String(record.sessionId.prefix(8))
+            switch SessionTermination.end(pid: record.pid, named: label,
+                                          expectedTty: ProcessProbe.tty(of: record.pid),
+                                          expectedCommand: CodexAdapter().processCommandFragment) {
+            case .alreadyGone:
+                print("\(label) was already gone")
+                FileSessionOwnershipStore.shared.remove(sessionId: record.sessionId)
+            case .died(let rung, let ms, let target):
+                print("\(label) died on \(rung.rawValue) after \(ms)ms "
+                    + "(\(SessionTermination.describe(target)))")
+                // The record no longer names anything alive — removed so a
+                // later `send`/`end` fails honestly rather than finding a
+                // pid `ProcessProbe.isAlive` happens to have reused.
+                FileSessionOwnershipStore.shared.remove(sessionId: record.sessionId)
+            case .survived:
+                print("\(label) SURVIVED both signals")
+            case .refused(let why):
+                print("refused: \(why)")
+            }
             break
         }
         let label = live.name ?? String(live.sessionId.prefix(8))
@@ -786,10 +818,36 @@ case "reconcile":
         // dispatch door onto the same targets, per CLAUDE.md rule 7.
         guard let (live, resolvedPane) = (ClaudeAgentsCLI().sessions() ?? [])
             .preferringTmuxOwned(sessionId: sessionId) else {
-            print("not dispatched: session is not registered in `claude agents --json`.")
-            print("  It is either blocked on a dialog or still starting. Injecting now")
-            print("  would answer that dialog, so we refuse.")
-            exit(2)
+            // Not a live Claude Code session — check the ownership record
+            // before refusing outright. A real branch, not a fallback
+            // guess: TB only ever comes to hold a Codex pid through a
+            // resume that already succeeded (`attemptCodexResume`), so a
+            // hit here is never inferred the way a hand-started session's
+            // liveness would be.
+            guard let record = FileSessionOwnershipStore.shared.verifiedCurrent(sessionId: sessionId),
+                  record.harness == CodexAdapter().id, let pane = record.pane else {
+                print("not dispatched: session is not registered in `claude agents --json`,")
+                print("  and TB holds no ownership record for it either (not attached, or the")
+                print("  attach exited since). Run  tbase revive \(sessionId)  first.")
+                exit(2)
+            }
+            guard EnrolmentRegistry().isEnrolled(sessionId: sessionId, cwd: record.cwd) else {
+                print("not dispatched: session is not enrolled. Run:  tbase enroll \(sessionId)")
+                exit(2)
+            }
+            let target = DispatchTarget(
+                kind: .tmux, sessionId: sessionId, pid: record.pid, tty: record.paneTty,
+                pane: pane, transcriptPath: CodexRollout.rolloutPath(forSessionId: sessionId),
+                label: nil, readinessSource: .rolloutTail,
+                promptGlyph: CodexAdapter().capabilities.promptGlyph,
+                // Found live, 22 Aug: without this, Codex's own idle hint
+                // text reads as someone's unsent message and every
+                // dispatch is refused — floorHeld, permanently, on an
+                // otherwise-idle composer. See classifyPromptLine's doc
+                // comment.
+                idlePlaceholder: CodexAdapter().trustPrompt?.settledBannerNeedle)
+            report(await TmuxTransport().send(text: text, to: target))
+            break
         }
         guard EnrolmentRegistry().isEnrolled(sessionId: sessionId, cwd: live.cwd) else {
             print("not dispatched: session is not enrolled. Run:  tbase enroll \(sessionId)")

@@ -116,11 +116,15 @@ public enum SessionTermination {
             self.tty = tty
         }
 
-        /// The guard, stated once. `ps -o comm=` gives the executable, so a
-        /// resumed or renamed session still reads `claude`, while whatever
-        /// inherited a recycled pid almost certainly does not.
-        public var looksLikeClaude: Bool {
-            command.lowercased().contains("claude")
+        /// The guard, stated once, per harness. `ps -o comm=` gives the
+        /// executable, so a resumed or renamed session still reads its own
+        /// binary name (`claude`, `codex`, …), while whatever inherited a
+        /// recycled pid almost certainly does not. `expected` names the
+        /// harness the caller believes it is signalling — never guessed here,
+        /// always handed down from the ownership record or agents listing
+        /// that identified the pid in the first place.
+        public func matches(expected: String) -> Bool {
+            command.lowercased().contains(expected.lowercased())
         }
     }
 
@@ -137,12 +141,19 @@ public enum SessionTermination {
     ///
     /// `expectedTty` is the tty the session was seen on, when the caller knows
     /// it. It is a second lock on the same door as the command check: a recycled
-    /// pid that somehow IS another `claude` would still have to be on the same
-    /// terminal to be signalled.
+    /// pid that somehow IS another session of the same harness would still have
+    /// to be on the same terminal to be signalled.
+    ///
+    /// `expectedCommand` names the harness whose process this is meant to be —
+    /// `"claude"` (the default, every pre-existing caller) or `"codex"`, and
+    /// any future harness the same way. It is the identity guard itself, not a
+    /// weakening of it: the ladder still refuses to signal a pid whose command
+    /// doesn't match, it just no longer assumes that command is always Claude.
     public static func end(
         pid: Int,
         named name: String,
         expectedTty: String? = nil,
+        expectedCommand: String = "claude",
         control: some ProcessControlling = LiveProcessControl(),
         policy: Policy = .default
     ) -> Outcome {
@@ -152,7 +163,8 @@ public enum SessionTermination {
             trace?("terminate: \(label) was already gone")
             return .alreadyGone
         }
-        if let refusal = refusal(for: identity, pid: pid, expectedTty: expectedTty) {
+        if let refusal = refusal(for: identity, pid: pid, expectedTty: expectedTty,
+                                 expectedCommand: expectedCommand) {
             trace?("terminate: REFUSED \(label) — \(refusal)")
             return .refused(refusal)
         }
@@ -175,7 +187,8 @@ public enum SessionTermination {
             // Re-read before EVERY signal, not just the first: the whole point of
             // the ladder is that time passes between rungs, and a pid can change
             // hands in that time.
-            switch state(of: pid, expectedTty: expectedTty, control: control) {
+            switch state(of: pid, expectedTty: expectedTty, expectedCommand: expectedCommand,
+                        control: control) {
             case .gone:
                 // Before the first signal this means it exited on its own between
                 // the guard above and here. Before the second it means SIGTERM
@@ -201,7 +214,8 @@ public enum SessionTermination {
                 // Delivery failed with the process still there — no permission,
                 // or it exited between the check and the call. One more look
                 // decides which, rather than reporting a failure that was a race.
-                if case .gone = state(of: pid, expectedTty: expectedTty, control: control) {
+                if case .gone = state(of: pid, expectedTty: expectedTty,
+                                      expectedCommand: expectedCommand, control: control) {
                     let ms = control.nowMs() - started
                     trace?("terminate: \(label) gone after \(ms)ms (exited as we signalled)")
                     return .died(rung: rung, afterMs: ms, target: target)
@@ -213,6 +227,7 @@ public enum SessionTermination {
             trace?("terminate: \(rung.rawValue) → \(describe(target)) for \(label)")
 
             if let ms = pollUntilGone(pid: pid, expectedTty: expectedTty,
+                                      expectedCommand: expectedCommand,
                                       window: window, control: control,
                                       policy: policy, since: started) {
                 trace?("terminate: \(label) died on \(rung.rawValue) after \(ms)ms"
@@ -243,26 +258,27 @@ public enum SessionTermination {
     /// process we meant to kill has died and something else answers to its
     /// number, which reads as "alive" to `kill(pid, 0)` and must not.
     private static func state(
-        of pid: Int, expectedTty: String?, control: some ProcessControlling
+        of pid: Int, expectedTty: String?, expectedCommand: String,
+        control: some ProcessControlling
     ) -> State {
         guard let identity = control.identity(of: pid) else { return .gone }
-        guard identity.looksLikeClaude else {
+        guard identity.matches(expected: expectedCommand) else {
             // Our process died; the pid was recycled. That IS the death we asked
             // for, and signalling further would hit a stranger.
             return .gone
         }
         if let expected = expectedTty, let actual = identity.tty, actual != expected {
-            return .refused("pid \(pid) is a Claude session on \(actual), "
+            return .refused("pid \(pid) is a \(expectedCommand) session on \(actual), "
                 + "not the one on \(expected) — refusing to signal")
         }
         return .alive
     }
 
     private static func refusal(
-        for identity: Identity, pid: Int, expectedTty: String?
+        for identity: Identity, pid: Int, expectedTty: String?, expectedCommand: String
     ) -> String? {
-        guard identity.looksLikeClaude else {
-            return "pid \(pid) is `\(identity.command)`, not a Claude session"
+        guard identity.matches(expected: expectedCommand) else {
+            return "pid \(pid) is `\(identity.command)`, not a \(expectedCommand) session"
         }
         if let expected = expectedTty, let actual = identity.tty, actual != expected {
             return "pid \(pid) is on \(actual), not the \(expected) this row was seen on"
@@ -273,14 +289,15 @@ public enum SessionTermination {
     /// Milliseconds since `since` when it dies inside the window; nil when it
     /// outlives it.
     private static func pollUntilGone(
-        pid: Int, expectedTty: String?, window: TimeInterval,
+        pid: Int, expectedTty: String?, expectedCommand: String, window: TimeInterval,
         control: some ProcessControlling, policy: Policy, since: Int
     ) -> Int? {
         var waited: TimeInterval = 0
         while waited < window {
             control.waitBriefly(policy.poll)
             waited += policy.poll
-            if case .gone = state(of: pid, expectedTty: expectedTty, control: control) {
+            if case .gone = state(of: pid, expectedTty: expectedTty,
+                                  expectedCommand: expectedCommand, control: control) {
                 return control.nowMs() - since
             }
         }
