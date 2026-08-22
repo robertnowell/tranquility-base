@@ -50,12 +50,19 @@ public enum SessionDiscovery {
         public let activity: SessionActivity?
         public let liveness: Liveness
         /// `gone` AND the launch directory still exists. Never true on
-        /// `unknown`, and never true when `claude --resume` would land nowhere.
+        /// `unknown`, and never true when `claude --resume` would land
+        /// nowhere. Codex rows read this differently — see `discoverCodex`.
         public let revivable: Bool
+        /// `HarnessAdapter.id` ("claude-code", "codex") — what `reviveCommand`
+        /// looks the adapter up by. Defaulted for every pre-existing
+        /// construction site (all of them Claude Code, from before discovery
+        /// went multi-harness), so nothing else needed to change to add this.
+        public let harness: String
 
         public init(sessionId: String, cwd: String?, transcriptPath: String,
                     title: String?, lastActivityAt: Date, answered: Bool,
-                    activity: SessionActivity?, liveness: Liveness, revivable: Bool) {
+                    activity: SessionActivity?, liveness: Liveness, revivable: Bool,
+                    harness: String = ClaudeCodeAdapter().id) {
             self.sessionId = sessionId
             self.cwd = cwd
             self.transcriptPath = transcriptPath
@@ -65,6 +72,7 @@ public enum SessionDiscovery {
             self.activity = activity
             self.liveness = liveness
             self.revivable = revivable
+            self.harness = harness
         }
 
         /// The same row with the process facts joined on. The scan leaves them
@@ -72,7 +80,8 @@ public enum SessionDiscovery {
         func with(liveness: Liveness, revivable: Bool) -> Session {
             Session(sessionId: sessionId, cwd: cwd, transcriptPath: transcriptPath,
                     title: title, lastActivityAt: lastActivityAt, answered: answered,
-                    activity: activity, liveness: liveness, revivable: revivable)
+                    activity: activity, liveness: liveness, revivable: revivable,
+                    harness: harness)
         }
 
         /// What brings this session back. Nil when it must not be offered.
@@ -80,12 +89,21 @@ public enum SessionDiscovery {
         /// second, independent `["--resume", sessionId]` literal that could
         /// drift from `AgentDefaults`'s, and did not even have the shape to
         /// represent a subcommand-style resume (Codex: `resume <id>`, not a
-        /// flag) when that day comes. Every row is Claude Code today, same
-        /// scope `SessionLauncher.launch`'s default keeps — this becomes a
-        /// per-row adapter lookup when discovery itself goes multi-harness.
+        /// flag). Per-row adapter lookup by `harness`, landed alongside
+        /// `discoverCodex`.
+        ///
+        /// For a Codex row specifically, prefer
+        /// `SessionLauncher.attemptCodexResume` over blindly launching this
+        /// tuple: Codex's single-writer lock means a plain launch can lose a
+        /// race a still-live session is holding, and only `attemptCodexResume`
+        /// reads which outcome actually happened. This property still
+        /// answers "what command, if any" — the settled design's decision
+        /// tree (try it, read Codex's own answer) is the caller's to run.
         public var reviveCommand: (cwd: String, arguments: [String])? {
             guard revivable, let cwd else { return nil }
-            return (cwd, ClaudeCodeAdapter().resumeArguments(sessionId: sessionId))
+            let adapter: any HarnessAdapter = harness == CodexAdapter().id
+                ? CodexAdapter() : ClaudeCodeAdapter()
+            return (cwd, adapter.resumeArguments(sessionId: sessionId))
         }
     }
 
@@ -589,5 +607,91 @@ public enum SessionDiscovery {
     static func isDirectory(_ path: String, _ fm: FileManager) -> Bool {
         var isDir: ObjCBool = false
         return fm.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    // MARK: - Codex
+
+    /// Codex's half of discovery — disk-only, like the walk above, but a
+    /// separate function rather than a branch inside `scan`: `CodexRollout.
+    /// parse` already gives structured data, so none of the raw-JSONL-line
+    /// classifiers above (`entrypoint`, `firstCwd`, `isPrompt`, …) apply,
+    /// and Codex's liveness story is deliberately different from Claude
+    /// Code's — folding the two together would only tangle logic that
+    /// doesn't share anything.
+    ///
+    /// Liveness is never guessed here — the settled design
+    /// (2026-08-22-tb-codex-hand-started-adoption): Codex has no registry
+    /// to ask, so every row reads `.unknown` uniformly rather than risk a
+    /// wrong guess in either direction. `revivable` follows from that: true
+    /// whenever the launch directory still exists, NOT gated on
+    /// `liveness == .gone` the way Claude Code's is. Attempting a resume is
+    /// always safe to try — `SessionLauncher.attemptCodexResume` reads
+    /// Codex's own answer, live or not, rather than needing to know in
+    /// advance. There is no `join(_:live:)` counterpart for this function:
+    /// unlike Claude Code, there is nothing to join a process-table result
+    /// onto — `.unknown` is deliberately the whole, final answer for every
+    /// row, not a first half waiting for a second.
+    ///
+    /// No caching, unlike `discover`/`scan` above (`ScanCache`) — this has
+    /// no wired call site yet to measure a real cost against, and 192
+    /// rollout files on this machine at last count is a different order of
+    /// magnitude from the hundreds of Claude Code transcripts that cache
+    /// earns its keep against. Worth revisiting once this is on a live
+    /// polling path, not before.
+    public static func discoverCodex(
+        window: TimeInterval = defaultWindow,
+        limit: Int = defaultLimit,
+        now: Date = Date(),
+        sessions: URL = CodexRollout.sessionsDirectory
+    ) -> Result {
+        var result = Result()
+        let fm = FileManager.default
+        guard let walker = fm.enumerator(
+            at: sessions, includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles])
+        else { return result }
+
+        var kept: [Session] = []
+        for case let url as URL in walker where url.pathExtension == "jsonl" {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            guard now.timeIntervalSince(modified) <= window else { continue }
+            result.scanned += 1
+
+            guard let text = try? String(contentsOfFile: url.path, encoding: .utf8)
+            else { continue }
+            let parsed = CodexRollout.parse(text)
+            guard let sessionId = parsed.meta?.sessionId else {
+                result.unclassifiable += 1
+                continue
+            }
+
+            // No per-message timestamp exists in CodexRollout's parsed shape
+            // yet — a real, known gap, not a design choice — so file mtime
+            // is the only clock there is: the same fallback Claude Code's
+            // own `lastMoved` uses when a tail holds nothing dated.
+            let landable = parsed.meta?.cwd.map { isDirectory($0, fm) } ?? false
+
+            kept.append(Session(
+                sessionId: sessionId,
+                cwd: parsed.meta?.cwd,
+                transcriptPath: url.path,
+                title: nil,          // no title mechanism measured for Codex yet
+                lastActivityAt: modified,
+                answered: parsed.messages.last?.role == "user",
+                activity: nil,       // no SessionActivity-equivalent classifier for Codex yet
+                liveness: .unknown,
+                revivable: landable,
+                harness: CodexAdapter().id))
+        }
+
+        kept.sort { $0.lastActivityAt > $1.lastActivityAt }
+        if kept.count > limit {
+            result.beyondLimit = kept.count - limit
+            kept.removeLast(kept.count - limit)
+        }
+        result.sessions = kept
+        result.livenessUnavailable = true   // by design here, not a probe failure
+        return result
     }
 }
