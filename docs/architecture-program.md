@@ -273,15 +273,24 @@ com.robertnowell.voice-dispatch (TCC).
           192/192, but `isBusy` was the one field it didn't check — the
           exact field the `turn_aborted` bug lived in, until the gate reran
           the numbers.
+      **`promptGlyph` half landed (4354d8d, 21 Aug)**: `DispatchTarget` now
+      carries its own harness's floor-check glyph (default `❯`, so every
+      existing site is unchanged); `TmuxTransport.classifyPromptLine` reads
+      it instead of the `❯` literal. Closes the specific hazard where a
+      Codex pane (echoes behind `›`) would have read as permanently `.empty`
+      on the floor check and silently skipped the never-splice-into-
+      unsent-text guard. Mechanism only, same shape as `resumeTmux`: no
+      call site builds a non-Claude-Code target yet.
       Still open, concretely:
+        - The READINESS half of the same debt is NOT done:
+          `DispatchTarget.ReadinessSource` is still `.claudeAgents` /
+          `.processAlive` only. Codex's `registersWithLiveness == false`
+          needs `processAlive` + rollout-tail (per the prior-art report),
+          which needs `CodexRollout` wired into a real readiness path —
+          a distinct, larger piece from the glyph fix above, not done by it.
         - Wire `CodexRollout` into session discovery/liveness so the grid
-          actually shows Codex sessions (`registersWithLiveness == false`
-          means `processAlive` + rollout-tail, per the prior-art report —
-          not built yet) and into dispatch so replies actually deliver
-          (needs a Codex-specific `DispatchTransport` or `TmuxTransport`
-          generalized to read `HarnessCapabilities` per-target instead of
-          hardcoding Claude Code's, which is also the M2-gate debt this
-          would finally pay off).
+          actually shows Codex sessions, and into dispatch so replies
+          actually deliver once the readiness half above lands too.
         - The explicit ownership-handoff state machine (observed →
           handoff-requested → releasing-writer → managed) — nothing built.
           **A requirement for it, surfaced late and worth stating explicitly**
