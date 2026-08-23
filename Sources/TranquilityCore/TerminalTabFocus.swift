@@ -176,6 +176,29 @@ public enum TerminalTabFocus {
             guard let binary = Tmux.resolveBinary() else {
                 return .failed("tmux binary not found")
             }
+            // tmux happily mirrors a second client onto a session that
+            // already has one attached, so `attach` unconditionally is how
+            // GO TO AGENT clicked twice opened two Terminal windows onto the
+            // same pane (found live, 23 Aug). If a client is already there,
+            // raise ITS window — its tty is an ordinary Terminal.app tab, so
+            // the tab-search branch below already knows how to find it —
+            // rather than mirroring a new one in on top of it.
+            if case .success(let clients) = Tmux.run(
+                ["list-clients", "-t", pane.sessionName, "-F", "#{client_tty}"],
+                socket: pane.socketName),
+               let existingTty = clients.split(separator: "\n").first.map(String.init),
+               !existingTty.isEmpty,
+               let raiseScript = script(focusing: existingTty) {
+                let raised = outcome(of: await AppleScript.run(script: raiseScript, timeout: timeout),
+                                     timeout: timeout)
+                // `.tabGone` means the client's tty is no longer a Terminal
+                // tab — the window closed without tmux noticing the detach
+                // (rare, but tmux's own client bookkeeping can lag a killed
+                // window). Fall through to a fresh attach exactly as if no
+                // client had been listed at all; every other outcome, success
+                // or failure, is this call's real answer.
+                if raised != .tabGone { return raised }
+            }
             guard let script = attachScript(
                 binary: binary, socket: pane.socketName,
                 tmuxTmpDir: Tmux.socketDirectory.path, sessionName: pane.sessionName)
