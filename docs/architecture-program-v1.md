@@ -1,13 +1,15 @@
-# Architecture program — one arc, one merge, a beautiful machine
+> **SUPERSEDED 23 Aug 2026 — see `architecture-program.md` (v2).** Kept here
+> for the record, not as current guidance: the "Hand-started sessions are
+> adopted" section below (dual-live) describes the OPPOSITE of what shipped
+> later the same day. Robert ruled it acceptable that a hand-started
+> session's original process stays running, unsignalled, beside a tmux twin
+> — then reversed that, on evidence, the same day: "no parallel human+tmux
+> session, ever... it must always work, it cannot work only sometimes." Read
+> v2's dual-live section, not this one. Everything else below is still an
+> accurate record of what happened and why, through the moment it was
+> written.
 
-**v2, 23 Aug 2026.** Supersedes `architecture-program-v1.md`, kept in place
-rather than deleted — the record below is preserved almost entirely; v2
-exists because one section of v1 (dual-live, marked below) was found to
-describe the OPPOSITE of what shipped later the same day, and a doc that
-actively contradicts the running code is worse than a stale one. See
-`~/Documents/deep-research/2026-08-23-agent-session-transport/` (the
-transport report) and `~/Documents/deep-research/2026-08-23-tb-architecture-
-checkpoint/` (the audit that triggered this rewrite) for the evidence.
+# Architecture program — one arc, one merge, a beautiful machine
 
 Ruled 19 Aug 2026, superseding the wave model ruled hours earlier (newest
 ruling wins; Robert, verbatim intent): "We're not gonna do feature flags.
@@ -70,44 +72,23 @@ The six-agent audit record behind every item:
   not acceptable... it should just work"). Every session on the machine
   appears in the grid from its transcript, whatever terminal it was started
   in — unchanged, and load-bearing for first-run users.
-  **Corrected 21 Aug, then reversed 23 Aug — this is the section v1 got
-  wrong; read this version, not that one.** The 21 Aug correction
-  (2026-08-21-tb-dual-live-harness-parity, 2026-08-21-tb-codex-tmux-
-  prior-art) said the mechanism branches by harness: Claude Code
-  dual-lives (a tmux twin resumed alongside the hand-started process, left
-  running, unsignalled — "the user's original process never signalled and
-  left running... ruled acceptable, the bar is dispatch WORKS, not which
-  pane a human happens to see it land in"), Codex cannot (single-writer
-  lock). **The Claude Code half of that ruling is retired, on a measurement,
-  not an argument** (CLAUDE.md rule 4's own bar): the "dual-live is safe"
-  premise assumed Claude Code's Remote Control would keep a hand-started
-  session's own terminal in sync with whatever the tmux twin was doing.
-  It doesn't, in the shape TB needs it to — live-caught 23 Aug on this very
-  session (sessionId `f37aaddd`): once dispatch started answering the twin,
-  nothing was watching the hand-started terminal any more, so every reply
-  after the first routed to a pane the human had no way to see. Confirmed
-  via `ps`: the twin's parent was TB's own `tmux new-session`; the original,
-  a bare interactive `zsh`, sat there stale.
-  **No parallel human+tmux session, ever, for either harness — ruled 23 Aug,
-  blunt: "when human session exists, interacting with session — i.e.
-  clicking it or bringing it forward — ends human session and creates tmux
-  session — it must always work, it cannot work only sometimes... tmux owns
-  when TB used to interact with session."** `SessionLauncher.
-  OwnershipTransfer.toTmux(sessionId:directory:)` is the one mechanism:
-  ends the hand-started process (`SessionTermination.end`, the same clean-
-  SIGTERM path `tbase end` already used), confirms it is actually gone —
-  positive evidence of death, `resumeTmux`'s own existing requirement — THEN
-  resumes fresh under tmux. `Coordinator.dispatch`'s `resumeTwin` and
-  StatusHUD's `goToSession()` both call it: typing into a hand-started
-  session transfers it, and so does bringing it forward, not just the
-  first one. `preferringTmuxOwned` (846dcbd) still exists and still matters
-  for the brief window between a transfer starting and the old dedup
-  catching up, but it is no longer arbitrating a PERMANENT dual-live state —
-  there is no such state any more, for either harness. Live-validated
-  end-to-end, twice (once for the dispatch-triggered transfer, once for the
-  Go-to-Agent-triggered one): a real Terminal.app session given one real
-  turn, transferred, confirmed via `claude agents --json` down to exactly
-  one live entry afterward, with the prior turn intact in the new pane.
+  **Corrected 21 Aug** (2026-08-21-tb-dual-live-harness-parity,
+  2026-08-21-tb-codex-tmux-prior-art): the mechanism branches by harness, it
+  is not one universal graceful-end. **Claude Code**: dual-live is measured
+  safe, live, twice (first the raw experiment, then again through the real
+  M3 dispatch path, 846dcbd) — Claude Code tolerates two processes on one
+  conversation and arbitrates it with its own "Remote Control" feature. TB
+  launches a tmux twin via `claude --resume <id>` and dispatches to it,
+  **the user's original process never signalled and left running** — no
+  SIGTERM, no adoption in the graceful-end sense, just a second live process
+  TB owns. Not the same as "never shows anything on the original's screen":
+  live-verified 23 Aug that Remote Control can redirect a turn typed into the
+  twin onto the original's screen instead. Ruled acceptable (Robert, 23 Aug):
+  the bar is dispatch WORKS — lands, gets answered, TB reads the state back —
+  not which pane a human happens to see it land in, and the common case is TB
+  owns the session via tmux from the start, where this never arises.
+  `Coordinator`'s `preferringTmuxOwned` (846dcbd) is what makes replies land
+  in TB's twin deterministically rather than an arbitrary one of the two.
   **Codex**: cannot dual-live — `codex-rs/app-server/README.md` states the
   single-writer lock directly ("only one app-server process can hold a
   paginated thread open for writing at a time... `thread/resume` fails with
@@ -143,53 +124,34 @@ The six-agent audit record behind every item:
   tmux. This is `allowsConcurrentResume` on `HarnessCapabilities` — true for
   Claude Code (always resume a twin), false for Codex (attempt-and-read the
   answer, above).
-- **GO TO AGENT = attach, or transfer.** `TerminalTabFocus.focus(tty:)` tries
-  `TmuxOwnership.pane(forTty:)` first; when it resolves, `list-clients` is
-  checked too (23 Aug fix, below) and an ALREADY-attached window is raised
-  rather than mirroring a second one in. When it does NOT resolve — a
-  hand-started session — the 22 Aug design (Terminal.app tab walk, unchanged
-  fallback) is superseded by the no-parallel-session ruling above: clicking
-  Go to Agent on a hand-started session now calls the same
-  `OwnershipTransfer.toTmux` dispatch uses, then attaches the new pane.
-  Bringing a session forward is an interaction with it, same as typing into
-  it, so it gets the same treatment. The Terminal.app tab walk in
-  `TerminalTabFocus.script(focusing:)` is kept as code (still the correct
-  answer for the narrow case a transfer itself fails) but is no longer the
-  steady-state path for any hand-started session a human actually clicks on.
+- **GO TO AGENT = attach**: opens a terminal window running
+  `tmux attach -t <session>`; detach leaves the agent running. Revive = tmux.
   **Fixed (3a641d2, 22 Aug)** — caught live by Robert clicking it, not by any
   gate: reproduced immediately on a session launched seconds earlier, so this
   was never one stale row, it was universal since `cc7bf4e`. Neither
   `swift test` nor `--selftest-hud` cover this path (a real AppleScript/
   Terminal.app interaction, and no click-through drill exists for the
   button specifically), which is the honest reason it sat on this checklist,
-  correctly labeled a regression, until it was actually clicked.
-  `SessionLauncher.focus(pid:)`, the other copy of the same broken walk,
-  deleted outright; its one call site now routes through the same door the
-  card already used. Live-verified against the exact session from the bug
-  report: hand-built the identical AppleScript, ran it, and
+  correctly labeled a regression, until it was actually clicked. Built per
+  this bullet's own design: `TerminalTabFocus.focus(tty:)` now tries
+  `TmuxOwnership.pane(forTty:)` first and opens a fresh Terminal window
+  running `tmux attach` when it resolves — the original Terminal.app tab
+  walk stays, unchanged, as the fallback for a hand-started session opened
+  directly in the user's own tab (the one case where a tmux pane genuinely
+  doesn't exist). `SessionLauncher.focus(pid:)`, the other copy of the same
+  broken walk, deleted outright; its one call site now routes through the
+  same door the card already used. Live-verified against the exact session
+  from the bug report: hand-built the identical AppleScript, ran it, and
   `tmux list-clients` confirmed a real client attached.
-  **The frontmost-suppression check generalizing to the active tmux client —
-  closed 23 Aug**, the same day it was flagged: tmux mirrors a second client
-  onto a session with one already attached, which is exactly how clicking
-  Go to Agent twice opened two Terminal windows onto the same pane
-  (confirmed live: two real sessions each sitting with two attached clients
-  apiece before the fix). `focus(tty:)` now checks `list-clients` before
-  attaching and raises the existing window instead.
+  The frontmost-suppression check generalizing to the active tmux client is
+  still open — not addressed by this fix, not previously scoped as blocking
+  it either.
 - **HarnessAdapter with two real implementations, no optional stubs:**
   ClaudeCodeAdapter and CodexAdapter land together, both load-bearing.
   Capabilities (liveSessions?, hooks?, echoesPaste, queuesInputMidTurn,
   promptGlyph, resumeArguments(), trustPromptSpec?, and
   `allowsConcurrentResume` — named 21 Aug, see the adoption bullet above)
   describe harness facts.
-  **The axis is the harness, not the terminal — confirmed 23 Aug**
-  (2026-08-23-agent-session-transport report, finding #1). Deleting
-  `TransportKind.iTerm2`/`.wezterm`/`.kitty` (below) is right — YAGNI, tmux
-  is the transport — but the report's sharper point is what the enum WORTH
-  keeping would describe if TB ever needed it: not which terminal emulator
-  runs a pane, but how TB talks to the agent at all — tmux-TTY (today, the
-  only one built), SDK-headless, Codex app-server. `HarnessAdapter` already
-  names itself correctly by this axis; this is the doc catching up to what
-  the code already got right, not a rename.
   The five hand-rolled transcript parsers collapse into the adapter's
   transcript store; the four status-vocabulary copies collapse into one
   normalized enum; the two trust watchers collapse into one loop over
@@ -199,19 +161,6 @@ The six-agent audit record behind every item:
   queue, long payload, copy-mode ambush, exact-once churn). Its findings set
   the CodexAdapter's capability values. Codex rides the same tmux loop;
   app-server stays out (second transport = dual path).
-- **ACP (Agent Client Protocol): considered, not adopted — closed 23 Aug**
-  (2026-08-23-agent-session-transport report, finding #3). No first-party
-  Codex adapter (openai/codex#2785, open since Aug 2025, no maintainer
-  response — only a community bridge tracking Codex's own moving protocol
-  from outside); the Claude adapter wraps the Agent SDK anyway, so ACP would
-  be indirection over a call TB can make directly; no supervisor precedent
-  among its confirmed clients (Zed, two Neovim plugins, Emacs, marimo, VS
-  Code — all editor plugins or terminal UIs). One idea kept without the
-  dependency: ACP's own split between `session/request_permission` (a
-  security decision) and `elicitation/create` (a free-text question) is the
-  same distinction `WaitingAt`'s `.permission`/`.question` split landed on
-  independently, from the opposite direction — reached again the same day,
-  the two agreeing is itself the evidence the modeling is right.
 - **Core correctness items land inside the arc** (A2 per-element decode, A3
   bounded Subprocess runner, A4 launch PATH from the adapter's candidate
   list, A5 attach affordance, A6 reapAudio, A7 speech lock, A8 firewall wired
@@ -225,18 +174,8 @@ The six-agent audit record behind every item:
   PrivateStorage tests, fontSheetRoot out of ~/.claude.
 - **Vestigial code from the audit's dead lists is deleted, not preserved**:
   SpeakTier, dormant hail, PlacardRowView/PaneLinkRowView, write-only state,
-  ~~TransportKind.iTerm2/.wezterm/.kitty~~ (YAGNI; tmux is the transport —
-  **done, ff98d7f, 23 Aug**), the no-op clearOldNotifications, tools/replay
-  one-off JSONs.
-- **The grid draws idle before dead, not dead before idle — reversed 23 Aug**
-  on a fresh screenshot: a dead test session (killed minutes earlier, on
-  purpose) sat in a floor slot while a genuinely live, idle session was
-  bumped to the list instead. The 18 Aug ruling behind this ("the grid is
-  for lit lamps") had already flagged this exact question as unresolved in
-  its own doc comment — "dead rows still sort last and still only reach the
-  grid when the floor has slots going spare; if that is also wrong it is a
-  separate ruling, with its own drills." It was. `gridRows` now fills its
-  slot budget lit-first, then alive-but-quiet, then dead last.
+  TransportKind.iTerm2/.wezterm/.kitty (YAGNI; tmux is the transport),
+  the no-op clearOldNotifications, tools/replay one-off JSONs.
 
 ## Untouched, by standing ruling
 
@@ -624,21 +563,12 @@ com.robertnowell.voice-dispatch (TCC).
       (TerminalAppTransport, the Automation permission gate) — the attach
       affordance itself landed separately (3a641d2, 22 Aug, GO TO AGENT fix
       above) and is NOT part of what's left here; the useTmux/launchTerminal
-      half of this is already done, above. Narrowed further TWICE since:
-      (7325876, 23 Aug) revive and hand-started dispatch both moved onto
-      `resumeTmux`, leaving `TerminalAppTransport` reached only when
-      `resumeTwin` itself fails; (b8958ab, 23 Aug) GO TO AGENT transfers too
-      now, closing the other call site that used to fall back to it. On the
-      operator's own instruction (23 Aug: "I don't know why tmux would ever
-      be not available... is there really a situation where tmux would not
-      be available") — no fallback transport is being preserved when this
-      lands; a genuinely unavailable tmux should fail the dispatch clearly,
-      not silently reroute through a different, far-less-tested mechanism.
-      Deliberately deferred out of the same session that landed the two
-      narrowing commits above — this is a deletion across
-      `Coordinator`'s default `transport:` parameter, `tbase`'s CLI, and two
-      test files, and earns its own careful pass rather than being the
-      sixth change in one sitting.
+      half of this is already done, above. Narrowed further (7325876, 23 Aug):
+      `TerminalAppTransport` is now reached only when `resumeTwin` itself
+      fails (tmux genuinely unavailable), not as a primary path for any real
+      session shape — revive and hand-started dispatch both moved onto
+      `resumeTmux`. What's actually left to delete is now a fallback nothing
+      exercises in practice, not live machinery three call sites depend on.
 - [x] Launcher: revive = tmux (7325876, 23 Aug — `SessionLauncher.resume()`
       now calls `resumeTmux`, live-verified: zero Terminal.app windows opened,
       real tmux pane confirmed, dispatch into the revived session confirmed).
@@ -647,45 +577,16 @@ com.robertnowell.voice-dispatch (TCC).
       read()/press(). Neither touched by revive's move above.
 - [ ] Coordinator split
 - [ ] App lane P1-P10 (sequenced, drills green per step)
-- [x] Store riders + dead-code deletions (ff98d7f, 23 Aug): `TransportKind.
-      iTerm2/.wezterm/.kitty` (grep-confirmed never constructed; decode-safe
-      to remove without a migration — `targetKind` is `TransportKind?` and
-      this enum's `DatabaseValueConvertible` conformance is GRDB's default
-      `RawRepresentable` synthesis, which decodes an unmatched raw string to
-      `nil` rather than throwing), `Event.isHeadless` (zero callers,
-      superseded by `SessionDiscovery.isHeadless(entrypoint:)`, already
-      documented dead in open-issues.md #1), `ProcessProbe.name(of:)` (zero
-      callers). Store riders (one cache, one append-only log, one trace
-      sink, PrivateStorage tests, fontSheetRoot out of ~/.claude) NOT done —
-      only the dead-code half of this item landed.
-- [x] `SessionDiscovery.firstCwd` mis-homes a relocated session (5450a72,
-      23 Aug — found by 2026-08-21-tb-division-of-labor: unfindable by
-      project name, and `reviveCommand` would resume it in `~` rather than
-      its real repo). Fixed: `firstCwd` now checks the transcript's TAIL
-      first (already read by the caller for `lastMoved`, no new I/O) and
-      falls back to the head's first cwd only when the tail has none — a
-      session that `cd`'d into a repo and stayed there reads that repo as
-      home; a brief wander into a subdirectory for one tool call, which
-      never reaches the tail, still loses to the head as before.
-- [x] Branch on all five documented `waitingFor` values, not just
-      `dialog open` (2c2f12a, 23 Aug — 2026-08-23-agent-session-transport
-      report, finding #2). `permission prompt`, `sandbox request`, and
-      `worker request` were falling through to the free-text `.question`
-      bucket alongside the one genuinely free-text value, `input needed` —
-      a real safety gap, not just a display one, since `Readiness.
-      canDispatch` used the same collapsed signal: TB would type a voice
-      transcript straight at a live permission gate. `Readiness.isDialog`
-      now refuses on all four hazard values (documented at Tier 1,
-      code.claude.com/docs/en/agent-view); `WaitingAt` gains `.permission`,
-      distinct in its copy from `.dialog` (a decision, not a modal) but
-      identical in `acceptsTypedReply`.
-- [x] No parallel human+tmux session, ever (c9ae20d + b8958ab, 23 Aug) — see
-      "The end state" above, dual-live bullet. `SessionLauncher.
-      OwnershipTransfer.toTmux` ends a hand-started process and confirms it
-      is gone before resuming under tmux; wired into both
-      `Coordinator.dispatch`'s `resumeTwin` and `StatusHUD.goToSession()`.
-- [x] Grid: idle sessions outrank dead ones for spare floor slots (3dcf65c,
-      23 Aug) — see "The end state" above, grid bullet.
+- [ ] Store riders + dead-code deletions: `TransportKind.iTerm2/.wezterm/
+      .kitty` (never constructed; `Codable` + persisted, needs a decode-
+      tolerance check, not a bare case removal), `Event.isHeadless` (`tty ==
+      "??"`, zero callers — the tty discriminator open-issues.md #1 already
+      calls dead; `SessionDiscovery.isHeadless(entrypoint:)` is the real,
+      wired signal), `ProcessProbe.name(of:)` (zero callers).
+- [ ] `SessionDiscovery.firstCwd` mis-homes a relocated session (found by
+      2026-08-21-tb-division-of-labor: unfindable by project name, and
+      `reviveCommand` would resume it in `~` rather than its real repo) —
+      real defect, tracked in no doc until now.
 - [~] tmux server survival across a macOS logout/reboot — tested for real,
       not deliberately: Robert's Mac rebooted 23 Aug and TB's own revive hung
       trying to bring a session back, forcing a manual restart outside TB.
