@@ -569,19 +569,33 @@ com.robertnowell.voice-dispatch (TCC).
 - [~] tmux server survival across a macOS logout/reboot — tested for real,
       not deliberately: Robert's Mac rebooted 23 Aug and TB's own revive hung
       trying to bring a session back, forcing a manual restart outside TB.
-      Root cause found and fixed (333595c, 23 Aug): the tmux SERVER survived
-      fine (launchd relaunches TB, TB creates a fresh one) — the actual break
-      was `launchTmux`'s `display-message` pane-tty query returning empty on
-      the very first pane a freshly-created socket ever hosted, which nothing
-      downstream could recover from. Fixed with a bounded retry (5× at
-      200ms) plus cleanup of the orphaned session on total failure, live-
-      verified not to slow the ordinary (already-warm-server) path at all.
-      Not reproducible on a healthy system by design of the fix (kill
-      server + clear socket dir + immediate new-session/display-message
-      didn't race), consistent with something specific to real boot-time
-      system load rather than a deterministic bug. Left `[~]` rather than
-      `[x]`: the fix addresses the exact failure mode found, but a real,
-      deliberate reboot test to confirm it holds under the actual boot
-      conditions that caused this has not been run.
+      Two real, distinct bugs came out of this, both live-found by actually
+      trying to revive real sessions after the reboot, not reasoned:
+      **Bug 1, the tty race** — the tmux SERVER survived fine (launchd
+      relaunches TB, TB creates a fresh one); the actual break was
+      `launchTmux`'s separate `display-message` pane-tty query returning
+      empty on the very first pane a freshly-created socket ever hosted.
+      First fixed with a bounded retry (333595c), then fixed properly
+      (5ccdb3c, same day): `new-session -d -P -F "#{pane_tty}"` prints the
+      tty as part of the SAME command that creates the pane, which has
+      nothing left to race against — removes the failure mode at its root
+      rather than retrying around it. Not reproducible on a healthy system
+      (kill server + clear socket dir + immediate new-session/display-message
+      never raced), consistent with something specific to real boot-time
+      system load.
+      **Bug 2, the false-negative receipt** — found immediately after Bug 1's
+      first fix, on a revive that had genuinely succeeded (pane confirmed
+      idle and settled) but still showed "RESUMING timed out on screen."
+      `revive()` had always discarded `SessionLauncher.resume()`'s result
+      (`_ = SessionLauncher.resume(...)`) and never updated the receipt on
+      success — invisible for as long as revive opened a Terminal.app
+      window, since the window itself was the success signal (`.reviving`'s
+      own doc comment says so); real the moment revive went silent
+      (resumeTmux, 7325876). Fixed (779a889): new `Receipt.revived`, wired
+      into both the Claude Code and Codex success paths (the Codex gap was
+      identical and pre-existing, fixed in the same pass).
+      Left `[~]` rather than `[x]`: both fixes address the exact failure
+      modes found, but a real, deliberate reboot test to confirm they hold
+      under the actual boot conditions that caused this has not been run.
 - [ ] Final: preflight, full drills, merge to main, deploy verified,
       freeze lifted
