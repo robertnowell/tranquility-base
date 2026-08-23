@@ -223,6 +223,56 @@ public enum SessionLauncher {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    /// Ends a hand-started (non-tmux) process and resumes it fresh under
+    /// tmux — ONE mechanism, shared by every interaction that used to leave
+    /// a hand-started session dual-live: `Coordinator.dispatch`'s own
+    /// `resumeTwin` (typing into it) and, as of 23 Aug, GO TO AGENT
+    /// (bringing it forward). Ruled 23 Aug, blunt and explicit: no parallel
+    /// human+tmux session, ever — every interaction with a hand-started
+    /// session transfers it, unconditionally, not just the first dispatch.
+    ///
+    /// `directory` is resolved from the live session's own `cwd` when the
+    /// caller does not already have it in hand (`Coordinator.dispatch`
+    /// does, from its own `live` lookup; GO TO AGENT does not, and asking
+    /// it to re-derive one would duplicate the exact lookup this function
+    /// already has to make to find the pid to end).
+    public enum OwnershipTransfer {
+        public static func toTmux(
+            sessionId: String,
+            directory: String? = nil,
+            agents: any ClaudeAgentsReading = ClaudeAgentsCLI()
+        ) -> (pane: TmuxPaneAddress, pid: Int)? {
+            let live = (agents.sessions() ?? []).first(where: { $0.sessionId == sessionId })
+            guard let resolvedDirectory = directory ?? live?.cwd else {
+                SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) has no directory to resume "
+                    + "into — neither the caller nor a live lookup supplied one")
+                return nil
+            }
+            // Positive evidence of death before resuming, per `resume`'s own
+            // requirement — a session already gone (no `live`) needs no
+            // ending, it is simply the first-ever resume for this id.
+            if let live {
+                let outcome = SessionTermination.end(
+                    pid: live.pid, named: sessionId, expectedTty: ProcessProbe.tty(of: live.pid))
+                guard outcome.isGone else {
+                    SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) refused to end its "
+                        + "hand-started process (\(outcome)) — not resuming under tmux")
+                    return nil
+                }
+            }
+            guard case .success(let tty) = resumeTmux(sessionId: sessionId, directory: resolvedDirectory)
+            else { return nil }
+            guard let pane = TmuxOwnership.pane(forTty: tty) else { return nil }
+            guard let pid = (agents.sessions() ?? []).first(where: { $0.sessionId == sessionId })?.pid
+            else {
+                SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) resumed under tmux but hasn't "
+                    + "reappeared in agents --json yet")
+                return nil
+            }
+            return (pane, pid)
+        }
+    }
+
     /// What actually happened when TB tried to bring a Codex session under
     /// its control via `attemptCodexResume`. `resumeTmux` alone only
     /// confirms a PANE came up — not whether the resume itself succeeded,
