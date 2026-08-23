@@ -387,8 +387,8 @@ public enum SessionDiscovery {
             guard !isHeadless(entry) else { result.headless += 1; continue }
 
             let sessionId = url.deletingPathExtension().lastPathComponent
-            let cwd = firstCwd(head: head)
             let tail = SessionActivity.tail(of: path) ?? []
+            let cwd = firstCwd(head: head, tail: tail)
             let moved = lastMoved(tail: tail) ?? modified
 
             // The window re-applied to the conversation's own clock: a touched
@@ -510,16 +510,38 @@ public enum SessionDiscovery {
         return nil
     }
 
-    /// The FIRST `cwd` in the file: where the session was launched, which is
-    /// also what the directory name was slugged from and therefore where a
-    /// resume belongs. Later entries carry the directory the agent has wandered
-    /// into (a skill's own folder, a subdirectory it is reading), which is not
-    /// the session's home.
+    /// The session's actual HOME — its most RECENT `cwd` if the tail shows
+    /// one, falling back to the first `cwd` the head recorded.
+    ///
+    /// Was "the first cwd, full stop" until 23 Aug
+    /// (2026-08-21-tb-division-of-labor's own finding): a session
+    /// hand-started from `~`, then `cd`'d into a repo and stayed there for
+    /// 540 turns plus 300 more in its worktree — still read
+    /// `/Users/robertnowell` as home, because that came first. Unfindable
+    /// by project name in Past Agents; `reviveCommand`, which reads this
+    /// same value, would have resumed it in the wrong directory outright.
+    ///
+    /// The tail is checked FIRST, not the head — the caller already reads
+    /// it (`SessionActivity.tail`, for `lastMoved`), so this costs no new
+    /// I/O, and "where the conversation currently lives" is a strictly
+    /// better answer to "where does a resume belong" than "where it
+    /// started". Falls back to the head's first cwd, unchanged, whenever
+    /// the tail has none — a very short session, or a caller (tests, most
+    /// of them) that never had a tail to give it. The head's OWN
+    /// first-entry logic is kept, not majority-voted, because it still
+    /// correctly rejects the failure mode it was built for: a later entry
+    /// carrying the directory the agent wandered into for one tool call — a
+    /// skill's own folder, a subdirectory it read — is exactly as absent
+    /// from a short head sample as it always was.
     ///
     /// Read rather than decoded. `-Users-robertnowell-Projects-kopi-promotions`
     /// cannot be turned back into a path without guessing, because a dash in
     /// the slug is either a separator or a dash in a directory name.
-    static func firstCwd(head lines: [String]) -> String? {
+    static func firstCwd(head lines: [String], tail tailLines: [String] = []) -> String? {
+        for line in tailLines.reversed() {
+            guard let entry = json(line) else { continue }
+            if let value = entry["cwd"] as? String, !value.isEmpty { return value }
+        }
         for line in lines {
             guard let entry = json(line) else { continue }
             if let value = entry["cwd"] as? String, !value.isEmpty { return value }
