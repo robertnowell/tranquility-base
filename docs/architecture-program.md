@@ -99,7 +99,17 @@ The six-agent audit record behind every item:
   approve, only a resume that either works or doesn't.
   Both harnesses: the resume-depth dialog, when Claude Code shows one,
   surfaces through the dialog gate (a usage spend stays a human choice; one
-  tap, then the reply flows). Replies to dead sessions revive straight into
+  tap, then the reply flows).
+  **Corrected 23 Aug (aa980a3)**: "surfaces through the dialog gate" was true
+  of the DECISION (nothing auto-presses it, still true) but not of the
+  VISIBILITY — found live when a revive landed on this exact dialog and
+  showed a green success chip with no way to see the question at all. Fixed:
+  `TrustPromptWatcher`'s `onNeedsHuman` now opens a Terminal window on the
+  pane automatically the moment a never-auto-accept needle is hit (this
+  dialog, and Codex's hooks-review dialog, for free) — no click required,
+  matching what AppleScript's `activate` used to do for this exact case
+  before revive moved onto resumeTmux.
+  Replies to dead sessions revive straight into
   tmux. This is `allowsConcurrentResume` on `HarnessCapabilities` — true for
   Claude Code (always resume a twin), false for Codex (attempt-and-read the
   answer, above).
