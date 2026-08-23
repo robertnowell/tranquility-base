@@ -87,42 +87,15 @@ public struct Coordinator: Sendable {
         resumeTwin: @escaping @Sendable (_ sessionId: String, _ directory: String) -> TmuxPaneAddress?
             = { sessionId, directory in
                 // Ownership TRANSFER, not a parallel twin (reversed 23 Aug,
-                // on the operator's direct correction). This closure used to
-                // launch the tmux pane straight away, leaving the
-                // hand-started process running alongside it — built on the
-                // premise that Claude Code's own Remote Control would keep
-                // the two in sync, the same "dual-live is safe" finding
-                // 2026-08-22-tb-codex-tmux-prior-art measured for concurrent
-                // human attention. It does not hold for THIS case: nothing
-                // was watching the hand-started terminal any more once
-                // dispatch started answering the tmux twin instead, so every
-                // reply after the first routed somewhere the human had no
-                // way to see (found live, 23 Aug — sessionId f37aaddd,
-                // confirmed via `ps`: the twin's parent was this app's own
-                // `tmux new-session`, the original a bare interactive zsh).
-                // `resumeTwin` only ever runs when `dispatch` already found
-                // no tmux pane for this session, so whatever is live for it
-                // now IS the hand-started process — ending it first, and
-                // confirming it is actually gone before resuming under tmux,
-                // is what makes GO TO AGENT and every future dispatch land
-                // on the one thing the human is looking at instead of a
-                // second, invisible one.
-                if let live = (ClaudeAgentsCLI().sessions() ?? [])
-                    .first(where: { $0.sessionId == sessionId }) {
-                    let outcome = SessionTermination.end(
-                        pid: live.pid, named: sessionId,
-                        expectedTty: ProcessProbe.tty(of: live.pid))
-                    guard outcome.isGone else {
-                        SessionTermination.trace?(
-                            "resumeTwin: \(sessionId.prefix(8)) refused to end its "
-                            + "hand-started process (\(outcome)) — not resuming under tmux")
-                        return nil
-                    }
-                }
-                guard case .success(let tty) = SessionLauncher.resumeTmux(
-                    sessionId: sessionId, directory: directory)
-                else { return nil }
-                return TmuxOwnership.pane(forTty: tty)
+                // on the operator's direct correction) — the shared
+                // mechanism, `SessionLauncher.OwnershipTransfer.toTmux`, also
+                // used by GO TO AGENT for the same reason: no parallel
+                // human+tmux session, ever, on ANY interaction with a
+                // hand-started session, not just its first dispatch. See
+                // that function's own doc comment for the "dual-live is
+                // safe" premise this reverses and why.
+                SessionLauncher.OwnershipTransfer.toTmux(
+                    sessionId: sessionId, directory: directory)?.pane
             }
     ) {
         self.store = store

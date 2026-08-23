@@ -7149,10 +7149,11 @@ final class StatusHUD: NSObject {
     @objc nonisolated private func goToSession() {
         MainActor.assumeIsolated {
             guard !goToSessionInFlight else { return }
-            guard let pid = currentTarget?.pid else {
+            guard let target = currentTarget, let pid = target.pid else {
                 bodyLabel.stringValue = "That agent is no longer running, so there's no tab to open."
                 return
             }
+            let sessionId = target.sessionId
             goToSessionInFlight = true
             let priorBody = bodyLabel.stringValue
             bodyLabel.stringValue = "Opening that session's tab…"
@@ -7164,6 +7165,49 @@ final class StatusHUD: NSObject {
                         self.goToSessionInFlight = false
                         self.bodyLabel.stringValue =
                             "Couldn't find a terminal for process \(pid). It may have exited."
+                    }
+                    return
+                }
+                // No parallel human+tmux session, ever (ruled 23 Aug):
+                // bringing a hand-started session forward TRANSFERS it, the
+                // same mechanism `Coordinator.dispatch`'s `resumeTwin` uses
+                // on its first reply — not a special case for typing into
+                // it. A tmux-owned tty already means this happened before;
+                // only a bare tty (no pane) triggers the transfer here.
+                if TmuxOwnership.pane(forTty: tty) == nil {
+                    Permissions.log("goToSession: \(tty) is hand-started — transferring to tmux")
+                    guard let transferred = SessionLauncher.OwnershipTransfer.toTmux(sessionId: sessionId)
+                    else {
+                        await MainActor.run { [weak self] in
+                            guard let self else { return }
+                            self.goToSessionInFlight = false
+                            self.bodyLabel.stringValue =
+                                "Couldn't move that session under tmux — it may still be "
+                                + "running in its own terminal. Nothing was closed."
+                        }
+                        return
+                    }
+                    await MainActor.run { [weak self] in
+                        self?.attachLivePid(transferred.pid, sessionId: sessionId)
+                    }
+                    let outcome = await TerminalTabFocus.focus(tty: transferred.pane.paneTty)
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.goToSessionInFlight = false
+                        switch outcome {
+                        case .focused:
+                            self.bodyLabel.stringValue = priorBody
+                            Permissions.log("goToSession: transferred and focused "
+                                + "\(transferred.pane.paneTty)")
+                        default:
+                            // The transfer itself succeeded — a follow-up window
+                            // failing to open is the SAME class of failure the
+                            // outcomes below already report, just one hop later.
+                            self.bodyLabel.stringValue =
+                                "Moved that session under tmux, but couldn't open a window "
+                                + "for it. It's reachable — try Go to Agent again."
+                            Permissions.log("goToSession: transfer ok, open failed: \(outcome)")
+                        }
                     }
                     return
                 }
