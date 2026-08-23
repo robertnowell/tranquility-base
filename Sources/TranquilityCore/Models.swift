@@ -54,15 +54,6 @@ public struct QueuedEvent: Codable, FetchableRecord, PersistableRecord, Identifi
     /// `SessionCursor`. Six code paths used to write that column and none of them
     /// owned it.
 
-    /// Machine-driven, not human-driven: `claude -p` from launchd or cron, with no
-    /// controlling terminal. Nothing to open, nothing to answer, and every run gets
-    /// a new session id so supersession cannot collapse them either.
-    ///
-    /// Only an explicit "??" counts. A nil tty is a row written before this was
-    /// recorded, and unknown must never be treated as headless: the cost of being
-    /// wrong here is silently never announcing a real session.
-    public var isHeadless: Bool { tty == "??" }
-
     public static let databaseTableName = "events"
 
     public var id: String
@@ -184,13 +175,26 @@ public enum TranscriptFinality: String, Codable, DatabaseValueConvertible, Senda
     }
 }
 
-/// Which terminal implementation owns the target. Stored so a post-crash recovery
-/// resolves through the same transport it originally used.
+/// Which transport owns the target. Stored so a post-crash recovery resolves
+/// through the same one it originally used.
+///
+/// `.iTerm2`/`.wezterm`/`.kitty` deleted 23 Aug — dead-code-sweep checklist
+/// item, never constructed anywhere in the codebase (only `.terminalApp` and
+/// `.tmux` ever are; grep confirms it). YAGNI stands, per
+/// `architecture-program.md`'s own ruling — tmux is the transport — but the
+/// axis these three were never actually a real answer to (`architecture-
+/// program.md` amended the same day): it isn't which TERMINAL EMULATOR runs
+/// the pane, it's how TB talks to the agent at all (a tmux TTY today; an
+/// SDK-headless or Codex app-server session, should either ever get built,
+/// would be a different axis entirely, not another case here).
+/// Decode-safe to remove without a migration: `targetKind` is `TransportKind?`
+/// and this enum's `DatabaseValueConvertible` conformance is GRDB's default
+/// `RawRepresentable` synthesis, which decodes an unmatched raw string (an
+/// old "iterm2" row, say) to `nil` — the column's own already-optional type —
+/// rather than throwing. No case removed here was ever written to a row in
+/// the first place.
 public enum TransportKind: String, Codable, DatabaseValueConvertible, Sendable {
     case terminalApp = "terminal_app"
-    case iTerm2 = "iterm2"
-    case wezterm
-    case kitty
     case tmux
 }
 

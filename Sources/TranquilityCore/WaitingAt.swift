@@ -29,6 +29,17 @@ public enum WaitingAt: Equatable, Sendable {
     /// The agent asked and is holding for an answer. Answerable from the panel:
     /// this is the app's daily loop.
     case question
+    /// A tool wants to run, or Claude wants to run something sandboxed, or a
+    /// worker is asking for something — `permission prompt` / `sandbox
+    /// request` / `worker request`, the three OTHER documented `waitingFor`
+    /// values added 23 Aug. A structural yes/no gate, not a question: ACP's
+    /// spec draws exactly this line between `session/request_permission` and
+    /// `elicitation/create` ("permission requests are fundamentally security
+    /// decisions"), reached independently from the transport-report research.
+    /// NOT answerable from here, same reason `.dialog` is not: a voice
+    /// transcript typed at a yes/no gate does not mean what it means at a
+    /// free-text question.
+    case permission
     /// A modal is open in the terminal. NOT answerable from here — typed text
     /// answers the modal rather than reaching the prompt, which is why
     /// `Readiness.canDispatch` refuses it.
@@ -39,17 +50,33 @@ public enum WaitingAt: Equatable, Sendable {
     /// Nil when the process is not waiting at all. Takes the two CLI fields and
     /// the one fact the CLI cannot supply, so every caller classifies the same
     /// way from the same evidence.
+    ///
+    /// Every value NOT recognized here — `input needed` (the fifth documented
+    /// one, genuinely free text) and anything undocumented — falls to
+    /// `.question`, deliberately: `Readiness.isDialog`'s own doc comment
+    /// states the reasoning this inherits (dispatching only for known-good
+    /// values would defer every ordinary reply on the strength of a string
+    /// nobody has verified). The three gate values ARE now verified
+    /// (2026-08-23-agent-session-transport report, Tier 1), which is what
+    /// moved them out of this default and into their own case.
     public static func read(status: String?, waitingFor: String?,
                             resumed: Bool) -> WaitingAt? {
         guard status == "waiting" else { return nil }
-        guard waitingFor == Readiness.dialogOpen else { return .question }
-        return resumed ? .resumePrompt : .dialog
+        switch waitingFor {
+        case Readiness.dialogOpen:
+            return resumed ? .resumePrompt : .dialog
+        case Readiness.permissionPrompt, Readiness.sandboxRequest, Readiness.workerRequest:
+            return .permission
+        default:
+            return .question
+        }
     }
 
     /// The clause a row shows in its own column.
     public var short: String {
         switch self {
         case .question: return "asking you a question"
+        case .permission: return "waiting on a permission"
         case .dialog: return "waiting at a dialog"
         case .resumePrompt: return "waiting at the resume prompt"
         }
@@ -61,6 +88,10 @@ public enum WaitingAt: Equatable, Sendable {
         switch self {
         case .question:
             return "The agent has asked you something and is holding for an answer."
+        case .permission:
+            return "The agent wants permission to run something and is holding for "
+                + "a yes or no. That is a decision, not a question — the panel will "
+                + "not send a typed reply to it; answer it in the terminal."
         case .dialog:
             return "A dialog is open in this session's terminal and nothing runs "
                 + "until it is answered there. Typed replies would answer the dialog "
@@ -72,7 +103,7 @@ public enum WaitingAt: Equatable, Sendable {
         }
     }
 
-    /// Whether the panel may type into this session. The one thing all three of
+    /// Whether the panel may type into this session. The one thing all four of
     /// these have in common is that they need the user; only one of them can be
     /// given what it needs from here.
     public var acceptsTypedReply: Bool { self == .question }
