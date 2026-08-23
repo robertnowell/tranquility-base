@@ -793,3 +793,63 @@ the one-session-at-a-time rule (CLAUDE.md #5) and out of scope for the
 Core-only CodexAdapter work this pass was auditing. Fix is mechanical once
 picked up: read both bodies, decide which is the intended one (or merge), and
 delete the other case.
+
+## 28. A hand-started session dual-lived silently — CLOSED (23 Aug)
+
+`Coordinator.dispatch`'s `resumeTwin` used to resume a tmux twin for a
+hand-started session's first reply and leave the original process running,
+unsignalled — the design `architecture-program.md` (v1) called "dual-live is
+safe," built on the premise that Claude Code's own Remote Control would keep
+the hand-started terminal in sync with whatever the twin was doing.
+
+It doesn't, for TB's purposes. Live-caught on this session's own conversation
+(sessionId `f37aaddd`): once dispatch started answering the twin, nothing
+was watching the hand-started terminal any more, and a reply landed
+somewhere the human had no way to see. Confirmed via `ps`: the twin's parent
+was TB's own `tmux new-session`; the original, a bare interactive `zsh`, sat
+there stale, showing an old turn while the real conversation had moved on.
+
+Fixed in two commits: `c9ae20d` (`resumeTwin`'s default now ends the
+hand-started process and confirms it is gone — `SessionTermination.end`,
+positive evidence of death — before resuming fresh under tmux) and `b8958ab`
+(the same mechanism, `SessionLauncher.OwnershipTransfer.toTmux`, wired into
+GO TO AGENT too, so bringing a session forward transfers it exactly like
+typing into it does — the earlier fix only covered the first interaction).
+Both live-validated end to end before shipping: a real Terminal.app session
+given one real turn, transferred, `claude agents --json` showing exactly one
+live entry afterward with the prior turn intact in the new pane.
+
+One follow-up bug caught by the same live-testing discipline, same day: the
+transfer's own pid wasn't threaded back to `Coordinator.ReplyOutcome` or the
+panel's `currentTarget`, so GO TO AGENT kept pointing at the pid the
+transfer had just, on purpose, ended ("couldn't find a terminal for process
+21081 — it may have exited," true and also the bug). Fixed same day:
+`ReplyOutcome.dispatched`/`.queued` now carry the pid dispatch actually
+used, and `main.swift`'s `send()`/`submitReply` handlers push it to the
+panel via `StatusHUD.attachLivePid` (guard relaxed to allow replacing an
+existing pid, not just filling a nil one).
+
+## 29. A hand-started process reappeared on the same tty after being ended — OPEN, not blocking
+
+Found live, 23 Aug, twice, both times on this session's own conversation
+(`f37aaddd`): after `SessionTermination.end` cleanly killed the hand-started
+process for issue #28's fix, a NEW `claude --dangerously-skip-permissions
+--resume <same id>` process appeared on the SAME tty (`ttys000`) roughly
+20-25 seconds later — recreating the exact dual-live shape #28 exists to
+prevent, with no `launcher:` line or any other TB log evidence explaining
+what started it. `ps` confirmed the new process's parent was the terminal's
+own `-zsh`, not any TB-owned tmux launcher.
+
+Investigated, not solved: nothing in TB's own code path was found that could
+explain a fresh `claude --resume` launching itself on a tty TB had just
+signalled. Manually ended (`tbase end`) both times it recurred; the second
+time, GO TO AGENT itself performed the transfer correctly per #28's fix
+(ended the then-current hand-started process, resumed clean under tmux, one
+live entry afterward) — so whatever causes the reappearance is external to
+the transfer mechanism itself, not a flaw in it.
+
+Not chased further: no reproduction recipe, and the operator's own
+Terminal/shell configuration is the most likely remaining place to look
+(an auto-resume wrapper, a saved session-restore setting) — outside what
+TB's own logs can observe. Worth a note if it recurs a third time; not
+blocking anything on the checklist.
