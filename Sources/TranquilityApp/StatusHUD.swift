@@ -2357,36 +2357,42 @@ final class StatusHUD: NSObject {
         return rows.filter { !drawn.contains($0.id) }
     }
 
-    /// The rows the grid actually DRAWS — the count below, minus the sessions
-    /// whose lamp is out because nothing is in flight.
+    /// The rows the grid actually DRAWS — the count below, filled in
+    /// priority order: lit first, then alive-but-quiet, then dead last.
     ///
     /// Ruled 18 Aug, on Robert's screenshot of row `0f2ea0d4` sitting on the
     /// grid with a dark socket while the process agreed it was idle: *"Why is
     /// there an idle fucking lamp? A turned-off lamp? In the goddamn grid. The
-    /// grid. Is for lit. Fucking lamps. Idle lamps going past agents."*
+    /// grid. Is for lit. Fucking lamps. Idle lamps going past agents."* That
+    /// ruling itself pre-empted exactly this reversal, in its own doc comment
+    /// on the ORIGINAL version of this function: "Dead rows still sort last
+    /// and still only reach the grid when the floor has slots going spare. If
+    /// that is also wrong it is a separate ruling, with its own drills." It
+    /// was: reversed 23 Aug, on a fresh screenshot — a dead test session
+    /// (killed minutes earlier, on purpose) sitting in a floor slot while a
+    /// genuinely live, idle session was bumped to the list instead. `.running`
+    /// (alive, quiet) now competes for floor slots ahead of `.unlit` (dead) —
+    /// still behind lit, and still gone the moment something urgent needs the
+    /// room, same as before.
     ///
-    /// So `.running` leaves, and it leaves alongside `switchedOff` because they
-    /// are the SAME STATE arrived at two ways — the switch's whole job is to
-    /// make a session idle, and a panel that files one and keeps the other
-    /// makes the switch look broken.
-    ///
-    /// **Deliberately narrow: `.unlit` is NOT excluded here.** A first attempt
-    /// read the ruling as "lit only" and took the dead rows too, which turned
-    /// four unrelated drills red — they seed closed rows and read them back off
-    /// the grid — and none of that was asked for. He pointed at an idle lamp,
-    /// not a dead one, and the 11 Aug ruling that a session keeps its row after
-    /// its process ends has not been revisited. Dead rows still sort last and
-    /// still only reach the grid when the floor has slots going spare. If that
-    /// is also wrong it is a separate ruling, with its own drills.
+    /// `switchedOff` still leaves entirely, same reasoning as 18 Aug: the
+    /// switch's whole job is to make a session idle by hand, and a row that
+    /// competes for a floor slot despite being switched off would make the
+    /// switch look broken. It is simply no longer classed WITH `.running` for
+    /// that purpose — it is its own exclusion, checked first.
     ///
     /// Split from `gridRowsShown` because that number is GEOMETRY — how tall
     /// the panel is worth being, which is why it may exceed the rows that
     /// exist and why the floor holds on a quiet machine. Folding membership
     /// into it collapsed the floor and shipped a regression earlier the same
-    /// evening.
+    /// evening (18 Aug).
     static func gridRows(_ rows: [StateLegend.SessionRow],
                          screen: NSScreen? = NSScreen.main) -> [StateLegend.SessionRow] {
-        Array(rows.filter { $0.lamp != .running && !$0.switchedOff }
+        let eligible = rows.filter { !$0.switchedOff }
+        let lit = eligible.filter { $0.lamp.isLit }
+        let alive = eligible.filter { $0.lamp == .running }
+        let dead = eligible.filter { $0.lamp == .unlit }
+        return Array((lit + alive + dead)
                   .prefix(gridRowsShown(rows, screen: screen)))
     }
 
@@ -5275,15 +5281,24 @@ final class StatusHUD: NSObject {
     /// Robert overruled that on 18 Aug, pointing at an idle socket drawn on the
     /// grid: "the grid is for lit fucking lamps." The earlier drill's real case
     /// survives and is kept below: the sessions it was written to protect were
-    /// working or blocked, both LIT, and they still hold their rows. What
-    /// changed is that alive-and-quiet is no longer an entitlement.
+    /// working or blocked, both LIT, and they still hold their rows.
+    ///
+    /// Reversed again 23 Aug, on a fresh screenshot: a dead test session sat
+    /// in a floor slot ahead of a genuinely live, idle one that had been
+    /// bumped to the list. `.running` (alive, quiet) now competes for floor
+    /// slots ahead of `.unlit` (dead) — behind lit, same as always, and gone
+    /// the moment something urgent needs the room. Idle is not back to being
+    /// an entitlement; it is back to outranking dead for whatever the floor
+    /// leaves over.
     private func litLampsOnlyDrill() {
         func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
             StateLegend.SessionRow(id: id, name: id, aux: id, lamp: lamp)
         }
         let capacity = Self.gridRowCapacity()
-        // The 18 Aug panel: nine lit, ten quiet — and now the quiet ten are
-        // the list's, not the grid's.
+        // The 18 Aug panel: nine lit, ten quiet. Nine lit rows alone already
+        // fill this shape's slot budget, so this case looks the same under
+        // both rulings — it needs `floorSlack` below to actually exercise
+        // the 23 Aug reversal.
         let asItWas = StateLegend.quietRowsLast(
             (0..<9).map { row("lit\($0)", .ready) }
             + (0..<10).map { row("quiet\($0)", .running) })
@@ -5299,6 +5314,16 @@ final class StatusHUD: NSObject {
 
         // One lit session per slot, and one more than there is room for.
         let overflowing = (0..<(capacity + 1)).map { row("lit\($0)", .ready) }
+
+        // Two lit rows, well under the floor of 8, leaves six floor slots
+        // open — the exact shape that used to hand every one of them to a
+        // dead session regardless of a live, idle one sitting right there.
+        let floorSlack = StateLegend.quietRowsLast(
+            (0..<2).map { row("lit\($0)", .ready) }
+            + (0..<10).map { row("alive\($0)", .running) }
+            + (0..<10).map { row("dead\($0)", .unlit) })
+        let floorDrawn = Self.gridRows(floorSlack)
+
         // Everything the grid does not draw, whatever the reason.
         let everything = StateLegend.quietRowsLast(
             [row("lit", .ready), row("quiet", .running), row("dead", .unlit),
@@ -5306,9 +5331,9 @@ final class StatusHUD: NSObject {
                                     lamp: .running, switchedOff: true)])
 
         SelfTest.report("litLampsOnly", [
-            ("noIdleRowIsDrawn", !drawn.contains { $0.lamp == .running }),
             ("everyLitRowIsDrawn", drawn.count == 9),
-            ("quietGoesToTheList", listed.count == 10),
+            ("noRoomLeftForIdleWhenLitFillsTheFloor", drawn.allSatisfy { $0.lamp.isLit }),
+            ("quietGoesToTheListWhenThereIsNoRoom", listed.count == 10),
             // The superseded drill's real case, kept.
             ("workingAndBlockedKeepTheirRows",
              busyDrawn.count == 10 && busyDrawn.allSatisfy { $0.lamp.isLit }),
@@ -5316,14 +5341,19 @@ final class StatusHUD: NSObject {
             ("theScreenIsStillTheLimit", Self.gridRows(overflowing).count == capacity),
             ("overflowGoesToTheList",
              Self.pastAgents(overflowing).count == overflowing.count - capacity),
-            // Quiet, dead and switched-off all land in the same place, which is
-            // the coherence Robert asked for: a lamp that is out is a lamp that
-            // is out, however it got that way.
-            // Idle by itself and idle by the switch land in the same place —
-            // the coherence the ruling is really about. `dead` stays eligible
-            // for a floor slot; that is the 11 Aug ruling, untouched here.
-            ("outIsOutHoweverItGotThatWay",
-             Set(Self.pastAgents(everything).map(\.id)).isSuperset(of: ["quiet", "filed"])
+            // The 23 Aug reversal itself: with floor slack, alive fills it
+            // ahead of dead, not the other way around.
+            ("aliveFillsSpareFloorSlotsAheadOfDead",
+             floorDrawn.filter { $0.lamp == .running }.count
+                == min(10, Self.gridRowFloor - 2)
+                && !floorDrawn.contains { $0.lamp == .unlit }),
+            // Switched-off still leaves entirely — the switch's whole job is
+            // to make a session idle by hand, and a row that keeps competing
+            // for a floor slot despite being switched off would make the
+            // switch look broken. `dead` and `quiet` both now draw when the
+            // floor has room; `filed` (switched off) never does.
+            ("switchedOffStillLeavesEntirely",
+             Set(Self.pastAgents(everything).map(\.id)) == ["filed"]
                 && !Self.gridRows(everything).contains { $0.id == "filed" }),
             ("nothingIsLost",
              Self.gridRows(everything).count + Self.pastAgents(everything).count
@@ -5391,8 +5421,13 @@ final class StatusHUD: NSObject {
             ("neitherIsFiledAway",
              listed.isDisjoint(with: ["interrupted", "reopened"])),
             // The narrowness that survives: this must not light every live row.
+            // Placement moved to `drawn` (23 Aug, gridRows now fills spare
+            // floor slots with `.running` rows ahead of dead ones) — three
+            // rows here is well under the floor, so an untouched idle row
+            // now draws on the grid same as its restarted neighbours; the
+            // real assertion is the LAMP, which is untouched either way.
             ("anUnrestartedSessionIsUntouched",
-             untouched.lamp == .running && listed.contains("neverRestarted")),
+             untouched.lamp == .running && drawn.contains("neverRestarted")),
             // And it retires itself the moment the session is spoken to.
             ("typingEndsIt",
              !AgentRestart.resumed(startedAt: restart,
@@ -5513,10 +5548,12 @@ final class StatusHUD: NSObject {
             ("filedIsNeverOnTheGrid", filedIsNeverOnTheGrid),
             ("filedIsInTheList", filedIsInTheList),
             ("nothingIsLost", nothingIsLost),
-            // An unfiled IDLE session leaves the grid too — same state, and
-            // the switch would look broken if only its own output did.
-            ("idleLeavesTheGridWhetherFiledOrNot",
-             !drawn.contains { $0.id == "quiet" } && !drawn.contains { $0.id == "filed" }),
+            // Only the SWITCH files a row away now (23 Aug: `.running` draws
+            // on the grid same as anything else when the floor has spare
+            // room, six rows here is well under it) — `switchedOff` is its
+            // own exclusion, not something `.running` shares by default.
+            ("onlySwitchedOffLeavesTheGrid",
+             drawn.contains { $0.id == "quiet" } && !drawn.contains { $0.id == "filed" }),
             ("pastAgentsRowsCarryTheSwitch", everyRowHasASwitch),
             ("switchIsTheSameSizeOnBothFaces",
              GridRowView.lampHitWidth == GridRowView.lampColumn),
@@ -5662,11 +5699,11 @@ final class StatusHUD: NSObject {
             StateLegend.SessionRow(id: "idle", name: "idle, nothing waiting", aux: "i",
                                    lamp: .running, read: .none),
         ]
-        // Built directly rather than through `showIdle`, because the idle row
-        // is no longer drawn on the grid (18 Aug) and this drill's subject was
-        // never membership — it is the mapping from read state to ink and lamp,
-        // which lives in a view initializer no unit test can reach. Where each
-        // row LANDS is asserted at the bottom, through the real partition.
+        // Built directly rather than through `showIdle`, because this drill's
+        // subject was never membership — it is the mapping from read state to
+        // ink and lamp, which lives in a view initializer no unit test can
+        // reach. Where each row LANDS is asserted at the bottom, through the
+        // real partition.
         let built = items.map {
             GridRowView(item: $0, auxWidth: 40, target: self,
                         action: #selector(sessionRowTapped(_:)))
@@ -5721,12 +5758,14 @@ final class StatusHUD: NSObject {
             // been read, which is a thing that never happened to it.
             ("idleLampIsUntouched", solid("idle")),
             ("allRendered", built.count == 5),
-            // ...and they still reach a face between them: the lit four on the
-            // grid, the idle one in the list.
-            ("theIdleRowLandsInTheList",
-             !Self.gridRows(items).contains { $0.id == "idle" }
-                && Self.pastAgents(items).contains { $0.id == "idle" }),
-            ("theLitRowsLandOnTheGrid", Self.gridRows(items).count == 4),
+            // ...and they still reach a face between them: five rows is well
+            // under the floor of 8, so as of 23 Aug the idle row draws
+            // alongside the four lit ones — the grid fills spare floor slots
+            // with `.running` before anything is filed to the list at all.
+            ("theIdleRowDrawsWithSpareFloorRoom",
+             Self.gridRows(items).contains { $0.id == "idle" }
+                && Self.pastAgents(items).isEmpty),
+            ("everyRowLandsOnTheGridWithSpareRoom", Self.gridRows(items).count == 5),
         ])
         showIdle(rows: [])
     }
