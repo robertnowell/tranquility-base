@@ -566,10 +566,22 @@ com.robertnowell.voice-dispatch (TCC).
       2026-08-21-tb-division-of-labor: unfindable by project name, and
       `reviveCommand` would resume it in `~` rather than its real repo) —
       real defect, tracked in no doc until now.
-- [ ] tmux server survival across a macOS logout/reboot — untested since the
-      19 Aug validation battery, and now the highest-stakes gap on the board:
-      after cc7bf4e tmux is the ONLY launch path, so a reboot that kills the
-      server has no fallback. One manual test; launchd `KeepAlive` is the
-      presumed fix if it's needed.
+- [~] tmux server survival across a macOS logout/reboot — tested for real,
+      not deliberately: Robert's Mac rebooted 23 Aug and TB's own revive hung
+      trying to bring a session back, forcing a manual restart outside TB.
+      Root cause found and fixed (333595c, 23 Aug): the tmux SERVER survived
+      fine (launchd relaunches TB, TB creates a fresh one) — the actual break
+      was `launchTmux`'s `display-message` pane-tty query returning empty on
+      the very first pane a freshly-created socket ever hosted, which nothing
+      downstream could recover from. Fixed with a bounded retry (5× at
+      200ms) plus cleanup of the orphaned session on total failure, live-
+      verified not to slow the ordinary (already-warm-server) path at all.
+      Not reproducible on a healthy system by design of the fix (kill
+      server + clear socket dir + immediate new-session/display-message
+      didn't race), consistent with something specific to real boot-time
+      system load rather than a deterministic bug. Left `[~]` rather than
+      `[x]`: the fix addresses the exact failure mode found, but a real,
+      deliberate reboot test to confirm it holds under the actual boot
+      conditions that caused this has not been run.
 - [ ] Final: preflight, full drills, merge to main, deploy verified,
       freeze lifted
