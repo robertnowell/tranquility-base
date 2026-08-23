@@ -56,6 +56,12 @@ public struct DispatchTarget: Sendable, Equatable {
     /// measured on its own idle composer) and every existing construction
     /// site, unchanged.
     public var idlePlaceholder: String?
+    /// The harness's paste chip prefix — see
+    /// `HarnessCapabilities.pasteChipPrefix`, whose measurement this
+    /// carries to the transport. Defaults to Claude Code's own, like
+    /// `promptGlyph` above, so every existing construction site keeps
+    /// meaning what it always has.
+    public var pasteChip: String?
 
     public init(
         kind: TransportKind = .terminalApp,
@@ -67,7 +73,8 @@ public struct DispatchTarget: Sendable, Equatable {
         label: String? = nil,
         readinessSource: ReadinessSource = .claudeAgents,
         promptGlyph: String = "❯",
-        idlePlaceholder: String? = nil
+        idlePlaceholder: String? = nil,
+        pasteChip: String? = "[Pasted text #"
     ) {
         self.kind = kind
         self.sessionId = sessionId
@@ -79,6 +86,7 @@ public struct DispatchTarget: Sendable, Equatable {
         self.readinessSource = readinessSource
         self.promptGlyph = promptGlyph
         self.idlePlaceholder = idlePlaceholder
+        self.pasteChip = pasteChip
     }
 }
 
@@ -114,14 +122,41 @@ public enum Readiness: Sendable, Equatable {
     /// value would quietly acquire that power.
     public static let dialogOpen = "dialog open"
 
+    /// The other three of the five DOCUMENTED `waitingFor` values (code.claude.com/
+    /// docs/en/agent-view) that are the same hazard as `dialogOpen` under a
+    /// different name: a structural yes/no gate, not a free-text answer. Added
+    /// 23 Aug (2026-08-23-agent-session-transport report) — until this only
+    /// `dialogOpen` was VERIFIED live, and `isDialog`'s own doc comment says why
+    /// that was deliberately narrow rather than an oversight: "only the value we
+    /// have seen refuses." These three are now seen, documented at Tier 1, not
+    /// guessed. Same reasoning ACP's spec draws between `session/
+    /// request_permission` and `elicitation/create`: a permission decision is
+    /// security, not a question, and typing a voice transcript at it does not
+    /// mean what typing an answer to a question means. Before this fix,
+    /// `canDispatch` waved a reply straight through to a live permission
+    /// prompt — untyped keys landing on an unread security gate, the same
+    /// shape of hazard the resume-prompt fix (19 Aug) closed for `dialogOpen`.
+    public static let permissionPrompt = "permission prompt"
+    public static let sandboxRequest = "sandbox request"
+    public static let workerRequest = "worker request"
+    /// The fifth documented value. Genuinely free-text-answerable — Claude
+    /// asking a real question, `AskUserQuestion`'s own shape — so it is NOT
+    /// added to `dialogLikeValues` below; it takes the same path `.question`
+    /// always has, unchanged.
+    public static let inputNeeded = "input needed"
+
+    private static let dialogLikeValues: Set<String> = [
+        dialogOpen, permissionPrompt, sandboxRequest, workerRequest,
+    ]
+
     /// Whether this state is a session sitting at a dialog, whatever route it
     /// was detected by. `WaitingAt` classifies the same field for the lamp, from
-    /// the same constant, so the row and the send path cannot disagree about
+    /// the same constants, so the row and the send path cannot disagree about
     /// what a session is stuck at.
     public var isDialog: Bool {
         switch self {
         case .notRegistered: return true
-        case .waiting(let what): return what == Readiness.dialogOpen
+        case .waiting(let what): return what.map { Self.dialogLikeValues.contains($0) } ?? false
         case .ready, .busy, .targetGone, .floorHeld: return false
         }
     }
