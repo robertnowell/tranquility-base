@@ -2888,6 +2888,16 @@ final class StatusHUD: NSObject {
         /// for the same reason a send is: it is an event, not state, and a
         /// Terminal window is about to appear and say the rest.
         case reviving(String)
+        /// The resume actually completed. Added 23 Aug: `.reviving`'s own doc
+        /// comment says "a Terminal window is about to appear and say the
+        /// rest" — true when revive opened an AppleScript/Terminal.app
+        /// window, false since revive moved onto `resumeTmux` (7325876):
+        /// nothing visible appears any more, so a success that never updates
+        /// the chip reads identically to one that hung, and the chip's own
+        /// 12s ceiling fires and logs "timed out on screen" on EVERY revive,
+        /// successful or not — caught live, 23 Aug, on a resume that had in
+        /// fact already fully settled by the time the chip gave up on it.
+        case revived(String)
         /// The refusal that keeps the app alive. Between the last grid refresh
         /// and the tap, the session came back on its own — resuming it now
         /// would put two processes under one id, which crashed the app twice.
@@ -2908,7 +2918,7 @@ final class StatusHUD: NSObject {
         /// refusal did not land at all.
         var landed: Bool {
             switch self {
-            case .sent, .queued: return true
+            case .sent, .queued, .revived: return true
             case .sending, .reviving, .alreadyAwake, .notRevived: return false
             }
         }
@@ -2918,7 +2928,7 @@ final class StatusHUD: NSObject {
         var inFlight: Bool {
             switch self {
             case .sending, .reviving: return true
-            case .sent, .queued, .alreadyAwake, .notRevived: return false
+            case .sent, .queued, .revived, .alreadyAwake, .notRevived: return false
             }
         }
 
@@ -2929,6 +2939,11 @@ final class StatusHUD: NSObject {
                     ? target.prefix(17).trimmingCharacters(in: .whitespaces) + "…"
                     : target
                 return "↺ \(name.uppercased()) · RESUMING"
+            case .revived(let target):
+                let name = target.count > 18
+                    ? target.prefix(17).trimmingCharacters(in: .whitespaces) + "…"
+                    : target
+                return "✓ \(name.uppercased()) · RESUMED"
             case .alreadyAwake: return "ALREADY RUNNING"
             case .notRevived(let why): return "↺ \(why.uppercased())"
             case .sending(let target):
