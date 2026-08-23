@@ -74,15 +74,32 @@ public struct HarnessCapabilities: Sendable {
     /// true means launch a tmux twin and leave the original process alone;
     /// false means graceful end, then resume, with the user's approval.
     public var allowsConcurrentResume: Bool
+    /// The chip a TUI draws INSTEAD of pasted text once the paste crosses
+    /// its own inline-render limit — the prefix, since the chip carries a
+    /// counter or a size that changes every time. `echoesPaste: true` is
+    /// only half true without this, and the half it omits is the half that
+    /// broke: measured live 23 Aug, both harnesses stop echoing large
+    /// pastes. Claude Code v2.1.241 renders 800 characters literally and
+    /// collapses 810 to `[Pasted text #N]`; codex-cli renders 1,000 and
+    /// collapses 1,024 to `[Pasted Content NNNN chars]`. A landing check
+    /// looking for the literal payload therefore CANNOT pass on a dictated
+    /// utterance longer than a paragraph — the transport pasted, never saw
+    /// its own text, never pressed Return, and left the words sitting in
+    /// the box (found live 23 Aug, twice in one afternoon). nil means "this
+    /// harness renders every paste literally", which is an assertion about
+    /// a measurement, not a default to fall back on.
+    public var pasteChipPrefix: String?
 
     public init(echoesPaste: Bool, promptGlyph: String, queuesInputMidTurn: Bool,
-               registersWithLiveness: Bool, hasHooks: Bool, allowsConcurrentResume: Bool) {
+               registersWithLiveness: Bool, hasHooks: Bool, allowsConcurrentResume: Bool,
+               pasteChipPrefix: String? = nil) {
         self.echoesPaste = echoesPaste
         self.promptGlyph = promptGlyph
         self.queuesInputMidTurn = queuesInputMidTurn
         self.registersWithLiveness = registersWithLiveness
         self.hasHooks = hasHooks
         self.allowsConcurrentResume = allowsConcurrentResume
+        self.pasteChipPrefix = pasteChipPrefix
     }
 }
 
@@ -183,7 +200,8 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
     public var capabilities: HarnessCapabilities {
         HarnessCapabilities(echoesPaste: true, promptGlyph: "❯",
                             queuesInputMidTurn: true, registersWithLiveness: true,
-                            hasHooks: true, allowsConcurrentResume: true)
+                            hasHooks: true, allowsConcurrentResume: true,
+                            pasteChipPrefix: "[Pasted text #")
     }
 }
 
@@ -258,7 +276,8 @@ public struct CodexAdapter: HarnessAdapter {
     public var capabilities: HarnessCapabilities {
         HarnessCapabilities(echoesPaste: true, promptGlyph: "›",
                             queuesInputMidTurn: true, registersWithLiveness: false,
-                            hasHooks: true, allowsConcurrentResume: false)
+                            hasHooks: true, allowsConcurrentResume: false,
+                            pasteChipPrefix: "[Pasted Content ")
     }
 }
 

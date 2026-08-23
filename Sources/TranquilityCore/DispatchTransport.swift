@@ -56,6 +56,12 @@ public struct DispatchTarget: Sendable, Equatable {
     /// measured on its own idle composer) and every existing construction
     /// site, unchanged.
     public var idlePlaceholder: String?
+    /// The harness's paste chip prefix — see
+    /// `HarnessCapabilities.pasteChipPrefix`, whose measurement this
+    /// carries to the transport. Defaults to Claude Code's own, like
+    /// `promptGlyph` above, so every existing construction site keeps
+    /// meaning what it always has.
+    public var pasteChip: String?
 
     public init(
         kind: TransportKind = .terminalApp,
@@ -67,7 +73,8 @@ public struct DispatchTarget: Sendable, Equatable {
         label: String? = nil,
         readinessSource: ReadinessSource = .claudeAgents,
         promptGlyph: String = "❯",
-        idlePlaceholder: String? = nil
+        idlePlaceholder: String? = nil,
+        pasteChip: String? = "[Pasted text #"
     ) {
         self.kind = kind
         self.sessionId = sessionId
@@ -79,6 +86,7 @@ public struct DispatchTarget: Sendable, Equatable {
         self.readinessSource = readinessSource
         self.promptGlyph = promptGlyph
         self.idlePlaceholder = idlePlaceholder
+        self.pasteChip = pasteChip
     }
 }
 
