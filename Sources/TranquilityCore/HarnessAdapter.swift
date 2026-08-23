@@ -304,6 +304,26 @@ public enum TrustPromptWatcher {
             if spec.promptNeedles.contains(where: { text.contains($0) }) {
                 press()
                 trace?("newSession: accepted the trust prompt in \(label) — user-commanded launch")
+                // A second, DIFFERENT dialog (Claude Code's resume-depth
+                // prompt) can render a beat after this one is answered, not
+                // simultaneously with it — found live, 23 Aug: this loop
+                // used to return the instant it pressed, so a
+                // never-auto-accept needle that only appears AFTER the
+                // trust prompt was never seen at all, and `onNeedsHuman`
+                // never fired for the exact case it exists for. A few more
+                // looks, never another press (only a needle match does
+                // anything from here on) — bounded, so the ordinary case
+                // (nothing follows) pays a few seconds, not fifteen polls.
+                for _ in 0..<3 {
+                    usleep(UInt32(pollInterval * 1_000_000))
+                    guard let followUp = read() else { continue }
+                    if spec.neverAutoAcceptNeedles.contains(where: { followUp.contains($0) }) {
+                        trace?("newSession: \(label) needs a human choice after the trust "
+                            + "prompt; leaving it be")
+                        onNeedsHuman()
+                        return
+                    }
+                }
                 return
             }
             if let noPrompt = spec.startedWithNoPromptNeedle, text.contains(noPrompt) {
