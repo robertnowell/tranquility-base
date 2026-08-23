@@ -1071,7 +1071,7 @@ final class StatusHUD: NSObject {
     /// no session in hand — a microphone fault is about the machine, not about
     /// an agent, and `showDeviceFault` says so by carrying no title at all.
     func showResult(_ message: String,
-                    about: (sessionId: String, label: String)? = nil) {
+                    about: (sessionId: String, pid: Int?, label: String)? = nil) {
         // Read BEFORE the transition, which is the only moment that can tell
         // the two kinds of failure apart: one that arrives while the capture
         // flow owns the stage happened TO the capture; one that arrives from
@@ -1117,7 +1117,7 @@ final class StatusHUD: NSObject {
             // subject from whatever happens to be on stage is how a card ends up
             // titled for one session and bodied for another.
             if let about {
-                currentTarget = (sessionId: about.sessionId, pid: nil, label: about.label)
+                currentTarget = (sessionId: about.sessionId, pid: about.pid, label: about.label)
                 currentEventId = about.sessionId
             } else if currentTarget == nil, let last = lastAddressed {
                 currentTarget = last
@@ -4610,7 +4610,7 @@ final class StatusHUD: NSObject {
             spoken: SpokenTextSanitizer().sanitize("a card already on the stage"),
             sessionId: "on-stage", pid: 1, project: "promotions", cwd: "/tmp/promotions")
         showResult("Typed it into recall, but couldn't confirm it landed.",
-                   about: (sessionId: "somebody-else", label: "recall"))
+                   about: (sessionId: "somebody-else", pid: nil, label: "recall"))
         let namesTheFailingAgent = titleLabel.stringValue == "recall"
         let notTheCardOnStage = titleLabel.stringValue != "promotions"
         // The other direction, which must not regress: a failure that IS about
@@ -4618,7 +4618,7 @@ final class StatusHUD: NSObject {
         _ = showAnnouncement(
             spoken: SpokenTextSanitizer().sanitize("a card already on the stage"),
             sessionId: "on-stage", pid: 1, project: "promotions", cwd: "/tmp/promotions")
-        showResult("Its own failure.", about: (sessionId: "on-stage", label: "promotions"))
+        showResult("Its own failure.", about: (sessionId: "on-stage", pid: 1, label: "promotions"))
         let ownFailureKeepsItsName = titleLabel.stringValue == "promotions"
         SelfTest.report("result.subject", [
             ("namesTheFailingAgent", namesTheFailingAgent),
