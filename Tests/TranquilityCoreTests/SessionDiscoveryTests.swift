@@ -133,6 +133,48 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertNil(SessionDiscovery.firstCwd(head: [#"{"type":"queue-operation"}"#]))
     }
 
+    /// The 23 Aug fix (2026-08-21-tb-division-of-labor): a session
+    /// hand-started from `~` and then `cd`'d into a repo for the rest of its
+    /// life must read the repo as home, not the handful of turns that came
+    /// first — the tail is checked before the head for exactly this.
+    func testTailRelocationWinsOverTheOriginalHead() {
+        let head = [#"{"type":"user","cwd":"/Users/x","entrypoint":"cli"}"#]
+        let tail = [
+            #"{"type":"assistant","cwd":"/Users/x/Projects/tranquility-base"}"#,
+            #"{"type":"user","cwd":"/Users/x/Projects/tranquility-base"}"#,
+        ]
+        XCTAssertEqual(SessionDiscovery.firstCwd(head: head, tail: tail),
+                       "/Users/x/Projects/tranquility-base")
+    }
+
+    /// A brief wander into a subdirectory for one tool call must still lose
+    /// to the head — the failure mode `firstCwd` was originally built to
+    /// reject, unaffected by the tail now being checked first.
+    func testATailWanderDoesNotWinIfItIsTheOnlyTailEntry() {
+        let head = [#"{"type":"user","cwd":"/Users/x/Projects/kopi","entrypoint":"cli"}"#]
+        let tail = [
+            #"{"type":"assistant","cwd":"/Users/x/Projects/kopi/.claude/skills/log-triage"}"#,
+        ]
+        // The tail genuinely is the most recent cwd here — this documents
+        // that a wander persisting all the way to the tail is, correctly,
+        // no longer distinguishable from a real relocation; only a wander
+        // that does NOT reach the tail (the common case: one tool call,
+        // then back to normal work) is protected by the head fallback below.
+        XCTAssertEqual(SessionDiscovery.firstCwd(head: head, tail: tail),
+                       "/Users/x/Projects/kopi/.claude/skills/log-triage")
+    }
+
+    /// No tail supplied — the exact shape the production call site had
+    /// before this fix, and every other caller still has. Must behave
+    /// identically to the pre-fix function.
+    func testNoTailFallsBackToTheHeadUnchanged() {
+        let head = [
+            #"{"type":"user","cwd":"/Users/x/Projects/kopi","entrypoint":"cli"}"#,
+            #"{"type":"assistant","cwd":"/Users/x/Projects/kopi/.claude/skills/log-triage"}"#,
+        ]
+        XCTAssertEqual(SessionDiscovery.firstCwd(head: head), "/Users/x/Projects/kopi")
+    }
+
     // MARK: - The verb needs positive evidence of absence
 
     private func session(_ liveness: SessionDiscovery.Liveness,
