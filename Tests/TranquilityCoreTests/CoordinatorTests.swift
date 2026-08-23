@@ -59,11 +59,13 @@ final class CoordinatorTests: XCTestCase {
     final class RecordingTransport: DispatchTransport, @unchecked Sendable {
         let kind = TransportKind.terminalApp
         var sent: [String] = []
+        var sentTargets: [DispatchTarget] = []
         var outcome: DispatchOutcome = .confirmed(latencyMs: 42)
         var readinessValue: Readiness = .ready
         func readiness(for target: DispatchTarget) async -> Readiness { readinessValue }
         func send(text: String, to target: DispatchTarget) async -> DispatchOutcome {
             sent.append(text)
+            sentTargets.append(target)
             return outcome
         }
     }
@@ -130,7 +132,12 @@ final class CoordinatorTests: XCTestCase {
         // "/tmp/p", a pid this test process itself has no tmux pane for)
         // silently exercised the real function and only stayed harmless
         // because "/tmp/p" happens not to exist — an accident, not a test.
-        resumeTwin: @escaping @Sendable (String, String) -> TmuxPaneAddress? = { _, _ in nil }
+        resumeTwin: @escaping @Sendable (String, String) -> TmuxPaneAddress? = { _, _ in nil },
+        // nil keeps the default fixed FakeAgents below — only the ownership-
+        // transfer test needs an agents fake that answers DIFFERENTLY before
+        // and after `resumeTwin` runs, since that is exactly the seam it
+        // exercises (the real `resumeTwin` ends one pid and starts another).
+        agents overrideAgents: (any ClaudeAgentsReading)? = nil
     ) throws -> Coordinator {
         let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
         if enrolled { try registry.enrol(sessionId: "sess-1") }
@@ -142,7 +149,7 @@ final class CoordinatorTests: XCTestCase {
             transport: transport,
             tmuxTransport: tmuxTransport,
             enrolment: registry,
-            agents: FakeAgents(live: sessionLive
+            agents: overrideAgents ?? FakeAgents(live: sessionLive
                 ? ["sess-1", "old", "new", "human", "cron", "waiting-one"].map {
                     LiveSession(pid: Int(ProcessInfo.processInfo.processIdentifier),
                                 sessionId: $0, cwd: "/tmp/p", status: "idle",
@@ -253,7 +260,7 @@ final class CoordinatorTests: XCTestCase {
         else { return XCTFail("expected a pending send") }
         XCTAssertTrue(transport.sent.isEmpty, "nothing is typed while the window is open")
 
-        guard case .dispatched(let text, _, let sessionId) =
+        guard case .dispatched(let text, _, let sessionId, _) =
             try await coordinator.confirmAndSend(utteranceId: utteranceId)
         else { return XCTFail("expected dispatch") }
         XCTAssertEqual(sessionId, "sess-1")
@@ -672,6 +679,63 @@ final class CoordinatorTests: XCTestCase {
                       "never falls to AppleScript once the twin resumed")
     }
 
+    /// A mutable `ClaudeAgentsReading` fake — needed only by the test below,
+    /// where `resumeTwin` itself must change what the NEXT probe answers
+    /// (the real default implementation ends one process and starts
+    /// another; `agents.sessions()` reporting the OLD pid throughout would
+    /// make the test pass by construction rather than by testing anything).
+    final class SwappableAgents: ClaudeAgentsReading, @unchecked Sendable {
+        private let lock = NSLock()
+        private var current: [LiveSession]
+        init(_ live: [LiveSession]) { current = live }
+        func sessions() -> [LiveSession]? { lock.lock(); defer { lock.unlock() }; return current }
+        func replace(_ live: [LiveSession]) { lock.lock(); current = live; lock.unlock() }
+    }
+
+    /// 23 Aug, the day `resumeTwin`'s default became a TRANSFER (end the
+    /// hand-started process, resume fresh under tmux) rather than a
+    /// parallel twin: `DispatchTarget.pid` and `Coordinator`'s own `live`
+    /// still read the pid `resumed` from BEFORE the call, which is the
+    /// exact pid the transfer just ended on purpose. Found live the same
+    /// day: GO TO AGENT read "couldn't find a terminal for process 21081 —
+    /// it may have exited", true and also the bug — the panel never learned
+    /// about the NEW pid the transfer had actually landed on.
+    func testOwnershipTransferRefreshesThePidDownstream() async throws {
+        let terminalApp = RecordingTransport()
+        let tmux = RecordingTransport()
+        let fabricatedPane = TmuxPaneAddress(
+            socketName: "tb", paneId: "%99", sessionName: "tb-fabricated", paneTty: "/dev/ttys099")
+        let rows: @Sendable (Int) -> [LiveSession] = { pid in
+            ["sess-1", "old", "new", "human", "cron", "waiting-one"].map {
+                LiveSession(pid: pid, sessionId: $0, cwd: "/tmp/p", status: "idle",
+                           name: "p", waitingFor: nil)
+            }
+        }
+        let agents = SwappableAgents(rows(111))
+        let coordinator = try makeCoordinator(
+            transport: terminalApp, tmuxTransport: tmux,
+            resumeTwin: { _, _ in
+                // The real closure's own effect, faked here: the
+                // hand-started pid is gone, a fresh one is live under tmux.
+                agents.replace(rows(222))
+                return fabricatedPane
+            },
+            agents: agents)
+        try append()
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+
+        _ = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+
+        XCTAssertEqual(tmux.sentTargets.first?.pid, 222,
+                       "the target must carry the pid the transfer landed on, not 111")
+        XCTAssertEqual(try store.utterances().first?.targetPid, 222,
+                       "the stored utterance must agree with the dispatch target")
+    }
+
     /// The other half: when `resumeTwin` fails (returns nil — the real
     /// default does this whenever `resumeTmux` itself fails), dispatch falls
     /// back to `transport` exactly as it always did, so a genuinely broken
@@ -825,7 +889,7 @@ final class CoordinatorTests: XCTestCase {
         else { return XCTFail("expected a pending send") }
         XCTAssertEqual(sessionId, "old", "the link's addressing wins")
 
-        guard case .dispatched(_, _, let sent) =
+        guard case .dispatched(_, _, let sent, _) =
             try await coordinator.confirmAndSend(utteranceId: utteranceId)
         else { return XCTFail("expected dispatch") }
         XCTAssertEqual(sent, "old")
