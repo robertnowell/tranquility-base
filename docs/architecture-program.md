@@ -68,8 +68,14 @@ The six-agent audit record behind every item:
   M3 dispatch path, 846dcbd) — Claude Code tolerates two processes on one
   conversation and arbitrates it with its own "Remote Control" feature. TB
   launches a tmux twin via `claude --resume <id>` and dispatches to it,
-  **the user's original terminal untouched and left running** — no SIGTERM,
-  no adoption in the graceful-end sense, just a second live process TB owns.
+  **the user's original process never signalled and left running** — no
+  SIGTERM, no adoption in the graceful-end sense, just a second live process
+  TB owns. Not the same as "never shows anything on the original's screen":
+  live-verified 23 Aug that Remote Control can redirect a turn typed into the
+  twin onto the original's screen instead. Ruled acceptable (Robert, 23 Aug):
+  the bar is dispatch WORKS — lands, gets answered, TB reads the state back —
+  not which pane a human happens to see it land in, and the common case is TB
+  owns the session via tmux from the start, where this never arises.
   `Coordinator`'s `preferringTmuxOwned` (846dcbd) is what makes replies land
   in TB's twin deterministically rather than an arbitrary one of the two.
   **Codex**: cannot dual-live — `codex-rs/app-server/README.md` states the
