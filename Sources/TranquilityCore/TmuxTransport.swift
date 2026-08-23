@@ -323,6 +323,14 @@ public struct TmuxTransport: DispatchTransport {
             ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId))
 
 
+        // Every paste chip THIS send has put on screen. A chip is the only
+        // trace a collapsed paste leaves (see `pasteChips`), so it is also
+        // the only way a later attempt can tell "my own words, still
+        // unsubmitted" from "somebody else's floor" — the distinction step
+        // 3 exists to make, and the one that silently stopped working the
+        // moment a payload got long enough to collapse.
+        var ourChips: Set<String> = []
+
         let attempts = 5
         attemptLoop: for attempt in 0..<attempts {
             let lastAttempt = attempt == attempts - 1
@@ -375,7 +383,8 @@ public struct TmuxTransport: DispatchTransport {
             // `classifyPromptLine` to actually track multi-row content
             // first; that has not been built.
             switch promptLine(pane, payload: payload, glyph: target.promptGlyph,
-                              placeholder: target.idlePlaceholder) {
+                              placeholder: target.idlePlaceholder,
+                              chip: target.pasteChip, ourChips: ourChips) {
             case .empty, .unreadable:
                 break                       // unreadable fails toward pasting:
                                             // landing is verified either way
@@ -408,6 +417,15 @@ public struct TmuxTransport: DispatchTransport {
             // shell, no argv, no AppleScript-literal escaping, no per-key
             // interpretation; the byte-exactness was measured (1,587 chars,
             // quotes and dollar signs intact).
+            //
+            // The chips already on screen are read FIRST, so that a chip
+            // seen afterwards is evidence about THIS paste and not about
+            // one already sitting there — the same shape as the transcript
+            // watermark two dozen lines above, and for the same reason:
+            // history is not evidence about this delivery.
+            let chipsBefore = Self.pasteChips(screen: screen(pane) ?? "",
+                                              glyph: target.promptGlyph,
+                                              chip: target.pasteChip)
             guard case .success = Tmux.run(
                 ["load-buffer", "-b", "tb-dispatch", "-"],
                 socket: pane.socketName, stdin: Data(payload.utf8))
@@ -428,9 +446,24 @@ public struct TmuxTransport: DispatchTransport {
             // buffer is exactly what allowed a double-paste splice under
             // churn (measured 20 Aug, 29-in-60), so a second no-echo path
             // does not exist any more.
-            guard poll(deadline: 2.0, every: 0.05, until: { screenContains(payload, pane) }) else {
+            //
+            // "Echoes" was read too literally, and the reading cost every
+            // long dictated reply (found live 23 Aug, twice in one
+            // afternoon: `[Pasted text #10]` and `[Pasted text #15]` left
+            // sitting in the box, never sent, reported as "couldn't confirm
+            // it landed"). A TUI echoes a paste in one of TWO ways — the
+            // text itself, or a chip standing in for it once the paste is
+            // too big to draw — and `screenContains` could only ever see
+            // the first. `pasteEcho` sees both, and both are the same fact:
+            // our words are in the box, Return is safe to press.
+            var echo = PasteEcho.absent
+            guard poll(deadline: 2.0, every: 0.05, until: {
+                echo = pasteEcho(payload, pane, target: target, chipsBefore: chipsBefore)
+                return echo != .absent
+            }) else {
                 continue    // a mode race ate the paste; loop — dedupe guards the retry
             }
+            if case .chip(let token) = echo { ourChips.insert(token) }
 
             // Step 6 — submit. A Return on an empty prompt does nothing, so
             // retrying Enter alone is safe; retrying the TEXT is what
@@ -450,7 +483,7 @@ public struct TmuxTransport: DispatchTransport {
                 return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
             }
             // Enter may have been swallowed while the words arrived.
-            if screenContains(payload, pane) {
+            if stillHolding(payload, pane, target: target, ourChips: ourChips) {
                 // The one-Return retry, with the #163 lesson applied: a
                 // session can pop a modal between the first Enter and this
                 // one, and a Return at a dialog ANSWERS it (gate finding V4).
@@ -506,6 +539,106 @@ public struct TmuxTransport: DispatchTransport {
         screen(pane)?.contains(payload) ?? false
     }
 
+    /// What the input box shows about the paste step 4 just made.
+    enum PasteEcho: Equatable {
+        case absent
+        /// The payload itself is readable in the box — the short-message
+        /// case, and the only case the transport used to be able to see.
+        case literal
+        /// The TUI collapsed it and drew this chip instead.
+        case chip(String)
+    }
+
+    private func pasteEcho(_ payload: String, _ pane: TmuxPaneAddress,
+                           target: DispatchTarget, chipsBefore: Set<String>) -> PasteEcho {
+        guard let text = screen(pane) else { return .absent }
+        if text.contains(payload)
+            || Self.boxHolds(payload: payload, screen: text, glyph: target.promptGlyph) {
+            return .literal
+        }
+        // Sorted so the choice is deterministic if a paste ever draws two
+        // chips; in practice `fresh` holds exactly one.
+        let fresh = Self.pasteChips(screen: text, glyph: target.promptGlyph,
+                                    chip: target.pasteChip).subtracting(chipsBefore)
+        if let one = fresh.sorted().first { return .chip(one) }
+        return .absent
+    }
+
+    /// Still ours, still unsubmitted — asked AFTER a Return, where a FRESH
+    /// chip is the wrong question (the box either cleared or it did not)
+    /// and identity is the right one: is what sits there still the thing
+    /// this send put there.
+    private func stillHolding(_ payload: String, _ pane: TmuxPaneAddress,
+                              target: DispatchTarget, ourChips: Set<String>) -> Bool {
+        guard let text = screen(pane) else { return false }
+        if text.contains(payload)
+            || Self.boxHolds(payload: payload, screen: text, glyph: target.promptGlyph) {
+            return true
+        }
+        return !Self.pasteChips(screen: text, glyph: target.promptGlyph,
+                                chip: target.pasteChip).isDisjoint(with: ourChips)
+    }
+
+    /// The input box's rendered rows, glyph row first.
+    ///
+    /// A TUI does not let the terminal wrap its composer; it draws each row
+    /// itself, indented under the glyph, which is why `capture-pane -J`
+    /// never joins them and why a payload wider than the pane is on screen
+    /// and yet absent from any `contains` test (measured 23 Aug: a
+    /// 2,444-char payload, fully visible, `screen.contains(payload) ==
+    /// false` with and without `-J`). Reading the box as rows is what makes
+    /// "is our text in the box" answerable rather than merely usually true.
+    static func boxRows(screen: String, glyph: String) -> [String]? {
+        let lines = screen.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let start = lines.lastIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix(glyph)
+        }) else { return nil }
+        var rows = [String(lines[start].trimmingCharacters(in: .whitespaces)
+            .dropFirst(glyph.count).trimmingCharacters(in: .whitespaces))]
+        for line in lines[(start + 1)...] {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            // The box ends at its own border rule; a continuation row is
+            // always indented under the glyph and never empty.
+            guard line.hasPrefix("  "), !trimmed.isEmpty, !trimmed.hasPrefix("─") else { break }
+            rows.append(trimmed)
+        }
+        return rows
+    }
+
+    /// Does the box hold exactly our payload, however many rows it took?
+    ///
+    /// EQUALITY, not containment, over whitespace-collapsed text: the row
+    /// breaks the TUI inserts are not in the payload, and a substring test
+    /// here would accept a box holding our words PLUS somebody else's —
+    /// which is the splice `.holds(ours: false)` exists to refuse.
+    static func boxHolds(payload: String, screen: String, glyph: String) -> Bool {
+        guard let rows = boxRows(screen: screen, glyph: glyph) else { return false }
+        return collapsed(rows.joined(separator: " ")) == collapsed(payload)
+    }
+
+    static func collapsed(_ text: String) -> String {
+        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+
+    /// Every paste chip currently drawn in the box, WHOLE — `chip` is only
+    /// the stable prefix, since the identifying part (Claude Code's
+    /// counter, Codex's byte count) is what makes one chip distinguishable
+    /// from the next, and telling them apart is the entire point.
+    static func pasteChips(screen: String, glyph: String, chip: String?) -> Set<String> {
+        guard let chip, !chip.isEmpty, let rows = boxRows(screen: screen, glyph: glyph)
+        else { return [] }
+        var found: Set<String> = []
+        for row in rows {
+            var rest = Substring(row)
+            while let open = rest.range(of: chip) {
+                guard let close = rest[open.upperBound...].firstIndex(of: "]") else { break }
+                found.insert(String(rest[open.lowerBound...close]))
+                rest = rest[rest.index(after: close)...]
+            }
+        }
+        return found
+    }
+
     enum PromptLine: Equatable {
         case empty
         case holds(ours: Bool)
@@ -522,18 +655,21 @@ public struct TmuxTransport: DispatchTransport {
     /// cursor is, and the landing check in step 5 is the guard that matters
     /// there.
     private func promptLine(
-        _ pane: TmuxPaneAddress, payload: String, glyph: String, placeholder: String?
+        _ pane: TmuxPaneAddress, payload: String, glyph: String, placeholder: String?,
+        chip: String?, ourChips: Set<String>
     ) -> PromptLine {
         guard let text = screen(pane) else { return .unreadable }
         return Self.classifyPromptLine(screen: text, payload: payload, glyph: glyph,
-                                       placeholder: placeholder)
+                                       placeholder: placeholder, chip: chip,
+                                       ourChips: ourChips)
     }
 
     /// Pure half, testable against captured screens. `glyph` defaults to
     /// Claude Code's own so every existing call site (and every existing
     /// test) keeps meaning exactly what it always has.
     static func classifyPromptLine(
-        screen: String, payload: String, glyph: String = "❯", placeholder: String? = nil
+        screen: String, payload: String, glyph: String = "❯", placeholder: String? = nil,
+        chip: String? = nil, ourChips: Set<String> = []
     ) -> PromptLine {
         let lines = screen.split(separator: "\n", omittingEmptySubsequences: false)
         guard let box = lines.last(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix(glyph) })
@@ -555,6 +691,23 @@ public struct TmuxTransport: DispatchTransport {
         // OWN known idle string reads as genuinely empty, never as someone
         // else's floor.
         if let placeholder, content == placeholder { return .empty }
+        // A chip THIS send drew is our own unsubmitted paste wearing the
+        // only clothes the TUI gave it. Without this, the branch below
+        // reads `[Pasted text #10]` as a stranger's floor, clears it,
+        // pastes again, draws `#11`, and repeats until the attempts run
+        // out — the exact loop measured live on 23 Aug: five pastes, no
+        // Return, twelve seconds, "couldn't confirm it landed." Checked
+        // against chips we KNOW we drew, never against the SHAPE of a
+        // chip: a paste the human made before we arrived is still theirs.
+        if !ourChips.isDisjoint(with: pasteChips(screen: screen, glyph: glyph, chip: chip)) {
+            return .holds(ours: true)
+        }
+        // Row-aware before line-aware: a payload the TUI drew across
+        // several rows is fully readable as rows, and only its first row
+        // survives the single-line `content` below.
+        if !payload.isEmpty, boxHolds(payload: payload, screen: screen, glyph: glyph) {
+            return .holds(ours: true)
+        }
         // A truncated echo is a PREFIX of what we sent — the TUI elides
         // trailing characters while long input renders — never the reverse,
         // and never an unanchored substring test. `payload.contains(content)`
