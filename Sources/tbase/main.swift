@@ -366,7 +366,8 @@ do {
         print("")
         switch SessionLauncher.resume(sessionId: session.sessionId, directory: command.cwd) {
         case .success:
-            print("launched — Terminal should be opening it now")
+            print("resumed in a detached tmux pane — `tbase targets` finds it, "
+                + "or click Go to Agent")
         case .failure(let error):
             print("failed — \(error.message)")
             exit(3)

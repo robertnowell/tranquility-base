@@ -113,13 +113,24 @@ final class CoordinatorTests: XCTestCase {
     private func makeCoordinator(
         speech: SilentSpeech = SilentSpeech(),
         transport: RecordingTransport = RecordingTransport(),
+        tmuxTransport: RecordingTransport = RecordingTransport(),
         enrolled: Bool = true,
         sessionLive: Bool = true,
         gate: InterruptGate = InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
         // Zero by default: these tests assert the REFUSAL, and paying the
         // production grace for each one added twelve seconds apiece to the
         // suite. The grace has its own test, below.
-        readinessGrace: TimeInterval = 0
+        readinessGrace: TimeInterval = 0,
+        // `nil` — no twin resumed — for every test but the one that exists to
+        // assert this specifically. The real default (production) calls a
+        // real `SessionLauncher.resumeTmux`, which has no business running
+        // inside a unit test; `resumeTwin` is exactly the seam that stops it
+        // (this coordinator's own doc comment on the property says why).
+        // Before this seam existed the fake `LiveSession`s below (cwd
+        // "/tmp/p", a pid this test process itself has no tmux pane for)
+        // silently exercised the real function and only stayed harmless
+        // because "/tmp/p" happens not to exist — an accident, not a test.
+        resumeTwin: @escaping @Sendable (String, String) -> TmuxPaneAddress? = { _, _ in nil }
     ) throws -> Coordinator {
         let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
         if enrolled { try registry.enrol(sessionId: "sess-1") }
@@ -129,6 +140,7 @@ final class CoordinatorTests: XCTestCase {
             speech: SpeechChain(preferred: speech, fallback: speech),
             gate: gate,
             transport: transport,
+            tmuxTransport: tmuxTransport,
             enrolment: registry,
             agents: FakeAgents(live: sessionLive
                 ? ["sess-1", "old", "new", "human", "cron", "waiting-one"].map {
@@ -140,7 +152,8 @@ final class CoordinatorTests: XCTestCase {
             recovery: RecoveryChain(
                 providers: [FixedTranscript(text: "yes go ahead")],
                 maxAttemptsPerProvider: 1, backoff: [0]),
-            readinessGrace: readinessGrace)
+            readinessGrace: readinessGrace,
+            resumeTwin: resumeTwin)
     }
 
     /// Append to the log. Nothing else ever writes an event.
@@ -611,6 +624,74 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(try store.utterances().first?.status, .dispatchedUnconfirmed,
                        "must not claim success, and must not silently resend")
         XCTAssertEqual(transport.sent.count, 1, "one attempt: a duplicate is worse than a drop")
+    }
+
+    /// The 22 Aug fix: a hand-started session with no tmux pane resumes a
+    /// dual-live twin (via the injected `resumeTwin`) and dispatches into
+    /// THAT, instead of falling to `transport` (AppleScript/Terminal.app).
+    /// The twin's own pid/pane are fabricated here — only the WIRING is
+    /// under test, not `resumeTmux` itself, which has no place running for
+    /// real inside a unit test (see `resumeTwin`'s own doc comment).
+    func testAHandStartedSessionWithNoPaneResumesATwinInsteadOfAppleScript() async throws {
+        let terminalApp = RecordingTransport()
+        let tmux = RecordingTransport()
+        let fabricatedPane = TmuxPaneAddress(
+            socketName: "tb", paneId: "%99", sessionName: "tb-fabricated", paneTty: "/dev/ttys099")
+        final class Calls: @unchecked Sendable {
+            private let lock = NSLock()
+            private var seen: [(sessionId: String, directory: String)] = []
+            func record(_ sessionId: String, _ directory: String) {
+                lock.lock(); defer { lock.unlock() }
+                seen.append((sessionId, directory))
+            }
+            var all: [(sessionId: String, directory: String)] {
+                lock.lock(); defer { lock.unlock() }; return seen
+            }
+        }
+        let resumeTwinCalls = Calls()
+        let coordinator = try makeCoordinator(
+            transport: terminalApp, tmuxTransport: tmux,
+            resumeTwin: { sessionId, directory in
+                resumeTwinCalls.record(sessionId, directory)
+                return fabricatedPane
+            })
+        try append()
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+
+        _ = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+
+        XCTAssertEqual(resumeTwinCalls.all.count, 1)
+        XCTAssertEqual(resumeTwinCalls.all.first?.sessionId, "sess-1")
+        XCTAssertEqual(resumeTwinCalls.all.first?.directory, "/tmp/p")
+        XCTAssertEqual(tmux.sent.count, 1, "the reply lands in the twin, over tmux")
+        XCTAssertTrue(terminalApp.sent.isEmpty,
+                      "never falls to AppleScript once the twin resumed")
+    }
+
+    /// The other half: when `resumeTwin` fails (returns nil — the real
+    /// default does this whenever `resumeTmux` itself fails), dispatch falls
+    /// back to `transport` exactly as it always did, so a genuinely broken
+    /// tmux binary degrades to the old behavior rather than refusing outright.
+    func testATwinThatFailsToResumeFallsBackToAppleScript() async throws {
+        let terminalApp = RecordingTransport()
+        let tmux = RecordingTransport()
+        let coordinator = try makeCoordinator(
+            transport: terminalApp, tmuxTransport: tmux, resumeTwin: { _, _ in nil })
+        try append()
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+
+        _ = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+
+        XCTAssertEqual(terminalApp.sent.count, 1, "falls back rather than refusing")
+        XCTAssertTrue(tmux.sent.isEmpty)
     }
 
     /// A session mid-turn still takes input; Claude Code queues it.
