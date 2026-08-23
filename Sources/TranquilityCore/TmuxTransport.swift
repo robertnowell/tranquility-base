@@ -355,20 +355,37 @@ public struct TmuxTransport: DispatchTransport {
             // ever answer it "try again in a moment" forever, which is what
             // it did in practice (found live, 23 Aug: the same session hit
             // this on every retry, because nothing was ever going to submit
-            // or clear that line on its own). Ruled again the same day,
-            // sharper: whatever is sitting there is NOT thrown away either —
-            // the paste below lands at the cursor, which after typing sits
-            // at the end of the existing text, so the two concatenate into
-            // one submitted line instead of either one being lost. This is
-            // the pre-floorHeld behaviour restored, deliberately, not a new
-            // splice — the thing `floorHeld` guarded against was two
-            // DIFFERENT dispatches racing onto each other's half-typed text,
-            // not a human's own typed line joining their own spoken one.
+            // or clear that line on its own).
+            //
+            // Clearing first, not concatenating — reverted the SAME day,
+            // the hard way: a version that pasted onto the cursor without
+            // clearing (so a genuinely different pre-existing line would
+            // merge with ours) turned out to have no way to tell "someone
+            // else's line" apart from "MY OWN unconfirmed paste from the
+            // last retry" when `.holds(ours: true)`'s own detection missed
+            // (large, multi-paragraph payloads wrap across many terminal
+            // rows, which `classifyPromptLine`'s single-line capture was
+            // never built to follow). Every retry that missed pasted ANOTHER
+            // copy on top of the last, live-caught at four concatenated
+            // copies of the same message, unsent. Clearing first means the
+            // worst case is "the latest attempt's text lands," never
+            // "however many retries it took, glued together" — strictly
+            // safer, at the cost of the pre-existing line this branch exists
+            // to preserve. A retry-safe way to keep BOTH intact needs
+            // `classifyPromptLine` to actually track multi-row content
+            // first; that has not been built.
             switch promptLine(pane, payload: payload, glyph: target.promptGlyph,
                               placeholder: target.idlePlaceholder) {
-            case .empty, .unreadable, .holds(ours: false):
+            case .empty, .unreadable:
                 break                       // unreadable fails toward pasting:
                                             // landing is verified either way
+            case .holds(ours: false):
+                // C-a then C-k (start-of-line, kill-to-end) rather than C-u
+                // alone, since C-u only clears BACK from wherever the cursor
+                // sits, and after a paste that never got submitted the
+                // cursor's position is not known.
+                Tmux.run(["send-keys", "-t", pane.paneId, "C-a"], socket: pane.socketName)
+                Tmux.run(["send-keys", "-t", pane.paneId, "C-k"], socket: pane.socketName)
             case .holds(ours: true):
                 // Our text is already sitting unsubmitted — a previous
                 // attempt's paste landed and its Enter was eaten. Submit

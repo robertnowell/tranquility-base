@@ -1242,14 +1242,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // status line and log carry the receipt, and a third card for a
                 // thing that went right was indistinguishable noise (user report,
                 // 05 Aug — "two further states, all saying different things").
-                case .queued:
+                case .queued(_, _, let dispatchedPid):
                     hud.showReceipt(.queued)
                     lastStatusLine = "queued in \(label), sends when its turn finishes"
                     Permissions.log("send: queued in \(label)")
-                case .dispatched:
+                    // A queued/dispatched reply can have gone through an
+                    // ownership transfer (resumeTwin ends the hand-started
+                    // process and resumes fresh under tmux) — the pid this
+                    // outcome actually landed on is not necessarily the one
+                    // the card was bound to when it was first shown. Syncs
+                    // GO TO AGENT the same way `attachLivePid` already does
+                    // for a revive that lands on a decision (found live, 23
+                    // Aug: without this, the button kept pointing at the pid
+                    // the transfer had just, on purpose, ended).
+                    if let dispatchedPid {
+                        hud.attachLivePid(dispatchedPid, sessionId: sessionId)
+                    }
+                case .dispatched(_, _, _, let dispatchedPid):
                     hud.showReceipt(.sent)
                     lastStatusLine = "sent to \(label)"
                     Permissions.log("send: confirmed to \(label)")
+                    if let dispatchedPid {
+                        hud.attachLivePid(dispatchedPid, sessionId: sessionId)
+                    }
                 case .sessionNotReady(let readiness):
                     // Sanctioned change (b): the actual condition in plain words,
                     // not the enum case's name. Mapping documented in
@@ -3164,12 +3179,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch outcome {
                 // Success says nothing on the panel (ruled — the Sent face is
                 // dead): status line + log, straight back to the grid.
-                case .dispatched(let text, let ms, _):
+                case .dispatched(let text, let ms, let dispatchedSessionId, let dispatchedPid):
                     lastStatusLine = "\(StateLegend.Glyph.sent) sent (\(ms)ms): \(text.prefix(48))"
+                    if let dispatchedPid {
+                        hud.attachLivePid(dispatchedPid, sessionId: dispatchedSessionId)
+                    }
                     hud.endCapture(because: "sent")
                     showIdleGrid()
-                case .queued(let text, _):
+                case .queued(let text, let dispatchedSessionId, let dispatchedPid):
                     lastStatusLine = "\(StateLegend.Glyph.sent) queued: \(text.prefix(48))"
+                    if let dispatchedPid {
+                        hud.attachLivePid(dispatchedPid, sessionId: dispatchedSessionId)
+                    }
                     hud.endCapture(because: "queued")
                     showIdleGrid()
                 case .noTarget:

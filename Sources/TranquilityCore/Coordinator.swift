@@ -999,9 +999,16 @@ public struct Coordinator: Sendable {
     // MARK: - Reply
 
     public enum ReplyOutcome: Sendable {
-        case dispatched(text: String, latencyMs: Int, sessionId: String)
+        // `pid` is the pid dispatch actually used — after an ownership
+        // transfer (`resumeTwin`) this is the NEW process, not whatever was
+        // live when the reply started. Carried so the caller can push it
+        // back to the panel's own target (`StatusHUD.attachLivePid`); before
+        // this, a successful dispatch through a transfer left GO TO AGENT
+        // pointed at the pid the transfer had just, on purpose, ended
+        // (found live, 23 Aug).
+        case dispatched(text: String, latencyMs: Int, sessionId: String, pid: Int?)
         /// Typed into a session that was mid-turn; it sends when that turn ends.
-        case queued(text: String, sessionId: String)
+        case queued(text: String, sessionId: String, pid: Int?)
         case transcriptionFailed(utteranceId: String)
         case noTarget
         /// Transcribed and about to be sent unless the user intervenes.
@@ -1147,7 +1154,7 @@ public struct Coordinator: Sendable {
                     + "inside the readiness grace")
             }
         }
-        guard let (live, resolvedPane) = resolved else {
+        guard let (fixedLive, resolvedPane) = resolved else {
             // Absent from `claude agents --json` means blocked on a dialog or gone.
             // Injecting would answer the dialog, so we refuse and keep the audio.
             // The files did not land either; back to the chips. A later
@@ -1158,6 +1165,9 @@ public struct Coordinator: Sendable {
             try store.update(utterance: utterance)
             return .sessionNotReady(.notRegistered)
         }
+        // Mutable only for the ownership-transfer branch below, which
+        // re-resolves it after ending and replacing this exact process.
+        var live = fixedLive
 
         // The transcript is resolved again here when the row has none. Delivery
         // is confirmed by watching our own text appear in it, so a missing path
@@ -1193,32 +1203,57 @@ public struct Coordinator: Sendable {
         var pane = resolvedPane ?? TmuxOwnership.pane(forPid: live.pid)
 
         // No tmux-owned row for this sessionId at all: a hand-started session
-        // TB has never touched, on its FIRST dispatch. Resume the dual-live
-        // twin now (via the injected `resumeTwin`, never a bare static call —
-        // see its own doc comment for why) rather than falling to AppleScript,
+        // TB has never touched, on its FIRST dispatch. Resume it under tmux
+        // now (via the injected `resumeTwin`, never a bare static call — see
+        // its own doc comment for why) rather than falling to AppleScript,
         // which types straight into whatever the user may be looking at in
         // their own terminal — the exact splice `TmuxTransport`'s floor check
         // exists to prevent, and `TerminalAppTransport` cannot check for at
         // all (22 Aug, 2026-08-22-tb-terminal-architecture: the AppleScript
         // fallback here was never a real design choice, just unfinished
         // wiring next to a mechanism — `resumeTmux` — that already does this
-        // exact job and was already live for Codex). The ORIGINAL process is
-        // never signalled, per the dual-live design (2026-08-21-tb-dual-live-
-        // harness-parity) — but "never signalled" is not "never shows
-        // anything": live-verified 23 Aug that Claude Code's own Remote
-        // Control feature can redirect a turn typed into the twin onto the
-        // original's screen instead (whichever process it decides currently
-        // holds Remote Control for the conversation), if the original is
-        // itself a live, foreground TUI. Ruled acceptable, not a bug to
-        // chase: the bar is that dispatch WORKS — lands, gets answered,
-        // and TB reads the state back — not which of the two panes a human
-        // happens to see it in, and the common case is TB owns the session
-        // via tmux from the start, where this never arises at all. Every
-        // dispatch after this one finds the twin already live in
-        // `agents --json` and `preferringTmuxOwned` picks it deterministically,
-        // so this only ever runs once per session.
+        // exact job and was already live for Codex).
+        //
+        // The ORIGINAL process IS signalled now — reversed 23 Aug, the same
+        // day as the line above it was true: this used to leave the
+        // hand-started process running dual-live beside the tmux twin, on
+        // the premise that Claude Code's own Remote Control would keep the
+        // two in sync. It does not, in practice — nothing was watching the
+        // hand-started terminal any more once dispatch started answering the
+        // twin instead, so every reply after the first routed somewhere the
+        // human had no way to see (found live, sessionId f37aaddd, this very
+        // session). `resumeTwin`'s default implementation now ends the
+        // hand-started process and confirms it is gone before resuming under
+        // tmux, so there is exactly one live process per session afterward.
+        // The bar is still that dispatch WORKS — lands, gets answered, and
+        // TB reads the state back — it just no longer accepts "somewhere a
+        // human can't see" as satisfying that bar. Every dispatch after this
+        // one finds the twin already live in `agents --json` and
+        // `preferringTmuxOwned` picks it deterministically, so this only
+        // ever runs once per session.
         if pane == nil, let cwd = live.cwd {
             pane = resumeTwin(target.sessionId, cwd)
+            if pane != nil {
+                // The transfer just ended `live.pid`'s process on purpose
+                // (ownership TRANSFER, not a parallel twin — see resumeTwin's
+                // own doc comment) and started a fresh one under tmux.
+                // Everything downstream that still reads `live.pid` —
+                // DispatchTarget's own pid, the utterance's targetPid, and
+                // ultimately the panel's GO TO AGENT — would otherwise carry
+                // the pid this call just deliberately killed (found live, 23
+                // Aug: GO TO AGENT read "couldn't find a terminal for
+                // process 21081 — it may have exited", which was true and
+                // was also the point). Re-resolve so they carry the pid that
+                // is actually live now.
+                if let refreshed = (agents.sessions() ?? [])
+                    .first(where: { $0.sessionId == target.sessionId }) {
+                    live = refreshed
+                } else {
+                    Coordinator.trace?("dispatch: \(target.sessionId.prefix(8)) transferred "
+                        + "to tmux but hasn't reappeared in agents --json yet — pid may "
+                        + "be stale downstream")
+                }
+            }
             Coordinator.trace?(pane != nil
                 ? "dispatch: \(target.sessionId.prefix(8)) had no tmux twin — resumed one"
                 : "dispatch: \(target.sessionId.prefix(8)) has no tmux twin and resuming "
@@ -1262,7 +1297,7 @@ public struct Coordinator: Sendable {
             try store.advanceCursor(sessionId: target.sessionId,
                                     heardThrough: target.latestId,
                                     dismissedThrough: target.latestId)
-            return .queued(text: text, sessionId: target.sessionId)
+            return .queued(text: text, sessionId: target.sessionId, pid: dispatchTarget.pid)
 
         case .confirmed(let latencyMs):
             attachments.resolve(utteranceId: utterance.id, landed: true)
@@ -1273,7 +1308,8 @@ public struct Coordinator: Sendable {
             try store.advanceCursor(sessionId: target.sessionId,
                                     heardThrough: target.latestId,
                                     dismissedThrough: target.latestId)
-            return .dispatched(text: text, latencyMs: latencyMs, sessionId: target.sessionId)
+            return .dispatched(text: text, latencyMs: latencyMs, sessionId: target.sessionId,
+                              pid: dispatchTarget.pid)
 
         case .deferred(let readiness):
             attachments.resolve(utteranceId: utterance.id, landed: false)
