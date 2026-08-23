@@ -355,20 +355,20 @@ public struct TmuxTransport: DispatchTransport {
             // ever answer it "try again in a moment" forever, which is what
             // it did in practice (found live, 23 Aug: the same session hit
             // this on every retry, because nothing was ever going to submit
-            // or clear that line on its own).
+            // or clear that line on its own). Ruled again the same day,
+            // sharper: whatever is sitting there is NOT thrown away either —
+            // the paste below lands at the cursor, which after typing sits
+            // at the end of the existing text, so the two concatenate into
+            // one submitted line instead of either one being lost. This is
+            // the pre-floorHeld behaviour restored, deliberately, not a new
+            // splice — the thing `floorHeld` guarded against was two
+            // DIFFERENT dispatches racing onto each other's half-typed text,
+            // not a human's own typed line joining their own spoken one.
             switch promptLine(pane, payload: payload, glyph: target.promptGlyph,
                               placeholder: target.idlePlaceholder) {
-            case .empty, .unreadable:
+            case .empty, .unreadable, .holds(ours: false):
                 break                       // unreadable fails toward pasting:
                                             // landing is verified either way
-            case .holds(ours: false):
-                // Clear it first so the paste below lands clean rather than
-                // splicing into it — C-a then C-k (start-of-line, kill-to-
-                // end) rather than C-u alone, since C-u only clears BACK
-                // from wherever the cursor sits, and after a paste that
-                // never got submitted the cursor's position is not known.
-                Tmux.run(["send-keys", "-t", pane.paneId, "C-a"], socket: pane.socketName)
-                Tmux.run(["send-keys", "-t", pane.paneId, "C-k"], socket: pane.socketName)
             case .holds(ours: true):
                 // Our text is already sitting unsubmitted — a previous
                 // attempt's paste landed and its Enter was eaten. Submit
