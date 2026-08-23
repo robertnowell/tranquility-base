@@ -21,16 +21,26 @@ public struct Coordinator: Sendable {
     /// standing co-existence design.
     public let tmuxTransport: any DispatchTransport
 
-    /// Resumes the dual-live twin for a hand-started session dispatch resolved
-    /// no tmux pane for — the mechanism `dispatch` reaches for BEFORE falling
+    /// TRANSFERS ownership of a hand-started session dispatch resolved no
+    /// tmux pane for — the mechanism `dispatch` reaches for BEFORE falling
     /// to `transport`, added 22 Aug alongside `SessionLauncher.resume`'s own
-    /// move off AppleScript (same architecture-program.md entry). Injected
-    /// exactly like `agents`/`transport`, not called as a bare static
-    /// function: real subprocess spawns have no place running unannounced
-    /// inside a test's `dispatch()` call, the same reasoning `recovery`'s own
-    /// doc comment gives for not defaulting network calls implicitly. `nil`
-    /// means resuming failed (or wasn't attempted); the caller falls back to
-    /// `transport` exactly as it did before this existed.
+    /// move off AppleScript (same architecture-program.md entry). Named for
+    /// what it did until 23 Aug — spin up a "dual-live twin" beside the
+    /// hand-started process — a design retired the same day it was found to
+    /// leave every reply after the first routed to a tmux pane nobody was
+    /// watching, with no way back to the terminal the human actually had
+    /// open (sessionId f37aaddd). The default implementation now ends the
+    /// hand-started process first and confirms it is gone before resuming
+    /// under tmux, so there is exactly one live process per session,
+    /// afterward, always tmux-owned. Injected exactly like `agents`/
+    /// `transport`, not called as a bare static function: real subprocess
+    /// spawns (and, now, real terminations) have no place running
+    /// unannounced inside a test's `dispatch()` call, the same reasoning
+    /// `recovery`'s own doc comment gives for not defaulting network calls
+    /// implicitly. `nil` means the transfer failed (the hand-started process
+    /// refused to end, or the tmux resume itself failed) or wasn't
+    /// attempted; the caller falls back to `transport` exactly as it did
+    /// before this existed.
     public let resumeTwin: @Sendable (_ sessionId: String, _ directory: String) -> TmuxPaneAddress?
 
     /// Which transport reaches this target. The decision is the target's own
@@ -76,6 +86,39 @@ public struct Coordinator: Sendable {
         readinessGrace: TimeInterval = 12,
         resumeTwin: @escaping @Sendable (_ sessionId: String, _ directory: String) -> TmuxPaneAddress?
             = { sessionId, directory in
+                // Ownership TRANSFER, not a parallel twin (reversed 23 Aug,
+                // on the operator's direct correction). This closure used to
+                // launch the tmux pane straight away, leaving the
+                // hand-started process running alongside it — built on the
+                // premise that Claude Code's own Remote Control would keep
+                // the two in sync, the same "dual-live is safe" finding
+                // 2026-08-22-tb-codex-tmux-prior-art measured for concurrent
+                // human attention. It does not hold for THIS case: nothing
+                // was watching the hand-started terminal any more once
+                // dispatch started answering the tmux twin instead, so every
+                // reply after the first routed somewhere the human had no
+                // way to see (found live, 23 Aug — sessionId f37aaddd,
+                // confirmed via `ps`: the twin's parent was this app's own
+                // `tmux new-session`, the original a bare interactive zsh).
+                // `resumeTwin` only ever runs when `dispatch` already found
+                // no tmux pane for this session, so whatever is live for it
+                // now IS the hand-started process — ending it first, and
+                // confirming it is actually gone before resuming under tmux,
+                // is what makes GO TO AGENT and every future dispatch land
+                // on the one thing the human is looking at instead of a
+                // second, invisible one.
+                if let live = (ClaudeAgentsCLI().sessions() ?? [])
+                    .first(where: { $0.sessionId == sessionId }) {
+                    let outcome = SessionTermination.end(
+                        pid: live.pid, named: sessionId,
+                        expectedTty: ProcessProbe.tty(of: live.pid))
+                    guard outcome.isGone else {
+                        SessionTermination.trace?(
+                            "resumeTwin: \(sessionId.prefix(8)) refused to end its "
+                            + "hand-started process (\(outcome)) — not resuming under tmux")
+                        return nil
+                    }
+                }
                 guard case .success(let tty) = SessionLauncher.resumeTmux(
                     sessionId: sessionId, directory: directory)
                 else { return nil }
