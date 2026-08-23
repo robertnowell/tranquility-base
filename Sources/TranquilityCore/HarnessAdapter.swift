@@ -164,7 +164,20 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
         TrustPromptSpec(
             promptNeedles: ["trust this folder", "Do you trust"],
             startedWithNoPromptNeedle: "? for shortcuts",
-            settledBannerNeedle: "Claude")
+            settledBannerNeedle: "Claude",
+            // The resume-depth prompt ("Resuming the full session will
+            // consume a substantial portion of your usage limits") — a real
+            // usage-cost decision that stays with the human, same bar as
+            // Codex's hooks-review dialog below. Found live, 23 Aug: a
+            // revive that landed here showed a green "✓ RESUMED" chip with
+            // nothing on screen to say a decision was still pending, and the
+            // session sat there until someone happened to go looking.
+            // Ruled (Robert, 23 Aug, verbatim): "if there's a question and
+            // the user has to answer then not showing the window is
+            // broken." `TrustPromptWatcher`'s `onNeedsHuman` now opens the
+            // pane automatically whenever any needle in this list is hit —
+            // this one included.
+            neverAutoAcceptNeedles: ["Resuming the full session will consume"])
     }
 
     public var capabilities: HarnessCapabilities {
@@ -267,7 +280,17 @@ public enum TrustPromptWatcher {
         trace: (@Sendable (String) -> Void)? = nil,
         label: String = "",
         pollInterval: TimeInterval = 2.0,
-        maxPolls: Int = 15
+        maxPolls: Int = 15,
+        // Fired exactly once, exactly when a `neverAutoAcceptNeedles` needle
+        // is hit — a screen this loop will never press through because the
+        // choice on it is a real cost the human bears (a resume-depth
+        // token spend, a hooks-review grant), never TB's to make silently.
+        // "Never press it" and "never let anyone SEE it" are different
+        // promises; this loop only ever kept the first one, which is
+        // exactly the gap ruled a real bug 23 Aug (see ClaudeCodeAdapter's
+        // own comment on this needle) — default no-op so every caller that
+        // predates this stays byte-for-byte unchanged.
+        onNeedsHuman: () -> Void = {}
     ) {
         var settled = 0
         for _ in 0..<maxPolls {
@@ -275,6 +298,7 @@ public enum TrustPromptWatcher {
             guard let text = read() else { continue }
             if spec.neverAutoAcceptNeedles.contains(where: { text.contains($0) }) {
                 trace?("newSession: \(label) needs a human choice, never auto-accepted; leaving it be")
+                onNeedsHuman()
                 return
             }
             if spec.promptNeedles.contains(where: { text.contains($0) }) {

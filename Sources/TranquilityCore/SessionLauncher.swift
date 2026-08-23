@@ -567,6 +567,26 @@ public enum SessionLauncher {
             press: {
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
             },
-            trace: Self.trace, label: pane.sessionName)
+            trace: Self.trace, label: pane.sessionName,
+            onNeedsHuman: {
+                // The same door Go to Agent uses, called automatically
+                // rather than waiting for a click: a screen that genuinely
+                // needs the human's own decision is not "resumed" until
+                // they can see it (ruled 23 Aug — see the needle's own
+                // comment on `ClaudeCodeAdapter.trustPrompt`).
+                guard let binary = Tmux.resolveBinary(),
+                      let script = TerminalTabFocus.attachScript(
+                        binary: binary, socket: pane.socketName,
+                        tmuxTmpDir: Tmux.socketDirectory.path, sessionName: pane.sessionName)
+                else {
+                    Self.trace?("newSession: \(pane.sessionName) needed a human but could not "
+                        + "open a window for it")
+                    return
+                }
+                if case .failure(let error) = AppleScript.run(script: script) {
+                    Self.trace?("newSession: \(pane.sessionName) needed a human — opening a "
+                        + "window failed: \(error.message)")
+                }
+            })
     }
 }
