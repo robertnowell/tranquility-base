@@ -111,9 +111,22 @@ public enum SessionLauncher {
             "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
         ]).joined(separator: ":")
 
+        // `-P -F` prints the new pane's tty as part of THIS command's own
+        // output, atomically with creation — not a separate query run
+        // afterward. That second query used to be a `display-message` call
+        // here, and it raced: measured live, 23 Aug, on a real machine
+        // straight out of a reboot, the FIRST pane this socket directory
+        // ever hosted answered `new-session` successfully and then
+        // `display-message`, run immediately after, came back an empty
+        // string (success, not a subprocess failure) for the exact same
+        // pane. `-P -F` has nothing to race against — tmux cannot report a
+        // pane's tty in the same breath that creates it without the tty
+        // already existing — so this removes the failure mode at its root
+        // instead of retrying around it.
+        let tty: String
         switch Tmux.run([
             "new-session", "-d", "-s", name, "-x", "220", "-y", "50",
-            "-c", directory,
+            "-c", directory, "-P", "-F", "#{pane_tty}",
             "-e", "PATH=\(path)",
             "-e", "LANG=en_US.UTF-8",
             "/bin/zsh", "-c", "cd \(quotedDir) && \(command)",
@@ -121,8 +134,18 @@ public enum SessionLauncher {
         case .failure(let error):
             Self.trace?("newSession(tmux) FAILED: \(error.message)")
             return .failure(error)
-        case .success:
-            break
+        case .success(let printed):
+            let trimmed = printed.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                // Never measured, but the same guard the retry-based fix
+                // had: a session with no addressable tty is worse than none
+                // at all (TmuxOwnership.pane(forTty:) can never find it
+                // again either), so it gets torn down rather than orphaned.
+                Tmux.run(["kill-session", "-t", name], socket: Tmux.socketName)
+                return .failure(ScriptError(
+                    message: "tmux session \(name) reported no pane tty — killed it"))
+            }
+            tty = trimmed
         }
         // Server posture, set AFTER new-session because a server only exists
         // once it hosts something — `set -s` against no server fails silently
@@ -133,37 +156,6 @@ public enum SessionLauncher {
         Tmux.run(["set", "-t", name, "window-size", "manual"], socket: Tmux.socketName)
         Tmux.run(["set", "-t", name, "mouse", "on"], socket: Tmux.socketName)
 
-        // Retried, not a single shot: measured live, 23 Aug, on a real
-        // machine straight out of a reboot — the FIRST pane this socket
-        // directory ever hosted answered `new-session` successfully and then
-        // `display-message` came back an empty string (success, not a
-        // subprocess failure) for the pane_tty query immediately after.
-        // Everything downstream — the trust-prompt watcher, TmuxOwnership
-        // ever finding this pane again — needs a real tty, and nothing about
-        // an empty one is recoverable except trying again a beat later. A
-        // healthy, already-warm server has never reproduced this in testing;
-        // five tries at 200ms costs a healthy launch nothing and gives a
-        // just-booted one a second to catch up.
-        var tty: String?
-        for attempt in 0..<5 {
-            if attempt > 0 { usleep(200_000) }
-            if case .success(let candidate) = Tmux.run(
-                ["display-message", "-p", "-t", name, "#{pane_tty}"],
-                socket: Tmux.socketName, timeout: 3),
-               !candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                tty = candidate
-                break
-            }
-        }
-        guard let tty else {
-            // A pane with no tty is one `TmuxOwnership.pane(forTty:)` can
-            // never find again either — an orphan left running is strictly
-            // worse than nothing, so kill it rather than leave a session
-            // nobody can address behind.
-            Tmux.run(["kill-session", "-t", name], socket: Tmux.socketName)
-            return .failure(ScriptError(message: "tmux session \(name) came up without a pane "
-                + "tty after 5 attempts (~1s) — killed the orphaned session"))
-        }
         Self.trace?("newSession: launched `\(command)` in \(directory) "
             + "(tmux \(name), tty \(tty))")
         if acceptTrustPrompt { watchForTrustPrompt(tty: tty, adapter: adapter) }
