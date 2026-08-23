@@ -597,16 +597,6 @@ public enum ProcessProbe {
         kill(pid_t(pid), 0) == 0 || errno == EPERM
     }
 
-    /// Executable name of a process. Used to name whoever is holding the audio
-    /// hardware when the HAL reports no bundle id — daemons and helpers usually
-    /// have none, and "pid 431" tells the reader nothing.
-    public static func name(of pid: Int) -> String? {
-        guard case .success(let raw) = Subprocess.run(
-            "/bin/ps", ["-o", "comm=", "-p", "\(pid)"], timeout: 3),
-              !raw.isEmpty else { return nil }
-        return (raw as NSString).lastPathComponent
-    }
-
     /// Controlling terminal of a process, as `/dev/ttysNNN`.
     public static func tty(of pid: Int) -> String? {
         guard case .success(let raw) = Subprocess.run(
