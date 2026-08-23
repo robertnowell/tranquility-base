@@ -542,8 +542,18 @@ com.robertnowell.voice-dispatch (TCC).
       (TerminalAppTransport, the Automation permission gate) — the attach
       affordance itself landed separately (3a641d2, 22 Aug, GO TO AGENT fix
       above) and is NOT part of what's left here; the useTmux/launchTerminal
-      half of this is already done, above.
-- [ ] Launcher: PATH/env from adapter; trust watcher unified; revive = tmux
+      half of this is already done, above. Narrowed further (7325876, 23 Aug):
+      `TerminalAppTransport` is now reached only when `resumeTwin` itself
+      fails (tmux genuinely unavailable), not as a primary path for any real
+      session shape — revive and hand-started dispatch both moved onto
+      `resumeTmux`. What's actually left to delete is now a fallback nothing
+      exercises in practice, not live machinery three call sites depend on.
+- [x] Launcher: revive = tmux (7325876, 23 Aug — `SessionLauncher.resume()`
+      now calls `resumeTmux`, live-verified: zero Terminal.app windows opened,
+      real tmux pane confirmed, dispatch into the revived session confirmed).
+- [ ] Launcher: PATH/env sourced from the adapter (not hand-copied per call
+      site); the two trust watchers collapse into one loop over injected
+      read()/press(). Neither touched by revive's move above.
 - [ ] Coordinator split
 - [ ] App lane P1-P10 (sequenced, drills green per step)
 - [ ] Store riders + dead-code deletions: `TransportKind.iTerm2/.wezterm/
