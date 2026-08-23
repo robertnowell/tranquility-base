@@ -3647,6 +3647,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch SessionLauncher.attemptCodexResume(sessionId: sessionId, directory: cwd) {
                 case .success(.attached):
                     Permissions.log("revive: attached codex \(sessionId.prefix(8))")
+                    await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
                 case .success(.alreadyLive):
                     Permissions.log("revive: refused \(sessionId.prefix(8)) — already live elsewhere")
                     await MainActor.run { [weak self] in
@@ -3699,7 +3700,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // A reply that beats the process back is not lost: dispatch checks
             // readiness and says "can't take this yet, your words are kept."
             await MainActor.run { [weak self] in self?.announceNext(only: sessionId) }
-            _ = SessionLauncher.resume(sessionId: sessionId, directory: command.cwd)
+            switch SessionLauncher.resume(sessionId: sessionId, directory: command.cwd) {
+            case .success:
+                await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
+            case .failure(let error):
+                Permissions.log("revive: failed \(sessionId.prefix(8)) — \(error.message)")
+                await MainActor.run { [weak self] in
+                    self?.hud.showReceipt(.notRevived("couldn't resume"))
+                }
+            }
         }
     }
 
