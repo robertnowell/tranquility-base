@@ -119,28 +119,51 @@ public enum TerminalTabFocus {
     /// the one value that comes from outside this process (a live tmux
     /// server's own listing), which is why it alone is character-filtered
     /// before any script is built.
+    /// Resized before attaching, always — a human window, never left at
+    /// whatever size the pane was created with. Launch panes are sized wide
+    /// (220×50) for TB's own capture-pane reading, which is uncomfortable to
+    /// read as a terminal window and — found live, 23 Aug — can hide the
+    /// exact content a human was just sent here to read below the fold. That
+    /// alone would just be an annoyance; what makes it a real bug is mouse
+    /// mode (on for every TB-launched pane): scrolling to see the hidden
+    /// content drops the pane into tmux's copy-mode, silently, and 1/2/Enter
+    /// then navigate the frozen scrollback instead of reaching the live
+    /// process — a real resume-depth prompt that looked completely
+    /// unresponsive because of it. `window-size manual` means the pane never
+    /// resizes on its own; this is the same `resize-window` any tmux tool
+    /// that creates panes headlessly and expects a human to attach later
+    /// already has to call — not new machinery, just calling it.
+    static let humanAttachColumns = 120
+    static let humanAttachRows = 40
+
     static func attachScript(
         binary: String, socket: String?, tmuxTmpDir: String, sessionName: String
     ) -> String? {
         guard !sessionName.isEmpty, sessionName.count <= 64,
               sessionName.unicodeScalars.allSatisfy({ sessionNameCharset.contains($0) })
         else { return nil }
-        let command: String
-        if let socket {
-            command = """
-                "env TMUX_TMPDIR=" & quoted form of "\(tmuxTmpDir)" \
-                & " " & quoted form of "\(binary)" & " -L " & quoted form of "\(socket)" \
-                & " attach -t " & quoted form of "\(sessionName)"
-                """
-        } else {
-            command = """
-                quoted form of "\(binary)" & " attach -t " & quoted form of "\(sessionName)"
+        // Built once, reused for both tmux invocations below — same pattern
+        // `script(focusing:)`'s sibling and `SessionLauncher.resume()`'s own
+        // `cd … && …` build already use: every dynamic piece goes through
+        // AppleScript's `quoted form of`, never manual Swift-side escaping.
+        func tmuxCommand(_ args: String) -> String {
+            if let socket {
+                return """
+                    "env TMUX_TMPDIR=" & quoted form of "\(tmuxTmpDir)" \
+                    & " " & quoted form of "\(binary)" & " -L " & quoted form of "\(socket)" \
+                    & " \(args) -t " & quoted form of "\(sessionName)"
+                    """
+            }
+            return """
+                quoted form of "\(binary)" & " \(args) -t " & quoted form of "\(sessionName)"
                 """
         }
+        let resize = tmuxCommand("resize-window -x \(humanAttachColumns) -y \(humanAttachRows)")
+        let attach = tmuxCommand("attach")
         return """
             tell application "Terminal"
               activate
-              do script \(command)
+              do script \(resize) & " && " & \(attach)
             end tell
             """
     }
