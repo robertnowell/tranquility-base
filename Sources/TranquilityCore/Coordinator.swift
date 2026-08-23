@@ -12,12 +12,26 @@ public struct Coordinator: Sendable {
     public let transport: any DispatchTransport
     /// The closed-loop tmux transport, selected per target when a live tmux
     /// server owns the session's pane. `transport` (Terminal.app) is the
-    /// fallback for everything else — every NEW launch is tmux now (ruled 21
-    /// Aug), so what still reaches this path is a hand-started session TB
-    /// never launched, or a revived one (`SessionLauncher.resume` still opens
-    /// a Terminal.app window). Scheduled for deletion at the single-transport
-    /// cut, not a standing co-existence design.
+    /// fallback of last resort — every NEW launch is tmux now (ruled 21 Aug),
+    /// and `resumeTwin` below closes the other real gap (a hand-started
+    /// session's first dispatch), so what still reaches `transport` is
+    /// `resumeTwin` itself failing (22 Aug, 2026-08-22-tb-terminal-
+    /// architecture: this was never a real design choice, just unfinished
+    /// wiring). Scheduled for deletion at the single-transport cut, not a
+    /// standing co-existence design.
     public let tmuxTransport: any DispatchTransport
+
+    /// Resumes the dual-live twin for a hand-started session dispatch resolved
+    /// no tmux pane for — the mechanism `dispatch` reaches for BEFORE falling
+    /// to `transport`, added 22 Aug alongside `SessionLauncher.resume`'s own
+    /// move off AppleScript (same architecture-program.md entry). Injected
+    /// exactly like `agents`/`transport`, not called as a bare static
+    /// function: real subprocess spawns have no place running unannounced
+    /// inside a test's `dispatch()` call, the same reasoning `recovery`'s own
+    /// doc comment gives for not defaulting network calls implicitly. `nil`
+    /// means resuming failed (or wasn't attempted); the caller falls back to
+    /// `transport` exactly as it did before this existed.
+    public let resumeTwin: @Sendable (_ sessionId: String, _ directory: String) -> TmuxPaneAddress?
 
     /// Which transport reaches this target. The decision is the target's own
     /// `pane` fact (resolved fresh from live server inventory at construction),
@@ -59,7 +73,14 @@ public struct Coordinator: Sendable {
         recovery: RecoveryChain = RecoveryChain(),
         attachments: AttachmentStore = AttachmentStore(),
         replyWindow: TimeInterval = 15 * 60,
-        readinessGrace: TimeInterval = 12
+        readinessGrace: TimeInterval = 12,
+        resumeTwin: @escaping @Sendable (_ sessionId: String, _ directory: String) -> TmuxPaneAddress?
+            = { sessionId, directory in
+                guard case .success(let tty) = SessionLauncher.resumeTmux(
+                    sessionId: sessionId, directory: directory)
+                else { return nil }
+                return TmuxOwnership.pane(forTty: tty)
+            }
     ) {
         self.store = store
         self.prepared = PreparedSummaries()
@@ -74,6 +95,7 @@ public struct Coordinator: Sendable {
         self.attachments = attachments
         self.replyWindow = replyWindow
         self.readinessGrace = readinessGrace
+        self.resumeTwin = resumeTwin
     }
 
     // MARK: - Intake
@@ -1125,7 +1147,40 @@ public struct Coordinator: Sendable {
         // chosen BECAUSE it was tmux-owned dispatching a beat later as
         // `.terminalApp` is the 19 Aug misfire's shape exactly. The common
         // single-row path never paid that lookup, so it resolves fresh here.
-        let pane = resolvedPane ?? TmuxOwnership.pane(forPid: live.pid)
+        var pane = resolvedPane ?? TmuxOwnership.pane(forPid: live.pid)
+
+        // No tmux-owned row for this sessionId at all: a hand-started session
+        // TB has never touched, on its FIRST dispatch. Resume the dual-live
+        // twin now (via the injected `resumeTwin`, never a bare static call —
+        // see its own doc comment for why) rather than falling to AppleScript,
+        // which types straight into whatever the user may be looking at in
+        // their own terminal — the exact splice `TmuxTransport`'s floor check
+        // exists to prevent, and `TerminalAppTransport` cannot check for at
+        // all (22 Aug, 2026-08-22-tb-terminal-architecture: the AppleScript
+        // fallback here was never a real design choice, just unfinished
+        // wiring next to a mechanism — `resumeTmux` — that already does this
+        // exact job and was already live for Codex). The ORIGINAL process is
+        // never signalled, per the dual-live design (2026-08-21-tb-dual-live-
+        // harness-parity) — but "never signalled" is not "never shows
+        // anything": live-verified 23 Aug that Claude Code's own Remote
+        // Control feature can redirect a turn typed into the twin onto the
+        // original's screen instead (whichever process it decides currently
+        // holds Remote Control for the conversation), if the original is
+        // itself a live, foreground TUI. Ruled acceptable, not a bug to
+        // chase: the bar is that dispatch WORKS — lands, gets answered,
+        // and TB reads the state back — not which of the two panes a human
+        // happens to see it in, and the common case is TB owns the session
+        // via tmux from the start, where this never arises at all. Every
+        // dispatch after this one finds the twin already live in
+        // `agents --json` and `preferringTmuxOwned` picks it deterministically,
+        // so this only ever runs once per session.
+        if pane == nil, let cwd = live.cwd {
+            pane = resumeTwin(target.sessionId, cwd)
+            Coordinator.trace?(pane != nil
+                ? "dispatch: \(target.sessionId.prefix(8)) had no tmux twin — resumed one"
+                : "dispatch: \(target.sessionId.prefix(8)) has no tmux twin and resuming "
+                    + "one failed — falling back to Terminal.app")
+        }
         let dispatchTarget = DispatchTarget(
             kind: pane != nil ? .tmux : .terminalApp,
             sessionId: target.sessionId,

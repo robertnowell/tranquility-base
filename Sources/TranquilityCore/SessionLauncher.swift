@@ -169,7 +169,7 @@ public enum SessionLauncher {
     /// any tmux call, rather than spawning a pane running a command with
     /// nothing to resume.
     @discardableResult
-    static func resumeTmux(
+    public static func resumeTmux(
         sessionId: String,
         directory: String,
         command: String = defaultCommand,
@@ -407,26 +407,22 @@ public enum SessionLauncher {
     ///
     /// Accepts the directory-trust prompt, exactly as `launch` does.
     ///
-    /// This function used to say the opposite — "no trust prompt: the directory
-    /// was trusted when the session first ran there, and this is the same
-    /// directory by construction" — which was reasoned rather than measured,
-    /// and wrong. Run against a real six-day-old session on 12 Aug: Claude Code
-    /// asks the workspace-trust question on a RESUME too, and the window then
-    /// sat on it doing nothing. Clicking REVIVE opened a terminal that needed
-    /// you to go and find it, which is precisely the hunt this whole feature
-    /// exists to end.
-    ///
-    /// The consent argument is `launch`'s, unchanged: the prompt is asking
-    /// permission for the thing the user just pressed a button to do, in a
-    /// directory their own session already ran in.
-    ///
-    /// What it does NOT answer is the question that comes next. A resume of a
-    /// long session offers "resume from summary" or "resume full session as-is"
-    /// and says the full one "will consume a substantial portion of your usage
-    /// limits". That is a spend, and a preference — it stays with the user, and
-    /// it is why Terminal is brought to the front rather than left behind.
-    /// `watchForTrustPrompt` returns the moment it presses once, so it
-    /// cannot walk into it.
+    /// Routed through `resumeTmux` (22 Aug), not the AppleScript/Terminal.app
+    /// path this used until today. That path existed for one real reason,
+    /// stated once and worth keeping: a resume of a long session offers
+    /// "resume from summary" or "resume full session as-is," the full option
+    /// "will consume a substantial portion of your usage limits," and a
+    /// revived session sitting on that question with no visible window would
+    /// be a lamp lying about being ready. Two things closed that gap without
+    /// needing a visible window at all: `WaitingAt.resumePrompt` (ruled 19
+    /// Aug) already surfaces this exact dialog in the grid's own lamp state,
+    /// read from `claude agents --json` — which reports it identically
+    /// whether the process sits in Terminal.app or a tmux pane — so the
+    /// human is never left staring at a false-green row. And `TerminalTabFocus`
+    /// (fixed 22 Aug, same day) is now a working "go look at it" door for a
+    /// tmux pane specifically, where none existed before. Terminal.app's
+    /// `activate` was this function's only way to guarantee visibility before
+    /// today; it no longer is the only way, so it is no longer the right way.
     ///
     /// Blocks up to ~30s while watching; call off-main.
     @discardableResult
@@ -437,55 +433,9 @@ public enum SessionLauncher {
         acceptTrustPrompt: Bool = true,
         adapter: any HarnessAdapter = ClaudeCodeAdapter()
     ) -> Result<Void, ScriptError> {
-        // The SAME command a new session gets, plus the conversation to open.
-        // Ruled 12 Aug: "any new or revived session gets launched under the
-        // same parameters." One setting, appended to, rather than two strings
-        // that have to be kept in agreement.
-        //
-        // Terminal is activated on purpose, and the ruling that keeps it is
-        // about what resume actually does: Claude Code asks whether to resume
-        // from the full context or from a summary, so a revived session is
-        // waiting on you the moment it opens. A row that lit itself while a
-        // question sat unanswered in a window you were never shown would be
-        // the lamp lying.
-        //
-        // The id comes from a transcript FILENAME, so it cannot contain a
-        // quote or a space — but it is still passed through AppleScript's own
-        // `quoted form of` at script-run time, same as the directory, rather
-        // than trusted: "cannot" is a property of today's harness, not of
-        // this function.
-        //
-        // An adapter returning [] here is a programmer error, not a shape to
-        // render around: a joined-empty segment leaves the script's trailing
-        // `&` with nothing after it, which osacompile confirms is a syntax
-        // error — AppleScript.run would then fail with a compile error that
-        // points nowhere near the real cause (M2 gate finding). Every
-        // resumable harness resumes SOME conversation by SOME argument;
-        // failing loudly here, before the AppleScript ever runs, is more
-        // honest than emitting a script that cannot compile.
-        let resumeArgs = adapter.resumeArguments(sessionId: sessionId)
-        guard !resumeArgs.isEmpty else {
-            Self.trace?("revive: \(adapter.id) adapter returned no resume arguments "
-                + "for \(sessionId.prefix(8)) — refusing rather than emitting broken AppleScript")
-            return .failure(ScriptError(message: "\(adapter.id) adapter: empty resume arguments"))
-        }
-        let resumeSegment = resumeArgs
-            .map { "quoted form of \"\($0)\"" }
-            .joined(separator: " & \" \" & ")
-        let script = """
-            tell application "Terminal"
-              activate
-              set newTab to do script "cd " & quoted form of "\(directory)" \
-                & " && \(command) " & \(resumeSegment)
-              return tty of newTab
-            end tell
-            """
-        switch AppleScript.run(script: script) {
-        case .success(let tty):
-            let tty = tty.trimmingCharacters(in: .whitespacesAndNewlines)
-            Self.trace?("revive: resumed \(sessionId.prefix(8)) in \(directory) "
-                + "as `\(command)` (tty \(tty))")
-            if acceptTrustPrompt { watchForTrustPrompt(tty: tty, adapter: adapter) }
+        switch resumeTmux(sessionId: sessionId, directory: directory, command: command,
+                          acceptTrustPrompt: acceptTrustPrompt, adapter: adapter) {
+        case .success:
             return .success(())
         case .failure(let error):
             Self.trace?("revive FAILED for \(sessionId.prefix(8)): \(error.message)")
