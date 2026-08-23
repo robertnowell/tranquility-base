@@ -281,6 +281,29 @@ final class StatusHUD: NSObject {
         lastAddressed = (sessionId, pid, label)
     }
 
+    /// Attaches a pid to the card already on stage, for the one case a fresh
+    /// `showAnnouncement` cannot resolve it itself: `revive()` announces a
+    /// session's stored brief BEFORE calling `SessionLauncher.resume` on it
+    /// (ruled 18 Aug — a recap has nothing worth waiting on), so the live-pid
+    /// lookup inside that announce's `onWillSpeak` runs against a session
+    /// that, for a `+stored` brief, has not been relaunched yet: resume is
+    /// the very next line. Found live, 23 Aug: the card painted with no GO TO
+    /// AGENT, and nothing ever revisited it once the resume that would have
+    /// made the button true actually finished a few seconds later.
+    ///
+    /// Guarded the same way `bindGreeting` guards its own late arrival: only
+    /// the card that is STILL about this exact session, and STILL missing a
+    /// pid, is touched. A card that has since moved on to a different agent,
+    /// or already carries a pid from its own announce, is left alone — the
+    /// same "late is not wrong, late and unnoticed would be" rule.
+    func attachLivePid(_ pid: Int, sessionId: String) {
+        guard let target = currentTarget, target.sessionId == sessionId, target.pid == nil
+        else { return }
+        currentTarget = (sessionId, pid, target.label)
+        lastAddressed = (sessionId, pid, target.label)
+        render()
+    }
+
     /// The last agent this panel addressed, kept so a failure card can name it.
     ///
     /// `send()` returns the panel to the grid before the outcome arrives — the

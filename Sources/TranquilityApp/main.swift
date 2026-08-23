@@ -3703,6 +3703,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch SessionLauncher.resume(sessionId: sessionId, directory: command.cwd) {
             case .success:
                 await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
+                // The announce fired before this resume even started (see
+                // `attachLivePid`'s doc comment) — by the time `resume` has
+                // returned, the process has been up for however long the
+                // trust-prompt watch took, so `claude agents --json` should
+                // already know it. A few short retries, not a bare single
+                // shot, because that registration is still a separate
+                // process's own timing, not this call's.
+                for _ in 0..<5 {
+                    if let pid = (ClaudeAgentsCLI().sessions() ?? [])
+                        .first(where: { $0.sessionId == sessionId })?.pid {
+                        await MainActor.run { [weak self] in
+                            self?.hud.attachLivePid(pid, sessionId: sessionId)
+                        }
+                        break
+                    }
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                }
             case .failure(let error):
                 Permissions.log("revive: failed \(sessionId.prefix(8)) — \(error.message)")
                 await MainActor.run { [weak self] in
