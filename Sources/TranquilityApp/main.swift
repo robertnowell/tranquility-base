@@ -95,6 +95,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// window the row read quiet — the one stretch the user KNOWS is busy,
     /// because they started it. Consumed by `lamp(for:sessionId:)`.
     private var delivering = DeliveryInFlight()
+    /// A session that legitimately WAS live a moment ago and is briefly
+    /// absent from `claude agents --json`'s own listing — not dead, just
+    /// caught between two polls of a registry that has its own transient
+    /// gaps. Found live, 23 Aug: dispatching to a session that had been
+    /// running for hours made it vanish from `sessionRowsNow()`'s probe for
+    /// 3-5 seconds while it started consuming the new input, which demoted
+    /// its row all the way to "closed (revivable)" and knocked it out of
+    /// the grid's visible window — worse than stale, it looked like the
+    /// session had just died.
+    ///
+    /// A short grace window, not a fix to the registry itself (this app
+    /// does not own `claude agents --json`): consulted and maintained
+    /// entirely inside `sessionRowsNow()`.
+    private static let liveGrace: TimeInterval = 8
+    private var lastSeenLive: [String: (session: LiveSession, at: Date)] = [:]
     /// No session to answer? The mic still works: the transcript goes to the
     /// clipboard instead of a terminal. A voice tool that refuses to listen just
     /// because nothing is waiting is leaving its best hardware idle.
@@ -1417,6 +1432,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             liveById[session.sessionId] = session
         }
+        // Smooth a transient miss in the probe above (see `lastSeenLive`'s
+        // doc comment): a session seen live within the grace window but
+        // absent from THIS read keeps its last-known entry rather than
+        // dropping straight to "closed". Refresh every session this read
+        // did find, backfill the ones it briefly lost, then prune anything
+        // that has aged out — so a session actually gone still reads gone
+        // the moment the window lapses.
+        let now = Date()
+        for (id, session) in liveById { lastSeenLive[id] = (session, now) }
+        for (id, remembered) in lastSeenLive
+        where liveById[id] == nil && now.timeIntervalSince(remembered.at) < Self.liveGrace {
+            liveById[id] = remembered.session
+        }
+        lastSeenLive = lastSeenLive.filter { now.timeIntervalSince($0.value.at) < Self.liveGrace }
         // The topic is the stored brief's composed 3–6-word label, carried by
         // the waiting query's brief join — NEVER a prose prefix of summaryText
         // or the raw assistant message (ruled: that derivation produced orphan

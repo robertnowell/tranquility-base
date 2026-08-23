@@ -345,13 +345,30 @@ public struct TmuxTransport: DispatchTransport {
             }
 
             // Step 3 — the floor check. A non-empty input line that is not
-            // our payload is somebody's half-typed message (the human's, or
-            // a reply they queued mid-turn); pasting would splice into it.
+            // our payload used to defer the whole dispatch rather than
+            // splice into it. Reversed 23 Aug, on the operator's own
+            // instruction, blunt and explicit: every pane this transport
+            // addresses is this machine's own terminal, there is no second
+            // human it could ever belong to, and a dispatch that arrives to
+            // find text already sitting there should still land — not sit
+            // in `.deferred(.floorHeld)` telling the one person who could
+            // ever answer it "try again in a moment" forever, which is what
+            // it did in practice (found live, 23 Aug: the same session hit
+            // this on every retry, because nothing was ever going to submit
+            // or clear that line on its own).
             switch promptLine(pane, payload: payload, glyph: target.promptGlyph,
                               placeholder: target.idlePlaceholder) {
             case .empty, .unreadable:
                 break                       // unreadable fails toward pasting:
                                             // landing is verified either way
+            case .holds(ours: false):
+                // Clear it first so the paste below lands clean rather than
+                // splicing into it — C-a then C-k (start-of-line, kill-to-
+                // end) rather than C-u alone, since C-u only clears BACK
+                // from wherever the cursor sits, and after a paste that
+                // never got submitted the cursor's position is not known.
+                Tmux.run(["send-keys", "-t", pane.paneId, "C-a"], socket: pane.socketName)
+                Tmux.run(["send-keys", "-t", pane.paneId, "C-k"], socket: pane.socketName)
             case .holds(ours: true):
                 // Our text is already sitting unsubmitted — a previous
                 // attempt's paste landed and its Enter was eaten. Submit
@@ -368,8 +385,6 @@ public struct TmuxTransport: DispatchTransport {
                     return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
                 }
                 continue
-            case .holds(ours: false):
-                return .deferred(.floorHeld)
             }
 
             // Step 4 — paste atomically. load-buffer over stdin means no
