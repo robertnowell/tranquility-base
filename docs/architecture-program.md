@@ -696,7 +696,37 @@ com.robertnowell.voice-dispatch (TCC).
       `.submitReply()`/etc. call site compiles and behaves unchanged; this
       was purely internal reorganization plus the one real behavior-
       preserving type extraction. 842/842 tests green.
-- [ ] App lane P1-9 (sequenced, drills green per step)
+- [~] App lane P1-9 (sequenced, drills green per step)
+      - [x] P1, dead code + the pose bug fix (23 Aug): `StateLegend.
+        SpeakTier` deleted (write-only — set at 9 construction sites,
+        read at none, its own doc comment already said "nothing consults
+        it yet"); `PlacardRowView`/`PaneLinkRowView` deleted from
+        `StatusHUD.swift` (private, zero instantiation sites — superseded
+        by `SplitPlacardRowView` and never cleaned up); the orphaned
+        `VoiceRowView` doc comment (misplaced ahead of the dead
+        `PaneLinkRowView` it used to sit beside) moved to the type it
+        actually describes; open-issues.md #27 (the duplicate
+        `case "settings":`) fixed — the stale first case deleted, the
+        second (which already explained in its own doc comment why it
+        was the intended one) survives as the sole case. `tools/replay`'s
+        four one-off `goal-replay-*.json` outputs untracked and
+        gitignored, same gap `/tools/replay/runs/`/`reports/` already
+        covered, just not this specific output shape.
+        `Earcons.clearOldNotifications`, also named in the audit's dead
+        list, was NOT deleted — read its own doc comment first: it is a
+        deliberate one-line no-op-after-first-launch cleanup for stale
+        system notifications from a retired feature, not dead code, and
+        deleting it removes real protection for existing installs.
+        842/842 tests green; `--selftest-hud` verification pending this
+        session's next deploy.
+      - [ ] P2, Widgets struct + TestSurface
+      - [ ] P3, leaf views out (~1,640 lines)
+      - [ ] P4, drills + pose out (~3,200 lines)
+      - [ ] P5, receipt/build/geometry extensions (StatusHUD core to ~2,500)
+      - [ ] P6, SessionRow model + grid statics to Core, with unit tests
+      - [ ] P7, main.swift extension split
+      - [ ] P8, GridAssembler to Core
+      - [ ] P9, Recorder/CaptureUnit/log-writer to Core
 - [x] Store riders + dead-code deletions (ff98d7f, 23 Aug): `TransportKind.
       iTerm2/.wezterm/.kitty` (grep-confirmed never constructed; decode-safe
       to remove without a migration — `targetKind` is `TransportKind?` and

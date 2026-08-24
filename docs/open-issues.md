@@ -772,7 +772,15 @@ leftover first. Two separate false greens came from measuring the wrong thing.
 
 ---
 
-## 27. A second `case "settings":` in StatusHUD's pose-fixture switch is dead code
+## 27. A second `case "settings":` in StatusHUD's pose-fixture switch is dead code — CLOSED (23 Aug, App lane P1)
+
+**Status:** fixed. The first case (three always-installed voices, no doc
+comment) was the stale one and is deleted; the second case survives as the
+sole `"settings"` case — its own doc comment already explained why it was
+the intended replacement ("Representative of what the pane actually holds
+now: paid and free interleaved, size rather than tier in the right
+column, and a voice that is NOT installed... a pose that cannot fail is
+not evidence"), which made the choice a read, not a judgment call.
 
 Named in the ORIGINAL architecture brief (2026-08-19-tb-architecture-program,
 Track A item 9 — "Duplicate case 'settings' makes a pose fixture
