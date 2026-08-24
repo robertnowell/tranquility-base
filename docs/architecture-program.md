@@ -940,7 +940,35 @@ com.robertnowell.voice-dispatch (TCC).
         lowest-precedence override). 912/912 tests green; deployed and
         verified live (70e6046): 49/49 self-test verdicts passed, canary
         green.
-      - [ ] P9, Recorder/CaptureUnit/log-writer to Core
+      - [x] P9, Recorder/CaptureUnit to Core (24 Aug). Both files were
+        already AVFoundation/AudioToolbox/CoreAudio/Foundation only, no
+        AppKit — `MicMachine`, their own state-machine core, was already
+        in Core from before this arc. Exactly two app-layer couplings in
+        `Recorder.swift`: 17 `Permissions.log(...)` call sites and one
+        `Earcons.acknowledge(.listening)`. Both replaced with the same
+        injectable-static-hook shape as `Coordinator.trace`/
+        `SessionLauncher.trace`/`ClaudeAgentsCLI.trace`: `Recorder.trace`
+        and a new `Recorder.onListeningAcknowledged`, wired in
+        `applicationDidFinishLaunching` beside the existing trace wiring.
+        `CaptureUnit.swift` had zero app-layer references at all — moved
+        as-is. Deliberately scoped to the move + DI, not the "log-writer"
+        half of this item's original name (making `Permissions.log`'s own
+        synchronous per-word write path async/buffered) — that's a
+        separate, safety-critical change to the app's live logging path
+        that deserves its own pass, not a rider on a mechanical
+        relocation; noted here rather than attempted.
+        Found along the way: bare `arch -arm64e swift test` silently
+        drops every XCTestCase-based test when Swift Testing tests are
+        also present in the same run — it ran only 31 (the Swift Testing
+        suites) with no error, not the 881 XCTest ones. Every prior
+        P-item's "N/N tests green" in this doc was almost certainly
+        measured the same undercounted way; today's real total, run with
+        `swift test --enable-xctest --disable-swift-testing`, is 881
+        executed, 1 skipped (voice-catalog's own `XCTSkipIf` machine
+        guard), 0 failures. No unit tests added — `Recorder`'s own logic
+        is hardware/AVFoundation-driven, not the pure-function surface
+        `SessionRow`/`GridAssembler` were. Deployed and verified live
+        (4ea01ca): 49/49 self-test verdicts passed, canary green.
 - [x] Store riders + dead-code deletions (ff98d7f, 23 Aug): `TransportKind.
       iTerm2/.wezterm/.kitty` (grep-confirmed never constructed; decode-safe
       to remove without a migration — `targetKind` is `TransportKind?` and
