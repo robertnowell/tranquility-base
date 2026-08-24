@@ -1058,5 +1058,29 @@ com.robertnowell.voice-dispatch (TCC).
       Left `[~]` rather than `[x]`: both fixes address the exact failure
       modes found, but a real, deliberate reboot test to confirm they hold
       under the actual boot conditions that caused this has not been run.
-- [ ] Final: preflight, full drills, merge to main, deploy verified,
-      freeze lifted
+- [~] Final: preflight, full drills, merge to main, deploy verified,
+      freeze lifted (24 Aug). preflight passed (912 tests: 881 XCTest + 31
+      Swift Testing, 0 failures — see preflight.sh's own fix below), full
+      drills green (`test-dispatch-tmux.sh`: 9/9; `--selftest-hud` live:
+      49/49), merged `arc/beautiful-machine` (945d499) directly to
+      `origin/main` (pushed branch:main rather than force-moving the local
+      `main` ref, which `git worktree`-refuses while checked out elsewhere
+      — then fast-forwarded the main checkout's local `main` to match, a
+      safe non-destructive update on a clean tree), deployed and verified
+      live (945d499): 49/49 self-test verdicts, canary green, ledger entry
+      confirmed in `logs/deploys.log` (the merge hook missed this one —
+      fast-forward-merge in the main checkout isn't the trigger shape it
+      watches for — so relaunch.sh was run by hand per rule 6's own
+      fallback instruction).
+      Left `[~]` rather than `[x]`: rule 0's audit gate (`/code-review` at
+      high effort over the milestone diff) is running now, dispatched as
+      this item's closing step — freeze lifts once its findings are
+      addressed or explicitly waived, not before.
+      Found and fixed along the way: `preflight.sh`'s own `swift test`
+      invocation had the same bug as the rest of this arc's test-running
+      commands (945d499) — it silently ran only the 31 Swift Testing
+      tests and skipped all 881 XCTest ones with exit 0, which is why
+      preflight failed outright on the first attempt today (Swift
+      Testing's summary line never contains "with 0 failures", the
+      substring the check was looking for). Fixed to run both frameworks
+      as two separately-checked invocations.
