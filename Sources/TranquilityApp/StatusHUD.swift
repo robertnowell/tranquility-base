@@ -95,9 +95,9 @@ final class StatusHUD: NSObject {
     /// on the next layout pass — while the ORIGIN had already been moved to
     /// `maxX - 40`. The result was a 380pt window hanging 340pt past the right
     /// edge of the display, with only its empty left margin visible.
-    private var expandedRoot: NSView?
-    private var stackEdges: [NSLayoutConstraint] = []
-    private var stripEdges: [NSLayoutConstraint] = []
+    var expandedRoot: NSView?
+    var stackEdges: [NSLayoutConstraint] = []
+    var stripEdges: [NSLayoutConstraint] = []
 
     /// Collapsed or expanded, and DURABLE — the user owns the width and nothing
     /// else sets it. Persisted because the app installs with a login item and
@@ -196,7 +196,7 @@ final class StatusHUD: NSObject {
     var launchRow: SettingRowView!
     var directoryRow: SettingRowView!
     var voiceStack: NSStackView!
-    private var voiceListHeight: NSLayoutConstraint!
+    var voiceListHeight: NSLayoutConstraint!
     var gearButton: ConsoleButton!
     var collapseButton: ConsoleButton!
     var backButton: ConsoleButton!
@@ -731,7 +731,7 @@ final class StatusHUD: NSObject {
         }
     }
 
-    @objc nonisolated private func breadcrumbClicked() {
+    @objc nonisolated func breadcrumbClicked() {
         MainActor.assumeIsolated {
             // Same altitude rule as ⌃⌥: home from a card. Speaking covers the
             // announcement and every ⌃⌃ rung; preparing is the card BEFORE
@@ -814,7 +814,7 @@ final class StatusHUD: NSObject {
     /// steals a keystroke. So the app is activated for the length of the
     /// choice and the panel takes key alongside it, exactly as the typing
     /// faces already do, and both are handed back when the sheet closes.
-    private func pickAgentDirectory() {
+    func pickAgentDirectory() {
         let picker = NSOpenPanel()
         picker.canChooseDirectories = true
         picker.canChooseFiles = false
@@ -935,11 +935,11 @@ final class StatusHUD: NSObject {
         retryTranscriptionButton?.isHidden = true
     }
 
-    @objc nonisolated private func cancelTranscriptionTapped() {
+    @objc nonisolated func cancelTranscriptionTapped() {
         MainActor.assumeIsolated { face.transcription?.cancel() }
     }
 
-    @objc nonisolated private func retryTranscriptionTapped() {
+    @objc nonisolated func retryTranscriptionTapped() {
         MainActor.assumeIsolated { face.transcription?.retry() }
     }
 
@@ -1073,7 +1073,7 @@ final class StatusHUD: NSObject {
     /// Wired by the app onto SessionLauncher, with the artifact in hand.
     var onNewSessionForArtifact: ((String) -> Void)?
 
-    @objc nonisolated private func openHubTapped() {
+    @objc nonisolated func openHubTapped() {
         MainActor.assumeIsolated {
             guard let id = currentTarget?.sessionId, let door = currentDoor else { return }
             switch door {
@@ -1087,7 +1087,7 @@ final class StatusHUD: NSObject {
         }
     }
 
-    @objc nonisolated private func newSessionForArtifactTapped() {
+    @objc nonisolated func newSessionForArtifactTapped() {
         MainActor.assumeIsolated {
             guard let ref = invitationRef else { return }
             onNewSessionForArtifact?(ref)
@@ -2432,7 +2432,7 @@ final class StatusHUD: NSObject {
     var replyTargetForDrop: (() -> (sessionId: String, label: String)?)?
 
     /// The name a picked row was showing, for the receipt.
-    private func pastListName(_ id: String) -> String {
+    func pastListName(_ id: String) -> String {
         face.sessionRows.first { $0.id == id }?.name ?? StateLegend.shortId(id)
     }
 
@@ -2568,130 +2568,7 @@ final class StatusHUD: NSObject {
         onRosterReordered?(order)
     }
 
-    /// Grow the window to whatever the content needs.
-    ///
-    /// The first version pinned the panel at 150pt regardless of what was in it, so
-    /// a long summary pushed the buttons off the bottom edge — the actions were
-    /// literally unreachable. Never ship a fixed-height container around
-    /// variable-length text.
-    private func resizeToFit(_ panel: NSPanel) {
-        // Collapsed is a fixed frame, so the column never resizes under the
-        // user and the lamps never move. It is also the only face that is
-        // FLUSH to the screen edge — `position` gives every other face a
-        // margin; a sidebar with a gap behind it is a floating card pretending
-        // to be a sidebar.
-        if isCollapsed, case .idle = state {
-            // A WIDTH change and nothing else. The right edge stays exactly
-            // where the grid's right edge was — same 16pt margin every other
-            // face gets — the corner radius stays, the panel stays. Ruled after
-            // the first attempt swapped content views and went flush to the
-            // screen edge: "just make it skinny and keep the right edge in the
-            // same place, and animate the collapse."
-            NSLayoutConstraint.deactivate(stackEdges)
-            NSLayoutConstraint.activate(stripEdges)
-            contentStack?.isHidden = true
-            strip?.isHidden = false
-            // Fixed height as well as fixed width — ruled, and load-bearing for
-            // the wordmark: inheriting the grid's height gave the strip 150pt on
-            // a quiet day, which left no room below the lamps and silently
-            // dropped the wordmark. The strip is the same size every time.
-            morph(panel, to: NSSize(width: CollapsedStrip.width,
-                                    height: CollapsedStrip.height))
-            return
-        }
-        NSLayoutConstraint.deactivate(stripEdges)
-        NSLayoutConstraint.activate(stackEdges)
-        strip?.isHidden = true
-        contentStack?.isHidden = false
 
-        guard let stack = contentStack else { return }
-        panel.contentView?.layoutSubtreeIfNeeded()
-        let needed = stack.fittingSize
-        let height = max(needed.height, 90)
-        // Against the height we last ASKED for, never the live frame: with an
-        // animated resize in flight, `panel.frame.height` is a transient, and
-        // comparing to it let a render skip its resize because the panel
-        // happened to be passing through the target height at that instant.
-        // That is why two identical faces settled 12pt apart (Robert's two
-        // screenshots of the same card, 06 Aug).
-        // The WIDTH has to be checked too, not just the height. Expanding out of
-        // the strip is a width-only change — the grid's height is often exactly
-        // what the collapsed panel already had — so a height-only guard skipped
-        // the resize entirely and left the panel 40pt wide. `position` then
-        // placed it from that 40pt width, and the grid rendered off the right of
-        // the display. That is the bug the user reported, and this line is it.
-        let widthIsWrong = abs(panel.frame.width - 380) > 1
-        if widthIsWrong || abs((intendedHeight ?? panel.frame.height) - height) > 1 {
-            intendedHeight = height
-            // The top edge holds still and the panel grows downward: origin is
-            // bottom-left, so the height delta comes out of origin.y. Animated
-            // when already on screen (ruled 06 Aug — the snap between
-            // different-sized faces was the jarring half of the border bug);
-            // the first paint still snaps, a hidden panel has nothing to ease.
-            var frame = panel.frame
-            let delta = height - frame.height
-            frame.origin.y -= delta
-            frame.size.height = height
-            frame.size.width = 380
-            // The ORIGIN has to be right in the animated frame, not corrected
-            // afterwards. `position` runs immediately after this call and does
-            // set it — and then the in-flight animation lands 0.12s later with
-            // the frame it was handed, stomping the correction. Expanding out of
-            // the collapsed strip therefore kept the strip's x and put 340pt of
-            // grid off the right of the display: measured
-            // {{1672, 751}, {380, 317}} against a screen 1728 wide.
-            if let screen = NSScreen.main {
-                frame.origin.x = screen.visibleFrame.maxX - frame.size.width - 16
-            }
-            if panel.isVisible {
-                // Through the animator, NOT setFrame(animate:) — that call
-                // blocks the main thread for the whole animation, which delays
-                // every gesture landing behind it (the ack arriving late was
-                // the symptom). This one returns immediately.
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.12
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                    panel.animator().setFrame(frame, display: true)
-                }
-            } else {
-                panel.setFrame(frame, display: true)
-            }
-        }
-        // Assert the actions are actually on screen. "Buttons cut off" is a bug the
-        // code can check for itself; it should never reach a person's eyes.
-        let buttonsFit = panel.contentView.map { $0.bounds.height + 0.5 >= needed.height } ?? false
-
-        // Does the label actually show all of its text? Comparing the rendered
-        // height to the text's natural height at this width is the only way to
-        // see truncation from code — the panel happily fits a clipped label, so
-        // the previous check passed while four lines of every summary were lost.
-        let width = bodyLabel.bounds.width
-        let natural = (bodyLabel.stringValue as NSString).boundingRect(
-            with: NSSize(width: width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: bodyLabel.font ?? .systemFont(ofSize: 12)]).height
-        let textFits = bodyLabel.bounds.height + 1 >= natural
-
-        // Frames live in each view's own superview, and the header is a nested
-        // stack, so comparing raw minX values across rows compares nothing. Convert
-        // into the panel's space before drawing any conclusion about alignment.
-        if let root = panel.contentView {
-            func box(_ v: NSView) -> NSRect { v.convert(v.bounds, to: root) }
-            Permissions.log(
-                "HUD chrome: state.x=\(Int(box(stateLabel).minX)) "
-                + "title.x=\(Int(box(titleLabel).minX)) body.x=\(Int(box(bodyLabel).minX)) "
-                + "gear.maxX=\(Int(box(gearButton).maxX)) panelW=\(Int(panel.frame.width)) "
-                + "rightMargin=\(Int(panel.frame.width - box(gearButton).maxX))")
-        }
-        Permissions.log(
-            "HUD layout: needed=\(Int(needed.height)) frame=\(Int(panel.frame.height)) "
-            + "buttonsFit=\(buttonsFit) textFits=\(textFits) "
-            + "labelH=\(Int(bodyLabel.bounds.height)) naturalH=\(Int(natural))")
-    }
-
-    /// Shown the instant ⌃⌥ is tapped, so the gap before audio isn't dead air.
-    /// Summarizing and fetching the voice take a few seconds; without this the app
-    /// looks broken for the whole of it.
     /// A visible pulse the instant a gesture registers.
     ///
     /// The gap between pressing and anything happening is where the app feels
@@ -2713,382 +2590,37 @@ final class StatusHUD: NSObject {
     /// CABasicAnimation rather than through the animator proxy — the proxy
     /// silently drops the animation when another one is mid-flight on the same
     /// property, which is exactly what a rapid second gesture produces.
-    private var ackBar: NSView?
-    private var ackHeld = false
+    ///
+    /// `internal`, not `private` (App-lane P5, 24 Aug): read and written from
+    /// `Receipt.swift`'s `ackBarLayer()`/`holdAcknowledge()`/`releaseAcknowledge()`/
+    /// `acknowledge()`, which moved there while these stored properties — which
+    /// Swift extensions cannot add — stayed here.
+    var ackBar: NSView?
+    var ackHeld = false
     /// The pending fade. Held so the next press inside the window can cancel it
     /// — cancelling is what turns two presses into one light.
-    private var ackStandDown: DispatchWorkItem?
+    var ackStandDown: DispatchWorkItem?
     /// The height last requested of the panel — the resize's own memory, so an
     /// in-flight animation cannot be mistaken for a settled size.
     var intendedHeight: CGFloat?
-    private var surfaceView: NSView?
+    /// `internal`, not `private` (App-lane P5, 24 Aug): set by `build()` (now
+    /// in `Build.swift`), read by `Receipt.swift`'s receipt/acknowledge code —
+    /// both moved out of this file, this stayed for the same reason `ackBar`
+    /// did.
+    var surfaceView: NSView?
     /// The same view as `surfaceView`, typed: the drill drives the drag
     /// callbacks directly, since a synthetic NSDraggingInfo is not something
     /// a launch drill can conjure.
     var dropSurface: DropSurfaceView?
-
-    /// The bar, positioned and ready. Builds the panel if a gesture arrives
-    /// before the first paint — "I should never question whether my control
-    /// is having an impact" (ruled) — and returns nil only if even that fails.
-    private func ackBarLayer() -> CALayer? {
-        let host = surfaceView ?? { _ = build(); return surfaceView }()
-        guard let host else { return nil }
-        let bar: NSView
-        if let existing = ackBar {
-            bar = existing
-        } else {
-            bar = NSView(frame: .zero)
-            bar.wantsLayer = true
-            // Palette, not controlAccentColor: accent = state, not user
-            // preference (ruled) — the light is the same green as the go lamp.
-            bar.layer?.backgroundColor = StateLegend.Palette.ready.cgColor
-            // Flexible bottom margin = pinned to the top edge; flexible width
-            // = pinned to both sides. The bar tracks every frame change.
-            bar.autoresizingMask = [.width, .minYMargin]
-            ackBar = bar
-        }
-        // Full width: the surface's own mask decides where it ends.
-        bar.frame = CGRect(x: 0, y: host.bounds.height - 3,
-                           width: host.bounds.width, height: 3)
-        host.addSubview(bar, positioned: .above, relativeTo: nil)
-        return bar.layer
-    }
-
-    /// The send receipt: a small chip at the top edge that says the words
-    /// left, and then that they landed.
-    ///
-    /// Ruled 06 Aug: "once it's been sent, give me a little awareness… a
-    /// little reassurance at the top of, like, sending, and then sent." The
-    /// send ceremony was collapsed months ago for good reason — a card for a
-    /// thing that went right is noise — but collapsing it left success
-    /// SILENT, and silence is indistinguishable from failure to anyone who
-    /// has not yet learned to trust the app. This is the middle ground: a
-    /// whisper, not a card.
-    ///
-    /// Deliberately OUTSIDE the render funnel, and that deserves defending,
-    /// because "one more painter" is how this panel got sick the first time.
-    /// The justification is that a receipt is not state — it is an event,
-    /// with a life of its own measured in seconds. It owns exactly one widget
-    /// that no arm of render() touches, it never affects layout (it floats
-    /// over the top band), it cannot own the stage or block a transition, and
-    /// it always ends by fading itself out. The two places that must clear it
-    /// early — dismiss and hide — do so explicitly.
-    enum Receipt {
-        case sending(String)
-        case sent
-        case queued
-        /// Tapping a row whose session has exited. A receipt rather than a card
-        /// for the same reason a send is: it is an event, not state, and a
-        /// Terminal window is about to appear and say the rest.
-        case reviving(String)
-        /// The resume actually completed. Added 23 Aug: `.reviving`'s own doc
-        /// comment says "a Terminal window is about to appear and say the
-        /// rest" — true when revive opened an AppleScript/Terminal.app
-        /// window, false since revive moved onto `resumeTmux` (7325876):
-        /// nothing visible appears any more, so a success that never updates
-        /// the chip reads identically to one that hung, and the chip's own
-        /// 12s ceiling fires and logs "timed out on screen" on EVERY revive,
-        /// successful or not — caught live, 23 Aug, on a resume that had in
-        /// fact already fully settled by the time the chip gave up on it.
-        case revived(String)
-        /// The refusal that keeps the app alive. Between the last grid refresh
-        /// and the tap, the session came back on its own — resuming it now
-        /// would put two processes under one id, which crashed the app twice.
-        case alreadyAwake
-        /// The switch was thrown and the session did NOT come back, for a
-        /// reason that is not "it was already running".
-        ///
-        /// Split out of `alreadyAwake` on 18 Aug. That case was carrying three
-        /// different outcomes — live, directory gone, liveness unprovable — and
-        /// telling you the same thing about all of them, so two thirds of the
-        /// time the panel's only word on the subject was false. Tolerable while
-        /// revive lived behind a hover verb; not tolerable now that the lamp is
-        /// the switch, because a switch that lies about why it did nothing is
-        /// worse than one that does nothing.
-        case notRevived(String)
-
-        /// Green is for a thing that landed. Reviving is in flight, and a
-        /// refusal did not land at all.
-        var landed: Bool {
-            switch self {
-            case .sent, .queued, .revived: return true
-            case .sending, .reviving, .alreadyAwake, .notRevived: return false
-            }
-        }
-
-        /// Still happening, so the chip gets the longer ceiling and logs if no
-        /// outcome ever replaces it. A refusal is an outcome already.
-        var inFlight: Bool {
-            switch self {
-            case .sending, .reviving: return true
-            case .sent, .queued, .revived, .alreadyAwake, .notRevived: return false
-            }
-        }
-
-        var text: String {
-            switch self {
-            case .reviving(let target):
-                let name = target.count > 18
-                    ? target.prefix(17).trimmingCharacters(in: .whitespaces) + "…"
-                    : target
-                return "↺ \(name.uppercased()) · RESUMING"
-            case .revived(let target):
-                let name = target.count > 18
-                    ? target.prefix(17).trimmingCharacters(in: .whitespaces) + "…"
-                    : target
-                return "✓ \(name.uppercased()) · RESUMED"
-            case .alreadyAwake: return "ALREADY RUNNING"
-            case .notRevived(let why): return "↺ \(why.uppercased())"
-            case .sending(let target):
-                // The chip shares the top band with the placard and the gear;
-                // a long callsign would run into both.
-                let name = target.count > 20
-                    ? target.prefix(19).trimmingCharacters(in: .whitespaces) + "…"
-                    : target
-                return "→ \(name.uppercased()) · SENDING"
-            case .sent: return "✓ SENT"
-            case .queued: return "✓ QUEUED · SENDS AFTER THIS TURN"
-            }
-        }
-    }
-
+    /// The send-receipt chip and its pending fade — stored here for the same
+    /// reason as `ackBar` above; `showReceipt`/`clearReceipt` (`Receipt.swift`)
+    /// read and write both.
     var receiptChip: NSTextField?
     var receiptFade: DispatchWorkItem?
 
-    /// Never surfaces a hidden panel (recommended and ruled): success is not
-    /// a summons. If you dismissed the panel, a send landing does not bring
-    /// it back — the menu bar and the log carry it.
-    func showReceipt(_ receipt: Receipt) {
-        guard panel?.isVisible == true, let host = surfaceView else { return }
-        let chip: NSTextField
-        if let existing = receiptChip {
-            chip = existing
-        } else {
-            chip = NSTextField(labelWithString: "")
-            chip.alignment = .center
-            chip.wantsLayer = true
-            chip.layer?.cornerRadius = 3
-            chip.drawsBackground = false
-            // Ruled 07 Aug: not centred — tucked against the gear on the
-            // right, which is the clean space. Pinned to that corner so a
-            // resize keeps it there.
-            chip.autoresizingMask = [.minXMargin, .minYMargin]
-            host.addSubview(chip)
-            receiptChip = chip
-        }
-        chip.attributedStringValue = Widgets.letterspaced(
-            receipt.text, size: 9, tracking: 1.4,
-            color: receipt.landed ? StateLegend.Palette.ready : StateLegend.Palette.secondary)
-        chip.sizeToFit()
-        // Right edge measured from the gear itself rather than a guessed
-        // margin, so the two never collide whatever the panel width.
-        let gearLeft = gearButton.superview.map { view in
-            view.convert(gearButton.frame, to: host).minX
-        } ?? host.bounds.width - 34
-        // LEFT edge measured from the placard's ink, for the same reason, and
-        // this half was missing: a long callsign simply grew leftwards until it
-        // was drawing through "A G E N T S". Found by topBandDrill on its first
-        // run — placardClearsReceipt=false — which is the collision the top
-        // band's whole lane rule exists to prevent, sitting in the shipping
-        // build the entire time.
-        //
-        // The chip yields, not the placard: the placard is the face's own name
-        // for itself and is already as short as it goes, while the chip is a
-        // callsign that reads perfectly well truncated, because its first
-        // words are the ones that identify it.
-        var placardRight: CGFloat = 0
-        if !stateLabel.isHidden, stateLabel.attributedStringValue.length > 0,
-           let parent = stateLabel.superview {
-            let box = parent.convert(stateLabel.frame, to: host)
-            let text = stateLabel.attributedStringValue
-            let indent = (text.attribute(.paragraphStyle, at: 0, effectiveRange: nil)
-                            as? NSParagraphStyle)?.firstLineHeadIndent ?? 0
-            placardRight = box.minX + indent + ceil(text.size().width)
-        }
-        let lane = max(40, gearLeft - 10 - (placardRight + 12))
-        let chipWidth = min(chip.bounds.width, lane)
-        chip.lineBreakMode = .byTruncatingTail
-        chip.frame = CGRect(x: gearLeft - chipWidth - 10,
-                            y: host.bounds.height - 22,
-                            width: chipWidth, height: chip.bounds.height)
-        host.addSubview(chip, positioned: .above, relativeTo: nil)
-        chip.layer?.removeAnimation(forKey: "receipt")
-        chip.alphaValue = 1
-
-        receiptFade?.cancel()
-        Permissions.log("receipt: \(receipt.text) "
-            + "[pid \(ProcessInfo.processInfo.processIdentifier) "
-            + "chip \(UInt(bitPattern: ObjectIdentifier(chip).hashValue) % 100000) "
-            + "alpha \(chip.alphaValue) frame \(Int(chip.frame.minX)),\(Int(chip.frame.minY)) "
-            + "host \(Int(host.bounds.height)) siblings \(host.subviews.count)]")
-
-        // Two clocks, because a send is slower than it feels. Measured on a
-        // real dispatch: commit at 16:06:28, confirmed at 16:06:35 — SEVEN
-        // seconds of "SENDING", and then the outcome flashed past in two.
-        // Robert saw the first and not the second and reported no
-        // confirmation at all, which is the correct reading of what was on
-        // screen.
-        //
-        // So an outcome lingers long enough to be caught by someone who
-        // looked away (4s), and "sending" gets a CEILING: if no outcome
-        // arrives, the chip stops claiming a send is in progress rather than
-        // sitting there indefinitely asserting something it no longer knows.
-        // A dispatch that has neither landed nor failed by then has a bigger
-        // problem than its receipt, and the failure card owns that.
-        let linger: TimeInterval = receipt.inFlight ? 12.0 : 4.0
-        let fade = DispatchWorkItem { [weak self, weak chip] in
-            guard let chip else { return }
-            if receipt.inFlight { Permissions.log("receipt: \(receipt.text) timed out on screen") }
-            self?.receiptFade = nil
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.5
-                chip.animator().alphaValue = 0
-            }
-        }
-        receiptFade = fade
-        DispatchQueue.main.asyncAfter(deadline: .now() + linger, execute: fade)
-    }
-
-    /// Whether a receipt is currently claiming the top band. The selftest
-    /// asserts this returns to false — a chip outside the render funnel has
-    /// to prove it cleans up, since no arm of render() will do it for it.
-    var receiptIsShowing: Bool { (receiptChip?.alphaValue ?? 0) > 0 }
-
-    /// Clear a receipt outright — the panel is going away under it.
-    func clearReceipt() {
-        receiptFade?.cancel()
-        receiptFade = nil
-        receiptChip?.alphaValue = 0
-    }
-
-    /// Hold the light on for as long as the key is down.
-    ///
-    /// Ruled 06 Aug: "it should just be a reflection that your keystroke is
-    /// recognized as a valid command-related key, and it should just be green
-    /// while that key is pressed." The previous design pulsed once per
-    /// transition, which meant a single hold flashed twice — once at the arm,
-    /// again when the microphone opened — and read as a stutter rather than
-    /// an acknowledgment. One light, one press.
-    func holdAcknowledge() {
-        guard let layer = ackBarLayer() else { return }
-        // A hold that begins inside an acknowledgment's window takes the light
-        // over: cancel the stand-down that would otherwise fade it mid-press,
-        // and claim the colour, or a hold following a blue ⌃ would be held in
-        // blue and say the wrong thing for as long as the key is down.
-        ackStandDown?.cancel(); ackStandDown = nil
-        layer.removeAnimation(forKey: "ack")
-        layer.removeAnimation(forKey: "ack-colour")
-        layer.backgroundColor = Acknowledgement.recognized.color
-        layer.opacity = 1
-        ackHeld = true
-        Permissions.log("ack: held on")
-    }
-
-    /// Release the held light. No-op when nothing is holding it, so a stray
-    /// release cannot erase a pulse that is mid-fade.
-    func releaseAcknowledge() {
-        guard ackHeld, let layer = ackBar?.layer else { return }
-        ackHeld = false
-        layer.removeAnimation(forKey: "ack")
-        layer.opacity = 0
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 1.0
-        fade.toValue = 0.0
-        fade.duration = 0.25
-        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        layer.add(fade, forKey: "ack")
-        Permissions.log("ack: released")
-    }
-
-    /// What the light is saying about the press that just landed.
-    ///
-    /// Two colours, because a press and a gesture are different facts and only
-    /// one of them means the app did something. Both are Palette tokens already
-    /// carrying these meanings elsewhere in the panel — advisory blue is what
-    /// the app uses to say "noted", ready green is what it uses to say "go".
-    enum Acknowledgement {
-        /// Blue. A key landed and was understood as input, but the gesture it
-        /// belongs to has not resolved yet. Today that is the first of a
-        /// possible ⌃⌃ — bare ⌃ is the opening key of two chords and means
-        /// nothing alone, so it must be visibly *received* without claiming
-        /// anything was done.
-        case registered
-        /// Green. That was a gesture and the app acted on it.
-        case recognized
-
-        var color: CGColor {
-            switch self {
-            case .registered: return StateLegend.Palette.working.cgColor
-            case .recognized: return StateLegend.Palette.ready.cgColor
-            }
-        }
-        var name: String {
-            switch self {
-            case .registered: return "registered (blue)"
-            case .recognized: return "recognized (green)"
-            }
-        }
-    }
-
-    /// How long the light stays up after the last press before standing down.
-    ///
-    /// Half a second, which is the span a sequence lives in: it is longer than
-    /// the gap between two taps of the same hand (⌃⌃ and ⌥⌥ run 50–100ms apart,
-    /// per HotkeyMonitor's own measurements), so the second tap of a pair always
-    /// arrives while the light is still up and RECOLOURS it. That is the whole
-    /// design — ⌃ then ⌃ is one light going blue to green, not two flashes.
-    private static let ackHold: TimeInterval = 0.5
-    /// And out. Slow enough not to snap, fast enough not to linger as state:
-    /// the light is a receipt, not a status lamp.
-    private static let ackFade: TimeInterval = 0.25
-
-    /// Acknowledge a press: colour the light, hold it, then let it go.
-    ///
-    /// Supersedes the single 0.5s pulse-to-zero this replaced. The pulse started
-    /// fading the instant it appeared, so a two-tap gesture read as two separate
-    /// flickers and a press that resolved into something else could not show
-    /// that it had — there was no light still up to change. Holding first makes
-    /// the colour the signal and the fade merely the ending.
-    func acknowledge(_ what: Acknowledgement) {
-        // A held light outranks this: a chord arriving mid-hold must not cut
-        // the hold's own light short (unchanged from the pulse it replaces).
-        guard !ackHeld, let layer = ackBarLayer() else { return }
-        ackStandDown?.cancel(); ackStandDown = nil
-
-        let wasLit = layer.opacity > 0
-        layer.removeAnimation(forKey: "ack")
-
-        // Recolour visibly when the light is already up. Snapping the colour
-        // would land in the same frame as the press and read as a flash — the
-        // thing this design exists to avoid — so the change itself is animated
-        // and IS the acknowledgment.
-        if wasLit, layer.backgroundColor != what.color {
-            let recolour = CABasicAnimation(keyPath: "backgroundColor")
-            recolour.fromValue = layer.backgroundColor
-            recolour.toValue = what.color
-            recolour.duration = 0.18
-            recolour.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            layer.add(recolour, forKey: "ack-colour")
-        }
-        layer.backgroundColor = what.color
-        layer.opacity = 1
-
-        let standDown = DispatchWorkItem { [weak self] in
-            // A hold that started inside the window owns the light now.
-            guard let self, !self.ackHeld, let layer = self.ackBar?.layer else { return }
-            layer.opacity = 0
-            let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = 1.0
-            fade.toValue = 0.0
-            fade.duration = Self.ackFade
-            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            layer.add(fade, forKey: "ack")
-        }
-        ackStandDown = standDown
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.ackHold, execute: standDown)
-        Permissions.log("ack: \(what.name) (visible=\(panel?.isVisible == true))")
-    }
-
+    /// Shown the instant ⌃⌥ is tapped, so the gap before audio isn't dead air.
+    /// Summarizing and fetching the voice take a few seconds; without this the app
+    /// looks broken for the whole of it.
     /// Returns false when the stage refused (a reply flow is live) — the caller
     /// must not announce, or the audio would play against a panel that never
     /// changed. Pixels and voice obey the same table.
@@ -3143,684 +2675,9 @@ final class StatusHUD: NSObject {
         panel.orderFront(nil)
     }
 
-    // MARK: - Pose driver (dev tooling)
 
-    /// Animate the panel between its two widths, holding the right edge still.
-    ///
-    /// Held, not recomputed: the expanded face sits at `maxX - width - 16`, and
-    /// a collapse that recomputes from the NEW width would slide the panel
-    /// rightwards as it narrows. Taking the current right edge and keeping it is
-    /// what makes this read as one panel getting thinner rather than a second
-    /// panel appearing somewhere else.
-    private func morph(_ panel: NSPanel, to size: NSSize) {
-        let width = size.width
-        var frame = panel.frame
-        guard abs(frame.width - width) > 0.5 || abs(frame.height - size.height) > 0.5
-        else { return }
-        frame.size.height = size.height
-        // The right edge is computed, not inherited. Holding the CURRENT edge
-        // reads well while the panel is already placed and fails completely when
-        // it is not: a launch that starts collapsed morphs the default
-        // {{0,0},{380,150}} rect and lands at {{340, 0}, {40, 150}} — bottom
-        // left, off the working area entirely.
-        //
-        // Every face sits at `visibleFrame.maxX - width - 16`, so its right edge
-        // is always `maxX - 16`. Computing that is identical to holding it, and
-        // it is also correct before the panel has ever been on screen.
-        if let screen = NSScreen.main {
-            frame.origin.x = screen.visibleFrame.maxX - width - 16
-            frame.origin.y = screen.visibleFrame.maxY - frame.height - 16
-        } else {
-            frame.origin.x = frame.maxX - width
-        }
-        frame.size.width = width
-        intendedHeight = frame.height
-        if panel.isVisible {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.16
-                ctx.allowsImplicitAnimation = true
-                panel.animator().setFrame(frame, display: true)
-            }
-        } else {
-            panel.setFrame(frame, display: true)
-        }
-    }
 
-    private func position(_ panel: NSPanel) {
-        guard let screen = NSScreen.main else { return }
-        // Collapsed owns its own frame, flush to the edge, and `resizeToFit`
-        // has already set it. Returning here rather than special-casing the
-        // margin below: this runs immediately AFTER that call on every render,
-        // so a margin applied here silently undoes it — which is exactly what
-        // the flushRight drill caught on the first deploy.
-        let margin: CGFloat = 16
-        // No special case for the collapsed strip. It is placed from its own
-        // width like every other face, which is what makes its right edge line
-        // up with the grid's — and, unlike a panel that positions itself, works
-        // on the very first paint before it has ever been on screen.
-        let size = panel.frame.size
-        // Top-right, below the menu bar.
-        let origin = NSPoint(
-            x: screen.visibleFrame.maxX - size.width - margin,
-            y: screen.visibleFrame.maxY - size.height - margin)
-        panel.setFrameOrigin(origin)
-    }
-
-    /// The console panel.
-    ///
-    /// `.nonactivatingPanel` + `.borderless` means it never becomes key, which
-    /// is the entire point everywhere except one place: it must never steal a
-    /// keystroke while you are typing in another app. That is also why the
-    /// filter field on the list face could not be clicked into — a text field
-    /// in a window that cannot become key has nowhere to put first responder,
-    /// so the click landed on nothing and the caret never appeared.
-    ///
-    /// So key status is a state, not a property: the panel accepts it only
-    /// while a face has actually asked for typing. Everything else stays
-    /// exactly as unstealable as it was.
-    final class ConsolePanel: NSPanel {
-        var acceptsKey = false
-        override var canBecomeKey: Bool { acceptsKey }
-        override var canBecomeMain: Bool { false }
-    }
-
-    private func build() -> ConsolePanel {
-        let panel = ConsolePanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 150),
-            // .nonactivatingPanel is the key flag: the panel can show without the app
-            // becoming frontmost, so it never steals a keystroke mid-sentence.
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered, defer: false)
-        // NSWindow defaults isReleasedWhenClosed to true, which predates ARC: closing
-        // the window performs a manual release while `panel` still holds a strong
-        // reference. The result is an over-release, and the panel's content — the
-        // buttons among it — becomes freed memory that AppKit still hands mouse
-        // events to. Clicking Reply then crashed inside the executor check on a
-        // garbage object pointer, taking the window with it.
-        panel.isReleasedWhenClosed = false
-        panel.level = .floating
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        // The panel declares the appearance it actually DRAWS, so AppKit's own
-        // chrome — bezels, scrollers, menus, and the text-selection band — is
-        // drawn for this surface rather than for the system's.
-        //
-        // This was pinned to `.aqua` when the console was light putty, with a
-        // comment whose logic now argues the other way: "a dark-mode bezel on
-        // light putty looks like a hole". The console went dark on 09 Aug
-        // (docs/ruling-the-console-goes-dark.md) and the pin did not follow, so
-        // every AppKit-drawn thing on the panel has been dressed for a light
-        // ground on a dark one ever since. Measured 18 Aug on the one that
-        // shows: an inactive text selection painted #DCDCDC under `ink`, which
-        // is 1.23:1 — the least readable thing the panel has ever drawn, and
-        // below every floor in the palette. Under `.darkAqua` the same band is
-        // #464646 under white at 9.44:1.
-        panel.appearance = NSAppearance(named: .darkAqua)
-
-        // Opaque light console surface, panel-wide (ruled — the blur is dead: an
-        // instrument guarantees its own contrast, a blur borrowed the desktop's).
-        // Same corner radius, shadow, and non-activating behavior as before.
-        // A drag destination rather than a plain view: the whole surface takes
-        // files (ruled 15 Aug). Dragging needs no key status, so the panel is
-        // exactly as non-activating as it ever was.
-        let background = DropSurfaceView(frame: panel.contentView!.bounds)
-        background.registerForDraggedTypes(DropSurfaceView.acceptedTypes)
-        background.canAccept = { [weak self] in self?.replyTargetForDrop?()?.label }
-        background.onDragTargetChanged = { [weak self] target in
-            guard let self else { return }
-            if let target { dropOverlay.show(target: target) }
-            else { dropOverlay.isHidden = true }
-        }
-        background.onDrop = { [weak self] items in
-            guard let self, let accepted = onFilesDropped?(items) else { return false }
-            // Repaint on the way out: the chips the drop just created are a
-            // render-time read of Core's tray, so the surface only has to say
-            // "something changed".
-            if accepted { render() }
-            return accepted
-        }
-        background.autoresizingMask = [.width, .height]
-        background.wantsLayer = true
-        background.layer?.backgroundColor = StateLegend.Palette.surface.cgColor
-        // 12 → 8 (ruled 06 Aug: "do we want this strong of corner rounding? It
-        // seems very default"). 8 is the instrument radius — a milled panel
-        // edge, not a system alert.
-        background.layer?.cornerRadius = 8
-        background.layer?.masksToBounds = true
-        // The ack bar lives INSIDE the clipping surface (06 Aug: "it gets cut
-        // off at the start of the corner round"). Full width, clipped by the
-        // same rounded mask as the console itself, so its ends taper with the
-        // corner instead of colliding with it.
-        surfaceView = background
-        dropSurface = background
-
-        // Widgets carry no initial visibility: build() is only reached from
-        // render(), which writes every widget's visibility before the panel is
-        // ever ordered front.
-        stateLabel = DoorLabel(labelWithString: "")
-        stateLabel.font = ChromeType.mono(ofSize: 10, weight: .medium)
-        stateLabel.textColor = StateLegend.Lens.chrome.color
-        // The ◀ breadcrumb is clickable (ruled 06 Aug): voiced first, but a
-        // pointer tap goes home too. The gesture is on the label always; the
-        // handler lets only card states through, so the AGENTS strip and the
-        // pills never react.
-        stateLabel.addGestureRecognizer(NSClickGestureRecognizer(
-            target: self, action: #selector(breadcrumbClicked)))
-
-        titleLabel = DoorLabel(labelWithString: "")
-        // The identity face: mono, matching the grid rows (ruled). renderTitle
-        // sets the string; this is the fallback style. ONE line since the topic
-        // died (10 Aug) — the identity was always the only thing on line one.
-        titleLabel.font = ChromeType.mono(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = StateLegend.Lens.content.color
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.maximumNumberOfLines = 1
-        // The second door to the session. GO TO AGENT stays — it is the
-        // discoverable one, and you said you use it. This is the shortcut for
-        // when your eye is already on the name, which is where it already goes.
-        titleLabel.addGestureRecognizer(
-            NSClickGestureRecognizer(target: self, action: #selector(goToSession)))
-
-        bodyLabel = CardBodyLabel(wrappingLabelWithString: "")
-        bodyLabel.font = StateLegend.Face.message(12)
-        bodyLabel.textColor = StateLegend.Lens.content.color
-        bodyLabel.maximumNumberOfLines = 0
-        // Selectable so a line can be quoted out of a card by hand; see
-        // `CardBodyLabel` for what stops it selecting itself.
-        bodyLabel.isSelectable = true
-
-        // Every surviving action is a QUIET text action (ruled): borderless,
-        // palette ink, no lozenge. The button rows are dead — chords are the
-        // interface; these are the few context actions a face still owns.
-        func quietAction(_ title: String, _ action: Selector) -> ConsoleButton {
-            let button = ConsoleButton(title: title, target: self, action: action)
-            button.isBordered = false
-            button.controlSize = .small
-            button.font = StateLegend.Face.chrome(11, .medium)
-            // Chrome, not `ink` — the hover standard's fourth rule:
-            // the brightest ink belongs to the prose, and a control resting
-            // there is both louder than the message and out of ramp, with no
-            // step left to answer the pointer with. `secondary` is 6.69:1,
-            // legible with room to spare, and it steps up to `ink` on hover.
-            button.restingInk = StateLegend.Lens.chrome.color
-            return button
-        }
-        // "Go to agent" (ui-pass-7, rulings 1 + 3): the one navigation the
-        // panel owns gets presence — go-green palette ink, letterspaced caps
-        // like the grid placards, and the action row's right edge to itself.
-        // Still flat, no lozenge: promotion by ink and placement, not chrome.
-        goButton = ConsoleButton(title: "Go to agent", target: self,
-                                 action: #selector(goToSession))
-        goButton.isBordered = false
-        goButton.restingInk = StateLegend.Palette.accent
-        goButton.wordmark = "\(StateLegend.goToAgentTitle) \(StateLegend.Glyph.forward)"
-        // The second door shares "Go to agent"'s treatment — same kind of
-        // move, leave this panel and go to the thing — and differs only in
-        // destination: one is a terminal tab, the other a browser. It sits at
-        // the row's LEADING edge rather than beside it: the two doors bracket
-        // the card, so neither reads as the primary and a mis-click lands on
-        // nothing. The title here is a placeholder; render() sets the real
-        // label per card — OPEN REPORT when this turn wrote a page, OPEN HUB
-        // otherwise — because the label follows the destination (ruled 15 Aug).
-        openPageButton = ConsoleButton(title: "Open hub", target: self,
-                                       action: #selector(openHubTapped))
-        openPageButton.isBordered = false
-        openPageButton.restingInk = StateLegend.Palette.accent
-        openPageButton.wordmark = "\(StateLegend.openHubTitle) \(StateLegend.Glyph.forward)"
-        dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
-        // The device-fault card's way out. Quiet like its row-mates: it is a
-        // door, not an alarm — the placard and the body have already said how
-        // bad this is, and a loud button would say it a third time.
-        micSettingsButton = quietAction(StateLegend.micSettingsTitle,
-                                        #selector(micSettingsTapped))
-        // The invitation's action. Quiet like its row-mates, and deliberately
-        // NOT go-green: "Go to agent" navigates to something that exists, and
-        // this one creates it. Sharing the promoted ink would make the two
-        // read as the same move.
-        newSessionButton = quietAction(StateLegend.startSessionTitle,
-                                       #selector(newSessionForArtifactTapped))
-
-        // A real symbol at a real size. The text glyph was 12pt — visually timid
-        // and, worse, a hit target well under the ~24pt a fingertip-sized control
-        // needs even for a mouse.
-        gearButton = ConsoleButton(image: NSImage(systemSymbolName: "gearshape",
-                                                  accessibilityDescription: "Settings")!
-                                     .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))!,
-                                  target: self, action: #selector(gearTapped))
-        gearButton.isBordered = false
-        gearButton.restingInk = StateLegend.Lens.chrome.color
-        gearButton.translatesAutoresizingMaskIntoConstraints = false
-        gearButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
-        gearButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
-
-        // A breadcrumb, not a button in a row of actions: it says where you are and
-        // the only way out is back the way you came.
-        backButton = ConsoleButton(title: StateLegend.backTitle, target: self,
-                                   action: #selector(backTapped))
-        backButton.isBordered = false
-        backButton.controlSize = .small
-        backButton.font = StateLegend.Face.chrome(11, .medium)
-        // The ‹ is a mark beside a word, so it goes through the same composer
-        // as every other one rather than sitting on the baseline where the
-        // font left it. `reink` because a ConsoleButton repaints by rebuilding
-        // its title, and this title is attributed.
-        backButton.reink = { [weak backButton] color in
-            backButton?.attributedTitle = ChromeType.line(
-                StateLegend.backTitle, font: StateLegend.Face.chrome(11, .medium),
-                color: color)
-        }
-        backButton.restingInk = StateLegend.Lens.chrome.color
-
-        // Surfaced only once a transcription has run long enough to deserve them
-        // (sanctioned change: open issue #4). Quiet text, like their row-mates.
-        cancelTranscriptionButton = quietAction(StateLegend.cancelTranscriptionTitle,
-                                                #selector(cancelTranscriptionTapped))
-        retryTranscriptionButton = quietAction(StateLegend.retryTranscriptionTitle,
-                                               #selector(retryTranscriptionTapped))
-
-        hintLabel = NSTextField(labelWithString: "")
-        hintLabel.font = StateLegend.Face.chrome(10)
-        hintLabel.textColor = StateLegend.Lens.guidance.color
-
-        // Quiet context actions keep the left edge; GO TO AGENT holds the
-        // right edge alone (ui-pass-7, ruling 3). The row spans the content
-        // column below, so the trailing gravity is a real edge.
-        let buttons = NSStackView()
-        actionRow = buttons
-        buttons.orientation = .horizontal
-        buttons.spacing = 12
-        // Air above the bottom line (ruled 18 Aug: "the controls seems a little
-        // too cramped relative to the text above"). The stack's own 6pt row gap
-        // is right between rows of the same kind — two labels, a rule and a
-        // label — and too tight under the last line of a card, where what
-        // follows is not more of the message but the things you can DO about
-        // it. Doubling it to 12 gives that row the same air the panel gives its
-        // own edges. Carried by the row rather than by custom spacing after the
-        // body, because the view above it differs by face and a hidden one
-        // takes its spacing with it.
-        buttons.edgeInsets = NSEdgeInsets(top: 6, left: 0, bottom: 0, right: 0)
-        buttons.addView(openPageButton, in: .leading)
-        buttons.addView(dontSendButton, in: .leading)
-        buttons.addView(micSettingsButton, in: .leading)
-        buttons.addView(newSessionButton, in: .leading)
-        buttons.addView(cancelTranscriptionButton, in: .leading)
-        buttons.addView(retryTranscriptionButton, in: .leading)
-        buttons.addView(goButton, in: .trailing)
-        // The middle, which is the only space a card's bottom line has left and
-        // the same place the grid puts it.
-        cardControls = ControlsWordView()
-        buttons.addView(cardControls, in: .center)
-        // And the row is exactly as tall as its contents: BOTH directions.
-        //
-        // Hugging alone was not enough and the difference is the whole bug.
-        // Hugging resists growing, so it stopped the row ballooning around a
-        // correctly-sized word — measured, that took the flip from 3-in-6 to
-        // 2-in-12 and no further. What remained was the row being SQUEEZED:
-        // compression resistance is what defends the 6pt top inset, and without
-        // it the stack could take that inset back whenever it wanted the space,
-        // landing the row at 25pt instead of 32 and the air at 8.5 instead of
-        // the ruled 12. A quantity you can only have when nothing else wants it
-        // is not a guarantee.
-        buttons.setContentHuggingPriority(.defaultHigh, for: .vertical)
-        buttons.setContentCompressionResistancePriority(.defaultHigh, for: .vertical)
-        // And the air itself is PINNED, not inferred.
-        //
-        // The two priorities above took the flip from 3-in-6 to 1-in-12 and
-        // stopped there, which is the tell: priorities move the odds, they do
-        // not remove the freedom. The stack centres a `.center` view in
-        // whatever height it ends up with, so the word's distance from the row
-        // top was always a consequence of other things rather than a fact.
-        //
-        // Now it is the fact: 6pt below the row's top edge, which is the row's
-        // own inset, on top of the stack's 6pt spacing above the row. 12,
-        // always, by construction — the number the 18 Aug ruling asked for
-        // ("doubling it to 12 gives that row the same air the panel gives its
-        // own edges") and never reliably got.
-        cardControls.topAnchor.constraint(
-            equalTo: buttons.topAnchor, constant: 6).isActive = true
-
-        hintLabel.maximumNumberOfLines = 0
-        hintLabel.lineBreakMode = .byTruncatingMiddle
-
-        // The strip's own furniture. The rule is what makes the capture read as
-        // an extension of the panel rather than another paragraph of the card —
-        // and it is hidden with the label, so a face with no capture has no
-        // orphan line across it.
-        stripLabel = NSTextField(labelWithString: "")
-        // Chrome: the strip is the machine reporting on itself — the mic, the
-        // transcription, the send. The readback rides it too, and mono is right
-        // for that as well: those words are about to be TYPED into a terminal,
-        // and this is the last look at them.
-        stripLabel.font = StateLegend.Face.chrome(11)
-        stripLabel.textColor = StateLegend.Palette.hint
-        stripLabel.maximumNumberOfLines = 2
-        stripLabel.lineBreakMode = .byTruncatingHead
-        stripRule = NSView()
-        stripRule.wantsLayer = true
-        stripRule.layer?.backgroundColor = StateLegend.Palette.hairline.cgColor
-        stripRule.translatesAutoresizingMaskIntoConstraints = false
-        stripRule.heightAnchor.constraint(equalToConstant: 1).isActive = true
-
-        trayRow = TrayRowView()
-        trayRow.onRemove = { [weak self] path in
-            guard let self, let session = currentTarget?.sessionId else { return }
-            onUnstage?(session, path)
-            Permissions.log("tray: unstaged \((path as NSString).lastPathComponent)")
-            render()
-        }
-
-        gridFooter = GridFooterView(width: Self.gridWidth)
-        controlsSticky = ControlsNoteView()
-        controlsSticky.isHidden = true
-        gridFooter.onControlsHover = { [weak self] hovering in
-            guard let self else { return }
-            setControlsNote(open: hovering, above: gridFooter)
-        }
-        gridFooter.onWordmark = { [weak self] in self?.onOpenRepository?() }
-        cardControls.onHover = { [weak self] hovering in
-            guard let self else { return }
-            setControlsNote(open: hovering, above: actionRow)
-        }
-
-        countdownBar = CountdownBarView()
-
-        meter = LevelMeterView()
-
-        // The roster list: a flipped document so content hangs from the top,
-        // the stack of VoiceRowViews inside, overlay scroller, no chrome.
-        voiceStack = NSStackView()
-        voiceStack.orientation = .vertical
-        voiceStack.alignment = .leading
-        voiceStack.spacing = 0
-        voiceStack.translatesAutoresizingMaskIntoConstraints = false
-        let voiceDoc = FlippedDocumentView()
-        voiceDoc.translatesAutoresizingMaskIntoConstraints = false
-        voiceDoc.addSubview(voiceStack)
-        voiceList = NSScrollView()
-        voiceList.drawsBackground = false
-        voiceList.hasVerticalScroller = true
-        voiceList.scrollerStyle = .overlay
-        voiceList.translatesAutoresizingMaskIntoConstraints = false
-        voiceList.documentView = voiceDoc
-        voiceListHeight = voiceList.heightAnchor.constraint(equalToConstant: 340)
-        NSLayoutConstraint.activate([
-            voiceStack.topAnchor.constraint(equalTo: voiceDoc.topAnchor),
-            voiceStack.leadingAnchor.constraint(equalTo: voiceDoc.leadingAnchor),
-            voiceStack.trailingAnchor.constraint(equalTo: voiceDoc.trailingAnchor),
-            voiceStack.bottomAnchor.constraint(equalTo: voiceDoc.bottomAnchor),
-            voiceDoc.leadingAnchor.constraint(equalTo: voiceList.contentView.leadingAnchor),
-            voiceDoc.topAnchor.constraint(equalTo: voiceList.contentView.topAnchor),
-            voiceDoc.widthAnchor.constraint(equalTo: voiceList.contentView.widthAnchor),
-            voiceListHeight,
-        ])
-
-        // How agents start, in the pane where settings live (ruled 15 Aug).
-        // One pair of values for the whole machine — "a global setting for now
-        // and see if we need more granular later" — read by every path that
-        // starts an agent: the menu item, the grid's + row, and revival.
-        settingsTabs = SettingsTabBar(width: Self.gridWidth)
-        settingsTabs.isHidden = true
-        settingsTabs.onSelect = { [weak self] tab in self?.showSettingsTab(tab) }
-
-        launchRow = SettingRowView(width: Self.gridWidth, label: "LAUNCH",
-                                   placeholder: AgentDefaults.fallback)
-        launchRow.onCommit = { AgentDefaults.save($0) }
-        directoryRow = SettingRowView(width: Self.gridWidth, label: "DIRECTORY",
-                                      placeholder: AgentDefaults.fallbackDirectory,
-                                      browsable: true)
-        directoryRow.onCommit = { AgentDefaults.save(directory: $0) }
-        directoryRow.onBrowse = { [weak self] in self?.pickAgentDirectory() }
-        launchRow.isHidden = true; directoryRow.isHidden = true
-
-        pastList = PastAgentsList(width: Self.gridWidth, height: 420)
-        pastList.isHidden = true
-        // One tap, the row's own verb. Dead comes back; live is picked up.
-        //
-        // Ruled 19 Aug, on a click that jumped him to a terminal he had not
-        // asked for: *"when I click on an idle agent … it should turn the lamp
-        // on, open the agent card. Because it's alive, clicking on it obviously
-        // means I want it to be alive. It doesn't need to go to it — maybe
-        // that's a right-click behaviour."* So GO TO AGENT moved to the menu,
-        // where END SESSION already lives, and the tap now does the two things
-        // picking a session up means: it lights the lamp, which is what puts
-        // the row back on the grid, and it opens the agent's card.
-        //
-        // Order matters. The switch is written BEFORE the card is asked for,
-        // so the repaint the card triggers already knows this row is on.
-        pastList.onPick = { [weak self] id, revivable in
-            guard let self else { return }
-            let name = pastListName(id)
-            onBreadcrumbHome?()
-            guard !revivable else { onRevive?(id, name); return }
-            onRestoreLamp?(id)
-            onPickWaiting?(id)
-        }
-        // The lamp, on this face too, and through the same function — so the
-        // dot means one thing wherever you meet it (ruled 18 Aug).
-        pastList.onLamp = { [weak self] row in
-            guard let self else { return }
-            // Home first in both cases, and for the same reason: the click's
-            // whole point is that the row leaves this face. Staying on a list
-            // to watch a row disappear from it is the panel showing you the
-            // bookkeeping instead of the result.
-            onBreadcrumbHome?()
-            switch StateLegend.lampAction(for: row, on: .list) {
-            case .turnOn: onRestoreLamp?(row.id)
-            case .revive: onRevive?(row.id, row.name)
-            case .turnOff:
-                Permissions.log("list: row \(row.id.prefix(8)) asked for turnOff "
-                    + "in the list — the face and the verb have come apart")
-            }
-        }
-        pastList.onGoTo = { [weak self] id in
-            guard let self else { return }
-            onBreadcrumbHome?()
-            onGoToSession?(id)
-        }
-        pastList.onTerminate = { [weak self] id, name in
-            self?.onTerminateSession?(id, name)
-        }
-        pastList.onFilterChanged = { [weak self] in
-            guard let self, case .pastAgents = state else { return }
-            hintLabel.stringValue = pastList.summary
-        }
-        waitingRows = NSStackView()
-        waitingRows.orientation = .vertical
-        waitingRows.alignment = .leading
-        waitingRows.spacing = 2
-
-        // The strip's furniture sits BELOW the body and above the meter, so a
-        // capture extends the panel downward and the card above it does not
-        // move (ruled 10 Aug: "extend below, not move everything down by
-        // inserting above"). The panel already grows this way — `position`
-        // anchors the top edge — so the strip costs no geometry work.
-        // The tray sits UNDER the capture strip and above the countdown: the
-        // strip is what the microphone is doing, the chips are what will go
-        // with it, and the readback that names them both renders in the strip
-        // directly above. Same downward-growth as the strip — a drop extends
-        // the panel, it never moves the card.
-        let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
-                                        waitingRows, pastList, bodyLabel,
-                                        stripRule, stripLabel, trayRow, gridFooter,
-                                        countdownBar, meter,
-                                        settingsTabs, launchRow, directoryRow,
-                                        voiceList, hintLabel, buttons])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
-        assert(stack.edgeInsets.left == StatusHUD.contentColumn)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        background.addSubview(stack)
-        background.addSubview(gearButton)
-        // Above everything: the sticky overlays the last grid rows on purpose.
-        // It has no constraint to the background's own edges, so it contributes
-        // nothing to the fitting size resizeToFit() measures — the panel is
-        // exactly as tall with the note open as with it shut.
-        background.addSubview(controlsSticky, positioned: .above, relativeTo: nil)
-        // No placement here: `setControlsNote(open:above:)` hangs it over
-        // whichever row owns the word at the moment it is asked for.
-
-        // Above everything, pinned to the panel's own edges rather than to the
-        // stack: it covers whatever face is up, and — like the sticky — it is
-        // outside the stack, so it contributes nothing to the fitting size
-        // resizeToFit measures. The panel does not change size when a drag
-        // arrives, which is the whole point of an overlay over a row.
-        dropOverlay = DropOverlayView()
-        background.addSubview(dropOverlay, positioned: .above, relativeTo: nil)
-        NSLayoutConstraint.activate([
-            dropOverlay.topAnchor.constraint(equalTo: background.topAnchor),
-            dropOverlay.leadingAnchor.constraint(equalTo: background.leadingAnchor),
-            dropOverlay.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            dropOverlay.bottomAnchor.constraint(equalTo: background.bottomAnchor),
-        ])
-
-        // Collapse lives on the panel, left of the gear. It was in the menu bar
-        // first, which was wrong twice over: clicking the status item already
-        // opens the panel, so "Show panel" was a second door to one room, and a
-        // control for shrinking the panel belongs on the panel rather than two
-        // clicks away in a menu you have to know is there.
-        collapseButton = ConsoleButton(
-            // A chevron, ruled over the standard sidebar glyph. The sidebar
-            // symbol carries a rectangle that reads as a second panel edge
-            // inside a panel that already has one, and at 12pt against a 10pt
-            // letterspaced title it was the heaviest thing in the strip. The
-            // chevron says direction and nothing else, which is all this does —
-            // and it matches the one the collapsed strip shows for Expand, so
-            // the pair reads as one control pointing two ways.
-            image: NSImage(systemSymbolName: "chevron.right",
-                           accessibilityDescription: "Collapse")!
-                .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))!,
-            target: self, action: #selector(collapseTapped))
-        collapseButton.isBordered = false
-        collapseButton.restingInk = StateLegend.Lens.chrome.color
-        collapseButton.translatesAutoresizingMaskIntoConstraints = false
-        collapseButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
-        collapseButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
-        background.addSubview(collapseButton)
-        // The list face's way back, in the SAME lane as the collapse chevron so
-        // its header is one row like the grid's: a chevron, the placard, the
-        // gear. Ruled 12 Aug — the separate "‹ Back" button above the placard
-        // made the list two rows deep where the grid is one, and the two faces
-        // stopped rhyming.
-        pastBackButton = ConsoleButton(
-            image: NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back")!
-                .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))!,
-            target: self, action: #selector(backTapped))
-        pastBackButton.isBordered = false
-        pastBackButton.restingInk = StateLegend.Lens.chrome.color
-        pastBackButton.translatesAutoresizingMaskIntoConstraints = false
-        pastBackButton.isHidden = true
-        background.addSubview(pastBackButton)
-        NSLayoutConstraint.activate([
-            pastBackButton.widthAnchor.constraint(equalToConstant: 26),
-            pastBackButton.heightAnchor.constraint(equalToConstant: 26),
-            pastBackButton.centerYAnchor.constraint(equalTo: gearButton.centerYAnchor),
-            pastBackButton.leadingAnchor.constraint(
-                equalTo: background.leadingAnchor,
-                constant: StatusHUD.contentColumn - pastBackButton.inkOverhang.leading),
-        ])
-        NSLayoutConstraint.activate([
-            collapseButton.centerYAnchor.constraint(equalTo: gearButton.centerYAnchor),
-            // FAR LEFT, not beside the gear. The top-right of the panel is the
-            // receipt's — "→ SENDING", "▶ SENT" — and a second control parked
-            // there is a collision waiting for the next send, which is exactly
-            // what it looked like. The two corners now own one thing each.
-            // The MARK on the content column, not the box on some other
-            // number. The rules and the rows below establish the column at 14
-            // and paint to it exactly; the chevron's box was pinned at 10 and
-            // its 9pt glyph landed at 21, so the header read 7pt narrower than
-            // every row under it — visibly, because the hairline directly below
-            // spans the full width and acts as a ruler (measured 19 Aug,
-            // reported 20 Aug: "the rows of agents' widths expand beyond the
-            // top bar a little bit").
-            collapseButton.leadingAnchor.constraint(
-                equalTo: background.leadingAnchor,
-                constant: StatusHUD.contentColumn - collapseButton.inkOverhang.leading),
-        ])
-        // Held, so collapsing can DEACTIVATE them. The stack pins the panel to
-        // 380pt through these; leaving them active while narrowing the window is
-        // what snapped the frame back to 380 and threw it off the display.
-        // The bottom pin yields; the top pin never does. While the grow
-        // animation is in flight the content is briefly taller than the panel,
-        // and with four REQUIRED pins autolayout must break one — in practice
-        // the top, which shoved the card off the top edge and floated it back
-        // down as the panel caught up (12 Aug, the readback tray landing).
-        // At 500 the bottom pin is the designated loser: the card stays nailed
-        // to the top edge and the new strip content waits below the bottom
-        // edge for the panel to grow over it — the tray slides out from under
-        // the panel instead of displacing the card. 500 still beats the
-        // stack's vertical hugging (250), so a panel taller than its content
-        // stretches the stack to the bottom edge exactly as before.
-        let stackBottom = stack.bottomAnchor.constraint(equalTo: background.bottomAnchor)
-        stackBottom.priority = NSLayoutConstraint.Priority(500)
-        stackEdges = [
-            stack.topAnchor.constraint(equalTo: background.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: background.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            stackBottom,
-        ]
-        NSLayoutConstraint.activate(stackEdges + [
-            bodyLabel.widthAnchor.constraint(equalToConstant: 348),
-            hintLabel.widthAnchor.constraint(equalToConstant: 348),
-            stripLabel.widthAnchor.constraint(equalToConstant: 348),
-            stripRule.widthAnchor.constraint(equalToConstant: 348),
-            titleLabel.widthAnchor.constraint(equalToConstant: 348),
-            stateLabel.widthAnchor.constraint(equalToConstant: 348),
-            // Same margin as every text row, so the eye reads one column.
-            gearButton.trailingAnchor.constraint(
-                equalTo: background.trailingAnchor,
-                constant: -(StatusHUD.contentColumn - gearButton.inkOverhang.trailing)),
-            gearButton.centerYAnchor.constraint(equalTo: stateLabel.centerYAnchor),
-            meter.widthAnchor.constraint(equalToConstant: 348),
-            meter.heightAnchor.constraint(equalToConstant: 28),
-            countdownBar.widthAnchor.constraint(equalToConstant: 348),
-            countdownBar.heightAnchor.constraint(equalToConstant: 4),
-            // The action row spans the content column so GO TO AGENT's
-            // trailing gravity right-aligns against a real edge (ruling 3).
-            buttons.widthAnchor.constraint(equalToConstant: 348),
-        ])
-        self.contentStack = stack
-
-        // The strip lives beside the stack rather than inside it: it owns the
-        // whole panel when it is up, and nesting it would put the grid's
-        // spacing and insets between it and the edges it is flush against.
-        let column = CollapsedStrip(frame: NSRect(x: 0, y: 0,
-                                                  width: CollapsedStrip.width,
-                                                  height: CollapsedStrip.height))
-        column.onExpand = { [weak self] in self?.setCollapsed(false) }
-        column.onDismiss = { [weak self] in self?.dismiss() }
-        column.onNewAgent = { [weak self] in
-            MainActor.assumeIsolated { self?.onNewSession?() }
-        }
-        column.onPick = { [weak self] id in
-            MainActor.assumeIsolated { self?.onPickWaiting?(id) }
-        }
-        panel.contentView = background
-        self.expandedRoot = background
-
-        // Inside the SAME rounded background as the grid. Collapsing morphs one
-        // panel; it does not swap one window's contents for another's. The
-        // radius, the fill and the shadow are the panel's, not the face's.
-        column.translatesAutoresizingMaskIntoConstraints = false
-        column.isHidden = true
-        background.addSubview(column)
-        stripEdges = [
-            column.topAnchor.constraint(equalTo: background.topAnchor),
-            column.leadingAnchor.constraint(equalTo: background.leadingAnchor),
-            column.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            column.bottomAnchor.constraint(equalTo: background.bottomAnchor),
-        ]
-        self.strip = column
-        self.panel = panel
-        return panel
-    }
-
-    @objc private func collapseTapped() { setCollapsed(true) }
+    @objc func collapseTapped() { setCollapsed(true) }
 
     // MARK: - Actions
 
@@ -4120,11 +2977,11 @@ final class StatusHUD: NSObject {
     /// destination it WILL have, and lands one tab away from it in the meantime,
     /// which beats both a dead control and a button named after the pane it can
     /// actually reach. Proposal: docs/settings-microphone.html.
-    @objc nonisolated private func micSettingsTapped() {
+    @objc nonisolated func micSettingsTapped() {
         MainActor.assumeIsolated { onOpenSettings?() }
     }
 
-    @objc nonisolated private func gearTapped() {
+    @objc nonisolated func gearTapped() {
         MainActor.assumeIsolated { onOpenSettings?() }
     }
 
@@ -4232,7 +3089,7 @@ final class StatusHUD: NSObject {
         }
     }
 
-    @objc nonisolated private func backTapped() {
+    @objc nonisolated func backTapped() {
         MainActor.assumeIsolated {
             // Leaving settings stops whatever the preview was saying. Walking away
             // from a screen should not leave its sound running.
