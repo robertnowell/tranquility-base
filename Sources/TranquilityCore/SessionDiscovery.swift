@@ -49,9 +49,11 @@ public enum SessionDiscovery {
         public let answered: Bool
         public let activity: SessionActivity?
         public let liveness: Liveness
-        /// `gone` AND the launch directory still exists. Never true on
-        /// `unknown`, and never true when `claude --resume` would land
-        /// nowhere. Codex rows read this differently — see `discoverCodex`.
+        /// `gone` AND `landingDirectory` finds somewhere to stand — the
+        /// original directory, else its repository root, else `~/Projects`.
+        /// Never true on `unknown`, and never true when `claude --resume`
+        /// would land nowhere (a temp path the OS has reaped, and nothing
+        /// above it). Codex rows read this differently — see `discoverCodex`.
         public let revivable: Bool
         /// `HarnessAdapter.id` ("claude-code", "codex") — what `reviveCommand`
         /// looks the adapter up by. Defaulted for every pre-existing
@@ -100,7 +102,10 @@ public enum SessionDiscovery {
         /// answers "what command, if any" — the settled design's decision
         /// tree (try it, read Codex's own answer) is the caller's to run.
         public var reviveCommand: (cwd: String, arguments: [String])? {
-            guard revivable, let cwd else { return nil }
+            // The LANDING directory, not the recorded one — they differ exactly
+            // when the original is gone, which is the case this exists for.
+            guard revivable, let cwd = SessionDiscovery.landingDirectory(for: cwd)
+            else { return nil }
             let adapter: any HarnessAdapter = harness == CodexAdapter().id
                 ? CodexAdapter() : ClaudeCodeAdapter()
             return (cwd, adapter.resumeArguments(sessionId: sessionId))
@@ -331,7 +336,7 @@ public enum SessionDiscovery {
             // failure with their filenames). Resolve first, offer second, and
             // resolve it HERE rather than in the scan: a directory can vanish
             // between two ticks and an offer must never outlive its target.
-            let landable = session.cwd.map { isDirectory($0, fm) } ?? false
+            let landable = landingDirectory(for: session.cwd, fm) != nil
             return session.with(liveness: liveness,
                                 revivable: liveness == .gone && landable)
         }
@@ -631,6 +636,110 @@ public enum SessionDiscovery {
         return fm.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
     }
 
+    /// Where the projects home is, for the last resort below. Not a
+    /// preference: a session with nowhere else to go still has a conversation
+    /// worth reaching, and it has to open somewhere.
+    static var projectsHome: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Projects").path
+    }
+
+    /// Where a revive should actually LAND, which is not always where the
+    /// session ran.
+    ///
+    /// `revivable` used to ask "does the original directory still exist", and
+    /// used that as a proxy for "will `--resume` work". The proxy is false, and
+    /// measurably so: a session whose directory was deleted outright resumes
+    /// from anywhere with its full conversation, the same session id, and no
+    /// fork in the transcript — the cwd names the folder under
+    /// `~/.claude/projects/` once, at birth, and the link is inert after that.
+    /// Codex does not even do the naming; rollouts are filed by date and id.
+    ///
+    /// So the directory is not evidence about the session, only about where to
+    /// stand. That matters because the proxy fails constantly rather than
+    /// rarely: CLAUDE.md rule 5 requires closing a worktree when its work
+    /// merges, and 60 of the 63 worktree sessions in a 60-day window on this
+    /// machine were unrevivable for exactly that reason — 95%, caused by
+    /// following the rule correctly.
+    ///
+    /// The ladder, ruled 24 Aug after two sessions were found stuck:
+    ///
+    /// 1. The original directory, when it still exists. Unchanged behaviour,
+    ///    and the only rung that preserves the session's project config.
+    /// 2. The git repository root above it. NOT "the nearest surviving
+    ///    ancestor", which was the first proposal and would have shipped
+    ///    broken: the nearest survivor of a deleted worktree is
+    ///    `.claude/worktrees/`, a bookkeeping folder with no code in it. 56 of
+    ///    69 real cases resolve here.
+    /// 3. `~/Projects`, so a session with no repo above it is still reachable.
+    ///    Refusing here protects nothing — the transcript exists either way —
+    ///    and only removes the ability to talk to it.
+    ///
+    /// Never a temp directory. Every one of the 18 sessions found living under
+    /// `/private/tmp` was a development artifact (TB's own `tb-goto-test` and
+    /// `probe-proj` fixtures, whose first message is "say hello in one word",
+    /// plus headless `claude -p` calls made by agents from inside their own
+    /// scratchpads). Nothing real runs there, so nothing real is lost by
+    /// refusing to reopen there — and reopening there would scatter an agent's
+    /// work into a directory the OS reaps.
+    ///
+    /// Walks for a `.git` entry rather than shelling out to
+    /// `rev-parse --show-toplevel`: this runs inside the scan that repaints the
+    /// grid, and rule 9 keeps subprocess spawns off that path. Checks for
+    /// EXISTENCE, not directory-ness, because a worktree's `.git` is a file.
+    /// `temporaryRoots` and `home` are injected rather than read, for one
+    /// reason: the tests build a REAL directory tree, because the ancestor walk
+    /// is filesystem behaviour and a stubbed `fileExists` would pass while the
+    /// walk was wrong. `NSTemporaryDirectory()` is itself under `/var/folders`,
+    /// so a fixture has nowhere honest to live unless the guard can be pointed
+    /// somewhere else. Production never passes either.
+    public static func landingDirectory(for cwd: String?,
+                                        _ fm: FileManager = .default,
+                                        temporaryRoots: [String] = defaultTemporaryRoots,
+                                        home: String? = nil) -> String? {
+        guard let cwd, !cwd.isEmpty else { return nil }
+        // Rung 1 answers before the guard, deliberately: the refusal below is
+        // about REAPED paths, and a temp directory still standing was never
+        // broken. Losing that would retire every live probe session.
+        if isDirectory(cwd, fm) { return cwd }
+        if isTemporary(cwd, temporaryRoots) { return nil }
+
+        var dir = (cwd as NSString).standardizingPath
+        while dir != "/" && !dir.isEmpty {
+            if isDirectory(dir, fm) {
+                if let root = repositoryRoot(from: dir, fm) { return root }
+                break
+            }
+            dir = (dir as NSString).deletingLastPathComponent
+        }
+        let fallback = home ?? projectsHome
+        return isDirectory(fallback, fm) ? fallback : nil
+    }
+
+    /// The first ancestor of `dir` (inclusive) holding a `.git` entry.
+    static func repositoryRoot(from dir: String, _ fm: FileManager) -> String? {
+        var d = dir
+        while d != "/" && !d.isEmpty {
+            if fm.fileExists(atPath: (d as NSString).appendingPathComponent(".git")) {
+                return d
+            }
+            d = (d as NSString).deletingLastPathComponent
+        }
+        return nil
+    }
+
+    /// Paths the OS reaps. `/private/tmp` is the resolved form of `/tmp` on
+    /// macOS and both are written in transcripts, so both are named here.
+    public static let defaultTemporaryRoots =
+        ["/private/tmp", "/tmp", "/private/var/folders", "/var/folders"]
+
+    static func isTemporary(_ path: String,
+                            _ roots: [String] = defaultTemporaryRoots) -> Bool {
+        let p = (path as NSString).standardizingPath
+        for root in roots where p == root || p.hasPrefix(root + "/") { return true }
+        return false
+    }
+
     // MARK: - Codex
 
     /// Codex's half of discovery — disk-only, like the walk above, but a
@@ -693,7 +802,7 @@ public enum SessionDiscovery {
             // yet — a real, known gap, not a design choice — so file mtime
             // is the only clock there is: the same fallback Claude Code's
             // own `lastMoved` uses when a tail holds nothing dated.
-            let landable = parsed.meta?.cwd.map { isDirectory($0, fm) } ?? false
+            let landable = landingDirectory(for: parsed.meta?.cwd, fm) != nil
 
             kept.append(Session(
                 sessionId: sessionId,
