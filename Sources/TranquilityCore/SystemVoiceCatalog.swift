@@ -357,9 +357,28 @@ public enum SystemVoiceCatalog {
         }
         // A stock Mac has none of these. Rather than an empty pane, show what it will
         // actually speak with, so the list always explains the sound coming out.
-        let shown = good.isEmpty
-            ? voices(matching: language).filter { $0.identifier.contains(".voice.compact.") }
-            : good
+        //
+        // "Compact" is not one identifier shape. Found live, 24 Aug, on a machine
+        // with nothing downloaded: every en-* default voice reported
+        // `com.apple.voice.super-compact.*` (Samantha, Daniel, Karen, Moira, Rishi,
+        // Tessa — an OS-version/locale naming this fallback had never been measured
+        // against), which does not contain the literal substring ".voice.compact." —
+        // so BOTH branches came back empty and the catalogue's own "never a blank
+        // pane" promise broke exactly the way it was written not to. Matching
+        // "compact" as a bare substring catches both `.voice.compact.` and
+        // `.voice.super-compact.`; matching ALL voices for the language as the last
+        // resort means a THIRD naming scheme still can't produce an empty result
+        // for as long as the OS reports any voice at all for it.
+        let compactOrSuperCompact = voices(matching: language)
+            .filter { $0.identifier.contains("compact") }
+        let shown: [AVSpeechSynthesisVoice]
+        if !good.isEmpty {
+            shown = good
+        } else if !compactOrSuperCompact.isEmpty {
+            shown = compactOrSuperCompact
+        } else {
+            shown = voices(matching: language)
+        }
         return shown.map { v in
             // Size, not tier. The tier is already in the name — a column repeating
             // "Enhanced" beside "Allison (Enhanced)" is noise, and "Free" beside a
