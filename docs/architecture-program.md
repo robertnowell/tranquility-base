@@ -717,9 +717,40 @@ com.robertnowell.voice-dispatch (TCC).
         deliberate one-line no-op-after-first-launch cleanup for stale
         system notifications from a retired feature, not dead code, and
         deleting it removes real protection for existing installs.
-        842/842 tests green; `--selftest-hud` verification pending this
-        session's next deploy.
-      - [ ] P2, Widgets struct + TestSurface
+        842/842 tests green; deployed and verified live (9876091):
+        49/49 self-test verdicts passed, canary green.
+      - [x] P2, `Widgets` struct + `TestSurface` (23 Aug). The synthesis
+        report's "Widgets struct + TestSurface" turned out to be a
+        compressed one-liner — the original text (commit `ebb87d9`,
+        before the doc's own v2 rewrite) reads "name the coupling before
+        moving," which is what this item actually is: not a feature, prep
+        for P3 and P4.
+        `Widgets` (new file, `Widgets.swift`, `@MainActor enum`, mirrors
+        `ChromeType`'s own established pattern): houses `letterspaced`
+        and `placardText`, the two loose top-level view-building helpers
+        that used to sit directly in `StatusHUD.swift` — both already
+        called from `PastAgentsList.swift` too, which is what made them
+        safe to name first. P3's actual leaf-view targets (`DroppedItem`,
+        `AudioEventRow`/`AudioEventRowView`) are untouched, still in
+        `StatusHUD.swift`, waiting on P3 itself.
+        `TestSurface` (new file, `TestSurface.swift`, a `@MainActor`
+        protocol StatusHUD conforms to for free): sized from a real survey
+        of all 25 self-test/drill functions (44 `SelfTest.report`/
+        `skipped` call sites) rather than guessed — the coupling turned
+        out NOT to be an access-control problem (nearly every "drive the
+        panel" method a drill calls was already `internal`); what's
+        actually coupled is structural, those 25 functions living inside
+        StatusHUD's class body, and most of what each reads back is a
+        one-off private value belonging to exactly one drill. The
+        protocol carries only the genuinely reusable surface: the driving
+        primitives (`showAnnouncement`, `showArming`, `showListening`,
+        `showTranscribing`, `showResult`, `endCapture`, `highlight`,
+        `adoptTarget`) plus one shared readout confirmed so far
+        (`inkBrightLength`, relaxed from `private` to `internal` — the
+        one access-modifier change this item needed). Deliberately not an
+        exhaustive mirror of everything every drill touches; more joins
+        as P4 actually moves drill code and finds what recurs.
+        842/842 tests green; deploy verification below.
       - [ ] P3, leaf views out (~1,640 lines)
       - [ ] P4, drills + pose out (~3,200 lines)
       - [ ] P5, receipt/build/geometry extensions (StatusHUD core to ~2,500)
