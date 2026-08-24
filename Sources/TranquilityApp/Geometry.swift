@@ -134,7 +134,7 @@ extension StatusHUD {
     /// rightwards as it narrows. Taking the current right edge and keeping it is
     /// what makes this read as one panel getting thinner rather than a second
     /// panel appearing somewhere else.
-    func morph(_ panel: NSPanel, to size: NSSize) {
+    private func morph(_ panel: NSPanel, to size: NSSize) {
         let width = size.width
         var frame = panel.frame
         guard abs(frame.width - width) > 0.5 || abs(frame.height - size.height) > 0.5

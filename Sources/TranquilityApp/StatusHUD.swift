@@ -2568,14 +2568,6 @@ final class StatusHUD: NSObject {
         onRosterReordered?(order)
     }
 
-
-    /// A visible pulse the instant a gesture registers.
-    ///
-    /// The gap between pressing and anything happening is where the app feels
-    /// broken: summarizing takes seconds, and with no acknowledgment a registered
-    /// press and a missed press look identical, so you press again — which is how
-    /// every double-trigger bug this weekend started. The pulse says "heard you"
-    /// before any work begins.
     /// A bar along the top edge, not a border around the whole panel.
     ///
     /// The full border was sized to the panel at flash time, and states have
@@ -2621,6 +2613,7 @@ final class StatusHUD: NSObject {
     /// Shown the instant ⌃⌥ is tapped, so the gap before audio isn't dead air.
     /// Summarizing and fetching the voice take a few seconds; without this the app
     /// looks broken for the whole of it.
+    ///
     /// Returns false when the stage refused (a reply flow is live) — the caller
     /// must not announce, or the audio would play against a panel that never
     /// changed. Pixels and voice obey the same table.
