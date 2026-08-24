@@ -112,10 +112,14 @@ public struct SessionRow: Equatable, Sendable {
     public let aux: String
     public let lamp: Lamp
     /// Whether tapping this row brings the session back — `claude --resume`
-    /// in its own directory.
+    /// in whatever directory `SessionDiscovery.landingDirectory` resolves:
+    /// its own when that survives, else the repository root above it, else
+    /// `~/Projects`. NOT "its own directory" any more (24 Aug): a closed
+    /// worktree used to retire its agent, and 95% of worktree sessions were
+    /// unrevivable for that reason alone.
     ///
     /// NOT simply "the lamp is unlit". It requires POSITIVE evidence the
-    /// process is gone, plus a directory that still exists. A probe that
+    /// process is gone, plus somewhere to land. A probe that
     /// failed proves nothing, and resuming a session that is still running
     /// leaves the original process alive and adds a second live entry
     /// under the same id, which crashed the app twice (06 Aug 14:35, 07
