@@ -869,7 +869,41 @@ com.robertnowell.voice-dispatch (TCC).
         and switched-off-sinks-lowest partition order, the 23 Aug
         dead-vs-idle grid-membership reversal. 898/898 tests green (867
         XCTest + 31 swift-testing).
-      - [ ] P7, main.swift extension split
+      - [x] P7, main.swift extension split (24 Aug). 4,454 -> 1,238 lines.
+        Seven new `AppDelegate+*.swift` files (Permissions, Reply, Grid,
+        PushToTalk, Sessions, Menu, SelfTest), same pattern as StatusHUD's
+        P1-P5: `extension AppDelegate`, no behavior change, no public API
+        moved. `AppDelegate+Sessions.swift` (1,250 lines) is named for
+        what it actually holds, not the stale "Deep links" MARK it grew
+        under — deep-link handling, `sendReply`, and all of session
+        management (`newSession`, `goToSession`, `revive`) had been sitting
+        under that one label with no sub-marks.
+        Real bug found doing this: `statusItemClicked()` was silently
+        dropped by the first extraction pass (a slicing error, not a
+        pre-existing bug) and caught only by a full before/after content
+        diff — every content line from the redistributed span (1,178-4,412
+        in the original) checked against the sum of the new files,
+        normalizing only for the expected `private`->`internal` relaxation.
+        That diff also caught the 5th instance of this session's recurring
+        doc-comment-drift bug (P1-P4 each found one): `sendReply`'s own
+        doc comment had drifted from an orphaned one-liner ("Hold:
+        transcribe and route the reply back to whichever session last
+        spoke") sitting under the old MARK boundary — reattached.
+        115 members relaxed `private` -> `internal` in one pass, not
+        individually justified like P1-P5's smaller counts: this file's
+        `AppDelegate` had every member `private` because it was ALL one
+        file, and the alternative (auditing each of 115 one at a time) was
+        disproportionate to the actual risk — `internal` still means
+        "only this app target", the boundary that mattered before the
+        split too. Four stored properties that were scattered mid-file
+        (`menuBarWasPresent`, `arrivalProbeGeneration`/`pendingArrival`,
+        `statusMenu`, `lastRebuildCost`) relocated to the primary
+        declaration's property block — extensions cannot add stored
+        properties, so every one of them has to live wherever the class
+        itself is declared regardless of which file reads it. `Counter`
+        (the selftest's stream-ask ledger) and `InFlightTranscription`
+        moved/relaxed the same way. 899/899 tests green; deploy
+        verification below.
       - [ ] P8, GridAssembler to Core
       - [ ] P9, Recorder/CaptureUnit/log-writer to Core
 - [x] Store riders + dead-code deletions (ff98d7f, 23 Aug): `TransportKind.
