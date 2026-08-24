@@ -36,6 +36,17 @@ public protocol HarnessAdapter: Sendable {
     /// polling for needles that will never appear.
     var trustPrompt: TrustPromptSpec? { get }
 
+    /// Directories to search for this harness's own binary, in priority
+    /// order, joined into the `PATH` a launched tmux pane's shell sees.
+    /// Harness-specific because install methods differ (npm/bun/homebrew
+    /// for Claude Code, cargo among them for Codex, which ships from a
+    /// Rust workspace) — a launcher that hand-copies one generic list, as
+    /// `launchTmux` did before this, silently stops finding a harness
+    /// installed somewhere that list didn't anticipate. `~` is expanded by
+    /// the adapter itself (each conformance already knows its own home
+    /// directory calls); a launcher never guesses at that expansion.
+    var pathCandidates: [String] { get }
+
     /// Facts about the TUI a launcher/transport needs and must never guess:
     /// does pasted text echo into a visible composer line, what glyph marks
     /// the composer's own line, does the harness queue typed input while
@@ -203,6 +214,23 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
                             hasHooks: true, allowsConcurrentResume: true,
                             pasteChipPrefix: "[Pasted text #")
     }
+
+    /// Same install locations `ClaudeAgentsCLI.resolveBinary()` already
+    /// searches for the `claude` binary itself, minus the filename — the
+    /// two lists describe the same fact (where this harness's install
+    /// methods put a binary) for two different consumers (finding the
+    /// binary to run `claude agents --json` vs. building a launched pane's
+    /// `PATH`), so they stay in sync by staying the same list, not by
+    /// coincidence.
+    public var pathCandidates: [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return [
+            "\(home)/.local/bin", "\(home)/.claude/local",
+            "/opt/homebrew/bin", "/usr/local/bin",
+            "\(home)/.bun/bin", "\(home)/.npm-global/bin",
+            "/usr/bin", "/bin",
+        ]
+    }
 }
 
 /// Codex, as a HarnessAdapter. Measured live 21 Aug against codex-cli 0.149.0
@@ -278,6 +306,27 @@ public struct CodexAdapter: HarnessAdapter {
                             queuesInputMidTurn: true, registersWithLiveness: false,
                             hasHooks: true, allowsConcurrentResume: false,
                             pasteChipPrefix: "[Pasted Content ")
+    }
+
+    /// This machine's own `codex` resolves through `~/.local/bin` same as
+    /// `claude` (confirmed live, 23 Aug: a symlink into
+    /// `~/.codex/packages/standalone/current/bin/codex`), so the common
+    /// locations are shared with `ClaudeCodeAdapter`. `~/.cargo/bin` is
+    /// listed too, ahead of the generic homebrew/usr paths: codex-rs is a
+    /// Rust workspace, and a machine that built or installed it via cargo
+    /// rather than the npm/standalone distribution would put it there —
+    /// unverified on THIS machine (nothing installed that way here to
+    /// check against), included because the failure mode of guessing wrong
+    /// is silent (a launch that can't find `codex` at all), not because it
+    /// was measured.
+    public var pathCandidates: [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return [
+            "\(home)/.local/bin", "\(home)/.cargo/bin",
+            "/opt/homebrew/bin", "/usr/local/bin",
+            "\(home)/.npm-global/bin",
+            "/usr/bin", "/bin",
+        ]
     }
 }
 
