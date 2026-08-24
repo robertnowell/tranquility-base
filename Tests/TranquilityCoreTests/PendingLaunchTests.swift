@@ -6,7 +6,8 @@ import XCTest
 /// a reply started three seconds in went to the PREVIOUS agent.
 final class PendingLaunchTests: XCTestCase {
     private func launch() -> PendingLaunch {
-        PendingLaunch(label: "Projects", directory: "/Users/x/Projects")
+        PendingLaunch(label: "Projects", directory: "/Users/x/Projects",
+                      conversationAtLaunch: nil)
     }
 
     func testAResolvedLaunchAnswersImmediately() async {
