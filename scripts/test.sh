@@ -29,7 +29,7 @@ cd "$(dirname "$0")/.."
 
 # Raise these when the suite grows. They exist so that "the tests stopped being
 # compiled in" cannot look like "the tests passed".
-FLOOR_XCTEST=868
+FLOOR_XCTEST=881
 FLOOR_SWIFT_TESTING=41
 
 # Apple Silicon hardware under a translated shell: re-exec the test run native.
@@ -43,14 +43,30 @@ FLOOR_SWIFT_TESTING=41
 RUNNER=(env)
 if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = "1" ] \
    && [ "$(uname -m)" != "arm64" ]; then
-  RUNNER=(arch -arm64)
-  echo "→ shell is $(uname -m) on arm64 hardware; running tests under arch -arm64"
+  RUNNER=(arch -arm64e)
+  echo "→ shell is $(uname -m) on arm64 hardware; running tests under arch -arm64e"
 fi
 
-echo "→ swift test"
+# TWO invocations, not one. Found independently by the App-lane session at P9
+# on a different machine (945d499) and it is the stronger mechanism, so it wins
+# here — rule 4, newest ruling, and this one cites a measurement: on that
+# toolchain the both-enabled invocation drops the XCTest bundle silently, where
+# on this one a single `arch -arm64` run happened to carry both. Asking for each
+# framework explicitly is true on both machines; relying on the default is true
+# on one of them. What this file adds on top is the floor — their version still
+# passes an "Executed 0 tests, with 0 failures".
+#
 # Captured, never piped — see the long note in preflight.sh about pipefail and
 # SIGPIPE. Same trap, same reason.
-OUT=$("${RUNNER[@]}" swift test 2>&1) && STATUS=0 || STATUS=$?
+echo "→ swift test --enable-xctest"
+OUT=$("${RUNNER[@]}" swift test --enable-xctest --disable-swift-testing 2>&1) \
+  && STATUS=0 || STATUS=$?
+echo "→ swift test --enable-swift-testing"
+ST_OUT=$("${RUNNER[@]}" swift test --disable-xctest --enable-swift-testing 2>&1) \
+  && ST_STATUS=0 || ST_STATUS=$?
+OUT="$OUT
+$ST_OUT"
+[ "$ST_STATUS" -eq 0 ] || STATUS=$ST_STATUS
 
 fail() {
   echo "✗ $1" >&2

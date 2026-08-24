@@ -872,6 +872,19 @@ enum StateLegend {
         case .floorHeld: return "someone is mid-keystroke in its input box"
         }
     }
+
+    /// The rescue message for `.dispatchFailed(.tabNotFound/.targetGone,_)` —
+    /// unified 24 Aug (App-lane P8, "unify the twice-written outcome→copy
+    /// mapping") from two copies, `AppDelegate.send()` and `.sendReply()`,
+    /// that had drifted apart only in whether a session label was already
+    /// known at that call site: the branch on `copied` (from
+    /// `copyTranscriptToClipboard`) was identical logic, written twice.
+    static func tabGoneRescueMessage(label: String?, copied: Bool) -> String {
+        let who = label.map { "\($0)'s tab" } ?? "That tab"
+        return copied
+            ? "\(who) is gone, copied your words to the clipboard."
+            : "\(who) is gone. Your words are kept in the log."
+    }
 }
 
 /// `Lamp`'s rendering — the half that stayed here after App-lane P6 (24
