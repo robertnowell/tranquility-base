@@ -89,23 +89,27 @@ echo "→ testing"
 # So: no pipe at all. Bash can test a substring without spawning anything, and
 # a check with no subprocess has no pipeline to fail.
 #
+# Two invocations, not one — found 24 Aug on a new machine (App-lane P9): a
+# bare `swift test` here silently runs ONLY the Swift Testing suites and
+# skips every XCTestCase-based test with no error, no non-zero exit, nothing
+# — 31 tests reported as green while 881 XCTestCase tests never ran. Passing
+# `--enable-xctest --disable-swift-testing` is what actually forces the
+# XCTest bundle to run; the default/both-enabled invocation reliably drops
+# it on this toolchain. `arch -arm64e` because plain `swift`/`swift test`
+# resolve to the x86_64 slice in this shell, which cannot dlopen the
+# arm64e-only XCTest bundle at all. Both frameworks are checked separately
+# so a silent zero in either one is a hard failure, not a quiet pass.
+#
 # The exit STATUS is the verdict; the summary line is a corroborating check that
 # the run actually happened rather than dying before it reached the tests.
-#
-# Through scripts/test.sh, not `swift test` directly (24 Aug). That script
-# picks the architecture and — the part that matters here — refuses to report
-# success unless it can prove BOTH halves of the suite ran and neither shrank.
-# A plain `swift test` in a Rosetta shell runs 41 of 883 tests and signs off
-# with "Test run with 41 tests in 4 suites passed" as its final line. The exit
-# status was honest and this gate would have caught it; the terminal still said
-# passed, and that is what a session reading the tail believes.
+# Through scripts/test.sh, which runs both invocations AND refuses to report
+# success unless each half cleared a floor. The two-invocation mechanism below
+# was this file's, found at App-lane P9; the floor is what stops an
+# "Executed 0 tests, with 0 failures" from reading as green.
 TEST_OUT=$(scripts/test.sh 2>&1) && TEST_STATUS=0 || TEST_STATUS=$?
 if [ "$TEST_STATUS" -ne 0 ]; then
   echo "✗ tests failed (exit $TEST_STATUS)" >&2
-  # `head` closing early is the same SIGPIPE trap; this one is on the way out
-  # through `exit 1`, but an unguarded pipeline under `set -e` would skip the
-  # diagnosis it exists to print.
-  printf '%s\n' "$TEST_OUT" | grep -E "error:|failed|XCTAssert" | head -20 >&2 || true
+  printf '%s\n' "$TEST_OUT" | grep -E "✗|error:|XCTAssert" | head -20 >&2 || true
   exit 1
 fi
 printf '%s\n' "$TEST_OUT" | grep -E "^✓ [0-9]+ XCTest" | tail -1 | sed 's/^✓/ /'
