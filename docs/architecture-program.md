@@ -754,7 +754,36 @@ com.robertnowell.voice-dispatch (TCC).
         self-test verdicts passed (including the placard/strip/chip
         drills that exercise `Widgets.letterspaced`/`Widgets.
         placardText` directly), canary green.
-      - [ ] P3, leaf views out (~1,640 lines)
+      - [x] P3, leaf views out (23 Aug): `StatusHUD.swift` 9,186 → 7,563
+        lines (1,623 moved, against the ~1,640 estimate) — every leaf
+        view/data type hoisted into its own file, `StatusHUD.swift` now
+        contains only the `StatusHUD` class itself. `DroppedItem` and
+        `AudioEventRow`, named explicitly in the original spec, moved
+        from nested (`StatusHUD.DroppedItem`/`StatusHUD.AudioEventRow`)
+        to top-level — the two external references in `main.swift`
+        updated to the bare names. New files: `AudioEventRow.swift`,
+        `DragAndDrop.swift` (`DroppedItem`, `DropSurfaceView`,
+        `TrayRowView`, `DropOverlayView`), `Labels.swift` (`DoorLabel`,
+        `CardBodyLabel`), `ConsoleButton.swift`, `GridRowView.swift`,
+        `Controls.swift` (`HoverBox`, `ControlsWordView`,
+        `GridFooterView`, `ControlsNoteView`), `CountdownBarView.swift`,
+        `VoiceRoster.swift` (`FlippedDocumentView`, `VoiceRowView`,
+        `CheckView`) — grouped by real usage relationships (nesting,
+        shared construction sites), not one file per type. Seven types
+        relaxed from `private` to `internal` where StatusHUD.swift itself
+        still constructs them across the new file boundary; two
+        (`HoverBox`, `CheckView`) stayed `private`, genuinely used only
+        by their sibling in the same new file.
+        A real, pre-existing bug found along the way: three separate leaf
+        views' doc comments (`GridRowView`, `DoorLabel`, `DropSurfaceView`)
+        had been concatenated into one contiguous orphaned block ~600
+        lines from all three declarations — an artifact of some earlier
+        edit, invisible until each type was traced by hand. Split back
+        apart and reattached to the right type, not left to travel
+        further mislabeled. (Two smaller instances of the same class of
+        bug were found and fixed in P1/P2 — this file has a real history
+        of doc comments separating from the code they describe.)
+        842/842 tests green; deploy verification below.
       - [ ] P4, drills + pose out (~3,200 lines)
       - [ ] P5, receipt/build/geometry extensions (StatusHUD core to ~2,500)
       - [ ] P6, SessionRow model + grid statics to Core, with unit tests
