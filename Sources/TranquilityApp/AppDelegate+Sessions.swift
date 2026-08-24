@@ -497,9 +497,7 @@ extension AppDelegate {
                     let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
                     lastStatusLine = copied ? "tab gone, words on the clipboard"
                                             : "tab gone, words kept in the log"
-                    hud.showResult(copied
-                        ? "That tab is gone, copied your words to the clipboard."
-                        : "That tab is gone. Your words are kept in the log.")
+                    hud.showResult(StateLegend.tabGoneRescueMessage(label: nil, copied: copied))
                 case .dispatchFailed(let failure, _):
                     lastStatusLine = "send failed: \(failure), audio kept"
                 }

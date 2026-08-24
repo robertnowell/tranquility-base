@@ -905,7 +905,40 @@ com.robertnowell.voice-dispatch (TCC).
         moved/relaxed the same way. 899/899 tests green; deployed and
         verified live (3fb6daf): 49/49 self-test verdicts passed, canary
         green.
-      - [ ] P8, GridAssembler to Core
+      - [x] P8, GridAssembler to Core (24 Aug). New `GridAssembler.swift`:
+        `blockedOnYou`, `lampAndReason`, `tabTitle`, `tabDisplayName` moved
+        — all four already depended on nothing but Core types
+        (`WaitingAt`, `AgentRestart`, `SessionActivity`, `TranscriptTitles`,
+        `Lamp`/`SessionRow` from P6), the app layer was just where they'd
+        been written. `lampAndReason` gained an `isInFlight: Bool`
+        parameter replacing a direct read of `Coordinator`/AppDelegate's
+        `DeliveryInFlight` — the one change needed to make it callable
+        from Core without carrying app-layer delivery-tracking state.
+        `sessionRowsNow()` itself stays app-side, deliberately: it owns
+        `lastSeenLive` and reads `delivering`, and extracting those too
+        would mean designing a real stateful Core type to replace what
+        are currently plain `AppDelegate` properties — a bigger redesign
+        than this pass, noted rather than attempted.
+        "Unify the twice-written outcome→copy mapping": found in
+        `AppDelegate.send()` and `.sendReply()` — both switch over
+        `Coordinator.ReplyOutcome` and had near-identical (not just
+        similar) branching for `.dispatchFailed(.tabNotFound/
+        .targetGone,_)`, copying the transcript to the clipboard and
+        picking a message on whether it succeeded, written twice with
+        only the presence of a session label differing. Unified into
+        `StateLegend.tabGoneRescueMessage(label:copied:)`, called from
+        both. The rest of each switch's cases handle genuinely different
+        stages of the reply flow (`submitReply`'s outcome vs
+        `confirmAndSend`'s, a strictly narrower set) with real UI
+        differences (a receipt chip vs a status line) that reflect
+        different UX rulings, not accidental drift — left alone rather
+        than force-unified.
+        13 new unit tests (`GridAssemblerTests.swift`, not exhaustive —
+        pins the precedence order each doc comment states: blocked
+        outranks everything, the process outranks the file for working/
+        stalled/idle, isInFlight upgrades quiet to blue, pickedUp is the
+        lowest-precedence override). 912/912 tests green; deploy
+        verification below.
       - [ ] P9, Recorder/CaptureUnit/log-writer to Core
 - [x] Store riders + dead-code deletions (ff98d7f, 23 Aug): `TransportKind.
       iTerm2/.wezterm/.kitty` (grep-confirmed never constructed; decode-safe
