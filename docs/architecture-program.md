@@ -750,7 +750,10 @@ com.robertnowell.voice-dispatch (TCC).
         one access-modifier change this item needed). Deliberately not an
         exhaustive mirror of everything every drill touches; more joins
         as P4 actually moves drill code and finds what recurs.
-        842/842 tests green; deploy verification below.
+        842/842 tests green; deployed and verified live (771cfc1): 49/49
+        self-test verdicts passed (including the placard/strip/chip
+        drills that exercise `Widgets.letterspaced`/`Widgets.
+        placardText` directly), canary green.
       - [ ] P3, leaf views out (~1,640 lines)
       - [ ] P4, drills + pose out (~3,200 lines)
       - [ ] P5, receipt/build/geometry extensions (StatusHUD core to ~2,500)
