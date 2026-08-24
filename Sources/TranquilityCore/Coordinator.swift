@@ -9,16 +9,10 @@ public struct Coordinator: Sendable {
     public let summarizer: SummarizerChain
     public let speech: SpeechChain
     public let gate: InterruptGate
-    public let transport: any DispatchTransport
-    /// The closed-loop tmux transport, selected per target when a live tmux
-    /// server owns the session's pane. `transport` (Terminal.app) is the
-    /// fallback of last resort — every NEW launch is tmux now (ruled 21 Aug),
-    /// and `resumeTwin` below closes the other real gap (a hand-started
-    /// session's first dispatch), so what still reaches `transport` is
-    /// `resumeTwin` itself failing (22 Aug, 2026-08-22-tb-terminal-
-    /// architecture: this was never a real design choice, just unfinished
-    /// wiring). Scheduled for deletion at the single-transport cut, not a
-    /// standing co-existence design.
+    /// The one dispatch transport (single-transport cut, 23 Aug — the
+    /// `TerminalAppTransport` fallback this property once chose between with
+    /// is deleted, not scheduled for deletion; a `resumeTwin` failure now
+    /// refuses cleanly in `dispatch` below instead of rerouting through it).
     public let tmuxTransport: any DispatchTransport
 
     /// TRANSFERS ownership of a hand-started session dispatch resolved no
@@ -43,12 +37,6 @@ public struct Coordinator: Sendable {
     /// before this existed.
     public let resumeTwin: @Sendable (_ sessionId: String, _ directory: String) -> TmuxPaneAddress?
 
-    /// Which transport reaches this target. The decision is the target's own
-    /// `pane` fact (resolved fresh from live server inventory at construction),
-    /// never a stored preference and never a tty string comparison.
-    func transport(for target: DispatchTarget) -> any DispatchTransport {
-        target.pane != nil ? tmuxTransport : transport
-    }
     public let enrolment: EnrolmentRegistry
     public let agents: ClaudeAgentsReading
     /// Injected rather than defaulted at the call site, so tests can run the whole
@@ -76,7 +64,6 @@ public struct Coordinator: Sendable {
         summarizer: SummarizerChain = SummarizerChain(),
         speech: SpeechChain = SpeechChain(),
         gate: InterruptGate = InterruptGate(),
-        transport: any DispatchTransport = TerminalAppTransport(),
         tmuxTransport: any DispatchTransport = TmuxTransport(),
         enrolment: EnrolmentRegistry = EnrolmentRegistry(),
         agents: ClaudeAgentsReading = ClaudeAgentsCLI(),
@@ -103,7 +90,6 @@ public struct Coordinator: Sendable {
         self.summarizer = summarizer
         self.speech = speech
         self.gate = gate
-        self.transport = transport
         self.tmuxTransport = tmuxTransport
         self.enrolment = enrolment
         self.agents = agents
@@ -1230,10 +1216,27 @@ public struct Coordinator: Sendable {
             Coordinator.trace?(pane != nil
                 ? "dispatch: \(target.sessionId.prefix(8)) had no tmux twin — resumed one"
                 : "dispatch: \(target.sessionId.prefix(8)) has no tmux twin and resuming "
-                    + "one failed — falling back to Terminal.app")
+                    + "one failed")
+        }
+        // tmux is the ONLY transport (single-transport cut, 23 Aug, on the
+        // operator's own instruction: "I don't know why tmux would ever be
+        // not available... is there really a situation where tmux would not
+        // be available for us to still need Terminal app transport?" —
+        // there wasn't one worth building a whole second, far-less-tested
+        // transport around). A hand-started session with no tmux twin and a
+        // failed transfer refuses cleanly here, rather than silently
+        // rerouting through AppleScript the way `TerminalAppTransport` once
+        // did.
+        guard let pane else {
+            attachments.resolve(utteranceId: utterance.id, landed: false)
+            utterance.status = .ready
+            try store.update(utterance: utterance)
+            return .dispatchFailed(
+                .injectionFailed("tmux is unavailable for this session"),
+                utteranceId: utterance.id)
         }
         let dispatchTarget = DispatchTarget(
-            kind: pane != nil ? .tmux : .terminalApp,
+            kind: .tmux,
             sessionId: target.sessionId,
             pid: live.pid,
             tty: ProcessProbe.tty(of: live.pid),
@@ -1254,7 +1257,7 @@ public struct Coordinator: Sendable {
         // The tray's fate rides the same exhaustive switch as the utterance's
         // status — one clear-site, not five. Landed (or possibly landed)
         // clears; everything else returns the files to the chips.
-        switch await transport(for: dispatchTarget).send(text: text, to: dispatchTarget) {
+        switch await tmuxTransport.send(text: text, to: dispatchTarget) {
         case .queued:
             // Delivered into a session that is mid-turn. It will send itself when
             // that turn ends. Treated as answered, because it is: the words are in

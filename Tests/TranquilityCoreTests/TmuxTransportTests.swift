@@ -169,11 +169,11 @@ final class TmuxTransportTests: XCTestCase {
 
     // MARK: selection defaults
 
-    func testDispatchTargetDefaultsStayTerminal() {
-        // Every existing construction site compiles unchanged and still means
-        // Terminal.app — co-existence, not rip-out.
+    func testDispatchTargetDefaultsStayTmux() {
+        // Terminal.app is gone (single-transport cut, 23 Aug) — every
+        // existing construction site now compiles unchanged and means tmux.
         let target = DispatchTarget(sessionId: "s")
-        XCTAssertEqual(target.kind, .terminalApp)
+        XCTAssertEqual(target.kind, .tmux)
         XCTAssertNil(target.pane)
     }
 
@@ -193,21 +193,6 @@ final class TmuxTransportTests: XCTestCase {
 
     func testFloorHeldRefusesDispatch() {
         XCTAssertFalse(Readiness.floorHeld.canDispatch)
-    }
-
-    func testTerminalTransportRefusesTmuxOwnedTarget() async {
-        // Defense in depth behind the Coordinator's selection: the misfire
-        // shape (Terminal typing at a tmux-owned target) must be impossible
-        // even if a caller wires the wrong transport by hand.
-        let pane = TmuxPaneAddress(socketName: "tb", paneId: "%1",
-                                   sessionName: "tb-x", paneTty: "/dev/ttys011")
-        let target = DispatchTarget(kind: .tmux, sessionId: "s", pid: 1,
-                                    pane: pane, readinessSource: .processAlive)
-        let outcome = await TerminalAppTransport().send(text: "x", to: target)
-        guard case .failed(.injectionFailed(let why)) = outcome else {
-            return XCTFail("expected refusal, got \(outcome)")
-        }
-        XCTAssertTrue(why.contains("refusing Terminal.app injection"))
     }
 
     // MARK: dual-live dispatch-target resolution (M3)

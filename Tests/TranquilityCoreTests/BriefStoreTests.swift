@@ -51,14 +51,6 @@ final class BriefStoreTests: XCTestCase {
         func stop() {}
     }
 
-    final class NoopTransport: DispatchTransport, @unchecked Sendable {
-        let kind = TransportKind.terminalApp
-        func readiness(for target: DispatchTarget) async -> Readiness { .ready }
-        func send(text: String, to target: DispatchTarget) async -> DispatchOutcome {
-            .confirmed(latencyMs: 1)
-        }
-    }
-
     struct FakeAgents: ClaudeAgentsReading {
         func sessions() -> [LiveSession]? {
             [LiveSession(pid: 1, sessionId: "sess-1", cwd: "/tmp/promotions",
@@ -75,7 +67,6 @@ final class BriefStoreTests: XCTestCase {
             summarizer: SummarizerChain(providers: [provider]),
             speech: SpeechChain(preferred: speech, fallback: speech),
             gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
-            transport: NoopTransport(),
             enrolment: EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json")),
             agents: FakeAgents(),
             recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))

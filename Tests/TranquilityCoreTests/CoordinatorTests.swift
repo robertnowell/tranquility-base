@@ -114,7 +114,6 @@ final class CoordinatorTests: XCTestCase {
 
     private func makeCoordinator(
         speech: SilentSpeech = SilentSpeech(),
-        transport: RecordingTransport = RecordingTransport(),
         tmuxTransport: RecordingTransport = RecordingTransport(),
         enrolled: Bool = true,
         sessionLive: Bool = true,
@@ -123,16 +122,20 @@ final class CoordinatorTests: XCTestCase {
         // production grace for each one added twelve seconds apiece to the
         // suite. The grace has its own test, below.
         readinessGrace: TimeInterval = 0,
-        // `nil` — no twin resumed — for every test but the one that exists to
-        // assert this specifically. The real default (production) calls a
-        // real `SessionLauncher.resumeTmux`, which has no business running
-        // inside a unit test; `resumeTwin` is exactly the seam that stops it
-        // (this coordinator's own doc comment on the property says why).
-        // Before this seam existed the fake `LiveSession`s below (cwd
-        // "/tmp/p", a pid this test process itself has no tmux pane for)
-        // silently exercised the real function and only stayed harmless
-        // because "/tmp/p" happens not to exist — an accident, not a test.
-        resumeTwin: @escaping @Sendable (String, String) -> TmuxPaneAddress? = { _, _ in nil },
+        // A FABRICATED pane by default, for every test but the ones that
+        // exist to assert `resumeTwin` failing specifically. Single-
+        // transport cut (23 Aug): with `TerminalAppTransport` deleted,
+        // `Coordinator.dispatch` refuses cleanly the moment `resumeTwin`
+        // returns nil (no fallback transport left to reach) — so a
+        // fixture pid the test process has no real tmux pane for (every
+        // `LiveSession` below, cwd "/tmp/p") needs SOME resolved pane to
+        // reach `tmuxTransport` at all, the same way production reaches it
+        // via a real `resumeTmux`. The two tests that assert the refusal
+        // itself pass `resumeTwin: { _, _ in nil }` explicitly.
+        resumeTwin: @escaping @Sendable (String, String) -> TmuxPaneAddress? = { _, _ in
+            TmuxPaneAddress(socketName: "tb", paneId: "%1",
+                            sessionName: "tb-fixture", paneTty: "/dev/ttys999")
+        },
         // nil keeps the default fixed FakeAgents below — only the ownership-
         // transfer test needs an agents fake that answers DIFFERENTLY before
         // and after `resumeTwin` runs, since that is exactly the seam it
@@ -146,7 +149,6 @@ final class CoordinatorTests: XCTestCase {
             summarizer: SummarizerChain(providers: [FixedSummary()]),
             speech: SpeechChain(preferred: speech, fallback: speech),
             gate: gate,
-            transport: transport,
             tmuxTransport: tmuxTransport,
             enrolment: registry,
             agents: overrideAgents ?? FakeAgents(live: sessionLive
@@ -218,7 +220,7 @@ final class CoordinatorTests: XCTestCase {
             summarizer: SummarizerChain(providers: [FixedSummary()]),
             speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
             gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
-            transport: RecordingTransport(),
+            tmuxTransport: RecordingTransport(),
             enrolment: EnrolmentRegistry(url: tmpDir.appendingPathComponent("e2.json")),
             agents: FailingAgents(),
             recovery: RecoveryChain(providers: [FixedTranscript(text: "x")],
@@ -245,7 +247,7 @@ final class CoordinatorTests: XCTestCase {
     func testAnnounceThenReplyRoutesBackToTheSessionThatSpoke() async throws {
         let speech = SilentSpeech()
         let transport = RecordingTransport()
-        let coordinator = try makeCoordinator(speech: speech, transport: transport)
+        let coordinator = try makeCoordinator(speech: speech, tmuxTransport: transport)
         try append()
 
         guard case .spoke(let announcement) = try await coordinator.announceNext() else {
@@ -473,7 +475,7 @@ final class CoordinatorTests: XCTestCase {
             store: store, summarizer: SummarizerChain(providers: [counting]),
             speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
             gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
-            transport: RecordingTransport(), enrolment: registry,
+            tmuxTransport: RecordingTransport(), enrolment: registry,
             agents: FakeAgents(live: [LiveSession(pid: 1, sessionId: "sess-1", cwd: "/tmp",
                                                   status: "idle", name: "p", waitingFor: nil)]),
             recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
@@ -514,7 +516,7 @@ final class CoordinatorTests: XCTestCase {
             summarizer: SummarizerChain(providers: [FixedSummary()]),
             speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
             gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
-            transport: RecordingTransport(), enrolment: registry,
+            tmuxTransport: RecordingTransport(), enrolment: registry,
             agents: FakeAgents(live: [
                 LiveSession(pid: 1, sessionId: "human", cwd: "/tmp", status: "idle",
                             name: "p", waitingFor: nil)]),
@@ -582,7 +584,7 @@ final class CoordinatorTests: XCTestCase {
 
     func testTranscribingNeverTypesAnything() async throws {
         let transport = RecordingTransport()
-        let coordinator = try makeCoordinator(transport: transport, enrolled: false)
+        let coordinator = try makeCoordinator(tmuxTransport: transport, enrolled: false)
         try append()
         _ = try await coordinator.announceNext()
 
@@ -599,14 +601,14 @@ final class CoordinatorTests: XCTestCase {
         let transport = RecordingTransport()
         // Heard while live, then the session blocks on a dialog and disappears from
         // the agents API before the reply is sent.
-        let live = try makeCoordinator(transport: transport)
+        let live = try makeCoordinator(tmuxTransport: transport)
         try append()
         _ = try await live.announceNext()
         guard case .readyToSend(let utteranceId, _, _, _) =
             try await live.submitReply(pcm16: silence())
         else { return XCTFail("expected a pending send") }
 
-        let coordinator = try makeCoordinator(transport: transport, sessionLive: false)
+        let coordinator = try makeCoordinator(tmuxTransport: transport, sessionLive: false)
 
         guard case .sessionNotReady(.notRegistered) =
             try await coordinator.confirmAndSend(utteranceId: utteranceId)
@@ -617,7 +619,7 @@ final class CoordinatorTests: XCTestCase {
     func testAmbiguousDispatchIsNeverMarkedConfirmedOrRetried() async throws {
         let transport = RecordingTransport()
         transport.outcome = .failed(.verificationTimedOut)
-        let coordinator = try makeCoordinator(transport: transport)
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
         try append()
         _ = try await coordinator.announceNext()
 
@@ -633,14 +635,16 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(transport.sent.count, 1, "one attempt: a duplicate is worse than a drop")
     }
 
-    /// The 22 Aug fix: a hand-started session with no tmux pane resumes a
-    /// dual-live twin (via the injected `resumeTwin`) and dispatches into
-    /// THAT, instead of falling to `transport` (AppleScript/Terminal.app).
-    /// The twin's own pid/pane are fabricated here — only the WIRING is
-    /// under test, not `resumeTmux` itself, which has no place running for
-    /// real inside a unit test (see `resumeTwin`'s own doc comment).
-    func testAHandStartedSessionWithNoPaneResumesATwinInsteadOfAppleScript() async throws {
-        let terminalApp = RecordingTransport()
+    /// The 22 Aug fix, narrowed 23 Aug: a hand-started session with no tmux
+    /// pane resumes a twin (via the injected `resumeTwin`) and dispatches
+    /// into THAT. Used to be "instead of falling to `transport`
+    /// (AppleScript/Terminal.app)" — that fallback is deleted outright now
+    /// (single-transport cut), so the only thing left to assert is that the
+    /// transfer happens and the reply lands over tmux. The twin's own
+    /// pid/pane are fabricated here — only the WIRING is under test, not
+    /// `resumeTmux` itself, which has no place running for real inside a
+    /// unit test (see `resumeTwin`'s own doc comment).
+    func testAHandStartedSessionWithNoPaneResumesATwinAndDispatchesOverTmux() async throws {
         let tmux = RecordingTransport()
         let fabricatedPane = TmuxPaneAddress(
             socketName: "tb", paneId: "%99", sessionName: "tb-fabricated", paneTty: "/dev/ttys099")
@@ -657,7 +661,7 @@ final class CoordinatorTests: XCTestCase {
         }
         let resumeTwinCalls = Calls()
         let coordinator = try makeCoordinator(
-            transport: terminalApp, tmuxTransport: tmux,
+            tmuxTransport: tmux,
             resumeTwin: { sessionId, directory in
                 resumeTwinCalls.record(sessionId, directory)
                 return fabricatedPane
@@ -675,8 +679,6 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(resumeTwinCalls.all.first?.sessionId, "sess-1")
         XCTAssertEqual(resumeTwinCalls.all.first?.directory, "/tmp/p")
         XCTAssertEqual(tmux.sent.count, 1, "the reply lands in the twin, over tmux")
-        XCTAssertTrue(terminalApp.sent.isEmpty,
-                      "never falls to AppleScript once the twin resumed")
     }
 
     /// A mutable `ClaudeAgentsReading` fake — needed only by the test below,
@@ -701,7 +703,6 @@ final class CoordinatorTests: XCTestCase {
     /// it may have exited", true and also the bug — the panel never learned
     /// about the NEW pid the transfer had actually landed on.
     func testOwnershipTransferRefreshesThePidDownstream() async throws {
-        let terminalApp = RecordingTransport()
         let tmux = RecordingTransport()
         let fabricatedPane = TmuxPaneAddress(
             socketName: "tb", paneId: "%99", sessionName: "tb-fabricated", paneTty: "/dev/ttys099")
@@ -713,7 +714,7 @@ final class CoordinatorTests: XCTestCase {
         }
         let agents = SwappableAgents(rows(111))
         let coordinator = try makeCoordinator(
-            transport: terminalApp, tmuxTransport: tmux,
+            tmuxTransport: tmux,
             resumeTwin: { _, _ in
                 // The real closure's own effect, faked here: the
                 // hand-started pid is gone, a fresh one is live under tmux.
@@ -736,15 +737,18 @@ final class CoordinatorTests: XCTestCase {
                        "the stored utterance must agree with the dispatch target")
     }
 
-    /// The other half: when `resumeTwin` fails (returns nil — the real
-    /// default does this whenever `resumeTmux` itself fails), dispatch falls
-    /// back to `transport` exactly as it always did, so a genuinely broken
-    /// tmux binary degrades to the old behavior rather than refusing outright.
-    func testATwinThatFailsToResumeFallsBackToAppleScript() async throws {
-        let terminalApp = RecordingTransport()
+    /// The other half, rewritten for the single-transport cut (23 Aug): when
+    /// `resumeTwin` fails (returns nil — the real default does this whenever
+    /// `resumeTmux` itself fails), dispatch used to fall back to
+    /// `TerminalAppTransport`; with that deleted outright (on the operator's
+    /// own instruction — no fallback worth keeping for a failure mode this
+    /// narrow), it refuses cleanly instead. A genuinely broken tmux binary
+    /// now reads as an honest failure, not a silent reroute through a
+    /// far-less-tested transport.
+    func testATwinThatFailsToResumeRefusesCleanly() async throws {
         let tmux = RecordingTransport()
         let coordinator = try makeCoordinator(
-            transport: terminalApp, tmuxTransport: tmux, resumeTwin: { _, _ in nil })
+            tmuxTransport: tmux, resumeTwin: { _, _ in nil })
         try append()
         _ = try await coordinator.announceNext()
 
@@ -752,10 +756,13 @@ final class CoordinatorTests: XCTestCase {
             try await coordinator.submitReply(pcm16: silence())
         else { return XCTFail("expected a pending send") }
 
-        _ = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        guard case .dispatchFailed(.injectionFailed, _) =
+            try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected a clean refusal") }
 
-        XCTAssertEqual(terminalApp.sent.count, 1, "falls back rather than refusing")
-        XCTAssertTrue(tmux.sent.isEmpty)
+        XCTAssertTrue(tmux.sent.isEmpty, "nothing was ever typed anywhere")
+        XCTAssertEqual(try store.utterances().first?.status, .ready,
+                       "kept, not lost — the words are still there to retry")
     }
 
     /// A session mid-turn still takes input; Claude Code queues it.
@@ -763,7 +770,7 @@ final class CoordinatorTests: XCTestCase {
         let transport = RecordingTransport()
         transport.readinessValue = .busy
         transport.outcome = .queued
-        let coordinator = try makeCoordinator(transport: transport)
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
         try append()
         _ = try await coordinator.announceNext()
 
@@ -786,7 +793,7 @@ final class CoordinatorTests: XCTestCase {
             summarizer: SummarizerChain(providers: [FixedSummary()]),
             speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
             gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
-            transport: RecordingTransport(), enrolment: registry,
+            tmuxTransport: RecordingTransport(), enrolment: registry,
             agents: FailingAgents(),
             recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
         try append()
@@ -807,7 +814,7 @@ final class CoordinatorTests: XCTestCase {
             summarizer: SummarizerChain(providers: [FixedSummary()]),
             speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
             gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
-            transport: transport, enrolment: registry,
+            tmuxTransport: transport, enrolment: registry,
             agents: FailingAgents(),
             recovery: RecoveryChain(
                 providers: [FixedTranscript(text: "yes go ahead")],
@@ -878,7 +885,7 @@ final class CoordinatorTests: XCTestCase {
     /// even if you listened to something else in between.
     func testTargetedReplyBeatsTheDerivedTarget() async throws {
         let transport = RecordingTransport()
-        let coordinator = try makeCoordinator(transport: transport)
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
         try append(.stop, session: "old", at: 1_000, message: "the page's session")
         try append(.stop, session: "sess-1", at: 2_000, message: "the one you heard")
         _ = try await coordinator.announceNext()   // hears sess-1
@@ -943,11 +950,19 @@ final class CoordinatorTests: XCTestCase {
             summarizer: SummarizerChain(providers: [FixedSummary()]),
             speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
             gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
-            transport: transport, enrolment: registry, agents: agents,
+            tmuxTransport: transport, enrolment: registry, agents: agents,
             recovery: RecoveryChain(
                 providers: [FixedTranscript(text: "yes go ahead")],
                 maxAttemptsPerProvider: 1, backoff: [0]),
-            readinessGrace: 5)
+            readinessGrace: 5,
+            // Fabricated, not the real default: the fixture pid/cwd never
+            // resolve a real tmux pane, and the point of this test is the
+            // wait-for-late-arrival behavior, not resumeTwin itself — see
+            // makeCoordinator's own default for the same reasoning.
+            resumeTwin: { _, _ in
+                TmuxPaneAddress(socketName: "tb", paneId: "%1",
+                                sessionName: "tb-fixture", paneTty: "/dev/ttys999")
+            })
         try append()
         // Addressed explicitly rather than through `announceNext`: the announce
         // path probes `claude agents --json` too, and this fake is about the
@@ -975,7 +990,7 @@ final class CoordinatorTests: XCTestCase {
             summarizer: SummarizerChain(providers: [FixedSummary()]),
             speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
             gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
-            transport: transport, enrolment: registry,
+            tmuxTransport: transport, enrolment: registry,
             agents: LateAgents(appearsOnCall: .max, live: []),
             recovery: RecoveryChain(
                 providers: [FixedTranscript(text: "yes go ahead")],
