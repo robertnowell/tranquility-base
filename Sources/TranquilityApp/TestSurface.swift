@@ -1,4 +1,3 @@
-import Foundation
 import TranquilityCore
 
 /// What a self-test drill needs from the panel: drive it into a state, read
@@ -29,8 +28,18 @@ import TranquilityCore
 /// primitives nearly every drill calls (restated here, not reimplemented —
 /// `StatusHUD` already satisfies every requirement for free), plus the
 /// small set of readouts more than one drill needs. `inkBrightLength` is
-/// the one of those confirmed so far; more join as P4 actually moves drills
-/// and finds which one-off reaches turn out to recur.
+/// the one of those confirmed so far.
+///
+/// **Corrected 24 Aug, post-P4 audit gate**: this doc comment predicted
+/// "more join as P4 actually moves drills and finds which one-off reaches
+/// turn out to recur." P4 moved all ~3,200 lines (`SelfTestDriver.swift`,
+/// `Drills.swift`, `PoseFixtures.swift`) as plain `extension StatusHUD`
+/// blocks and never used this protocol as a type anywhere — no
+/// `any TestSurface`, no generic constraint. The prediction was wrong: the
+/// coupling really was as narrow as P2's survey found, and nothing since
+/// has needed a bigger seam. What this protocol still buys, honestly: a
+/// compiler-enforced list of the nine members drill code depends on, nothing
+/// more.
 @MainActor
 protocol TestSurface: AnyObject {
     // MARK: - Driving primitives

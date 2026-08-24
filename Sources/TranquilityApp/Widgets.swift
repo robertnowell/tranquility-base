@@ -41,14 +41,15 @@ enum Widgets {
         return NSAttributedString(string: text, attributes: attributes)
     }
 
-    /// The placard string with symbol glyphs optically corrected. ◀/▶ are not in
+    /// A placard: the state's mark and its word, on one line.
+    ///
+    /// The string's symbol glyphs are optically corrected. ◀/▶ are not in
     /// SF Mono; the fallback font's triangle renders larger and off-baseline
     /// against the placard's 10pt mono caps (Robert's screenshot, 06 Aug — the
     /// "◀ SOLUTION" rung pill). The glyph run is drawn smaller with a baseline
     /// nudge so both fonts share one optical center; letter runs keep the
     /// placard's own font. Color is explicit because attributed runs ignore the
     /// field's textColor.
-    /// A placard: the state's mark and its word, on one line.
     ///
     /// Every mark is centred on the cap line by measurement (`ChromeType`), not by
     /// a per-glyph nudge. The old version carried `baselineOffset: 0.8` for `◀`

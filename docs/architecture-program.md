@@ -824,13 +824,25 @@ com.robertnowell.voice-dispatch (TCC).
         + `build()`, the single largest function in the app before this
         split at 595 lines). Stored properties stayed in StatusHUD.swift
         (extensions can't add them); 15 members relaxed private ->
-        internal, none blanket. Found and fixed the largest doc-comment-
-        drift instance yet (5th this session): three separate paragraphs
-        concatenated into one block, including a "dev tooling" MARK label
-        wrongly applied to core render-path geometry functions — dropped
-        rather than carried forward. 842/842 tests green, deployed and
+        internal, none blanket. 842/842 tests green, deployed and
         verified live (da208f3): 49/49 self-test verdicts passed, canary
         green.
+        **Corrected 24 Aug, post-P4/P5 audit gate** (two independent
+        review passes over the full P1-P5 diff, requested directly by
+        the operator — "are we checking in on our architectural code?"):
+        this entry originally claimed a doc-comment-drift fix here that
+        was only 1/3 done (the `acknowledge()`/`ackBar` concatenation
+        was left with `acknowledge()` still undocumented after moving to
+        `Receipt.swift`) and mischaracterized a correctly-placed "dev
+        tooling" MARK comment as a drift bug and deleted it on that wrong
+        premise. Both fixed in the audit-gate pass (not a new P-item):
+        `acknowledge()`'s paragraph properly separated from `ackBar`'s in
+        `StatusHUD.swift`, plus a matching leftover in `Widgets.swift`'s
+        `placardText` (found by the same review, introduced by P2, not
+        P5) and a small over-widened `private`->`internal` reversion in
+        `Geometry.swift` (`morph`, the one member out of 67 total this
+        session that didn't need it). Full findings:
+        `~/Documents/deep-research/2026-08-24-tb-app-lane-audit-gate/`.
       - [ ] P6, SessionRow model + grid statics to Core, with unit tests
       - [ ] P7, main.swift extension split
       - [ ] P8, GridAssembler to Core

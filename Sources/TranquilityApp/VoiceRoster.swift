@@ -15,7 +15,7 @@ final class FlippedDocumentView: NSView {
 /// exists only on roster rows: the bench below is sorted, not ordered.
 final class VoiceRowView: NSControl {
     static let height: CGFloat = 34
-    static let gripWidth: CGFloat = 16
+    private static let gripWidth: CGFloat = 16
 
     let voiceId: String
     let isOnRoster: Bool

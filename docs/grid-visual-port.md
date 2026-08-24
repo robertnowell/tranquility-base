@@ -59,9 +59,11 @@ the ✓ hands-free send button and the acknowledge pulse.
 - **Key line**: replaces the Dismiss button on the grid face —
   monospaced 9.5px, `hairline` rule above:
   `⌃⌥ hear · hold ⌥ reply · ⌃⌃ why · ⌃⇧ dismiss`.
-- Implementation: `GridRowView` / `PlacardRowView` (cell-less NSControls
+- Implementation: `GridRowView` / `SplitPlacardRowView` (cell-less NSControls
   with real frames) — a bezel-less NSButton can only flow an attributed
-  title inline, and columns need columns.
+  title inline, and columns need columns. (`PlacardRowView`, named here
+  originally, was deleted 23 Aug as dead code — App-lane P1 — never
+  instantiated, superseded by `SplitPlacardRowView`.)
 
 ## The topic source fix
 
