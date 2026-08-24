@@ -194,10 +194,32 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertEqual(command?.arguments, ["resume", "abc"])
     }
 
+    /// Updated 24 Aug with the landing ruling. This used to assert the fixture's
+    /// imaginary `/Users/x/Projects/kopi` came back verbatim, which only held
+    /// because `reviveCommand` echoed the recorded path without asking whether
+    /// anything was there. It now resolves, so the case is stated with a
+    /// directory that genuinely exists — the passthrough this test is about.
     func testGoneAndLandableOffersResume() {
-        let command = session(.gone, revivable: true).reviveCommand
-        XCTAssertEqual(command?.cwd, "/Users/x/Projects/kopi")
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let command = session(.gone, revivable: true, cwd: home).reviveCommand
+        XCTAssertEqual(command?.cwd, home)
         XCTAssertEqual(command?.arguments, ["--resume", "abc"])
+    }
+
+    /// The other half of the same ruling, and the reason it exists: a session
+    /// whose directory was deleted still comes back, standing somewhere real.
+    func testAGoneDirectoryStillOffersResumeSomewhereReal() {
+        let command = session(.gone, revivable: true,
+                              cwd: "/definitely/not/a/real/path/xyz").reviveCommand
+        XCTAssertNotNil(command, "a deleted worktree must not retire the session")
+        XCTAssertEqual(command?.cwd, SessionDiscovery.projectsHome)
+    }
+
+    /// And the one refusal that survives: nothing reopens under a reaped temp
+    /// path. Every session found living there was a fixture or a headless probe.
+    func testAReapedTempDirectoryOffersNothing() {
+        XCTAssertNil(session(.gone, revivable: true,
+                             cwd: "/private/tmp/tb-goto-test").reviveCommand)
     }
 
     /// The crash case. An unproven session must never be offered the verb.
@@ -796,13 +818,20 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertEqual(result.unclassifiable, 1)
     }
 
-    /// `revivable` follows the directory existing, NOT liveness — the
-    /// deliberate divergence from Claude Code's own semantics: Codex rows
+    /// `revivable` follows whether there is somewhere to LAND, NOT liveness —
+    /// the deliberate divergence from Claude Code's own semantics: Codex rows
     /// never gate on a `.gone` this function never even computes.
-    func testDiscoverCodexRevivableFollowsDirectoryNotLiveness() throws {
+    ///
+    /// Renamed and re-stated 24 Aug. It used to read "follows the directory
+    /// existing", and proved it with `/tmp` as the good case and a made-up path
+    /// as the bad one. Both flipped under the landing ruling, and both for the
+    /// right reason: a reaped temp path is now the case that offers nothing,
+    /// and a deleted ordinary directory is the case that still comes back.
+    func testDiscoverCodexRevivableFollowsTheLandingDirectoryNotLiveness() throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
         let root = try makeCodexSessions([
-            ("real", [#"{"type":"session_meta","payload":{"id":"real","cwd":"/tmp"}}"#]),
-            ("fake", [#"{"type":"session_meta","payload":{"id":"fake","cwd":"/definitely/not/a/real/path/xyz"}}"#]),
+            ("real", [#"{"type":"session_meta","payload":{"id":"real","cwd":"\#(home)"}}"#]),
+            ("fake", [#"{"type":"session_meta","payload":{"id":"fake","cwd":"/private/tmp/tb-goto-test"}}"#]),
         ])
         defer { try? FileManager.default.removeItem(at: root) }
         let rows = SessionDiscovery.discoverCodex(sessions: root).sessions
@@ -880,4 +909,82 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertEqual(SessionDiscovery.discoverCodexIfScanned(sessions: root)?.sessions
             .map(\.sessionId), ["s1"])
     }
+
+    // MARK: - Where a revive lands (ruled 24 Aug)
+
+    /// The ladder these cover: the original directory when it survives, its
+    /// repository root when it does not, `~/Projects` when there is no repo
+    /// above it, and nothing at all under a temp path.
+    ///
+    /// Built on a real temporary tree rather than a stub FileManager, because
+    /// the thing under test IS filesystem behaviour — a fake that answers
+    /// `fileExists` from a dictionary would pass while the ancestor walk was
+    /// wrong, which is the only way this function can fail.
+    private func makeTree() throws -> URL {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("tb-landing-\(UUID().uuidString)")
+        let repo = root.appendingPathComponent("myrepo")
+        try FileManager.default.createDirectory(
+            at: repo.appendingPathComponent(".claude/worktrees"),
+            withIntermediateDirectories: true)
+        // A worktree's .git is a FILE, which is why the walk tests existence.
+        try "gitdir: elsewhere".write(
+            to: repo.appendingPathComponent(".git"), atomically: true, encoding: .utf8)
+        return root
+    }
+
+    func testALivingDirectoryIsWhereItLands() throws {
+        let root = try makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = root.appendingPathComponent("myrepo").path
+        XCTAssertEqual(SessionDiscovery.landingDirectory(
+            for: repo, .default, temporaryRoots: []), repo)
+    }
+
+    func testADeletedWorktreeLandsOnTheRepositoryRootNotTheBookkeepingFolder() throws {
+        let root = try makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = root.appendingPathComponent("myrepo").path
+        let dead = repo + "/.claude/worktrees/gone-branch/promotions"
+        // The nearest SURVIVING ancestor is .claude/worktrees, which holds no
+        // code; landing there was the first proposal and is the bug this asserts
+        // against.
+        XCTAssertEqual(SessionDiscovery.landingDirectory(
+            for: dead, .default, temporaryRoots: []), repo)
+    }
+
+    func testNoRepositoryAboveItFallsBackToTheProjectsHome() throws {
+        let root = try makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let orphan = root.appendingPathComponent("no-repo-here/deep/deeper").path
+        let home = root.appendingPathComponent("stand-here")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        XCTAssertEqual(SessionDiscovery.landingDirectory(
+            for: orphan, .default, temporaryRoots: [], home: home.path), home.path)
+    }
+
+    func testAReapedTempDirectoryLandsNowhere() {
+        // Every session found living under /private/tmp was a test fixture or a
+        // headless probe. Reopening there would scatter work into a directory
+        // the OS reaps, so this rung refuses rather than falling through.
+        XCTAssertNil(SessionDiscovery.landingDirectory(
+            for: "/private/tmp/tb-goto-test"))
+        XCTAssertNil(SessionDiscovery.landingDirectory(
+            for: "/tmp/claude-501/somebody/scratchpad/probes/dirA"))
+        XCTAssertNil(SessionDiscovery.landingDirectory(for: nil))
+    }
+
+    func testATempPathThatStillExistsIsStillItsOwnLanding() throws {
+        // The refusal is about REAPED paths. A temp directory that is still
+        // there was never broken, and rung 1 answers before the guard — losing
+        // that would change behaviour for every live probe session.
+        let live = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("tb-landing-live-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: live, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: live) }
+        XCTAssertEqual(SessionDiscovery.landingDirectory(for: live.path), live.path)
+        XCTAssertTrue(SessionDiscovery.isTemporary(live.path),
+                      "and it IS a temp path — rung 1 is what saves it, not a gap in the guard")
+    }
+
 }

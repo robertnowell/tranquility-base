@@ -321,12 +321,17 @@ final class HarnessAdapterTests: XCTestCase {
                       "real harness — coincidence, not verification; still not read per-target")
     }
 
+    /// The cwd moved off `/tmp/x` on 24 Aug: `reviveCommand` now resolves where
+    /// to land rather than echoing the recorded path, and nothing reopens under
+    /// a reaped temp directory. This test is about the ADAPTER's arguments, so
+    /// it states its case with a directory that exists and stays out of that.
     func testReviveCommandUsesAdapterResumeArguments() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
         let session = SessionDiscovery.Session(
-            sessionId: "sess-1", cwd: "/tmp/x", transcriptPath: "/tmp/x.jsonl",
+            sessionId: "sess-1", cwd: home, transcriptPath: home + "/x.jsonl",
             title: nil, lastActivityAt: Date(), answered: true, activity: nil,
             liveness: .gone, revivable: true)
         XCTAssertEqual(session.reviveCommand?.arguments, ["--resume", "sess-1"])
-        XCTAssertEqual(session.reviveCommand?.cwd, "/tmp/x")
+        XCTAssertEqual(session.reviveCommand?.cwd, home)
     }
 }
