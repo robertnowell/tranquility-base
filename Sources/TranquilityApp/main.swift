@@ -3527,7 +3527,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let recentAudioFloorMs: Int64 = 1_000
     private static let recentAudioRowCap = 12
 
-    private func recentAudioEvents(retrying: String? = nil) -> [StatusHUD.AudioEventRow] {
+    private func recentAudioEvents(retrying: String? = nil) -> [AudioEventRow] {
         guard let store else { return [] }
         let stamp = DateFormatter()
         stamp.dateFormat = "MMM d HH:mm"
@@ -3538,7 +3538,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let seconds = Int((u.audioDurationMs ?? 0) / 1000)
                 let text = u.transcriptText?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                return StatusHUD.AudioEventRow(
+                return AudioEventRow(
                     id: u.id,
                     timeLabel: stamp.string(
                         from: Date(timeIntervalSince1970: Double(u.createdAtMs) / 1000)),
