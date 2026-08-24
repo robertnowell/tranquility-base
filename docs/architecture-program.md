@@ -787,7 +787,33 @@ com.robertnowell.voice-dispatch (TCC).
         self-test verdicts passed (including drills that exercise
         GridRowView, VoiceRowView, ConsoleButton, CountdownBarView,
         AudioEventRowView, and DoorLabel directly), canary green.
-      - [ ] P4, drills + pose out (~3,200 lines)
+      - [x] P4, drills + pose out (23 Aug). `StatusHUD.swift` 7,563 -> 4,257
+        lines. Every self-test/drill/pose function moved into three new
+        files as `extension StatusHUD` blocks (same pattern as P1-P3, not
+        a rewrite against `any TestSurface` — `TestSurface.swift`'s own
+        survey already found the coupling here is structural, not
+        access-control, so a generic rewrite would have been a much
+        bigger redesign than "name the coupling before moving" ever
+        asked for): `SelfTestDriver.swift` (1,636 lines — `selfTest()`
+        itself, 1,342 lines, the single largest function in the app, plus
+        its own support); `Drills.swift` (1,354 lines — the 19 individual
+        behavior drills, one per ruling); `PoseFixtures.swift` (365
+        lines — `pose(_:)` and `poseSnapshot()`). `goHomeFromPastAgents`/
+        `releaseKeyboard`, real navigation logic sitting in the middle of
+        the drill range, stayed in `StatusHUD.swift`.
+        Found and fixed a 4th instance of this session's recurring
+        doc-comment-drift bug: `launchSettingsDrill`'s and
+        `pastAgentsDrill`'s doc comments had been concatenated into one
+        block, leaving `pastAgentsDrill` undocumented — split back apart.
+        53 StatusHUD members relaxed `private` -> `internal`, each
+        verified individually against what the moved code actually
+        touches (never blanket) — plus the 19 drill functions themselves
+        and the private nested `Face` struct (a property using it can't
+        be more visible than the type). 842/842 tests green; deployed and
+        verified live (0617694): **49/49 self-test verdicts passed**
+        (the actual proof this didn't break anything — more load-bearing
+        here than for any prior P-item, since this IS the self-test
+        machinery), canary green.
       - [ ] P5, receipt/build/geometry extensions (StatusHUD core to ~2,500)
       - [ ] P6, SessionRow model + grid statics to Core, with unit tests
       - [ ] P7, main.swift extension split
