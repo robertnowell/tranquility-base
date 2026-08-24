@@ -40,6 +40,11 @@ config.local.json
 # the outputs are regenerable from the log by whoever holds the log.
 /tools/replay/runs/
 /tools/replay/reports/
+# Same gap as above, smaller shape: goal-replay.py writes one JSON per
+# invocation straight into tools/replay/ itself, and four one-off runs
+# were committed the same way the corpus.jsonl outputs were (App-lane P1
+# dead-code pass, 23 Aug). Untracked here so the next run doesn't repeat it.
+/tools/replay/goal-replay-*.json
 __pycache__/
 *.pyc
 

@@ -6348,14 +6348,6 @@ final class StatusHUD: NSObject {
             panel?.contentView?.layoutSubtreeIfNeeded()
             countdownBar.freeze(fraction: 0.4)
 
-        case "settings":
-            showSettings(
-                voices: [Voice(id: "a", name: "Archer", category: "professional"),
-                         Voice(id: "b", name: "My Clone", category: "cloned"),
-                         Voice(id: "c", name: "Sarah", category: "premade")],
-                roster: ["c"],
-                note: "Checked voices are the cast agents speak with.")
-
         case "recent-audio":
             showRecentAudio(events: [
                 .init(id: "e1", timeLabel: "Aug 13 07:05", durationLabel: "39s",
@@ -8559,51 +8551,6 @@ final class GridRowView: NSControl {
     }
 }
 
-/// The "+ NEW SESSION" placard: a quiet 28px row — the plus glyph in the lamp
-/// column, the label letterspaced and faint. A placard, not a bordered button:
-/// it invites without competing with the lamps for attention.
-private final class PlacardRowView: NSControl {
-    init(target: AnyObject, action: Selector) {
-        super.init(frame: .zero)
-        self.target = target
-        self.action = action
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-
-        let plus = NSTextField(labelWithString: "+")
-        plus.font = ChromeType.mono(ofSize: 12, weight: .regular)
-        // The marker and its label are one affordance and take one ink.
-        plus.textColor = StateLegend.Palette.hint
-        plus.translatesAutoresizingMaskIntoConstraints = false
-
-        let label = NSTextField(labelWithString: "")
-        label.attributedStringValue = letterspaced(
-            StateLegend.newAgentTitle, size: 9.5, tracking: 1.33,
-            color: StateLegend.Palette.hint)
-        label.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(plus); addSubview(label)
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 28),
-            plus.leadingAnchor.constraint(equalTo: leadingAnchor),
-            plus.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor,
-                                           constant: GridRowView.lampColumn),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    override func mouseDown(with event: NSEvent) {}
-
-    override func mouseUp(with event: NSEvent) {
-        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
-        sendAction(action, to: target)
-    }
-}
-
 /// A bare hover rectangle. `Controls` owns its own tracking rect rather than
 /// borrowing the footer's: the footer spans the whole grid width, and hovering
 /// the app's name in the opposite corner is not hovering a control.
@@ -8883,48 +8830,6 @@ private final class FlippedDocumentView: NSView {
     override var isFlipped: Bool { true }
 }
 
-/// One row of the voice roster pane (draft render ruled 05 Aug):
-/// [≡ grip 16][square check 14][11][▶][11][name — flexible][category, faint].
-/// The check is SQUARE — it is a checkbox; circles are the grid's session
-/// lamps and the two must not read as the same species. The grip lives in the
-/// left gutter so the check column is the pane's left alignment line, and it
-/// exists only on roster rows: the bench below is sorted, not ordered.
-/// A full-width row that is only a door to another pane. Styled like a row,
-/// not a button, because it lives among rows.
-private final class PaneLinkRowView: NSControl {
-    private let onTap: () -> Void
-    private let hairline = CALayer()
-
-    init(title: String, onTap: @escaping () -> Void) {
-        self.onTap = onTap
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        hairline.backgroundColor = StateLegend.Palette.hairlineSoft.cgColor
-        layer?.addSublayer(hairline)
-
-        let label = NSTextField(labelWithString: title)
-        label.font = ChromeType.mono(ofSize: 12, weight: .medium)
-        label.textColor = StateLegend.Palette.secondary
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: VoiceRowView.height),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: VoiceRowView.gripWidth),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    override func layout() {
-        super.layout()
-        hairline.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 1)
-    }
-
-    override func mouseDown(with event: NSEvent) { onTap() }
-}
-
 /// One capture in the recent-audio log: when, how long, what it said — or
 /// that it said nothing the chain could hear. Play sits on the row because
 /// it has state a menu cannot show (▶ while stopped, ■ while playing —
@@ -9100,6 +9005,12 @@ private final class AudioEventRowView: NSControl, NSMenuDelegate {
     }
 }
 
+/// One row of the voice roster pane (draft render ruled 05 Aug):
+/// [≡ grip 16][square check 14][11][▶][11][name — flexible][category, faint].
+/// The check is SQUARE — it is a checkbox; circles are the grid's session
+/// lamps and the two must not read as the same species. The grip lives in the
+/// left gutter so the check column is the pane's left alignment line, and it
+/// exists only on roster rows: the bench below is sorted, not ordered.
 private final class VoiceRowView: NSControl {
     static let height: CGFloat = 34
     static let gripWidth: CGFloat = 16

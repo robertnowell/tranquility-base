@@ -401,15 +401,6 @@ enum StateLegend {
         }
     }
 
-    /// Whether being in the state involves the app making sound. Descriptive today
-    /// (nothing consults it yet); WS-A's announcement tiers will.
-    enum SpeakTier {
-        /// The app is speaking, or about to.
-        case speaks
-        /// Visual only.
-        case silent
-    }
-
     // MARK: - Rows
 
     /// One row of the legend: how a display situation presents itself.
@@ -421,7 +412,6 @@ enum StateLegend {
         let stateText: String
         let glyph: String
         let lens: Lens
-        let speakTier: SpeakTier
     }
 
     // MARK: - Session grid (WS-B)
@@ -852,7 +842,7 @@ enum StateLegend {
         switch situation {
         case .ready:
             return Row(stateText: "\(Glyph.quiet) \(legend("Ready"))", glyph: Glyph.quiet,
-                       lens: .chrome, speakTier: .silent)
+                       lens: .chrome)
         case .preparing:
             // The breadcrumb, not the quiet ◌ (ruled 18 Aug). Preparing was the
             // one face on stage with no way off it: the pill was inert, the ◀
@@ -860,28 +850,28 @@ enum StateLegend {
             // "there is no way to get back to the grid". A wait you cannot
             // leave is a trap, and the mark that says you can leave is ◀.
             return Row(stateText: "\(Glyph.home) \(legend("Preparing"))", glyph: Glyph.home,
-                       lens: .chrome, speakTier: .silent)
+                       lens: .chrome)
         case .working:
             return Row(stateText: "\(Glyph.quiet) \(legend("Working"))", glyph: Glyph.quiet,
-                       lens: .chrome, speakTier: .silent)
+                       lens: .chrome)
         case .workingFor(let seconds):
             return Row(stateText: "\(Glyph.quiet) \(legend("Working")) · \(seconds)s",
-                       glyph: Glyph.quiet, lens: .chrome, speakTier: .silent)
+                       glyph: Glyph.quiet, lens: .chrome)
         case .speaking:
             return Row(stateText: "\(Glyph.speaking) \(legend("Speaking"))", glyph: Glyph.speaking,
-                       lens: .chrome, speakTier: .speaks)
+                       lens: .chrome)
         case .listening(let target):
             return Row(stateText: "\(Glyph.dot) \(target)", glyph: Glyph.dot,
-                       lens: .chrome, speakTier: .silent)
+                       lens: .chrome)
         case .delivered:
             return Row(stateText: "\(Glyph.sent) \(legend("Delivered"))", glyph: Glyph.sent,
-                       lens: .chrome, speakTier: .silent)
+                       lens: .chrome)
         case .needsYou:
             return Row(stateText: "\(Glyph.needsYou) \(legend("Needs you"))", glyph: Glyph.needsYou,
-                       lens: .chrome, speakTier: .silent)
+                       lens: .chrome)
         case .settings:
             return Row(stateText: "\(legend("Settings"))", glyph: "",
-                       lens: .chrome, speakTier: .silent)
+                       lens: .chrome)
         }
     }
 
