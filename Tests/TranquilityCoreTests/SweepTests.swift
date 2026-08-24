@@ -9,10 +9,16 @@ import XCTest
 /// "nobody is here" from a proxy and hid live conversations, and the per-poll skip
 /// line that wrote 2.3 GB in five days.
 final class SweepTests: XCTestCase {
+    /// A fresh instance per test IS the reset — `SessionSweep` used to be a
+    /// set of static vars on `Coordinator`, shared globally, which is why
+    /// every test needed a `Coordinator.resetSweepStateForTesting()` call in
+    /// `setUp`/`tearDown` (23 Aug, Coordinator-split rider: the extraction
+    /// that fixed this).
+    private var sweep: SessionSweep!
 
     override func setUp() {
         super.setUp()
-        Coordinator.resetSweepStateForTesting()
+        sweep = SessionSweep()
         collector.reset()
         let sink = collector
         Coordinator.trace = { line in sink.append(line) }
@@ -20,7 +26,7 @@ final class SweepTests: XCTestCase {
 
     override func tearDown() {
         Coordinator.trace = nil
-        Coordinator.resetSweepStateForTesting()
+        sweep = nil
         super.tearDown()
     }
 
@@ -56,7 +62,7 @@ final class SweepTests: XCTestCase {
                       seconds: Int, every step: Int = 5) -> ContinuousClock.Instant {
         var t = start
         for _ in stride(from: 0, through: seconds, by: step) {
-            Coordinator.sweep(sessions, live: live, now: t)
+            sweep.sweep(sessions, live: live, now: t, trace: Coordinator.trace)
             t = t.advanced(by: .seconds(step))
         }
         return t
@@ -70,9 +76,9 @@ final class SweepTests: XCTestCase {
         let s = [session("live-1")]
         // A full day of polling while live.
         for minute in stride(from: 0, through: 24 * 60, by: 5) {
-            Coordinator.sweep(s, live: ["live-1"], now: t0.advanced(by: .milliseconds(Int(Double(minute) * 60 * 1000))))
+            sweep.sweep(s, live: ["live-1"], now: t0.advanced(by: .milliseconds(Int(Double(minute) * 60 * 1000))), trace: Coordinator.trace)
         }
-        XCTAssertTrue(Coordinator.retiredSessionsForTesting().isEmpty,
+        XCTAssertTrue(sweep.retiredSessionsForTesting().isEmpty,
                       "a session the agents API still reports must never be retired")
         XCTAssertTrue(lines(containing: "skipping").isEmpty,
                       "a live session must never be described as gone")
@@ -81,10 +87,10 @@ final class SweepTests: XCTestCase {
     func testReturningToLifeUnretiresAndSaysSo() {
         let s = [session("flaky-1")]
         let t = poll(s, from: t0, seconds: 200)
-        XCTAssertEqual(Coordinator.retiredSessionsForTesting(), ["flaky-1"])
+        XCTAssertEqual(sweep.retiredSessionsForTesting(), ["flaky-1"])
 
-        Coordinator.sweep(s, live: ["flaky-1"], now: t)
-        XCTAssertTrue(Coordinator.retiredSessionsForTesting().isEmpty,
+        sweep.sweep(s, live: ["flaky-1"], now: t, trace: Coordinator.trace)
+        XCTAssertTrue(sweep.retiredSessionsForTesting().isEmpty,
                       "the agents API reporting it live must un-retire it immediately")
         XCTAssertEqual(lines(containing: "is live again").count, 1,
                        "coming back is an important event and must be said exactly once")
@@ -97,19 +103,19 @@ final class SweepTests: XCTestCase {
         // The liveness probe is cached for 6s, so a burst of polls can be ONE
         // observation. Counting polls would retire on the third of these.
         for i in 0..<50 {
-            Coordinator.sweep(s, live: [], now: t0.advanced(by: .milliseconds(Int(Double(i) * 0.2 * 1000))))
+            sweep.sweep(s, live: [], now: t0.advanced(by: .milliseconds(Int(Double(i) * 0.2 * 1000))), trace: Coordinator.trace)
         }
-        XCTAssertTrue(Coordinator.retiredSessionsForTesting().isEmpty,
+        XCTAssertTrue(sweep.retiredSessionsForTesting().isEmpty,
                       "50 polls across 10 seconds is not 50 observations")
     }
 
     func testRetiresOnlyAfterSustainedAbsence() {
         let s = [session("gone-2")]
         let t = poll(s, from: t0, seconds: 115)
-        XCTAssertTrue(Coordinator.retiredSessionsForTesting().isEmpty, "115s is inside the delay")
+        XCTAssertTrue(sweep.retiredSessionsForTesting().isEmpty, "115s is inside the delay")
 
-        Coordinator.sweep(s, live: [], now: t)
-        XCTAssertEqual(Coordinator.retiredSessionsForTesting(), ["gone-2"])
+        sweep.sweep(s, live: [], now: t, trace: Coordinator.trace)
+        XCTAssertEqual(sweep.retiredSessionsForTesting(), ["gone-2"])
         // "retired" alone also matches the heartbeat's counts, which is a different
         // line saying a different thing — match the announcement itself.
         XCTAssertEqual(logged().filter { $0.hasPrefix("retired ") }.count, 1,
@@ -121,7 +127,7 @@ final class SweepTests: XCTestCase {
     func testGoneIsSaidOncePerSessionNotOncePerPoll() {
         let s = [session("gone-3")]
         for i in 0..<500 {
-            Coordinator.sweep(s, live: [], now: t0.advanced(by: .milliseconds(Int(Double(i) * 0.1 * 1000))))
+            sweep.sweep(s, live: [], now: t0.advanced(by: .milliseconds(Int(Double(i) * 0.1 * 1000))), trace: Coordinator.trace)
         }
         XCTAssertEqual(lines(containing: "skipping").count, 1,
                        "the 2.3 GB incident: this line was written once per poll")
@@ -141,7 +147,7 @@ final class SweepTests: XCTestCase {
     func testTwoHundredDeadSessionsCostOneLineNotTwoHundred() {
         let many = (0..<200).map { session("dead-\($0)") }
         for i in 0..<100 {
-            Coordinator.sweep(many, live: [], now: t0.advanced(by: .seconds(i)))
+            sweep.sweep(many, live: [], now: t0.advanced(by: .seconds(i)), trace: Coordinator.trace)
         }
         // Each line is a synchronous write on the main thread, so a burst is a
         // stall. One line carries the same facts: how many, and which projects.
@@ -167,7 +173,7 @@ final class SweepTests: XCTestCase {
                 sessions.append(session("\(project)-\(i)", cwd: "/Users/x/Projects/\(project)"))
             }
         }
-        Coordinator.sweep(sessions, live: [], now: t0)
+        sweep.sweep(sessions, live: [], now: t0, trace: Coordinator.trace)
         let line = lines(containing: "skipping").first ?? ""
         XCTAssertTrue(line.contains("188 sessions, all gone"), line)
         XCTAssertTrue(line.contains("replay×107"), line)
@@ -178,9 +184,9 @@ final class SweepTests: XCTestCase {
 
     func testHeartbeatReportsStateEvenWhenNothingChanges() {
         let s = [session("gone-5")]
-        Coordinator.sweep(s, live: [], now: t0)                              // first: heartbeat
-        Coordinator.sweep(s, live: [], now: t0.advanced(by: .seconds(301)))      // second
-        Coordinator.sweep(s, live: [], now: t0.advanced(by: .seconds(602)))      // third
+        sweep.sweep(s, live: [], now: t0, trace: Coordinator.trace)                              // first: heartbeat
+        sweep.sweep(s, live: [], now: t0.advanced(by: .seconds(301)), trace: Coordinator.trace)      // second
+        sweep.sweep(s, live: [], now: t0.advanced(by: .seconds(602)), trace: Coordinator.trace)      // third
         let beats = lines(containing: "sweep:")
         XCTAssertEqual(beats.count, 3,
                        "a log that rolled must still be able to answer 'what is it doing'")
@@ -196,14 +202,14 @@ final class SweepTests: XCTestCase {
     func testSlidingOutOfTheQueryWindowDoesNotResurrectASession() {
         let s = session("recycled-1")
         let t = poll([s], from: t0, seconds: 200)                    // retired
-        XCTAssertEqual(Coordinator.retiredSessionsForTesting(), ["recycled-1"])
+        XCTAssertEqual(sweep.retiredSessionsForTesting(), ["recycled-1"])
         let announced = lines(containing: "skipping").count
 
         // Pushed out of the newest-200 window by newer arrivals, then back in.
-        Coordinator.sweep([], live: [], now: t.advanced(by: .seconds(5)))
-        Coordinator.sweep([s], live: [], now: t.advanced(by: .seconds(10)))
+        sweep.sweep([], live: [], now: t.advanced(by: .seconds(5)), trace: Coordinator.trace)
+        sweep.sweep([s], live: [], now: t.advanced(by: .seconds(10)), trace: Coordinator.trace)
 
-        XCTAssertEqual(Coordinator.retiredSessionsForTesting(), ["recycled-1"],
+        XCTAssertEqual(sweep.retiredSessionsForTesting(), ["recycled-1"],
                        "leaving a truncated query is not evidence of anything")
         XCTAssertEqual(lines(containing: "skipping").count, announced,
                        "a session must not be announced gone twice for sliding in and out")
@@ -212,10 +218,10 @@ final class SweepTests: XCTestCase {
     func testARecordExpiresOnItsOwnClockOnceNobodyHasSeenItForAnHour() {
         let s = session("stale-1")
         let t = poll([s], from: t0, seconds: 200)
-        XCTAssertFalse(Coordinator.retiredSessionsForTesting().isEmpty)
+        XCTAssertFalse(sweep.retiredSessionsForTesting().isEmpty)
         // Gone from the queue entirely for longer than the retention window.
-        Coordinator.sweep([], live: [], now: t.advanced(by: .seconds(3_700)))
-        XCTAssertTrue(Coordinator.retiredSessionsForTesting().isEmpty,
+        sweep.sweep([], live: [], now: t.advanced(by: .seconds(3_700)), trace: Coordinator.trace)
+        XCTAssertTrue(sweep.retiredSessionsForTesting().isEmpty,
                       "bookkeeping must not accumulate forever either")
     }
 
@@ -223,11 +229,11 @@ final class SweepTests: XCTestCase {
 
     func testAnOutageDoesNotAgeASessionIntoRetirement() {
         let s = [session("outage-1")]
-        Coordinator.sweep(s, live: [], now: t0)                      // seen absent once
+        sweep.sweep(s, live: [], now: t0, trace: Coordinator.trace)                      // seen absent once
         // Probe down for five minutes: no sweeps at all. Wall-clock arithmetic would
         // retire on the next observation; two observations is not sustained absence.
-        Coordinator.sweep(s, live: [], now: t0.advanced(by: .seconds(300)))
-        XCTAssertTrue(Coordinator.retiredSessionsForTesting().isEmpty,
+        sweep.sweep(s, live: [], now: t0.advanced(by: .seconds(300)), trace: Coordinator.trace)
+        XCTAssertTrue(sweep.retiredSessionsForTesting().isEmpty,
                       "a gap in watching is not evidence of absence")
     }
 
@@ -235,9 +241,9 @@ final class SweepTests: XCTestCase {
 
     func testASessionAnnouncedGoneIsAnnouncedBackEvenIfItNeverRetired() {
         let s = [session("blip-1")]
-        Coordinator.sweep(s, live: [], now: t0)                      // "gone" said
+        sweep.sweep(s, live: [], now: t0, trace: Coordinator.trace)                      // "gone" said
         XCTAssertEqual(lines(containing: "skipping").count, 1)
-        Coordinator.sweep(s, live: ["blip-1"], now: t0.advanced(by: .seconds(5)))
+        sweep.sweep(s, live: ["blip-1"], now: t0.advanced(by: .seconds(5)), trace: Coordinator.trace)
         XCTAssertEqual(lines(containing: "is live again").count, 1,
                        "the log must retract a death it reported, retired or not")
     }
