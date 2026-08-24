@@ -13,9 +13,9 @@ import Foundation
 /// new-session affordance; adding options before the habit exists is furniture.
 ///
 /// Lives in Core so `tbase new` and the app's menu item are the same code
-/// path. `resume` (reviving a dead session) still opens a Terminal.app window
-/// and still needs the Automation permission and `AppleScript.run` — that is
-/// the one remaining consumer of both, not `launch`.
+/// path. `resume` (reviving a dead session) is routed through `resumeTmux`
+/// (22 Aug) — see its own doc comment for why the Terminal.app/Automation
+/// path it used until then is gone, not merely bypassed.
 public enum SessionLauncher {
 
     /// Same shape as Coordinator.trace / QueueStore.trace: Core stays silent
