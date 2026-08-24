@@ -924,6 +924,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Coordinator.trace = { Permissions.log("routing: \($0)") }
         ClaudeAgentsCLI.trace = { Permissions.log("liveness: \($0)") }
         SessionLauncher.trace = { Permissions.log("launcher: \($0)") }
+        Recorder.trace = { Permissions.log($0) }
+        Recorder.onListeningAcknowledged = { Earcons.acknowledge(.listening) }
         SessionTermination.trace = { Permissions.log($0) }
         Secrets.trace = { Permissions.log("secrets: \($0)") }
         QueueStore.trace = { Permissions.log("queue: \($0)") }
