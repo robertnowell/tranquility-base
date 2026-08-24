@@ -2,7 +2,6 @@ import AVFoundation
 import AudioToolbox
 import CoreAudio
 import Foundation
-import TranquilityCore
 
 /// Microphone capture for push-to-talk.
 ///
@@ -34,6 +33,21 @@ import TranquilityCore
 /// thread — the per-press hardware cost is `AudioOutputUnitStart` on an
 /// initialized unit.
 public final class Recorder: @unchecked Sendable {
+    /// Same shape as Coordinator.trace / SessionLauncher.trace: Core stays
+    /// silent unless a host wires the log in. Added App-lane P9 (24 Aug)
+    /// so this file could move to Core — it used to call `Permissions.log`
+    /// directly, the app layer's own writer, which is exactly the
+    /// coupling every other Core type in this codebase avoids the same
+    /// way.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
+    /// Fired once, when listening opens — was a direct `Earcons.
+    /// acknowledge(.listening)` call, the one other app-layer dependency
+    /// this file had. `Earcons` itself stays app-side (it plays real
+    /// sound cues through AppKit-adjacent machinery); this is the same
+    /// injection shape as `trace` for the one call site that needed it.
+    public nonisolated(unsafe) static var onListeningAcknowledged: (@Sendable () -> Void)?
+
     public enum RecorderError: Error, Sendable {
         case microphoneDenied
         /// Kept under its historical name — main.swift's failure copy keys
@@ -191,9 +205,9 @@ public final class Recorder: @unchecked Sendable {
         // by design — stale generations, wedged prepares) must never read
         // as a stuck panel and fail a deploy.
         if transition.accepted, before != after {
-            Permissions.log("mic: \(before) -> \(after)  (\(reason))")
+            Recorder.trace?("mic: \(before) -> \(after)  (\(reason))")
         } else if !transition.accepted {
-            Permissions.log("mic: refused \(event) in \(before)  (\(reason))")
+            Recorder.trace?("mic: refused \(event) in \(before)  (\(reason))")
         }
         return transition
     }
@@ -238,11 +252,11 @@ public final class Recorder: @unchecked Sendable {
     private func prepareUnit(preferring override: AudioInputDevice.Device?,
                              because reason: String) -> Bool {
         guard Self.microphoneAuthorized() else {
-            Permissions.log("mic: prepare skipped — not authorized")
+            Recorder.trace?("mic: prepare skipped — not authorized")
             return false
         }
         guard let deviceID = resolveDeviceID(preferring: override) else {
-            Permissions.log("mic: prepare failed — no input device resolvable")
+            Recorder.trace?("mic: prepare failed — no input device resolvable")
             return false
         }
         if let unit, unit.deviceID == deviceID {
@@ -259,13 +273,13 @@ public final class Recorder: @unchecked Sendable {
             installListeners(on: deviceID)
             let name = AudioInputDevice.allInputs().first { $0.id == deviceID }?.name
                 ?? "device \(deviceID)"
-            Permissions.log("mic: unit prepared on \(name) "
+            Recorder.trace?("mic: unit prepared on \(name) "
                 + "tap=\(Int(built.clientFormat.sampleRate))Hz/"
                 + "\(built.clientFormat.channelCount)ch (\(reason))")
             _ = submit(.unitPrepared, because: reason)
             return true
         } catch {
-            Permissions.log("mic: unit build FAILED on device \(deviceID): \(error) (\(reason))")
+            Recorder.trace?("mic: unit build FAILED on device \(deviceID): \(error) (\(reason))")
             _ = submit(.unitDiscarded, because: "build failed")
             return false
         }
@@ -281,10 +295,10 @@ public final class Recorder: @unchecked Sendable {
         do {
             try unit.start()
             unit.stop()
-            Permissions.log(String(format: "mic: prepay start/stop %.0fms",
+            Recorder.trace?(String(format: "mic: prepay start/stop %.0fms",
                                    Date().timeIntervalSince(began) * 1000))
         } catch {
-            Permissions.log("mic: prepay start failed: \(error)")
+            Recorder.trace?("mic: prepay start failed: \(error)")
         }
     }
 
@@ -345,7 +359,7 @@ public final class Recorder: @unchecked Sendable {
         lock.lock()
         let state = machine.state
         lock.unlock()
-        Permissions.log("mic: device config changed (state=\(state.name)); "
+        Recorder.trace?("mic: device config changed (state=\(state.name)); "
             + "rebuild in \(Int(Self.rebuildAfterFormatChange * 1000))ms")
         switch state {
         case .capturing, .opening:
@@ -505,7 +519,7 @@ public final class Recorder: @unchecked Sendable {
         discarding?.abandon()
         endMarkerHeartbeat()
         level = 0
-        Permissions.log("mic: press failed — \(why)")
+        Recorder.trace?("mic: press failed — \(why)")
         let message = "Couldn't open the microphone, \(why)."
         DispatchQueue.main.async { [weak self] in self?.onCaptureFault?(message) }
     }
@@ -526,12 +540,12 @@ public final class Recorder: @unchecked Sendable {
         discarding?.abandon()
         endMarkerHeartbeat()
         level = 0
-        Permissions.log("mic: open failed (gen \(generation)) — \(why)")
+        Recorder.trace?("mic: open failed (gen \(generation)) — \(why)")
         let message = "Couldn't hear the microphone, \(why)."
         DispatchQueue.main.async { [weak self] in self?.onCaptureFault?(message) }
 
         if transition.effect == .enterWedge {
-            Permissions.log("mic: WEDGED after \(MicMachine.wedgeThreshold) consecutive failures — "
+            Recorder.trace?("mic: WEDGED after \(MicMachine.wedgeThreshold) consecutive failures — "
                 + "per-press retries stop; one background heal in \(Int(Self.healDelay))s")
             DispatchQueue.main.async { [weak self] in self?.onWedge?() }
             audioQueue.asyncAfter(deadline: .now() + Self.healDelay) { [weak self] in
@@ -563,11 +577,11 @@ public final class Recorder: @unchecked Sendable {
         // fault. Only `healed`, below, on evidence, moves the state.
         _ = prepareUnit(preferring: override, because: "heal attempt")
         guard let unit else {
-            Permissions.log("mic: heal failed — unit would not build; staying wedged")
+            Recorder.trace?("mic: heal failed — unit would not build; staying wedged")
             return
         }
         do { try unit.start() } catch {
-            Permissions.log("mic: heal failed — start refused: \(error); staying wedged")
+            Recorder.trace?("mic: heal failed — start refused: \(error); staying wedged")
             return
         }
         // Blocking THIS queue is fine — it is the audio queue's job to wait
@@ -585,7 +599,7 @@ public final class Recorder: @unchecked Sendable {
             if override != nil { fellBackToBuiltIn = true }
             _ = submit(.healed, because: "heal verified — audio flowed")
         } else {
-            Permissions.log("mic: heal failed — unit started but delivered nothing; staying wedged")
+            Recorder.trace?("mic: heal failed — unit started but delivered nothing; staying wedged")
         }
     }
 
@@ -642,7 +656,7 @@ public final class Recorder: @unchecked Sendable {
             // Gated on the transition being accepted, so a stale generation's late
             // buffer cannot announce a capture that is not this one.
             if transition.accepted {
-                Earcons.acknowledge(.listening)
+                Recorder.onListeningAcknowledged?()
             }
         }
         if let converted {
@@ -740,7 +754,7 @@ public final class Recorder: @unchecked Sendable {
         lock.unlock()
         let captureURL = try? finishing?.close()
 
-        Permissions.log(String(
+        Recorder.trace?(String(
             format: "capture: %.2fs open, tap delivered %d, kept %d, %d bytes, peak %.4f",
             lastOpenSeconds, delivered, kept, captured.count, peakLevel))
 
@@ -776,7 +790,7 @@ public final class Recorder: @unchecked Sendable {
             let state = self.machine.state
             self.lock.unlock()
             guard !state.wantsAudioFlowing else {
-                Permissions.log("mic: teardown skipped (\(reason)) — a newer press owns the unit")
+                Recorder.trace?("mic: teardown skipped (\(reason)) — a newer press owns the unit")
                 return
             }
             self.unit?.stop()
