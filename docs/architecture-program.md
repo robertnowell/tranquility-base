@@ -902,8 +902,9 @@ com.robertnowell.voice-dispatch (TCC).
         properties, so every one of them has to live wherever the class
         itself is declared regardless of which file reads it. `Counter`
         (the selftest's stream-ask ledger) and `InFlightTranscription`
-        moved/relaxed the same way. 899/899 tests green; deploy
-        verification below.
+        moved/relaxed the same way. 899/899 tests green; deployed and
+        verified live (3fb6daf): 49/49 self-test verdicts passed, canary
+        green.
       - [ ] P8, GridAssembler to Core
       - [ ] P9, Recorder/CaptureUnit/log-writer to Core
 - [x] Store riders + dead-code deletions (ff98d7f, 23 Aug): `TransportKind.
