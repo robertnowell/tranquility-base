@@ -1058,7 +1058,7 @@ com.robertnowell.voice-dispatch (TCC).
       Left `[~]` rather than `[x]`: both fixes address the exact failure
       modes found, but a real, deliberate reboot test to confirm they hold
       under the actual boot conditions that caused this has not been run.
-- [~] Final: preflight, full drills, merge to main, deploy verified,
+- [x] Final: preflight, full drills, merge to main, deploy verified,
       freeze lifted (24 Aug). preflight passed (912 tests: 881 XCTest + 31
       Swift Testing, 0 failures — see preflight.sh's own fix below), full
       drills green (`test-dispatch-tmux.sh`: 9/9; `--selftest-hud` live:
@@ -1072,10 +1072,6 @@ com.robertnowell.voice-dispatch (TCC).
       fast-forward-merge in the main checkout isn't the trigger shape it
       watches for — so relaunch.sh was run by hand per rule 6's own
       fallback instruction).
-      Left `[~]` rather than `[x]`: rule 0's audit gate (`/code-review` at
-      high effort over the milestone diff) is running now, dispatched as
-      this item's closing step — freeze lifts once its findings are
-      addressed or explicitly waived, not before.
       Found and fixed along the way: `preflight.sh`'s own `swift test`
       invocation had the same bug as the rest of this arc's test-running
       commands (945d499) — it silently ran only the 31 Swift Testing
@@ -1084,3 +1080,42 @@ com.robertnowell.voice-dispatch (TCC).
       Testing's summary line never contains "with 0 failures", the
       substring the check was looking for). Fixed to run both frameworks
       as two separately-checked invocations.
+      **Rule 0's audit gate**, dispatched as this item's closing step
+      (`/code-review`, high effort, over the whole a57ff32..945d499
+      milestone diff — 86 files, ~18.8k insertions, all of App-lane
+      P1-P9 plus the earlier Coordinator split and store riders): zero
+      correctness bugs, zero dropped functionality. Independently
+      re-verified the P1-P9 extractions with a line-multiset diff and
+      found no lines lost or altered in any of the StatusHUD.swift/
+      main.swift moves. The 7 surviving findings are all
+      architecture-coherence observations, not defects — the recurring
+      shape is that `HarnessAdapter` was built as the one seam for
+      harness-generic facts, but several call sites still hand-branch
+      per harness instead of routing through it (`TmuxTransport`'s
+      landing check ignoring `capabilities.echoesPaste`,
+      `SessionDiscovery`'s separate discover()/discoverCodex() function
+      families, `revive()`'s and `tbase`'s independently-duplicated
+      two-step fallback chains, `SessionLauncher.attemptCodexResume`
+      not routing through `capabilities.allowsConcurrentResume`, the
+      two near-identical closed-session grid loops in
+      `AppDelegate+Grid.swift`, a `DispatchTransport.PipeBuffer` that
+      duplicates `Subprocess.PipeBuffer` on a file already marked for
+      deletion, and `SessionOwnershipRecord` flattening
+      `TmuxPaneAddress` into four independent optionals instead of
+      nesting it). Most of these are already self-documented in the
+      code as known, deliberate debt (the `HarnessAdapter` gap has its
+      own "STILL NOT CONSUMED" comment) rather than accidental drift
+      from this arc — waived rather than fixed here: they're
+      pre-existing, harness-count-3 problems, and this arc shipped with
+      exactly two harnesses. Worth a dedicated pass whenever a third
+      harness is actually added, not a blocker for this merge.
+      **Freeze lifted.** By the time this gate closed, two other
+      branches (`route/one-destination-decided-once`,
+      `fix/revive-lands-somewhere-sensible` / PR #173) had already
+      merged into `origin/main` on top of this arc's merge, deployed
+      independently by another session — origin/main now sits at
+      4ec7565, ahead of this item's own 945d499/0d5e466. That's fine:
+      the arc's own content is intact and unmodified inside those
+      merges (verified — this doc's own Final entry, written at
+      0d5e466, is untouched at 4ec7565), and normal multi-branch
+      traffic resuming on main is exactly what "freeze lifted" means.
