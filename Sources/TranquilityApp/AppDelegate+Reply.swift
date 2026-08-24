@@ -112,9 +112,8 @@ extension AppDelegate {
                     // not archived. The words go to the clipboard, plainly said.
                     Earcons.play(.needsYou, gate: earconGate())
                     let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
-                    hud.showResult(copied
-                        ? "\(label)'s tab is gone, copied your words to the clipboard."
-                        : "\(label)'s tab is gone. Your words are kept in the log.",
+                    hud.showResult(
+                        StateLegend.tabGoneRescueMessage(label: label, copied: copied),
                         about: (sessionId: sessionId, pid: pid, label: label))
                 case .dispatchFailed(let failure, _):
                     Earcons.play(.needsYou, gate: earconGate())
