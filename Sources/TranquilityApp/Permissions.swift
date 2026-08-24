@@ -17,7 +17,6 @@ struct Permissions {
         case microphone
         case speechRecognition
         case inputMonitoring
-        case automation
         case accessibility
 
         var title: String {
@@ -25,7 +24,6 @@ struct Permissions {
             case .microphone: return "Microphone"
             case .speechRecognition: return "Speech Recognition"
             case .inputMonitoring: return "Input Monitoring"
-            case .automation: return "Automation (Terminal)"
             case .accessibility: return "Accessibility"
             }
         }
@@ -35,7 +33,6 @@ struct Permissions {
             case .microphone: return "to record your spoken reply"
             case .speechRecognition: return "so transcription still works when the network is down"
             case .inputMonitoring: return "to notice the hotkeys while you're in another app (measured: Accessibility alone does NOT do this)"
-            case .automation: return "to type replies into the right Terminal tab"
             case .accessibility: return "so dictation can type at your cursor"
             }
         }
@@ -74,7 +71,7 @@ struct Permissions {
         var isRequired: Bool {
             switch self {
             case .speechRecognition: return false
-            case .microphone, .inputMonitoring, .automation, .accessibility: return true
+            case .microphone, .inputMonitoring, .accessibility: return true
             }
         }
 
@@ -84,20 +81,9 @@ struct Permissions {
             case .microphone: return base + "Privacy_Microphone"
             case .speechRecognition: return base + "Privacy_SpeechRecognition"
             case .inputMonitoring: return base + "Privacy_ListenEvent"
-            case .automation: return base + "Privacy_Automation"
             case .accessibility: return base + "Privacy_Accessibility"
             }
         }
-    }
-
-    /// Can we send Apple Events to Terminal? Queried WITHOUT prompting, so the
-    /// checklist can show truth before the user acts. procNotFound means Terminal
-    /// is not running, which is indeterminate rather than denied.
-    private static func automationStatus() -> OSStatus {
-        guard let desc = NSAppleEventDescriptor(bundleIdentifier: "com.apple.Terminal")
-            .aeDesc?.pointee else { return OSStatus(procNotFound) }
-        var target = desc
-        return AEDeterminePermissionToAutomateTarget(&target, typeWildCard, typeWildCard, false)
     }
 
     /// Append-only diagnostic log.
@@ -170,7 +156,7 @@ struct Permissions {
         log("micStatus=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue) "
             + "(\(statusDescription(.microphone)))")
         log("inputMonitoring=\(CGPreflightListenEventAccess())")
-        log("automation=\(statusDescription(.automation)) accessibility=\(AXIsProcessTrusted())")
+        log("accessibility=\(AXIsProcessTrusted())")
     }
 
     static func isGranted(_ kind: Kind) -> Bool {
@@ -181,8 +167,6 @@ struct Permissions {
             return SFSpeechRecognizer.authorizationStatus() == .authorized
         case .inputMonitoring:
             return CGPreflightListenEventAccess()
-        case .automation:
-            return automationStatus() == noErr
         case .accessibility:
             return AXIsProcessTrusted()
         }
@@ -214,13 +198,6 @@ struct Permissions {
             }
         case .inputMonitoring:
             return CGPreflightListenEventAccess() ? "granted" : "not granted. Click Grant"
-        case .automation:
-            switch automationStatus() {
-            case noErr: return "granted"
-            case OSStatus(procNotFound): return "open Terminal first, then click Grant"
-            case -1744: return "not asked yet. Click Grant"   // errAEEventWouldRequireUserConsent
-            default: return "denied earlier. Switch it on in Settings"
-            }
         case .accessibility:
             return AXIsProcessTrusted() ? "granted"
                 : "not granted. Click Grant, dictation types at your cursor with it"
@@ -260,11 +237,6 @@ struct Permissions {
             // Prompts the first time and lists the app thereafter. Safe to call
             // repeatedly — it returns the current state once already decided.
             return CGRequestListenEventAccess()
-        case .automation:
-            // The consent prompt only appears when an actual Apple Event is sent,
-            // so send the most harmless one Terminal understands.
-            _ = AppleScript.run(script: "tell application \"Terminal\" to count windows")
-            return isGranted(kind)
         case .accessibility:
             FocusedInput.requestTrustOnce()
             return isGranted(kind)
