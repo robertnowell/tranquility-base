@@ -937,8 +937,9 @@ com.robertnowell.voice-dispatch (TCC).
         pins the precedence order each doc comment states: blocked
         outranks everything, the process outranks the file for working/
         stalled/idle, isInFlight upgrades quiet to blue, pickedUp is the
-        lowest-precedence override). 912/912 tests green; deploy
-        verification below.
+        lowest-precedence override). 912/912 tests green; deployed and
+        verified live (70e6046): 49/49 self-test verdicts passed, canary
+        green.
       - [ ] P9, Recorder/CaptureUnit/log-writer to Core
 - [x] Store riders + dead-code deletions (ff98d7f, 23 Aug): `TransportKind.
       iTerm2/.wezterm/.kitty` (grep-confirmed never constructed; decode-safe
