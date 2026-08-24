@@ -783,7 +783,10 @@ com.robertnowell.voice-dispatch (TCC).
         further mislabeled. (Two smaller instances of the same class of
         bug were found and fixed in P1/P2 — this file has a real history
         of doc comments separating from the code they describe.)
-        842/842 tests green; deploy verification below.
+        842/842 tests green; deployed and verified live (0516c9c): 49/49
+        self-test verdicts passed (including drills that exercise
+        GridRowView, VoiceRowView, ConsoleButton, CountdownBarView,
+        AudioEventRowView, and DoorLabel directly), canary green.
       - [ ] P4, drills + pose out (~3,200 lines)
       - [ ] P5, receipt/build/geometry extensions (StatusHUD core to ~2,500)
       - [ ] P6, SessionRow model + grid statics to Core, with unit tests
