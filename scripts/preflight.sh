@@ -91,8 +91,16 @@ echo "→ testing"
 #
 # The exit STATUS is the verdict; the summary line is a corroborating check that
 # the run actually happened rather than dying before it reached the tests.
-TEST_OUT=$(swift test 2>&1) && TEST_STATUS=0 || TEST_STATUS=$?
-if [ "$TEST_STATUS" -ne 0 ] || [[ "$TEST_OUT" != *"with 0 failures"* ]]; then
+#
+# Through scripts/test.sh, not `swift test` directly (24 Aug). That script
+# picks the architecture and — the part that matters here — refuses to report
+# success unless it can prove BOTH halves of the suite ran and neither shrank.
+# A plain `swift test` in a Rosetta shell runs 41 of 883 tests and signs off
+# with "Test run with 41 tests in 4 suites passed" as its final line. The exit
+# status was honest and this gate would have caught it; the terminal still said
+# passed, and that is what a session reading the tail believes.
+TEST_OUT=$(scripts/test.sh 2>&1) && TEST_STATUS=0 || TEST_STATUS=$?
+if [ "$TEST_STATUS" -ne 0 ]; then
   echo "✗ tests failed (exit $TEST_STATUS)" >&2
   # `head` closing early is the same SIGPIPE trap; this one is on the way out
   # through `exit 1`, but an unguarded pipeline under `set -e` would skip the
@@ -100,7 +108,7 @@ if [ "$TEST_STATUS" -ne 0 ] || [[ "$TEST_OUT" != *"with 0 failures"* ]]; then
   printf '%s\n' "$TEST_OUT" | grep -E "error:|failed|XCTAssert" | head -20 >&2 || true
   exit 1
 fi
-printf '%s\n' "$TEST_OUT" | grep -E "Executed [0-9]+ tests" | tail -1 | sed 's/^[[:space:]]*/  /'
+printf '%s\n' "$TEST_OUT" | grep -E "^✓ [0-9]+ XCTest" | tail -1 | sed 's/^✓/ /'
 echo "✓ build clean, tests green"
 
 # --- the palette owns every colour --------------------------------------------
