@@ -1750,7 +1750,7 @@ final class StatusHUD: NSObject {
         // check. No hint line on any card (ruled): the grid's key line is the
         // only hint left, set by its own arm.
         let row = situation().map { StateLegend.row(for: $0) }
-        stateLabel.attributedStringValue = placardText(
+        stateLabel.attributedStringValue = Widgets.placardText(
             face.placardOverride.isEmpty
                 ? (row?.stateText ?? "") : face.placardOverride)
         stateLabel.isHidden = false
@@ -1840,7 +1840,7 @@ final class StatusHUD: NSObject {
         switch state {
         case .transcribing:
             if let note = face.captureNote {
-                renderCaptureStrip(placardText(note))
+                renderCaptureStrip(Widgets.placardText(note))
             }
 
         case .hidden, .preparing, .receipt:
@@ -1884,7 +1884,7 @@ final class StatusHUD: NSObject {
             // receipt, so "✓ SENT" and the count fought for the same pixels —
             // and the count was answering a question the list face now owns
             // outright. The placard is a placard again.
-            let stripTitle = NSMutableAttributedString(attributedString: letterspaced(
+            let stripTitle = NSMutableAttributedString(attributedString: Widgets.letterspaced(
                 StateLegend.gridStripTitle, size: 10, tracking: 3.2,
                 color: StateLegend.Lens.chrome.color))
             let indent = NSMutableParagraphStyle()
@@ -1951,7 +1951,7 @@ final class StatusHUD: NSObject {
             // The read-back is the strip's third phase, in the same slot the
             // other two used. The placard names it; the words follow.
             if let readback = face.readback {
-                renderCaptureStrip(placardText(StateLegend.readbackPlacard),
+                renderCaptureStrip(Widgets.placardText(StateLegend.readbackPlacard),
                                    detail: "\u{201C}\(readback)\u{201D}")
             }
 
@@ -1972,7 +1972,7 @@ final class StatusHUD: NSObject {
             // invitation waits the same way a failure does and means the
             // opposite.
             stateLabel.textColor = face.lens.color
-            stateLabel.attributedStringValue = placardText(
+            stateLabel.attributedStringValue = Widgets.placardText(
                 stateLabel.attributedStringValue.string,
                 color: face.lens.color)
             // A device fault is the only failure with somewhere to send you.
@@ -1990,7 +1990,7 @@ final class StatusHUD: NSObject {
             // Indented clear of the back chevron sharing this row (x 10–36;
             // the stack's left inset is 14, so 30 puts the "P" at x 44 with an
             // 8pt gap). The placardClearsChevron drill holds this geometry.
-            stateLabel.attributedStringValue = letterspaced(
+            stateLabel.attributedStringValue = Widgets.letterspaced(
                 StateLegend.pastAgentsTitle, size: 10, tracking: 3.2,
                 color: StateLegend.Lens.chrome.color, headIndent: 30)
             // One row, like the grid's: chevron, placard, gear. The gear stays
@@ -2053,7 +2053,7 @@ final class StatusHUD: NSObject {
             // and a notice with nowhere to land is feedback the user never gets.
             stateLabel.isHidden = false
             stateLabel.textColor = noticeLens.color
-            stateLabel.attributedStringValue = placardText(notice, color: noticeLens.color)
+            stateLabel.attributedStringValue = Widgets.placardText(notice, color: noticeLens.color)
         }
 
         // The drop tray's chips, derived rather than stored: whatever Core
@@ -3012,7 +3012,7 @@ final class StatusHUD: NSObject {
             host.addSubview(chip)
             receiptChip = chip
         }
-        chip.attributedStringValue = letterspaced(
+        chip.attributedStringValue = Widgets.letterspaced(
             receipt.text, size: 9, tracking: 1.4,
             color: receipt.landed ? StateLegend.Palette.ready : StateLegend.Palette.secondary)
         chip.sizeToFit()
@@ -7327,7 +7327,12 @@ final class StatusHUD: NSObject {
     /// PIXELS, not from `face.spokenUpTo` — a drill that asked the field would
     /// only prove the field agrees with itself, and the defect being guarded
     /// against is precisely the pixels disagreeing with the face.
-    private var inkBrightLength: Int {
+    ///
+    /// `internal`, not `private` (App-lane P2, 23 Aug): a `TestSurface`
+    /// requirement, conformed to from `TestSurface.swift` rather than from
+    /// an extension inside this file — a `private` witness is invisible
+    /// across that file boundary.
+    var inkBrightLength: Int {
         guard let attributed = bodyLabel?.attributedStringValue else { return 0 }
         var bright = 0
         let full = NSRange(location: 0, length: attributed.length)
@@ -7580,60 +7585,6 @@ final class StatusHUD: NSObject {
             hide()
         }
     }
-}
-
-/// Small uppercase letterspaced type — the SESSIONS strip (10px, +0.16em) and
-/// the NEW SESSION placard (9.5px, +0.14em) share it.
-@MainActor
-/// The placard string with symbol glyphs optically corrected. ◀/▶ are not in
-/// SF Mono; the fallback font's triangle renders larger and off-baseline
-/// against the placard's 10pt mono caps (Robert's screenshot, 06 Aug — the
-/// "◀ SOLUTION" rung pill). The glyph run is drawn smaller with a baseline
-/// nudge so both fonts share one optical center; letter runs keep the
-/// placard's own font. Color is explicit because attributed runs ignore the
-/// field's textColor.
-/// A placard: the state's mark and its word, on one line.
-///
-/// Every mark is centred on the cap line by measurement (`ChromeType`), not by
-/// a per-glyph nudge. The old version carried `baselineOffset: 0.8` for `◀`
-/// alone — 0.67pt low, measured — and nothing at all for `⚠`, `→` or the
-/// chevrons, half of which are not even in the monospaced font and are drawn by
-/// a fallback face with its own metrics.
-///
-/// The marks stay three-quarters of the text size: a state mark is a
-/// punctuation-weight thing beside its word, not a second word. Only its
-/// POSITION was ever wrong.
-private func placardText(
-    _ text: String, color: NSColor = StateLegend.Lens.chrome.color
-) -> NSAttributedString {
-    ChromeType.line(text, font: StateLegend.placardFont, color: color, markScale: 0.68)
-}
-
-func letterspaced(_ text: String, size: CGFloat, tracking: CGFloat,
-                          color: NSColor, headIndent: CGFloat = 0) -> NSAttributedString {
-    var attributes: [NSAttributedString.Key: Any] = [
-        // Chrome, like everything else that names rather than says (ruled
-        // 18 Aug). This was the system font, which is why AGENTS and NEW AGENT
-        // read as visitors on a monospaced panel — the letterspacing was doing
-        // the work of looking deliberate while the face disagreed with every
-        // row beneath it.
-        .font: StateLegend.Face.chrome(size),
-        .kern: tracking,
-        .foregroundColor: color,
-    ]
-    // For a placard that shares its row with a control to its LEFT (the list
-    // face's back chevron): the label's frame still spans the row, but the
-    // text starts clear of the control. An indent in the string rather than a
-    // second leading constraint, because the label lives in the content stack
-    // and its frame is not this call's to move (observed 13 Aug: the chevron
-    // painted over "PAST AGENTS"'s first glyphs).
-    if headIndent > 0 {
-        let style = NSMutableParagraphStyle()
-        style.firstLineHeadIndent = headIndent
-        style.headIndent = headIndent
-        attributes[.paragraphStyle] = style
-    }
-    return NSAttributedString(string: text, attributes: attributes)
 }
 
 /// One grid row, in the ruled three-column geometry: a 26px lamp column, a

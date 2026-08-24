@@ -599,7 +599,7 @@ final class PastRowView: NSControl {
     static let auxColumn: CGFloat = {
         let time = ("88m ago" as NSString)
             .size(withAttributes: [.font: GridRowView.auxFont]).width
-        let verb = letterspaced("REVIVE ›", size: 9.5, tracking: 1.33,
+        let verb = Widgets.letterspaced("REVIVE ›", size: 9.5, tracking: 1.33,
                                 color: .white).size().width
         // Two points of air on each side. The column is measured, but a font
         // substitution on a machine without Berkeley Mono moves the numbers,
@@ -709,7 +709,7 @@ final class PastRowView: NSControl {
         // resistance dance this replaces is described on `auxColumn`.
         idLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        verbLabel.attributedStringValue = letterspaced(
+        verbLabel.attributedStringValue = Widgets.letterspaced(
             item.revivable ? "REVIVE ›" : "OPEN ›", size: 9.5, tracking: 1.33,
             color: item.revivable ? StateLegend.Palette.ready : StateLegend.Palette.accent)
         verbLabel.alignment = .right
@@ -869,7 +869,7 @@ private final class PlacardHalf: NSControl {
             color: StateLegend.Palette.hint)
         mark.translatesAutoresizingMaskIntoConstraints = false
 
-        label.attributedStringValue = letterspaced(
+        label.attributedStringValue = Widgets.letterspaced(
             title, size: 9.5, tracking: 1.33, color: StateLegend.Palette.hint)
         label.translatesAutoresizingMaskIntoConstraints = false
         resting = [mark.attributedStringValue, label.attributedStringValue]
@@ -963,7 +963,7 @@ final class SettingRowView: NSView, NSTextFieldDelegate {
         translatesAutoresizingMaskIntoConstraints = false
 
         let caption = NSTextField(labelWithString: "")
-        caption.attributedStringValue = letterspaced(
+        caption.attributedStringValue = Widgets.letterspaced(
             label, size: 9.5, tracking: 1.33, color: StateLegend.Palette.hint)
         caption.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1001,7 +1001,7 @@ final class SettingRowView: NSView, NSTextFieldDelegate {
             // Not a bottom-line door — it lives in the settings pane and keeps
             // its own letterspaced sans, so it re-inks through the generic hook.
             browse.reink = { [weak browse] color in
-                browse?.attributedTitle = letterspaced(
+                browse?.attributedTitle = Widgets.letterspaced(
                     "CHOOSE…", size: 9.5, tracking: 1.33, color: color)
             }
             browse.restingInk = StateLegend.Palette.accent
@@ -1108,7 +1108,7 @@ final class SettingsTabBar: NSView {
     private func paint() {
         for (tab, button) in buttons {
             let lit = tab == selected
-            button.attributedTitle = letterspaced(
+            button.attributedTitle = Widgets.letterspaced(
                 tab.rawValue, size: 9.5, tracking: 1.33,
                 color: lit ? StateLegend.Palette.ink : StateLegend.Palette.hint)
         }
