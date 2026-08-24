@@ -217,10 +217,20 @@ The six-agent audit record behind every item:
   list, A5 attach affordance, A6 reapAudio, A7 speech lock, A8 firewall wired
   or deleted): each is part of the surface the arc rebuilds anyway.
 - **Coordinator splits** (Announcer / ReplyPipeline / SessionSweep) and the
-  **app-layer decomposition** (P1-P10 from the audit: dead code deleted, leaf
-  views and drills out of StatusHUD, grid policy down to Core with unit
-  tests, main.swift extensions, the async logger) — executed as arc-stacked
-  PRs in the app lane, one session at a time.
+  **app-layer decomposition** (P1-9 from the original audit report
+  [2026-08-19-tb-architecture-program]: 1 dead code + pose fix, 2 Widgets
+  struct + TestSurface, 3 leaf views out (~1,640 lines), 4 drills+pose out
+  (~3,200), 5 receipt/build/geometry extensions (core lands ~2,500), 6
+  SessionRow model + grid statics to Core with unit tests, 7 main.swift
+  extension split, 8 GridAssembler to Core, 9 Recorder/CaptureUnit/log-writer
+  to Core) — executed as arc-stacked PRs in the app lane, one session at a
+  time. **Two of the report's "transport conditionality" riders under this
+  item are already satisfied, ground-checked 23 Aug**, not by an App-lane PR
+  but as a side effect of the single-transport cut above: the four
+  Terminal-naming user strings are gone with `Permissions.Kind.automation`
+  (4eaf17f), and `goToSession` already routes through the injected
+  `onGoToSession` callback (StatusHUD.swift:2529), not a direct transport
+  call — nothing left to do for either rider when P1-9 starts.
 - **Store riders**: one cache, one append-only log, one trace sink,
   PrivateStorage tests, fontSheetRoot out of ~/.claude.
 - **Vestigial code from the audit's dead lists is deleted, not preserved**:
