@@ -970,14 +970,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // seconds and releases the drill hold when it is done.
             hud.selfTestReadbackDoor()
             hud.selfTestPendingSend()
-            // The voice-menu cache drill (issue 14, nested blocker). Three
-            // seconds is far past the off-thread loader's worst case, so by
-            // now the snapshot must be warm, the menu must carry the Voice
-            // submenu, and a rebuild must be quick even with the catalogue
-            // populated — the tick never again pays the TTS daemon's price.
+            // The voice-menu cache drill (issue 14, nested blocker). By the
+            // time this checks, the snapshot must be warm, the menu must
+            // carry the Voice submenu, and a rebuild must be quick even with
+            // the catalogue populated — the tick never again pays the TTS
+            // daemon's price.
+            //
+            // Polls until the snapshot has actually loaded rather than
+            // sleeping a fixed duration and hoping — fixed at a flat 4s
+            // until 24 Aug, when this drill started failing identically on
+            // `main` and this branch the same afternoon on builds whose
+            // panel source was byte-identical (2026-08-24-tb-state-on-the-
+            // arc). A fixed sleep races an off-thread load with no
+            // completion signal, so any machine (or TTS daemon) slower than
+            // whatever the deadline was tuned against fails through no
+            // fault of the build — measuring the hour, not the build, the
+            // same class of flake this drill's own doc comment already
+            // records being fixed once before in the sibling assertion
+            // below. Bounded at 10s (the old deadline, well doubled) so a
+            // genuinely broken loader still fails the drill rather than
+            // hanging the launch.
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                let warm = !SystemVoiceCatalog.cachedRows().catalogue.isEmpty
+                var warm = false
+                for _ in 0..<50 {
+                    if !SystemVoiceCatalog.cachedRows().catalogue.isEmpty { warm = true; break }
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
                 // TWO rebuilds, and the gate reads the second (18 Aug).
                 //
                 // The drill's name is "cacheWarm" and its assertion was
