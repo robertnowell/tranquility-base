@@ -814,7 +814,23 @@ com.robertnowell.voice-dispatch (TCC).
         (the actual proof this didn't break anything — more load-bearing
         here than for any prior P-item, since this IS the self-test
         machinery), canary green.
-      - [ ] P5, receipt/build/geometry extensions (StatusHUD core to ~2,500)
+      - [x] P5, receipt/build/geometry extensions (24 Aug): StatusHUD.swift
+        4,257 -> 3,114 (not exactly the ~2,500 estimate — the rest of the
+        gap belongs to P6-P9's own targets, not invented here). Three new
+        files, all `extension StatusHUD`: `Receipt.swift` (374 lines —
+        the send-receipt chip AND the acknowledge light together, already
+        adjacent/interleaved in the source), `Geometry.swift` (190 —
+        resizeToFit/morph/position), `Build.swift` (623 — `ConsolePanel`
+        + `build()`, the single largest function in the app before this
+        split at 595 lines). Stored properties stayed in StatusHUD.swift
+        (extensions can't add them); 15 members relaxed private ->
+        internal, none blanket. Found and fixed the largest doc-comment-
+        drift instance yet (5th this session): three separate paragraphs
+        concatenated into one block, including a "dev tooling" MARK label
+        wrongly applied to core render-path geometry functions — dropped
+        rather than carried forward. 842/842 tests green, deployed and
+        verified live (da208f3): 49/49 self-test verdicts passed, canary
+        green.
       - [ ] P6, SessionRow model + grid statics to Core, with unit tests
       - [ ] P7, main.swift extension split
       - [ ] P8, GridAssembler to Core
