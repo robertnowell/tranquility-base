@@ -89,18 +89,39 @@ echo "→ testing"
 # So: no pipe at all. Bash can test a substring without spawning anything, and
 # a check with no subprocess has no pipeline to fail.
 #
+# Two invocations, not one — found 24 Aug on a new machine (App-lane P9): a
+# bare `swift test` here silently runs ONLY the Swift Testing suites and
+# skips every XCTestCase-based test with no error, no non-zero exit, nothing
+# — 31 tests reported as green while 881 XCTestCase tests never ran. Passing
+# `--enable-xctest --disable-swift-testing` is what actually forces the
+# XCTest bundle to run; the default/both-enabled invocation reliably drops
+# it on this toolchain. `arch -arm64e` because plain `swift`/`swift test`
+# resolve to the x86_64 slice in this shell, which cannot dlopen the
+# arm64e-only XCTest bundle at all. Both frameworks are checked separately
+# so a silent zero in either one is a hard failure, not a quiet pass.
+#
 # The exit STATUS is the verdict; the summary line is a corroborating check that
 # the run actually happened rather than dying before it reached the tests.
-TEST_OUT=$(swift test 2>&1) && TEST_STATUS=0 || TEST_STATUS=$?
-if [ "$TEST_STATUS" -ne 0 ] || [[ "$TEST_OUT" != *"with 0 failures"* ]]; then
-  echo "✗ tests failed (exit $TEST_STATUS)" >&2
+XCTEST_OUT=$(arch -arm64e swift test --enable-xctest --disable-swift-testing 2>&1) \
+  && XCTEST_STATUS=0 || XCTEST_STATUS=$?
+if [ "$XCTEST_STATUS" -ne 0 ] || [[ "$XCTEST_OUT" != *"with 0 failures"* ]]; then
+  echo "✗ XCTest tests failed (exit $XCTEST_STATUS)" >&2
   # `head` closing early is the same SIGPIPE trap; this one is on the way out
   # through `exit 1`, but an unguarded pipeline under `set -e` would skip the
   # diagnosis it exists to print.
-  printf '%s\n' "$TEST_OUT" | grep -E "error:|failed|XCTAssert" | head -20 >&2 || true
+  printf '%s\n' "$XCTEST_OUT" | grep -E "error:|failed|XCTAssert" | head -20 >&2 || true
   exit 1
 fi
-printf '%s\n' "$TEST_OUT" | grep -E "Executed [0-9]+ tests" | tail -1 | sed 's/^[[:space:]]*/  /'
+printf '%s\n' "$XCTEST_OUT" | grep -E "Executed [0-9]+ tests" | tail -1 | sed 's/^[[:space:]]*/  /'
+
+ST_OUT=$(arch -arm64e swift test --disable-xctest --enable-swift-testing 2>&1) \
+  && ST_STATUS=0 || ST_STATUS=$?
+if [ "$ST_STATUS" -ne 0 ] || [[ "$ST_OUT" != *"passed after"* ]]; then
+  echo "✗ Swift Testing tests failed (exit $ST_STATUS)" >&2
+  printf '%s\n' "$ST_OUT" | grep -E "error:|failed|Issue recorded" | head -20 >&2 || true
+  exit 1
+fi
+printf '%s\n' "$ST_OUT" | grep -E "Test run with [0-9]+ tests" | tail -1 | sed 's/^[[:space:]]*/  /'
 echo "✓ build clean, tests green"
 
 # --- the palette owns every colour --------------------------------------------
