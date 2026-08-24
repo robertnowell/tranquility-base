@@ -37,14 +37,28 @@ public final class PendingLaunch: @unchecked Sendable {
     public let directory: String
     public let startedAt: Date
 
+    /// The session you were in when + NEW AGENT was pressed, or nil if you were
+    /// in none.
+    ///
+    /// Stored on the launch rather than kept as a local in `newSession`,
+    /// because it is a fact ABOUT THE LAUNCH and two moments need it: the
+    /// adoption at registration, and — since 24 Aug — the microphone. It was a
+    /// stack local, so the microphone could not see it, and that is half of why
+    /// the microphone was left asking `isPending` instead of asking the real
+    /// question.
+    public let conversationAtLaunch: String?
+
     private let lock = NSLock()
     private var sessionId: String?
     private var abandoned = false
+    private var settled = false
     private var waiters: [UUID: CheckedContinuation<String?, Never>] = [:]
 
-    public init(label: String, directory: String, startedAt: Date = Date()) {
+    public init(label: String, directory: String,
+                conversationAtLaunch: String?, startedAt: Date = Date()) {
         self.label = label
         self.directory = directory
+        self.conversationAtLaunch = conversationAtLaunch
         self.startedAt = startedAt
     }
 
@@ -52,6 +66,51 @@ public final class PendingLaunch: @unchecked Sendable {
     public var isPending: Bool {
         lock.lock(); defer { lock.unlock() }
         return sessionId == nil && !abandoned
+    }
+
+    /// Whether this launch still owns where your words go.
+    ///
+    /// NOT the same question as `isPending`, and conflating them is exactly the
+    /// 24 Aug misroute. `isPending` asks whether the agent has an id yet;
+    /// `resolve` answers it on a detached launcher task the instant
+    /// `claude agents --json` reports the session. But the DESTINATION is
+    /// handed over one main-actor hop later, in the adoption block, and in the
+    /// gap between the two `isPending` was false while the panel's
+    /// `activeConversation` still named the previous agent. The microphone
+    /// opened in that gap, found no branch that matched, and addressed the
+    /// capture to whoever had spoken last.
+    ///
+    /// So the claim expires when it is ANSWERED, not when the id arrives:
+    /// `abandon()` (the agent never came up, so it owns nothing) or `settle()`
+    /// (the adoption ran and handed the destination to the panel, whichever way
+    /// it decided). Every exit from `newSession` reaches one of those two —
+    /// there is no third — which is what keeps an hour-old launch from
+    /// capturing a microphone it has no business capturing.
+    public var ownsTheReply: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !abandoned && !settled
+    }
+
+    /// The session id if it has arrived, without waiting for it.
+    ///
+    /// `session(timeout:)` is the right call when you are about to send and can
+    /// afford to wait. This is the right call when you are DECIDING and cannot:
+    /// a launch that already has an id can be addressed as a session outright,
+    /// which lets the panel name the real agent while you speak.
+    public var resolvedSession: String? {
+        lock.lock(); defer { lock.unlock() }
+        return sessionId
+    }
+
+    /// The destination question for this launch has been answered.
+    ///
+    /// Called from the adoption block on BOTH branches — the launch took the
+    /// reply, or you had moved on and it did not. Either way the answer now
+    /// lives in the panel's `activeConversation`, and the launch stops being
+    /// consulted. Idempotent, like `resolve` and for the same reason.
+    public func settle() {
+        lock.lock(); defer { lock.unlock() }
+        settled = true
     }
 
     /// The session, once Claude Code has minted it. Idempotent: a second call
@@ -73,6 +132,7 @@ public final class PendingLaunch: @unchecked Sendable {
         lock.lock()
         guard sessionId == nil, !abandoned else { lock.unlock(); return }
         abandoned = true
+        settled = true
         let pending = waiters
         waiters = [:]
         lock.unlock()

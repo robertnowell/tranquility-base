@@ -27,6 +27,19 @@ import Foundation
 /// Pure, in Core, and tested: the app layer has no unit tests, and this rule is
 /// about attention rather than about drawing, so it does not need a panel to
 /// be checked.
+/// Asked at TWO moments, and they must be read together (24 Aug):
+///
+///   · at registration, by the adoption block, to decide whether the launched
+///     agent takes over `activeConversation`;
+///   · at mic-open, by `ReplyRouting.destination`, to decide whether the launch
+///     owns the words you are about to speak.
+///
+/// It was asked at only the first for five days. The microphone asked
+/// `PendingLaunch.isPending` instead — a question about whether the agent had
+/// an id, not about where your attention was — and on 24 Aug the two answers
+/// came apart for about half a second and a reply went to the wrong repository.
+/// One predicate, both moments; if you change this rule, `ReplyRouting` is the
+/// other place it is felt.
 public enum LaunchAdoption {
     /// - Parameters:
     ///   - isNewestLaunch: this launch is still the one `pendingLaunch` names.

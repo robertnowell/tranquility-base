@@ -3875,12 +3875,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The promise the card's answer waits on. Created with the card, because
         // the whole point of the card is that you may answer it before there is
         // an agent to answer — see PendingLaunch for what that cost before.
-        let launch = greet ? PendingLaunch(label: label, directory: dir) : nil
-        if let launch { pendingLaunch = launch }
         // Where your attention was when the button was pressed, so the
         // adoption below can tell "still here" from "moved on". See it for
-        // why the destination cannot wait for the card.
+        // why the destination cannot wait for the card. Read BEFORE the launch
+        // is built and carried ON it (24 Aug): the microphone needs this fact
+        // too, and as a local here it could not see it.
         let conversationAtLaunch = activeConversation?.sessionId
+        let launch = greet ? PendingLaunch(label: label, directory: dir,
+                                           conversationAtLaunch: conversationAtLaunch) : nil
+        if let launch { pendingLaunch = launch }
         if greet, hud.showGreeting(line: line, label: label) {
             // Through the greeting cache, which is what it is for: one fixed
             // sentence per voice, synthesized once and replayed from disk
@@ -3973,11 +3976,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     conversationAtLaunch: conversationAtLaunch,
                     conversationNow: self.activeConversation?.sessionId)
                 else {
+                    // Answered, even though the answer is "not you" — the claim
+                    // must expire on this branch too, or the launch keeps
+                    // owning a microphone it just lost.
+                    launch?.settle()
                     Permissions.log("launch: \(sessionId.prefix(8)) registered, but you "
                         + "moved on — replies stay where you put them")
                     return
                 }
                 self.activeConversation = (sessionId, label, dir)
+                // The destination now lives in the panel; the launch stops
+                // being consulted. See PendingLaunch.ownsTheReply — this is the
+                // hand-off the 24 Aug misroute happened one hop before.
+                launch?.settle()
                 Permissions.log("launch: replies now go to \(sessionId.prefix(8))")
             }
 
