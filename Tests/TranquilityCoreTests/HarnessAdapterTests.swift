@@ -29,6 +29,21 @@ final class HarnessAdapterTests: XCTestCase {
         XCTAssertEqual(spec!.settledBannerNeedle, "Claude")
     }
 
+    func testClaudeCodePathCandidatesMatchWhatResolveBinaryAlreadySearches() {
+        // The two lists describe the same install locations for two
+        // different consumers (ClaudeAgentsCLI.resolveBinary() appends the
+        // filename; this one is joined straight into a PATH) — same set
+        // of directories, so a real machine's install method is found by
+        // both or neither.
+        let candidates = ClaudeCodeAdapter().pathCandidates
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for dir in ["\(home)/.local/bin", "\(home)/.claude/local", "/opt/homebrew/bin",
+                    "/usr/local/bin", "\(home)/.bun/bin", "\(home)/.npm-global/bin"] {
+            XCTAssertTrue(candidates.contains(dir), "missing \(dir)")
+        }
+        XCTAssertFalse(candidates.isEmpty)
+    }
+
     // MARK: CodexAdapter — measured live 21 Aug, codex-cli 0.149.0, real tmux pane
 
     func testCodexResumeArguments() {
@@ -63,6 +78,19 @@ final class HarnessAdapterTests: XCTestCase {
                        "~1s of any real output; the composer's own idle placeholder " +
                        "sits at the bottom of the pane and survives (gate finding, 21 Aug)")
         XCTAssertTrue(spec!.neverAutoAcceptNeedles.contains("Hooks need review"))
+    }
+
+    func testCodexPathCandidatesIncludeCargoAheadOfTheGenericPaths() {
+        let candidates = CodexAdapter().pathCandidates
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let cargo = "\(home)/.cargo/bin"
+        XCTAssertTrue(candidates.contains(cargo))
+        XCTAssertTrue(candidates.contains("\(home)/.local/bin"))
+        XCTAssertLessThan(candidates.firstIndex(of: cargo)!,
+                          candidates.firstIndex(of: "/opt/homebrew/bin")!,
+                          "a cargo-built codex should be found before falling through " +
+                          "to the generic homebrew/usr paths")
+        XCTAssertFalse(candidates.isEmpty)
     }
 
     // MARK: TrustPromptWatcher — the one loop both transports now share
@@ -156,6 +184,7 @@ final class HarnessAdapterTests: XCTestCase {
             let processCommandFragment = "silent"
             func resumeArguments(sessionId: String) -> [String] { [] }
             var trustPrompt: TrustPromptSpec? { nil }
+            var pathCandidates: [String] { [] }
             var capabilities: HarnessCapabilities {
                 HarnessCapabilities(echoesPaste: false, promptGlyph: "", queuesInputMidTurn: false,
                                     registersWithLiveness: false, hasHooks: false,
@@ -181,6 +210,7 @@ final class HarnessAdapterTests: XCTestCase {
             let processCommandFragment = "silent"
             func resumeArguments(sessionId: String) -> [String] { [] }
             var trustPrompt: TrustPromptSpec? { nil }
+            var pathCandidates: [String] { [] }
             var capabilities: HarnessCapabilities {
                 HarnessCapabilities(echoesPaste: false, promptGlyph: "", queuesInputMidTurn: false,
                                     registersWithLiveness: false, hasHooks: false,

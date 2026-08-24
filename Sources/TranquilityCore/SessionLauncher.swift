@@ -93,7 +93,10 @@ public enum SessionLauncher {
     /// GUI-launched app's env is minimal, tmux panes start login shells whose
     /// /etc/zprofile reorders PATH, and a reused server propagates almost
     /// nothing (the trap claude-squad hit as issue #278). Nothing here trusts
-    /// inheritance.
+    /// inheritance. PATH is sourced from the adapter's own
+    /// `pathCandidates` (23 Aug) — not a single generic list hand-copied
+    /// here regardless of which harness is being launched, since different
+    /// harnesses' install methods put a binary in different places.
     @discardableResult
     static func launchTmux(
         directory: String,
@@ -106,10 +109,7 @@ public enum SessionLauncher {
         // (must exist) but is still never trusted as shell syntax.
         let quotedDir = Self.shellQuoted(directory)
         let name = "tb-" + String(UUID().uuidString.prefix(8)).lowercased()
-        let path = ([
-            "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin",
-            "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
-        ]).joined(separator: ":")
+        let path = adapter.pathCandidates.joined(separator: ":")
 
         // `-P -F` prints the new pane's tty as part of THIS command's own
         // output, atomically with creation — not a separate query run
@@ -510,12 +510,33 @@ public enum SessionLauncher {
         }
     }
 
-    /// Watch the just-launched tab; if Claude's trust prompt renders, press
-    /// Return once and STOP. The single press and immediate return are
-    /// load-bearing (ruled 12 Aug, PR #34): on a resume, the screen after
-    /// trust offers "resume from summary / full", and the full option is a
-    /// usage-limit spend that stays with the user. Answering once and leaving
-    /// is what keeps this watcher safe on both the launch and revive paths.
+    /// Resolves `tty` to its tmux pane and watches that — a thin
+    /// convenience for the two callers (`launchTmux`, and the app's own
+    /// post-launch greeting task) that have a tty in hand from a launch
+    /// they just made, not a second implementation. Before the
+    /// single-transport cut (23 Aug) this fell back to an AppleScript
+    /// watcher over a Terminal.app tab when the tty wasn't tmux-owned; that
+    /// branch is deleted, not merely dead-code-flagged, because it no
+    /// longer CAN be reached — `launchTmux` is the only launch path left,
+    /// and every tty it produces is tmux-owned by construction. See
+    /// `watchForTrustPrompt(pane:)` for the one remaining watch loop.
+    public static func watchForTrustPrompt(tty: String, adapter: any HarnessAdapter = ClaudeCodeAdapter()) {
+        guard let pane = TmuxOwnership.pane(forTty: tty) else {
+            Self.trace?("newSession: \(tty) has no resolvable tmux pane — trust watcher has "
+                + "nothing to watch")
+            return
+        }
+        watchForTrustPrompt(pane: pane, adapter: adapter)
+    }
+
+    /// Watch a just-launched pane; if the harness's trust prompt renders,
+    /// press Return once and STOP. The single press and immediate return
+    /// are load-bearing (ruled 12 Aug, PR #34, against the AppleScript
+    /// predecessor this collapsed from — 23 Aug): on a resume, the screen
+    /// after trust offers "resume from summary / full", and the full
+    /// option is a usage-limit spend that stays with the user. Answering
+    /// once and leaving is what keeps this watcher safe on both the launch
+    /// and revive paths.
     ///
     /// Measured on a real revive (12 Aug, session bd28a0a1, 753k tokens, so
     /// the stakes were live, not hypothetical):
@@ -523,87 +544,30 @@ public enum SessionLauncher {
     ///   resume-choice prompt is answered, so a revived session reads LIVE in
     ///   `claude agents --json` while it is actually blocked on that
     ///   question. The trust prompt is the opposite: nothing registers until
-    ///   it is answered. Liveness is not evidence the tab needs no attention.
+    ///   it is answered. Liveness is not evidence the pane needs no attention.
     /// - A second Return on the resume prompt would pick "summary
     ///   (recommended)", the cheap option — wrong owner, not catastrophe.
-    ///   The early return below is what keeps that press from happening.
+    ///   The early return in `TrustPromptWatcher.watch` is what keeps that
+    ///   press from happening.
     ///
-    /// Twice-rotted and re-verified against a live v2.1.229 tab on 12 Aug
-    /// (scripts/canary.sh caught both; it replays this exact contract at
-    /// every deploy):
+    /// The needle wording itself has rotted before and will again: "Do you
+    /// trust" was the pre-2.1 Claude Code prompt; v2.1.x renders "Quick
+    /// safety check: … ❯ 1. Yes, I trust this folder" — matched on "trust
+    /// this folder", with the old needle kept for older CLIs. The
+    /// started-sentinel was `? for shortcuts` (also gone); it is now the
+    /// banner word "Claude" — capital C, so the lowercase `claude` in the
+    /// echoed launch command cannot satisfy it. Two consecutive sightings,
+    /// because a single read can catch the pane mid-boot.
     ///
-    /// 1. WORDING. "Do you trust" was the pre-2.1 prompt; v2.1.x renders
-    ///    "Quick safety check: … ❯ 1. Yes, I trust this folder". Matched on
-    ///    "trust this folder", with the old needle kept for older CLIs. The
-    ///    started-sentinel was `? for shortcuts` (also gone); it is now the
-    ///    banner word "Claude" — capital C, so the lowercase `claude` in the
-    ///    echoed launch command cannot satisfy it. Two consecutive sightings,
-    ///    because a single read can catch the tab mid-boot. (The v2.1.229
-    ///    trust screen itself contains "Claude", which is why the trust check
-    ///    runs FIRST in every poll — reorder these and the watcher will call
-    ///    an unanswered trust prompt "started".)
-    ///
-    /// 2. ADDRESSING. `contents of t` where t is a repeat variable is
-    ///    AppleScript's DEREFERENCE operator, not Terminal's `contents`
-    ///    property: it returns the tab object, which stringifies as
-    ///    "tab 1 of window id N", so every needle missed against nine words
-    ///    of specifier text. Only a directly typed specifier
-    ///    (`contents of tab i of window id wid`) reads the screen. The same
-    ///    trap applies to `do script "" in t`, so both scripts address
-    ///    directly.
-    public static func watchForTrustPrompt(tty: String, adapter: any HarnessAdapter = ClaudeCodeAdapter()) {
-        // A tmux-owned tty is watched through capture-pane: the same needles,
-        // none of the AppleScript dereference pathology this doc block
-        // describes (that trap rotted twice and earned its own canary; it
-        // simply does not exist in tmux's read path).
-        if let pane = TmuxOwnership.pane(forTty: tty) {
-            watchForTrustPrompt(pane: pane, adapter: adapter)
-            return
-        }
-        guard let spec = adapter.trustPrompt else { return }
-        TrustPromptWatcher.watch(
-            spec: spec,
-            read: {
-                guard case .success(let text) = AppleScript.run(script: """
-                    tell application "Terminal"
-                      repeat with w in windows
-                        set wid to id of w
-                        set n to count of tabs of w
-                        repeat with i from 1 to n
-                          if (tty of tab i of window id wid) as text is "\(tty)" then
-                            return contents of tab i of window id wid
-                          end if
-                        end repeat
-                      end repeat
-                      return ""
-                    end tell
-                    """) else { return nil }
-                return text
-            },
-            press: {
-                _ = AppleScript.run(script: """
-                    tell application "Terminal"
-                      repeat with w in windows
-                        set wid to id of w
-                        set n to count of tabs of w
-                        repeat with i from 1 to n
-                          if (tty of tab i of window id wid) as text is "\(tty)" then
-                            do script "" in tab i of window id wid
-                            return "ok"
-                          end if
-                        end repeat
-                      end repeat
-                      return "notfound"
-                    end tell
-                    """)
-            },
-            trace: Self.trace, label: tty)
-    }
-
-    /// The tmux twin, identical contract, capture-pane instead of
-    /// AppleScript. Verified live 19 Aug: the v2.1 "trust this folder"
-    /// screen read cleanly through capture-pane and a single send-keys
-    /// Enter accepted it, with registration correctly absent until it did.
+    /// Verified live 19 Aug against a real tmux pane: the v2.1 "trust this
+    /// folder" screen read cleanly through capture-pane and a single
+    /// send-keys Enter accepted it, with registration correctly absent
+    /// until it did. Before 23 Aug this loop had a second implementation
+    /// (`watchForTrustPrompt(tty:)`'s own AppleScript read/press over a
+    /// Terminal.app tab, one hand-copied 40-line pair for the transport
+    /// that no longer exists) — deleted, not merely superseded, once the
+    /// tty-based overload above stopped being reachable through anything
+    /// but this one.
     static func watchForTrustPrompt(pane: TmuxPaneAddress, adapter: any HarnessAdapter = ClaudeCodeAdapter()) {
         guard let spec = adapter.trustPrompt else { return }
         TrustPromptWatcher.watch(
