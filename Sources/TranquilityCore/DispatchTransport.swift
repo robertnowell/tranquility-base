@@ -44,7 +44,6 @@ public struct DispatchTarget: Sendable, Equatable {
     /// live 21 Aug). Defaults to Claude Code's own, so every existing
     /// construction site keeps meaning exactly what it always has; a caller
     /// building a target for a different harness passes its adapter's glyph.
-    /// Unused by `TerminalAppTransport`, which has no screen to read.
     public var promptGlyph: String
     /// The harness's own idle-composer hint text, when it has one that
     /// renders on the SAME glyph-prefixed line an empty box would — found
@@ -64,7 +63,7 @@ public struct DispatchTarget: Sendable, Equatable {
     public var pasteChip: String?
 
     public init(
-        kind: TransportKind = .terminalApp,
+        kind: TransportKind = .tmux,
         sessionId: String,
         pid: Int? = nil,
         tty: String? = nil,
@@ -274,164 +273,6 @@ public enum DispatchText {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
-    }
-}
-
-// MARK: - Terminal.app
-
-public struct TerminalAppTransport: DispatchTransport {
-    public let kind: TransportKind = .terminalApp
-    public var verificationTimeout: TimeInterval
-    public var pollInterval: TimeInterval
-    private let agents: ClaudeAgentsReading
-
-    public init(
-        verificationTimeout: TimeInterval = 10,
-        pollInterval: TimeInterval = 0.1,
-        agents: ClaudeAgentsReading = ClaudeAgentsCLI()
-    ) {
-        self.verificationTimeout = verificationTimeout
-        self.pollInterval = pollInterval
-        self.agents = agents
-    }
-
-    public func readiness(for target: DispatchTarget) async -> Readiness {
-        guard let pid = target.pid, ProcessProbe.isAlive(pid) else { return .targetGone }
-
-        switch target.readinessSource {
-        case .processAlive:
-            return .ready
-        case .claudeAgents:
-            // Typing fails CLOSED: a probe failure and a genuinely absent session
-            // are treated the same, because injecting into a session we cannot
-            // verify could answer a dialog. This is the opposite direction from
-            // announcing, and the asymmetry is deliberate.
-            return Readiness.classify((agents.sessions() ?? [])
-                .matching(sessionId: target.sessionId, pid: pid))
-        case .rolloutTail:
-            return Readiness.classify(rollout: CodexRollout.parse(sessionId: target.sessionId))
-        }
-    }
-
-    public func send(text: String, to target: DispatchTarget) async -> DispatchOutcome {
-        // Defense in depth behind the Coordinator's per-target selection: a
-        // target a tmux server owns must never be typed at through Terminal —
-        // that is the exact shape of the 19 Aug misfire, where a recycled pty
-        // number matched a dead Terminal window and the reply went into it.
-        guard target.kind == .terminalApp, target.pane == nil else {
-            return .failed(.injectionFailed(
-                "target is \(target.kind.rawValue)-owned; refusing Terminal.app injection"))
-        }
-        let state = await readiness(for: target)
-        let wasBusy = state == .busy
-        guard state.canDispatch else {
-            return state == .targetGone ? .failed(.targetGone) : .deferred(state)
-        }
-        guard let tty = target.tty else { return .failed(.tabNotFound("no tty on target")) }
-
-        let payload = DispatchText.flatten(text)
-        guard !payload.isEmpty else { return .failed(.injectionFailed("empty text")) }
-
-        let start = Date()
-        // Everything appended before this instant is history, and history is
-        // not evidence about this delivery — see TranscriptWatcher.fileSize.
-        let watermark = TranscriptWatcher.fileSize(atPath: target.transcriptPath
-            ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId))
-
-        // Step 1 — deliver the text.
-        switch AppleScript.run(script: injectScript(tty: tty, literal: DispatchText.appleScriptLiteral(payload))) {
-        case .failure(let e): return .failed(.injectionFailed(e.message))
-        case .success(let out) where out.contains("notfound"):
-            return .failed(.tabNotFound(tty))
-        case .success: break
-        }
-
-        // Step 2 — submit. This MUST be its own AppleEvent: `do script` delivers
-        // long text without submitting it, and it then sits silently in the input
-        // box while the session still reports `idle`. Verified with 1687 chars.
-        //
-        // The pause matters. A session mid-work is redrawing constantly, and a
-        // Return arriving in the same instant as the text was dropped: the words sat
-        // in the input box, unsent, looking exactly like a successful delivery.
-        // Giving the TUI a moment to accept the text first is what makes the Return
-        // land on a settled prompt.
-        try? await Task.sleep(nanoseconds: 250_000_000)
-
-        switch AppleScript.run(script: injectScript(tty: tty, literal: "\"\"")) {
-        case .failure(let e): return .failed(.injectionFailed("submit: \(e.message)"))
-        case .success: break
-        }
-
-        // Step 3 — read back. Delivery is confirmed by OUR text appearing, not by
-        // the agent's reply, which is unbounded (a long tool call takes minutes).
-        //
-        // The path is NOT required up front, and demanding it was a bug with a
-        // guaranteed victim (18 Aug). Claude Code creates the transcript file when
-        // the first user message lands — measured to the second: session 8373bb2c's
-        // file was born at 21:54:51 and the send reported itself unconfirmed at
-        // 21:54:51. So on a session's first message the file cannot exist yet, the
-        // old `guard` returned `.verificationTimedOut` in one second flat without
-        // ever entering the ten-second window, and EVERY first reply to a new agent
-        // landed correctly and then said it might not have.
-        //
-        // Resolving inside the loop fixes it for free: the file appears at the same
-        // instant the text does, so a watcher that tolerates a missing file sees
-        // both together. Nothing changes for an established session, where the path
-        // resolves on the first poll.
-        let landed = await TranscriptWatcher.waitForUserText(
-            payload, sessionId: target.sessionId, knownPath: target.transcriptPath,
-            timeout: verificationTimeout, pollInterval: pollInterval,
-            fromByteOffset: watermark)
-
-        // One retry of the Return, and only the Return.
-        //
-        // If the text never appeared, the likeliest cause by far is that the submit
-        // was swallowed while the words themselves arrived — which is safe to repeat,
-        // because a Return on an empty prompt does nothing, whereas repeating the
-        // TEXT would duplicate the message. That asymmetry is the whole reason this
-        // is worth retrying at all.
-        if !landed {
-            _ = AppleScript.run(script: injectScript(tty: tty, literal: "\"\""))
-            let landedAfterRetry = await TranscriptWatcher.waitForUserText(
-                payload, sessionId: target.sessionId, knownPath: target.transcriptPath,
-                timeout: 3, pollInterval: pollInterval,
-                fromByteOffset: watermark)
-            if landedAfterRetry {
-                return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
-            }
-        }
-
-        // A busy session cannot echo the text until its current turn finishes, which
-        // can take minutes. Not seeing it inside the window is expected there, and
-        // calling that ambiguous would make every mid-turn reply look like a
-        // possible loss.
-        if !landed, wasBusy { return .queued }
-
-        return landed
-            ? .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
-            : .failed(.verificationTimedOut)
-    }
-
-    /// The tab must be ALIVE, not merely named. A closed tab's window can
-    /// survive in Terminal's model still reporting its old tty string, and a
-    /// pty NUMBER outlives its tab — the tmux server recycled ttys011 for a
-    /// pane while two dead windows still claimed it, and a reply typed into
-    /// one "succeeded" (19 Aug). `processes of t` is empty on a dead tab, so
-    /// requiring it non-empty makes a corpse unmatchable.
-    private func injectScript(tty: String, literal: String) -> String {
-        """
-        tell application "Terminal"
-          repeat with w in windows
-            repeat with t in tabs of w
-              if (tty of t) as text is "\(tty)" and (count of processes of t) > 0 then
-                do script \(literal) in t
-                return "ok"
-              end if
-            end repeat
-          end repeat
-          return "notfound"
-        end tell
-        """
     }
 }
 

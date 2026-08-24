@@ -423,7 +423,6 @@ final class Phase1bTests: XCTestCase {
             summarizer: SummarizerChain(providers: [PrefixWritingSummary()]),
             speech: SpeechChain(preferred: Silent(), fallback: Silent()),
             gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
-            transport: TerminalAppTransport(),
             enrolment: EnrolmentRegistry(url: tmpDir.appendingPathComponent("e.json")),
             agents: Agents(),
             recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))

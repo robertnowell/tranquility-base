@@ -58,8 +58,6 @@ func usage() -> Never {
       tbase enroll --cwd <prefix>         allow dispatch into any session under a path
       tbase enrolment                     show the allowlist
       tbase send <sessionId> <text...>    dispatch into a real session (enrolled only)
-      tbase send-raw <pid> <tty> <transcript> <text...>
-                                          dispatch into the test harness
     """)
     exit(1)
 }
@@ -873,22 +871,31 @@ case "reconcile":
         // Reused from selection above rather than re-resolved: two live
         // lookups for the same pid, moments apart, can disagree if a pane
         // closes in between (the 19 Aug misfire's shape).
-        let pane = resolvedPane ?? TmuxOwnership.pane(forPid: live.pid)
+        var pane = resolvedPane ?? TmuxOwnership.pane(forPid: live.pid)
+        var dispatchPid = live.pid
+        if pane == nil, let cwd = live.cwd {
+            // Same transfer the real app's `Coordinator.dispatch` makes —
+            // this CLI is a second real dispatch door onto the same
+            // targets (CLAUDE.md rule 7), not a lesser one, so a
+            // hand-started session gets the same ownership TRANSFER here,
+            // not a different refusal.
+            if let transferred = SessionLauncher.OwnershipTransfer.toTmux(
+                sessionId: sessionId, directory: cwd) {
+                pane = transferred.pane
+                dispatchPid = transferred.pid
+            }
+        }
+        guard let pane else {
+            print("not dispatched: tmux is unavailable for this session (no pane, and "
+                + "resuming one under tmux failed)")
+            exit(2)
+        }
         let target = DispatchTarget(
-            kind: pane != nil ? .tmux : .terminalApp,
-            sessionId: sessionId, pid: live.pid, tty: ProcessProbe.tty(of: live.pid),
+            kind: .tmux,
+            sessionId: sessionId, pid: dispatchPid, tty: ProcessProbe.tty(of: dispatchPid),
             pane: pane, transcriptPath: transcript, label: live.name,
             readinessSource: .claudeAgents)
-        let transport: any DispatchTransport =
-            pane != nil ? TmuxTransport() : TerminalAppTransport()
-        report(await transport.send(text: text, to: target))
-
-    case "send-raw":
-        guard args.count > 4, let pid = Int(args[1]) else { usage() }
-        let target = DispatchTarget(
-            sessionId: "harness-\(pid)", pid: pid, tty: args[2], transcriptPath: args[3],
-            label: "test harness", readinessSource: .processAlive)
-        report(await TerminalAppTransport().send(text: args.dropFirst(4).joined(separator: " "), to: target))
+        report(await TmuxTransport().send(text: text, to: target))
 
     case "send-raw-tmux":
         // The tmux twin of send-raw, and what scripts/test-dispatch-tmux.sh
