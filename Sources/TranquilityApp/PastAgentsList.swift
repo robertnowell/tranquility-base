@@ -24,7 +24,7 @@ final class PastAgentsList: NSView {
     /// same name, the same short id. Nothing here has to be learned twice, and
     /// a session looks the same wherever you meet it.
     struct Item: Equatable {
-        let row: StateLegend.SessionRow
+        let row: SessionRow
         /// What a click does. Dead sessions come back; live ones get focus.
         let revivable: Bool
         /// Everything the filter matches against, lowercased once at build.
@@ -45,7 +45,7 @@ final class PastAgentsList: NSView {
         /// knows both halves.
         let tooltip: String?
 
-        init(row: StateLegend.SessionRow, revivable: Bool, haystack: String,
+        init(row: SessionRow, revivable: Bool, haystack: String,
              aux: String? = nil, tooltip: String? = nil) {
             self.row = row
             self.revivable = revivable
@@ -70,11 +70,11 @@ final class PastAgentsList: NSView {
 
     var onPick: ((_ id: String, _ revivable: Bool) -> Void)?
     /// A click on the LAMP COLUMN, which is the session's power switch and
-    /// never navigation — see `StateLegend.lampAction(for:)`. The whole row is
+    /// never navigation — see `SessionRow.lampAction(for:)`. The whole row is
     /// handed over rather than an id, because the switch's verb is a function
     /// of the lamp and the caller must read it from the same place the grid
     /// does, or the same dot means two things on two faces.
-    var onLamp: ((_ row: StateLegend.SessionRow) -> Void)?
+    var onLamp: ((_ row: SessionRow) -> Void)?
     var onFilterChanged: (() -> Void)?
     /// Right-click → "Terminate" on a LIVE row (ruled 13 Aug). Dead sessions
     /// have no process to end and get no menu — an empty menu would promise a
@@ -635,7 +635,7 @@ final class PastRowView: NSControl {
         // The same hover as the grid, through the same function: a row that
         // said one thing on one face and another on the other would be worse
         // than one that said nothing.
-        toolTip = item.tooltip ?? StateLegend.hoverText(for: item.row)
+        toolTip = item.tooltip ?? SessionRow.hoverText(for: item.row)
 
         highlight.wantsLayer = true
         highlight.layer?.cornerRadius = 6
@@ -652,7 +652,7 @@ final class PastRowView: NSControl {
         let hollow = item.row.read == .opened && item.row.lamp.asksForYou
         lamp.layer?.backgroundColor = hollow ? NSColor.clear.cgColor
                                              : item.row.lamp.fill.cgColor
-        lamp.layer?.cornerRadius = StateLegend.Lamp.diameter / 2
+        lamp.layer?.cornerRadius = Lamp.diameter / 2
         if hollow {
             lamp.layer?.borderWidth = 1.5
             lamp.layer?.borderColor = item.row.lamp.fill.cgColor
@@ -728,8 +728,8 @@ final class PastRowView: NSControl {
                                                 constant: GridRowView.hoverBleed),
             highlight.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             highlight.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
-            lamp.widthAnchor.constraint(equalToConstant: StateLegend.Lamp.diameter),
-            lamp.heightAnchor.constraint(equalToConstant: StateLegend.Lamp.diameter),
+            lamp.widthAnchor.constraint(equalToConstant: Lamp.diameter),
+            lamp.heightAnchor.constraint(equalToConstant: Lamp.diameter),
             lamp.leadingAnchor.constraint(equalTo: leadingAnchor),
             lamp.centerYAnchor.constraint(equalTo: centerYAnchor),
             name.leadingAnchor.constraint(equalTo: leadingAnchor,

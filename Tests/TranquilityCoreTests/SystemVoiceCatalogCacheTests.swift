@@ -72,3 +72,26 @@ final class SystemVoiceCatalogCacheTests: XCTestCase {
         XCTAssertEqual(cache.rows(language: "fr").catalogue.first?.id, "v-fr")
     }
 }
+
+/// `asCatalogueVoices` against REAL system state, not an injected loader —
+/// legitimate here the same way the tmux/AppleScript drills measure real
+/// system behavior, because the bug this pins is specifically about what
+/// `AVSpeechSynthesisVoice.speechVoices()` reports on the machine actually
+/// running the test.
+final class SystemVoiceCatalogRealVoicesTests: XCTestCase {
+    /// Found live, 24 Aug, on a machine with nothing downloaded: every en-*
+    /// default voice reported `com.apple.voice.super-compact.*` (Samantha,
+    /// Daniel, Karen, Moira, Rishi, Tessa), which does not contain the
+    /// literal substring `.voice.compact.` — so the quality filter came back
+    /// empty (nothing Enhanced/Premium) AND the compact-identifier fallback
+    /// came back empty too, and the catalogue's own "never a blank pane"
+    /// promise broke exactly the way its doc comment said it wouldn't. This
+    /// pins the promise directly: for as long as macOS reports ANY voice for
+    /// "en" (true on every real Mac), the catalogue must show something.
+    func testTheCatalogueIsNeverEmptyWhenTheLanguageHasAnyInstalledVoice() throws {
+        let raw = SystemVoiceCatalog.voices(matching: "en")
+        try XCTSkipIf(raw.isEmpty, "no en voices installed on this machine at all")
+        XCTAssertFalse(SystemVoiceCatalog.asCatalogueVoices(language: "en").isEmpty,
+                       "macOS reports \(raw.count) en voice(s) but the catalogue is empty")
+    }
+}

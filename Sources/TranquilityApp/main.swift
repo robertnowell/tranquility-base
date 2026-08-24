@@ -224,7 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// missed real changes: a newer turn replacing an older one leaves the count
     /// identical, and a summary arriving changes a row's topic with no count
     /// change at all.
-    private var lastShownRows: [StateLegend.SessionRow]?
+    private var lastShownRows: [SessionRow]?
     /// Which sessions were already waiting on the previous tick.
     ///
     /// `turnArrived` is honest about a TURN arriving — it keys off rows being
@@ -1436,7 +1436,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// session is waiting on you; quiet when it is merely alive. Dead sessions
     /// appear nowhere. Identity is the minted callsign with the project label
     /// (or live session name) as fallback until minted.
-    private func sessionRowsNow() -> [StateLegend.SessionRow] {
+    private func sessionRowsNow() -> [SessionRow] {
         guard let coordinator else { return [] }
         let waiting = (try? coordinator.waiting()) ?? []
         // One probe serves every row; the name shown is Claude's own (re-ruled
@@ -1493,7 +1493,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // band; ON has to travel INTO the lamp rule, because it changes what
         // colour a row is rather than which face draws it.
         let switchedOn = LampSwitch.loadOn()
-        var rows = waiting.map { (event: WaitingSession) -> StateLegend.SessionRow in
+        var rows = waiting.map { (event: WaitingSession) -> SessionRow in
             let evidence = event.transcriptPath.flatMap {
                 SessionActivity.evidence(transcriptPath: $0,
                                          boundary: boundaries[event.sessionId])
@@ -1519,14 +1519,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // before it was killed, while the only move that helps is in the
             // terminal. See `blockedOnYou` for the case that is always here.
             let blocked = Self.blockedOnYou(liveById[event.sessionId], resumed: resumed)
-            return StateLegend.SessionRow(
+            return SessionRow(
                 id: event.sessionId,
                 name: tabDisplayName(for: event, live: liveById[event.sessionId]),
                 // The id, not the callsign — ruled 12 Aug, and the same in
                 // every band so a row means the same thing wherever it sits.
                 // A blocked row spends the column on its reason, like every
                 // other amber row on the panel.
-                aux: blocked?.reason ?? StateLegend.shortId(event.sessionId),
+                aux: blocked?.reason ?? SessionRow.shortId(event.sessionId),
                 lamp: blocked?.lamp
                     ?? (!resumed
                         && (evidence?.activity == .working
@@ -1578,10 +1578,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                            live: live,
                                            boundary: boundaries[stored.sessionId],
                                            pickedUp: switchedOn.contains(stored.sessionId))
-            rows.append(StateLegend.SessionRow(
+            rows.append(SessionRow(
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
-                aux: storedLamp.reason ?? StateLegend.shortId(stored.sessionId),
+                aux: storedLamp.reason ?? SessionRow.shortId(stored.sessionId),
                 lamp: storedLamp.lamp, detail: storedLamp.detail))
         }
         // Live sessions with no stored events yet: nothing to rank them by,
@@ -1604,12 +1604,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                          live: live,
                                          boundary: boundaries[live.sessionId],
                                          pickedUp: switchedOn.contains(live.sessionId))
-            rows.append(StateLegend.SessionRow(
+            rows.append(SessionRow(
                 id: live.sessionId,
-                name: StateLegend.displayName(
+                name: SessionRow.displayName(
                     liveName: Self.tabTitle(transcriptPath: nil, live: live),
                     callsign: nil, fallback: "session"),
-                aux: liveLamp.reason ?? StateLegend.shortId(live.sessionId),
+                aux: liveLamp.reason ?? SessionRow.shortId(live.sessionId),
                 lamp: liveLamp.lamp, detail: liveLamp.detail))
         }
         // And the sessions that are not awake (ruled 11 Aug). Everything above
@@ -1625,9 +1625,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for found in (SessionDiscovery.discoverIfScanned()?.sessions ?? [])
         where !placed.contains(found.sessionId) && found.liveness != .live {
             placed.insert(found.sessionId)
-            rows.append(StateLegend.SessionRow(
+            rows.append(SessionRow(
                 id: found.sessionId,
-                name: StateLegend.displayName(
+                name: SessionRow.displayName(
                     liveName: found.title,
                     callsign: closedCallsigns[found.sessionId],
                     fallback: found.cwd.map { ($0 as NSString).lastPathComponent } ?? "session"),
@@ -1636,7 +1636,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // For a closed row that id is the whole point — it is the
                 // thing you would otherwise be grepping ~/.claude/projects for.
                 aux: found.activity?.shortReason
-                    ?? StateLegend.shortId(found.sessionId),
+                    ?? SessionRow.shortId(found.sessionId),
                 lamp: .unlit,
                 revivable: found.revivable,
                 detail: found.activity?.fullReason))
@@ -1658,13 +1658,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for found in (SessionDiscovery.discoverCodexIfScanned()?.sessions ?? [])
         where !placed.contains(found.sessionId) {
             placed.insert(found.sessionId)
-            rows.append(StateLegend.SessionRow(
+            rows.append(SessionRow(
                 id: found.sessionId,
-                name: StateLegend.displayName(
+                name: SessionRow.displayName(
                     liveName: found.title,
                     callsign: closedCallsigns[found.sessionId],
                     fallback: found.cwd.map { ($0 as NSString).lastPathComponent } ?? "session"),
-                aux: StateLegend.shortId(found.sessionId),
+                aux: SessionRow.shortId(found.sessionId),
                 lamp: .unlit,
                 revivable: found.revivable,
                 detail: "Codex session"))
@@ -1697,7 +1697,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Last, and after every band has been appended: a session that is merely
         // alive drops below the ones doing something, without disturbing the
         // recency order the bands above spent this whole function establishing.
-        return StateLegend.quietRowsLast(rows)
+        return SessionRow.quietRowsLast(rows)
     }
 
     /// The lamp a non-waiting session shows. A waiting session is green by
@@ -1752,7 +1752,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// about needing you and which computed green from stored turns without ever
     /// asking the process. That gap had a permanent occupant; see `WaitingAt`.
     private static func blockedOnYou(_ live: LiveSession?, resumed: Bool)
-        -> (lamp: StateLegend.Lamp, reason: String?, detail: String?)? {
+        -> (lamp: Lamp, reason: String?, detail: String?)? {
         guard let at = WaitingAt.read(status: live?.status,
                                       waitingFor: live?.waitingFor,
                                       resumed: resumed) else { return nil }
@@ -1763,7 +1763,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                live: LiveSession?,
                                boundary: SessionActivity.TurnBoundary? = nil,
                                pickedUp: Bool = false)
-        -> (lamp: StateLegend.Lamp, reason: String?, detail: String?) {
+        -> (lamp: Lamp, reason: String?, detail: String?) {
         let activity = evidence?.activity
         let resumed = AgentRestart.resumed(
             startedAt: live?.startedAtDate,
@@ -1786,7 +1786,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            let said = AgentRestart.reason(for: activity) {
             return (.fault, said.short, said.full)
         }
-        let observed: (StateLegend.Lamp, String?, String?) = {
+        let observed: (Lamp, String?, String?) = {
             switch activity {
             case .working:
                 // The file says a turn is in flight. If the process says it is
@@ -1855,7 +1855,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// grid rows, the speaking card, the depth-1 why card, the reply target —
     /// so no surface can drift back to the derived slug on its own.
     private func tabDisplayName(for event: WaitingSession, live: LiveSession?) -> String {
-        StateLegend.displayName(
+        SessionRow.displayName(
             liveName: Self.tabTitle(transcriptPath: event.transcriptPath, live: live),
             callsign: event.callsign, fallback: event.projectLabel)
     }
@@ -3370,7 +3370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// a keypress, which is backwards — you cannot interrupt someone who just asked
     /// for something. Interrupting is exactly what this does, so this is where a
     /// veto belongs.
-    private func surfaceArrival(rows: [StateLegend.SessionRow], waiting: Int,
+    private func surfaceArrival(rows: [SessionRow], waiting: Int,
                                 newlyWaiting: Bool) {
         let decision = gate.evaluate()
         guard decision.allowed else {
@@ -3436,11 +3436,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// One probe in flight, newest wins; the pending rows never cross an
     /// isolation boundary — they wait here for the probe's verdict.
     private var arrivalProbeGeneration = 0
-    private var pendingArrival: (rows: [StateLegend.SessionRow], waiting: Int,
+    private var pendingArrival: (rows: [SessionRow], waiting: Int,
                                 newlyWaiting: Bool)?
 
     /// The away-channel tail of an arrival, after the gates have spoken.
-    private func finishArrival(rows: [StateLegend.SessionRow], waiting: Int,
+    private func finishArrival(rows: [SessionRow], waiting: Int,
                                newlyWaiting: Bool) {
         // RULING 1: an arrival changes what the panel SAYS, never whether it is
         // on screen or how wide it is. A panel you put away stays away.
@@ -3637,7 +3637,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // name at all. The reason is not lost; it moves to the tooltip,
             // uncut, next to the id it now shares that space with.
             let when = moved[row.id].map { SessionActivity.lastMovedLabel($0, now: now) }
-            let hover = [StateLegend.hoverText(for: row), StateLegend.shortId(row.id)]
+            let hover = [SessionRow.hoverText(for: row), SessionRow.shortId(row.id)]
                 .compactMap { $0 }.joined(separator: "\n")
             // The row's OWN lamp, carried through. A session below the fold is
             // usually quiet, but it is not quiet by definition — on a small

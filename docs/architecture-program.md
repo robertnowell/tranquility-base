@@ -843,7 +843,32 @@ com.robertnowell.voice-dispatch (TCC).
         `Geometry.swift` (`morph`, the one member out of 67 total this
         session that didn't need it). Full findings:
         `~/Documents/deep-research/2026-08-24-tb-app-lane-audit-gate/`.
-      - [ ] P6, SessionRow model + grid statics to Core, with unit tests
+      - [x] P6, SessionRow model + grid statics to Core, with unit tests
+        (24 Aug). New file `SessionRow.swift` in TranquilityCore:
+        `SessionRow`, `Lamp` (cases + `isLit`/`asksForYou` only —
+        `fill`/`ring`/`rowAlpha`/`diameter`, all `NSColor`/rendering, stay
+        app-side as an extension at the bottom of `StateLegend.swift`),
+        `ReadState`, and — nested under `SessionRow`, matching how they
+        were already grouped — `RowAction`, `LampFace`, `LampAction`,
+        plus the pure logic that had been sitting in the app layer with
+        zero coverage: `hoverText(for:)`, `action(for:)`,
+        `lampAction(for:on:)`, `isLive(_:)`, `quietRowsLast(_:)`,
+        `shortId(_:)`, `displayName(...)`, and the pure half of
+        `StatusHUD.gridRows`/`gridRowsShown` (renamed `gridRows`/
+        `shownCount` in Core, taking plain `capacity`/`floor` Ints —
+        `StatusHUD`'s own versions are now two-line wrappers that turn a
+        screen into those Ints and call through). 126 call-site renames
+        across 8 app-layer files (`StateLegend.SessionRow` → `SessionRow`,
+        `StateLegend.Lamp` → `Lamp`, etc. — nested→top-level, same shape
+        P3 already established for `DroppedItem`/`AudioEventRow`),
+        compiled clean on the first build after the mechanical rename —
+        no follow-up fixes needed. 25 new unit tests
+        (`SessionRowTests.swift`) pin the actual behavioral rules this
+        logic encodes, not just getters: what a tap does per lamp state,
+        what a lamp click does per grid/list face, the quiet-rows-last
+        and switched-off-sinks-lowest partition order, the 23 Aug
+        dead-vs-idle grid-membership reversal. 898/898 tests green (867
+        XCTest + 31 swift-testing).
       - [ ] P7, main.swift extension split
       - [ ] P8, GridAssembler to Core
       - [ ] P9, Recorder/CaptureUnit/log-writer to Core

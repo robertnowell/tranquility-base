@@ -408,7 +408,7 @@ extension StatusHUD {
             // to watch a row disappear from it is the panel showing you the
             // bookkeeping instead of the result.
             onBreadcrumbHome?()
-            switch StateLegend.lampAction(for: row, on: .list) {
+            switch SessionRow.lampAction(for: row, on: .list) {
             case .turnOn: onRestoreLamp?(row.id)
             case .revive: onRevive?(row.id, row.name)
             case .turnOff:
