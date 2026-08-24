@@ -46,7 +46,7 @@ final class GridRowView: NSControl {
     static let auxFraction: CGFloat = 0.38
     static let auxFont = ChromeType.mono(ofSize: 11, weight: .regular)
 
-    init(item: StateLegend.SessionRow, auxWidth: CGFloat,
+    init(item: SessionRow, auxWidth: CGFloat,
          target: AnyObject, action: Selector) {
         nameLabel = NSTextField(labelWithString: item.name)
         super.init(frame: .zero)
@@ -58,7 +58,7 @@ final class GridRowView: NSControl {
         // Rest the pointer and read the whole thing. Both halves of this row
         // truncate, so until 18 Aug the end of an error or a stall lived only
         // in the log: "there's no way to see the full message."
-        toolTip = StateLegend.hoverText(for: item)
+        toolTip = SessionRow.hoverText(for: item)
 
         let ready = item.lamp == .ready
 
@@ -82,7 +82,7 @@ final class GridRowView: NSControl {
         let hollow = item.read == .opened && item.lamp.asksForYou
         lampLayer = lamp.layer
         lamp.layer?.backgroundColor = hollow ? NSColor.clear.cgColor : item.lamp.fill.cgColor
-        lamp.layer?.cornerRadius = StateLegend.Lamp.diameter / 2
+        lamp.layer?.cornerRadius = Lamp.diameter / 2
         if hollow {
             // 1.5pt, not the quiet ring's 1pt: at 9px a hairline ring reads as
             // a smudge rather than a deliberate outline.
@@ -181,8 +181,8 @@ final class GridRowView: NSControl {
                                                 constant: Self.hoverBleed),
             highlight.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             highlight.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
-            lamp.widthAnchor.constraint(equalToConstant: StateLegend.Lamp.diameter),
-            lamp.heightAnchor.constraint(equalToConstant: StateLegend.Lamp.diameter),
+            lamp.widthAnchor.constraint(equalToConstant: Lamp.diameter),
+            lamp.heightAnchor.constraint(equalToConstant: Lamp.diameter),
             lamp.leadingAnchor.constraint(equalTo: leadingAnchor),
             lamp.centerYAnchor.constraint(equalTo: centerYAnchor),
             name.leadingAnchor.constraint(equalTo: leadingAnchor,

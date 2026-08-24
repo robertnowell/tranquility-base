@@ -1162,7 +1162,7 @@ extension StatusHUD {
         showIdle(rows: [])
 
         // The collapsed strip. Three properties, and the third is the ruling.
-        let mixed: [StateLegend.SessionRow] = [
+        let mixed: [SessionRow] = [
             .init(id: "a", name: "promotions copy", aux: "a8323d60", lamp: .ready),
             .init(id: "b", name: "syndit", aux: "9ca8815c", lamp: .running),
             .init(id: "c", name: "tranquility base", aux: "6bfb2087", lamp: .working),
@@ -1305,7 +1305,7 @@ extension StatusHUD {
         // The defect was a view that never asked whether a lamp had been
         // opened, so any drill that asks the question itself passes on the
         // broken build — the expression was correct everywhere it existed.
-        let readMix: [StateLegend.SessionRow] = [
+        let readMix: [SessionRow] = [
             .init(id: "u", name: "unread", aux: "u", lamp: .ready, read: .unread),
             .init(id: "o", name: "opened", aux: "o", lamp: .ready, read: .opened),
             .init(id: "w", name: "working", aux: "w", lamp: .working, read: .none),
@@ -1577,7 +1577,7 @@ extension StatusHUD {
             && !StateLegend.gettingStartedMessage.contains("⌥")
         // An agent reporting in takes the room back, and the ambient repaint
         // that follows must not inherit the big centred type.
-        showIdle(rows: [StateLegend.SessionRow(
+        showIdle(rows: [SessionRow(
             id: "drill", name: "an agent arrives", aux: "drill", lamp: .ready)])
         let roomTakenBack = !face.gettingStarted && emptySince == nil
             && bodyLabel.alignment == .natural
