@@ -649,11 +649,25 @@ com.robertnowell.voice-dispatch (TCC).
 - [x] Launcher: revive = tmux (7325876, 23 Aug — `SessionLauncher.resume()`
       now calls `resumeTmux`, live-verified: zero Terminal.app windows opened,
       real tmux pane confirmed, dispatch into the revived session confirmed).
-- [ ] Launcher: PATH/env sourced from the adapter (not hand-copied per call
-      site); the two trust watchers collapse into one loop over injected
-      read()/press(). Neither touched by revive's move above.
+- [x] Launcher: PATH/env sourced from the adapter, the two trust watchers
+      collapse into one (23 Aug). `HarnessAdapter` gained `pathCandidates`
+      — `launchTmux`'s PATH env var now joins `adapter.pathCandidates`
+      instead of one hardcoded list regardless of which harness is being
+      launched; `ClaudeCodeAdapter`'s mirrors `ClaudeAgentsCLI.
+      resolveBinary()`'s own search locations, `CodexAdapter`'s adds
+      `~/.cargo/bin` ahead of the generic paths (codex-rs is a Rust
+      workspace; unverified on this machine, included because the failure
+      mode of guessing wrong is silent). The trust-watcher collapse:
+      `watchForTrustPrompt(tty:)`'s AppleScript/Terminal.app branch is
+      DELETED, not merely dead-flagged — it could only ever be reached for
+      a non-tmux-owned tty, and `launchTmux` is the only launch path left,
+      so every tty it produces is tmux-owned by construction. The function
+      is now a 3-line tty→pane resolver in front of the one remaining
+      loop (`watchForTrustPrompt(pane:)`), where before there were two
+      full `TrustPromptWatcher.watch` invocations, one per transport.
+      836/836 tests green, 2 new (`HarnessAdapterTests`, pathCandidates).
 - [ ] Coordinator split
-- [ ] App lane P1-P10 (sequenced, drills green per step)
+- [ ] App lane P1-9 (sequenced, drills green per step)
 - [x] Store riders + dead-code deletions (ff98d7f, 23 Aug): `TransportKind.
       iTerm2/.wezterm/.kitty` (grep-confirmed never constructed; decode-safe
       to remove without a migration — `targetKind` is `TransportKind?` and
@@ -662,9 +676,28 @@ com.robertnowell.voice-dispatch (TCC).
       `nil` rather than throwing), `Event.isHeadless` (zero callers,
       superseded by `SessionDiscovery.isHeadless(entrypoint:)`, already
       documented dead in open-issues.md #1), `ProcessProbe.name(of:)` (zero
-      callers). Store riders (one cache, one append-only log, one trace
-      sink, PrivateStorage tests, fontSheetRoot out of ~/.claude) NOT done —
-      only the dead-code half of this item landed.
+      callers). **Three more store riders landed 23 Aug, same pass as the
+      Launcher item above**: `HomeBase.fontSheetRoot` moved out of
+      `~/.claude` (Claude Code's own shared config home, not TB's) to
+      `QueueStore.supportDirectory` — the one real file it pointed at
+      (`hq-fonts/kopi.css`) moved with it, not left orphaned; the
+      `v12_vowelless_callsigns` migration renamed to `v17_` (it registers
+      after v16 — GRDB orders by registration, not by the number in the
+      name; the rename is a genuine, if low-risk, prod-data-touching
+      change — flagged, not silently done, since GRDB tracks applied
+      migrations by name and this makes an already-applied migration
+      re-run once, harmlessly, because its body is idempotent); and
+      `PrivateStorageTests.swift` added (zero coverage before, on the code
+      that keeps every session's transcripts and voice recordings from
+      being world-readable). **Still NOT done**: the one cache
+      (StaleWhileRevalidateCache, 3 copies — main.swift, SystemVoiceCatalog,
+      SessionDiscovery), the one append-only log (ArtifactStore/
+      PullRequestStore), the one Core.Trace sink (11 separate
+      `nonisolated(unsafe) static var trace` properties across Core, not
+      8 as originally scoped — grep-recounted 23 Aug), and the
+      SpokenComposition→AnnouncementLike inversion — each is a real,
+      multi-file dedup, not a one-line fix, and deliberately deferred
+      rather than rushed into the same sitting as the smaller riders above.
 - [x] `SessionDiscovery.firstCwd` mis-homes a relocated session (5450a72,
       23 Aug — found by 2026-08-21-tb-division-of-labor: unfindable by
       project name, and `reviveCommand` would resume it in `~` rather than

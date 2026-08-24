@@ -426,7 +426,19 @@ public final class QueueStore: Sendable {
         // more. It stays because the stored name still seeds the recogniser's
         // lexicon and still shows in the grid for a session whose tab has no
         // title yet, and an unsayable name is no better in a lexicon.
-        m.registerMigration("v12_vowelless_callsigns") { db in
+        // Named "v12" until 23 Aug even though it registers after v16 —
+        // GRDB orders migrations by registration order, never by the
+        // number in the name, so the mislabel never affected correctness,
+        // only readability (found in the store-riders cleanup pass).
+        // Renaming an already-applied migration is not free: GRDB tracks
+        // applied migrations by name in `grdb_migrations`, so this one
+        // re-runs once on any machine that already had "v12_vowelless_
+        // callsigns" recorded — safe here specifically because the body
+        // is idempotent (it only deletes rows that are STILL unspeakable,
+        // and the minting path that could ever produce one was removed
+        // the same day this migration was written, per the comment
+        // above), not safe as a general pattern for renaming migrations.
+        m.registerMigration("v17_vowelless_callsigns") { db in
             for row in try Row.fetchAll(db, sql: "SELECT sessionId, callsign FROM session_callsign") {
                 let callsign: String = row["callsign"]
                 guard callsign.split(separator: " ")

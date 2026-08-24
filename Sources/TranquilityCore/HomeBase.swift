@@ -394,9 +394,19 @@ public enum HomeBase {
 
     /// Where brand faces live, shared by every local page rather than
     /// embedded in each one.
+    ///
+    /// Moved out of `~/.claude` (23 Aug, store-riders cleanup): that
+    /// directory is Claude Code's own config home, shared across every
+    /// project on the machine, not TB's — the app has no business writing
+    /// its idea of "where fonts live" underneath a directory it does not
+    /// own. `QueueStore.supportDirectory` is TB's actual home
+    /// (`~/Library/Application Support/VoiceDispatch`), same as every other
+    /// file this app keeps. The one real file this pointed at
+    /// (`~/.claude/hq-fonts/kopi.css`, dropped there by hand, nothing else
+    /// on this machine writes or reads it) moved with the code change, not
+    /// left orphaned at the old path.
     public static var fontSheetRoot: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/hq-fonts", isDirectory: true)
+        QueueStore.supportDirectory.appendingPathComponent("hq-fonts", isDirectory: true)
     }
 
     public static var catalogURL: URL {

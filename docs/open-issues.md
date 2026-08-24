@@ -461,9 +461,11 @@ gate, so the same failure came back through a different door.
 included — applied to the directory half, the topic half, and the raw-topic
 tie-break word. It is deliberately no cleverer: a consonant-run limit was the
 obvious second rule and fails on real English ("strengths" carries five in a
-row). Migration `v12_vowelless_callsigns` DELETES an offending row rather than
-rewriting it, which un-freezes the session so it re-mints through the gate; one
-row of 127 qualified.
+row). Migration `v17_vowelless_callsigns` (renamed 23 Aug from a stale
+`v12_` label — it registers after v16, GRDB orders by registration, not
+by name) DELETES an offending row rather than rewriting it, which
+un-freezes the session so it re-mints through the gate; one row of 127
+qualified.
 
 Note what the gate does not catch, on purpose: an initialism WITH a vowel
 ("tvpa", "json") survives, because a voice can say it.
@@ -853,3 +855,44 @@ Terminal/shell configuration is the most likely remaining place to look
 (an auto-resume wrapper, a saved session-restore setting) — outside what
 TB's own logs can observe. Worth a note if it recurs a third time; not
 blocking anything on the checklist.
+
+## 30. Per-harness agent defaults, and a New Agent button that shows which one — REQUESTED (23 Aug)
+
+**Status:** open, not started. A new feature, not a bug — Robert, in his own
+words: Settings should let you set a default provider/agent for new
+sessions, toggling between Claude Code and Codex, with separate default
+launch params per provider (his own: `--dangerously-skip-permissions` for
+Claude Code, YOLO mode for Codex — other people would set their own) and a
+separate default directory per provider (e.g. one directory for
+Claude-launched work, a different one for Codex-launched work). The New
+Agent button on the grid should show which provider is currently the
+default — at minimum its logo/glyph.
+
+**Grounding:** today's `AgentDefaults` (`Sources/TranquilityCore/
+AgentDefaults.swift`) is a single global command+directory pair,
+harness-unaware — one `command` string, one `directory`, persisted to
+`agent-command.json`. The settings→agents pane (`StatusHUD.swift:867+`,
+`launchRow`/`directoryRow`) edits exactly that one pair, and both
+`SessionLauncher.defaultCommand`/`defaultDirectory` read straight through
+to it. The New Agent button lives at `StatusHUD.swift:2500`
+(`StateLegend.newAgentTitle`, the `+` in the grid's leading control) and
+carries no provider indicator today.
+
+**Natural shape, not yet designed:** `AgentDefaults` becomes per-harness (a
+dictionary or two named slots, keyed by `HarnessAdapter.id`) rather than
+one global pair, plus a new `defaultHarness` selector. This composes with
+the existing seam rather than fighting it — `resumeArguments`/`launch`
+already take an adapter as a real parameter (00b060d), and
+`HarnessCapabilities.promptGlyph` already carries a per-harness glyph
+(`ClaudeCodeAdapter` "❯", `CodexAdapter` "›") that the New Agent button's
+indicator could reuse or sit beside. The command TB actually launches with
+today (`AgentDefaults.load()`, e.g. `claude --dangerously-skip-
+permissions`) is a free-text field, not a flags picker — whether per-
+provider defaults stay free text or grow real per-flag UI is an open
+design question, not settled by this entry.
+
+**Scope note:** not part of the arc's own list (which is subtraction —
+AppleScript removal, HarnessAdapter consolidation, app-layer decomposition,
+`docs/architecture-program.md`). Reasonable to build after the arc merges,
+or as a small arc-stacked PR once App lane P1-9 has moved more of Settings
+into Core — worth revisiting once that's clearer, not before.
