@@ -666,7 +666,36 @@ com.robertnowell.voice-dispatch (TCC).
       loop (`watchForTrustPrompt(pane:)`), where before there were two
       full `TrustPromptWatcher.watch` invocations, one per transport.
       836/836 tests green, 2 new (`HarnessAdapterTests`, pathCandidates).
-- [ ] Coordinator split
+- [x] Coordinator split (23 Aug). `Coordinator.swift` was 1,321 lines mixing
+      three concerns — announcing, replying, sweeping — in one file.
+      `SessionSweep` extracted as a real, injectable type (new file,
+      `SessionSweep.swift`): the sweep's `private nonisolated(unsafe) static
+      var` state (watched sessions, probe-failure clock, heartbeat) is now
+      instance state behind an `NSLock`, with a `.shared` default matching
+      the old static's one-memory-per-process behavior. This is the piece
+      the audit named directly — "sweep statics become injectable —
+      resetSweepStateForTesting is the smell" — and it is fixed exactly
+      that way: `SweepTests.swift`'s ~25 call sites now construct a fresh
+      `SessionSweep()` per test instead of calling a global reset.
+      Announcer and ReplyPipeline went a smaller distance, deliberately:
+      split into `Coordinator+Announcer.swift` (571 lines: prepareNext,
+      nextToAnnounce/nextToReplay, waiting, announceNext, summarize,
+      speak, the PreparedSummaries-adjacent logic) and `Coordinator+
+      ReplyPipeline.swift` (396 lines: replyTarget, submitReply,
+      confirmAndSend, cancelSend, dispatch) as `extension Coordinator`
+      blocks, not separate injected types — every method in both groups
+      shares `store`, `agents`, `attachments`, and most of `Coordinator`'s
+      other stored properties throughout, so a real type-level split would
+      mean duplicating that dependency list across two new initializers
+      (or redesigning how they're threaded) rather than a one-file-per-
+      concern move. `Coordinator.swift` itself is now 162 lines: the
+      struct, its stored properties (including `PreparedSummaries`, kept
+      here since Swift extensions cannot add stored properties to a
+      different file), and `init`. Zero public API changed — every
+      existing `Coordinator(...)` construction and every `.announceNext()`/
+      `.submitReply()`/etc. call site compiles and behaves unchanged; this
+      was purely internal reorganization plus the one real behavior-
+      preserving type extraction. 842/842 tests green.
 - [ ] App lane P1-9 (sequenced, drills green per step)
 - [x] Store riders + dead-code deletions (ff98d7f, 23 Aug): `TransportKind.
       iTerm2/.wezterm/.kitty` (grep-confirmed never constructed; decode-safe
