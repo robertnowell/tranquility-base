@@ -129,7 +129,7 @@ final class CollapsedStrip: NSView {
     /// Ready, working and fault only. Idle lamps do not appear collapsed —
     /// there is no reason to show a socket with nothing in it when the whole
     /// column exists to answer one question.
-    private(set) var lamps: [StateLegend.SessionRow] = []
+    private(set) var lamps: [SessionRow] = []
     private var hovering = false
 
     /// Which of the floor's two faces the last paint put there.
@@ -293,7 +293,7 @@ final class CollapsedStrip: NSView {
         return ink
     }
 
-    func flash(_ lamp: StateLegend.Lamp) {
+    func flash(_ lamp: Lamp) {
         glowTimer?.invalidate()
         glowColor = lamp.fill
         glowStrength = 1
@@ -306,7 +306,7 @@ final class CollapsedStrip: NSView {
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    func show(rows: [StateLegend.SessionRow]) {
+    func show(rows: [SessionRow]) {
         lamps = rows.filter { $0.lamp != .running }
             .prefix(Self.lampCapacity).map { $0 }
         needsDisplay = true
@@ -486,7 +486,7 @@ final class CollapsedStrip: NSView {
     private func drawLamps() {
         for (i, row) in lamps.enumerated() {
             let slot = lampRect(i)
-            let d = StateLegend.Lamp.diameter
+            let d = Lamp.diameter
             let dot = NSRect(x: slot.midX - d / 2, y: slot.midY - d / 2, width: d, height: d)
             if row.read == .opened && row.lamp.asksForYou {
                 row.lamp.fill.setStroke()

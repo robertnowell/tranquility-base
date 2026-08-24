@@ -156,7 +156,7 @@ final class StatusHUD: NSObject {
     /// the same news twice. And only ever a transient — see `CollapsedStrip.flash`
     /// for why a glow that outlives its moment becomes the notification badge
     /// this product exists to avoid.
-    func flashArrival(_ lamp: StateLegend.Lamp) {
+    func flashArrival(_ lamp: Lamp) {
         guard isCollapsed else { return }
         Permissions.log("glow: arrival")
         strip?.flash(lamp)
@@ -1347,7 +1347,7 @@ final class StatusHUD: NSObject {
     /// callsign + lamp + short topic. Row tap invites that session. The old
     /// count-pill and hint text are gone as the default face; the app's own name
     /// and a one-line hint survive only in the true empty state (no sessions).
-    func showIdle(note: String? = nil, rows: [StateLegend.SessionRow],
+    func showIdle(note: String? = nil, rows: [SessionRow],
                   because reason: String = "idle repaint") {
         // The greeting window belongs to the greeting card; any other face
         // taking the stage ends it, so an unbound launch never mutes the next
@@ -1485,7 +1485,7 @@ final class StatusHUD: NSObject {
         /// rungs ("◀ FINDINGS") and READBACK. Empty = the state's own placard.
         var placardOverride = ""
         var countdownSeconds: TimeInterval = 0
-        var sessionRows: [StateLegend.SessionRow] = []
+        var sessionRows: [SessionRow] = []
         var voices: [Voice] = []
         var roster: [String] = []
         /// Non-nil switches the settings state to its second pane: the
@@ -2217,8 +2217,8 @@ final class StatusHUD: NSObject {
     /// they are a prefix and its remainder. A session that leaves the grid
     /// because something more urgent arrived appears in the list the moment it
     /// does, with no second rule to keep in agreement.
-    static func pastAgents(_ rows: [StateLegend.SessionRow],
-                           screen: NSScreen? = NSScreen.main) -> [StateLegend.SessionRow] {
+    static func pastAgents(_ rows: [SessionRow],
+                           screen: NSScreen? = NSScreen.main) -> [SessionRow] {
         // Everything the grid did not draw, named by id rather than counted
         // off the front. It WAS a `dropFirst` of the grid's count, which is
         // only correct while the array is sorted so the grid's rows are its
@@ -2259,14 +2259,15 @@ final class StatusHUD: NSObject {
     /// exist and why the floor holds on a quiet machine. Folding membership
     /// into it collapsed the floor and shipped a regression earlier the same
     /// evening (18 Aug).
-    static func gridRows(_ rows: [StateLegend.SessionRow],
-                         screen: NSScreen? = NSScreen.main) -> [StateLegend.SessionRow] {
-        let eligible = rows.filter { !$0.switchedOff }
-        let lit = eligible.filter { $0.lamp.isLit }
-        let alive = eligible.filter { $0.lamp == .running }
-        let dead = eligible.filter { $0.lamp == .unlit }
-        return Array((lit + alive + dead)
-                  .prefix(gridRowsShown(rows, screen: screen)))
+    ///
+    /// The ordering/selection itself moved to Core (App-lane P6, 24 Aug —
+    /// `SessionRow.gridRows`); this is now the thin AppKit half, turning a
+    /// screen into a plain capacity count for the Core function to work
+    /// from. It has no opinion about which rows win, only about how many
+    /// slots there are to win.
+    static func gridRows(_ rows: [SessionRow],
+                         screen: NSScreen? = NSScreen.main) -> [SessionRow] {
+        SessionRow.gridRows(rows, capacity: gridRowCapacity(screen: screen), floor: gridRowFloor)
     }
 
     /// How many row-slots the panel is worth: every LIT session, or your top
@@ -2289,10 +2290,13 @@ final class StatusHUD: NSObject {
     ///
     /// So the grid is the instrument for NOW, in one sentence: it draws lit
     /// lamps. Everything else — idle, switched off, exited — is the list.
-    static func gridRowsShown(_ rows: [StateLegend.SessionRow],
+    ///
+    /// The count itself moved to Core (App-lane P6, 24 Aug —
+    /// `SessionRow.shownCount`); this stays the AppKit half, same reason
+    /// as `gridRows` above.
+    static func gridRowsShown(_ rows: [SessionRow],
                               screen: NSScreen? = NSScreen.main) -> Int {
-        let lit = rows.filter { $0.lamp.isLit && !$0.switchedOff }.count
-        return min(gridRowCapacity(screen: screen), max(gridRowFloor, lit))
+        SessionRow.shownCount(rows, capacity: gridRowCapacity(screen: screen), floor: gridRowFloor)
     }
 
     private func rebuildSessionRows() {
@@ -2331,7 +2335,7 @@ final class StatusHUD: NSObject {
             // control on one row in ten and part of the row everywhere else —
             // and a dark lamp, the one people reach for to bring a session
             // back, did whatever the ROW did. See `StateLegend.lampAction`.
-            switch StateLegend.lampAction(for: item, on: .grid) {
+            switch SessionRow.lampAction(for: item, on: .grid) {
             // On the grid the lamp files a session away. Every lit row, not
             // just green: "clicking an ON lamp turns it off. Turns it to idle.
             // It does not kill the process."
@@ -2433,7 +2437,7 @@ final class StatusHUD: NSObject {
 
     /// The name a picked row was showing, for the receipt.
     func pastListName(_ id: String) -> String {
-        face.sessionRows.first { $0.id == id }?.name ?? StateLegend.shortId(id)
+        face.sessionRows.first { $0.id == id }?.name ?? SessionRow.shortId(id)
     }
 
     @objc nonisolated private func pastAgentsRowTapped() {
@@ -2995,7 +2999,7 @@ final class StatusHUD: NSObject {
             guard let row = face.sessionRows.first(where: { $0.id == id }) else {
                 onPickWaiting?(id); return
             }
-            switch StateLegend.action(for: row) {
+            switch SessionRow.action(for: row) {
             case .announce: onPickWaiting?(id)
             // Amber has one useful destination and it is not the voice: the
             // row already carries the reason in its own column, and the thing
@@ -3028,8 +3032,8 @@ final class StatusHUD: NSObject {
     /// duplicates the left-click. That repetition is deliberate: a menu that
     /// hid the item on the one lamp whose tap already does it would be teaching
     /// the exception rather than the rule.
-    private func rowMenu(for item: StateLegend.SessionRow) -> NSMenu? {
-        guard StateLegend.isLive(item) else { return nil }
+    private func rowMenu(for item: SessionRow) -> NSMenu? {
+        guard SessionRow.isLive(item) else { return nil }
         let menu = NSMenu()
         let go = NSMenuItem(title: "Go to agent",
                             action: #selector(goToAgentGridRowPicked(_:)),
