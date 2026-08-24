@@ -68,9 +68,9 @@ extension StatusHUD {
     /// reorder would be invisible in every screenshot and expensive exactly
     /// once.
     func terminateDrill() {
-        func row(_ id: String, _ lamp: StateLegend.Lamp,
-                 revivable: Bool = false) -> StateLegend.SessionRow {
-            StateLegend.SessionRow(id: id, name: "agent-\(id)", aux: id,
+        func row(_ id: String, _ lamp: Lamp,
+                 revivable: Bool = false) -> SessionRow {
+            SessionRow(id: id, name: "agent-\(id)", aux: id,
                                    lamp: lamp, revivable: revivable)
         }
         let rows = [
@@ -121,8 +121,8 @@ extension StatusHUD {
     /// dead ones — which would make its height a measure of how long the
     /// machine has been on rather than of how much is happening.
     func elasticGridDrill() {
-        func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
-            StateLegend.SessionRow(id: id, name: id, aux: id, lamp: lamp)
+        func row(_ id: String, _ lamp: Lamp) -> SessionRow {
+            SessionRow(id: id, name: id, aux: id, lamp: lamp)
         }
         // A generous screen, so the ceiling rather than the arithmetic decides.
         let big = NSScreen.main
@@ -242,8 +242,8 @@ extension StatusHUD {
         func item(_ id: String, _ name: String, live: Bool, cwd: String)
             -> PastAgentsList.Item {
             PastAgentsList.Item(
-                row: StateLegend.SessionRow(
-                    id: id, name: name, aux: StateLegend.shortId(id),
+                row: SessionRow(
+                    id: id, name: name, aux: SessionRow.shortId(id),
                     lamp: live ? .running : .unlit, revivable: !live),
                 revivable: !live,
                 haystack: [name, id, cwd].joined(separator: " ").lowercased())
@@ -252,7 +252,7 @@ extension StatusHUD {
         // in the right column instead of an id, and a reason is a sentence.
         let stallReason = "silent for 24h, nothing written since it started this"
         let stalled = PastAgentsList.Item(
-            row: StateLegend.SessionRow(
+            row: SessionRow(
                 id: "9f0c2b71-4444", name: "Blankshirts Mailchimp audit",
                 aux: stallReason, lamp: .unlit, revivable: true,
                 detail: stallReason),
@@ -262,10 +262,10 @@ extension StatusHUD {
         // width. Before the column was fixed it took it, and the time — the
         // one thing this face exists to say — rendered at zero points.
         let longTitled = PastAgentsList.Item(
-            row: StateLegend.SessionRow(
+            row: SessionRow(
                 id: "6d1a77e0-5555",
                 name: "Back to School 2026 Mailchimp email campaign for Blankshirts",
-                aux: StateLegend.shortId("6d1a77e0-5555"), lamp: .unlit, revivable: true),
+                aux: SessionRow.shortId("6d1a77e0-5555"), lamp: .unlit, revivable: true),
             revivable: true, haystack: "back to school",
             aux: "88m ago")
         let items = [
@@ -284,7 +284,7 @@ extension StatusHUD {
         // 16 Aug exception, which this drill did not know about until a stalled
         // row was added to its sample and turned it red (19 Aug).
         let idsMatch = items.allSatisfy {
-            $0.row.aux == StateLegend.shortId($0.row.id) || $0.row.aux == $0.row.detail
+            $0.row.aux == SessionRow.shortId($0.row.id) || $0.row.aux == $0.row.detail
         }
         let tookKeyboard = panel?.acceptsKey == true
         // The name holds its column against a sentence in the right one.
@@ -315,7 +315,7 @@ extension StatusHUD {
             longTitleName > 0 && longTitleName <= listWidth - PastRowView.auxColumn
         // And nothing is lost: the tooltip carries the name AND the full
         // sentence, uncut, which is where the truncated half goes.
-        let stalledTip = StateLegend.hoverText(for: stalled.row) ?? ""
+        let stalledTip = SessionRow.hoverText(for: stalled.row) ?? ""
         let theFullReasonIsReachable = stalledTip.contains(stallReason)
             && stalledTip.contains("Blankshirts Mailchimp audit")
         // Read WHILE the face is up. Everything below `goHomeFromPastAgents`
@@ -326,7 +326,7 @@ extension StatusHUD {
         let caretColour = pastList.caretColourForTesting
         // A sample bigger than any screen can draw, so the split is real.
         let sample = (0..<40).map {
-            StateLegend.SessionRow(id: "s\($0)", name: "s\($0)", aux: "s\($0)",
+            SessionRow(id: "s\($0)", name: "s\($0)", aux: "s\($0)",
                                    lamp: $0 < 3 ? .ready : ($0 < 30 ? .running : .unlit))
         }
         let drawn = Self.gridRows(sample)
@@ -506,8 +506,8 @@ extension StatusHUD {
     }
 
     func quietRowsDrill() {
-        func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
-            StateLegend.SessionRow(id: id, name: id, aux: id, lamp: lamp)
+        func row(_ id: String, _ lamp: Lamp) -> SessionRow {
+            SessionRow(id: id, name: id, aux: id, lamp: lamp)
         }
         // Deliberately interleaved, and with two of each active lamp, so a
         // comparator that grouped by lamp rather than partitioning would fail.
@@ -516,7 +516,7 @@ extension StatusHUD {
         let mixed = [row("w1", .working), row("i1", .running), row("d1", .unlit),
                      row("r1", .ready), row("i2", .running), row("d2", .unlit),
                      row("f1", .fault), row("w2", .working)]
-        let sorted = StateLegend.quietRowsLast(mixed).map(\.id)
+        let sorted = SessionRow.quietRowsLast(mixed).map(\.id)
 
         SelfTest.report("quietRows", [
             ("closedLast", sorted.suffix(2) == ["d1", "d2"]),
@@ -524,7 +524,7 @@ extension StatusHUD {
             ("activeKeepsArrivalOrder", Array(sorted.prefix(4)) == ["w1", "r1", "f1", "w2"]),
             ("nothingLost", sorted.count == mixed.count),
             ("allQuietIsStillAllQuiet",
-             StateLegend.quietRowsLast([row("i1", .running), row("i2", .running)])
+             SessionRow.quietRowsLast([row("i1", .running), row("i2", .running)])
                 .map(\.id) == ["i1", "i2"]),
         ])
     }
@@ -546,15 +546,15 @@ extension StatusHUD {
     /// an entitlement; it is back to outranking dead for whatever the floor
     /// leaves over.
     func litLampsOnlyDrill() {
-        func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
-            StateLegend.SessionRow(id: id, name: id, aux: id, lamp: lamp)
+        func row(_ id: String, _ lamp: Lamp) -> SessionRow {
+            SessionRow(id: id, name: id, aux: id, lamp: lamp)
         }
         let capacity = Self.gridRowCapacity()
         // The 18 Aug panel: nine lit, ten quiet. Nine lit rows alone already
         // fill this shape's slot budget, so this case looks the same under
         // both rulings — it needs `floorSlack` below to actually exercise
         // the 23 Aug reversal.
-        let asItWas = StateLegend.quietRowsLast(
+        let asItWas = SessionRow.quietRowsLast(
             (0..<9).map { row("lit\($0)", .ready) }
             + (0..<10).map { row("quiet\($0)", .running) })
         let drawn = Self.gridRows(asItWas)
@@ -562,7 +562,7 @@ extension StatusHUD {
 
         // The case the superseded rule was written for, restated: a session
         // that is WORKING or BLOCKED is lit, and keeps its row.
-        let busy = StateLegend.quietRowsLast(
+        let busy = SessionRow.quietRowsLast(
             (0..<9).map { row("work\($0)", .working) }
             + [row("stuck", .fault)] + (0..<10).map { row("quiet\($0)", .running) })
         let busyDrawn = Self.gridRows(busy)
@@ -573,16 +573,16 @@ extension StatusHUD {
         // Two lit rows, well under the floor of 8, leaves six floor slots
         // open — the exact shape that used to hand every one of them to a
         // dead session regardless of a live, idle one sitting right there.
-        let floorSlack = StateLegend.quietRowsLast(
+        let floorSlack = SessionRow.quietRowsLast(
             (0..<2).map { row("lit\($0)", .ready) }
             + (0..<10).map { row("alive\($0)", .running) }
             + (0..<10).map { row("dead\($0)", .unlit) })
         let floorDrawn = Self.gridRows(floorSlack)
 
         // Everything the grid does not draw, whatever the reason.
-        let everything = StateLegend.quietRowsLast(
+        let everything = SessionRow.quietRowsLast(
             [row("lit", .ready), row("quiet", .running), row("dead", .unlit),
-             StateLegend.SessionRow(id: "filed", name: "filed", aux: "filed",
+             SessionRow(id: "filed", name: "filed", aux: "filed",
                                     lamp: .running, switchedOff: true)])
 
         SelfTest.report("litLampsOnly", [
@@ -638,8 +638,8 @@ extension StatusHUD {
     /// that the verdict reaches the LAMP and the lamp reaches the GRID — the
     /// two joins that the 18 Aug downgrade sat between.
     func restartedAgentDrill() {
-        func row(_ id: String, _ lamp: StateLegend.Lamp) -> StateLegend.SessionRow {
-            StateLegend.SessionRow(id: id, name: id, aux: id, lamp: lamp)
+        func row(_ id: String, _ lamp: Lamp) -> SessionRow {
+            SessionRow(id: id, name: id, aux: id, lamp: lamp)
         }
         // The real clocks off this machine at 22:32: the conversation's last
         // word at 22:25:22, the process up at 22:32:22.
@@ -648,7 +648,7 @@ extension StatusHUD {
         // The lamp half of `lampAndReason`, for a process reporting `idle` —
         // which is where every one of these rows used to land as quiet.
         func lamp(_ activity: SessionActivity, startedAt: Date?)
-            -> (lamp: StateLegend.Lamp, aux: String) {
+            -> (lamp: Lamp, aux: String) {
             guard AgentRestart.resumed(startedAt: startedAt, lastWord: lastWord),
                   let said = AgentRestart.reason(for: activity)
             else { return (.running, "quiet") }
@@ -659,7 +659,7 @@ extension StatusHUD {
         let stalled = lamp(.stalled(reason: "silent for 2h"), startedAt: restart)
         // The same file, read against a process that has been up all along.
         let untouched = lamp(.working, startedAt: lastWord.addingTimeInterval(-600))
-        let rows = StateLegend.quietRowsLast([
+        let rows = SessionRow.quietRowsLast([
             row("interrupted", interrupted.lamp), row("reopened", reopened.lamp),
             row("neverRestarted", untouched.lamp)])
         let drawn = Set(Self.gridRows(rows).map(\.id))
@@ -701,18 +701,18 @@ extension StatusHUD {
     /// could not be proven must therefore do NOTHING on tap rather than fall
     /// through to the announce path it used to share.
     func closedRowsDrill() {
-        func row(_ id: String, _ lamp: StateLegend.Lamp,
-                 revivable: Bool = false) -> StateLegend.SessionRow {
-            StateLegend.SessionRow(id: id, name: id, aux: id,
+        func row(_ id: String, _ lamp: Lamp,
+                 revivable: Bool = false) -> SessionRow {
+            SessionRow(id: id, name: id, aux: id,
                                    lamp: lamp, revivable: revivable)
         }
-        let unlit = StateLegend.Lamp.unlit
+        let unlit = Lamp.unlit
 
         // The row is drawn by presence, not by a fifth colour: nothing in the
         // socket, a fainter ring than the seated lamp, and stepped-back ink.
         let noFill = unlit.fill.alphaComponent == 0
         let fainterRing = (unlit.ring?.alphaComponent ?? 1)
-            < (StateLegend.Lamp.running.ring?.alphaComponent ?? 0)
+            < (Lamp.running.ring?.alphaComponent ?? 0)
 
         // Every drill row goes through showIdle so the grid actually builds
         // one — a row that sorts correctly and then fails to render is the
@@ -724,21 +724,21 @@ extension StatusHUD {
         SelfTest.report("closedRows", [
             ("unlitHasNoFill", noFill),
             ("unlitRingIsFainterThanQuiet", fainterRing),
-            ("unlitDimsTheRow", unlit.rowAlpha < 1 && StateLegend.Lamp.running.rowAlpha == 1),
-            ("liveRowAnnounces", StateLegend.action(for: row("live", .ready)) == .announce),
+            ("unlitDimsTheRow", unlit.rowAlpha < 1 && Lamp.running.rowAlpha == 1),
+            ("liveRowAnnounces", SessionRow.action(for: row("live", .ready)) == .announce),
             // Amber does not speak, it points (18 Aug). A blocked session is
             // not in the waiting set, so the announcement it used to trigger
             // had nothing to say and left the panel sitting on Preparing.
             ("amberRowGoesToAgent",
-             StateLegend.action(for: row("amber", .fault)) == .goToAgent),
+             SessionRow.action(for: row("amber", .fault)) == .goToAgent),
             // ...and is still a live row, so it keeps its menu. The two
             // questions are asked through one function precisely so this
             // cannot come apart.
-            ("amberRowIsStillLive", StateLegend.isLive(row("amber", .fault))),
+            ("amberRowIsStillLive", SessionRow.isLive(row("amber", .fault))),
             ("revivableRowRevives",
-             StateLegend.action(for: row("dead", unlit, revivable: true)) == .revive),
+             SessionRow.action(for: row("dead", unlit, revivable: true)) == .revive),
             ("unprovenRowDoesNothing",
-             StateLegend.action(for: row("unproven", unlit)) == StateLegend.RowAction.none),
+             SessionRow.action(for: row("unproven", unlit)) == SessionRow.RowAction.none),
             ("closedRowsStillRender", built.count == 3),
         ])
         showIdle(rows: [])
@@ -754,16 +754,16 @@ extension StatusHUD {
     /// user's click: if a filed row reaches the grid, its lamp offers `turnOff`
     /// on a session that is already off and the switch has no way back.
     func lampSwitchDrill() {
-        func row(_ id: String, _ lamp: StateLegend.Lamp,
-                 revivable: Bool = false, off: Bool = false) -> StateLegend.SessionRow {
-            StateLegend.SessionRow(id: id, name: id, aux: id, lamp: lamp,
+        func row(_ id: String, _ lamp: Lamp,
+                 revivable: Bool = false, off: Bool = false) -> SessionRow {
+            SessionRow(id: id, name: id, aux: id, lamp: lamp,
                                    revivable: revivable, switchedOff: off)
         }
-        let unlit = StateLegend.Lamp.unlit
+        let unlit = Lamp.unlit
 
         // One session in each state, one of them filed, through the real
         // banding and the real partition.
-        let rows = StateLegend.quietRowsLast([
+        let rows = SessionRow.quietRowsLast([
             row("asking", .ready), row("busy", .working), row("stuck", .fault),
             row("quiet", .running), row("filed", .running, off: true),
             row("dead", unlit, revivable: true),
@@ -787,18 +787,18 @@ extension StatusHUD {
             // The sentence: on the grid it files away, in the list it brings back.
             ("gridFilesEveryLitRow",
              [row("a", .ready), row("b", .working), row("c", .fault), row("d", .running)]
-                .allSatisfy { StateLegend.lampAction(for: $0, on: .grid) == .turnOff }),
+                .allSatisfy { SessionRow.lampAction(for: $0, on: .grid) == .turnOff }),
             ("listRestoresEveryLiveRow",
              [row("a", .ready), row("b", .working), row("c", .fault), row("d", .running)]
-                .allSatisfy { StateLegend.lampAction(for: $0, on: .list) == .turnOn }),
+                .allSatisfy { SessionRow.lampAction(for: $0, on: .list) == .turnOn }),
             // The one exception, and it is the same on both faces: you cannot
             // flip a terminated process on, you have to resurrect it.
             ("deadRevivesOnEitherFace",
-             StateLegend.lampAction(for: row("x", unlit, revivable: true), on: .grid) == .revive
-                && StateLegend.lampAction(for: row("x", unlit), on: .list) == .revive),
+             SessionRow.lampAction(for: row("x", unlit, revivable: true), on: .grid) == .revive
+                && SessionRow.lampAction(for: row("x", unlit), on: .list) == .revive),
             // Off is not a kill: nothing in the lamp's vocabulary terminates.
             ("noLampVerbEndsAProcess",
-             Set([StateLegend.LampAction.turnOff, .turnOn, .revive]).count == 3),
+             Set([SessionRow.LampAction.turnOff, .turnOn, .revive]).count == 3),
             // Membership, through the real partition rather than by assertion.
             ("filedIsNeverOnTheGrid", filedIsNeverOnTheGrid),
             ("filedIsInTheList", filedIsInTheList),
@@ -829,9 +829,9 @@ extension StatusHUD {
     /// swapped for recorders and put back — announcing for real inside a drill
     /// would speak out loud on every launch.
     func pickUpDrill() {
-        let live = StateLegend.SessionRow(id: "alive", name: "alive", aux: "alive",
+        let live = SessionRow(id: "alive", name: "alive", aux: "alive",
                                           lamp: .running)
-        let dead = StateLegend.SessionRow(id: "gone", name: "gone", aux: "gone",
+        let dead = SessionRow(id: "gone", name: "gone", aux: "gone",
                                           lamp: .unlit, revivable: true)
         showPastAgents(items: [
             PastAgentsList.Item(row: live, revivable: false, haystack: live.name),
@@ -877,7 +877,7 @@ extension StatusHUD {
             // And what the switch it flips is worth: an idle session the user
             // picked up is lit, so the grid draws it.
             ("aPickedUpSessionIsDrawnOnTheGrid",
-             Self.gridRows([StateLegend.SessionRow(id: "alive", name: "alive",
+             Self.gridRows([SessionRow(id: "alive", name: "alive",
                                                    aux: "standing by", lamp: .fault)])
                 .contains { $0.id == "alive" }),
         ])
@@ -900,7 +900,7 @@ extension StatusHUD {
     /// the green row it replaced.
     func resumePromptDrill() {
         let at = WaitingAt.resumePrompt
-        let locked = StateLegend.SessionRow(
+        let locked = SessionRow(
             id: "locked", name: "PRs in the Hub", aux: at.short,
             lamp: .fault, detail: at.full)
         showIdle(rows: [locked])
@@ -917,7 +917,7 @@ extension StatusHUD {
             // Amber's tap is the one move that helps: it puts you in the tab
             // where the dialog is.
             ("theTapGoesToTheTerminal",
-             StateLegend.action(for: locked) == .goToAgent),
+             SessionRow.action(for: locked) == .goToAgent),
             ("theRowNamesTheDialog", locked.aux == "waiting at the resume prompt"),
             // The hover is "name, newline, reason" (see StateLegend.hoverText),
             // so the assertion is that the sentence is IN it. The first version
@@ -943,15 +943,15 @@ extension StatusHUD {
     /// varying would put the grid back to two states it cannot tell apart.
     func readIntensityDrill() {
         let items = [
-            StateLegend.SessionRow(id: "unread", name: "unread", aux: "u",
+            SessionRow(id: "unread", name: "unread", aux: "u",
                                    lamp: .ready, read: .unread),
-            StateLegend.SessionRow(id: "opened", name: "opened", aux: "o",
+            SessionRow(id: "opened", name: "opened", aux: "o",
                                    lamp: .ready, read: .opened),
-            StateLegend.SessionRow(id: "w-unread", name: "working unread", aux: "wu",
+            SessionRow(id: "w-unread", name: "working unread", aux: "wu",
                                    lamp: .working, read: .unread),
-            StateLegend.SessionRow(id: "w-opened", name: "working opened", aux: "wo",
+            SessionRow(id: "w-opened", name: "working opened", aux: "wo",
                                    lamp: .working, read: .opened),
-            StateLegend.SessionRow(id: "idle", name: "idle, nothing waiting", aux: "i",
+            SessionRow(id: "idle", name: "idle, nothing waiting", aux: "i",
                                    lamp: .running, read: .none),
         ]
         // Built directly rather than through `showIdle`, because this drill's
@@ -1261,10 +1261,10 @@ extension StatusHUD {
         // A row whose message is longer than the column, which is the case the
         // hover exists for.
         let message = "silent for 2h, nothing written since it started this"
-        let stalled = StateLegend.SessionRow(
+        let stalled = SessionRow(
             id: "stall", name: "a session name long enough to truncate against the callsign",
             aux: message, lamp: .fault, detail: message)
-        showIdle(rows: [stalled, StateLegend.SessionRow(
+        showIdle(rows: [stalled, SessionRow(
             id: "ok", name: "quiet one", aux: "ok", lamp: .ready)])
         panel?.contentView?.layoutSubtreeIfNeeded()
         var seen = panel?.contentView.map { words(in: $0) } ?? []
