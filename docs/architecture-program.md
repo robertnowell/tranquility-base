@@ -620,25 +620,22 @@ com.robertnowell.voice-dispatch (TCC).
       finding: `CodexRollout.rolloutPath(forSessionId:)` takes the first
       filename match on a thread-id suffix with no duplicate check —
       speculative given Codex thread ids are UUIDs, not actioned.
-- [ ] Single-transport cut, remainder: delete AppleScript dispatch machinery
-      (TerminalAppTransport, the Automation permission gate) — the attach
+- [x] Single-transport cut, remainder (9d4ffd2, 4eaf17f — 23 Aug): deleted
+      `TerminalAppTransport` (its `injectScript` helper, the `tbase send-raw`
+      drill command, `scripts/test-dispatch.sh`) and the Automation
+      permission gate (`Permissions.Kind.automation` and every switch arm,
+      `automationStatus()`) outright, on the operator's own instruction
+      (23 Aug: "I don't know why tmux would ever be not available... is
+      there really a situation where tmux would not be available") — no
+      fallback transport is preserved; `Coordinator.dispatch` and `tbase
+      send` now refuse cleanly (`.injectionFailed`) when `resumeTwin` can't
+      produce a pane, rather than silently rerouting through a
+      far-less-tested mechanism. 834/834 tests green (9d4ffd2 deployed and
+      canary-verified live; 4eaf17f — Permissions.swift only, app-layer —
+      committed, deploy pending a live mic at commit time per the
+      never-kill-a-capture rule, verify on the next relaunch). The attach
       affordance itself landed separately (3a641d2, 22 Aug, GO TO AGENT fix
-      above) and is NOT part of what's left here; the useTmux/launchTerminal
-      half of this is already done, above. Narrowed further TWICE since:
-      (7325876, 23 Aug) revive and hand-started dispatch both moved onto
-      `resumeTmux`, leaving `TerminalAppTransport` reached only when
-      `resumeTwin` itself fails; (b8958ab, 23 Aug) GO TO AGENT transfers too
-      now, closing the other call site that used to fall back to it. On the
-      operator's own instruction (23 Aug: "I don't know why tmux would ever
-      be not available... is there really a situation where tmux would not
-      be available") — no fallback transport is being preserved when this
-      lands; a genuinely unavailable tmux should fail the dispatch clearly,
-      not silently reroute through a different, far-less-tested mechanism.
-      Deliberately deferred out of the same session that landed the two
-      narrowing commits above — this is a deletion across
-      `Coordinator`'s default `transport:` parameter, `tbase`'s CLI, and two
-      test files, and earns its own careful pass rather than being the
-      sixth change in one sitting.
+      above); the useTmux/launchTerminal half was already done, above.
 - [x] Launcher: revive = tmux (7325876, 23 Aug — `SessionLauncher.resume()`
       now calls `resumeTmux`, live-verified: zero Terminal.app windows opened,
       real tmux pane confirmed, dispatch into the revived session confirmed).
