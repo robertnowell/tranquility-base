@@ -49,13 +49,26 @@ final class SessionRowTests: XCTestCase {
         XCTAssertEqual(SessionRow.action(for: row(lamp: .working)), .goToAgent)
     }
 
-    func testTapOnRowsWithSomethingToSayAnnounces() {
-        // Green is waiting on you; quiet is a finished turn you can ask to
-        // hear again. Both have words behind them, which is the whole test
-        // for this verb.
-        for lamp: Lamp in [.ready, .running] {
-            XCTAssertEqual(SessionRow.action(for: row(lamp: lamp)), .announce)
+    func testTapOnQuietGoesToAgent() {
+        // The dark lamp joined them the same day. Its turn is complete and
+        // already heard, so announce had nothing left to read and fell
+        // through to nothingWaiting — a tap that logged a line and did
+        // nothing. Three lamps, three reasons, one verb.
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .running)), .goToAgent)
+    }
+
+    func testGreenIsTheOnlyLampThatAnnounces() {
+        // The whole rule in one assertion: announce is for a row with an
+        // unread turn, and green is the only lamp that has one.
+        for lamp: Lamp in [.ready, .working, .running, .fault] {
+            let expected: SessionRow.RowAction = lamp == .ready ? .announce : .goToAgent
+            XCTAssertEqual(SessionRow.action(for: row(lamp: lamp)), expected,
+                           "\(lamp) took the wrong verb")
         }
+    }
+
+    func testQuietRowIsStillLive() {
+        XCTAssertTrue(SessionRow.isLive(row(lamp: .running)))
     }
 
     func testWorkingRowIsStillLive() {
