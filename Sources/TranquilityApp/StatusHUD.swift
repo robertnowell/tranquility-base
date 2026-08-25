@@ -2730,14 +2730,26 @@ final class StatusHUD: NSObject {
                 // only a bare tty (no pane) triggers the transfer here.
                 if TmuxOwnership.pane(forTty: tty) == nil {
                     Permissions.log("goToSession: \(tty) is hand-started — transferring to tmux")
-                    guard let transferred = SessionLauncher.OwnershipTransfer.toTmux(sessionId: sessionId)
-                    else {
+                    let attempt = SessionLauncher.OwnershipTransfer.attempt(sessionId: sessionId)
+                    guard let transferred = attempt.moved else {
+                        // Two failures, two sentences (ruled 24 Aug). Saying
+                        // "Nothing was closed" over a session this button had
+                        // just killed sent its owner looking for a terminal
+                        // that no longer had one.
+                        let message: String
+                        switch attempt {
+                        case .endedButNotRestarted:
+                            message = "That session was closed, but it couldn't be reopened "
+                                + "under tmux. Nothing is lost — the conversation is on disk. "
+                                + "Revive it from Past Agents."
+                        default:
+                            message = "Couldn't move that session under tmux — it is still "
+                                + "running in its own terminal. Nothing was closed."
+                        }
                         await MainActor.run { [weak self] in
                             guard let self else { return }
                             self.goToSessionInFlight = false
-                            self.bodyLabel.stringValue =
-                                "Couldn't move that session under tmux — it may still be "
-                                + "running in its own terminal. Nothing was closed."
+                            self.bodyLabel.stringValue = message
                         }
                         return
                     }
