@@ -138,13 +138,29 @@ codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
   "$APP_SRC"
 
 codesign --verify --deep --strict --verbose=2 "$APP_SRC"
-codesign -dv --verbose=4 "$APP_SRC" 2>&1 | grep -E "^(Authority|TeamIdentifier|Timestamp)="
-# A signature with no Timestamp= line will be rejected by the notary service
-# minutes from now; catching it here costs a second.
-if ! codesign -dv --verbose=4 "$APP_SRC" 2>&1 | grep -q "^Timestamp="; then
-  echo "✗ no secure timestamp on the signature — notarization would reject this." >&2
-  exit 1
-fi
+
+# Captured ONCE into a variable, then tested without a pipeline.
+#
+# The obvious spelling of this check is a lie under `set -o pipefail`:
+#
+#     if ! codesign -dv --verbose=4 "$APP" 2>&1 | grep -q "^Timestamp="
+#
+# `grep -q` exits the instant it matches, which closes the pipe; codesign then
+# dies of SIGPIPE and the pipeline reports 141. pipefail propagates that, `!`
+# inverts it, and the guard fires ON SUCCESS -- it rejects exactly the correctly
+# timestamped signature it exists to require. Measured 25 Aug on this script's
+# own first dry run, against a signature whose Timestamp= line was printed two
+# lines above the error saying it had none.
+SIGN_INFO=$(codesign -dv --verbose=4 "$APP_SRC" 2>&1)
+echo "$SIGN_INFO" | grep -E "^(Authority|TeamIdentifier|Timestamp)=" || true
+
+# A signature with no secure timestamp is rejected by the notary service minutes
+# from now; catching it here costs nothing.
+case "$SIGN_INFO" in
+  *"Timestamp="*) ;;
+  *)  echo "✗ no secure timestamp on the signature — notarization would reject this." >&2
+      exit 1 ;;
+esac
 
 # --- DMG ---------------------------------------------------------------------
 #
