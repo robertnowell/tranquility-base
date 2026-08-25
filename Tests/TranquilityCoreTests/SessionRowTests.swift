@@ -41,10 +41,28 @@ final class SessionRowTests: XCTestCase {
         XCTAssertEqual(SessionRow.action(for: row(lamp: .fault)), .goToAgent)
     }
 
-    func testTapOnLiveRowsAnnounces() {
-        for lamp: Lamp in [.ready, .working, .running] {
+    func testTapOnWorkingGoesToAgent() {
+        // Blue joined amber on 24 Aug: a row with work in hand has no
+        // unread turn, so the announcement has nothing to say. The door
+        // does — the pane is already writing what a summary would
+        // paraphrase.
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .working)), .goToAgent)
+    }
+
+    func testTapOnRowsWithSomethingToSayAnnounces() {
+        // Green is waiting on you; quiet is a finished turn you can ask to
+        // hear again. Both have words behind them, which is the whole test
+        // for this verb.
+        for lamp: Lamp in [.ready, .running] {
             XCTAssertEqual(SessionRow.action(for: row(lamp: lamp)), .announce)
         }
+    }
+
+    func testWorkingRowIsStillLive() {
+        // Its verb changed; its liveness did not. END SESSION and the row
+        // menu both hang off isLive, and they must not have quietly gone
+        // away with the announcement.
+        XCTAssertTrue(SessionRow.isLive(row(lamp: .working)))
     }
 
     func testTapOnRevivableDeadRowRevives() {
