@@ -58,6 +58,17 @@ trap 'rm -rf "$WORK"' EXIT
 
 # macOS ships LibreSSL, which has no -addext, so the extensions go in a config file.
 # The codeSigning EKU is required: without it codesign refuses the identity.
+#
+# /usr/bin/openssl BY ABSOLUTE PATH, not whatever `openssl` resolves to. Measured
+# 25 Aug on a machine with Homebrew first on PATH: OpenSSL 3.x writes PKCS#8 from
+# `openssl rsa` regardless of the conversion below (it needs an explicit
+# -traditional), and `security import -f openssl` rejects that with
+#   security: SecKeychainItemImport: Unknown format in import.
+# bundle.sh calls this script with `|| true`, so the failure was SILENT and the
+# build fell through to ad-hoc signing -- the exact outcome the header above says
+# is unusable. The script had always ASSUMED /usr/bin/openssl (see "macOS ships
+# LibreSSL"); it just never said so where it mattered. LibreSSL predates the
+# PKCS#8 default and writes traditional RSA, so pinning the path is the whole fix.
 cat > "$WORK/req.cnf" <<CNF
 [ req ]
 distinguished_name = dn
@@ -72,14 +83,14 @@ extendedKeyUsage       = critical,codeSigning
 subjectKeyIdentifier   = hash
 CNF
 
-openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+/usr/bin/openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
   -config "$WORK/req.cnf" -keyout "$WORK/key.pem" -out "$WORK/cert.pem" 2>/dev/null
 
 # Imported as two items rather than one PKCS#12 on purpose. macOS `security import`
 # cannot verify the MAC on a PKCS#12 written by LibreSSL ("MAC verification failed"),
 # and `openssl req` emits a PKCS#8 key that `security` reports as "Unknown format" —
 # so the key is converted to traditional RSA PEM first.
-openssl rsa -in "$WORK/key.pem" -out "$WORK/key-trad.pem" 2>/dev/null
+/usr/bin/openssl rsa -in "$WORK/key.pem" -out "$WORK/key-trad.pem"
 
 # -T /usr/bin/codesign -A: pre-authorise codesign to use the key, so signing never
 # stops to ask for the login password. Without it every build blocks on a dialog.
