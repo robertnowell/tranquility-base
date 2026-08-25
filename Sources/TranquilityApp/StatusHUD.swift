@@ -3017,9 +3017,11 @@ final class StatusHUD: NSObject {
             }
             switch SessionRow.action(for: row) {
             case .announce: onPickWaiting?(id)
-            // Amber has one useful destination and it is not the voice: the
-            // row already carries the reason in its own column, and the thing
-            // it cannot tell you is which tab to fix it in.
+            // Amber and blue share one useful destination and it is not the
+            // voice. Amber already carries its reason in its own column, and
+            // the thing it cannot tell you is which tab to fix it in; blue is
+            // mid-turn, so there is no finished turn to read back and the pane
+            // is already writing what an announcement would paraphrase.
             case .goToAgent: onGoToSession?(id)
             case .revive: onRevive?(id, row.name)
             case .none: refuseRowTap(id)
@@ -3058,9 +3060,9 @@ final class StatusHUD: NSObject {
     /// when you want it. END SESSION keeps the bottom, behind a separator, so
     /// the destructive item is never where the pointer lands by momentum.
     ///
-    /// GO TO AGENT is offered on EVERY live row, amber included, where it
-    /// duplicates the left-click. That repetition is deliberate: a menu that
-    /// hid the item on the one lamp whose tap already does it would be teaching
+    /// GO TO AGENT is offered on EVERY live row, amber and blue included, where
+    /// it duplicates the left-click. That repetition is deliberate: a menu that
+    /// hid the item on the lamps whose tap already does it would be teaching
     /// the exception rather than the rule.
     private func rowMenu(for item: SessionRow) -> NSMenu? {
         guard SessionRow.isLive(item) else { return nil }
