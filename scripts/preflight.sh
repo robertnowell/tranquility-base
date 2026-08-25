@@ -115,6 +115,26 @@ fi
 printf '%s\n' "$TEST_OUT" | grep -E "^✓ [0-9]+ XCTest" | tail -1 | sed 's/^✓/ /'
 echo "✓ build clean, tests green"
 
+# --- the drills that were never actually wired to anything --------------------
+#
+# Found in the arc's closing audit (24 Aug): the arc's own rule 4 requires
+# "the drills" — swift test, scripts/test-dispatch-tmux.sh, --selftest-hud —
+# on every landing, but this file only ever ran the first. The other two were
+# real, working, human-run-when-remembered scripts with no gate behind them:
+# a regression in either could ship and nothing here would catch it before
+# someone noticed by hand. Worse for Codex specifically — test-codex-
+# lifecycle.sh is the ONLY thing in this repo that exercises a real Codex
+# session end to end, and it wasn't run by this script even once.
+#
+# Both scripts already fail closed (non-zero exit on any FAIL line) and
+# test-codex-lifecycle.sh already skips itself cleanly ("SKIP: no codex on
+# this machine") on a machine without the Codex CLI installed, so this adds
+# no new false-positive risk — it just stops the gate being optional.
+echo "→ tmux dispatch drill"
+scripts/test-dispatch-tmux.sh
+echo "→ codex lifecycle drill"
+scripts/test-codex-lifecycle.sh
+
 # --- the palette owns every colour --------------------------------------------
 #
 # StateLegend.swift already carries a grep contract in writing, for glyphs: the
