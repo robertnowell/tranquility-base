@@ -304,6 +304,31 @@ final class StatusHUD: NSObject {
         render()
     }
 
+    /// The same binding for a card that ALREADY has a pid and whose pid is
+    /// wrong — a session that was ended and resumed under a new process while
+    /// this card sat on screen.
+    ///
+    /// `attachLivePid` refuses that case by design (`target.pid == nil`): it
+    /// was written for a greeting card learning its session for the first
+    /// time, where an existing pid means someone else already answered. A
+    /// transfer is the opposite shape, and the refusal is what left the card
+    /// holding a corpse. Measured 25 Aug: a session was transferred to tmux
+    /// at 00:21:46, and the next five GO TO AGENT presses all answered
+    /// "Couldn't find a terminal for process 49931" about a process that had
+    /// been dead for twelve seconds, while the session itself sat alive in a
+    /// pane one keystroke away.
+    ///
+    /// Only ever a REPLACEMENT within one session id, never a rebind across
+    /// sessions, which is the property that makes overwriting safe here and
+    /// unsafe in `attachLivePid`.
+    func rebindLivePid(_ pid: Int, sessionId: String) {
+        guard let target = currentTarget, target.sessionId == sessionId, target.pid != pid
+        else { return }
+        currentTarget = (sessionId, pid, target.label)
+        lastAddressed = (sessionId, pid, target.label)
+        render()
+    }
+
     /// The last agent this panel addressed, kept so a failure card can name it.
     ///
     /// `send()` returns the panel to the grid before the outcome arrives — the
@@ -2716,13 +2741,35 @@ final class StatusHUD: NSObject {
             let priorBody = bodyLabel.stringValue
             bodyLabel.stringValue = "Opening that session's tab…"
             Task.detached(priority: .userInitiated) { [weak self] in
-                guard let tty = ProcessProbe.tty(of: pid) else {
-                    Permissions.log("goToSession: no tty for pid \(pid)")
+                // The card's pid is a fact with a shelf life, and this button
+                // is pressed minutes after the card was painted. A session
+                // that was transferred to tmux in between is alive under a
+                // NEW pid, and the old one names nothing — so a miss here is
+                // a reason to ask the session again, not to give up on it.
+                // The session id is the durable name; the pid never was.
+                var pid = pid
+                var resolvedTty = ProcessProbe.tty(of: pid)
+                if resolvedTty == nil,
+                   let fresh = (ClaudeAgentsCLI().sessions() ?? [])
+                       .first(where: { $0.sessionId == sessionId }),
+                   fresh.pid != pid,
+                   let freshTty = ProcessProbe.tty(of: fresh.pid) {
+                    Permissions.log("goToSession: pid \(pid) is gone — "
+                        + "\(sessionId.prefix(8)) runs as \(fresh.pid) now, following it")
+                    pid = fresh.pid
+                    resolvedTty = freshTty
+                    await MainActor.run { [weak self] in
+                        self?.rebindLivePid(fresh.pid, sessionId: sessionId)
+                    }
+                }
+                guard let tty = resolvedTty else {
+                    Permissions.log("goToSession: no tty for pid \(pid), and "
+                        + "\(sessionId.prefix(8)) is not running under any other")
                     await MainActor.run { [weak self] in
                         guard let self else { return }
                         self.goToSessionInFlight = false
                         self.bodyLabel.stringValue =
-                            "Couldn't find a terminal for process \(pid). It may have exited."
+                            "That agent isn't running any more. Revive it from Past Agents."
                     }
                     return
                 }
@@ -2740,13 +2787,29 @@ final class StatusHUD: NSObject {
                         // "Nothing was closed" over a session this button had
                         // just killed sent its owner looking for a terminal
                         // that no longer had one.
+                        // The reason goes to the log, never to the card. Ruled
+                        // 25 Aug: an exit status and a line of somebody else's
+                        // stderr is not something a person can act on, and a
+                        // card is not a log viewer. What the card owes is the
+                        // one move that works — and "try again" is only that
+                        // move when the failure could plausibly go differently.
                         let message: String
                         switch attempt {
-                        case .endedButNotRestarted:
-                            message = "That session was closed, but it couldn't be reopened "
-                                + "under tmux. Nothing is lost — the conversation is on disk. "
-                                + "Revive it from Past Agents."
-                        default:
+                        case .endedButNotRestarted(let why, let worthRetrying, let manual):
+                            Permissions.log("goToSession: transfer ended but did not restart "
+                                + "\(sessionId.prefix(8)) — \(why)")
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(manual, forType: .string)
+                            message = "That session was closed and couldn't be reopened here. "
+                                + "Copied the manual revival command to your clipboard — "
+                                + "paste it in a terminal."
+                                + (worthRetrying ? " Or try Go to Agent again." : "")
+                        case .refused(let why):
+                            Permissions.log("goToSession: transfer refused "
+                                + "\(sessionId.prefix(8)) — \(why)")
+                            message = "Couldn't move that session under tmux — it is still "
+                                + "running in its own terminal. Nothing was closed."
+                        case .moved:
                             message = "Couldn't move that session under tmux — it is still "
                                 + "running in its own terminal. Nothing was closed."
                         }

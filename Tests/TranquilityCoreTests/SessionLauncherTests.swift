@@ -52,10 +52,35 @@ final class OwnershipTransferOutcomeTests: XCTestCase {
 
     func testOnlyAMoveCarriesAPane() {
         let refused = SessionLauncher.OwnershipTransfer.Outcome.refused("busy")
-        let ended = SessionLauncher.OwnershipTransfer.Outcome.endedButNotRestarted("no pane")
+        let ended = SessionLauncher.OwnershipTransfer.Outcome.endedButNotRestarted(
+            "no pane", worthRetrying: false, manualRevival: "cd '/x' && claude --resume 'i'")
         XCTAssertNil(refused.moved)
         XCTAssertNil(ended.moved,
                      "a session that was ended and not restarted has no pane to hand back, and "
                      + "must still be distinguishable from one that was never touched")
+    }
+}
+
+/// A failure the user can act on, and a retry offer that means something.
+final class ManualRevivalTests: XCTestCase {
+
+    /// The whole point is that this line does NOT carry the pane's PATH
+    /// export: it runs in a human's shell, which already has one, and a
+    /// command someone is asked to paste should be short enough to read.
+    func testTheManualLineIsWhatAHumanWouldType() {
+        let line = SessionLauncher.manualRevival(
+            sessionId: "abc-123", directory: "/Users/x/Projects/thing", command: "claude")
+        XCTAssertEqual(line, "cd '/Users/x/Projects/thing' && claude --resume 'abc-123'")
+        XCTAssertFalse(line.contains("export PATH"),
+                       "the app's PATH is the app's problem; a human shell has its own")
+    }
+
+    /// Retryability is not a mood. A command that ran and exited on its own
+    /// terms will exit the same way next time; a pane tmux never delivered
+    /// might.
+    func testOnlyAnUndeliveredPaneIsWorthRetrying() {
+        XCTAssertTrue(ScriptError(message: "anything").worthRetrying,
+                      "the default stays true — most failures here are a busy Terminal")
+        XCTAssertFalse(ScriptError(message: "status 127", worthRetrying: false).worthRetrying)
     }
 }

@@ -192,8 +192,9 @@ public enum SessionLauncher {
         Tmux.run(["set", "-t", name, "remain-on-exit", "on"], socket: Tmux.socketName)
         if let failure = Self.survivalFailure(session: name, tty: tty) {
             Tmux.run(["kill-session", "-t", name], socket: Tmux.socketName)
-            Self.trace?("newSession: \(name) died on launch — \(failure)")
-            return .failure(ScriptError(message: failure))
+            Self.trace?("newSession: \(name) died on launch — \(failure.reason)")
+            return .failure(ScriptError(message: failure.reason,
+                                        worthRetrying: failure.worthRetrying))
         }
         Tmux.run(["set", "-t", name, "remain-on-exit", "off"], socket: Tmux.socketName)
 
@@ -258,6 +259,31 @@ public enum SessionLauncher {
     /// of this exact expression; collapsed here rather than reintroduced
     /// for `resumeTmux`'s arguments. Not `private`: pinned directly by a
     /// test, the way a security-relevant string transform earns.
+    /// The line a human can paste into their own terminal to bring this
+    /// session back, when the app's own launcher cannot.
+    ///
+    /// The point is that it does NOT go through anything this app owns. It
+    /// runs in the user's shell, with the user's PATH and the user's
+    /// environment — which is exactly the axis the 24 Aug failure lived on,
+    /// where every in-app launch died and this line would have worked all
+    /// morning. Deliberately without the pane's PATH export: a human's shell
+    /// already has one, and a command you are asked to trust should be short
+    /// enough to read.
+    public static func manualRevival(
+        sessionId: String,
+        directory: String,
+        command: String = defaultCommand,
+        adapter: any HarnessAdapter = ClaudeCodeAdapter()
+    ) -> String {
+        // Flags come from our own adapter and are quoted only in the pane's
+        // machine-read command; here a human has to read this line and decide
+        // whether to trust it, and `'--resume'` reads like something is being
+        // hidden. The VALUE still gets quotes, which is where they matter.
+        let args = adapter.resumeArguments(sessionId: sessionId)
+            .map { $0.hasPrefix("-") ? $0 : shellQuoted($0) }
+        return (["cd \(shellQuoted(directory)) &&", command] + args).joined(separator: " ")
+    }
+
     /// What the pane's shell is actually asked to run. Pulled out of the argv
     /// so a test can pin it: the PATH export is the whole 24 Aug fix, and the
     /// argv it lives in cannot be asserted against without a tmux server.
@@ -280,7 +306,8 @@ public enum SessionLauncher {
     /// worse than the bug it replaces. Three looks over ~600ms, and a pane
     /// still present at the end is a launch. Blocks; `launchTmux` already
     /// documents itself as an off-main call.
-    static func survivalFailure(session name: String, tty: String) -> String? {
+    static func survivalFailure(session name: String, tty: String)
+        -> (reason: String, worthRetrying: Bool)? {
         var lastSeen: (dead: Bool, status: String)?
         for attempt in 0..<3 {
             if attempt > 0 { Thread.sleep(forTimeInterval: 0.3) }
@@ -296,13 +323,17 @@ public enum SessionLauncher {
             break
         }
         guard let seen = lastSeen else {
-            return "tmux session \(name) (tty \(tty)) was gone within a second of launching — "
-                + "its pane never reached the server's inventory"
+            // tmux never delivered a pane we could address. Nothing was
+            // observed to refuse anything, so a second attempt is a fair ask.
+            return ("tmux session \(name) (tty \(tty)) was gone within a second of launching — "
+                + "its pane never reached the server's inventory", true)
         }
         let reason = Self.lastLine(ofPane: name)
         let status = seen.status.isEmpty ? "unknown" : seen.status
-        return "the launched command exited immediately (status \(status))"
-            + (reason.isEmpty ? "" : ": \(reason)")
+        // The command ran and exited on its own terms. Same command, same
+        // environment, same status — retrying is a loop, not a repair.
+        return ("the launched command exited immediately (status \(status))"
+            + (reason.isEmpty ? "" : ": \(reason)"), false)
     }
 
     /// The last thing a dead pane printed — the whole point of arming
@@ -357,7 +388,7 @@ public enum SessionLauncher {
             /// The hand-started process was ended cleanly and the resumed
             /// pane did not come up. The conversation is intact on disk and
             /// revivable; the process is not coming back on its own.
-            case endedButNotRestarted(String)
+            case endedButNotRestarted(String, worthRetrying: Bool, manualRevival: String)
 
             public var moved: (pane: TmuxPaneAddress, pid: Int)? {
                 if case .moved(let pane, let pid) = self { return (pane, pid) }
@@ -396,13 +427,25 @@ public enum SessionLauncher {
             // Past this line the old process is gone, so every remaining
             // failure is `endedButNotRestarted` — the caller must not be
             // told nothing happened.
-            func failed(_ why: String) -> Outcome {
+            func failed(_ why: String, worthRetrying: Bool = true) -> Outcome {
                 SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(why)")
-                return ended ? .endedButNotRestarted(why) : .refused(why)
+                guard ended else { return .refused(why) }
+                // The process is gone and this app could not bring it back, so
+                // the only recovery worth offering is the one that does not run
+                // through this app at all.
+                return .endedButNotRestarted(
+                    why, worthRetrying: worthRetrying,
+                    manualRevival: SessionLauncher.manualRevival(
+                        sessionId: sessionId, directory: resolvedDirectory))
             }
-            guard case .success(let tty) = resumeTmux(sessionId: sessionId,
-                                                      directory: resolvedDirectory)
-            else { return failed("could not start a tmux pane to resume into") }
+            let resumed = resumeTmux(sessionId: sessionId, directory: resolvedDirectory)
+            guard case .success(let tty) = resumed else {
+                guard case .failure(let error) = resumed else {
+                    return failed("could not start a tmux pane to resume into")
+                }
+                return failed("could not start a tmux pane to resume into — \(error.message)",
+                              worthRetrying: error.worthRetrying)
+            }
             guard let pane = TmuxOwnership.pane(forTty: tty)
             else { return failed("the resumed pane (\(tty)) is not on any live tmux server") }
             guard let pid = (agents.sessions() ?? []).first(where: { $0.sessionId == sessionId })?.pid
