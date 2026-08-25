@@ -331,6 +331,11 @@ public struct TmuxTransport: DispatchTransport {
         // moment a payload got long enough to collapse.
         var ourChips: Set<String> = []
 
+        // Whether this send has ever seen its own words echoed into the box.
+        // It is the ONLY thing that separates the two opposite facts `.empty`
+        // reports with the same word — see the step 3 switch below.
+        var everEchoed = false
+
         let attempts = 5
         attemptLoop: for attempt in 0..<attempts {
             let lastAttempt = attempt == attempts - 1
@@ -382,20 +387,32 @@ public struct TmuxTransport: DispatchTransport {
             // to preserve. A retry-safe way to keep BOTH intact needs
             // `classifyPromptLine` to actually track multi-row content
             // first; that has not been built.
-            switch promptLine(pane, payload: payload, glyph: target.promptGlyph,
-                              placeholder: target.idlePlaceholder,
-                              chip: target.pasteChip, ourChips: ourChips) {
-            case .empty, .unreadable:
-                break                       // unreadable fails toward pasting:
-                                            // landing is verified either way
-            case .holds(ours: false):
+            switch Self.decide(
+                line: promptLine(pane, payload: payload, glyph: target.promptGlyph,
+                                 placeholder: target.idlePlaceholder,
+                                 chip: target.pasteChip, ourChips: ourChips),
+                everEchoed: everEchoed
+            ) {
+            case .paste:
+                break
+            case .stop:
+                // Submitted and accepted. The transcript may simply be behind
+                // (idle), or may not see it until the current turn ends (busy).
+                // Either way the words are in the tab and this send is done
+                // pasting; the outcome is decided after the loop.
+                if await landedInTranscript(payload, target: target,
+                                            fromByteOffset: watermark) {
+                    return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
+                }
+                break attemptLoop
+            case .clearThenPaste:
                 // C-a then C-k (start-of-line, kill-to-end) rather than C-u
                 // alone, since C-u only clears BACK from wherever the cursor
                 // sits, and after a paste that never got submitted the
                 // cursor's position is not known.
                 Tmux.run(["send-keys", "-t", pane.paneId, "C-a"], socket: pane.socketName)
                 Tmux.run(["send-keys", "-t", pane.paneId, "C-k"], socket: pane.socketName)
-            case .holds(ours: true):
+            case .returnOnly:
                 // Our text is already sitting unsubmitted — a previous
                 // attempt's paste landed and its Enter was eaten. Submit
                 // only — but re-probe first (gate finding V4, codebase audit
@@ -464,6 +481,9 @@ public struct TmuxTransport: DispatchTransport {
                 continue    // a mode race ate the paste; loop — dedupe guards the retry
             }
             if case .chip(let token) = echo { ourChips.insert(token) }
+            // Our words are in the box. From here on this send may press Return
+            // again, but it may never paste again.
+            everEchoed = true
 
             // Step 6 — submit. A Return on an empty prompt does nothing, so
             // retrying Enter alone is safe; retrying the TEXT is what
@@ -643,6 +663,53 @@ public struct TmuxTransport: DispatchTransport {
         case empty
         case holds(ours: Bool)
         case unreadable
+    }
+
+    /// What an attempt does with the input line it just read.
+    enum FloorAction: Equatable {
+        /// Nothing of ours is in the box and nothing of ours has ever been in
+        /// it: this is the first paste of this send.
+        case paste
+        /// Somebody else's half-typed line, and we have not delivered yet.
+        case clearThenPaste
+        /// Our own words, still sitting unsubmitted. Press Return, never paste.
+        case returnOnly
+        /// Our words went in and the box released them — accepted. Stop.
+        case stop
+    }
+
+    /// PASTE AT MOST ONCE PER SEND — the whole rule, in one pure function.
+    ///
+    /// `everEchoed` is what separates the two OPPOSITE facts `.empty` reports
+    /// with the same word: "a fresh box, paste here" and "the box just TOOK
+    /// our message." Without it they are indistinguishable, and the transport
+    /// takes the destructive reading.
+    ///
+    /// Found live 24 Aug (session 60fbc8e7): ONE dispatch into a mid-turn
+    /// session left FIVE identical messages in Claude Code's queue. A queued
+    /// message is not in the transcript — step 0's and step 7's only witness —
+    /// and it is not in the box either, so all five attempts read `.empty` and
+    /// pasted again. `attempts = 5`, and five is what landed.
+    ///
+    /// Deliberately NOT a function of `wasBusy`: that is sampled once before
+    /// the paste, so a session that goes busy in between would take the old
+    /// path and reproduce the bug exactly. The box is observable now; the
+    /// status is a memory of a moment that has passed.
+    static func decide(line: PromptLine, everEchoed: Bool) -> FloorAction {
+        switch line {
+        case .empty, .unreadable:
+            // `.unreadable` fails toward pasting only while nothing of ours
+            // has landed; once it has, an unreadable screen is not permission
+            // to send the message a second time.
+            return everEchoed ? .stop : .paste
+        case .holds(ours: true):
+            return .returnOnly
+        case .holds(ours: false):
+            // Once ours has gone in, a line on the floor arrived AFTERWARDS
+            // and belongs to somebody else. Clearing it would delete a
+            // person's typing to make room for a message already delivered.
+            return everEchoed ? .stop : .clearThenPaste
+        }
     }
 
     /// What sits on the input line right now. Each harness's TUI draws its
