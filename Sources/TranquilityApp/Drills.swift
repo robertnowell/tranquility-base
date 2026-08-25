@@ -735,6 +735,12 @@ extension StatusHUD {
             // questions are asked through one function precisely so this
             // cannot come apart.
             ("amberRowIsStillLive", SessionRow.isLive(row("amber", .fault))),
+            // Blue joined amber on 24 Aug, same reason and not a second
+            // one: work in hand is not an unread turn, so the tap is the
+            // door rather than the voice.
+            ("workingRowGoesToAgent",
+             SessionRow.action(for: row("working", .working)) == .goToAgent),
+            ("workingRowIsStillLive", SessionRow.isLive(row("working", .working))),
             ("revivableRowRevives",
              SessionRow.action(for: row("dead", unlit, revivable: true)) == .revive),
             ("unprovenRowDoesNothing",

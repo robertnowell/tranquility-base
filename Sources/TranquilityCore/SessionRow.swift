@@ -207,6 +207,25 @@ public struct SessionRow: Equatable, Sendable {
         /// row, in the column where every other row shows its id. What is
         /// missing is the tab, and that is the one thing a tap can hand
         /// you.
+        ///
+        /// Blue joined amber here on 24 Aug, and for the same reason
+        /// rather than a second one. A working row has no unread turn
+        /// either — it has work IN HAND — so announcing it says nothing,
+        /// or reads back the turn BEFORE this one, which is worse than
+        /// silence because it sounds current. Robert: *"why not just send
+        /// the user to the agent the same way we do with an amber lamp?
+        /// If you want to see the progress, just go to the source."*
+        /// Summarising progress was the alternative, and it is strictly
+        /// more machinery for strictly less truth: the pane is already
+        /// writing the thing a summary would paraphrase, so the summary
+        /// can only be later and thinner than what it stands in for.
+        ///
+        /// The rule underneath all three lamps is one sentence:
+        /// **announce is for a row with an unread turn.** Green has one.
+        /// Amber and blue do not, so their tap is the door. `.running`
+        /// keeps announce on purpose and is not an oversight — its turn is
+        /// complete and already heard, which makes "say that again" a verb
+        /// only it can offer.
         case goToAgent
         /// Proven gone, and its directory is still there: bring it back.
         case revive
@@ -220,8 +239,8 @@ public struct SessionRow: Equatable, Sendable {
 
     public static func action(for row: SessionRow) -> RowAction {
         switch row.lamp {
-        case .fault: return .goToAgent
-        case .ready, .working, .running: return .announce
+        case .fault, .working: return .goToAgent
+        case .ready, .running: return .announce
         case .unlit: return row.revivable ? .revive : .none
         }
     }
