@@ -284,11 +284,22 @@ public struct ScriptError: Error, Sendable, CustomStringConvertible {
     /// on its own — the caller's "Terminal is busy" case, distinct from a
     /// genuine scripting error.
     public let timedOut: Bool
+    /// Whether running the same call again could plausibly do anything
+    /// different. Default true, because most failures here are a busy
+    /// Terminal or a slow Apple event and always were.
+    ///
+    /// False is the case named 24 Aug: a launched command that EXITED on its
+    /// own, with a status. `zsh` exiting 127 on a missing binary will exit
+    /// 127 again, every time, and a card offering "try again" over that is
+    /// sending its reader in a circle. Distinguishing them is the difference
+    /// between an offer and a loop.
+    public let worthRetrying: Bool
     public var description: String { message }
 
-    public init(message: String, timedOut: Bool = false) {
+    public init(message: String, timedOut: Bool = false, worthRetrying: Bool = true) {
         self.message = message
         self.timedOut = timedOut
+        self.worthRetrying = worthRetrying
     }
 }
 

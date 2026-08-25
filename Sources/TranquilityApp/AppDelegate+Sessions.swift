@@ -517,6 +517,19 @@ extension AppDelegate {
     /// A reply that cannot be delivered goes to the clipboard — the one place the
     /// user can immediately use it. Deliberately NOT FocusedInput.paste (which
     /// restores the previous clipboard after 0.7s); this is a handoff, not a paste.
+    /// What a failure card says about the words the user just spoke — after
+    /// putting them somewhere the user can actually use them.
+    ///
+    /// "Your words are kept" was true and useless: kept in a log the reader
+    /// has no path to from a card. The clipboard is the one place "kept"
+    /// means "one paste away", and it costs a pasteboard write on a path
+    /// that has already failed.
+    func wordsKept(utteranceId: String) -> String {
+        copyTranscriptToClipboard(utteranceId: utteranceId)
+            ? "Copied your words to the clipboard."
+            : "Your words are kept in the log."
+    }
+
     func copyTranscriptToClipboard(utteranceId: String) -> Bool {
         guard let text = (try? store?.utterances(limit: 500))?
                 .first(where: { $0.id == utteranceId })?.transcriptText,
@@ -1024,9 +1037,23 @@ extension AppDelegate {
                     try? await Task.sleep(nanoseconds: 400_000_000)
                 }
             case .failure(let error):
+                // The cause is a log line, not a card: an exit status means
+                // nothing to the person holding the mouse. What they get is
+                // the command that does not depend on this app's environment
+                // — which is exactly the axis the 24 Aug failure lived on,
+                // where every in-app launch died and this line worked all
+                // morning — and a retry offer only when a retry could differ.
                 Permissions.log("revive: failed \(sessionId.prefix(8)) — \(error.message)")
+                let manual = SessionLauncher.manualRevival(
+                    sessionId: sessionId, directory: command.cwd)
                 await MainActor.run { [weak self] in
-                    self?.hud.showReceipt(.notRevived("couldn't resume"))
+                    guard let self else { return }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(manual, forType: .string)
+                    self.hud.showResult(
+                        "Couldn't reopen \(name) here. Copied the manual revival command to "
+                        + "your clipboard — paste it in a terminal."
+                        + (error.worthRetrying ? " Or tap it again." : ""))
                 }
             }
         }
