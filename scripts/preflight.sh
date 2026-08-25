@@ -126,14 +126,30 @@ echo "✓ build clean, tests green"
 # lifecycle.sh is the ONLY thing in this repo that exercises a real Codex
 # session end to end, and it wasn't run by this script even once.
 #
-# Both scripts already fail closed (non-zero exit on any FAIL line) and
-# test-codex-lifecycle.sh already skips itself cleanly ("SKIP: no codex on
-# this machine") on a machine without the Codex CLI installed, so this adds
-# no new false-positive risk — it just stops the gate being optional.
+# test-dispatch-tmux.sh is a hard gate: it drives its own tmux server on a
+# dedicated socket (tbdrill-<pid>), so it stays correct whether or not a real
+# Tranquility Base instance is running alongside it.
 echo "→ tmux dispatch drill"
 scripts/test-dispatch-tmux.sh
-echo "→ codex lifecycle drill"
-scripts/test-codex-lifecycle.sh
+
+# test-codex-lifecycle.sh is NOT that isolated, discovered the hard way (24
+# Aug, minutes after first wiring this in): it drives the real `tbase` CLI
+# against the real, shared session-ownership.json and the real tmux server —
+# the same state a live Tranquility Base instance manages. With one running
+# (the ordinary, expected state for this app — it's a menu-bar app people
+# leave open all day), the drill's own attemptCodexResume raced the live
+# app's session polling over the same Codex session and failed 4/6, twice,
+# on a tree with zero Sources/ changes. Hard-gating on that would make
+# preflight fail essentially at random depending on who else has the app
+# open — worse than not running it, because a check that cries wolf gets
+# disabled, not fixed. So: run it, report it, never block on it, until it
+# gets the same self-contained isolation test-dispatch-tmux.sh already has.
+echo "→ codex lifecycle drill (informational — see comment above)"
+if scripts/test-codex-lifecycle.sh; then
+  echo "✓ codex lifecycle drill passed"
+else
+  echo "⚠ codex lifecycle drill failed — not blocking (see preflight.sh's own comment on why)" >&2
+fi
 
 # --- the palette owns every colour --------------------------------------------
 #
