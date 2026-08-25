@@ -1029,8 +1029,8 @@ final class SettingRowView: NSView, NSTextFieldDelegate {
 
 /// The settings pane's tabs.
 ///
-/// Restored from the design (docs/settings-recent.html v3,
-/// docs/settings-microphone.html v1), which drew Settings as a tab bar from the
+/// Restored from the design (docs/design/settings-recent.html v3,
+/// docs/design/settings-microphone.html v1), which drew Settings as a tab bar from the
 /// start. The build had drifted into one scrolling column with a
 /// "Recent audio ▸" link buried among the voices, and then grew launch settings
 /// on top of that — three unrelated concerns in one list, which is how a pane

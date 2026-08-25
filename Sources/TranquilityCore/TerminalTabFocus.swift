@@ -9,7 +9,7 @@ import Foundation
 /// 1. **tmux pane** (every session TB launches, unconditionally, since
 ///    `cc7bf4e`): `TmuxOwnership.pane(forTty:)` finds the live pane and this
 ///    opens a fresh Terminal window running `tmux attach`, per "The end
-///    state" note in `docs/architecture-program.md` ("GO TO AGENT = attach").
+///    state" note in `docs/log/architecture-program.md` ("GO TO AGENT = attach").
 ///    A LIVE server cannot serve a stale pane the way Terminal.app served a
 ///    dead tab (the 19 Aug misfire this file's sibling type guards against),
 ///    which is what makes this branch safe to try first, always.

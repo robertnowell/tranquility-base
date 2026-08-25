@@ -62,7 +62,7 @@ enum StateLegend {
     ///
     /// On the dark ground the budget sits ABOVE the surface and is larger —
     /// 14.10:1 of room against the bright putty's 1.77:1 — and every floor
-    /// clears with margin. See docs/ruling-the-console-goes-dark.md for the
+    /// clears with margin. See docs/rulings/ruling-the-console-goes-dark.md for the
     /// measurements and the experiments they came from.
     ///
     /// The lamp pair is green + blue and stays that way: purple measured further
@@ -275,7 +275,7 @@ enum StateLegend {
     /// Contrast arithmetic, so the ruling's numbers are ASSERTED rather than
     /// remembered.
     ///
-    /// Every figure in docs/ruling-the-console-goes-dark.md was computed by hand,
+    /// Every figure in docs/rulings/ruling-the-console-goes-dark.md was computed by hand,
     /// once. Hand-computed numbers rot the first time someone warms a hex by four
     /// points to taste — and the failure is invisible, because a colour that has
     /// slipped under its floor still renders. That is exactly how `faint` shipped
@@ -519,7 +519,7 @@ enum StateLegend {
     /// The grid's bottom key line, in the hint slot — every gesture the grid
     /// answers to, in order. ON PROBATION (simplification pass): the only hint
     /// line left anywhere; the per-card chord hints are dead with no
-    /// replacement. See docs/simplification-pass.md.
+    /// replacement. See docs/log/simplification-pass.md.
     static let controlsTitle = "Controls"
 
     // MARK: - Which face, and why (ruled 18 Aug)

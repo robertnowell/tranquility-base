@@ -56,7 +56,7 @@ in `listening`. `announceNext` does not stop the recorder; it reaches
 rejected. The gate held. Only the in-memory buffer was lost.
 
 The "already true — do not rebuild it" note in
-`docs/ruling-an-arrival-does-not-move-the-panel.md` is therefore correct and
+`docs/rulings/ruling-an-arrival-does-not-move-the-panel.md` is therefore correct and
 this measurement does not disturb it.
 
 ## The change

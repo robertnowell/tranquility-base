@@ -52,7 +52,7 @@ extension StatusHUD {
         // This was pinned to `.aqua` when the console was light putty, with a
         // comment whose logic now argues the other way: "a dark-mode bezel on
         // light putty looks like a hole". The console went dark on 09 Aug
-        // (docs/ruling-the-console-goes-dark.md) and the pin did not follow, so
+        // (docs/rulings/ruling-the-console-goes-dark.md) and the pin did not follow, so
         // every AppKit-drawn thing on the panel has been dressed for a light
         // ground on a dark one ever since. Measured 18 Aug on the one that
         // shows: an inactive text selection painted #DCDCDC under `ink`, which

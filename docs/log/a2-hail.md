@@ -2,8 +2,8 @@
 
 Baseline dadd4ab (the grid). App-layer only; Core untouched — the dormant half
 (`Announcement.hailText`, 09cb796) stays dormant, see "the fetch" below.
-Binding inputs: the ruled design (unchanged all day), docs/wiring-a4.md's A2
-note ("a flow change, not a call site"), docs/ws-b-grid.md.
+Binding inputs: the ruled design (unchanged all day), docs/log/wiring-a4.md's A2
+note ("a flow change, not a call site"), docs/log/ws-b-grid.md.
 
 ## What changed
 

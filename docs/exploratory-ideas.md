@@ -3,7 +3,7 @@
 Robert, 06 Aug 2026, verbatim intent: "I want you to capture these ideas, not
 necessarily act on them. That doesn't mean they're good ideas. They're just
 ideas." Nothing here is ruled. Nothing here is scheduled. When one graduates,
-it moves to `open-issues.md` or the program board with a real design.
+it moves to `docs/log/open-issues.md` or the program board with a real design.
 
 ## 1. New agent opens a tab, not a window
 

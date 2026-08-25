@@ -70,7 +70,7 @@ switched off. Silence at launch is what makes starting at login acceptable.
 Recorded originally as not-scheduled:
 
 - **The grid becomes contextual.** Today `showIdle(note:rows:)` draws one row per
-  live session, capped at 8 (docs/ws-b-grid.md). The intent is that what the idle
+  live session, capped at 8 (docs/log/ws-b-grid.md). The intent is that what the idle
   face shows becomes state-determined rather than a fixed list.
 - **The lamps compress to the side.** A denser resting face where the session
   lamps sit at the edge rather than occupying the card. Explicitly "we don't need

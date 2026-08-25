@@ -181,7 +181,7 @@ public enum TranscriptFinality: String, Codable, DatabaseValueConvertible, Senda
 /// `.iTerm2`/`.wezterm`/`.kitty` deleted 23 Aug — dead-code-sweep checklist
 /// item, never constructed anywhere in the codebase (only `.terminalApp` and
 /// `.tmux` ever are; grep confirms it). YAGNI stands, per
-/// `architecture-program.md`'s own ruling — tmux is the transport — but the
+/// `docs/log/architecture-program.md`'s own ruling — tmux is the transport — but the
 /// axis these three were never actually a real answer to (`architecture-
 /// program.md` amended the same day): it isn't which TERMINAL EMULATOR runs
 /// the pane, it's how TB talks to the agent at all (a tmux TTY today; an

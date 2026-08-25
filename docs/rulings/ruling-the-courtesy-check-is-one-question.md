@@ -2,7 +2,7 @@
 
 Ruled 10 Aug 2026, spoken, after two days that produced ~200 lines of detector,
 an acoustic eval harness, three wrong diagnoses and one real bug. Supersedes the
-room-listening half of docs/ruling-an-arrival-does-not-move-the-panel.md
+room-listening half of docs/rulings/ruling-an-arrival-does-not-move-the-panel.md
 (ruling 3) and retires docs/courtesy-check-evidence-plan.md.
 
 ## The ruling

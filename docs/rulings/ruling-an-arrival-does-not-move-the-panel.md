@@ -30,7 +30,7 @@ visibility.
 >
 > Ruling 3 (the courtesy check) and the whole of the room-listening design were
 > deleted on the same day — see
-> docs/ruling-the-return-is-a-sound-not-a-sentence.md. What survives from this
+> docs/rulings/ruling-the-return-is-a-sound-not-a-sentence.md. What survives from this
 > doc is ruling 1, ruling 4's toast (now the arrival glow), and the recovery
 > continuation bound.
 

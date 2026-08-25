@@ -689,7 +689,7 @@ extension AppDelegate {
         // does not need a window. Nothing is lost by not summoning one.
         //
         // This is the last unimplemented half of
-        // docs/ruling-an-arrival-does-not-move-the-panel.md: `showIdle` raises
+        // docs/rulings/ruling-an-arrival-does-not-move-the-panel.md: `showIdle` raises
         // the panel, and `allowsAmbientSurface` is true for `.hidden`, so every
         // arriving turn re-opened a panel the user had dismissed.
         guard hud.isOnScreen else {

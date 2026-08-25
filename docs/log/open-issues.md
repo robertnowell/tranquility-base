@@ -3,7 +3,7 @@
 Live tracker. Nothing gets closed here without evidence: a log line, a query, or a
 test. Ordered by how much damage the bug does, not by how easy it is.
 
-Companion to `docs/state-machine.html`, which maps every state against every input.
+Companion to `docs/design/state-machine.html`, which maps every state against every input.
 
 ---
 
@@ -17,7 +17,7 @@ neither the dead `tty` approach below nor the `kind` field this entry calls
 "the fourth guess." Wired at `Coordinator.swift:305` and
 `Sources/TranquilityApp/main.swift:1497,1524`; tested at
 `Tests/TranquilityCoreTests/SessionDiscoveryTests.swift:97-101`.
-`docs/architecture-program.md` already lists "the sdk-cli exclusion (robots
+`docs/log/architecture-program.md` already lists "the sdk-cli exclusion (robots
 stay out of the grid)" among standing rulings — this entry is that ruling's
 own history, kept below for the post-mortem, not as open work.
 
@@ -230,7 +230,7 @@ rebuilds on this machine) but falls back to ad-hoc with a warning. Ad-hoc means 
 designated requirement is the binary's own cdhash: every rebuild is an app macOS
 has never seen, and every TCC grant silently dies — while the Privacy pane still
 shows the switch ON. Near-undiagnosable; full analysis preserved in
-`docs/pr1-harvest.md`. PR #1 shipped `make-signing-identity.sh` (create a stable
+`docs/log/pr1-harvest.md`. PR #1 shipped `make-signing-identity.sh` (create a stable
 local cert, no Xcode) and `reset-permissions.sh` (recover when an identity does
 change); `bundle.sh` *created* the identity rather than warning. Port both scripts
 before any release.
@@ -404,7 +404,7 @@ it was already waving through this one.
 The five independent booleans became `PanelState` + the stage arbiter
 (`admits()` legality table), then the eleven painters became one `render()` funnel.
 Issues 5, 6 and 7 above were closed by exactly the mechanism this section promised.
-History: `docs/state-architecture.html`, `docs/3a-collapse.md`.
+History: `docs/design/state-architecture.html`, `docs/log/3a-collapse.md`.
 
 ## 18. A card came back with its own body highlighted — FIXED (18 Aug)
 
@@ -671,7 +671,7 @@ which was the top rung of the hover ramp, so the step function handed it back
 unchanged. The amber pill and the go-green had the same silence for the same
 reason.
 
-Fixed by replacing the ramp — see `docs/ruling-the-panel-answers-the-pointer.md`
+Fixed by replacing the ramp — see `docs/rulings/ruling-the-panel-answers-the-pointer.md`
 for the measurement, which also disposes of the 35%-toward-ink blend that
 shipped alongside it for half an hour. `hovered` is now a fixed +8 ΔL* channel
 scale: defined for every colour, the same perceptual distance everywhere, and
@@ -686,7 +686,7 @@ gate instead of passing it.
 ## 20. Is the spoken callsign still earning its place? — CLOSED: no (18 Aug)
 
 Ruled the same day it was raised: it is not. See
-`docs/ruling-the-recap-starts-with-the-recap.md`.
+`docs/rulings/ruling-the-recap-starts-with-the-recap.md`.
 
 Both halves failed on measurement. The project half names nothing — 23 of 127
 minted signs begin "promotions", because that is where the work is — and the
@@ -784,7 +784,7 @@ not evidence"), which made the choice a read, not a judgment call.
 
 Named in the ORIGINAL architecture brief (2026-08-19-tb-architecture-program,
 Track A item 9 — "Duplicate case 'settings' makes a pose fixture
-unreachable") but never carried into `docs/architecture-program.md`'s tracked
+unreachable") but never carried into `docs/log/architecture-program.md`'s tracked
 checklist or into this file, so it sat unflagged for two days across the M1
 through resumeTmux work. Found again by a fresh 21 Aug audit sweep
 (2026-08-21-tb-arc-checkpoint-m2 follow-up) cross-checking the original brief
@@ -808,7 +808,7 @@ delete the other case.
 
 `Coordinator.dispatch`'s `resumeTwin` used to resume a tmux twin for a
 hand-started session's first reply and leave the original process running,
-unsignalled — the design `architecture-program.md` (v1) called "dual-live is
+unsignalled — the design `docs/log/architecture-program.md` (v1) called "dual-live is
 safe," built on the premise that Claude Code's own Remote Control would keep
 the hand-started terminal in sync with whatever the twin was doing.
 
@@ -901,6 +901,6 @@ design question, not settled by this entry.
 
 **Scope note:** not part of the arc's own list (which is subtraction —
 AppleScript removal, HarnessAdapter consolidation, app-layer decomposition,
-`docs/architecture-program.md`). Reasonable to build after the arc merges,
+`docs/log/architecture-program.md`). Reasonable to build after the arc merges,
 or as a small arc-stacked PR once App lane P1-9 has moved more of Settings
 into Core — worth revisiting once that's clearer, not before.

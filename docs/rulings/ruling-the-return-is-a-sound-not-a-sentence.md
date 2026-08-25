@@ -1,8 +1,8 @@
 # The return is a sound, not a sentence
 
 Ruled 10 Aug 2026, spoken. Final. Supersedes A2 (the spoken hail), ruling 3 of
-docs/ruling-an-arrival-does-not-move-the-panel.md, and
-docs/ruling-the-courtesy-check-is-one-question.md in its entirety.
+docs/rulings/ruling-an-arrival-does-not-move-the-panel.md, and
+docs/rulings/ruling-the-courtesy-check-is-one-question.md in its entirety.
 
 ## The ruling
 

@@ -3,7 +3,7 @@ import TranquilityCore
 /// What a self-test drill needs from the panel: drive it into a state, read
 /// a measurement back. Named 23 Aug (App-lane P2, "name the coupling before
 /// moving") ahead of the actual move — see `Widgets.swift`'s own doc comment
-/// for the sibling half of this pass, and `docs/architecture-program.md`'s
+/// for the sibling half of this pass, and `docs/log/architecture-program.md`'s
 /// P4 for where the ~3,200 lines of drill/pose code this seam is for
 /// eventually go.
 ///

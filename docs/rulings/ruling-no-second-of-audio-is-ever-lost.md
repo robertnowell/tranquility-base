@@ -49,7 +49,7 @@ then I can copy it and take it to the agent my fucking self."**
 
 Audio surviving is necessary and not sufficient — a recording you cannot reach is
 lost in every sense that matters to the person who spoke it. The Recent pane
-(`docs/settings-recent.html`, design v3, still unshipped) is where this lives:
+(`docs/design/settings-recent.html`, design v3, still unshipped) is where this lives:
 every capture listed, each with a retry-transcription action and a copy action.
 Retry re-runs the existing `RecoveryChain` against the stored WAV; copy puts the
 text on the pasteboard and gets out of the way.

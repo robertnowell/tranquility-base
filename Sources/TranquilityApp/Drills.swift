@@ -1148,7 +1148,7 @@ extension StatusHUD {
 
     /// Every control answers the pointer, and answers it the same way.
     ///
-    /// The standard is docs/ruling-the-panel-answers-the-pointer.md, written
+    /// The standard is docs/rulings/ruling-the-panel-answers-the-pointer.md, written
     /// after the panel was measured against its own inventory: two cursor rects
     /// in the
     /// whole app, and sixteen buttons that looked exactly like the prose beside

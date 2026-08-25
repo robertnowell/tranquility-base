@@ -514,7 +514,7 @@ public struct LiveSession: Sendable, Decodable {
     /// The CLI's own hosting discriminator: "interactive" for a person's
     /// session, "background" for one hosted by `claude --bg-pty-host` with no
     /// tab and no supported input channel (PR #1 measured the correlation
-    /// across 11 live sessions; docs/open-issues.md §1 named decoding it "the
+    /// across 11 live sessions; docs/log/open-issues.md §1 named decoding it "the
     /// fourth guess that finally has evidence behind it"). Optional so a CLI
     /// that stops emitting it costs one rule rather than every row, and the
     /// asymmetry matches the sdk-cli filter: exclusion needs POSITIVE

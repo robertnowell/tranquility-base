@@ -3,7 +3,7 @@
 For the session that owns `Summarizer.swift` / `SessionBrief` / `SpokenComposition`.
 Robert ruled (05 Aug, in the WS-C session) and the prompt design is already
 validated against the 10 most recent corpus records. This is the implementation
-handoff, mirror of `docs/wiring-a4.md` in the other direction.
+handoff, mirror of `docs/log/wiring-a4.md` in the other direction.
 
 ## The rulings
 

@@ -107,7 +107,7 @@ header, `sample_rate`/`format_turns` query params, binary PCM16 chunks
 - **Provider tags**: `assemblyai-streaming` vs `openai`/`apple-speech`
   distinguish streamed from recovered transcripts in `utterances`.
 - **App wiring**: capture lives in the App target (off-limits this session);
-  the ≤5-line tap wiring is documented in `docs/wiring-streaming.md`.
+  the ≤5-line tap wiring is documented in `docs/log/wiring-streaming.md`.
   `Coordinator.submitReply` gained a defaulted `streamed:` parameter as the
   Core-side integration point — nil (the only value passed today) is
   byte-identical to the previous behavior.

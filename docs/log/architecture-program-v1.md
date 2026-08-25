@@ -1,4 +1,4 @@
-> **SUPERSEDED 23 Aug 2026 — see `architecture-program.md` (v2).** Kept here
+> **SUPERSEDED 23 Aug 2026 — see `docs/log/architecture-program.md` (v2).** Kept here
 > for the record, not as current guidance: the "Hand-started sessions are
 > adopted" section below (dual-live) describes the OPPOSITE of what shipped
 > later the same day. Robert ruled it acceptable that a hand-started
@@ -551,7 +551,7 @@ com.robertnowell.voice-dispatch (TCC).
       no-op, not a trap), no self-inconsistency in the last four commits,
       every `[x]` checklist item traces to a real matching commit. Two real
       findings, both folded in rather than just noted: the mid-keystroke
-      SIGTERM gate above, and open-issues.md #27 (a duplicate
+      SIGTERM gate above, and docs/log/open-issues.md #27 (a duplicate
       `case "settings":` in `StatusHUD.swift`'s pose-fixture switch, named in
       the ORIGINAL brief's Track A item 9 and then dropped from every doc
       for two days until this pass re-found it — cosmetic today, but the
@@ -580,7 +580,7 @@ com.robertnowell.voice-dispatch (TCC).
 - [ ] Store riders + dead-code deletions: `TransportKind.iTerm2/.wezterm/
       .kitty` (never constructed; `Codable` + persisted, needs a decode-
       tolerance check, not a bare case removal), `Event.isHeadless` (`tty ==
-      "??"`, zero callers — the tty discriminator open-issues.md #1 already
+      "??"`, zero callers — the tty discriminator docs/log/open-issues.md #1 already
       calls dead; `SessionDiscovery.isHeadless(entrypoint:)` is the real,
       wired signal), `ProcessProbe.name(of:)` (zero callers).
 - [ ] `SessionDiscovery.firstCwd` mis-homes a relocated session (found by

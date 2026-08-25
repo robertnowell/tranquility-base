@@ -3,7 +3,7 @@
 Baseline 0f2057f (voice-roster pane), 152 Core tests. App layer only —
 PanelState, StateLegend, StatusHUD, main.swift — no Core change. Composes
 with the ladder cycle (8fecb52: MESSAGE re-heard after WHY) and the
-simplification pass (docs/simplification-pass.md).
+simplification pass (docs/log/simplification-pass.md).
 
 ## The rulings, change by change
 

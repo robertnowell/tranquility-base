@@ -530,7 +530,7 @@ public final class StreamedUtterance: @unchecked Sendable {
     }
 
     /// Feed one PCM16 mono chunk at the provider's sample rate (the app's tap
-    /// converts with `BuddyPCM16Converter` — see docs/wiring-streaming.md).
+    /// converts with `BuddyPCM16Converter` — see docs/log/wiring-streaming.md).
     /// Cheap, non-blocking, safe to call before `start` completes.
     public func feed(pcm16: Data) {
         lock.lock()

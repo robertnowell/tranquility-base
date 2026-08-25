@@ -1,16 +1,37 @@
-# docs/ — what is current, and what is only proposed
+# docs/ — design rationale and build history
 
-Read this file first. It exists because `docs/` had grown to thirty files and
-three and a half thousand lines with **no way to tell a shipped behaviour from a
-proposal**, and CLAUDE.md rule 4 ("newest ruling wins") only works if a session
-can find out which ruling is newest without reading all thirty.
+**Looking for what this app does or how to install/run it? That's the
+[root README](../README.md), not this folder.** Everything here is the *why*
+behind the behaviour that ships — design rulings, build-process history, and
+visual references — kept because the next person to touch this code (human or
+agent) needs to know a decision was deliberate before changing it, not because
+it's required reading to use the app.
 
-The failure this prevents already happened, on 08 Aug: the direction section of
-`ruling-the-app-is-silent-and-the-panel-speaks.md` was superseded three hours
-after it was written, by a ruling in a different file. Nothing marked it. A
-session arriving at the older file first would have concluded the work was
-unscheduled and been confidently wrong — the pointer that now sits there was
-added by hand, which does not scale to thirty files.
+Three subfolders, one flat remainder:
+
+- **`rulings/`** — binding design decisions, one per file, each stating what
+  was decided and (often) what open questions remain. Read before touching the
+  panel, the arrival path, or the announcement path.
+- **`log/`** — build-process history: the arc's own day-by-day tracking doc
+  (`architecture-program.md`), the running issue list, and merged-work pass
+  records. Read for *why* something is the way it is; not a description of
+  current behaviour.
+- **`design/`** — hand-built HTML mockups and state diagrams.
+- **This directory's remaining files** (`acknowledgement.md`,
+  `instant-arm.md`, etc.) are smaller built/ruled docs that didn't earn their
+  own subfolder.
+
+## Why this index exists
+
+`docs/` had grown to thirty-plus files with **no way to tell a shipped
+behaviour from a proposal** — and CLAUDE.md rule 4 ("newest ruling wins") only
+works if a session can find out which ruling is newest without reading all of
+them. The failure this prevents already happened, on 08 Aug: the direction
+section of `rulings/ruling-the-app-is-silent-and-the-panel-speaks.md` was
+superseded three hours after it was written, by a ruling in a different file.
+Nothing marked it. A session arriving at the older file first would have
+concluded the work was unscheduled and been confidently wrong — the pointer
+that now sits there was added by hand, which does not scale to thirty files.
 
 ## Status vocabulary
 
@@ -35,10 +56,10 @@ touching the panel, the arrival path, or the announcement path.
 
 | Doc | Status | About |
 |---|---|---|
-| `ruling-the-capture-is-a-strip-under-the-card.md` | RULED, NOT BUILT | The reading card stays up for the whole capture; arming / listening / read-back are one fixed-height strip beneath it; ⌃⌃ while recording advances the text silently. Supersedes most of `ruling-capture-returns-to-its-card.md`. Names three open questions — do not guess them. |
-| `ruling-capture-returns-to-its-card.md` | RULED, NOT BUILT | A capture that sends nothing returns to the card it interrupted, and no outcome reopens the microphone. **Was indexed BUILT `d106206` in error** — that commit added the doc and nothing else. Read the strip ruling first: it dissolves this doc's face-restore design and keeps only §C's lost-address rescue, §D, and §E. |
+| `docs/rulings/ruling-the-capture-is-a-strip-under-the-card.md` | RULED, NOT BUILT | The reading card stays up for the whole capture; arming / listening / read-back are one fixed-height strip beneath it; ⌃⌃ while recording advances the text silently. Supersedes most of `docs/rulings/ruling-capture-returns-to-its-card.md`. Names three open questions — do not guess them. |
+| `docs/rulings/ruling-capture-returns-to-its-card.md` | RULED, NOT BUILT | A capture that sends nothing returns to the card it interrupted, and no outcome reopens the microphone. **Was indexed BUILT `d106206` in error** — that commit added the doc and nothing else. Read the strip ruling first: it dissolves this doc's face-restore design and keeps only §C's lost-address rescue, §D, and §E. |
 | `ruling-the-collapsed-strip.md` | RULED, NOT BUILT | The grid collapses to a ~40px lamp strip; the user owns the width; three states (expanded / collapsed / minimized). Names its own open questions — do not guess them. |
-| `ruling-an-arrival-does-not-move-the-panel.md` | RULED, NOT BUILT | An arrival never changes the panel's shape or visibility; a live microphone vetoes the spoken hail; the courtesy check listens before speaking and keeps nothing. |
+| `docs/rulings/ruling-an-arrival-does-not-move-the-panel.md` | RULED, NOT BUILT | An arrival never changes the panel's shape or visibility; a live microphone vetoes the spoken hail; the courtesy check listens before speaking and keeps nothing. |
 | `courtesy-check-evidence-plan.md` | RULED, PARTLY BUILT | How we would know the courtesy check works. `LiveAudioCapture` has landed; the gate itself has not. Ship log-only before it suppresses anything. |
 
 ## Rulings — built
@@ -48,8 +69,8 @@ touching the panel, the arrival path, or the announcement path.
 | `acknowledgement.md` | BUILT `bc67741` | The two-colour light: blue registered, green recognized, hold 500ms then fade. |
 | `measurement-audio-must-be-durable-from-the-first-frame.md` | BUILT `05b9422` | A recording is on disk while it is still being spoken. |
 | `instant-arm.md` | BUILT | The `.arming` state, the ~80ms grace, and why typing must never flash the panel. |
-| `ruling-the-app-is-silent-and-the-panel-speaks.md` | PARTLY BUILT | Launch speaks nothing (`main.swift`, shipped) and the empty room teaches the first press (`a1b5291`). The rest — mute onboarding, silence as posture — is not built. **Its "Direction" section is SUPERSEDED** by `ruling-the-collapsed-strip.md`. |
-| `ws-b-ruling.md` | BUILT | The WS-B interaction model, ruled 05 Aug. Binding input for `ws-b-grid.md`. |
+| `docs/rulings/ruling-the-app-is-silent-and-the-panel-speaks.md` | PARTLY BUILT | Launch speaks nothing (`main.swift`, shipped) and the empty room teaches the first press (`a1b5291`). The rest — mute onboarding, silence as posture — is not built. **Its "Direction" section is SUPERSEDED** by `ruling-the-collapsed-strip.md`. |
+| `ws-b-ruling.md` | BUILT | The WS-B interaction model, ruled 05 Aug. Binding input for `docs/log/ws-b-grid.md`. |
 | `grid-visual-port.md` | BUILT | Grid visual variant A. |
 | `prompt-rationale-spec.md` | BUILT | The rationale field. |
 
@@ -58,23 +79,23 @@ touching the panel, the arrival path, or the announcement path.
 Merged work, kept for the reasoning. Read these to find out *why* something is
 the way it is; do not read them as a description of current behaviour.
 
-`3a-collapse.md` · `ws-c-changes.md` · `phase-1b-changes.md` · `pr1-harvest.md` ·
-`a7-corehalves-counters.md` · `a2-hail.md` · `stt-and-store.md` ·
-`wiring-a4.md` · `wiring-streaming.md` · `ui-pass-7.md` · `ws-b-grid.md` ·
-`simplification-pass.md` (applied, but contains one proposal explicitly marked
+`docs/log/3a-collapse.md` · `docs/log/ws-c-changes.md` · `docs/log/phase-1b-changes.md` · `docs/log/pr1-harvest.md` ·
+`docs/log/a7-corehalves-counters.md` · `docs/log/a2-hail.md` · `docs/log/stt-and-store.md` ·
+`docs/log/wiring-a4.md` · `docs/log/wiring-streaming.md` · `docs/log/ui-pass-7.md` · `docs/log/ws-b-grid.md` ·
+`docs/log/simplification-pass.md` (applied, but contains one proposal explicitly marked
 "not built" — mid-speech back-step)
 
 ## Living
 
 | Doc | Status |
 |---|---|
-| `open-issues.md` | LIVING — the running list. |
+| `docs/log/open-issues.md` | LIVING — the running list. |
 | `exploratory-ideas.md` | LIVING — captured, explicitly not committed. Nothing here is ruled. |
 
 ## The `.html` files
 
-`settings-microphone.html` · `settings-recent.html` · `state-architecture.html` ·
-`state-machine.html` · `trigger-test.html`
+`docs/design/settings-microphone.html` · `docs/design/settings-recent.html` · `docs/design/state-architecture.html` ·
+`docs/design/state-machine.html` · `docs/design/trigger-test.html`
 
 Generated or hand-built visual references — state diagrams and settings mockups.
 They are in-repo because they are *artifacts*, not prose duplicating a `.md`.
