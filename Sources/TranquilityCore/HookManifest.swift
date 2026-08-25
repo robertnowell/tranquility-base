@@ -85,6 +85,16 @@ public enum HookManifest {
     /// "no hooks installed" and "I could not tell" are different answers, and only one
     /// of them should make an app shout at you.
     public static func audit(settings url: URL = settingsURL) -> [Status]? {
+        // ABSENT is not UNREADABLE, and conflating them cost a whole install
+        // path. A user whose Claude Code has never written settings.json got
+        // `nil` here, which `repair` turned into "settings unreadable" and
+        // `tbase install-hooks` turned into exit 1 -- telling someone their
+        // file could not be read when the honest answer is that they do not
+        // have one yet, and that we are about to write it. A missing file is
+        // the clearest possible statement that nothing is installed.
+        if !FileManager.default.fileExists(atPath: url.path) {
+            return expected.map { Status(hook: $0, state: .missing) }
+        }
         guard let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
@@ -142,6 +152,32 @@ public enum HookManifest {
         QueueStore.supportDirectory.appendingPathComponent("hooks-dir")
     }
 
+    /// The hooks carried INSIDE the .app, if this build has them.
+    ///
+    /// The last-resort source, and the one that makes a shipped binary work at
+    /// all: a user handed a built app has no checkout for the recorded
+    /// directory to point at, so before this every path in the file was a path
+    /// into somebody else's Mac. A directory inside the bundle moves with the
+    /// bundle, which also closes failure mode 3 (the moved repo) for good --
+    /// there is nothing left to move away from.
+    ///
+    /// Deliberately LAST in the candidate order. A developer running from a
+    /// checkout has a recorded directory pointing at that checkout, and their
+    /// edits to hooks/*.sh must keep taking effect without a rebuild; if the
+    /// bundle won, every debug build would silently repoint settings.json at a
+    /// frozen copy under .build/ and the next edit would do nothing.
+    ///
+    /// nil when the app was not assembled by bundle.sh (a bare SwiftPM binary,
+    /// or `tbase`, whose Bundle.main is a directory of executables) -- the
+    /// every-script check below rejects those without a special case.
+    public static var bundledDirectory: String? {
+        guard let resources = Bundle.main.resourceURL?
+            .appendingPathComponent("hooks", isDirectory: true).path,
+              directoryHoldsEveryScript(resources)
+        else { return nil }
+        return resources
+    }
+
     public enum RepairOutcome: Sendable, Equatable {
         /// Nothing was wrong; nothing was touched.
         case healthy
@@ -178,7 +214,12 @@ public enum HookManifest {
 
         // Learn the directory.
         var candidates: [String] = []
-        guard let data = try? Data(contentsOf: url),
+        // An absent file starts from `{}` rather than refusing: audit() has
+        // already said every hook is missing, and the repair for "you have no
+        // settings file" is to write one.
+        let existed = FileManager.default.fileExists(atPath: url.path)
+        let data = existed ? (try? Data(contentsOf: url)) : Data("{}".utf8)
+        guard let data,
               var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return .unavailable("settings unreadable") }
         var hooks = root["hooks"] as? [String: Any] ?? [:]
@@ -193,9 +234,12 @@ public enum HookManifest {
         if let recorded = try? String(contentsOf: recordURL, encoding: .utf8) {
             candidates.append(recorded.trimmingCharacters(in: .whitespacesAndNewlines))
         }
+        // Last: our own bundle. See `bundledDirectory` for why it ranks here
+        // and not first.
+        if let bundled = bundledDirectory { candidates.append(bundled) }
         guard let directory = candidates.first(where: directoryHoldsEveryScript) else {
             return .unavailable("cannot locate the hooks directory — "
-                + "run `tbase install-hooks` from the repo once")
+                + "run `tbase install-hooks` from the repo once")  // unreachable from a bundled build
         }
 
         var rewired = 0, added = 0
@@ -249,7 +293,10 @@ public enum HookManifest {
         guard let out = try? JSONSerialization.data(
             withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         else { return .unavailable("could not serialize settings") }
-        try? data.write(to: url.appendingPathExtension("tbase-backup"))
+        if existed { try? data.write(to: url.appendingPathExtension("tbase-backup")) }
+        // ~/.claude may not exist yet on a machine that has only ever run the app.
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         do { try out.write(to: url, options: .atomic) }
         catch { return .unavailable("could not write settings: \(error)") }
         try? directory.write(to: recordURL, atomically: true, encoding: .utf8)
