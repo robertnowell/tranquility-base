@@ -200,9 +200,24 @@ step "stapling"
 xcrun stapler staple "$DMG_PATH"
 xcrun stapler validate "$DMG_PATH"
 
-# The honest end-to-end check: ask the same subsystem Gatekeeper asks.
+# The honest end-to-end check: ask the same subsystem Gatekeeper asks, and
+# REFUSE to publish if it does not say "accepted". Everything above can succeed
+# while the artifact is still one a user's Mac will not open.
+#
+# /usr/sbin/spctl by absolute path. It is not on every PATH -- this script's own
+# first successful run died here with `spctl: command not found`, AFTER notarizing,
+# because the invoking environment had no /usr/sbin. Third instance of one class
+# on this branch (openssl, then codesign-under-pipefail, now this): a tool
+# resolved through the environment is a tool that works until someone else runs it.
 step "verifying as Gatekeeper sees it"
-spctl --assess --type open --context context:primary-signature -vv "$DMG_PATH" 2>&1 | sed 's/^/   /'
+ASSESS=$(/usr/sbin/spctl --assess --type open \
+  --context context:primary-signature -vv "$DMG_PATH" 2>&1) || true
+echo "$ASSESS" | sed 's/^/   /'
+case "$ASSESS" in
+  *": accepted"*) ;;
+  *)  echo "✗ Gatekeeper does not accept this DMG — not publishing it." >&2
+      exit 1 ;;
+esac
 
 # --- publish -----------------------------------------------------------------
 
