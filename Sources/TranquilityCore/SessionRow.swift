@@ -220,12 +220,24 @@ public struct SessionRow: Equatable, Sendable {
         /// writing the thing a summary would paraphrase, so the summary
         /// can only be later and thinner than what it stands in for.
         ///
-        /// The rule underneath all three lamps is one sentence:
-        /// **announce is for a row with an unread turn.** Green has one.
-        /// Amber and blue do not, so their tap is the door. `.running`
-        /// keeps announce on purpose and is not an oversight — its turn is
-        /// complete and already heard, which makes "say that again" a verb
-        /// only it can offer.
+        /// The dark lamp followed the same day, closing the rule rather
+        /// than extending it. `.running` was left on announce for one
+        /// turn of this conversation on the theory that a finished,
+        /// already-heard turn could still be asked for again — and the
+        /// code says otherwise: there is no re-read path. `announceNext`
+        /// falls through to `.nothingWaiting`, logs a line, and drops you
+        /// back on the grid. So the tap on the one lamp nobody had looked
+        /// at was a control that did nothing at all, which is the 18 Aug
+        /// amber complaint exactly, surviving on the quietest row because
+        /// a silent no-op is the hardest kind of dead control to notice.
+        ///
+        /// What is left is one sentence, and it is the whole rule:
+        /// **announce is for a row with an unread turn — and green is the
+        /// only lamp that has one.** Green gets the card. Every other live
+        /// lamp gets the door. Amber cannot speak because it is stopped,
+        /// blue because it is mid-turn, dark because its turn was already
+        /// read; three different reasons, one verb, and no lamp left whose
+        /// tap has to be learned as an exception.
         case goToAgent
         /// Proven gone, and its directory is still there: bring it back.
         case revive
@@ -239,8 +251,8 @@ public struct SessionRow: Equatable, Sendable {
 
     public static func action(for row: SessionRow) -> RowAction {
         switch row.lamp {
-        case .fault, .working: return .goToAgent
-        case .ready, .running: return .announce
+        case .fault, .working, .running: return .goToAgent
+        case .ready: return .announce
         case .unlit: return row.revivable ? .revive : .none
         }
     }
