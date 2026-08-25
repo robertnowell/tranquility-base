@@ -741,6 +741,17 @@ extension StatusHUD {
             ("workingRowGoesToAgent",
              SessionRow.action(for: row("working", .working)) == .goToAgent),
             ("workingRowIsStillLive", SessionRow.isLive(row("working", .working))),
+            // ...and the dark lamp closed the rule the same day. Announce
+            // on a quiet row read nothing and returned to the grid, so the
+            // tap was a silent no-op — amber's 18 Aug complaint, surviving
+            // where it was hardest to see.
+            ("quietRowGoesToAgent",
+             SessionRow.action(for: row("quiet", .running)) == .goToAgent),
+            ("quietRowIsStillLive", SessionRow.isLive(row("quiet", .running))),
+            // Green is the only lamp left that speaks.
+            ("greenIsTheOnlyLampThatAnnounces",
+             SessionRow.action(for: row("live", .ready)) == .announce
+             && SessionRow.action(for: row("quiet", .running)) != .announce),
             ("revivableRowRevives",
              SessionRow.action(for: row("dead", unlit, revivable: true)) == .revive),
             ("unprovenRowDoesNothing",

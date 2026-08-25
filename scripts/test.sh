@@ -29,20 +29,36 @@ cd "$(dirname "$0")/.."
 
 # Raise these when the suite grows. They exist so that "the tests stopped being
 # compiled in" cannot look like "the tests passed".
-FLOOR_XCTEST=881
+FLOOR_XCTEST=901
 FLOOR_SWIFT_TESTING=41
 
 # Apple Silicon hardware under a translated shell: re-exec the test run native.
-# `sysctl` asks the HARDWARE, which is the only thing Rosetta cannot lie about;
-# `uname -m` reports the process personality and is exactly what fooled us.
+# `uname -m` reports the process PERSONALITY and is exactly what fooled us, so
+# the question has to go to the HARDWARE, which Rosetta cannot lie about.
+#
+# It used to go there via `sysctl -n hw.optional.arm64`, and that is a PATH
+# dependency wearing a hardware question's clothes: `sysctl` lives in
+# /usr/sbin, the `2>/dev/null || echo 0` swallows a missing binary exactly the
+# way it swallows an Intel Mac, and so any shell without /usr/sbin was quietly
+# told this is not Apple Silicon. Agent shells are that shell -- the same
+# missing-sbin class of PATH bug that had every launched pane exiting 127 on
+# 24 Aug -- so the gate fell back to a plain `swift test`, which could not
+# dlopen the arm64 bundle, and preflight reported the 24 Aug architecture
+# failure on a tree where all 901 tests pass. A gate that fails green is worse
+# than no gate: it teaches you to run the tests some other way.
+#
+# `arch -arm64e true` puts the same question to the hardware by attempting the
+# only thing we actually want from the answer. It needs nothing but
+# /usr/bin/arch, and it cannot be wrong by being absent: if it will not run,
+# there was nothing to re-exec into.
+#
 # `env` as the no-op prefix, not an empty array: `"${RUNNER[@]}"` on an EMPTY
 # array is an unbound-variable error under `set -u` in bash 3.2, which is what
 # /usr/bin/env bash still is on macOS. Caught while proving the gate below —
 # on a native arm64 shell, where no re-exec is needed, the script would have
 # died before running a single test.
 RUNNER=(env)
-if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = "1" ] \
-   && [ "$(uname -m)" != "arm64" ]; then
+if [ "$(uname -m)" != "arm64" ] && arch -arm64e true 2>/dev/null; then
   RUNNER=(arch -arm64e)
   echo "→ shell is $(uname -m) on arm64 hardware; running tests under arch -arm64e"
 fi
