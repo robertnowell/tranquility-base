@@ -4,7 +4,7 @@ import XCTest
 /// The interrupt gate's order, and what it stopped being.
 ///
 /// Two courtesy checks lived in this gate and both are gone with the spoken
-/// callsign they protected (docs/ruling-the-return-is-a-sound-not-a-sentence.md):
+/// callsign they protected (docs/rulings/ruling-the-return-is-a-sound-not-a-sentence.md):
 /// first one that opened the microphone and listened to the room, then one that
 /// asked the HAL which app was using audio. What survives is the part that was
 /// always cheap and always right — refuse on a locked screen, refuse to a call

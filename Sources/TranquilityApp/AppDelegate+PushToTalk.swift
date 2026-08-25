@@ -284,7 +284,7 @@ extension AppDelegate {
             // ⌃⌃ = escalate the daemon's channel: speak the rationale and risk
             // for the announcement on stage (or the last one spoken), composed
             // from the brief's already-computed card fields — zero model calls,
-            // and the session itself is never woken. Wiring per docs/wiring-a4.md.
+            // and the session itself is never woken. Wiring per docs/log/wiring-a4.md.
             guard let coordinator else { return }
             guard !hud.isCapturingAudio else {
                 Permissions.log("depth-1: ignored, microphone is open")
@@ -473,7 +473,7 @@ extension AppDelegate {
             // actually fixed), replying from an idle/hidden panel inside the 15-min
             // reply window, and re-recording during transcription (replyGeneration
             // exists for exactly that). The predicate needs a rethink before it can
-            // gate anything. See docs/ws-c-changes.md.
+            // gate anything. See docs/log/ws-c-changes.md.
             // The agent you just launched owns this reply, even though it has
             // no id yet. Resolving the routing here would walk past it to the
             // PREVIOUS agent — the misroute this exists to end — so the launch

@@ -3052,7 +3052,7 @@ final class StatusHUD: NSObject {
     /// pane — there is no Microphone pane yet. The button is honest about the
     /// destination it WILL have, and lands one tab away from it in the meantime,
     /// which beats both a dead control and a button named after the pane it can
-    /// actually reach. Proposal: docs/settings-microphone.html.
+    /// actually reach. Proposal: docs/design/settings-microphone.html.
     @objc nonisolated func micSettingsTapped() {
         MainActor.assumeIsolated { onOpenSettings?() }
     }

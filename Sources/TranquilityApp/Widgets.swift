@@ -2,7 +2,7 @@ import AppKit
 
 /// Small, reusable view-building helpers with no state and no StatusHUD
 /// dependency of their own — the destination P3 (leaf views out) moves
-/// into (App-lane, docs/architecture-program.md). Named 23 Aug (P2, "name
+/// into (App-lane, docs/log/architecture-program.md). Named 23 Aug (P2, "name
 /// the coupling before moving") ahead of the actual move: today it holds
 /// the two loose top-level helpers that already had exactly this shape —
 /// used from both StatusHUD.swift and PastAgentsList.swift already, which

@@ -2,7 +2,7 @@ import AppKit
 
 /// Every button on the panel answers the pointer the same way.
 ///
-/// The standard (docs/ruling-the-panel-answers-the-pointer.md):
+/// The standard (docs/rulings/ruling-the-panel-answers-the-pointer.md):
 ///
 ///  1. the CURSOR says a thing is a control — a pointing hand over its hit
 ///     rect, everywhere, because on this panel a control and a label are the

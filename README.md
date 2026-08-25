@@ -68,7 +68,7 @@ types at your cursor (with Accessibility granted) or lands on the clipboard.
 Requires macOS 14+, Xcode command-line tools, and the `claude` CLI.
 
 ```sh
-git clone <this repo> && cd tranquility-base
+git clone https://github.com/robertnowell/tranquility-base.git && cd tranquility-base
 ./scripts/bundle.sh                  # build + sign the .app
 open ".build/debug/Tranquility Base.app"
 swift run tbase install-hooks        # wires the Claude Code hooks (backup kept)
@@ -112,7 +112,7 @@ summaries are the point.
 - **The event log is the only system of record.** Events are append-only;
   "waiting" is a query (latest event per session is a Stop you haven't heard or
   dismissed). Read/dismissed are per-session watermarks, so a new turn revives a
-  dismissed session by construction. `docs/state-architecture.html` has the full
+  dismissed session by construction. `docs/design/state-architecture.html` has the full
   rationale.
 - **Never speak an inferred fact.** Summaries are grounded in the session's own
   final message. A pull request is mentioned only if the session mentioned it —

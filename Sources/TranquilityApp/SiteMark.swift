@@ -82,7 +82,7 @@ enum SiteMark {
     /// colour and uses the alpha, tinting for light bars, dark bars and the
     /// selected state. It is also why this mark can never carry a lamp colour
     /// up there — ruled already, in
-    /// docs/ruling-an-arrival-does-not-move-the-panel.md.
+    /// docs/rulings/ruling-an-arrival-does-not-move-the-panel.md.
     static func templateImage(size: CGFloat = 16, filled: Bool = false) -> NSImage {
         let image = NSImage(size: NSSize(width: size, height: size),
                             flipped: false) { _ in

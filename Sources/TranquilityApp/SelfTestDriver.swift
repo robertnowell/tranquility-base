@@ -448,7 +448,7 @@ extension StatusHUD {
         // The ink drill (10 Aug). The defect: a card you have been reading
         // resets to unread grey the moment a capture repaints it, because the
         // ink lived in the pixels instead of the face. That is incident 1 of
-        // docs/ruling-capture-returns-to-its-card.md — reported, specified, and
+        // docs/rulings/ruling-capture-returns-to-its-card.md — reported, specified, and
         // until now unbuilt. Arm-and-revert is the path that reproduces it with
         // today's API; it is also the path the capture strip is about to make
         // the MAIN path, which is why this lands before the strip and not with

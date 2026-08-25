@@ -74,7 +74,7 @@ public struct InterruptGate: Sendable {
     /// using audio lived here from 09–10 Aug, and before that one that opened the
     /// microphone and listened to the room. Both are gone with the spoken
     /// callsign they existed to protect — see
-    /// docs/ruling-the-return-is-a-sound-not-a-sentence.md.
+    /// docs/rulings/ruling-the-return-is-a-sound-not-a-sentence.md.
     public func evaluate() -> Decision {
         let idle = signals.idleSeconds()
         let app = signals.frontmostApp()

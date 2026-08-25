@@ -18,7 +18,7 @@ public struct Coordinator: Sendable {
     /// TRANSFERS ownership of a hand-started session dispatch resolved no
     /// tmux pane for — the mechanism `dispatch` reaches for BEFORE falling
     /// to `transport`, added 22 Aug alongside `SessionLauncher.resume`'s own
-    /// move off AppleScript (same architecture-program.md entry). Named for
+    /// move off AppleScript (same docs/log/architecture-program.md entry). Named for
     /// what it did until 23 Aug — spin up a "dual-live twin" beside the
     /// hand-started process — a design retired the same day it was found to
     /// leave every reply after the first routed to a tmux pane nobody was

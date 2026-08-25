@@ -1,7 +1,7 @@
 # The PR belongs in the hub
 
 Ruled 18 Aug 2026, in a voice session, with the hub on screen. Extends the
-card's second door (`docs/ruling-the-second-door-opens-the-hub.md`) rather than
+card's second door (`docs/rulings/ruling-the-second-door-opens-the-hub.md`) rather than
 replacing it: the door still opens the hub, and the hub now has one more kind of
 thing on it.
 

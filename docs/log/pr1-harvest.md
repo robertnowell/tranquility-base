@@ -94,6 +94,6 @@ This also fixes the duplication where "client-report" was both the title and the
 - **The clipboard fallback has never been observed firing.**
 - **`gesturesGranted`'s either-branch is untested** — granting Accessibility flips Input Monitoring true automatically, so the Input-Monitoring-only state was not reachable without giving up a working grant.
 - A **bare folder-name title is a symptom of the Haiku summarizer not running** (`summaryText` NULL, spoken text falling back to verbatim assistant prose). Not chased.
-- `open-issues.md` not updated, though `kind` closes issue #1's search for a discriminator.
+- `docs/log/open-issues.md` not updated, though `kind` closes issue #1's search for a discriminator.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

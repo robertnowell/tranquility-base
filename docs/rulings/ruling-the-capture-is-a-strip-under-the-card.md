@@ -1,7 +1,7 @@
 # The capture is a strip under the card, not a screen instead of it
 
 Ruled 09 Aug 2026, spoken. RULED, NOT BUILT. Written down per CLAUDE.md rule 4
-because it changes the same surface `ruling-capture-returns-to-its-card.md`
+because it changes the same surface `docs/rulings/ruling-capture-returns-to-its-card.md`
 describes and **supersedes most of that doc's problem** — a card that is never
 taken down needs no machinery to give it back.
 
@@ -99,7 +99,7 @@ started on, no re-speak of what was advanced silently. The strip drops; the card
 stays exactly where ⌃⌃ walked it.
 
 **8. Every non-send outcome is now just "drop the strip."** The four outcomes in
-`ruling-capture-returns-to-its-card.md` §C — silence gate, Don't send, empty
+`docs/rulings/ruling-capture-returns-to-its-card.md` §C — silence gate, Don't send, empty
 transcription, lost address — no longer need a card restored, because no card
 was taken. That ruling's `Face.spokenUpTo` / `paintInk` / `stashBeforeCapture` /
 `restoreCardAfterCapture` design exists to give back something this ruling never
@@ -163,7 +163,7 @@ Panel behaviour, so `swift test` says nothing about it. Launch drills:
 
 ## Correction to docs/README.md
 
-`ruling-capture-returns-to-its-card.md` is indexed **BUILT `d106206`**. That
+`docs/rulings/ruling-capture-returns-to-its-card.md` is indexed **BUILT `d106206`**. That
 commit added the doc and nothing else — `git show --stat d106206` is one file,
 170 insertions, `docs/` only. None of the design ships: no `spokenUpTo`, no
 `paintInk`, no `stashBeforeCapture`, no `restoreCardAfterCapture` anywhere in

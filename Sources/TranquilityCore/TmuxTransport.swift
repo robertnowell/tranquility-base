@@ -184,7 +184,7 @@ extension Array where Element == LiveSession {
     /// every NEW launch is tmux, no flag, no opt-in — but a hand-started
     /// session (Claude Code, opened by the user in their own plain Terminal
     /// tab, never launched by TB at all) is a real, load-bearing shape
-    /// (`docs/architecture-program.md`'s adoption ruling: every session is
+    /// (`docs/log/architecture-program.md`'s adoption ruling: every session is
     /// adoptable, wherever it started). Two such rows for one sessionId, or
     /// one of TB's own resumed into a Terminal.app window while a Terminal.app
     /// row already exists, still resolves arbitrarily here — that is not a

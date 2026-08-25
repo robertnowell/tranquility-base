@@ -134,7 +134,7 @@ TTY_PATH="${VERDICT##*|}"
 # measured claiming /dev/ttys007 at once, three dead canaries and one LIVE
 # coding session — so the search-and-close this replaced could match somebody
 # else's work. That is a real hazard traded for tidiness, and tidiness lost.
-# Five other handles were tried and are recorded in docs/open-issues.md #17
+# Five other handles were tried and are recorded in docs/log/open-issues.md #17
 # so nobody spends another morning on it.
 #
 # The windows persist at all because Terminal is configured that way:

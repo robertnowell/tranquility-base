@@ -25,7 +25,7 @@ Structure pass. Zero pixels changed except the sanctioned items listed under
   `StateLegend.Glyph.dot` (same character, no visual change).
 - `Tests/TranquilityCoreTests/CoordinatorTests.swift` — new test
   `testSubagentStopNeverSpeaksOnItsOwn` pinning the pyramid guard.
-- `docs/ws-c-changes.md` — this file.
+- `docs/log/ws-c-changes.md` — this file.
 
 ## Behavior-affecting changes (everything else renders identically)
 

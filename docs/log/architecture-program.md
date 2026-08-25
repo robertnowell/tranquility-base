@@ -1,6 +1,6 @@
 # Architecture program — one arc, one merge, a beautiful machine
 
-**v2, 23 Aug 2026.** Supersedes `architecture-program-v1.md`, kept in place
+**v2, 23 Aug 2026.** Supersedes `docs/log/architecture-program-v1.md`, kept in place
 rather than deleted — the record below is preserved almost entirely; v2
 exists because one section of v1 (dual-live, marked below) was found to
 describe the OPPOSITE of what shipped later the same day, and a doc that
@@ -622,7 +622,7 @@ com.robertnowell.voice-dispatch (TCC).
       no-op, not a trap), no self-inconsistency in the last four commits,
       every `[x]` checklist item traces to a real matching commit. Two real
       findings, both folded in rather than just noted: the mid-keystroke
-      SIGTERM gate above, and open-issues.md #27 (a duplicate
+      SIGTERM gate above, and docs/log/open-issues.md #27 (a duplicate
       `case "settings":` in `StatusHUD.swift`'s pose-fixture switch, named in
       the ORIGINAL brief's Track A item 9 and then dropped from every doc
       for two days until this pass re-found it — cosmetic today, but the
@@ -705,7 +705,7 @@ com.robertnowell.voice-dispatch (TCC).
         by `SplitPlacardRowView` and never cleaned up); the orphaned
         `VoiceRowView` doc comment (misplaced ahead of the dead
         `PaneLinkRowView` it used to sit beside) moved to the type it
-        actually describes; open-issues.md #27 (the duplicate
+        actually describes; docs/log/open-issues.md #27 (the duplicate
         `case "settings":`) fixed — the stale first case deleted, the
         second (which already explained in its own doc comment why it
         was the intended one) survives as the sole case. `tools/replay`'s
@@ -976,7 +976,7 @@ com.robertnowell.voice-dispatch (TCC).
       `RawRepresentable` synthesis, which decodes an unmatched raw string to
       `nil` rather than throwing), `Event.isHeadless` (zero callers,
       superseded by `SessionDiscovery.isHeadless(entrypoint:)`, already
-      documented dead in open-issues.md #1), `ProcessProbe.name(of:)` (zero
+      documented dead in docs/log/open-issues.md #1), `ProcessProbe.name(of:)` (zero
       callers). **Three more store riders landed 23 Aug, same pass as the
       Launcher item above**: `HomeBase.fontSheetRoot` moved out of
       `~/.claude` (Claude Code's own shared config home, not TB's) to

@@ -40,7 +40,7 @@ what Core hands it, unmodified.
   the callsign and applies the mechanical prefix; traces empty-source skips and
   digit scrubs with the event id.
 - `Tests/TranquilityCoreTests/Phase1bTests.swift` — **new**, 26 tests.
-- `docs/phase-1b-changes.md` — this file.
+- `docs/log/phase-1b-changes.md` — this file.
 
 ## 1. Prompt port
 

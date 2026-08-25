@@ -96,7 +96,7 @@ public enum BrowserFocus {
     /// click already asked for, and Chrome restores scroll position across it.
     ///
     /// `reloading: false` is real, not spare capacity: the repository door
-    /// (open-issues.md #24) uses it — a live GitHub page nobody here
+    /// (docs/log/open-issues.md #24) uses it — a live GitHub page nobody here
     /// rewrote, where reloading would throw away whatever the user was
     /// reading, unlike the hub pages this app rewrites immediately before
     /// raising them.

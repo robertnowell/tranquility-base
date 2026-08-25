@@ -61,7 +61,7 @@ public protocol HarnessAdapter: Sendable {
     /// pins the two together until the wiring itself lands. That now lands
     /// WITH CodexAdapter by design, not after it: a second adapter is what
     /// makes per-target harness selection a real question rather than a
-    /// field with one possible answer — see `docs/architecture-program.md`'s
+    /// field with one possible answer — see `docs/log/architecture-program.md`'s
     /// CodexAdapter checklist item.
     var capabilities: HarnessCapabilities { get }
 }
@@ -139,7 +139,7 @@ public struct TrustPromptSpec: Sendable {
     /// clears only because Robert's 05 Aug ruling gave TB standing consent
     /// for THAT one specific prompt. Seeing one of these stops the watcher
     /// exactly as "nothing appeared at all" does; no user-facing escalation
-    /// is wired yet (open, see docs/architecture-program.md's CodexAdapter
+    /// is wired yet (open, see docs/log/architecture-program.md's CodexAdapter
     /// item) but the failure direction is safe either way — a prompt left
     /// sitting, never a consent TB had no authority to give.
     ///

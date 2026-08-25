@@ -2,7 +2,7 @@
 
 Ruled 18–19 Aug 2026, over four mechanisms in one night, three of which shipped
 and none of which worked until the fourth. Supersedes the pull-request halves of
-`ruling-the-pr-belongs-in-the-hub.md`; the ruling that a PR belongs on the hub at
+`docs/rulings/ruling-the-pr-belongs-in-the-hub.md`; the ruling that a PR belongs on the hub at
 all is unchanged and was right from the first minute.
 
 ## The ruling, in the user's words

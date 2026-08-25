@@ -1,6 +1,6 @@
 # The courtesy check — how we would know it works
 
-Planning doc for the ruling in docs/ruling-an-arrival-does-not-move-the-panel.md
+Planning doc for the ruling in docs/rulings/ruling-an-arrival-does-not-move-the-panel.md
 (ruling 3). Written 08 Aug 2026 in answer to "how can we test that this will
 actually work… let's make sure this is safe, reliable, tested, and that it's not
 going to make the codebase messy or introduce other regressions."
