@@ -71,6 +71,57 @@ final class TmuxTransportTests: XCTestCase {
 
     // MARK: prompt-line classification (the floor check)
 
+    // MARK: - PASTE AT MOST ONCE PER SEND (live regression, 24 Aug)
+
+    /// The bug, exactly: ONE dispatch into a mid-turn session left FIVE
+    /// identical messages in Claude Code's queue (session 60fbc8e7). A queued
+    /// message is in neither the transcript nor the box, so every attempt read
+    /// `.empty` and pasted again.
+    func testAnEmptyBoxAfterOurOwnEchoIsAnAcceptedMessage() {
+        XCTAssertEqual(TmuxTransport.decide(line: .empty, everEchoed: true), .stop,
+                       "the box released OUR words — it took the message, it did not lose it")
+    }
+
+    func testAnEmptyBoxBeforeAnyEchoIsAFreshFloor() {
+        XCTAssertEqual(TmuxTransport.decide(line: .empty, everEchoed: false), .paste)
+    }
+
+    /// The five copies in one sentence: whatever the loop does, it may paste
+    /// on at most one attempt.
+    func testNoAttemptAfterTheEchoEverPastesAgain() {
+        for line in [TmuxTransport.PromptLine.empty, .unreadable,
+                     .holds(ours: true), .holds(ours: false)] {
+            let action = TmuxTransport.decide(line: line, everEchoed: true)
+            XCTAssertNotEqual(action, .paste, "\(line) pasted a second copy")
+            XCTAssertNotEqual(action, .clearThenPaste, "\(line) pasted a second copy")
+        }
+    }
+
+    /// An unreadable screen fails toward pasting only while nothing of ours has
+    /// landed. Once it has, "I cannot see" is not permission to send twice.
+    func testAnUnreadableScreenStopsFailingTowardPastingOnceOursHasLanded() {
+        XCTAssertEqual(TmuxTransport.decide(line: .unreadable, everEchoed: false), .paste)
+        XCTAssertEqual(TmuxTransport.decide(line: .unreadable, everEchoed: true), .stop)
+    }
+
+    /// Protects the HUMAN's text, not ours: a line that appears after our
+    /// message went in belongs to whoever typed it.
+    func testAForeignLineIsNeverClearedOnceOurMessageHasGoneIn() {
+        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: false), everEchoed: false),
+                       .clearThenPaste)
+        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: false), everEchoed: true), .stop,
+                       "clearing here would delete a person's typing for an already-delivered message")
+    }
+
+    /// The branch that was always right stays right: our own unsubmitted text
+    /// gets a Return, never another paste.
+    func testOurOwnUnsubmittedTextAlwaysGetsReturnAndNeverAPaste() {
+        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: true), everEchoed: false),
+                       .returnOnly)
+        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: true), everEchoed: true),
+                       .returnOnly)
+    }
+
     func testEmptyPromptLine() {
         let screen = "some scrollback\n────\n❯ \n────\n  ⏵⏵ auto mode on"
         XCTAssertEqual(TmuxTransport.classifyPromptLine(screen: screen, payload: "hello"),
