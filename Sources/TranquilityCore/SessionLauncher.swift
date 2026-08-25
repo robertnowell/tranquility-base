@@ -288,7 +288,48 @@ public enum SessionLauncher {
     /// so a test can pin it: the PATH export is the whole 24 Aug fix, and the
     /// argv it lives in cannot be asserted against without a tmux server.
     static func paneCommand(path: String, directory: String, command: String) -> String {
-        "export PATH=\(shellQuoted(path)); cd \(shellQuoted(directory)) && \(command)"
+        "export PATH=\(shellQuoted(path)); cd \(shellQuoted(directory)) && "
+            + "\(nativeArchPrefix)\(command)"
+    }
+
+    /// `arch -arm64 `, or nothing.
+    ///
+    /// Measured 25 Aug, from inside a pane TB had launched: `arch` answered
+    /// `i386` and `uname -m` answered `x86_64` on an Apple Silicon Mac. The
+    /// pane was running under Rosetta, and so was the agent in it, and so was
+    /// everything that agent then built. `preflight.sh` inside such a pane
+    /// fails on the XCTest bundle with "incompatible architecture (have
+    /// 'arm64', need 'x86_64')" — a failure it already has a named check for,
+    /// which means this has bitten before and was read as a local mystery.
+    ///
+    /// The cause is inherited, not chosen: this machine's Homebrew lives in
+    /// /usr/local and is the INTEL one (`brew config` reports macOS
+    /// `26.5.1-x86_64`, `Rosetta 2: true`, and an 18-core "westmere" — that
+    /// is Rosetta describing an M-series chip). `tmux` came from there, the
+    /// tmux SERVER is therefore x86_64, and every pane it forks inherits the
+    /// translation. Nothing in TB ever asked for Intel: `Tmux.locateBinary`
+    /// prefers /opt/homebrew/bin/tmux, the Apple Silicon path, and only falls
+    /// back to /usr/local because on this machine the first does not exist.
+    ///
+    /// So the correction belongs at the point where TB starts the AGENT,
+    /// which is the process whose architecture actually matters and the one
+    /// thing here TB owns. `arch -arm64` re-execs it natively no matter what
+    /// the server is, and on an already-native pane it is a pass-through.
+    /// Verified live before it was written: the composed command runs
+    /// `claude --version` natively out of a translated shell, and a nested
+    /// shell under it reports `arm64`.
+    ///
+    /// Compile-time, on the app's own architecture, because that is the one
+    /// question with a certain answer here — an app built for arm64 is
+    /// running on a Mac that has it. A missing `/usr/bin/arch` would be a
+    /// broken macOS install, but it costs one stat to not bet on that, and a
+    /// wrong bet here is a pane that cannot start at all.
+    static var nativeArchPrefix: String {
+        #if arch(arm64)
+        FileManager.default.isExecutableFile(atPath: "/usr/bin/arch") ? "arch -arm64 " : ""
+        #else
+        ""
+        #endif
     }
 
     /// Why the pane this launch just made is not running, or nil when it is.
