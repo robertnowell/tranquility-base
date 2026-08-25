@@ -1453,10 +1453,20 @@ extension StatusHUD {
         // nothing follows it.
         topBandDrill()
 
+        // The refused tap, through the same door the pointer uses. Added
+        // 24 Aug: this row answered nine real taps with silence, and the only
+        // evidence it had been pressed at all was a log line.
+        showIdle(rows: [])
+        refuseRowTap("deadbeef")
+        let refusedTapSpeaks = noticeIsShowing
+            && stateLabel.attributedStringValue.string == StateLegend.cannotReopenNotice
+        clearNoticeForDrill()
+
         SelfTest.report("notice", [
             ("onGrid", noticedOnGrid),
             ("clearedByCard", clearedByCard),
             ("refusedOnCard", refusedOnCard),
+            ("refusedTapSpeaks", refusedTapSpeaks),
         ])
         // And the leak the two transition doors close: a notice must not survive
         // a hide and come back up with the panel. `.hidden` returns out of

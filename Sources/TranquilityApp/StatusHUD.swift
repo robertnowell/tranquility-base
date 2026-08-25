@@ -1156,6 +1156,10 @@ final class StatusHUD: NSObject {
     /// this returns to false, since nothing but its own clock clears it.
     var noticeIsShowing: Bool { notice != nil }
 
+    /// The drills leave the strip as they found it; nothing else may clear a
+    /// notice early, which is the leak the `notice` drill already guards.
+    func clearNoticeForDrill() { clearNotice(); render() }
+
     private func clearNotice() {
         noticeExpiry?.cancel()
         noticeExpiry = nil
@@ -3018,11 +3022,25 @@ final class StatusHUD: NSObject {
             // it cannot tell you is which tab to fix it in.
             case .goToAgent: onGoToSession?(id)
             case .revive: onRevive?(id, row.name)
-            case .none:
-                Permissions.log("grid: tap on \(id.prefix(8)) — unlit and not revivable, "
-                    + "no action (liveness unproven, or its directory is gone)")
+            case .none: refuseRowTap(id)
             }
         }
+    }
+
+    /// A tap that will not be honoured, said out loud.
+    ///
+    /// Its own method rather than three lines inside the switch, so the drill
+    /// can knock on the same door the pointer does — `sessionRowTapped` takes
+    /// an `NSControl`, and a drill that builds a fake one is testing its own
+    /// fixture rather than the panel.
+    ///
+    /// The log line stays and keeps the full reason: the notice is five
+    /// seconds of strip and has to be readable at a glance, while the log is
+    /// where somebody asks WHY tomorrow.
+    func refuseRowTap(_ id: String) {
+        Permissions.log("grid: tap on \(id.prefix(8)) — unlit and not revivable, "
+            + "no action (liveness unproven, or its directory is gone)")
+        flashNotice(StateLegend.cannotReopenNotice)
     }
 
     /// The right-click menu for a grid row, or nil for a row with no process

@@ -720,6 +720,22 @@ enum StateLegend {
     /// stays: it is the one mark that earns the amber.
     static let noWordsNotice = "\(Glyph.needsYou) No words detected, try again"
 
+    /// What a tap on a row that cannot be reopened says back.
+    ///
+    /// It used to say nothing at all. Robert tapped one nine times in two
+    /// minutes on 24 Aug and got silence; the handler had been logging the
+    /// reason to `app.log` since the day it was written, where nobody taps.
+    /// A refusal the user cannot see is indistinguishable from a dead button,
+    /// and the second-guess it invites — "is the panel wedged?" — costs more
+    /// than the sentence.
+    ///
+    /// It names BOTH causes because the row cannot tell them apart: `.none`
+    /// is `unlit && !revivable`, and `SessionRow` carries no liveness to say
+    /// which. Naming one would be a guess half the time, and the guess would
+    /// read as diagnosis. The log line still carries the full reason.
+    static let cannotReopenNotice =
+        "\(Glyph.needsYou) No proof it stopped, or nowhere to land"
+
     // MARK: - The device fault (ruled 08 Aug)
 
     /// The third tier's placard. It names the CONDITION, not a classification:
