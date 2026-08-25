@@ -80,14 +80,14 @@ extension AppDelegate {
                     // Aug: without this, the button kept pointing at the pid
                     // the transfer had just, on purpose, ended).
                     if let dispatchedPid {
-                        hud.attachLivePid(dispatchedPid, sessionId: sessionId)
+                        hud.rebindLivePid(dispatchedPid, sessionId: sessionId)
                     }
                 case .dispatched(_, _, _, let dispatchedPid):
                     hud.showReceipt(.sent)
                     lastStatusLine = "sent to \(label)"
                     Permissions.log("send: confirmed to \(label)")
                     if let dispatchedPid {
-                        hud.attachLivePid(dispatchedPid, sessionId: sessionId)
+                        hud.rebindLivePid(dispatchedPid, sessionId: sessionId)
                     }
                 case .sessionNotReady(let readiness):
                     // Sanctioned change (b): the actual condition in plain words,
@@ -98,13 +98,22 @@ extension AppDelegate {
                         "\(label) can't take this yet, \(StateLegend.plainWords(for: readiness)). "
                         + "Your words are kept. Try again in a moment.",
                         about: (sessionId: sessionId, pid: pid, label: label))
+                // ── Every branch below is a FAILURE, and every one of them puts
+                // the words on the clipboard. Ruled 25 Aug: "when dispatch to an
+                // agent fails, it should copy transcript text to clipboard."
+                // Two of these branches already did, and the reasoning written
+                // for them — "kept must mean usable, not archived" — was never
+                // specific to a missing tab. A person who has just spoken a
+                // paragraph and been told it failed should be one ⌘V from
+                // sending it by hand, whatever the failure was.
                 case .dispatchFailed(.verificationTimedOut, _):
                     // Documented as ambiguous and never auto-retried: only a human
                     // can decide whether to repeat themselves. That is needs-you.
                     Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult(
                         "Typed it into \(label), but couldn't confirm it landed. "
-                        + "Check the tab before repeating yourself.",
+                        + "Check the tab before repeating yourself. "
+                        + wordsKept(utteranceId: utteranceId),
                         about: (sessionId: sessionId, pid: pid, label: label))
                 case .dispatchFailed(.tabNotFound, let utteranceId),
                      .dispatchFailed(.targetGone, let utteranceId):
@@ -118,21 +127,24 @@ extension AppDelegate {
                 case .dispatchFailed(let failure, _):
                     Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult("Couldn't type into \(label): \(failure). "
-                                   + "Your words are kept.",
+                                   + wordsKept(utteranceId: utteranceId),
                                    about: (sessionId: sessionId, pid: pid, label: label))
                 case .noTarget:
                     Earcons.play(.needsYou, gate: earconGate())
-                    hud.showResult("That reply lost its agent. Your words are kept.",
+                    hud.showResult("That reply lost its agent. "
+                                   + wordsKept(utteranceId: utteranceId),
                                    about: (sessionId: sessionId, pid: pid, label: label))
                 default:
                     Earcons.play(.needsYou, gate: earconGate())
-                    hud.showResult("Unexpected result: \(outcome). Your words are kept.",
+                    hud.showResult("Unexpected result: \(outcome). "
+                                   + wordsKept(utteranceId: utteranceId),
                                    about: (sessionId: sessionId, pid: pid, label: label))
                 }
             } catch {
                 Permissions.log("confirmAndSend threw: \(error)")
                 Earcons.play(.needsYou, gate: earconGate())
-                hud.showResult("Send failed: \(error). Your words are kept.",
+                hud.showResult("Send failed: \(error). "
+                               + wordsKept(utteranceId: utteranceId),
                                about: (sessionId: sessionId, pid: pid, label: label))
             }
             rebuildMenu()
