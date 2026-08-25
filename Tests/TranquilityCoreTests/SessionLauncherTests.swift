@@ -25,8 +25,9 @@ final class SessionLauncherPaneCommandTests: XCTestCase {
         XCTAssertTrue(command.hasPrefix("export PATH='/Users/x/.local/bin:/usr/bin:/bin';"),
                       "the export must come FIRST and carry the full candidate list — a pane "
                       + "that reaches `claude` with the app's inherited PATH exits 127: \(command)")
-        XCTAssertTrue(command.contains("cd '/Users/x/Projects/thing' && "
-                                       + "claude --dangerously-skip-permissions"),
+        XCTAssertTrue(command.hasSuffix("cd '/Users/x/Projects/thing' && "
+                                        + "\(SessionLauncher.nativeArchPrefix)"
+                                        + "claude --dangerously-skip-permissions"),
                       "the cd and the harness command still follow, in that order: \(command)")
     }
 
@@ -82,5 +83,34 @@ final class ManualRevivalTests: XCTestCase {
         XCTAssertTrue(ScriptError(message: "anything").worthRetrying,
                       "the default stays true — most failures here are a busy Terminal")
         XCTAssertFalse(ScriptError(message: "status 127", worthRetrying: false).worthRetrying)
+    }
+}
+
+
+/// An agent must not inherit an accident of which Homebrew installed tmux.
+final class NativeArchTests: XCTestCase {
+
+    /// On Apple Silicon the harness is re-execed natively; the prefix sits
+    /// immediately before the command and nowhere else, so nothing about the
+    /// PATH export or the cd is disturbed by it.
+    func testTheHarnessIsTheThingRunNatively() {
+        let command = SessionLauncher.paneCommand(
+            path: "/usr/bin:/bin", directory: "/tmp/x", command: "claude --resume 'abc'")
+        #if arch(arm64)
+        XCTAssertTrue(command.contains("&& arch -arm64 claude --resume 'abc'"),
+                      "the prefix belongs to the agent, not the shell or the cd: \(command)")
+        #else
+        XCTAssertTrue(command.hasSuffix("&& claude --resume 'abc'"),
+                      "an Intel host must not be handed an arm64 re-exec: \(command)")
+        #endif
+    }
+
+    /// The manual line a human pastes stays plain: their own shell is already
+    /// whatever their machine is, and `arch -arm64` in a command someone is
+    /// asked to trust is noise they would have to evaluate.
+    func testTheManualLineIsNotReExeced() {
+        let line = SessionLauncher.manualRevival(
+            sessionId: "abc", directory: "/tmp/x", command: "claude")
+        XCTAssertFalse(line.contains("arch -arm64"), line)
     }
 }
