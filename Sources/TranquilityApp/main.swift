@@ -934,6 +934,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.rebuildMenu()
         }
         Coordinator.trace = { Permissions.log("routing: \($0)") }
+        TmuxTransport.trace = { Permissions.log($0) }
         ClaudeAgentsCLI.trace = { Permissions.log("liveness: \($0)") }
         SessionLauncher.trace = { Permissions.log("launcher: \($0)") }
         Recorder.trace = { Permissions.log($0) }
