@@ -1008,6 +1008,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.log("startup: hooks installed and reachable")
         }
 
+        // Look at the checklist without launching a second live instance.
+        //   TranquilityApp --dump-onboarding /tmp/gate.png
+        if let i = CommandLine.arguments.firstIndex(of: "--dump-onboarding"),
+           i + 1 < CommandLine.arguments.count {
+            // Optional third argument names a scenario, so the states a
+            // developer machine cannot reach are still reviewable:
+            //   --dump-onboarding /tmp/a.png fresh|midway|done
+            if i + 2 < CommandLine.arguments.count {
+                switch CommandLine.arguments[i + 2] {
+                case "fresh":
+                    Permissions.previewStates = [.microphone: .notAsked,
+                                                 .speechRecognition: .notAsked,
+                                                 .inputMonitoring: .notAsked,
+                                                 .accessibility: .notAsked]
+                case "midway":
+                    Permissions.previewStates = [.microphone: .active,
+                                                 .speechRecognition: .notAsked,
+                                                 .inputMonitoring: .pendingRestart,
+                                                 .accessibility: .denied]
+                default: break
+                }
+            }
+            onboarding.writePreview(to: CommandLine.arguments[i + 1])
+            NSApp.terminate(nil)
+            return
+        }
         if CommandLine.arguments.contains("--show-onboarding") {
             onboarding.show { }
         }
@@ -1137,6 +1163,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // The checklist's restart question is answered by the live tap, not by
+        // a table of which permissions "need a restart" — see `Permissions.State`.
+        Permissions.listeningProbe = { [weak self] in self?.hotkey?.isListening ?? false }
+
         startPermissionPolling()
         refresh()
 
@@ -1173,7 +1203,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // updates), and announcing yourself each time is noise from the exact
         // product that promised calm. The idle card appearing IS the greeting.
         Task { @MainActor in
-            if !Permissions.allGranted {
+            // `allActive`, not `allGranted`. A permission granted while the app
+            // was already running can be recorded by macOS and still unusable
+            // here, and an app that skips its own checklist on the strength of
+            // that reads as broken rather than unfinished.
+            if !Permissions.allActive {
                 onboarding.show { [weak self] in self?.refresh() }
             }
         }
