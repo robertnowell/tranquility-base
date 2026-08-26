@@ -1225,6 +1225,35 @@ extension AppDelegate {
                 return
             }
 
+            // Codex's one and only liveness fact (Coordinator+Announcer.swift's
+            // `waiting()`, its own 26 Aug doc comment) — without this record,
+            // the session that just registered reads as permanently "gone" to
+            // the announce/sweep pipeline, which has no other way to ask
+            // Codex whether it is still there. Best-effort: a miss (pid not
+            // found on this tty) records nothing, the same "no point writing
+            // a record this function does not trust" call `attemptCodexResume`
+            // already makes for the identical lookup.
+            //
+            // Matched on `command`, NOT `sessionId` — the id-matching form
+            // `attemptCodexResume` uses only works there because `codex
+            // resume <id>` puts the id directly on the process's own argv.
+            // A fresh launch's argv is just `command` (`codex
+            // --dangerously-...`); Codex mints the id internally, after the
+            // process starts, so it is never on the command line to match
+            // at all. Found live, 26 Aug: this silently matched nothing on
+            // every fresh launch, so no record was ever written and the
+            // liveness fix above had nothing to read. `command` is
+            // distinctive enough to skip a sibling MCP-server child on the
+            // same tty (measured live: a codex launch's own child process
+            // shares its tty and does not contain this string).
+            if isCodex, let pid = ProcessProbe.pid(onTty: tty, containing: command) {
+                let pane = TmuxOwnership.pane(forTty: tty)
+                FileSessionOwnershipStore.shared.record(SessionOwnershipRecord(
+                    sessionId: sessionId, harness: CodexAdapter().id, pid: pid,
+                    paneId: pane?.paneId, socketName: pane?.socketName,
+                    sessionName: pane?.sessionName, paneTty: tty, cwd: dir))
+            }
+
             // Kept BEFORE the greeting row is written and before the card is
             // bound: the promise is about the SESSION EXISTING, which is now
             // true, and it must not be hostage to a store write or to whether

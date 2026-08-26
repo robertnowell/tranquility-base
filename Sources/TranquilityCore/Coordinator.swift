@@ -39,6 +39,18 @@ public struct Coordinator: Sendable {
 
     public let enrolment: EnrolmentRegistry
     public let agents: ClaudeAgentsReading
+    /// The only source of Codex liveness `waiting()` has — Codex never
+    /// appears in `agents` at all, ever, not even after it registers (that
+    /// registry is `claude agents --json`, harness-specific by construction).
+    /// Found live, 26 Aug, chasing a fresh Codex launch whose greeting card
+    /// vanished within five seconds: `SessionSweep` read the freshly-
+    /// launched session as permanently "gone" the instant `waiting()` first
+    /// polled it, because `live` was built from `agents` alone. A record
+    /// written at launch (`AppDelegate+Sessions.swift`, once registration
+    /// resolves an id) makes this answerable — see `SessionOwnershipRecord`'s
+    /// own doc comment: "the fact Claude Code's own `agents --json` gives
+    /// for free and no other harness does."
+    public let ownership: any SessionOwnershipStore
     /// Extracted from `Coordinator` into its own injectable type (23 Aug,
     /// Coordinator-split rider) — see `SessionSweep`'s own doc comment for
     /// why. `.shared` by default, matching the old static state's behavior:
@@ -73,6 +85,7 @@ public struct Coordinator: Sendable {
         tmuxTransport: any DispatchTransport = TmuxTransport(),
         enrolment: EnrolmentRegistry = EnrolmentRegistry(),
         agents: ClaudeAgentsReading = ClaudeAgentsCLI(),
+        ownership: any SessionOwnershipStore = FileSessionOwnershipStore.shared,
         sweep: SessionSweep = .shared,
         recovery: RecoveryChain = RecoveryChain(),
         attachments: AttachmentStore = AttachmentStore(),
@@ -100,6 +113,7 @@ public struct Coordinator: Sendable {
         self.tmuxTransport = tmuxTransport
         self.enrolment = enrolment
         self.agents = agents
+        self.ownership = ownership
         self.sweep = sweep
         self.recovery = recovery
         self.attachments = attachments
