@@ -157,6 +157,14 @@ struct Permissions {
             + "(\(statusDescription(.microphone)))")
         log("inputMonitoring=\(CGPreflightListenEventAccess())")
         log("accessibility=\(AXIsProcessTrusted())")
+        // The DERIVED states, not just the raw TCC answers. The gate opens on
+        // `allActive`, which can differ from "granted" by a whole state
+        // (`pendingRestart`), and the difference decides whether a returning
+        // user sees a setup window they already finished. Logged at launch so
+        // that question is a grep and never a guess.
+        log("states " + Kind.allCases.map { "\($0.title.prefix(4))=\(state($0))" }
+                .joined(separator: " ")
+            + " allActive=\(allActive) progress=\(progress.done)/\(progress.total)")
     }
 
     /// What a permission actually IS right now, at the granularity the user
