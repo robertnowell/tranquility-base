@@ -133,15 +133,13 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         }
 
         stack.addArrangedSubview(spacer(8))
-        // One sentence. The long version of this note said four true things and
-        // was, by the same ruling that removed the controls block from the top
-        // of this window, "way too much" for a screen whose job is to get three
-        // switches flipped.
-        let note = label(
-            "Grant is what makes macOS ask — until an app has asked, it is not "
-            + "listed in the Privacy pane at all.",
-            size: 11, secondary: true, width: 560)
-        stack.addArrangedSubview(note)
+        // No standing note at all.
+        //
+        // It said "Grant is what makes macOS ask, until an app has asked it is
+        // not listed in the Privacy pane at all", which is a true fact about
+        // TCC and an unreadable sentence, and it was explaining a mechanism
+        // nobody on this screen has asked about. The rows say what to do and
+        // the doors say how. Ruled 26 Aug: delete it.
 
         let restartNote = label("", size: 11, secondary: true, width: 560)
         restartNote.isHidden = true
@@ -209,7 +207,10 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         details[kind] = detail
         row.addArrangedSubview(detail)
 
-        let button = door("Grant", ink: StateLegend.Palette.accent,
+        // The door wears the same colour as the lamp beside it, because it IS
+        // the action that lamp is asking for. Accent blue-grey made the one
+        // thing you are supposed to press the quietest thing in the row.
+        let button = door("Grant", ink: StateLegend.Palette.fault,
                           action: #selector(grantTapped(_:)))
         button.identifier = NSUserInterfaceItemIdentifier(kind.title)
         grantButtons[kind] = button
@@ -312,23 +313,31 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         let current = states.first { $0.1 != .active }?.0
 
         for (kind, state) in states {
-            // The panel's own lamp vocabulary, not system colours: green is
-            // done, blue is underway with nothing for you to do, amber is
-            // needs-you, and an unlit lamp is a socket. `pendingRestart` is
-            // BLUE rather than amber on purpose — it is genuinely underway and
-            // deliberately not yet actionable, which is the batching decision
-            // stated in colour instead of only in a note.
+            // The panel's own lamp vocabulary, and one meaning per colour.
+            //
+            // AMBER IS "NEEDS ACTION", so every untouched row starts amber.
+            // They were sockets, on the reasoning that an ungranted permission
+            // is an unlit lamp. That reads as "nothing here" when the truth is
+            // "all of this is waiting on you", which on a setup screen is the
+            // one thing the colour must not say. Ruled 26 Aug.
+            //
+            // Green is done. Blue is underway with nothing to do, which is why
+            // `pendingRestart` is blue and not amber: it is the batching
+            // decision stated in colour rather than only in a note.
+            //
+            // `denied` is amber too. It needs action exactly as much as an
+            // untouched row does; what differs is WHICH action, and the detail
+            // and the door beside it already say so.
             rows[kind]?.textColor = {
                 switch state {
                 case .active: return StateLegend.Palette.ready
                 case .pendingRestart: return StateLegend.Palette.working
-                case .restricted, .denied: return StateLegend.Palette.fault
-                case .notAsked: return kind.isRequired ? StateLegend.Palette.socket
-                                                       : StateLegend.Palette.faint
+                case .restricted: return StateLegend.Palette.faint
+                case .denied, .notAsked: return StateLegend.Palette.fault
                 }
             }()
-            details[kind]?.textColor = state == .denied || state == .restricted
-                ? StateLegend.Palette.fault : StateLegend.Palette.hint
+            details[kind]?.textColor = state == .active
+                ? StateLegend.Palette.hint : StateLegend.Palette.secondary
             details[kind]?.stringValue = Self.detail(kind, state)
             grantButtons[kind]?.isHidden = (state == .active || state == .pendingRestart)
             if let button = grantButtons[kind] as? ConsoleButton {
@@ -338,7 +347,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
                     button?.attributedTitle = ChromeType.line(
                         title + " ›", font: font, color: color)
                 }
-                button.restingInk = StateLegend.Palette.accent
+                button.restingInk = StateLegend.Palette.fault
             }
 
             // Dim what is not the user's business yet, and never dim the row
@@ -366,7 +375,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
             let names = pending.map(\.title).joined(separator: " and ")
             restartNote?.stringValue = readyToRestart
                 ? "Last step: restart, and \(names) comes with you."
-                : "\(names) needs a restart. Finish the list first — one restart at the end."
+                : "\(names) needs a restart. Finish the list first, then restart once."
         }
 
         // The required set completes the checklist; the optional row never holds
@@ -393,10 +402,10 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     private static func detail(_ kind: Permissions.Kind, _ state: Permissions.State) -> String {
         switch state {
         case .active: return "done"
-        case .pendingRestart: return "granted — restart to finish"
+        case .pendingRestart: return "granted, restart to finish"
         case .denied: return "denied earlier"
         case .restricted: return "restricted by policy"
-        case .notAsked: return "not done yet"
+        case .notAsked: return "needs action"
         }
     }
 
