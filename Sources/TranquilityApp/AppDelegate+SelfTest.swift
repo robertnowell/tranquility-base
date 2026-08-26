@@ -202,19 +202,28 @@ extension AppDelegate {
             worst = max(worst, Date().timeIntervalSince(t0))
         }
 
+        // Counters, not the in-flight flag. The flag belongs to whichever probe
+        // is current, and this app starts one every 1.5 seconds, so reading it
+        // answers "is A probe running" and never "did MINE finish". Asserting
+        // on it failed on the first deploy that ran this drill, on a build
+        // whose repair was working perfectly: worstRefresh=4ms, badge=15, and
+        // a flag that read true because the timer had started the next one.
+        // A count that went up cannot be somebody else's.
+        let startedBefore = waitingProbesStarted
+        let completedBefore = waitingProbesCompleted
         refreshWaitingSnapshot()
-        let started = waitingProbeInFlight
-        refreshWaitingSnapshot()          // second tick, same window
-        let stillOne = waitingProbeInFlight
+        refreshWaitingSnapshot()          // second call, same instant
+        let startedByTwoCalls = waitingProbesStarted - startedBefore
 
-        // The probe is a child process; give it the same grace the CLI gets
-        // before we call it stuck, then check it came home and cleared.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+        // 15s, not 10: `sessions()` allows the CLI an 8-second deadline and
+        // then two more seconds to drain its pipes, so 10 is exactly the worst
+        // case it is meant to tolerate rather than comfortably past it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
             guard let self else { return }
             SelfTest.report("refreshIsCheap", [
                 ("paintNeverProbes", worst < 0.1),
-                ("probeRanOffMain", started && !self.waitingProbeInFlight),
-                ("probeIsNotReentrant", stillOne),
+                ("probeCompletedOffMain", self.waitingProbesCompleted > completedBefore),
+                ("probeIsNotReentrant", startedByTwoCalls == 1),
             ])
             Permissions.log("refreshIsCheap: worstRefresh=\(Int(worst * 1000))ms "
                             + "badge=\(self.waitingCountSnapshot)")

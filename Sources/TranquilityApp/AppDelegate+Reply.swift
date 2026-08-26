@@ -285,11 +285,13 @@ extension AppDelegate {
     func refreshWaitingSnapshot() {
         guard !waitingProbeInFlight, let coordinator else { return }
         waitingProbeInFlight = true
+        waitingProbesStarted += 1
         Task.detached(priority: .utility) {
             let count = (try? coordinator.waitingCount()) ?? 0
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.waitingProbeInFlight = false
+                self.waitingProbesCompleted += 1
                 guard count != self.waitingCountSnapshot else { return }
                 self.waitingCountSnapshot = count
                 self.updateTitle()
