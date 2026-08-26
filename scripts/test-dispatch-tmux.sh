@@ -108,8 +108,8 @@ touch "$PWD/.tmux-drill-adversary"
 EXACT_FAIL=0
 EXACT_WHY=""
 for i in $(seq 1 10); do
-  OUT=$("$BIN/tbase" send-raw-tmux "$PID" "$PANE" "$TRANSCRIPT" "exact-once probe $i" 2>&1) \
-    || { EXACT_FAIL=$((EXACT_FAIL+1)); EXACT_WHY="probe $i: $(echo "$OUT" | tail -1)"; }
+  OUT=$(TB_TRACE=1 "$BIN/tbase" send-raw-tmux "$PID" "$PANE" "$TRANSCRIPT" "exact-once probe $i" 2>&1) \
+    || { EXACT_FAIL=$((EXACT_FAIL+1)); EXACT_WHY="probe $i:"$'\n'"$(echo "$OUT" | grep '^trace:' | tail -6)"; }
 done
 rm -f "$PWD/.tmux-drill-adversary"; sleep 1
 # DISTINCT probes, not lines. A line count cannot tell nine-plus-a-duplicate
