@@ -165,3 +165,55 @@ final class TranscriptWatermarkTests: XCTestCase {
         XCTAssertTrue(confirmedFromAppend)
     }
 }
+
+/// A message typed into a busy session is queued by the TUI, not written as a
+/// `user` record until the turn ends — and Claude Code writes that decision
+/// down as its own record. Reading only `user` lines made the transport blind
+/// to its own successful delivery.
+///
+/// The fixture is the real line, copied from
+/// `09d524e6-1ed0-4c1a-b169-bcd2e6f1a98a.jsonl` at 2026-08-26T02:06:45.576Z —
+/// the delivery the panel reported as "couldn't confirm it landed" seventeen
+/// seconds after this was on disk.
+final class QueuedDeliveryIsEvidenceTests: XCTestCase {
+
+    private func write(_ lines: [String]) throws -> String {
+        let dir = NSTemporaryDirectory() + "queue-witness-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let path = dir + "/t.jsonl"
+        try (lines.joined(separator: "\n") + "\n").write(toFile: path, atomically: true,
+                                                         encoding: .utf8)
+        return path
+    }
+
+    private let enqueued = #"""
+    {"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-26T02:06:45.576Z","sessionId":"09d524e6-1ed0-4c1a-b169-bcd2e6f1a98a","content":"Okay, so, uh, we need to catch up on our Labor Day launch. Mirai."}
+    """#
+
+    func testAnEnqueuedMessageCountsAsDelivered() throws {
+        let path = try write([enqueued])
+        XCTAssertTrue(
+            TranscriptWatcher.userMessages(in: path, fromByteOffset: 0)
+                .contains { $0.contains("catch up on our Labor Day launch") },
+            "the program that took the message wrote down that it has it; that is the witness")
+    }
+
+    /// The watermark still governs it — a queued delivery from before this
+    /// send is history, exactly like a `user` record from before this send.
+    func testAnEnqueueBeforeTheWatermarkIsStillInvisible() throws {
+        let path = try write([enqueued])
+        let watermark = TranscriptWatcher.fileSize(atPath: path)
+        XCTAssertFalse(
+            TranscriptWatcher.userMessages(in: path, fromByteOffset: watermark)
+                .contains { $0.contains("Labor Day") },
+            "history is not evidence about this delivery, whichever record shape it took")
+    }
+
+    /// Only an enqueue. A dequeue is the message LEAVING the queue for the
+    /// turn that consumes it, and counting both would double-count one
+    /// delivery on a path whose whole job is telling deliveries apart.
+    func testOnlyAnEnqueueCounts() throws {
+        let path = try write([#"{"type":"queue-operation","operation":"dequeue","content":"nope"}"#])
+        XCTAssertTrue(TranscriptWatcher.userMessages(in: path, fromByteOffset: 0).isEmpty)
+    }
+}
