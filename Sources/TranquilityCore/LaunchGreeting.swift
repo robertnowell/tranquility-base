@@ -169,4 +169,42 @@ public enum LaunchGreeting {
         }
         return nil
     }
+
+    /// `awaitRegistration`'s Codex twin.
+    ///
+    /// Codex has no live registry to poll — `SessionDiscovery.discoverCodex`
+    /// is a disk walk over `~/.codex/sessions` rather than a call to `claude
+    /// agents --json`, and it is genuinely more expensive (measured close to
+    /// a second against 19 real rollouts on this machine, per its own doc
+    /// comment), so this polls less often than the three-second-scale Claude
+    /// Code case can afford to: `interval` defaults to 2s, not 1s. Same
+    /// before/after-by-directory shape otherwise, deliberately — a session
+    /// that appears in the walk after the launch, in the launch directory,
+    /// and was not already known, is the one that was just started.
+    ///
+    /// `discover` takes no arguments and returns the whole `Result` rather
+    /// than being handed `directory` itself: `discoverCodex`'s own signature
+    /// has nothing directory-scoped to filter by earlier (it walks the whole
+    /// tree), so there is nothing to push down — the filter happens here,
+    /// the same place `awaitRegistration`'s does.
+    public static func awaitCodexRegistration(
+        directory: String,
+        excluding known: Set<String>,
+        discover: () -> SessionDiscovery.Result = { SessionDiscovery.discoverCodex() },
+        timeout: TimeInterval = 30,
+        interval: TimeInterval = 2,
+        now: () -> Date = Date.init,
+        sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
+    ) -> String? {
+        let deadline = now().addingTimeInterval(timeout)
+        while now() < deadline {
+            if let fresh = discover().sessions.first(where: {
+                $0.cwd == directory && !known.contains($0.sessionId)
+            }) {
+                return fresh.sessionId
+            }
+            sleep(interval)
+        }
+        return nil
+    }
 }

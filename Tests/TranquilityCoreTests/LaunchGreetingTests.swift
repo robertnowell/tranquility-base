@@ -239,4 +239,63 @@ final class LaunchGreetingTests: XCTestCase {
         XCTAssertNil(found)
         XCTAssertEqual(agents.calls, 30)
     }
+
+    // MARK: - Waiting for a Codex session to register (App-lane, default
+    // launcher work: Codex has no live registry, so this polls a disk walk
+    // instead — same shape as the Claude Code tests above, different source.)
+
+    private func codexSession(_ id: String, cwd: String) -> SessionDiscovery.Session {
+        SessionDiscovery.Session(
+            sessionId: id, cwd: cwd, transcriptPath: "/tmp/\(id).jsonl",
+            title: nil, lastActivityAt: Date(), answered: false,
+            activity: nil, liveness: .unknown, revivable: true,
+            harness: CodexAdapter().id)
+    }
+
+    /// Scripts `discover()` the same way `ScriptedAgents` scripts `sessions()`
+    /// — a canned answer per call, so the test controls exactly when the new
+    /// rollout "appears" without touching the real filesystem.
+    final class ScriptedDiscovery: @unchecked Sendable {
+        private var answers: [[SessionDiscovery.Session]]
+        private(set) var calls = 0
+        init(_ answers: [[SessionDiscovery.Session]]) { self.answers = answers }
+        func next() -> SessionDiscovery.Result {
+            calls += 1
+            var result = SessionDiscovery.Result()
+            result.sessions = answers.isEmpty ? [] : answers.removeFirst()
+            return result
+        }
+    }
+
+    func testCodexRegistrationTakesTheFirstNewIdInTheLaunchedDirectory() {
+        let discovery = ScriptedDiscovery([
+            [codexSession("old", cwd: "/tmp/one")],
+            [codexSession("old", cwd: "/tmp/one"), codexSession("new", cwd: "/tmp/one")],
+        ])
+        var clock = Date(timeIntervalSince1970: 0)
+        let found = LaunchGreeting.awaitCodexRegistration(
+            directory: "/tmp/one", excluding: ["old"], discover: discovery.next,
+            now: { clock }, sleep: { clock += $0 })
+        XCTAssertEqual(found, "new")
+    }
+
+    /// Another rollout in another directory is not our launch.
+    func testCodexRegistrationIgnoresOtherDirectories() {
+        let discovery = ScriptedDiscovery([[codexSession("elsewhere", cwd: "/tmp/two")]])
+        var clock = Date(timeIntervalSince1970: 0)
+        let found = LaunchGreeting.awaitCodexRegistration(
+            directory: "/tmp/one", excluding: [], discover: discovery.next,
+            timeout: 4, interval: 2, now: { clock }, sleep: { clock += $0 })
+        XCTAssertNil(found)
+    }
+
+    func testCodexRegistrationGivesUpAtTheDeadline() {
+        let discovery = ScriptedDiscovery([])
+        var clock = Date(timeIntervalSince1970: 0)
+        let found = LaunchGreeting.awaitCodexRegistration(
+            directory: "/tmp/one", excluding: [], discover: discovery.next,
+            timeout: 10, interval: 2, now: { clock }, sleep: { clock += $0 })
+        XCTAssertNil(found)
+        XCTAssertEqual(discovery.calls, 5)
+    }
 }
