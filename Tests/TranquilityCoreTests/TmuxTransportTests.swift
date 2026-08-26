@@ -442,3 +442,69 @@ final class JoinedBoxRecognitionTests: XCTestCase {
             TmuxTransport.boxHolds(payload: expected, screen: screen, glyph: glyph))
     }
 }
+
+/// The 26 Aug failure: a box holding five paragraphs classified as EMPTY.
+///
+/// Claude Code 2.1.246 draws the caret alone on the glyph row and starts the
+/// text on the next one. `classifyPromptLine` read only the glyph row, so
+/// `content` was empty, `decide` answered `.paste`, and every attempt pasted
+/// another copy — nothing cleared (clearing only happens on `.holds`) and the
+/// Return was never reached, because the echo check cannot match five copies
+/// against one payload. Two sessions in one morning, five glued copies each,
+/// nothing sent.
+///
+/// The fixture is the real shape, `capture-pane -p -J` of a live pane: glyph,
+/// U+00A0, then indented continuation rows.
+final class MultiRowComposerTests: XCTestCase {
+
+    private let glyph = "❯"
+
+    private func liveBox(_ rows: [String]) -> String {
+        (["  ⎿  some earlier output",
+          String(repeating: "─", count: 40),
+          "\(glyph)\u{00A0}"]
+         + rows.map { "  \($0)" }
+         + [String(repeating: "─", count: 40),
+            "  ⏵⏵ bypass permissions on (shift+tab to cycle)"]).joined(separator: "\n")
+    }
+
+    /// The bug itself, stated as the thing that must never be true again.
+    func testAFullBoxIsNeverReadAsEmpty() {
+        let screen = liveBox(["I think A sounds plausible, but I want to make sure,",
+                              "like, let's map out the flow paths."])
+        XCTAssertNotEqual(
+            TmuxTransport.classifyPromptLine(screen: screen, payload: "anything at all",
+                                             glyph: glyph),
+            .empty,
+            "an empty verdict is permission to paste again — five times, in the real case")
+    }
+
+    /// And the consequence, at the decision that acts on it.
+    func testAFullBoxIsNotPastedInto() {
+        let screen = liveBox(["somebody's half-typed line"])
+        let line = TmuxTransport.classifyPromptLine(screen: screen, payload: "ours",
+                                                    glyph: glyph)
+        XCTAssertNotEqual(TmuxTransport.decide(line: line, everEchoed: false), .paste)
+    }
+
+    /// Our own payload, drawn across rows the same way, is still ours — the
+    /// case that keeps a retry from clearing a paste that already worked.
+    func testOurOwnMultiRowPayloadIsRecognised() {
+        let payload = "I think A sounds plausible, but I want to make sure, "
+            + "like, let's map out the flow paths."
+        let screen = liveBox(["I think A sounds plausible, but I want to make sure,",
+                              "like, let's map out the flow paths."])
+        XCTAssertEqual(
+            TmuxTransport.classifyPromptLine(screen: screen, payload: payload, glyph: glyph),
+            .holds(ours: true))
+    }
+
+    /// A genuinely empty box still reads empty — the caret row and nothing
+    /// under it.
+    func testAnEmptyBoxStillReadsEmpty() {
+        XCTAssertEqual(
+            TmuxTransport.classifyPromptLine(screen: liveBox([]), payload: "ours",
+                                             glyph: glyph),
+            .empty)
+    }
+}

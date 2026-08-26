@@ -517,8 +517,14 @@ public struct TmuxTransport: DispatchTransport {
             // too big to draw — and `screenContains` could only ever see
             // the first. `pasteEcho` sees both, and both are the same fact:
             // our words are in the box, Return is safe to press.
+            // Six seconds, not two. The deadline is what turns a slow redraw
+            // into a second paste, and both 26 Aug failures were sessions
+            // fifteen minutes into a turn that was streaming output the whole
+            // time — a composer under that does not repaint in two seconds.
+            // The row-aware floor check below is what makes a missed echo
+            // survivable; this is what makes it rare.
             var echo = PasteEcho.absent
-            guard poll(deadline: 2.0, every: 0.05, until: {
+            guard poll(deadline: 6.0, every: 0.05, until: {
                 echo = pasteEcho(payload, pane, target: target, chipsBefore: chipsBefore,
                                  expectedInBox: expectedInBox)
                 return echo != .absent
@@ -829,12 +835,31 @@ public struct TmuxTransport: DispatchTransport {
         screen: String, payload: String, glyph: String = "❯", placeholder: String? = nil,
         chip: String? = nil, ourChips: Set<String> = []
     ) -> PromptLine {
-        let lines = screen.split(separator: "\n", omittingEmptySubsequences: false)
-        guard let box = lines.last(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix(glyph) })
-        else { return .empty }
-        let content = box.trimmingCharacters(in: .whitespaces)
-            .dropFirst(glyph.count)                         // the glyph itself
-            .trimmingCharacters(in: .whitespaces)
+        // THE WHOLE BOX, not the glyph's own row. Measured 26 Aug against
+        // Claude Code 2.1.246, from a live pane holding five glued copies of
+        // a message that was never sent:
+        //
+        //     ❯\u{00A0}
+        //       I think A sounds plausible, but I want to make sure, …
+        //       would actually change what we expect. …
+        //
+        // The caret sits alone on its row and the text begins on the next
+        // one. Reading only the glyph row, `content` was empty and a box
+        // holding five paragraphs classified as `.empty` — so `decide`
+        // answered `.paste`, every attempt pasted another copy, nothing ever
+        // cleared (clearing only happens on `.holds`), and the Return was
+        // never reached because the echo check cannot match five copies
+        // against one payload. Five pastes, no send, "couldn't confirm it
+        // landed", and the user's words left sitting in the box.
+        //
+        // `boxRows` already read continuation rows correctly and is what
+        // `boxHolds` has used since 23 Aug; this function simply was not
+        // asking it. The emptiness test is the one that has to be
+        // row-aware, because it short-circuits every check below it — a
+        // wrong `.empty` is not a missed observation, it is permission to
+        // paste again.
+        guard let rows = boxRows(screen: screen, glyph: glyph) else { return .empty }
+        let content = collapsed(rows.joined(separator: " "))
         if content.isEmpty { return .empty }
         // A live bug, found only by actually dispatching to a real idle
         // Codex composer (22 Aug): its own idle hint text ("Ask Codex to do
