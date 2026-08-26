@@ -72,75 +72,41 @@ final class TmuxTransportTests: XCTestCase {
     // MARK: prompt-line classification (the floor check)
 
     // MARK: - PASTE AT MOST ONCE PER SEND (live regression, 24 Aug)
+    // MARK: - The floor decision
+    //
+    // Rewritten 26 Aug with `send`. `decide` used to answer "is a second
+    // paste safe now", which is why it took `everEchoed` and `firstAttempt`
+    // and why it had a `.stop` case. A send pastes once, by construction, so
+    // the question no longer exists and neither do the tests that asked it.
+    // What is left is the only thing the box can still tell us: whose words
+    // are in it.
 
-    /// The bug, exactly: ONE dispatch into a mid-turn session left FIVE
-    /// identical messages in Claude Code's queue (session 60fbc8e7). A queued
-    /// message is in neither the transcript nor the box, so every attempt read
-    /// `.empty` and pasted again.
-    func testAnEmptyBoxAfterOurOwnEchoIsAnAcceptedMessage() {
-        XCTAssertEqual(TmuxTransport.decide(line: .empty, everEchoed: true), .stop,
-                       "the box released OUR words — it took the message, it did not lose it")
+    /// An empty box is the ordinary case and it pastes.
+    func testAnEmptyBoxIsPastedInto() {
+        XCTAssertEqual(TmuxTransport.decide(line: .empty), .paste)
     }
 
-    func testAnEmptyBoxBeforeAnyEchoIsAFreshFloor() {
-        XCTAssertEqual(TmuxTransport.decide(line: .empty, everEchoed: false), .paste)
+    /// Our own unsubmitted words get a Return and never a second copy. This
+    /// is the branch that was always right, and it is now the only defence
+    /// against duplication that `decide` is asked to provide — the rest is
+    /// structural.
+    func testOurOwnUnsubmittedTextGetsReturnAndNeverAPaste() {
+        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: true)), .returnOnly)
     }
 
-    /// The five copies in one sentence: whatever the loop does, it may paste
-    /// on at most one attempt.
-    func testNoAttemptAfterTheEchoEverPastesAgain() {
-        for line in [TmuxTransport.PromptLine.empty, .unreadable,
-                     .holds(ours: true), .holds(ours: false)] {
-            let action = TmuxTransport.decide(line: line, everEchoed: true)
-            XCTAssertNotEqual(action, .paste, "\(line) pasted a second copy")
-            XCTAssertNotEqual(action, .clearThenPaste, "\(line) pasted a second copy")
-        }
-    }
-
-    /// An unreadable screen fails toward pasting only while nothing of ours has
-    /// landed. Once it has, "I cannot see" is not permission to send twice.
-    func testAnUnreadableScreenStopsFailingTowardPastingOnceOursHasLanded() {
-        XCTAssertEqual(TmuxTransport.decide(line: .unreadable, everEchoed: false), .paste)
-        XCTAssertEqual(TmuxTransport.decide(line: .unreadable, everEchoed: true), .stop)
-    }
-
-    /// Protects the HUMAN's text, not ours: a line that appears after our
-    /// message went in belongs to whoever typed it.
-    func testAForeignLineIsNeverClearedOnceOurMessageHasGoneIn() {
-        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: false), everEchoed: true), .stop,
-                       "clearing here would delete a person's typing for an already-delivered message")
-    }
-
-    /// Ruled 25 Aug, from a live loss: a URL Robert had pasted was deleted to
+    /// Ruled 25 Aug from a live loss: a URL Robert had pasted was deleted to
     /// make room for the dictated instruction that referred to it.
-    func testTextAlreadyInTheBoxIsJoinedRatherThanDeleted() {
-        XCTAssertEqual(
-            TmuxTransport.decide(line: .holds(ours: false), everEchoed: false,
-                                 firstAttempt: true),
-            .joinExisting,
-            "the two things the user meant as one message must arrive as one message")
+    func testSomebodyElsesTextIsJoinedNeverDeleted() {
+        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: false)), .joinExisting,
+                       "the two things the user meant as one message arrive as one message")
     }
 
-    /// The join is first-attempt only. A paste whose echo was never detected
-    /// is allowed one more paste (the step 5 mode-race `continue`), and
-    /// joining there could append a second copy onto the first — so after the
-    /// first attempt this falls back to exactly the old behaviour. The worst
-    /// case is unchanged; only the common case improves.
-    func testAJoinIsNeverRetried() {
-        XCTAssertEqual(
-            TmuxTransport.decide(line: .holds(ours: false), everEchoed: false,
-                                 firstAttempt: false),
-            .clearThenPaste,
-            "a second join could glue two copies of our payload onto the user's line")
-    }
-
-    /// The branch that was always right stays right: our own unsubmitted text
-    /// gets a Return, never another paste.
-    func testOurOwnUnsubmittedTextAlwaysGetsReturnAndNeverAPaste() {
-        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: true), everEchoed: false),
-                       .returnOnly)
-        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: true), everEchoed: true),
-                       .returnOnly)
+    /// An unreadable screen still delivers. It used to matter enormously
+    /// whether this pasted, because pasting could happen five times; now the
+    /// worst case is one splice into text nobody could see, against the
+    /// certainty of a message never sent.
+    func testAnUnreadableScreenStillDelivers() {
+        XCTAssertEqual(TmuxTransport.decide(line: .unreadable), .paste)
     }
 
     func testEmptyPromptLine() {
@@ -393,5 +359,118 @@ final class TmuxTransportTests: XCTestCase {
         XCTAssertEqual(live.matching(sessionId: "dup", pid: 1)?.status, "busy")
         XCTAssertNil(live.matching(sessionId: "dup", pid: 99))
         XCTAssertNil(live.matching(sessionId: "other", pid: 2))
+    }
+}
+
+/// The 25 Aug follow-on: the join landed and the Return never came.
+///
+/// `boxHolds` is an EQUALITY test — deliberately, since a substring test
+/// would accept a box holding our words PLUS somebody else's, which is the
+/// splice the floor check exists to refuse. After a join the box legitimately
+/// holds more than the payload, so asking it about the payload alone answers
+/// "no" about a paste that plainly worked, the echo poll reports `.absent`,
+/// and step 6 is never reached. Robert's words sat in the box, complete and
+/// unsent, five times over.
+final class JoinedBoxRecognitionTests: XCTestCase {
+
+    private let glyph = "❯"
+
+    private func box(_ rows: [String]) -> String {
+        (["────────", "\(glyph) \(rows[0])"]
+            + rows.dropFirst().map { "  \($0)" }
+            + ["────────"]).joined(separator: "\n")
+    }
+
+    func testAJoinedBoxIsNotRecognisedByThePayloadAlone() {
+        let screen = box(["https://example.com/link", "and here is the dictated part"])
+        XCTAssertFalse(
+            TmuxTransport.boxHolds(payload: "and here is the dictated part",
+                                   screen: screen, glyph: glyph),
+            "this is the false negative that swallowed the Return — pinned so the fix "
+            + "below cannot be quietly undone by passing the payload again")
+    }
+
+    func testItIsRecognisedByWhatTheBoxWasExpectedToHold() {
+        let screen = box(["https://example.com/link", "and here is the dictated part"])
+        let expected = "https://example.com/link and here is the dictated part"
+        XCTAssertTrue(
+            TmuxTransport.boxHolds(payload: expected, screen: screen, glyph: glyph))
+    }
+
+    /// The property that must survive the fix: expecting MORE than the payload
+    /// is not the same as accepting anything. A third party's line appearing
+    /// after the join still fails the check.
+    func testAStrangersExtraLineStillFails() {
+        let screen = box(["https://example.com/link", "and here is the dictated part",
+                          "something somebody else typed"])
+        let expected = "https://example.com/link and here is the dictated part"
+        XCTAssertFalse(
+            TmuxTransport.boxHolds(payload: expected, screen: screen, glyph: glyph))
+    }
+}
+
+/// The 26 Aug failure: a box holding five paragraphs classified as EMPTY.
+///
+/// Claude Code 2.1.246 draws the caret alone on the glyph row and starts the
+/// text on the next one. `classifyPromptLine` read only the glyph row, so
+/// `content` was empty, `decide` answered `.paste`, and every attempt pasted
+/// another copy — nothing cleared (clearing only happens on `.holds`) and the
+/// Return was never reached, because the echo check cannot match five copies
+/// against one payload. Two sessions in one morning, five glued copies each,
+/// nothing sent.
+///
+/// The fixture is the real shape, `capture-pane -p -J` of a live pane: glyph,
+/// U+00A0, then indented continuation rows.
+final class MultiRowComposerTests: XCTestCase {
+
+    private let glyph = "❯"
+
+    private func liveBox(_ rows: [String]) -> String {
+        (["  ⎿  some earlier output",
+          String(repeating: "─", count: 40),
+          "\(glyph)\u{00A0}"]
+         + rows.map { "  \($0)" }
+         + [String(repeating: "─", count: 40),
+            "  ⏵⏵ bypass permissions on (shift+tab to cycle)"]).joined(separator: "\n")
+    }
+
+    /// The bug itself, stated as the thing that must never be true again.
+    func testAFullBoxIsNeverReadAsEmpty() {
+        let screen = liveBox(["I think A sounds plausible, but I want to make sure,",
+                              "like, let's map out the flow paths."])
+        XCTAssertNotEqual(
+            TmuxTransport.classifyPromptLine(screen: screen, payload: "anything at all",
+                                             glyph: glyph),
+            .empty,
+            "an empty verdict is permission to paste again — five times, in the real case")
+    }
+
+    /// And the consequence, at the decision that acts on it.
+    func testAFullBoxIsNotPastedInto() {
+        let screen = liveBox(["somebody's half-typed line"])
+        let line = TmuxTransport.classifyPromptLine(screen: screen, payload: "ours",
+                                                    glyph: glyph)
+        XCTAssertNotEqual(TmuxTransport.decide(line: line), .paste)
+    }
+
+    /// Our own payload, drawn across rows the same way, is still ours — the
+    /// case that keeps a retry from clearing a paste that already worked.
+    func testOurOwnMultiRowPayloadIsRecognised() {
+        let payload = "I think A sounds plausible, but I want to make sure, "
+            + "like, let's map out the flow paths."
+        let screen = liveBox(["I think A sounds plausible, but I want to make sure,",
+                              "like, let's map out the flow paths."])
+        XCTAssertEqual(
+            TmuxTransport.classifyPromptLine(screen: screen, payload: payload, glyph: glyph),
+            .holds(ours: true))
+    }
+
+    /// A genuinely empty box still reads empty — the caret row and nothing
+    /// under it.
+    func testAnEmptyBoxStillReadsEmpty() {
+        XCTAssertEqual(
+            TmuxTransport.classifyPromptLine(screen: liveBox([]), payload: "ours",
+                                             glyph: glyph),
+            .empty)
     }
 }

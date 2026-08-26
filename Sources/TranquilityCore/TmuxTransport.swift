@@ -246,7 +246,71 @@ extension Array where Element == LiveSession {
 /// timer ever decides an outcome — every wait polls an observable
 /// postcondition, every retry is guarded by dedupe against the transcript, so
 /// a message can be retried forever without ever landing twice.
+/// One dispatch at a time per pane, across PROCESSES.
+///
+/// A composer is a single shared mutable thing, and two sends into it
+/// interleave exactly as badly as that sounds: the second reads the floor
+/// while the first is mid-paste, joins onto a half-written message, or clears
+/// it. Measured 26 Aug by the live drill — two `tbase send` calls with no gap,
+/// and one of the two messages was never delivered at all.
+///
+/// A file lock rather than an in-process one, because the second writer is
+/// usually a different process. `tbase` is a real dispatch door, not a lesser
+/// one (CLAUDE.md rule 7), and crons and a second panel are the same shape; an
+/// actor would serialise the app against itself and miss every case that
+/// actually happens. `DeliveryInFlight` does not cover this and never meant
+/// to: it is a lamp overlay describing what the panel is doing, not a mutex
+/// over a terminal.
+///
+/// Bounded, and it fails OPEN. A stuck holder must not silently stop delivery
+/// forever; after the ceiling this proceeds unlocked and says so, which is a
+/// risk of interleaving in a case that was 100% interleaved before this
+/// existed.
+enum PaneDispatchLock {
+
+    /// Long enough for a real dispatch (a confirmed one is ~1s, a failing one
+    /// runs its full verification window), short enough that a crashed holder
+    /// costs one delivery's latency rather than the delivery.
+    static let ceiling: TimeInterval = 45
+
+    /// Returns the held descriptor, or nil when it gave up waiting.
+    static func acquire(paneId: String, trace: ((String) -> Void)? = nil) -> Int32? {
+        let dir = Tmux.socketDirectory.deletingLastPathComponent()
+            .appendingPathComponent("locks", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Pane ids are "%12"; the percent is not a filename problem but the
+        // sanitising is free and the intent is clearer than trusting it.
+        let name = paneId.replacingOccurrences(of: "%", with: "pane-")
+        let fd = open(dir.appendingPathComponent("\(name).lock").path,
+                      O_CREAT | O_RDWR, 0o600)
+        guard fd >= 0 else { return nil }
+        let deadline = Date().addingTimeInterval(ceiling)
+        while Date() < deadline {
+            if flock(fd, LOCK_EX | LOCK_NB) == 0 { return fd }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        trace?("dispatch: pane \(paneId) lock not acquired in \(Int(ceiling))s — "
+            + "proceeding unlocked rather than dropping the message")
+        close(fd)
+        return nil
+    }
+
+    static func release(_ fd: Int32?) {
+        guard let fd else { return }
+        flock(fd, LOCK_UN)
+        close(fd)
+    }
+}
+
 public struct TmuxTransport: DispatchTransport {
+
+    /// One line per dispatch attempt, wired by the host like every other
+    /// Core trace. There was no record of what the composer held or what was
+    /// done about it, so "my link did not send" could only be answered by
+    /// reading a screenshot — and a transport nobody can audit is not
+    /// trustworthy however correct it is.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
     public let kind: TransportKind = .tmux
     public var verificationTimeout: TimeInterval
     public var pollInterval: TimeInterval
@@ -295,15 +359,42 @@ public struct TmuxTransport: DispatchTransport {
                 .matching(sessionId: target.sessionId, pid: pid)).isDialog
     }
 
+    /// Deliver `text` into a live TUI composer and prove it arrived.
+    ///
+    /// ONE PASTE PER SEND. That is the whole design, and it is a structural
+    /// property rather than a rule this function tries to follow: the paste
+    /// happens on exactly one code path, guarded by `pasted`, and no
+    /// observation of any kind can send control back to it. Everything that
+    /// used to decide "paste again" now decides at most "press Return again",
+    /// which is idempotent on an empty composer and therefore free.
+    ///
+    /// Rewritten 26 Aug after eight repairs in eight days, all of them the
+    /// same shape: the transport read a terminal's screen, got it wrong
+    /// because the terminal had changed how it draws, and the penalty for
+    /// getting it wrong was a second paste. Five glued copies of somebody's
+    /// sentence, unsent, twice in one morning. Accuracy of a screen scrape
+    /// was load-bearing for correctness, which is not a property that can be
+    /// made reliable by reading the screen more carefully — only by making
+    /// the reading non-critical.
+    ///
+    /// So the screen now has exactly one job, done once, before anything is
+    /// typed: protect text a human already put in the box. Nothing else can
+    /// see that, which is why it cannot be dropped. DELIVERY, by contrast, is
+    /// proved from the transcript — the harness's own first-hand record that
+    /// it took the message, `user` line or `queue-operation` enqueue — and
+    /// the transcript cannot be wrong about that in the way a repaint can.
+    ///
+    /// The second attempt exists, and it is gated on PROOF that the first
+    /// delivered nothing: a silent transcript AND an empty composer. Absence
+    /// of confirmation is not that proof; a composer holding our words is the
+    /// opposite of it. Anything else reports failure with the words left
+    /// exactly where they are, which is a state a person can see and act on.
     public func send(text: String, to target: DispatchTarget) async -> DispatchOutcome {
         guard let pane = target.pane else {
             return .failed(.injectionFailed("tmux target has no pane address"))
         }
-        // Local on purpose, not re-derived from `target.pid` 90 lines below:
-        // the V4 dialog re-check needs this pid to run, and today it only
-        // does because `readiness(for:)` already fails closed on a nil one —
-        // a non-local invariant whose failure mode, if it ever changed, would
-        // be the check silently skipping rather than erroring.
+        // Local on purpose: the dialog re-check needs this pid, and today it
+        // only runs because `readiness(for:)` fails closed on a nil one.
         guard let pid = target.pid else { return .failed(.targetGone) }
         let state = await readiness(for: target)
         let wasBusy = state == .busy
@@ -313,230 +404,151 @@ public struct TmuxTransport: DispatchTransport {
 
         let payload = DispatchText.flatten(text)
         guard !payload.isEmpty else { return .failed(.injectionFailed("empty text")) }
+
+        // Serialised per pane from here to the end, across processes. Taken
+        // AFTER the cheap refusals so a malformed send never queues behind a
+        // real one.
+        let lock = PaneDispatchLock.acquire(paneId: pane.paneId, trace: Self.trace)
+        defer { PaneDispatchLock.release(lock) }
+
         let start = Date()
         // Everything appended before this instant is history, and history is
-        // not evidence about this delivery. Without the watermark, a short
-        // reply ("yes") that ever appeared in an earlier message
-        // false-confirmed without sending — found by the 19 Aug audit hours
-        // after this transport shipped. See TranscriptWatcher.fileSize.
+        // not evidence about this delivery. Without it a short reply ("yes")
+        // that ever appeared in an earlier message false-confirms without
+        // sending — found by the 19 Aug audit hours after this shipped.
         let watermark = TranscriptWatcher.fileSize(atPath: target.transcriptPath
             ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId))
+        func elapsed() -> Int { Int(Date().timeIntervalSince(start) * 1000) }
 
-
-        // Every paste chip THIS send has put on screen. A chip is the only
-        // trace a collapsed paste leaves (see `pasteChips`), so it is also
-        // the only way a later attempt can tell "my own words, still
-        // unsubmitted" from "somebody else's floor" — the distinction step
-        // 3 exists to make, and the one that silently stopped working the
-        // moment a payload got long enough to collapse.
-        var ourChips: Set<String> = []
-
-        // Whether this send has ever seen its own words echoed into the box.
-        // It is the ONLY thing that separates the two opposite facts `.empty`
-        // reports with the same word — see the step 3 switch below.
-        var everEchoed = false
-
-        // Whether this attempt is appending to text somebody already typed.
-        // Reset every attempt: the box is re-read each time, and a line that
-        // was there a moment ago may have been submitted since.
-        var joining = false
-
-        let attempts = 5
-        attemptLoop: for attempt in 0..<attempts {
-            let lastAttempt = attempt == attempts - 1
-            joining = false
-            // Step 0 — dedupe against ground truth, EVERY attempt. This is
-            // what makes every retry below safe: our payload appended after
-            // the watermark is a delivery this send already made.
-            if alreadyDelivered(payload, target: target, fromByteOffset: watermark) {
-                return .confirmed(latencyMs: Int(Date().timeIntervalSince1970 * 1000
-                    - start.timeIntervalSince1970 * 1000))
+        for attempt in 0..<2 {
+            if attempt == 1 {
+                // The retry gate. Both conditions, and both are positive
+                // evidence rather than the absence of good news: the
+                // transcript has nothing of ours, and the composer is empty,
+                // so the first attempt provably delivered nothing anywhere.
+                if alreadyDelivered(payload, target: target, fromByteOffset: watermark) {
+                    return .confirmed(latencyMs: elapsed())
+                }
+                guard composerIsEmpty(pane, target: target) else { break }
             }
 
-            // Step 1 — the pane must exist on the live server, now.
             guard paneExists(pane) else { return .failed(.targetGone) }
-
-            // Step 2 — copy-mode is cleared and VERIFIED cleared. Measured:
-            // text sent into copy-mode is destroyed outright, not queued —
-            // it never reaches the program, on screen or in transcript.
+            // Text sent into copy-mode is destroyed outright — not queued, not
+            // shown. Cleared and VERIFIED cleared before anything is typed.
             if !clearMode(pane) {
                 return .failed(.injectionFailed("pane stuck in copy-mode"))
             }
+            if alreadyDelivered(payload, target: target, fromByteOffset: watermark) {
+                return .confirmed(latencyMs: elapsed())
+            }
 
-            // Step 3 — the floor check. A non-empty input line that is not
-            // our payload used to defer the whole dispatch rather than
-            // splice into it. Reversed 23 Aug, on the operator's own
-            // instruction, blunt and explicit: every pane this transport
-            // addresses is this machine's own terminal, there is no second
-            // human it could ever belong to, and a dispatch that arrives to
-            // find text already sitting there should still land — not sit
-            // in `.deferred(.floorHeld)` telling the one person who could
-            // ever answer it "try again in a moment" forever, which is what
-            // it did in practice (found live, 23 Aug: the same session hit
-            // this on every retry, because nothing was ever going to submit
-            // or clear that line on its own).
-            //
-            // Clearing first, not concatenating — reverted the SAME day,
-            // the hard way: a version that pasted onto the cursor without
-            // clearing (so a genuinely different pre-existing line would
-            // merge with ours) turned out to have no way to tell "someone
-            // else's line" apart from "MY OWN unconfirmed paste from the
-            // last retry" when `.holds(ours: true)`'s own detection missed
-            // (large, multi-paragraph payloads wrap across many terminal
-            // rows, which `classifyPromptLine`'s single-line capture was
-            // never built to follow). Every retry that missed pasted ANOTHER
-            // copy on top of the last, live-caught at four concatenated
-            // copies of the same message, unsent. Clearing first means the
-            // worst case is "the latest attempt's text lands," never
-            // "however many retries it took, glued together" — strictly
-            // safer, at the cost of the pre-existing line this branch exists
-            // to preserve. A retry-safe way to keep BOTH intact needs
-            // `classifyPromptLine` to actually track multi-row content
-            // first; that has not been built.
-            switch Self.decide(
-                line: promptLine(pane, payload: payload, glyph: target.promptGlyph,
-                                 placeholder: target.idlePlaceholder,
-                                 chip: target.pasteChip, ourChips: ourChips),
-                everEchoed: everEchoed,
-                firstAttempt: attempt == 0
-            ) {
-            case .paste:
+            // ── The one screen read. Its only question is what a human left
+            // in the box, and its only power is to preserve it.
+            var expectedInBox = payload
+            var pasted = false
+            let floor = Self.decide(line: promptLine(
+                pane, payload: payload, glyph: target.promptGlyph,
+                placeholder: target.idlePlaceholder, chip: target.pasteChip,
+                ourChips: []))
+
+            var joining = false
+            // One line per attempt, said out loud. There was no record of
+            // what the box held or what was done about it, so "my link did
+            // not send" could only be answered by forensics on a screenshot
+            // — and a transport nobody can audit cannot be trusted, however
+            // correct it is. Cheap: one line per send, not per poll.
+            Self.trace?("dispatch: \(target.sessionId.prefix(8)) attempt \(attempt) "
+                + "floor=\(floor) payload=\(payload.count)b")
+            switch floor {
+            case .returnOnly:
+                // Our own words are already sitting there unsubmitted, from a
+                // send that ended without them going in. Pasting would make
+                // two of them; Return makes one message.
                 break
-            case .stop:
-                // Submitted and accepted. The transcript may simply be behind
-                // (idle), or may not see it until the current turn ends (busy).
-                // Either way the words are in the tab and this send is done
-                // pasting; the outcome is decided after the loop.
-                if await landedInTranscript(payload, target: target,
-                                            fromByteOffset: watermark) {
-                    return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
-                }
-                break attemptLoop
             case .joinExisting:
-                // Keep what is already in the box and put ours after it.
-                // C-e first so "after" means after the text rather than
-                // wherever the cursor happened to be left; the newline that
-                // separates them rides the paste itself, which is why it does
-                // not submit early — bracketed paste is literal.
+                // Keep what is there and put ours after it, so the two things
+                // the user meant as one message arrive as one message. Read
+                // first: this is the only moment they are still separable.
+                if let rows = Self.boxRows(screen: screen(pane) ?? "",
+                                           glyph: target.promptGlyph) {
+                    let before = Self.collapsed(rows.joined(separator: " "))
+                    if !before.isEmpty { expectedInBox = before + " " + payload }
+                }
                 Tmux.run(["send-keys", "-t", pane.paneId, "C-e"], socket: pane.socketName)
                 joining = true
-            case .clearThenPaste:
-                // C-a then C-k (start-of-line, kill-to-end) rather than C-u
-                // alone, since C-u only clears BACK from wherever the cursor
-                // sits, and after a paste that never got submitted the
-                // cursor's position is not known.
-                Tmux.run(["send-keys", "-t", pane.paneId, "C-a"], socket: pane.socketName)
-                Tmux.run(["send-keys", "-t", pane.paneId, "C-k"], socket: pane.socketName)
-            case .returnOnly:
-                // Our text is already sitting unsubmitted — a previous
-                // attempt's paste landed and its Enter was eaten. Submit
-                // only — but re-probe first (gate finding V4, codebase audit
-                // 21 Aug: this branch has MORE elapsed time behind it than
-                // step 7's own re-check, since it only runs on attempt >= 2,
-                // after a full failed attempt's wait — the exact window a
-                // resume-depth dialog can pop in. A Return at a dialog spends
-                // a usage tier silently; standing down and retrying is free.
-                if dialogIsUp(target: target, pid: pid) { break attemptLoop }
+            case .paste:
+                break
+            }
+
+            if floor != .returnOnly {
+                // load-buffer over stdin: no shell, no argv, no per-key
+                // interpretation, byte-exact (measured at 1,587 chars with
+                // quotes and dollar signs intact). The ONLY paste in this
+                // function, and `pasted` is what says so afterwards.
+                guard case .success = Tmux.run(
+                    ["load-buffer", "-b", "tb-dispatch", "-"],
+                    socket: pane.socketName,
+                    stdin: Data((joining ? "\n" + payload : payload).utf8))
+                else { continue }
+                Tmux.run(["paste-buffer", "-b", "tb-dispatch", "-d", "-p", "-t", pane.paneId],
+                         socket: pane.socketName)
+                pasted = true
+
+                // Advisory, never a gate. A TUI takes a moment to draw a
+                // paste, and pressing Return into a half-ingested one is the
+                // race this waits out. It used to decide whether to paste
+                // AGAIN, which is what made a slow repaint into a duplicate;
+                // now a timeout here just means "press Return anyway", and
+                // Return on a composer that never received the paste does
+                // nothing at all.
+                _ = poll(deadline: 6.0, every: 0.05, until: {
+                    guard let text = screen(pane) else { return false }
+                    return text.contains(payload)
+                        || Self.boxHolds(payload: expectedInBox, screen: text,
+                                         glyph: target.promptGlyph)
+                        || !Self.pasteChips(screen: text, glyph: target.promptGlyph,
+                                            chip: target.pasteChip).isEmpty
+                })
+            }
+            _ = pasted
+
+            // ── Submit and prove it. Return is idempotent; the transcript is
+            // the witness. A dialog re-check before every one of them, because
+            // a Return at a modal ANSWERS it (gate finding V4) and a session
+            // can raise one between two of these.
+            for round in 0..<3 {
+                if dialogIsUp(target: target, pid: pid) { break }
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
-                if await landedInTranscript(payload, target: target,
+                let window: TimeInterval = round == 2 ? verificationTimeout : 4
+                if await landedInTranscript(payload, target: target, timeout: window,
                                             fromByteOffset: watermark) {
-                    return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
-                }
-                continue
-            }
-
-            // Step 4 — paste atomically. load-buffer over stdin means no
-            // shell, no argv, no AppleScript-literal escaping, no per-key
-            // interpretation; the byte-exactness was measured (1,587 chars,
-            // quotes and dollar signs intact).
-            //
-            // The chips already on screen are read FIRST, so that a chip
-            // seen afterwards is evidence about THIS paste and not about
-            // one already sitting there — the same shape as the transcript
-            // watermark two dozen lines above, and for the same reason:
-            // history is not evidence about this delivery.
-            let chipsBefore = Self.pasteChips(screen: screen(pane) ?? "",
-                                              glyph: target.promptGlyph,
-                                              chip: target.pasteChip)
-            guard case .success = Tmux.run(
-                ["load-buffer", "-b", "tb-dispatch", "-"],
-                socket: pane.socketName,
-                stdin: Data((joining ? "\n" + payload : payload).utf8))
-            else { continue }
-            Tmux.run(["paste-buffer", "-b", "tb-dispatch", "-d", "-p", "-t", pane.paneId],
-                     socket: pane.socketName)
-
-            // Step 5 — the payload is VISIBLY in the pane before Enter is
-            // ever pressed. This closes the gap the AppleScript transport
-            // lived with (text delivered but unsubmitted looks identical to
-            // text delivered and submitted): here the two are distinguishable,
-            // so "couldn't confirm" stops being an outcome the mechanism
-            // can produce on its own.
-            // Every target echoes — Claude Code's TUI by design (verified
-            // live 19 Aug), the test harness by its own write-back — so the
-            // landing check is unconditional. An eaten paste is VISIBLE as
-            // absence within 2s and safely retried; an invisible input
-            // buffer is exactly what allowed a double-paste splice under
-            // churn (measured 20 Aug, 29-in-60), so a second no-echo path
-            // does not exist any more.
-            //
-            // "Echoes" was read too literally, and the reading cost every
-            // long dictated reply (found live 23 Aug, twice in one
-            // afternoon: `[Pasted text #10]` and `[Pasted text #15]` left
-            // sitting in the box, never sent, reported as "couldn't confirm
-            // it landed"). A TUI echoes a paste in one of TWO ways — the
-            // text itself, or a chip standing in for it once the paste is
-            // too big to draw — and `screenContains` could only ever see
-            // the first. `pasteEcho` sees both, and both are the same fact:
-            // our words are in the box, Return is safe to press.
-            var echo = PasteEcho.absent
-            guard poll(deadline: 2.0, every: 0.05, until: {
-                echo = pasteEcho(payload, pane, target: target, chipsBefore: chipsBefore)
-                return echo != .absent
-            }) else {
-                continue    // a mode race ate the paste; loop — dedupe guards the retry
-            }
-            if case .chip(let token) = echo { ourChips.insert(token) }
-            // Our words are in the box. From here on this send may press Return
-            // again, but it may never paste again.
-            everEchoed = true
-
-            // Step 6 — submit. A Return on an empty prompt does nothing, so
-            // retrying Enter alone is safe; retrying the TEXT is what
-            // duplicates, and dedupe (step 0) already forbids that path.
-            Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
-
-            // Step 7 — ground truth. A no-echo target cannot show us an
-            // eaten paste, so betting the full verification window on every
-            // attempt turned one eaten paste into a burned attempt and, under
-            // enough churn, three burned attempts into a loud failure
-            // (measured 20 Aug: 2 of 30 under the adversarial drill). Short
-            // verifies on early attempts, the full window only on the last —
-            // the shape the 100/100 bash validation actually ran.
-            let window = lastAttempt ? verificationTimeout : 4
-            if await landedInTranscript(payload, target: target, timeout: window,
-                                        fromByteOffset: watermark) {
-                return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
-            }
-            // Enter may have been swallowed while the words arrived.
-            if stillHolding(payload, pane, target: target, ourChips: ourChips) {
-                // The one-Return retry, with the #163 lesson applied: a
-                // session can pop a modal between the first Enter and this
-                // one, and a Return at a dialog ANSWERS it (gate finding V4).
-                // Re-probe and stand down if a dialog is up.
-                if dialogIsUp(target: target, pid: pid) { break attemptLoop }
-                Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
-                if await landedInTranscript(payload, target: target, timeout: 3,
-                                            fromByteOffset: watermark) {
-                    return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
+                    Self.trace?("dispatch: \(target.sessionId.prefix(8)) confirmed after "
+                        + "\(round + 1) return(s), \(elapsed())ms")
+                    return .confirmed(latencyMs: elapsed())
                 }
             }
         }
+        Self.trace?("dispatch: \(target.sessionId.prefix(8)) NOT confirmed — "
+            + "boxEmpty=\(composerIsEmpty(pane, target: target)) wasBusy=\(wasBusy)")
 
-        // A busy session cannot echo the text into its transcript until the
-        // current turn ends — same doctrine as the Terminal transport.
+        // A busy session may hold the words in its own queue for a while; the
+        // enqueue record is read now, so this is genuinely the last resort
+        // rather than the ordinary busy path it used to be.
         if wasBusy { return .queued }
         return .failed(.verificationTimedOut)
+    }
+
+    /// Nothing in the composer — the second half of the retry gate.
+    /// Deliberately conservative: an unreadable box is NOT empty, because
+    /// "we could not see" must never authorise a second paste.
+    private func composerIsEmpty(_ pane: TmuxPaneAddress, target: DispatchTarget) -> Bool {
+        guard let text = screen(pane),
+              let rows = Self.boxRows(screen: text, glyph: target.promptGlyph)
+        else { return false }
+        let content = Self.collapsed(rows.joined(separator: " "))
+        if content.isEmpty { return true }
+        if let placeholder = target.idlePlaceholder, content == placeholder { return true }
+        return false
     }
 
     // MARK: observations (each one a postcondition something above polls)
@@ -564,6 +576,20 @@ public struct TmuxTransport: DispatchTransport {
         return !inMode(pane)
     }
 
+    /// Empty the composer, however many rows it is holding, and stop as soon
+    /// as it is empty rather than after a fixed number of keys. Bounded: an
+    /// unreadable box gets the same handful of attempts and no more.
+    static func clearBox(pane: TmuxPaneAddress, glyph: String,
+                         screen: () -> String?) {
+        for _ in 0..<12 {
+            let rows = boxRows(screen: screen() ?? "", glyph: glyph) ?? []
+            let text = collapsed(rows.joined(separator: " "))
+            if text.isEmpty { return }
+            Tmux.run(["send-keys", "-t", pane.paneId, "C-a"], socket: pane.socketName)
+            Tmux.run(["send-keys", "-t", pane.paneId, "C-k"], socket: pane.socketName)
+        }
+    }
+
     private func screen(_ pane: TmuxPaneAddress) -> String? {
         guard case .success(let out) = Tmux.run(
             ["capture-pane", "-p", "-J", "-t", pane.paneId],
@@ -586,10 +612,11 @@ public struct TmuxTransport: DispatchTransport {
     }
 
     private func pasteEcho(_ payload: String, _ pane: TmuxPaneAddress,
-                           target: DispatchTarget, chipsBefore: Set<String>) -> PasteEcho {
+                           target: DispatchTarget, chipsBefore: Set<String>,
+                           expectedInBox: String) -> PasteEcho {
         guard let text = screen(pane) else { return .absent }
         if text.contains(payload)
-            || Self.boxHolds(payload: payload, screen: text, glyph: target.promptGlyph) {
+            || Self.boxHolds(payload: expectedInBox, screen: text, glyph: target.promptGlyph) {
             return .literal
         }
         // Sorted so the choice is deterministic if a paste ever draws two
@@ -605,10 +632,11 @@ public struct TmuxTransport: DispatchTransport {
     /// and identity is the right one: is what sits there still the thing
     /// this send put there.
     private func stillHolding(_ payload: String, _ pane: TmuxPaneAddress,
-                              target: DispatchTarget, ourChips: Set<String>) -> Bool {
+                              target: DispatchTarget, ourChips: Set<String>,
+                              expectedInBox: String) -> Bool {
         guard let text = screen(pane) else { return false }
         if text.contains(payload)
-            || Self.boxHolds(payload: payload, screen: text, glyph: target.promptGlyph) {
+            || Self.boxHolds(payload: expectedInBox, screen: text, glyph: target.promptGlyph) {
             return true
         }
         return !Self.pasteChips(screen: text, glyph: target.promptGlyph,
@@ -681,81 +709,44 @@ public struct TmuxTransport: DispatchTransport {
         case unreadable
     }
 
-    /// What an attempt does with the input line it just read.
+    /// What a send does with the input line, decided once, before anything
+    /// is typed. Three outcomes, because there are only three things that can
+    /// be in the box: nothing, our own unsent words, or a person's.
     enum FloorAction: Equatable {
-        /// Nothing of ours is in the box and nothing of ours has ever been in
-        /// it: this is the first paste of this send.
+        /// An empty box. Paste.
         case paste
-        /// Somebody else's half-typed line, and we have not delivered yet.
-        case clearThenPaste
-        /// The same line, on the FIRST attempt: keep it and append ours to
-        /// it, so one submit sends both. Ruled 25 Aug — see `decide`.
-        case joinExisting
-        /// Our own words, still sitting unsubmitted. Press Return, never paste.
+        /// Our own words, already there and never submitted — from a send
+        /// that ended without its Return landing. Return, never paste: a
+        /// paste here is how you get two of the same message.
         case returnOnly
-        /// Our words went in and the box released them — accepted. Stop.
-        case stop
+        /// Somebody typed something. Keep it and put ours after it, so the
+        /// two things they meant as one message arrive as one message.
+        case joinExisting
     }
 
-    /// PASTE AT MOST ONCE PER SEND — the whole rule, in one pure function.
+    /// The floor decision, from the box alone.
     ///
-    /// `everEchoed` is what separates the two OPPOSITE facts `.empty` reports
-    /// with the same word: "a fresh box, paste here" and "the box just TOOK
-    /// our message." Without it they are indistinguishable, and the transport
-    /// takes the destructive reading.
+    /// It used to take `everEchoed` and `firstAttempt`, because the caller
+    /// could paste more than once per send and this had to keep answering
+    /// "is a second paste safe now". A send pastes once, so the question is
+    /// gone and so are the parameters — and with them `.stop`, which only
+    /// ever meant "you have already pasted", and `.clearThenPaste`, which
+    /// existed only to make room for pasting again. Deleting a person's
+    /// typing was never a goal; it was the cost of a retry that no longer
+    /// happens.
     ///
-    /// Found live 24 Aug (session 60fbc8e7): ONE dispatch into a mid-turn
-    /// session left FIVE identical messages in Claude Code's queue. A queued
-    /// message is not in the transcript — step 0's and step 7's only witness —
-    /// and it is not in the box either, so all five attempts read `.empty` and
-    /// pasted again. `attempts = 5`, and five is what landed.
-    ///
-    /// Deliberately NOT a function of `wasBusy`: that is sampled once before
-    /// the paste, so a session that goes busy in between would take the old
-    /// path and reproduce the bug exactly. The box is observable now; the
-    /// status is a memory of a moment that has passed.
-    /// `firstAttempt` exists for one branch: a pre-existing line is JOINED
-    /// rather than deleted, but only while nothing of ours has been pasted
-    /// yet. Ruled 25 Aug, from a live loss — Robert had pasted a URL into a
-    /// session, dictated an instruction that referred to it, and the URL was
-    /// cleared out from under him; the two facts he meant as one message
-    /// arrived as one message minus half of itself.
-    ///
-    /// This reverses the 23 Aug revert, and the thing that makes it safe now
-    /// is `everEchoed`, which did not exist then. That revert's failure was
-    /// "every retry that missed pasted ANOTHER copy on top of the last, live-
-    /// caught at four concatenated copies". PASTE AT MOST ONCE PER SEND makes
-    /// that shape unreachable: a send that has echoed never pastes again.
-    ///
-    /// The one hole `everEchoed` does not cover is a paste whose echo was
-    /// never detected — the mode-race `continue` at step 5, which deliberately
-    /// allows one more paste. Joining there could duplicate, so it does not:
-    /// after the first attempt this falls back to clearing, i.e. exactly
-    /// today's behaviour. The worst case is unchanged and the common case is
-    /// fixed, which is the only trade worth making here.
-    ///
-    /// Measured before it was written, in a real pane on a real session: a
-    /// bracketed paste of `"\n" + payload` appends a second line to the
-    /// composer without submitting, and one Return then delivers ONE user
-    /// message containing both, `'…/the-link\nAND HERE IS THE DICTATED PART'`.
-    static func decide(line: PromptLine, everEchoed: Bool,
-                       firstAttempt: Bool = true) -> FloorAction {
+    /// `.unreadable` pastes. With no second paste to fear, the cost of being
+    /// wrong here is a splice into text we could not see — which is what
+    /// joining does on purpose anyway — while the cost of refusing would be
+    /// a message silently not delivered.
+    static func decide(line: PromptLine) -> FloorAction {
         switch line {
-        case .empty, .unreadable:
-            // `.unreadable` fails toward pasting only while nothing of ours
-            // has landed; once it has, an unreadable screen is not permission
-            // to send the message a second time.
-            return everEchoed ? .stop : .paste
-        case .holds(ours: true):
-            return .returnOnly
-        case .holds(ours: false):
-            // Once ours has gone in, a line on the floor arrived AFTERWARDS
-            // and belongs to somebody else. Clearing it would delete a
-            // person's typing to make room for a message already delivered.
-            if everEchoed { return .stop }
-            return firstAttempt ? .joinExisting : .clearThenPaste
+        case .empty, .unreadable: return .paste
+        case .holds(ours: true): return .returnOnly
+        case .holds(ours: false): return .joinExisting
         }
     }
+
 
     /// What sits on the input line right now. Each harness's TUI draws its
     /// input box prefixed with its own glyph — Claude Code's `❯`, Codex's
@@ -783,12 +774,31 @@ public struct TmuxTransport: DispatchTransport {
         screen: String, payload: String, glyph: String = "❯", placeholder: String? = nil,
         chip: String? = nil, ourChips: Set<String> = []
     ) -> PromptLine {
-        let lines = screen.split(separator: "\n", omittingEmptySubsequences: false)
-        guard let box = lines.last(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix(glyph) })
-        else { return .empty }
-        let content = box.trimmingCharacters(in: .whitespaces)
-            .dropFirst(glyph.count)                         // the glyph itself
-            .trimmingCharacters(in: .whitespaces)
+        // THE WHOLE BOX, not the glyph's own row. Measured 26 Aug against
+        // Claude Code 2.1.246, from a live pane holding five glued copies of
+        // a message that was never sent:
+        //
+        //     ❯\u{00A0}
+        //       I think A sounds plausible, but I want to make sure, …
+        //       would actually change what we expect. …
+        //
+        // The caret sits alone on its row and the text begins on the next
+        // one. Reading only the glyph row, `content` was empty and a box
+        // holding five paragraphs classified as `.empty` — so `decide`
+        // answered `.paste`, every attempt pasted another copy, nothing ever
+        // cleared (clearing only happens on `.holds`), and the Return was
+        // never reached because the echo check cannot match five copies
+        // against one payload. Five pastes, no send, "couldn't confirm it
+        // landed", and the user's words left sitting in the box.
+        //
+        // `boxRows` already read continuation rows correctly and is what
+        // `boxHolds` has used since 23 Aug; this function simply was not
+        // asking it. The emptiness test is the one that has to be
+        // row-aware, because it short-circuits every check below it — a
+        // wrong `.empty` is not a missed observation, it is permission to
+        // paste again.
+        guard let rows = boxRows(screen: screen, glyph: glyph) else { return .empty }
+        let content = collapsed(rows.joined(separator: " "))
         if content.isEmpty { return .empty }
         // A live bug, found only by actually dispatching to a real idle
         // Codex composer (22 Aug): its own idle hint text ("Ask Codex to do
