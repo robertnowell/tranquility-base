@@ -57,6 +57,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// every 1.5 seconds behind the last one that has not come back.
     var waitingProbeInFlight = false
 
+    /// Probes started and probes finished, monotonic.
+    ///
+    /// `waitingProbeInFlight` cannot answer "did MY probe run", because this
+    /// app probes on a 1.5-second timer and the flag belongs to whichever
+    /// probe is current. `refreshIsCheapDrill` asserted on it anyway and
+    /// failed on the first deploy that ran it: its own probe had long since
+    /// completed (the badge had the answer) while the flag read true for the
+    /// timer's next one. Counters are the fix, because a count that went up
+    /// cannot be somebody else's.
+    var waitingProbesStarted = 0
+    var waitingProbesCompleted = 0
+
     /// Tap versus hold on the same chord. A tap plays the next waiting update; a
     /// hold records a reply to whatever last spoke. One gesture, two verbs — which
     /// beats two chords to remember, and the boundary is unambiguous in practice
