@@ -30,10 +30,19 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 360),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+            styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered, defer: false)
+        // The first thing anyone sees of this app must look like this app.
+        // Ruled 26 Aug: the stock-AppKit checklist "has a completely different
+        // colour scheme from the rest of the app", which on a first impression
+        // is the whole impression. Same ground, same face, same ink ramp as the
+        // panel — `StateLegend.Palette` and `ChromeType`, not system defaults.
         window.title = "Tranquility Base"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = StateLegend.Palette.surface
         window.center()
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -97,17 +106,25 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         stack.edgeInsets = NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        stack.addArrangedSubview(label("Tranquility Base", size: 18, weight: .semibold))
-        stack.addArrangedSubview(label(
-            "When a coding session finishes: tap ⌃⌥ to hear what happened, hold ⌥ to "
-            + "reply out loud (⌥⌥ locks hands-free), ⇧ pauses, ⌃⇧ dismisses.",
-            size: 12, secondary: true, width: 420))
+        stack.addArrangedSubview(wordmark())
 
-        stack.addArrangedSubview(spacer(4))
-        stack.addArrangedSubview(label("Please do these first — in order. The app is not "
-                                       + "usable until the required ones are done.",
-                                       size: 12, weight: .medium, width: 420))
-        let progress = label("", size: 11, secondary: true, width: 420)
+        // What the app IS, before anything about how to drive it. The controls
+        // note that used to open this window is the LAST thing in onboarding,
+        // not the first: nobody needs the chord vocabulary before they have
+        // decided the thing is worth setting up.
+        stack.addArrangedSubview(label(
+            "Manage a team of coding agents with your voice and two keys.",
+            size: 15, weight: .medium, width: 560))
+
+        // Every mark is named. Ruled 26 Aug, and already half-written at
+        // `StateLegend.controlsNote`: a bare glyph is a shape most people
+        // cannot say out loud, and a key you cannot name is a key you cannot
+        // press. The mark earns its place by sitting NEXT TO the word, never
+        // instead of it.
+        stack.addArrangedSubview(keycaps())
+
+        stack.addArrangedSubview(spacer(10))
+        let progress = sectionLabel("")
         progressLabel = progress
         stack.addArrangedSubview(progress)
 
@@ -116,35 +133,37 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         }
 
         stack.addArrangedSubview(spacer(8))
+        // One sentence. The long version of this note said four true things and
+        // was, by the same ruling that removed the controls block from the top
+        // of this window, "way too much" for a screen whose job is to get three
+        // switches flipped.
         let note = label(
-            "macOS only lists an app in a Privacy pane after it has asked once, and "
-            + "Grant is what does that ask. If a switch is off, flip it. Most rows go "
-            + "green within a second; one that needs the app to restart says so, and "
-            + "waits for the rest of the list before asking.",
-            size: 11, secondary: true, width: 420)
+            "Grant is what makes macOS ask — until an app has asked, it is not "
+            + "listed in the Privacy pane at all.",
+            size: 11, secondary: true, width: 560)
         stack.addArrangedSubview(note)
 
-        let restartNote = label("", size: 11, secondary: true, width: 420)
+        let restartNote = label("", size: 11, secondary: true, width: 560)
         restartNote.isHidden = true
         self.restartNote = restartNote
         stack.addArrangedSubview(restartNote)
 
-        let restart = NSButton(title: "Restart Tranquility Base",
-                               target: self, action: #selector(restartTapped))
-        restart.bezelStyle = .rounded
+        let restart = door("Restart Tranquility Base", ink: StateLegend.Palette.fault,
+                           action: #selector(restartTapped))
         restart.isHidden = true
         restartButton = restart
         stack.addArrangedSubview(restart)
 
-        let done = NSButton(title: "Start using Tranquility Base",
-                            target: self, action: #selector(doneTapped))
-        done.bezelStyle = .rounded
+        let done = door("Start using Tranquility Base", ink: StateLegend.Palette.ready,
+                        action: #selector(doneTapped))
         done.keyEquivalent = "\r"
         done.isEnabled = false
         doneButton = done
         stack.addArrangedSubview(done)
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 360))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 430))
+        container.wantsLayer = true
+        container.layer?.backgroundColor = StateLegend.Palette.surface.cgColor
         container.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: container.topAnchor),
@@ -162,33 +181,36 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     private func permissionRow(_ kind: Permissions.Kind, step: Int) -> NSView {
         let row = NSStackView()
         row.orientation = .horizontal
-        row.spacing = 8
+        row.spacing = 10
         row.alignment = .firstBaseline
 
         let dot = NSTextField(labelWithString: StateLegend.Glyph.dot)
-        dot.font = .systemFont(ofSize: 12)
+        dot.font = ChromeType.mono(ofSize: 11, weight: .regular)
+        dot.drawsBackground = false
         rows[kind] = dot
         row.addArrangedSubview(dot)
 
         let name = NSTextField(labelWithString:
             "\(step). " + kind.title + (kind.isRequired ? "" : "  (optional)"))
-        name.font = .systemFont(ofSize: 12, weight: .medium)
-        nameLabels[kind] = name
+        name.font = ChromeType.mono(ofSize: 12, weight: .medium)
+        name.textColor = StateLegend.Palette.ink
+        name.drawsBackground = false
         name.translatesAutoresizingMaskIntoConstraints = false
-        name.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        name.widthAnchor.constraint(equalToConstant: 250).isActive = true
+        nameLabels[kind] = name
         row.addArrangedSubview(name)
 
         let detail = NSTextField(wrappingLabelWithString: "")
-        detail.font = .systemFont(ofSize: 11)
-        detail.textColor = .secondaryLabelColor
+        detail.font = ChromeType.mono(ofSize: 11, weight: .regular)
+        detail.textColor = StateLegend.Palette.hint
+        detail.drawsBackground = false
         detail.translatesAutoresizingMaskIntoConstraints = false
-        detail.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        detail.widthAnchor.constraint(equalToConstant: 215).isActive = true
         details[kind] = detail
         row.addArrangedSubview(detail)
 
-        let button = NSButton(title: "Grant", target: self, action: #selector(grantTapped(_:)))
-        button.bezelStyle = .rounded
-        button.controlSize = .small
+        let button = door("Grant", ink: StateLegend.Palette.accent,
+                          action: #selector(grantTapped(_:)))
         button.identifier = NSUserInterfaceItemIdentifier(kind.title)
         grantButtons[kind] = button
         row.addArrangedSubview(button)
@@ -204,10 +226,65 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
             // registers the app in the Settings pane so it can be toggled at all.
             if await Permissions.request(kind) { refresh(); return }
             Permissions.openSettings(for: kind)
+            refresh()
         }
     }
 
     @objc private func doneTapped() { window?.close() }
+
+    // MARK: - Chrome
+
+    /// The panel signs the top of this window the way it signs its own corner.
+    private func wordmark() -> NSTextField {
+        let field = NSTextField(labelWithString: "")
+        let font = ChromeType.mono(ofSize: 10, weight: .regular)
+        field.attributedStringValue = ChromeType.line(
+            "TRANQUILITY BASE", font: font,
+            color: StateLegend.Palette.hint, tracking: 2.2)
+        field.font = font
+        field.drawsBackground = false
+        return field
+    }
+
+    /// The two keys, each mark beside its name.
+    private func keycaps() -> NSView {
+        let font = ChromeType.mono(ofSize: 12, weight: .regular)
+        let field = NSTextField(labelWithString: "")
+        // Through the composer, for the same reason `Controls` goes through it:
+        // a line that is nothing but marks beside words is the last place that
+        // should be setting a plain string and hoping the glyphs sit straight.
+        field.attributedStringValue = ChromeType.line(
+            "⌃ Control     ⌥ Option", font: font,
+            color: StateLegend.Palette.ink, tracking: 0.4)
+        field.font = font
+        field.drawsBackground = false
+        return field
+    }
+
+    /// A quiet section rule, in the panel's smallest voice.
+    private func sectionLabel(_ text: String) -> NSTextField {
+        let field = NSTextField(labelWithString: text)
+        field.font = ChromeType.mono(ofSize: 10, weight: .regular)
+        field.textColor = StateLegend.Palette.hint
+        field.drawsBackground = false
+        return field
+    }
+
+    /// A door, not a bezel. The panel has no filled buttons anywhere; a chrome
+    /// button here would be the same mistake as a light window.
+    private func door(_ title: String, ink: NSColor, action: Selector) -> ConsoleButton {
+        let button = ConsoleButton(title: title, target: self, action: action)
+        button.isBordered = false
+        button.bezelStyle = .inline
+        let font = ChromeType.mono(ofSize: 11, weight: .medium)
+        button.font = font
+        button.reink = { [weak button] color in
+            button?.attributedTitle = ChromeType.line(
+                title + " ›", font: font, color: color)
+        }
+        button.restingInk = ink
+        return button
+    }
 
     /// One restart at the end, never one per permission — and the count is read
     /// from the system, never stored.
@@ -235,18 +312,34 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         let current = states.first { $0.1 != .active }?.0
 
         for (kind, state) in states {
+            // The panel's own lamp vocabulary, not system colours: green is
+            // done, blue is underway with nothing for you to do, amber is
+            // needs-you, and an unlit lamp is a socket. `pendingRestart` is
+            // BLUE rather than amber on purpose — it is genuinely underway and
+            // deliberately not yet actionable, which is the batching decision
+            // stated in colour instead of only in a note.
             rows[kind]?.textColor = {
                 switch state {
-                case .active: return .systemGreen
-                case .pendingRestart: return .systemOrange
-                case .restricted, .denied: return .systemRed
-                case .notAsked: return kind.isRequired ? .tertiaryLabelColor
-                                                       : .quaternaryLabelColor
+                case .active: return StateLegend.Palette.ready
+                case .pendingRestart: return StateLegend.Palette.working
+                case .restricted, .denied: return StateLegend.Palette.fault
+                case .notAsked: return kind.isRequired ? StateLegend.Palette.socket
+                                                       : StateLegend.Palette.faint
                 }
             }()
+            details[kind]?.textColor = state == .denied || state == .restricted
+                ? StateLegend.Palette.fault : StateLegend.Palette.hint
             details[kind]?.stringValue = Self.detail(kind, state)
             grantButtons[kind]?.isHidden = (state == .active || state == .pendingRestart)
-            grantButtons[kind]?.title = state == .denied ? "Open Settings" : "Grant"
+            if let button = grantButtons[kind] as? ConsoleButton {
+                let title = state == .denied ? "Open Settings" : "Grant"
+                let font = ChromeType.mono(ofSize: 11, weight: .medium)
+                button.reink = { [weak button] color in
+                    button?.attributedTitle = ChromeType.line(
+                        title + " ›", font: font, color: color)
+                }
+                button.restingInk = StateLegend.Palette.accent
+            }
 
             // Dim what is not the user's business yet, and never dim the row
             // they are on or a row that still needs them.
@@ -256,7 +349,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         }
 
         let (done, total) = Permissions.progress
-        progressLabel?.stringValue = "\(done) of \(total) done"
+        progressLabel?.stringValue = "SETUP · \(done) OF \(total) DONE"
 
         // The restart is offered as an ACTION only when it is genuinely the next
         // one — every row either finished or waiting on the relaunch. Offering
@@ -271,12 +364,9 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         restartButton?.isHidden = !readyToRestart
         if !pending.isEmpty {
             let names = pending.map(\.title).joined(separator: " and ")
-            let subject = "\(names) \(pending.count == 1 ? "is" : "are") granted, but macOS "
-                + "only hands it to an app that starts up with it."
             restartNote?.stringValue = readyToRestart
-                ? subject + " That is the last step — one restart and you are done."
-                : subject + " Finish the rest of the list first; one restart at the "
-                          + "end picks up everything at once."
+                ? "Last step: restart, and \(names) comes with you."
+                : "\(names) needs a restart. Finish the list first — one restart at the end."
         }
 
         // The required set completes the checklist; the optional row never holds
@@ -304,9 +394,9 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         switch state {
         case .active: return "done"
         case .pendingRestart: return "granted — restart to finish"
-        case .denied: return "denied earlier. Switch it on in Settings"
+        case .denied: return "denied earlier"
         case .restricted: return "restricted by policy"
-        case .notAsked: return "not done yet. Click Grant"
+        case .notAsked: return "not done yet"
         }
     }
 
@@ -345,8 +435,8 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         content.layoutSubtreeIfNeeded()
         let stackSize = content.subviews.first?.fittingSize ?? content.frame.size
         content.frame = NSRect(origin: .zero,
-                               size: NSSize(width: max(stackSize.width, 500),
-                                            height: max(stackSize.height, 360)))
+                               size: NSSize(width: max(stackSize.width, 640),
+                                            height: max(stackSize.height, 430)))
         content.layoutSubtreeIfNeeded()
 
         guard let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else {
@@ -370,8 +460,9 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         secondary: Bool = false, width: CGFloat? = nil
     ) -> NSTextField {
         let field = NSTextField(wrappingLabelWithString: text)
-        field.font = .systemFont(ofSize: size, weight: weight)
-        field.textColor = secondary ? .secondaryLabelColor : .labelColor
+        field.font = ChromeType.mono(ofSize: size, weight: weight)
+        field.textColor = secondary ? StateLegend.Palette.hint : StateLegend.Palette.ink
+        field.drawsBackground = false
         field.isSelectable = false
         if let width {
             field.translatesAutoresizingMaskIntoConstraints = false

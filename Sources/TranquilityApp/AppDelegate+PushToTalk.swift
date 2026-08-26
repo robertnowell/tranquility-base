@@ -98,7 +98,7 @@ extension AppDelegate {
                 // rather than advancing it. A rapid double-press composes
                 // into "next agent": the first press lands on the grid, and
                 // from the grid the second press invites the next agent below.
-                goHomeFromCard(via: "⌃⌥")
+                goHomeFromCard(via: "⌃⌥")  // key-names:exempt — log label
                 return
             }
             // From hidden, ⌃⌥ surfaces the grid and stops (ruled 05 Aug):
@@ -199,7 +199,7 @@ extension AppDelegate {
                 guard micGranted else { return }
                 if recorder.isRecording {
                     Permissions.log("hands-free: refused, mic already live")
-                    lastStatusLine = "mic already live, tap ⌥ to send"
+                    lastStatusLine = "mic already live, tap ⌥ Option to send"
                     return
                 }
                 // ⌥⌥ from the read-back is Don't send, then ⌥⌥ (ruled 18 Aug).
@@ -464,7 +464,7 @@ extension AppDelegate {
                 // stomped-pill incident left the recorder live behind an idle
                 // facade and every press landed here, invisibly.
                 Permissions.log("reply: refused, mic already live")
-                lastStatusLine = "mic already live, tap ⌥ to send"
+                lastStatusLine = "mic already live, tap ⌥ Option to send"
                 return
             }
             // Open issue #7 is NOT wired here, deliberately. `canStartReply` as a
@@ -779,7 +779,7 @@ extension AppDelegate {
                         lastStatusLine = "playback failed, still unread"
                         hud.showResult(
                             "Playback failed (\(failure)). It's still waiting. "
-                            + "tap ⌃⌥ to hear it again.")
+                            + "tap ⌃ Ctrl + ⌥ Option to hear it again.")
                     } else {
                         // No read-state claim here: stopping it yourself OPENS
                         // the turn (13 Aug), stopping it before any audio does
