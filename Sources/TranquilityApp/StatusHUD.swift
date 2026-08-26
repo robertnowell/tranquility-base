@@ -586,6 +586,11 @@ final class StatusHUD: NSObject {
         currentTarget = nil
         awaitingGreetingBinding = true
         face = Face(title: label, body: line)
+        // The one visible sign, from the instant the card paints, that
+        // something is actually happening: `bindGreeting` clears it on
+        // success, `showResult` clears it on failure (both guarded on
+        // `awaitingGreetingBinding`, so neither can outlive this card).
+        face.placardOverride = StateLegend.startingAgentPlacard
         render()
         return true
     }
@@ -613,11 +618,33 @@ final class StatusHUD: NSObject {
         // guard in `adoptTarget` would otherwise refuse the very call it exists
         // to make room for.
         awaitingGreetingBinding = false
+        // Answered: the agent this card was waiting on has arrived, so the
+        // "Starting agent..." pill has nothing left to say.
+        face.placardOverride = ""
         adoptTarget(sessionId: sessionId, pid: pid, label: label, cwd: cwd)
         // The doors are derived from the target, so the card grows GO TO AGENT
         // and its hub link at the moment it acquires one.
         render()
         return true
+    }
+
+    /// The greeting card's own launch is now known to have failed (its
+    /// `PendingLaunch.abandon()` was just called): clears the "Starting
+    /// agent..." pill so the card stops claiming activity that is not
+    /// happening. Deliberately its own call, not folded into `showResult`:
+    /// a capture fault can arrive on this same card while the launch is
+    /// still genuinely pending (a dead microphone, say), and the greeting
+    /// drill's `boundAfterAMicFault` proves that launch can still land fine
+    /// afterward. Only the two call sites that actually gave up on the
+    /// launch (AppDelegate+Sessions.swift, the launch-error and
+    /// registration-timeout branches) know that happened, so only they call
+    /// this. Guarded on `awaitingGreetingBinding` the same way `bindGreeting`
+    /// is: a launch that has already been answered, one way or the other,
+    /// has nothing left for this to clear.
+    func markLaunchFailed() {
+        guard awaitingGreetingBinding else { return }
+        face.placardOverride = ""
+        render()
     }
 
     /// The first reply to a session asks once, showing the words that are about to
@@ -1043,6 +1070,16 @@ final class StatusHUD: NSObject {
         // reason the read-back did. Amber either way; the channel does not
         // change, only the slot it speaks from.
         if face.hasCard, cardIsTheSubject, failedDuringCapture || greetingAwaitsItsSession {
+            // NOT where the "Starting agent..." pill is answered, on
+            // purpose: this fires for a capture fault that merely arrived
+            // while the card was up (a dead microphone, say), and the
+            // greeting drill's own `boundAfterAMicFault` proves the launch
+            // can still land fine afterward ("the card survives its
+            // microphone"). Clearing the pill here would claim the launch
+            // had failed when this code has no idea whether it did.
+            // `markLaunchFailed()` is the honest, narrower signal: only the
+            // two call sites that actually call `PendingLaunch.abandon()`
+            // know that.
             face.captureFault = message
         } else {
             // The card names the agent the failure is ABOUT, and therefore carries
