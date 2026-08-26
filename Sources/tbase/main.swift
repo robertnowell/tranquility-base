@@ -612,13 +612,36 @@ case "reconcile":
         // Kick off an investigation instead of reacting to one (ruled 05 Aug).
         // Optional argument overrides the directory; the command is fixed in v1.
         SessionLauncher.trace = { print($0) }
-        let dir = args.count > 1 ? (args[1] as NSString).expandingTildeInPath
-                                 : SessionLauncher.defaultDirectory
-        switch SessionLauncher.launch(directory: dir) {
+        // --codex: a door onto the exact fresh-launch-and-register path the
+        // panel's own newSession() uses (default launcher, 26 Aug) — the
+        // same reasoning as `tbase end` below, a headless way to exercise a
+        // REAL launch without deploying a build. This is what proved the
+        // registration fix live: a fresh, message-less Codex launch never
+        // wrote a rollout to discover (Codex only writes one after the
+        // FIRST TURN), so the old poll timed out on every single launch,
+        // silently. Now polls CodexRollout.threadWriterLocksDirectory
+        // instead, which Codex writes to immediately.
+        let useCodex = args.contains("--codex")
+        let adapter: any HarnessAdapter = useCodex ? CodexAdapter() : ClaudeCodeAdapter()
+        let dirArg = args.first(where: { $0 != "--codex" && $0 != "new" })
+        let dir = dirArg.map { ($0 as NSString).expandingTildeInPath }
+            ?? AgentDefaults.directory(for: adapter.id)
+        let command = AgentDefaults.load(for: adapter.id)
+        let before = useCodex ? Set(CodexRollout.liveThreadIds())
+                              : Set((ClaudeAgentsCLI().sessions() ?? [])
+                                    .filter { $0.cwd == dir }.map(\.sessionId))
+        switch SessionLauncher.launch(directory: dir, command: command, adapter: adapter) {
         case .success:
-            print("detached tmux session (attach on demand): "
-                + "`\(SessionLauncher.defaultCommand)` in \(dir)")
-            print("its turns enter the loop as soon as the session first stops")
+            print("detached tmux session (attach on demand): `\(command)` in \(dir)")
+            print("waiting for it to register…")
+            let sessionId = useCodex
+                ? LaunchGreeting.awaitCodexRegistration(excluding: before)
+                : LaunchGreeting.awaitRegistration(directory: dir, excluding: before)
+            if let sessionId {
+                print("registered: \(sessionId)")
+            } else {
+                print("did not register within 30s (see the trace lines above)")
+            }
         case .failure(let error):
             print("couldn't launch: \(error.message)")
             print("(a missing tmux binary or `new-session` failing is the usual suspect —")

@@ -181,6 +181,54 @@ public enum CodexRollout {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")
     }
 
+    /// Where Codex writes one empty `<threadId>.lock` file per thread, the
+    /// moment the thread is created — found live, 26 Aug, chasing a fresh
+    /// Codex launch that never registered: `sessionsDirectory`'s own
+    /// rollout file does not exist until the FIRST turn completes, so
+    /// polling it for a brand-new, message-less launch waits forever. This
+    /// directory is the one place a thread id is knowable before that.
+    ///
+    /// The lock has no `cwd` in it (a bare UUID filename) — unlike a
+    /// rollout, it cannot say WHICH directory a new thread belongs to, only
+    /// THAT one now exists. `awaitCodexRegistration` accepts that trade the
+    /// same way Claude Code's own registration already does: "the newest
+    /// one that appeared since we launched" is the trust model both share,
+    /// not a guarantee.
+    public static var threadWriterLocksDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/thread-writer-locks")
+    }
+
+    /// Every thread id with a lock on disk right now, newest first — a
+    /// plain directory listing, stripped of `.lock`. Not cached, not
+    /// windowed: unlike `discoverCodex`'s archive walk (which parses every
+    /// kept rollout's full content), this is one `contentsOfDirectory` call
+    /// plus a per-file mtime stat, cheap enough to poll every half-second
+    /// rather than every two.
+    ///
+    /// Newest-first, not just "new since known": this machine can have
+    /// several Codex processes creating threads at once (this repo's own
+    /// multi-session drills among them), so on a poll where more than one
+    /// lock is new, the most recently created is the one this launch most
+    /// likely started — an ordering, not a guarantee, the same trust level
+    /// `awaitRegistration`'s own "first new id" already accepts for Claude
+    /// Code.
+    public static func liveThreadIds(locks: URL = threadWriterLocksDirectory) -> [String] {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: locks.path) else { return [] }
+        return names.filter { $0.hasSuffix(".lock") }
+            // A thread id, not any lock: found live, this same day, sharing
+            // this directory with `.coordination.lock` — a stable file with
+            // no thread behind it at all. UUID-shaped only.
+            .filter { UUID(uuidString: String($0.dropLast(5))) != nil }
+            .compactMap { name -> (String, Date)? in
+                let modified = (try? fm.attributesOfItem(atPath: locks.appendingPathComponent(name).path)[.modificationDate] as? Date) ?? nil
+                return modified.map { (String(name.dropLast(5)), $0) }
+            }
+            .sorted { $0.1 > $1.1 }
+            .map(\.0)
+    }
+
     /// The rollout file for one thread id — FOUND from the filename Codex
     /// itself writes (`rollout-<timestamp>-<threadId>.jsonl`), not derived
     /// from a guessed directory layout the way `TranscriptArchive` has no
