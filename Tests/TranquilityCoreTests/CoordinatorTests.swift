@@ -304,6 +304,34 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertTrue(try coordinator.waiting().map(\.sessionId).contains("human"))
     }
 
+    /// The fuller proof: being counted as "waiting" (above) is necessary but
+    /// not sufficient — `dispatch`'s OWN readiness resolution is a second,
+    /// independent call to `agents.sessions()` (Coordinator+ReplyPipeline.
+    /// swift), found live the same day a Codex session's greeting card
+    /// correctly stayed up and the reply that answered it still got refused
+    /// with "can't take this yet." A full submitReply → confirmAndSend round
+    /// trip against a session `agents` has never heard of must actually
+    /// reach the transport.
+    func testACodexSessionsReplyActuallyDispatches() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(
+            tmuxTransport: transport, sessionLive: false,
+            ownership: StubOwnershipStore(records: [SessionOwnershipRecord(
+                sessionId: "codex-1", harness: "codex",
+                pid: Int(ProcessInfo.processInfo.processIdentifier),
+                paneId: "%1", socketName: "tb", sessionName: "tb-codex-1", paneTty: "/dev/ttys999")]))
+        try append(session: "codex-1")
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, _, _, let sessionId) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+        XCTAssertEqual(sessionId, "codex-1")
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("a Codex session agents has never heard of must still receive the reply") }
+        XCTAssertEqual(transport.sent.count, 1)
+    }
+
     // MARK: - The full loop
 
     func testAnnounceThenReplyRoutesBackToTheSessionThatSpoke() async throws {
