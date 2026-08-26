@@ -1107,7 +1107,8 @@ extension AppDelegate {
     /// is for — the artifact invitation, which hands the session its opening
     /// prompt. Everywhere else the greeting is the point: a launched agent is a
     /// waiting agent, and it says so.
-    func newSession(directory dir: String, command: String, greet: Bool = true) {
+    func newSession(directory dir: String, command: String, greet: Bool = true,
+                    adapter: any HarnessAdapter = ClaudeCodeAdapter()) {
         let label = (dir as NSString).lastPathComponent
         let line = LaunchGreeting.nextLine()
 
@@ -1146,15 +1147,31 @@ extension AppDelegate {
             }
         }
 
+        // Which harness this launch is registered against — the one branch
+        // point in an otherwise harness-generic function, because the two
+        // registration mechanisms are genuinely different facts about the
+        // world (a live registry to poll vs a disk walk to diff), not a
+        // difference `HarnessAdapter`'s capability flags can express as one
+        // more boolean. See `LaunchGreeting.awaitCodexRegistration`'s own
+        // doc comment for why Codex needs its own poller rather than
+        // reusing `awaitRegistration`.
+        let isCodex = adapter.id == CodexAdapter().id
+
         Task.detached(priority: .userInitiated) { [weak self] in
-            let before = Set((ClaudeAgentsCLI().sessions() ?? [])
-                .filter { $0.cwd == dir }.map(\.sessionId))
+            let before: Set<String>
+            if isCodex {
+                before = Set(SessionDiscovery.discoverCodex().sessions
+                    .filter { $0.cwd == dir }.map(\.sessionId))
+            } else {
+                before = Set((ClaudeAgentsCLI().sessions() ?? [])
+                    .filter { $0.cwd == dir }.map(\.sessionId))
+            }
             // `acceptTrustPrompt: false` — we run that watcher ourselves, in
             // parallel, immediately below. It blocks for at least two settled
             // polls and up to thirty seconds, and until now the registration
             // this greeting binds to queued behind it.
             let result = SessionLauncher.launch(directory: dir, command: command,
-                                                acceptTrustPrompt: false)
+                                                acceptTrustPrompt: false, adapter: adapter)
             guard case .success(let tty) = result else {
                 // Every exit from here on releases the promise. A waiter left
                 // hanging is a reply that never lands and never says why, which
@@ -1169,7 +1186,7 @@ extension AppDelegate {
                 return
             }
             Task.detached(priority: .utility) {
-                SessionLauncher.watchForTrustPrompt(tty: tty)
+                SessionLauncher.watchForTrustPrompt(tty: tty, adapter: adapter)
             }
             await MainActor.run { [weak self] in
                 self?.lastStatusLine = "new session launched"
@@ -1181,8 +1198,10 @@ extension AppDelegate {
             // auto-answered when it needs a human. If nothing registers, say so
             // — a walked-away launch must not be a silently stillborn
             // investigation.
-            guard let sessionId = LaunchGreeting.awaitRegistration(
-                directory: dir, excluding: before) else {
+            let sessionIdOrNil = isCodex
+                ? LaunchGreeting.awaitCodexRegistration(directory: dir, excluding: before)
+                : LaunchGreeting.awaitRegistration(directory: dir, excluding: before)
+            guard let sessionId = sessionIdOrNil else {
                 launch?.abandon()
                 Permissions.log("launcher: no session registered in \(dir) after 30s")
                 await MainActor.run { [weak self] in
