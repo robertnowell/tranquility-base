@@ -212,9 +212,18 @@ extension Coordinator {
         // already carries the pid and pane, so there is nothing to wait
         // for, unlike the grace period's actual job of tolerating Claude
         // Code's OWN transient registry gaps.
+        // Which of the two sources answered — carried forward so the
+        // `DispatchTarget` built below can ask `TmuxTransport.readiness(for:)`
+        // the Codex-shaped question instead of the Claude Code-shaped one it
+        // silently defaulted to before (see the doc comment on `dispatchTarget`
+        // itself, added the same day this was found, 26 Aug).
+        var isCodex = false
         var resolved = (agents.sessions() ?? [])
             .preferringTmuxOwned(sessionId: target.sessionId, trace: Coordinator.trace)
-            ?? codexResolved(target.sessionId)
+        if resolved == nil, let codex = codexResolved(target.sessionId) {
+            resolved = codex
+            isCodex = true
+        }
         if resolved == nil {
             let deadline = Date().addingTimeInterval(readinessGrace)
             while resolved == nil, Date() < deadline {
@@ -305,7 +314,14 @@ extension Coordinator {
         // one finds the twin already live in `agents --json` and
         // `preferringTmuxOwned` picks it deterministically, so this only
         // ever runs once per session.
-        if pane == nil, let cwd = live.cwd {
+        // Codex-only: `codexResolved` already carries the ownership record's
+        // pane, so this branch is not reached for Codex in the normal case —
+        // but a record with no pane saved must still refuse rather than run
+        // `resumeTwin`, which is Claude Code's hand-started-process-adoption
+        // concept and has no Codex meaning (Codex sessions are always
+        // tmux-launched from the start; see `TmuxTransport.swift`'s own
+        // audit note on this, 26 Aug).
+        if pane == nil, !isCodex, let cwd = live.cwd {
             pane = resumeTwin(target.sessionId, cwd)
             if pane != nil {
                 // The transfer just ended `live.pid`'s process on purpose
@@ -350,15 +366,36 @@ extension Coordinator {
                 .injectionFailed("tmux is unavailable for this session"),
                 utteranceId: utterance.id)
         }
+        // Every field below `pane` used to default to Claude Code's own
+        // shape (`readinessSource: .claudeAgents`, its `❯` glyph, its JSONL
+        // transcript path) on EVERY dispatch, Codex included — there was no
+        // branch here at all. Found live, 26 Aug, dispatching to a session
+        // that had just registered and was sitting idle: `readiness(for:)`'s
+        // `.claudeAgents` case asks `agents.sessions()`, which never carries
+        // Codex, so it read `.notRegistered` and refused with "blocked on a
+        // dialog or still starting up" — on a session that was neither. The
+        // `.rolloutTail` case exists for exactly this and was already wired
+        // through `TmuxTransport` and `tbase send`'s own CLI dispatch path
+        // (`Sources/tbase/main.swift`); only THIS call site, the one real
+        // voice-reply dispatch, never set it. `target.transcriptPath` is
+        // Claude Code-shaped too (`TranscriptArchive`'s JSONL convention) and
+        // is never trusted for Codex, matching `tbase send`'s own pattern —
+        // `CodexRollout.rolloutPath` is computed fresh instead.
         let dispatchTarget = DispatchTarget(
             kind: .tmux,
             sessionId: target.sessionId,
             pid: live.pid,
             tty: ProcessProbe.tty(of: live.pid),
             pane: pane,
-            transcriptPath: target.transcriptPath
-                ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId),
-            label: target.projectLabel)
+            transcriptPath: isCodex
+                ? CodexRollout.rolloutPath(forSessionId: target.sessionId)
+                : (target.transcriptPath
+                    ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId)),
+            label: target.projectLabel,
+            readinessSource: isCodex ? .rolloutTail : .claudeAgents,
+            promptGlyph: isCodex ? CodexAdapter().capabilities.promptGlyph : "❯",
+            idlePlaceholder: isCodex ? CodexAdapter().trustPrompt?.settledBannerNeedle : nil,
+            pasteChip: isCodex ? CodexAdapter().capabilities.pasteChipPrefix : "[Pasted text #")
 
         utterance.status = .dispatching
         utterance.targetKind = dispatchTarget.kind

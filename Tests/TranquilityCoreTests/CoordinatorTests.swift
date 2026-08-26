@@ -330,6 +330,19 @@ final class CoordinatorTests: XCTestCase {
         guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
         else { return XCTFail("a Codex session agents has never heard of must still receive the reply") }
         XCTAssertEqual(transport.sent.count, 1)
+
+        // `RecordingTransport.readiness(for:)` always answers `.ready`
+        // regardless of what it's asked, so this loop alone cannot catch the
+        // real `TmuxTransport.readiness(for:)` refusing a Codex target that
+        // was built Claude-Code-shaped (found live, 26 Aug — see
+        // `dispatchTarget`'s own doc comment in Coordinator+ReplyPipeline.
+        // swift). What CAN be asserted here is the shape of the target
+        // `dispatch()` actually built: wrong fields would sail through this
+        // fake and still fail against the real transport.
+        let built = try XCTUnwrap(transport.sentTargets.last)
+        XCTAssertEqual(built.readinessSource, .rolloutTail)
+        XCTAssertEqual(built.promptGlyph, CodexAdapter().capabilities.promptGlyph)
+        XCTAssertEqual(built.idlePlaceholder, CodexAdapter().trustPrompt?.settledBannerNeedle)
     }
 
     // MARK: - The full loop

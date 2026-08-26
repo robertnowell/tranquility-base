@@ -103,6 +103,29 @@ final class SubprocessTests: XCTestCase {
         XCTAssertFalse(Readiness.classify(rollout: nil).canDispatch)
     }
 
+    /// Found live, 26 Aug: a Codex session's FIRST-EVER dispatch — no
+    /// rollout yet, since it has taken no turn — refused as `.notRegistered`
+    /// on a session that was demonstrably alive and idle. The thread-writer
+    /// lock (written at thread creation, independent of any turn) is what
+    /// disambiguates "no turns yet" from "not found".
+    func testClassifyRolloutTreatsALiveThreadWithNoRolloutYetAsReady() {
+        XCTAssertEqual(
+            Readiness.classify(rollout: nil, sessionId: "abc", liveThreadIds: ["abc"]),
+            .ready)
+        // Absent from the live-thread list too: the original, honest refusal
+        // stands — this is not a blanket "no rollout means ready" escape
+        // hatch, only a narrower one for a session known to exist.
+        XCTAssertEqual(
+            Readiness.classify(rollout: nil, sessionId: "abc", liveThreadIds: ["other"]),
+            .notRegistered)
+        // A real rollout always wins over the lock-file fallback — busy/ready
+        // classification is unchanged once there is something to tail.
+        XCTAssertEqual(
+            Readiness.classify(rollout: CodexRollout.Parsed(isBusy: true),
+                                sessionId: "abc", liveThreadIds: ["abc"]),
+            .busy)
+    }
+
     // MARK: ProcessProbe.matchPid — the real agent pid behind a tmux pane
 
     func testMatchPidFindsTheRealAgentProcessVerbatim() {
