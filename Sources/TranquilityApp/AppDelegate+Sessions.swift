@@ -1212,6 +1212,7 @@ extension AppDelegate {
                 launch?.abandon()
                 if case .failure(let error) = result {
                     await MainActor.run { [weak self] in
+                        self?.hud.markLaunchFailed()
                         self?.hud.showResult("Couldn't start an agent: \(error.message). "
                                              + "A missing tmux binary is the usual suspect.")
                     }
@@ -1248,6 +1249,7 @@ extension AppDelegate {
                 // comment, 19 Aug) — it joins the message onto the card
                 // that's already up instead of requiring a quiet panel.
                 await MainActor.run { [weak self] in
+                    self?.hud.markLaunchFailed()
                     self?.hud.showResult(
                         "Couldn't confirm the new agent started. Attach a "
                         + "terminal to check, or try again.")

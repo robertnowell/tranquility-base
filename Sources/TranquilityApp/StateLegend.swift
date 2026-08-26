@@ -755,6 +755,18 @@ enum StateLegend {
     static let startSessionPlacard = "\(Glyph.quiet) No agent"
     static let startSessionTitle = "Start a session"
 
+    /// The greeting card's pill for the seconds between + NEW AGENT and the
+    /// session actually registering (`PendingLaunch`'s own window, five to
+    /// nine seconds measured 18 Aug). Requested directly, twice: "it should
+    /// at least show that there's like set starting agent or something,
+    /// that there's activity happening" (26 Aug), since the card painted
+    /// identically to a bound, ready agent's card, so a launch that was
+    /// still booting and one that had already failed silently looked the
+    /// same. `Glyph.dot`, not `.quiet`: this is the "there IS activity"
+    /// mark, the same one the listening pill uses, not the "nothing here"
+    /// one `startSessionPlacard` reaches for above.
+    static let startingAgentPlacard = "\(Glyph.dot) Starting agent\u{2026}"
+
     /// Names the artifact, because that is the whole content of the offer: a
     /// fresh agent is worth starting only if it opens holding the thing you
     /// were reading.

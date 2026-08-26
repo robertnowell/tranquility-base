@@ -774,7 +774,7 @@ extension StatusHUD {
             return found + view.subviews.flatMap(uncomposedMarks)
         }
         var loose: [String] = []
-        for probe in ["grid", "speaking", "needsyou", "settings", "recent-audio"] {
+        for probe in ["grid", "speaking", "needsyou", "settings", "recent-audio", "greeting"] {
             _ = pose(probe)
             panel?.contentView?.layoutSubtreeIfNeeded()
             if let root = panel?.contentView { loose += uncomposedMarks(root) }
@@ -840,6 +840,12 @@ extension StatusHUD {
         let greetingSaysOnlyTheQuestion = bodyLabel.stringValue == greetingLine
         let greetingHasNoAgentYet = currentTarget == nil && goButton.isHidden
         let greetingNamesItsDirectory = titleLabel.stringValue == "projects"
+        // The "Starting agent..." pill (26 Aug): the one visible sign that
+        // something is happening, requested directly after a launch that
+        // looked identical to a bound, ready card whether it was booting or
+        // already dead. Up the instant the card paints...
+        let startingPillShowsWhilePending =
+            stateLabel.attributedStringValue.string == StateLegend.startingAgentPlacard
         // The door that opened somebody else's tab (18 Aug, 22:37). Starting a
         // capture on the greeting card adopts whatever the reply routing last
         // resolved — the PREVIOUS agent, because this one has not registered —
@@ -852,6 +858,9 @@ extension StatusHUD {
         panel?.contentView?.layoutSubtreeIfNeeded()
         let bindingGivesItTheAgent = bound && currentTarget?.sessionId == "g1"
             && !goButton.isHidden
+        // ...and gone the instant the card has something real to say instead.
+        let startingPillClearsOnBind =
+            stateLabel.attributedStringValue.string != StateLegend.startingAgentPlacard
         // Moved on: the grid is up, and a late registration must be ignored.
         showIdle(note: nil, rows: [.init(id: "z1", name: "something else",
                                          aux: "", lamp: .running)])
@@ -882,9 +891,24 @@ extension StatusHUD {
         let micFaultKeepsTheCard = bodyLabel.stringValue == greetingLine
             && titleLabel.stringValue == "projects" && currentTarget == nil
         let micFaultSpeaksFromTheStrip = face.captureFault != nil
+        // The pill must survive too, not just the card: a dead microphone
+        // says nothing about whether the launch is still coming up, and
+        // `boundAfterAMicFault` right below proves it can still land. A
+        // `showResult` that cleared the pill here would tell you the launch
+        // had failed when nobody knows that yet.
+        let startingPillSurvivesAMicFault =
+            stateLabel.attributedStringValue.string == StateLegend.startingAgentPlacard
         let boundAfterAMicFault = bindGreeting(sessionId: "g3", pid: 8,
                                                label: "projects", cwd: "/tmp")
             && currentTarget?.sessionId == "g3"
+        // The narrower signal: only a call site that actually gave up on the
+        // launch (`PendingLaunch.abandon()`) knows to clear the pill, so
+        // this is its own drill, not folded into the mic-fault one above.
+        showGreeting(line: greetingLine, label: "projects")
+        markLaunchFailed()
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let startingPillClearsOnMarkFailed =
+            stateLabel.attributedStringValue.string != StateLegend.startingAgentPlacard
         // And the refusal it must NOT weaken: once the panel has genuinely
         // moved on, a late binding is still wrong. Same assertion as
         // `lateBindingRefused`, re-asked after the fault path to prove the
@@ -899,6 +923,10 @@ extension StatusHUD {
             ("noAgentUntilBound", greetingHasNoAgentYet),
             ("unboundCardRefusesAForeignAgent", unboundCardRefusesAForeignAgent),
             ("bindingGivesItTheAgent", bindingGivesItTheAgent),
+            ("startingPillShowsWhilePending", startingPillShowsWhilePending),
+            ("startingPillClearsOnBind", startingPillClearsOnBind),
+            ("startingPillSurvivesAMicFault", startingPillSurvivesAMicFault),
+            ("startingPillClearsOnMarkFailed", startingPillClearsOnMarkFailed),
             ("lateBindingRefused", lateBindingRefused),
             ("failureKeepsItsAgent", failureKeepsItsAgent),
             ("micFaultKeepsTheCard", micFaultKeepsTheCard),

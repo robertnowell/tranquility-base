@@ -177,6 +177,15 @@ extension StatusHUD {
         case "empty":
             showIdle(rows: [])
 
+        // The card + NEW AGENT paints before a session exists to hang it on
+        // (`showGreeting`'s own doc comment), now carrying the "Starting
+        // agent..." pill (26 Aug) so this state stops looking identical to a
+        // bound, ready agent's card. Held still here the same way "waiting"
+        // holds the shimmer still: normally five to nine seconds, otherwise
+        // unobservable long enough to actually look at.
+        case "greeting":
+            _ = showGreeting(line: "What would you like to work on?", label: "Projects")
+
         case "preparing":
             _ = showPreparing()
 
