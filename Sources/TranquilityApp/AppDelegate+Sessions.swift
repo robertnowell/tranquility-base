@@ -1164,8 +1164,7 @@ extension AppDelegate {
         Task.detached(priority: .userInitiated) { [weak self] in
             let before: Set<String>
             if isCodex {
-                before = Set(SessionDiscovery.discoverCodex().sessions
-                    .filter { $0.cwd == dir }.map(\.sessionId))
+                before = Set(CodexRollout.liveThreadIds())
             } else {
                 before = Set((ClaudeAgentsCLI().sessions() ?? [])
                     .filter { $0.cwd == dir }.map(\.sessionId))
@@ -1203,14 +1202,25 @@ extension AppDelegate {
             // — a walked-away launch must not be a silently stillborn
             // investigation.
             let sessionIdOrNil = isCodex
-                ? LaunchGreeting.awaitCodexRegistration(directory: dir, excluding: before)
+                ? LaunchGreeting.awaitCodexRegistration(excluding: before)
                 : LaunchGreeting.awaitRegistration(directory: dir, excluding: before)
             guard let sessionId = sessionIdOrNil else {
                 launch?.abandon()
                 Permissions.log("launcher: no session registered in \(dir) after 30s")
+                // showResult, not showIdleGrid(note:) — found live, 26 Aug,
+                // chasing a Codex launch that failed in total silence: the
+                // greeting card is on stage for the whole 30s wait (that's
+                // the point of "launch is a turn"), so canSurfaceAmbiently
+                // (idle/hidden only) was false the entire time and the note
+                // never painted, on this or any other launch that reaches
+                // this branch. showResult already has a case for exactly
+                // this state (`greetingAwaitsItsSession`, its own doc
+                // comment, 19 Aug) — it joins the message onto the card
+                // that's already up instead of requiring a quiet panel.
                 await MainActor.run { [weak self] in
-                    guard let self, self.hud.canSurfaceAmbiently else { return }
-                    self.showIdleGrid(note: "New agent is waiting on a prompt (attach to see it).")
+                    self?.hud.showResult(
+                        "Couldn't confirm the new agent started. Attach a "
+                        + "terminal to check, or try again.")
                 }
                 return
             }
