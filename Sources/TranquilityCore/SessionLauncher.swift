@@ -275,12 +275,17 @@ public enum SessionLauncher {
         command: String = defaultCommand,
         adapter: any HarnessAdapter = ClaudeCodeAdapter()
     ) -> String {
-        // Flags come from our own adapter and are quoted only in the pane's
-        // machine-read command; here a human has to read this line and decide
-        // whether to trust it, and `'--resume'` reads like something is being
-        // hidden. The VALUE still gets quotes, which is where they matter.
-        let args = adapter.resumeArguments(sessionId: sessionId)
-            .map { $0.hasPrefix("-") ? $0 : shellQuoted($0) }
+        // Quote only what needs it. A human has to read this line and decide
+        // whether to trust it before pasting it, and a line where every token
+        // wears quotes — `codex 'resume' 'abc'` — reads like something is
+        // being hidden. An argument made only of characters a shell treats as
+        // ordinary is already literal, so quoting adds nothing but noise;
+        // anything else keeps its quotes, which is where they matter.
+        let plain = CharacterSet(charactersIn:
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/:@%+=-")
+        let args = adapter.resumeArguments(sessionId: sessionId).map { arg in
+            !arg.isEmpty && arg.unicodeScalars.allSatisfy(plain.contains) ? arg : shellQuoted(arg)
+        }
         return (["cd \(shellQuoted(directory)) &&", command] + args).joined(separator: " ")
     }
 

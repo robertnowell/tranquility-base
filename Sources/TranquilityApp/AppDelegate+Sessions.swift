@@ -1020,7 +1020,24 @@ extension AppDelegate {
             // A reply that beats the process back is not lost: dispatch checks
             // readiness and says "can't take this yet, your words are kept."
             await MainActor.run { [weak self] in self?.announceNext(only: sessionId) }
-            switch SessionLauncher.resume(sessionId: sessionId, directory: command.cwd) {
+            // The session's OWN harness, not the default one. `resume` and
+            // `manualRevival` both default to Claude Code, and a Codex session
+            // reviving through that default gets Claude Code's flag spelling
+            // with Codex's binary: `codex --dangerously-bypass-… --resume <id>`,
+            // which Codex rejects outright ("unexpected argument '--resume'
+            // found" — it is `codex resume <id>`, a subcommand). The pane then
+            // exits inside a second and the launch survival check reports it as
+            // "gone within a second", which is true and says nothing about why.
+            //
+            // Measured 26 Aug on f83191a4. The same default made the RESCUE
+            // wrong in the same breath: the command copied to the clipboard was
+            // the same unusable spelling, so the card said "copied the manual
+            // revival command" and handed over something that could not work
+            // for that agent. One default, two lies.
+            let adapter = KnownHarnesses.adapter(for: fresh.harness)
+            let harnessCommand = AgentDefaults.load(for: fresh.harness)
+            switch SessionLauncher.resume(sessionId: sessionId, directory: command.cwd,
+                                          command: harnessCommand, adapter: adapter) {
             case .success:
                 await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
                 // The announce fired before this resume even started (see
@@ -1049,7 +1066,8 @@ extension AppDelegate {
                 // morning — and a retry offer only when a retry could differ.
                 Permissions.log("revive: failed \(sessionId.prefix(8)) — \(error.message)")
                 let manual = SessionLauncher.manualRevival(
-                    sessionId: sessionId, directory: command.cwd)
+                    sessionId: sessionId, directory: command.cwd,
+                    command: harnessCommand, adapter: adapter)
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     NSPasteboard.general.clearContents()
