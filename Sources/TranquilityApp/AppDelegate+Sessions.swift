@@ -447,7 +447,8 @@ extension AppDelegate {
                     showIdleGrid()
                 case .noTarget:
                     lastStatusLine = "nothing to reply to yet"
-                    hud.showResult("Nothing to reply to yet. Tap ⌃⌥ to hear one first.")
+                    hud.showResult("Nothing to reply to yet. "
+                                   + "Tap ⌃ Ctrl + ⌥ Option to hear one first.")
                 case .readyToSend(let utteranceId, let text, let coreLabel, let sessionId):
                     // One identity: Core's outcome still carries the project
                     // label; the visual "Sending to X" upgrades it to the minted

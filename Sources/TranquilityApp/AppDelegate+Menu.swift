@@ -158,7 +158,15 @@ extension AppDelegate {
 
         menu.addItem(.separator())
 
-        menu.addItem(disabled("⌃⌥ hear · hold ⌥ reply · ⌥⌥ hands-free · ⇧ pause · ⌃⇧ dismiss"))
+        // From `StateLegend.controlsNote`, which is now the ONE place the chord
+        // vocabulary is written. This line used to carry its own copy in bare
+        // glyphs — "⌃⌥ hear · hold ⌥ reply" — which broke the naming rule and
+        // meant two definitions to keep in step. Every mark rides beside its
+        // key's name here for the same reason the Controls panel does it: a
+        // glyph is a shape most people cannot say out loud.
+        for entry in StateLegend.controlsNote {
+            menu.addItem(disabled("\(entry.chord)  \(entry.meaning)"))
+        }
         menu.addItem(.separator())
 
         menu.addItem(permissionRow(
