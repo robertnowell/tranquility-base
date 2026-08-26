@@ -395,3 +395,50 @@ final class TmuxTransportTests: XCTestCase {
         XCTAssertNil(live.matching(sessionId: "other", pid: 2))
     }
 }
+
+/// The 25 Aug follow-on: the join landed and the Return never came.
+///
+/// `boxHolds` is an EQUALITY test — deliberately, since a substring test
+/// would accept a box holding our words PLUS somebody else's, which is the
+/// splice the floor check exists to refuse. After a join the box legitimately
+/// holds more than the payload, so asking it about the payload alone answers
+/// "no" about a paste that plainly worked, the echo poll reports `.absent`,
+/// and step 6 is never reached. Robert's words sat in the box, complete and
+/// unsent, five times over.
+final class JoinedBoxRecognitionTests: XCTestCase {
+
+    private let glyph = "❯"
+
+    private func box(_ rows: [String]) -> String {
+        (["────────", "\(glyph) \(rows[0])"]
+            + rows.dropFirst().map { "  \($0)" }
+            + ["────────"]).joined(separator: "\n")
+    }
+
+    func testAJoinedBoxIsNotRecognisedByThePayloadAlone() {
+        let screen = box(["https://example.com/link", "and here is the dictated part"])
+        XCTAssertFalse(
+            TmuxTransport.boxHolds(payload: "and here is the dictated part",
+                                   screen: screen, glyph: glyph),
+            "this is the false negative that swallowed the Return — pinned so the fix "
+            + "below cannot be quietly undone by passing the payload again")
+    }
+
+    func testItIsRecognisedByWhatTheBoxWasExpectedToHold() {
+        let screen = box(["https://example.com/link", "and here is the dictated part"])
+        let expected = "https://example.com/link and here is the dictated part"
+        XCTAssertTrue(
+            TmuxTransport.boxHolds(payload: expected, screen: screen, glyph: glyph))
+    }
+
+    /// The property that must survive the fix: expecting MORE than the payload
+    /// is not the same as accepting anything. A third party's line appearing
+    /// after the join still fails the check.
+    func testAStrangersExtraLineStillFails() {
+        let screen = box(["https://example.com/link", "and here is the dictated part",
+                          "something somebody else typed"])
+        let expected = "https://example.com/link and here is the dictated part"
+        XCTAssertFalse(
+            TmuxTransport.boxHolds(payload: expected, screen: screen, glyph: glyph))
+    }
+}
