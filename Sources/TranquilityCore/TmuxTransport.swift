@@ -336,9 +336,15 @@ public struct TmuxTransport: DispatchTransport {
         // reports with the same word — see the step 3 switch below.
         var everEchoed = false
 
+        // Whether this attempt is appending to text somebody already typed.
+        // Reset every attempt: the box is re-read each time, and a line that
+        // was there a moment ago may have been submitted since.
+        var joining = false
+
         let attempts = 5
         attemptLoop: for attempt in 0..<attempts {
             let lastAttempt = attempt == attempts - 1
+            joining = false
             // Step 0 — dedupe against ground truth, EVERY attempt. This is
             // what makes every retry below safe: our payload appended after
             // the watermark is a delivery this send already made.
@@ -391,7 +397,8 @@ public struct TmuxTransport: DispatchTransport {
                 line: promptLine(pane, payload: payload, glyph: target.promptGlyph,
                                  placeholder: target.idlePlaceholder,
                                  chip: target.pasteChip, ourChips: ourChips),
-                everEchoed: everEchoed
+                everEchoed: everEchoed,
+                firstAttempt: attempt == 0
             ) {
             case .paste:
                 break
@@ -405,6 +412,14 @@ public struct TmuxTransport: DispatchTransport {
                     return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
                 }
                 break attemptLoop
+            case .joinExisting:
+                // Keep what is already in the box and put ours after it.
+                // C-e first so "after" means after the text rather than
+                // wherever the cursor happened to be left; the newline that
+                // separates them rides the paste itself, which is why it does
+                // not submit early — bracketed paste is literal.
+                Tmux.run(["send-keys", "-t", pane.paneId, "C-e"], socket: pane.socketName)
+                joining = true
             case .clearThenPaste:
                 // C-a then C-k (start-of-line, kill-to-end) rather than C-u
                 // alone, since C-u only clears BACK from wherever the cursor
@@ -445,7 +460,8 @@ public struct TmuxTransport: DispatchTransport {
                                               chip: target.pasteChip)
             guard case .success = Tmux.run(
                 ["load-buffer", "-b", "tb-dispatch", "-"],
-                socket: pane.socketName, stdin: Data(payload.utf8))
+                socket: pane.socketName,
+                stdin: Data((joining ? "\n" + payload : payload).utf8))
             else { continue }
             Tmux.run(["paste-buffer", "-b", "tb-dispatch", "-d", "-p", "-t", pane.paneId],
                      socket: pane.socketName)
@@ -672,6 +688,9 @@ public struct TmuxTransport: DispatchTransport {
         case paste
         /// Somebody else's half-typed line, and we have not delivered yet.
         case clearThenPaste
+        /// The same line, on the FIRST attempt: keep it and append ours to
+        /// it, so one submit sends both. Ruled 25 Aug — see `decide`.
+        case joinExisting
         /// Our own words, still sitting unsubmitted. Press Return, never paste.
         case returnOnly
         /// Our words went in and the box released them — accepted. Stop.
@@ -695,7 +714,32 @@ public struct TmuxTransport: DispatchTransport {
     /// the paste, so a session that goes busy in between would take the old
     /// path and reproduce the bug exactly. The box is observable now; the
     /// status is a memory of a moment that has passed.
-    static func decide(line: PromptLine, everEchoed: Bool) -> FloorAction {
+    /// `firstAttempt` exists for one branch: a pre-existing line is JOINED
+    /// rather than deleted, but only while nothing of ours has been pasted
+    /// yet. Ruled 25 Aug, from a live loss — Robert had pasted a URL into a
+    /// session, dictated an instruction that referred to it, and the URL was
+    /// cleared out from under him; the two facts he meant as one message
+    /// arrived as one message minus half of itself.
+    ///
+    /// This reverses the 23 Aug revert, and the thing that makes it safe now
+    /// is `everEchoed`, which did not exist then. That revert's failure was
+    /// "every retry that missed pasted ANOTHER copy on top of the last, live-
+    /// caught at four concatenated copies". PASTE AT MOST ONCE PER SEND makes
+    /// that shape unreachable: a send that has echoed never pastes again.
+    ///
+    /// The one hole `everEchoed` does not cover is a paste whose echo was
+    /// never detected — the mode-race `continue` at step 5, which deliberately
+    /// allows one more paste. Joining there could duplicate, so it does not:
+    /// after the first attempt this falls back to clearing, i.e. exactly
+    /// today's behaviour. The worst case is unchanged and the common case is
+    /// fixed, which is the only trade worth making here.
+    ///
+    /// Measured before it was written, in a real pane on a real session: a
+    /// bracketed paste of `"\n" + payload` appends a second line to the
+    /// composer without submitting, and one Return then delivers ONE user
+    /// message containing both, `'…/the-link\nAND HERE IS THE DICTATED PART'`.
+    static func decide(line: PromptLine, everEchoed: Bool,
+                       firstAttempt: Bool = true) -> FloorAction {
         switch line {
         case .empty, .unreadable:
             // `.unreadable` fails toward pasting only while nothing of ours
@@ -708,7 +752,8 @@ public struct TmuxTransport: DispatchTransport {
             // Once ours has gone in, a line on the floor arrived AFTERWARDS
             // and belongs to somebody else. Clearing it would delete a
             // person's typing to make room for a message already delivered.
-            return everEchoed ? .stop : .clearThenPaste
+            if everEchoed { return .stop }
+            return firstAttempt ? .joinExisting : .clearThenPaste
         }
     }
 
