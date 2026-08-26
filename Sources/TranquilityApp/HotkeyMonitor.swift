@@ -260,6 +260,28 @@ public final class HotkeyMonitor: @unchecked Sendable {
 
     public var isRunning: Bool { tap != nil }
 
+    /// Whether the tap is actually DELIVERING — not merely whether one exists.
+    ///
+    /// `isRunning` answers "did we get a tap object". This answers "can this
+    /// process see keystrokes", and the gap between the two is the whole reason
+    /// the permission checklist can say "restart to finish".
+    ///
+    /// The 08 Aug probe measured that gap directly: `accessibility=true
+    /// listenEventAccess=false tapEnabled=false eventsReceived=0` — a tap that
+    /// exists, is disabled, and is silent. Freshly-granted Input Monitoring
+    /// looks the same way until the app is restarted, because `tapCreate` keeps
+    /// returning nil for a process that was already running when the grant
+    /// landed.
+    ///
+    /// Nothing here assumes WHICH permissions need a restart. It measures, so
+    /// the day macOS starts picking Input Monitoring up live, `tapCreate`
+    /// succeeds, this goes true, and the checklist stops asking. That is the
+    /// repo's rule — measured, not reasoned — applied to a moving target.
+    public var isListening: Bool {
+        guard let tap else { return false }
+        return CGEvent.tapIsEnabled(tap: tap)
+    }
+
     @discardableResult
     public func start() -> Bool {
         // Already running — see note 2 above. Restarting would drop a live press.

@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Speech
 import TranquilityCore
 
 /// The individual self-test drills — one function per ruling, each proving
@@ -1369,4 +1370,47 @@ extension StatusHUD {
         Permissions.log(String(format: "contrast: lamp ΔL* = %.1f", lampGap))
         SelfTest.report("contrast", checks)
     }
+
+    /// The drill that would have caught incident 51344D00 (25 Aug 2026).
+    ///
+    /// `Permissions.request(.speechRecognition)` hands a closure to a TCC API
+    /// that replies on `com.apple.root.default-qos`. Under Swift 6 that closure
+    /// inherits `Permissions`' `@MainActor` isolation unless it is explicitly
+    /// `@Sendable`, and a main-actor closure invoked off-main takes a SIGTRAP —
+    /// killing the whole app. The `@Sendable` in `Permissions.request` is what
+    /// stands between us and that; this is what holds it there.
+    ///
+    /// **Reaching the report line at all IS the assertion.** A trap does not
+    /// fail a check, it kills the process: there is no PASS line, no FAIL line,
+    /// and relaunch.sh's gate goes red on a self-test log that stops mid-run.
+    /// So the check is named for what surviving proves, and it is not a
+    /// tautology — it is the only shape an assertion about a fatal trap can
+    /// take from inside the process it would kill.
+    ///
+    /// It runs on ANY machine where the permission has been decided. Measured
+    /// 26 Aug on an already-authorized Mac: the reply still arrived with
+    /// `isMainThread=false queue=com.apple.root.default-qos`, and the
+    /// pre-`@Sendable` build still trapped. That is why this is a launch drill
+    /// and not a note in a doc saying "test on a fresh machine" — the bug was
+    /// reproducible here the whole time and nothing ever called the line.
+    ///
+    /// `.notDetermined` skips rather than runs: asking there would put a
+    /// permission dialog in front of a launch self-test, which is the one
+    /// thing the courtesy rules in `Permissions.request` forbid.
+    func speechCallbackDrill() {
+        guard SFSpeechRecognizer.authorizationStatus() != .notDetermined else {
+            SelfTest.skipped("speechCallback",
+                             because: "speech undecided — asking would prompt mid-launch")
+            return
+        }
+        let before = Permissions.isGranted(.speechRecognition)
+        Task { @MainActor in
+            _ = await Permissions.request(.speechRecognition)
+            SelfTest.report("speechCallback", [
+                ("survivedOffMainReply", true),
+                ("statusUnchanged", Permissions.isGranted(.speechRecognition) == before),
+            ])
+        }
+    }
+
 }

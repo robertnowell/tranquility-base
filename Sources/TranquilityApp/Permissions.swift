@@ -157,6 +157,141 @@ struct Permissions {
             + "(\(statusDescription(.microphone)))")
         log("inputMonitoring=\(CGPreflightListenEventAccess())")
         log("accessibility=\(AXIsProcessTrusted())")
+        // The DERIVED states, not just the raw TCC answers. The gate opens on
+        // `allActive`, which can differ from "granted" by a whole state
+        // (`pendingRestart`), and the difference decides whether a returning
+        // user sees a setup window they already finished. Logged at launch so
+        // that question is a grep and never a guess.
+        log("states " + Kind.allCases.map { "\($0.title.prefix(4))=\(state($0))" }
+                .joined(separator: " ")
+            + " allActive=\(allActive) progress=\(progress.done)/\(progress.total)")
+    }
+
+    /// What a permission actually IS right now, at the granularity the user
+    /// has to act on.
+    ///
+    /// "Granted" was hiding a fifth state. macOS records the grant instantly,
+    /// but a process that was already running when the grant landed cannot
+    /// always USE it — Input Monitoring's event tap is created at launch, and
+    /// `tapCreate` keeps returning nil until the app restarts. A checklist that
+    /// only knows granted/not-granted paints that row green and then the
+    /// hotkeys do not work, which is the worst of the two wrong answers.
+    ///
+    /// So `pendingRestart` is a state, and it is DERIVED rather than declared:
+    /// TCC says yes, the live probe says no. No table anywhere lists which
+    /// permissions need a restart, because such a table would be a guess that
+    /// rots. The measurement is the answer.
+    enum State: Equatable {
+        case notAsked        // never asked — a prompt will appear
+        case denied          // macOS will not ask again; Settings is the only route
+        case restricted      // policy; nothing the user can do
+        case pendingRestart  // granted, but this process cannot use it yet
+        case active          // granted AND working right now
+    }
+
+    /// How the app asks "is the tap actually delivering?".
+    ///
+    /// Set once at launch by `AppDelegate`. `Permissions` is a static struct and
+    /// has no route to the running `HotkeyMonitor`, and the alternative — having
+    /// this file reach for the app delegate — would make a permission model
+    /// depend on a window. Absent a probe the answer is `true`: never invent a
+    /// restart prompt out of missing information.
+    @MainActor static var listeningProbe: (() -> Bool)?
+
+    /// Forced states, for rendering the checklist in situations this machine is
+    /// not in. Preview and drills only — set by `--dump-onboarding`, never in a
+    /// normal launch.
+    ///
+    /// It exists because the states that matter are the ones a developer machine
+    /// cannot reach: every permission here has been granted for weeks, so the
+    /// only view anyone ever sees of this window is four green dots and an
+    /// enabled button. The half-done view — a dimmed row, an orange "restart to
+    /// finish", a disabled Start — shipped unlooked-at for exactly that reason,
+    /// which is the same shape as the crash that started all this: the path
+    /// nobody can run is the path nobody checks.
+    @MainActor static var previewStates: [Kind: State]?
+
+    static func state(_ kind: Kind) -> State {
+        if let forced = previewStates?[kind] { return forced }
+        switch kind {
+        case .microphone:
+            switch AVCaptureDevice.authorizationStatus(for: .audio) {
+            case .authorized: return .active
+            case .notDetermined: return .notAsked
+            case .denied: return .denied
+            case .restricted: return .restricted
+            @unknown default: return .denied
+            }
+        case .speechRecognition:
+            switch SFSpeechRecognizer.authorizationStatus() {
+            case .authorized: return .active
+            case .notDetermined: return .notAsked
+            case .denied: return .denied
+            case .restricted: return .restricted
+            @unknown default: return .denied
+            }
+        case .inputMonitoring:
+            // The one row where "recorded" and "usable" can disagree.
+            guard CGPreflightListenEventAccess() else { return .notAsked }
+            return (listeningProbe?() ?? true) ? .active : .pendingRestart
+        case .accessibility:
+            if AXIsProcessTrusted() { return .active }
+            // Not trusted. That is EITHER never-granted or granted-and-this-
+            // process-cannot-see-it, and preflight cannot tell them apart —
+            // both read false.
+            //
+            // The repo holds both answers and they disagree. `waitForGrant`
+            // polls for two minutes and the onboarding copy promises the dot
+            // goes green "within a couple of seconds"; `reset-permissions.sh`
+            // step 3 says relaunch, "AXIsProcessTrusted() is evaluated when the
+            // process starts, so a running instance cannot see it". Rather than
+            // pick a winner and hard-code it, ask the clock: if we asked and it
+            // has not gone true within the grace period, the optimistic answer
+            // has been falsified for this machine and this OS, and a restart is
+            // the honest next instruction.
+            //
+            // This is also why there is no table of which permissions need a
+            // restart. macOS changes; the measurement does not go stale.
+            guard let asked = accessibilityAskedAt else { return .notAsked }
+            return Date().timeIntervalSince(asked) > liveGrantGrace
+                ? .pendingRestart : .notAsked
+        }
+    }
+
+    /// When `request(.accessibility)` last put the system dialog up. See the
+    /// `.accessibility` branch of `state(_:)` for why a timestamp and not a flag.
+    @MainActor private static var accessibilityAskedAt: Date?
+
+    /// How long a freshly-granted permission gets to show up in a running
+    /// process before the checklist stops waiting and asks for a restart.
+    ///
+    /// Eight seconds because the optimistic claim in the onboarding copy is "a
+    /// couple of seconds" and the polling loop it came from runs at 1Hz — so
+    /// this is that promise plus room for a slow machine, not a number chosen
+    /// to feel patient.
+    private static let liveGrantGrace: TimeInterval = 8
+
+    /// The gate: every REQUIRED permission granted AND usable in this process.
+    /// Stronger than `allGranted`, which cannot see the restart gap.
+    static var allActive: Bool {
+        Kind.allCases.filter(\.isRequired).allSatisfy { state($0) == .active }
+    }
+
+    /// Anything granted that this process still cannot use. One restart clears
+    /// all of them at once, which is why the checklist asks once at the end
+    /// rather than after each grant.
+    static var pendingRestart: [Kind] {
+        Kind.allCases.filter { state($0) == .pendingRestart }
+    }
+
+    /// Progress across the whole list, required or not — "2 of 4 done".
+    ///
+    /// Read from live TCC state, never from stored progress, which is what
+    /// makes it survive the restart the checklist itself asks for: the system
+    /// remembers the grants, so a relaunched app opens already knowing how far
+    /// the user got. There is nothing to persist and nothing to get out of sync.
+    static var progress: (done: Int, total: Int) {
+        (Kind.allCases.filter { state($0) == .active }.count, Kind.allCases.count)
     }
 
     static func isGranted(_ kind: Kind) -> Bool {
@@ -229,8 +364,33 @@ struct Permissions {
             // is not interrupting; a check that opens with a permission dialog
             // has interrupted harder than the announcement it was being polite
             // about. Onboarding or not at all.
+            //
+            // `@Sendable` on the handler is LOAD-BEARING, not decoration.
+            //
+            // `Permissions` is `@MainActor`. In Swift 6 a closure literal that
+            // is not `@Sendable` and is formed in an actor-isolated context
+            // INHERITS that isolation, and ObjC block parameters import as
+            // non-Sendable unless the header says otherwise — Speech's does
+            // not. So without this keyword the compiler quietly makes this
+            // handler main-actor code and writes a `swift_task_isCurrentExecutor`
+            // check into its prologue. TCC delivers the reply on
+            // `com.apple.root.default-qos` (measured; and the SDK header says
+            // so outright: "The system does not guarantee the execution of this
+            // block on your app's main dispatch queue"), the check fails, and
+            // the process takes a SIGTRAP.
+            //
+            // That is not a hypothetical: it killed 0.1.0 on the first external
+            // user's Mac, 25 Aug 2026, incident 51344D00, the moment they
+            // pressed Grant. The compiler emitted no error, no warning and no
+            // note — strict concurrency was fully on and had nothing to say.
+            //
+            // `@Sendable` opts the closure OUT of isolation inheritance, so no
+            // check is emitted and none is needed: `resume(returning:)` is safe
+            // from any thread by design. `speechCallbackDrill` holds this.
             _ = await withCheckedContinuation { (c: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
-                SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0) }
+                SFSpeechRecognizer.requestAuthorization { @Sendable status in
+                    c.resume(returning: status)
+                }
             }
             return isGranted(kind)
         case .inputMonitoring:
@@ -239,6 +399,10 @@ struct Permissions {
             return CGRequestListenEventAccess()
         case .accessibility:
             FocusedInput.requestTrustOnce()
+            // Start the clock. If the grant does not reach this process before
+            // the grace period is up, the checklist switches from "click Grant"
+            // to "restart to finish" on its own.
+            if accessibilityAskedAt == nil { accessibilityAskedAt = Date() }
             return isGranted(kind)
         }
     }

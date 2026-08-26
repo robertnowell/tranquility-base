@@ -67,6 +67,12 @@ if git show-ref -q --verify refs/heads/main; then
   fi
 fi
 
+# Cheap, and it catches a class the panel's own drills cannot: a bare modifier
+# glyph in text a human reads. The existing drill guards ONE string; this
+# guards every string, which is what the 26 Aug ruling actually asked for.
+echo "→ key names"
+python3 scripts/check-key-names.sh
+
 echo "→ building"
 swift build 2>&1 | grep -E "error:|warning: .*never used" || true
 swift build >/dev/null

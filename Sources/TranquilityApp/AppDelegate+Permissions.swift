@@ -33,7 +33,12 @@ extension AppDelegate {
     func startPermissionPolling() {
         Earcons.clearOldNotifications()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            Task { @MainActor in
+                // Kick the off-main probe FIRST so its result is available to
+                // the next tick's paint, then paint from what we already have.
+                self?.refreshWaitingSnapshot()
+                self?.refresh()
+            }
         }
     }
 }

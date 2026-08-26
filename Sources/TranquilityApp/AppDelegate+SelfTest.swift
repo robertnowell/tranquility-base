@@ -176,4 +176,49 @@ extension AppDelegate {
             + "\(clean ? "PASS" : "FAIL")")
         showIdleGrid()
     }
+
+    /// The drill for rule 9 on the badge path (incident 51344D00, thread 0).
+    ///
+    /// `refresh()` runs on a 1.5-second timer and used to reach
+    /// `Coordinator.waitingCount()` inline, which spawns `claude agents --json`
+    /// with an 8-second deadline. The crash report that caught the Speech trap
+    /// also caught the main thread sitting in that wait. The repair is a
+    /// snapshot sampled off-main; this is what holds it there.
+    ///
+    /// Three checks, because timing alone is not enough to tell the two designs
+    /// apart — a warm 6-second cache makes the OLD code fast too, so a drill
+    /// that only timed `refresh()` would pass on a broken build most runs.
+    ///
+    ///   `refreshIsCheap`      — the paint path itself never pays for a probe.
+    ///   `probeRanOffMain`     — the replacement mechanism actually completes,
+    ///                           so "fast" is not "fast because it does nothing".
+    ///   `probeIsNotReentrant` — a second tick while one is in flight does not
+    ///                           stack another child process behind it.
+    func refreshIsCheapDrill() {
+        var worst: TimeInterval = 0
+        for _ in 0..<5 {
+            let t0 = Date()
+            refresh()
+            worst = max(worst, Date().timeIntervalSince(t0))
+        }
+
+        refreshWaitingSnapshot()
+        let started = waitingProbeInFlight
+        refreshWaitingSnapshot()          // second tick, same window
+        let stillOne = waitingProbeInFlight
+
+        // The probe is a child process; give it the same grace the CLI gets
+        // before we call it stuck, then check it came home and cleared.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self else { return }
+            SelfTest.report("refreshIsCheap", [
+                ("paintNeverProbes", worst < 0.1),
+                ("probeRanOffMain", started && !self.waitingProbeInFlight),
+                ("probeIsNotReentrant", stillOne),
+            ])
+            Permissions.log("refreshIsCheap: worstRefresh=\(Int(worst * 1000))ms "
+                            + "badge=\(self.waitingCountSnapshot)")
+        }
+    }
+
 }
