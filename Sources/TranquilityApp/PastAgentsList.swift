@@ -1206,10 +1206,17 @@ final class HarnessPickerRow: NSView {
         for (id, button) in buttons {
             let lit = id == selected
             let label = labels[id] ?? id
-            let title = id == defaultHarness ? "\(label) ★" : label
-            button.attributedTitle = Widgets.letterspaced(
-                title, size: 9.5, tracking: 1.33,
-                color: lit ? StateLegend.Palette.ink : StateLegend.Palette.hint)
+            let color = lit ? StateLegend.Palette.ink : StateLegend.Palette.hint
+            // Through ChromeType.line, not Widgets.letterspaced — the ★ is a
+            // MARK (ChromeType.isMark), and letterspaced has no idea marks
+            // exist; it draws every character on the same baseline the
+            // letters use, which the chrome self-test (`everyMarkComposed`)
+            // exists specifically to catch. `line(_:)` is "the one place a
+            // glyph meets a word in this app" for exactly this reason.
+            button.attributedTitle = id == defaultHarness
+                ? ChromeType.line("\(label) ★", font: StateLegend.Face.chrome(9.5),
+                                  color: color, tracking: 1.33)
+                : Widgets.letterspaced(label, size: 9.5, tracking: 1.33, color: color)
         }
         let viewingDefault = selected == defaultHarness
         makeDefault.isHidden = viewingDefault
