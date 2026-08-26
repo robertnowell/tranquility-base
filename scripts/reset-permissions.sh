@@ -38,7 +38,15 @@ fi
 # ListenEvent is Input Monitoring; Accessibility covers the event tap and typing at
 # the cursor. Microphone and AppleEvents are included so one command puts the app back
 # to a known-clean state rather than a partly-granted one that is harder to reason about.
-for service in Accessibility ListenEvent Microphone AppleEvents; do
+#
+# SpeechRecognition was missing from this list until 26 Aug, and that omission has a
+# crash attached to it. `Permissions.request(.speechRecognition)` is reachable from
+# exactly one place — the Grant button on the Speech row, which is hidden once the
+# permission is granted — so an incomplete reset here meant the line was never run
+# again on this machine after the first time. It shipped a SIGTRAP to the first
+# external user (incident 51344D00). A reset script that resets MOST of the state
+# leaves precisely the paths nobody exercises, which are the paths that break.
+for service in Accessibility ListenEvent Microphone AppleEvents SpeechRecognition; do
   out=$(tccutil reset "$service" "$BUNDLE_ID" 2>&1) && echo "  reset $service" \
     || echo "  reset $service — $out"
 done
@@ -49,5 +57,7 @@ echo "  1. open \".build/debug/Tranquility Base.app\""
 echo "  2. click Grant on each row in the checklist — Grant is what makes macOS ASK,"
 echo "     and an app that has never asked is not listed in the Privacy pane at all,"
 echo "     so there is nothing to switch on until you do."
-echo "  3. relaunch once after granting Accessibility: AXIsProcessTrusted() is"
-echo "     evaluated when the process starts, so a running instance cannot see it."
+echo "  3. work down the whole list before restarting. The checklist tracks which"
+echo "     rows are granted-but-not-yet-usable and offers ONE restart at the end;"
+echo "     a restart per permission means three of them, and the count survives"
+echo "     because it is read from macOS, not stored by the app."
