@@ -158,7 +158,18 @@ extension Coordinator {
         // The limit, stated: a headless run still executing IS live, so a long
         // job could be announced. That is noise, and noise is recoverable —
         // unlike the tty filter this replaces, which hid real conversations.
-        let live = Set(sessions.map(\.sessionId))
+        //
+        // `sessions` only ever answers for Claude Code — `agents` is
+        // `claude agents --json`, harness-specific by construction, and a
+        // Codex session is never in it, registered or not. Found live, 26
+        // Aug: a fresh Codex launch's greeting card read as "gone" the
+        // instant this function first polled it, seconds after it had
+        // actually registered — `ownership`'s own recorded pid is the only
+        // other liveness fact this app has for a harness with no registry.
+        let codexLive = Set(ownership.all()
+            .filter { $0.harness == CodexAdapter().id && ProcessProbe.isAlive($0.pid) }
+            .map(\.sessionId))
+        let live = Set(sessions.map(\.sessionId)).union(codexLive)
         let all = yours(try store.waitingSessions())
         sweep.sweep(all, live: live, trace: Coordinator.trace)
         return all.filter { live.contains($0.sessionId) }

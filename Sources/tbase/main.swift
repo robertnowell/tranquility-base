@@ -631,16 +631,49 @@ case "reconcile":
                               : Set((ClaudeAgentsCLI().sessions() ?? [])
                                     .filter { $0.cwd == dir }.map(\.sessionId))
         switch SessionLauncher.launch(directory: dir, command: command, adapter: adapter) {
-        case .success:
+        case .success(let tty):
             print("detached tmux session (attach on demand): `\(command)` in \(dir)")
             print("waiting for it to register…")
             let sessionId = useCodex
                 ? LaunchGreeting.awaitCodexRegistration(excluding: before)
                 : LaunchGreeting.awaitRegistration(directory: dir, excluding: before)
-            if let sessionId {
-                print("registered: \(sessionId)")
-            } else {
+            guard let sessionId else {
                 print("did not register within 30s (see the trace lines above)")
+                break
+            }
+            print("registered: \(sessionId)")
+            // --wait-live: the fuller proof, not just registration — the
+            // exact gap that shipped 26 Aug: a fresh Codex session
+            // registered fine but read as permanently "gone" the instant
+            // Coordinator.waiting() (announce/sweep, not this file's own
+            // dispatch code) first polled it, because that function's
+            // liveness came from `agents` alone (claude agents --json,
+            // which never carries Codex) with no ownership record written
+            // at fresh-launch to answer it otherwise. Mirrors newSession()'s
+            // own sequence: record ownership (if Codex), write the
+            // greeting, then ask a REAL Coordinator whether it's live —
+            // the same question the panel's announce/sweep pipeline asks.
+            if args.contains("--wait-live") {
+                if useCodex, let pid = ProcessProbe.pid(onTty: tty, containing: command) {
+                    let pane = TmuxOwnership.pane(forTty: tty)
+                    FileSessionOwnershipStore.shared.record(SessionOwnershipRecord(
+                        sessionId: sessionId, harness: CodexAdapter().id, pid: pid,
+                        paneId: pane?.paneId, socketName: pane?.socketName,
+                        sessionName: pane?.sessionName, paneTty: tty, cwd: dir))
+                    print("ownership recorded: pid \(pid)")
+                }
+                try LaunchGreeting.record(sessionId: sessionId, directory: dir,
+                                          line: "tbase new --wait-live probe", store: store)
+                print("greeting recorded — sleeping 3s (past the window the bug fired in)…")
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+                Coordinator.trace = { print("  coordinator: \($0)") }
+                let coordinator = Coordinator(store: store)
+                let stillWaiting = try coordinator.waiting().map(\.sessionId)
+                if stillWaiting.contains(sessionId) {
+                    print("✓ still live in Coordinator.waiting() after 3s")
+                } else {
+                    print("✗ NOT in Coordinator.waiting() — this is the bug")
+                }
             }
         case .failure(let error):
             print("couldn't launch: \(error.message)")
