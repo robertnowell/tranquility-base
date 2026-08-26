@@ -537,7 +537,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let name = CommandLine.arguments[flag + 1]
             let path = CommandLine.arguments[flag + 2]
             intakeTimer?.invalidate(); intakeTimer = nil
-            if hud.pose(name), let png = hud.poseSnapshot() {
+            let posed = hud.pose(name)
+            if posed {
+                // A pose that resizes the panel from whatever it already
+                // showed animates over 0.12s (resizeToFit, when the panel is
+                // already visible) — found posing "agents-settings" 25 Aug:
+                // poseSnapshot() reads pixels synchronously, right after
+                // pose(name) returns, so without this it photographs the
+                // frame mid-animation and the new content is clipped off the
+                // bottom, silently. `Thread.sleep` was the first fix tried and
+                // does NOT work — it blocks the very run loop
+                // NSAnimationContext needs to advance the animation at all,
+                // so the frame is exactly as stale after a slept 0.25s as
+                // before it. Spinning the run loop instead actually lets the
+                // animation run and land.
+                RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            }
+            if posed, let png = hud.poseSnapshot() {
                 do {
                     try png.write(to: URL(fileURLWithPath: path))
                     Permissions.log("pose-shot: \(name) → \(path) (\(png.count) bytes)")
@@ -829,6 +845,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .recent: showRecentAudio()
             }
         }
+        hud.onDefaultHarnessChanged = { [weak self] in self?.rebuildMenu() }
 
         // Play carries its state on the row (▶/■), so the player reports
         // every change and the pane re-renders from the store + playingId —

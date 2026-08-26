@@ -330,6 +330,21 @@ public struct CodexAdapter: HarnessAdapter {
     }
 }
 
+/// Every harness this app currently knows how to launch, and how to look one
+/// up by `id` — the one place that question gets answered, so a settings
+/// picker and a launch call site resolve "which adapter does this id mean"
+/// the same way instead of each keeping their own list.
+public enum KnownHarnesses {
+    public static let all: [any HarnessAdapter] = [ClaudeCodeAdapter(), CodexAdapter()]
+
+    /// Unrecognized ids (a harness this build predates) resolve to Claude
+    /// Code rather than trap — the same fail-safe direction
+    /// `AgentDefaults.fallback(for:)` already takes.
+    public static func adapter(for id: String) -> any HarnessAdapter {
+        all.first(where: { $0.id == id }) ?? ClaudeCodeAdapter()
+    }
+}
+
 /// The one trust-prompt loop, parameterized by how to read a screen and how
 /// to press Return — the two primitives that used to be the entire
 /// difference between the AppleScript watcher and the tmux watcher. Both now

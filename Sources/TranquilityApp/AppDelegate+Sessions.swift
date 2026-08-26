@@ -811,12 +811,16 @@ extension AppDelegate {
         showIdleGrid()
     }
 
-    /// Start a fresh Claude session in a new Terminal window (v1 is choiceless:
-    /// home directory, `claude --dangerously-skip-permissions`). Its turns
-    /// enter the loop — and the grid — as soon as the session first stops.
+    /// Start a fresh agent under whichever harness Settings has as default
+    /// (Claude Code unless changed — see `AgentDefaults.defaultHarness`). Its
+    /// turns enter the loop — and the grid — as soon as the session first
+    /// stops.
     func newSession() {
-        newSession(directory: SessionLauncher.defaultDirectory,
-                   command: SessionLauncher.defaultCommand)
+        let harness = AgentDefaults.defaultHarness
+        let adapter = KnownHarnesses.adapter(for: harness)
+        newSession(directory: AgentDefaults.directory(for: harness),
+                   command: AgentDefaults.load(for: harness),
+                   adapter: adapter)
     }
 
     /// Bring back a session whose process has ended.

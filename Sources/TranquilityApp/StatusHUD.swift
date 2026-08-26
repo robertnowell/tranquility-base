@@ -193,8 +193,15 @@ final class StatusHUD: NSObject {
     var voiceList: NSScrollView!
     var pastList: PastAgentsList!
     var settingsTabs: SettingsTabBar!
+    var harnessPicker: HarnessPickerRow!
     var launchRow: SettingRowView!
     var directoryRow: SettingRowView!
+    /// Which harness the Agents tab is currently showing fields for — pane-
+    /// local UI state, not a setting. Defaults to whichever is the default
+    /// harness the moment settings first open; switching it with the picker
+    /// changes only what's displayed here, never `AgentDefaults.defaultHarness`
+    /// itself (that's `harnessPicker.onMakeDefault`'s job, explicitly).
+    var viewingHarness: String = ClaudeCodeAdapter().id
     var voiceStack: NSStackView!
     var voiceListHeight: NSLayoutConstraint!
     var gearButton: ConsoleButton!
@@ -820,6 +827,11 @@ final class StatusHUD: NSObject {
     /// per pane, so no pane can be drawn against another's payload.
     var onOpenSettingsTab: ((SettingsTab) -> Void)?
 
+    /// Fired the moment `MAKE DEFAULT` is pressed, so the New Agent menu
+    /// item's icon updates immediately rather than waiting for whatever
+    /// unrelated event next calls `rebuildMenu()`.
+    var onDefaultHarnessChanged: (() -> Void)?
+
     /// The host answers the voices pane's "Recent audio ▸" row by assembling
     /// events and calling `showRecentAudio` — the pane never reads the store.
     var onShowRecentAudio: (() -> Void)?
@@ -848,12 +860,25 @@ final class StatusHUD: NSObject {
         picker.message = "Where new agents start"
         // Open on what is configured, so the picker begins where the setting
         // points rather than wherever AppKit last left someone.
-        picker.directoryURL = URL(fileURLWithPath: AgentDefaults.directory())
+        picker.directoryURL = URL(fileURLWithPath: AgentDefaults.directory(for: viewingHarness))
         NSApp.activate(ignoringOtherApps: true)
         guard picker.runModal() == .OK, let url = picker.url else { return }
-        AgentDefaults.save(directory: url.path)
+        AgentDefaults.save(directory: url.path, for: viewingHarness)
         directoryRow.show(url.path)
-        Permissions.log("settings: agent directory set to \(url.path)")
+        Permissions.log("settings: \(viewingHarness) agent directory set to \(url.path)")
+    }
+
+    /// Push one harness's LAUNCH/DIRECTORY values and placeholders into the
+    /// rows the picker sits above. Called on every picker selection and every
+    /// fresh open of the Agents tab — never on a save, which updates the rows
+    /// it already owns directly (`launchRow.show`/`directoryRow.show` in
+    /// their own `onCommit`/browse-completion handlers) rather than round-
+    /// tripping back through here.
+    func showAgentFields(for harness: String) {
+        launchRow.show(AgentDefaults.load(for: harness))
+        launchRow.setPlaceholder(AgentDefaults.fallback(for: harness))
+        directoryRow.show(AgentDefaults.directoryAsTyped(for: harness))
+        directoryRow.setPlaceholder(AgentDefaults.fallbackDirectory)
     }
 
     /// Switch tabs without leaving `.settings`.
@@ -1716,6 +1741,7 @@ final class StatusHUD: NSObject {
         pastList?.isHidden = true
         pastBackButton?.isHidden = true
         settingsTabs?.isHidden = true
+        harnessPicker?.isHidden = true
         launchRow?.isHidden = true; directoryRow?.isHidden = true
         // Key status is a widget like any other, and the baseline owns it: any
         // state that is not the list face gives the keyboard back. Written here
@@ -1919,9 +1945,15 @@ final class StatusHUD: NSObject {
 
             switch face.settingsTab {
             case .agents:
+                harnessPicker.isHidden = false
                 launchRow.isHidden = false; directoryRow.isHidden = false
-                launchRow.show(AgentDefaults.load())
-                directoryRow.show(AgentDefaults.directoryAsTyped())
+                // Fresh each time the tab opens, to whatever's currently
+                // default — a picker left pointed at Codex from a previous
+                // visit would otherwise silently show the wrong harness's
+                // fields the next time settings open.
+                viewingHarness = AgentDefaults.defaultHarness
+                harnessPicker.update(selected: viewingHarness, defaultHarness: viewingHarness)
+                showAgentFields(for: viewingHarness)
                 bodyLabel.stringValue = face.body
                 setHint("return to save · choose… picks a folder")
                 // Settings is the second face that asks for typing, so it takes

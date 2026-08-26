@@ -1022,6 +1022,17 @@ final class SettingRowView: NSView, NSTextFieldDelegate {
 
     func show(_ value: String) { input.stringValue = value }
 
+    /// The hint text shown when the field is empty — fixed at init for every
+    /// row but the launch/directory pair, which now shows a different
+    /// harness's fallback depending on which one the agents pane's picker
+    /// has selected.
+    func setPlaceholder(_ text: String) {
+        input.placeholderAttributedString = NSAttributedString(
+            string: text,
+            attributes: [.font: ChromeType.mono(ofSize: 11, weight: .regular),
+                         .foregroundColor: StateLegend.Palette.faint])
+    }
+
     @objc private func browseTapped() { onBrowse?() }
 
     func controlTextDidEndEditing(_ obj: Notification) { onCommit?(input.stringValue) }
@@ -1120,4 +1131,100 @@ final class SettingsTabBar: NSView {
         select(tab)
         onSelect?(tab)
     }
+}
+
+/// Which harness the Agents tab's LAUNCH/DIRECTORY rows are showing — Claude
+/// Code or Codex (25 Aug, default launcher). Modeled on `SettingsTabBar`
+/// itself: hand-drawn buttons, not `NSSegmentedControl`'s bezel, for the same
+/// reason. A second affordance the tab bar doesn't need — MAKE DEFAULT —
+/// because viewing a harness's settings and making it the one `New Agent`
+/// launches are different questions; switching which one is SHOWN must never
+/// itself change the default.
+final class HarnessPickerRow: NSView {
+    static let height: CGFloat = 30
+    private var buttons: [String: NSButton] = [:]
+    private var labels: [String: String] = [:]
+    private let makeDefault = ConsoleButton(title: "", target: nil, action: nil)
+    var onSelect: ((String) -> Void)?
+    var onMakeDefault: ((String) -> Void)?
+    private(set) var selected: String
+    private(set) var defaultHarness: String
+
+    init(width: CGFloat, harnesses: [(id: String, label: String)],
+        selected: String, defaultHarness: String) {
+        self.selected = selected
+        self.defaultHarness = defaultHarness
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        labels = Dictionary(uniqueKeysWithValues: harnesses.map { ($0.id, $0.label) })
+
+        var previous: NSView?
+        for h in harnesses {
+            let button = ConsoleButton(title: "", target: self, action: #selector(tapped(_:)))
+            button.isBordered = false
+            button.identifier = NSUserInterfaceItemIdentifier(h.id)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(button)
+            buttons[h.id] = button
+            NSLayoutConstraint.activate([
+                button.centerYAnchor.constraint(equalTo: centerYAnchor),
+                button.leadingAnchor.constraint(
+                    equalTo: previous?.trailingAnchor ?? leadingAnchor,
+                    constant: previous == nil ? 0 : 18),
+            ])
+            previous = button
+        }
+
+        makeDefault.isBordered = false
+        makeDefault.target = self
+        makeDefault.action = #selector(makeDefaultTapped)
+        makeDefault.restingInk = StateLegend.Palette.accent
+        makeDefault.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(makeDefault)
+
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: width),
+            heightAnchor.constraint(equalToConstant: Self.height),
+            makeDefault.trailingAnchor.constraint(equalTo: trailingAnchor),
+            makeDefault.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        paint()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Re-shown whenever the host's own values change — a save elsewhere (the
+    /// `tbase` CLI, another window) must not leave this pane's picker stale.
+    func update(selected: String, defaultHarness: String) {
+        self.selected = selected
+        self.defaultHarness = defaultHarness
+        paint()
+    }
+
+    private func paint() {
+        for (id, button) in buttons {
+            let lit = id == selected
+            let label = labels[id] ?? id
+            let title = id == defaultHarness ? "\(label) ★" : label
+            button.attributedTitle = Widgets.letterspaced(
+                title, size: 9.5, tracking: 1.33,
+                color: lit ? StateLegend.Palette.ink : StateLegend.Palette.hint)
+        }
+        let viewingDefault = selected == defaultHarness
+        makeDefault.isHidden = viewingDefault
+        if !viewingDefault {
+            makeDefault.attributedTitle = Widgets.letterspaced(
+                "MAKE DEFAULT", size: 9.5, tracking: 1.33, color: StateLegend.Palette.accent)
+        }
+    }
+
+    @objc private func tapped(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue else { return }
+        selected = id
+        paint()
+        onSelect?(id)
+    }
+
+    @objc private func makeDefaultTapped() { onMakeDefault?(selected) }
 }

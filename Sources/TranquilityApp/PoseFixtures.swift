@@ -330,6 +330,11 @@ extension StatusHUD {
                 roster: ["sys1", "a"],
                 note: "Pick one to hear it.")
 
+        case "agents-settings":
+            // The default-launcher work (25 Aug): the harness picker above
+            // LAUNCH/DIRECTORY, showing whichever is default with its ★.
+            showAgentSettings()
+
         default:
             return false
         }
