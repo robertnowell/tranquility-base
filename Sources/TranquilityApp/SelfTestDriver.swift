@@ -1617,6 +1617,7 @@ extension StatusHUD {
         dropTrayDrill()
         elasticGridDrill()
         goToSessionDrill()
+        speechCallbackDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])

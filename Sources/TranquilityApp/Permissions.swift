@@ -229,8 +229,33 @@ struct Permissions {
             // is not interrupting; a check that opens with a permission dialog
             // has interrupted harder than the announcement it was being polite
             // about. Onboarding or not at all.
+            //
+            // `@Sendable` on the handler is LOAD-BEARING, not decoration.
+            //
+            // `Permissions` is `@MainActor`. In Swift 6 a closure literal that
+            // is not `@Sendable` and is formed in an actor-isolated context
+            // INHERITS that isolation, and ObjC block parameters import as
+            // non-Sendable unless the header says otherwise — Speech's does
+            // not. So without this keyword the compiler quietly makes this
+            // handler main-actor code and writes a `swift_task_isCurrentExecutor`
+            // check into its prologue. TCC delivers the reply on
+            // `com.apple.root.default-qos` (measured; and the SDK header says
+            // so outright: "The system does not guarantee the execution of this
+            // block on your app's main dispatch queue"), the check fails, and
+            // the process takes a SIGTRAP.
+            //
+            // That is not a hypothetical: it killed 0.1.0 on the first external
+            // user's Mac, 25 Aug 2026, incident 51344D00, the moment they
+            // pressed Grant. The compiler emitted no error, no warning and no
+            // note — strict concurrency was fully on and had nothing to say.
+            //
+            // `@Sendable` opts the closure OUT of isolation inheritance, so no
+            // check is emitted and none is needed: `resume(returning:)` is safe
+            // from any thread by design. `speechCallbackDrill` holds this.
             _ = await withCheckedContinuation { (c: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
-                SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0) }
+                SFSpeechRecognizer.requestAuthorization { @Sendable status in
+                    c.resume(returning: status)
+                }
             }
             return isGranted(kind)
         case .inputMonitoring:
