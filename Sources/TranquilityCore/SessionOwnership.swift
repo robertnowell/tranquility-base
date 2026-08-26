@@ -81,6 +81,30 @@ extension SessionOwnershipStore {
         guard let r = current(sessionId: sessionId), ProcessProbe.isAlive(r.pid) else { return nil }
         return r
     }
+
+    /// Every session from a harness with no registry of its own — Codex
+    /// today, whatever harness comes next tomorrow — in `agents.sessions()`'s
+    /// own shape, so a caller built around Claude Code's registry can just
+    /// add these in rather than rewrite itself around a second source.
+    ///
+    /// The one seam: found live, 26 Aug, that the same "ask `agents` and
+    /// nothing else" assumption was independently written at roughly thirty
+    /// call sites across this app — three of them on the single fresh-
+    /// launch-then-reply path, each silently treating a demonstrably live
+    /// Codex session as gone. `Coordinator.waiting()` and `dispatch()` were
+    /// hand-fixed first, in the order the bug was found in; this is the
+    /// same fix, factored out once, for the rest.
+    ///
+    /// Excludes Claude Code deliberately, even though this store can hold
+    /// Claude Code records too (a revive writes one) — `agents.sessions()`
+    /// is already authoritative for that harness, and a Claude Code row
+    /// from BOTH sources would double the same session in a `+`-combined
+    /// list.
+    public func liveNonRegistrySessions() -> [LiveSession] {
+        all().filter { $0.harness != ClaudeCodeAdapter().id && ProcessProbe.isAlive($0.pid) }
+            .map { LiveSession(pid: $0.pid, sessionId: $0.sessionId, cwd: $0.cwd,
+                               status: "idle", name: nil, waitingFor: nil) }
+    }
 }
 
 /// Default, local implementation — one JSON file, same shape

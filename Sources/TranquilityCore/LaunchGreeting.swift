@@ -170,38 +170,40 @@ public enum LaunchGreeting {
         return nil
     }
 
-    /// `awaitRegistration`'s Codex twin.
+    /// `awaitRegistration`'s Codex twin — and NOT what its first version
+    /// (24 Aug) did. That version polled `SessionDiscovery.discoverCodex`,
+    /// which reads the rollout file Codex writes in `~/.codex/sessions` —
+    /// and found live, 26 Aug, chasing a launch that greeted, then never
+    /// registered: Codex does not write that file until the FIRST TURN
+    /// COMPLETES. A fresh launch with nobody talked to yet has no rollout to
+    /// discover, ever — the wait timed out at 30s on every single Codex
+    /// launch, silently, because "no session in this repo has finished a
+    /// turn yet" is not "not registered," and the code could not tell them
+    /// apart.
     ///
-    /// Codex has no live registry to poll — `SessionDiscovery.discoverCodex`
-    /// is a disk walk over `~/.codex/sessions` rather than a call to `claude
-    /// agents --json`, and it is genuinely more expensive (measured close to
-    /// a second against 19 real rollouts on this machine, per its own doc
-    /// comment), so this polls less often than the three-second-scale Claude
-    /// Code case can afford to: `interval` defaults to 2s, not 1s. Same
-    /// before/after-by-directory shape otherwise, deliberately — a session
-    /// that appears in the walk after the launch, in the launch directory,
-    /// and was not already known, is the one that was just started.
-    ///
-    /// `discover` takes no arguments and returns the whole `Result` rather
-    /// than being handed `directory` itself: `discoverCodex`'s own signature
-    /// has nothing directory-scoped to filter by earlier (it walks the whole
-    /// tree), so there is nothing to push down — the filter happens here,
-    /// the same place `awaitRegistration`'s does.
+    /// `CodexRollout.threadWriterLocksDirectory` is the fix: Codex writes an
+    /// empty `<threadId>.lock` there the moment the thread is CREATED, no
+    /// turn required — confirmed live by launching a bare, message-less
+    /// `codex` and watching the lock appear within the same second, well
+    /// before any rollout exists. No `cwd` in a lock's filename, so this
+    /// cannot filter by directory the way the Claude Code and old-Codex
+    /// versions both could — `liveThreadIds`'s own doc comment says why
+    /// that's an accepted trade, not an oversight. Interval drops to 0.5s:
+    /// a directory listing plus per-file mtime stat is far cheaper than
+    /// `discoverCodex`'s full archive walk, and Codex's own lock creation
+    /// is near-instant, so there's no reason to wait as long between polls.
     public static func awaitCodexRegistration(
-        directory: String,
         excluding known: Set<String>,
-        discover: () -> SessionDiscovery.Result = { SessionDiscovery.discoverCodex() },
+        liveThreadIds: () -> [String] = { CodexRollout.liveThreadIds() },
         timeout: TimeInterval = 30,
-        interval: TimeInterval = 2,
+        interval: TimeInterval = 0.5,
         now: () -> Date = Date.init,
         sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
     ) -> String? {
         let deadline = now().addingTimeInterval(timeout)
         while now() < deadline {
-            if let fresh = discover().sessions.first(where: {
-                $0.cwd == directory && !known.contains($0.sessionId)
-            }) {
-                return fresh.sessionId
+            if let fresh = liveThreadIds().first(where: { !known.contains($0) }) {
+                return fresh
             }
             sleep(interval)
         }

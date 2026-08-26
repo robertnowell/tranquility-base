@@ -612,13 +612,69 @@ case "reconcile":
         // Kick off an investigation instead of reacting to one (ruled 05 Aug).
         // Optional argument overrides the directory; the command is fixed in v1.
         SessionLauncher.trace = { print($0) }
-        let dir = args.count > 1 ? (args[1] as NSString).expandingTildeInPath
-                                 : SessionLauncher.defaultDirectory
-        switch SessionLauncher.launch(directory: dir) {
-        case .success:
-            print("detached tmux session (attach on demand): "
-                + "`\(SessionLauncher.defaultCommand)` in \(dir)")
-            print("its turns enter the loop as soon as the session first stops")
+        // --codex: a door onto the exact fresh-launch-and-register path the
+        // panel's own newSession() uses (default launcher, 26 Aug) — the
+        // same reasoning as `tbase end` below, a headless way to exercise a
+        // REAL launch without deploying a build. This is what proved the
+        // registration fix live: a fresh, message-less Codex launch never
+        // wrote a rollout to discover (Codex only writes one after the
+        // FIRST TURN), so the old poll timed out on every single launch,
+        // silently. Now polls CodexRollout.threadWriterLocksDirectory
+        // instead, which Codex writes to immediately.
+        let useCodex = args.contains("--codex")
+        let adapter: any HarnessAdapter = useCodex ? CodexAdapter() : ClaudeCodeAdapter()
+        let dirArg = args.first(where: { $0 != "--codex" && $0 != "new" })
+        let dir = dirArg.map { ($0 as NSString).expandingTildeInPath }
+            ?? AgentDefaults.directory(for: adapter.id)
+        let command = AgentDefaults.load(for: adapter.id)
+        let before = useCodex ? Set(CodexRollout.liveThreadIds())
+                              : Set((ClaudeAgentsCLI().sessions() ?? [])
+                                    .filter { $0.cwd == dir }.map(\.sessionId))
+        switch SessionLauncher.launch(directory: dir, command: command, adapter: adapter) {
+        case .success(let tty):
+            print("detached tmux session (attach on demand): `\(command)` in \(dir)")
+            print("waiting for it to register…")
+            let sessionId = useCodex
+                ? LaunchGreeting.awaitCodexRegistration(excluding: before)
+                : LaunchGreeting.awaitRegistration(directory: dir, excluding: before)
+            guard let sessionId else {
+                print("did not register within 30s (see the trace lines above)")
+                break
+            }
+            print("registered: \(sessionId)")
+            // --wait-live: the fuller proof, not just registration — the
+            // exact gap that shipped 26 Aug: a fresh Codex session
+            // registered fine but read as permanently "gone" the instant
+            // Coordinator.waiting() (announce/sweep, not this file's own
+            // dispatch code) first polled it, because that function's
+            // liveness came from `agents` alone (claude agents --json,
+            // which never carries Codex) with no ownership record written
+            // at fresh-launch to answer it otherwise. Mirrors newSession()'s
+            // own sequence: record ownership (if Codex), write the
+            // greeting, then ask a REAL Coordinator whether it's live —
+            // the same question the panel's announce/sweep pipeline asks.
+            if args.contains("--wait-live") {
+                if useCodex, let pid = ProcessProbe.pid(onTty: tty, containing: command) {
+                    let pane = TmuxOwnership.pane(forTty: tty)
+                    FileSessionOwnershipStore.shared.record(SessionOwnershipRecord(
+                        sessionId: sessionId, harness: CodexAdapter().id, pid: pid,
+                        paneId: pane?.paneId, socketName: pane?.socketName,
+                        sessionName: pane?.sessionName, paneTty: tty, cwd: dir))
+                    print("ownership recorded: pid \(pid)")
+                }
+                try LaunchGreeting.record(sessionId: sessionId, directory: dir,
+                                          line: "tbase new --wait-live probe", store: store)
+                print("greeting recorded — sleeping 3s (past the window the bug fired in)…")
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+                Coordinator.trace = { print("  coordinator: \($0)") }
+                let coordinator = Coordinator(store: store)
+                let stillWaiting = try coordinator.waiting().map(\.sessionId)
+                if stillWaiting.contains(sessionId) {
+                    print("✓ still live in Coordinator.waiting() after 3s")
+                } else {
+                    print("✗ NOT in Coordinator.waiting() — this is the bug")
+                }
+            }
         case .failure(let error):
             print("couldn't launch: \(error.message)")
             print("(a missing tmux binary or `new-session` failing is the usual suspect —")
@@ -709,11 +765,13 @@ case "reconcile":
             // the transcript's job — building a page for every session that
             // ever ran fills the directory with agents nobody will open again,
             // which is the same mess in a different window.
-            ids = (ClaudeAgentsCLI().sessions() ?? []).map(\.sessionId)
+            ids = ((ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions()).map(\.sessionId)
         default:
             ids = [args[1]]
         }
-        let live = ClaudeAgentsCLI().sessions() ?? []
+        let live = (ClaudeAgentsCLI().sessions() ?? [])
+            + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
         for id in ids {
             // Priming: the CLI is not the main actor, and somebody typing
             // `tbase homebase` is asking for the finished page — a hub written
@@ -775,9 +833,12 @@ case "reconcile":
 
     case "targets":
         let enrolment = EnrolmentRegistry()
-        guard let live = ClaudeAgentsCLI().sessions() else {
+        guard let claudeLive = ClaudeAgentsCLI().sessions() else {
             print("(liveness probe FAILED — the app is failing open right now)"); break
         }
+        // Codex has no probe to fail — its half of this list is whatever
+        // `ownership` currently verifies as alive, unconditionally.
+        let live = claudeLive + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
         if live.isEmpty { print("(no live sessions)"); break }
         print("\(pad("STATUS", 8))  \(pad("PID", 7))  \(pad("TTY", 14))  \(pad("ENROLLED", 9))  PROJECT")
         for s in live.sorted(by: { ($0.cwd ?? "") < ($1.cwd ?? "") }) {
@@ -871,7 +932,8 @@ case "reconcile":
         // Reused from selection above rather than re-resolved: two live
         // lookups for the same pid, moments apart, can disagree if a pane
         // closes in between (the 19 Aug misfire's shape).
-        var pane = resolvedPane ?? TmuxOwnership.pane(forPid: live.pid)
+        var pane = resolvedPane
+            ?? TmuxOwnership.pane(forSessionId: live.sessionId, pid: live.pid)
         var dispatchPid = live.pid
         if pane == nil, let cwd = live.cwd {
             // Same transfer the real app's `Coordinator.dispatch` makes —
@@ -908,6 +970,16 @@ case "reconcile":
         let target = DispatchTarget(
             kind: .tmux, sessionId: "harness-\(pid)", pid: pid, pane: pane,
             transcriptPath: args[3], label: "test harness", readinessSource: .processAlive)
+        // The drill's own eyes. Without this, a failing send in
+        // test-dispatch-tmux.sh reports only its outcome, and working out WHY
+        // meant adding a print, rebuilding, and hoping the flake recurred —
+        // which is how three rounds of timeout-tuning got argued from noise.
+        // stderr, so the drill's stdout parsing is untouched.
+        if ProcessInfo.processInfo.environment["TB_TRACE"] != nil {
+            TmuxTransport.trace = { line in
+                FileHandle.standardError.write(Data(("trace: " + line + "\n").utf8))
+            }
+        }
         report(await TmuxTransport().send(text: args.dropFirst(4).joined(separator: " "), to: target))
 
     // MARK: summarize

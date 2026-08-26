@@ -71,7 +71,7 @@ final class ManualRevivalTests: XCTestCase {
     func testTheManualLineIsWhatAHumanWouldType() {
         let line = SessionLauncher.manualRevival(
             sessionId: "abc-123", directory: "/Users/x/Projects/thing", command: "claude")
-        XCTAssertEqual(line, "cd '/Users/x/Projects/thing' && claude --resume 'abc-123'")
+        XCTAssertEqual(line, "cd '/Users/x/Projects/thing' && claude --resume abc-123")
         XCTAssertFalse(line.contains("export PATH"),
                        "the app's PATH is the app's problem; a human shell has its own")
     }
@@ -112,5 +112,43 @@ final class NativeArchTests: XCTestCase {
         let line = SessionLauncher.manualRevival(
             sessionId: "abc", directory: "/tmp/x", command: "claude")
         XCTAssertFalse(line.contains("arch -arm64"), line)
+    }
+}
+
+/// A revive must speak its own harness's language.
+///
+/// Measured 26 Aug on session f83191a4, a Codex session: it was revived with
+/// Codex's binary and Claude Code's flag spelling — `codex … --resume <id>` —
+/// which Codex rejects outright ("unexpected argument '--resume' found"; it is
+/// `codex resume <id>`, a subcommand). The pane exited inside a second. The
+/// same wrong default then produced the RESCUE line copied to the clipboard,
+/// so the card promised a manual revival command and handed over one that
+/// could not work for that agent.
+final class HarnessSpecificRevivalTests: XCTestCase {
+
+    func testCodexResumesWithItsSubcommandNotAFlag() {
+        XCTAssertEqual(CodexAdapter().resumeArguments(sessionId: "abc"), ["resume", "abc"],
+                       "`codex --resume` is not a thing; it is a subcommand")
+        XCTAssertEqual(ClaudeCodeAdapter().resumeArguments(sessionId: "abc"), ["--resume", "abc"])
+    }
+
+    /// The rescue line is only a rescue if it runs. Pinned per harness, since
+    /// the bug was a DEFAULT quietly applying the wrong one.
+    func testTheManualLineMatchesTheHarnessItIsFor() {
+        let codex = SessionLauncher.manualRevival(
+            sessionId: "abc", directory: "/x", command: "codex", adapter: CodexAdapter())
+        XCTAssertEqual(codex, "cd '/x' && codex resume abc")
+
+        let claude = SessionLauncher.manualRevival(
+            sessionId: "abc", directory: "/x", command: "claude", adapter: ClaudeCodeAdapter())
+        XCTAssertEqual(claude, "cd '/x' && claude --resume abc")
+    }
+
+    /// The lookup the call site now uses, pinned so a renamed id fails here
+    /// rather than in a pane that dies in a second.
+    func testTheHarnessIdResolvesToItsOwnAdapter() {
+        XCTAssertEqual(KnownHarnesses.adapter(for: CodexAdapter().id).id, CodexAdapter().id)
+        XCTAssertEqual(KnownHarnesses.adapter(for: ClaudeCodeAdapter().id).id,
+                       ClaudeCodeAdapter().id)
     }
 }

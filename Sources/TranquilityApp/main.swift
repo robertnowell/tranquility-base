@@ -644,7 +644,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Probe, signal and poll off-main (rule 9); only the repaint hops back.
         hud.onTerminateSession = { [weak self] id, name in
             Task.detached {
-                guard let live = (ClaudeAgentsCLI().sessions() ?? [])
+                // `agents` alone made this a permanent no-op for a live Codex
+                // session (26 Aug) — logged "already gone" and refused to
+                // terminate a process that was, in fact, still running.
+                guard let live = ((ClaudeAgentsCLI().sessions() ?? [])
+                    + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                     .first(where: { $0.sessionId == id }) else {
                     Permissions.log("terminate: \(name) (\(id.prefix(8))) not in agents — already gone")
                     await MainActor.run { self?.refreshGridAfterTerminate() }
