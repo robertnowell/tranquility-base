@@ -107,10 +107,31 @@ final class TmuxTransportTests: XCTestCase {
     /// Protects the HUMAN's text, not ours: a line that appears after our
     /// message went in belongs to whoever typed it.
     func testAForeignLineIsNeverClearedOnceOurMessageHasGoneIn() {
-        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: false), everEchoed: false),
-                       .clearThenPaste)
         XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: false), everEchoed: true), .stop,
                        "clearing here would delete a person's typing for an already-delivered message")
+    }
+
+    /// Ruled 25 Aug, from a live loss: a URL Robert had pasted was deleted to
+    /// make room for the dictated instruction that referred to it.
+    func testTextAlreadyInTheBoxIsJoinedRatherThanDeleted() {
+        XCTAssertEqual(
+            TmuxTransport.decide(line: .holds(ours: false), everEchoed: false,
+                                 firstAttempt: true),
+            .joinExisting,
+            "the two things the user meant as one message must arrive as one message")
+    }
+
+    /// The join is first-attempt only. A paste whose echo was never detected
+    /// is allowed one more paste (the step 5 mode-race `continue`), and
+    /// joining there could append a second copy onto the first — so after the
+    /// first attempt this falls back to exactly the old behaviour. The worst
+    /// case is unchanged; only the common case improves.
+    func testAJoinIsNeverRetried() {
+        XCTAssertEqual(
+            TmuxTransport.decide(line: .holds(ours: false), everEchoed: false,
+                                 firstAttempt: false),
+            .clearThenPaste,
+            "a second join could glue two copies of our payload onto the user's line")
     }
 
     /// The branch that was always right stays right: our own unsubmitted text
