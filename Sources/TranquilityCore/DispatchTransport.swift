@@ -209,6 +209,27 @@ public enum Readiness: Sendable, Equatable {
         return parsed.isBusy ? .busy : .ready
     }
 
+    /// `classify(rollout:)` above cannot tell "no turns yet" from "not
+    /// found" — both parse as `nil`. Found live, 26 Aug: a session
+    /// launched seconds earlier, alive, an idle composer on screen,
+    /// refused its first-ever dispatch as `.notRegistered` — "blocked on a
+    /// dialog or still starting up" — because it had taken no turn and so
+    /// had no rollout to tail.
+    ///
+    /// The thread-writer lock file disambiguates: written at THREAD
+    /// CREATION (`awaitCodexRegistration`'s own mechanism, before any
+    /// turn), so its presence for this session id means the thread exists
+    /// and simply has not turned yet — honestly ready, not unregistered.
+    /// Its absence leaves the original verdict standing. `liveThreadIds`
+    /// is a plain array, not a live call, so this stays a pure function a
+    /// test can drive with a fabricated list.
+    public static func classify(
+        rollout parsed: CodexRollout.Parsed?, sessionId: String, liveThreadIds: [String]
+    ) -> Readiness {
+        if parsed == nil, liveThreadIds.contains(sessionId) { return .ready }
+        return classify(rollout: parsed)
+    }
+
     /// `floorHeld` refuses for its own reason: pasting would splice our words
     /// into somebody's half-typed message. Same gate, different hazard.
     public var canDispatch: Bool {

@@ -386,7 +386,13 @@ public struct TmuxTransport: DispatchTransport {
             return Readiness.classify((agents.sessions() ?? [])
                 .matching(sessionId: target.sessionId, pid: pid))
         case .rolloutTail:
-            return Readiness.classify(rollout: CodexRollout.parse(sessionId: target.sessionId))
+            // See `Readiness.classify(rollout:sessionId:liveThreadIds:)`'s
+            // own doc comment for why a nil rollout alone is not enough to
+            // refuse — this disambiguates "no turns yet" from "not found".
+            return Readiness.classify(
+                rollout: CodexRollout.parse(sessionId: target.sessionId),
+                sessionId: target.sessionId,
+                liveThreadIds: CodexRollout.liveThreadIds())
         }
     }
 
