@@ -267,6 +267,28 @@ extension AppDelegate {
         }
     }
 
-    /// The badge, from the same predicate a keypress uses.
-    func waitingNow() -> Int { (try? coordinator?.waitingCount()) ?? 0 }
+    /// The badge, from the same predicate a keypress uses — but read from the
+    /// snapshot, never probed inline. See `waitingCountSnapshot` for why the
+    /// inline version was a main-thread subprocess wait on a 1.5s timer.
+    func waitingNow() -> Int { waitingCountSnapshot }
+
+    /// Resample the waiting count off the main thread and repaint on change.
+    ///
+    /// `Coordinator` is a `Sendable` struct and `waitingCount()` touches only
+    /// the CLI probe and the store, so the whole call is safe to make from a
+    /// detached task; only the repaint comes home.
+    func refreshWaitingSnapshot() {
+        guard !waitingProbeInFlight, let coordinator else { return }
+        waitingProbeInFlight = true
+        Task.detached(priority: .utility) {
+            let count = (try? coordinator.waitingCount()) ?? 0
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.waitingProbeInFlight = false
+                guard count != self.waitingCountSnapshot else { return }
+                self.waitingCountSnapshot = count
+                self.updateTitle()
+            }
+        }
+    }
 }

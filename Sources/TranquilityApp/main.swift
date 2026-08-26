@@ -25,6 +25,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var lastStatusLine = "starting…"
     var isBusy = false
 
+    /// The menu-bar badge's waiting count, sampled OFF the main thread.
+    ///
+    /// `Coordinator.waitingCount()` reaches `ClaudeAgentsCLI.sessions()`, which
+    /// runs `claude agents --json` as a child process with an 8-second deadline.
+    /// `updateTitle()` called it inline, `refresh()` calls `updateTitle()`, and
+    /// the permission timer calls `refresh()` every 1.5 seconds — so the main
+    /// thread went into a subprocess wait on a repeating timer. The 6-second
+    /// result cache hid it most ticks and hid it completely on a fast machine
+    /// with a warm CLI; on the first external user's Mac the crash report caught
+    /// thread 0 mid-wait, three frames deep in `Subprocess.run` (incident
+    /// 51344D00, 25 Aug).
+    ///
+    /// That is rule 9 exactly — "anything whose cost a human would feel as a
+    /// frozen frame runs detached and hops back for the UI half" — and the
+    /// deadline that was added when this last bit (audit R5) bounded how long
+    /// the freeze lasts without moving which thread freezes.
+    ///
+    /// So the badge reads a number and never a process. `refreshWaitingSnapshot`
+    /// samples off-main and repaints only on change. The count starts at 0 and
+    /// is correct within one probe of launch, which is the honest trade: a badge
+    /// that is briefly zero beats a menu bar that is briefly frozen.
+    ///
+    /// It also warms the shared 6-second cache every tick, so the keypress paths
+    /// that still call `waiting()` inline (they need the rows, not a count, and
+    /// freshness at the moment of a press is load-bearing) almost always hit a
+    /// warm cache instead of a spawn.
+    var waitingCountSnapshot = 0
+
+    /// One probe at a time. Without this a slow CLI stacks a new child process
+    /// every 1.5 seconds behind the last one that has not come back.
+    var waitingProbeInFlight = false
+
     /// Tap versus hold on the same chord. A tap plays the next waiting update; a
     /// hold records a reply to whatever last spoke. One gesture, two verbs — which
     /// beats two chords to remember, and the boundary is unambiguous in practice
@@ -980,6 +1012,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onboarding.show { }
         }
         if CommandLine.arguments.contains("--selftest-hud") {
+            refreshIsCheapDrill()
             hud.selfTest()
             // Before selfTestPendingSend: that one holds the panel for five more
             // seconds and releases the drill hold when it is done.
