@@ -468,6 +468,9 @@ public struct TmuxTransport: DispatchTransport {
             ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId))
         func elapsed() -> Int { Int(Date().timeIntervalSince(start) * 1000) }
 
+        // Set once any attempt has seen its own words in the composer.
+        var accepted = false
+
         for attempt in 0..<2 {
             if attempt == 1 {
                 // The retry gate. Both conditions, and both are positive
@@ -494,6 +497,12 @@ public struct TmuxTransport: DispatchTransport {
             // in the box, and its only power is to preserve it.
             var expectedInBox = payload
             var pasted = false
+            // Whether we SAW our words in the box. Advisory for the paste (a
+            // slow repaint must never cause a second one), but decisive at the
+            // end: our text seen in the box, and the box empty after Return,
+            // is first-hand evidence the TUI took the message — evidence that
+            // does not depend on a file being written in time.
+            var echoSeen = false
             let floor = Self.decide(line: promptLine(
                 pane, payload: payload, glyph: target.promptGlyph,
                 placeholder: target.idlePlaceholder, chip: target.pasteChip,
@@ -549,7 +558,7 @@ public struct TmuxTransport: DispatchTransport {
                 // now a timeout here just means "press Return anyway", and
                 // Return on a composer that never received the paste does
                 // nothing at all.
-                _ = poll(deadline: 6.0, every: 0.05, until: {
+                echoSeen = poll(deadline: 6.0, every: 0.05, until: {
                     guard let text = screen(pane) else { return false }
                     return text.contains(payload)
                         || Self.boxHolds(payload: expectedInBox, screen: text,
@@ -558,7 +567,11 @@ public struct TmuxTransport: DispatchTransport {
                                             chip: target.pasteChip).isEmpty
                 })
             }
+            // `.returnOnly` means the box already held our words when this
+            // send started, which is the same evidence a fresh echo gives.
+            if floor == .returnOnly { echoSeen = true }
             _ = pasted
+            accepted = accepted || echoSeen
 
             // ── Submit and prove it. Return is idempotent; the transcript is
             // the witness. A dialog re-check before every one of them, because
@@ -566,6 +579,21 @@ public struct TmuxTransport: DispatchTransport {
             // can raise one between two of these.
             for round in 0..<3 {
                 if dialogIsUp(target: target, pid: pid) { break }
+                // Copy-mode before EVERY Return, not just once at the top of
+                // the send. Return is a copy-mode key — in copy-mode it moves
+                // the selection instead of submitting, so a pane that entered
+                // copy-mode between the paste and the Return silently eats the
+                // submit and leaves the words sitting in the box.
+                //
+                // Traced 26 Aug rather than guessed: every remaining failure
+                // under the churn drill was `boxEmpty=false` at the end, on a
+                // send whose text was still in the composer. It read as a
+                // false alarm only because the NEXT send joined onto the
+                // stranded text and submitted both, so the message arrived
+                // late and under someone else's send. Clearing here is the
+                // difference between an Enter that submits and one that
+                // scrolls.
+                _ = clearMode(pane)
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
                 let window: TimeInterval = round == 2 ? verificationTimeout : 4
                 if await landedInTranscript(payload, target: target, timeout: window,
@@ -603,6 +631,35 @@ public struct TmuxTransport: DispatchTransport {
             return .confirmed(latencyMs: elapsed())
         }
 
+        // ── ACCEPTED, not failed.
+        //
+        // Our words went into the box, we watched them arrive, we pressed
+        // Return, and the box is now empty. The TUI took them. That is
+        // first-hand evidence of acceptance and it does not depend on a file
+        // being written before a deadline — which is the one thing every
+        // remaining false alarm has in common.
+        //
+        // Measured 26 Aug: under adversarial copy-mode churn, one send in
+        // sixty reported failure while all sixty messages had arrived exactly
+        // once. Every one of those was this state — accepted, transcript
+        // lagging — and calling it a failure sends someone to check a tab
+        // where their message is already sitting.
+        //
+        // BOTH halves are required, and neither alone would do. An empty box
+        // on its own is also what a paste that never landed looks like; an
+        // echo on its own says nothing about whether Return was taken. It is
+        // the transition between them that means "taken".
+        //
+        // `.queued` rather than `.confirmed`, because the difference is real
+        // and the receipt says so: the words are in the session, not yet in
+        // its transcript. That is exactly what a message typed into a busy
+        // session looks like, which is why the outcome already exists.
+        if accepted && composerIsEmpty(pane, target: target) {
+            Self.trace?("dispatch: \(target.sessionId.prefix(8)) accepted — echoed, "
+                + "submitted, box now empty; transcript has not caught up")
+            return .queued
+        }
+
         // A busy session may hold the words in its own queue for a while; the
         // enqueue record is read now, so this is genuinely the last resort
         // rather than the ordinary busy path it used to be.
@@ -614,6 +671,21 @@ public struct TmuxTransport: DispatchTransport {
     /// Deliberately conservative: an unreadable box is NOT empty, because
     /// "we could not see" must never authorise a second paste.
     private func composerIsEmpty(_ pane: TmuxPaneAddress, target: DispatchTarget) -> Bool {
+        // Copy-mode first, always. A pane in copy-mode shows SCROLLBACK, so
+        // `capture-pane` returns a historical view and the "last prompt line"
+        // is some earlier prompt with an earlier message after it — a box that
+        // is empty reads as full, and one that is full can read as empty.
+        //
+        // Found 26 Aug by tracing the drill instead of guessing at it: the
+        // adversary shoves the pane into copy-mode at random, and every
+        // remaining false alarm traced to `boxEmpty=false` on a session whose
+        // message had already landed. It was never a timing problem; the
+        // reader was looking at the wrong screen.
+        //
+        // Clearing is safe here and everywhere else this file does it: leaving
+        // a pane in copy-mode is itself the condition that destroys injected
+        // text, which is why step 2 of every send clears it too.
+        _ = clearMode(pane)
         guard let text = screen(pane),
               let rows = Self.boxRows(screen: text, glyph: target.promptGlyph)
         else { return false }
