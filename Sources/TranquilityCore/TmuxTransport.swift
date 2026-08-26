@@ -141,6 +141,54 @@ public enum TmuxOwnership {
         return pane(forTty: tty)
     }
 
+    /// The pane a session is in, asked of the session's own registry entry
+    /// before anything is inferred.
+    ///
+    /// The tty join below is three hops — pid to tty via `ps`, tty to pane via
+    /// the server's inventory — and each hop can be stale or recycled while
+    /// the session sits there perfectly alive. That is where "the session is
+    /// right here and it couldn't open it" came from on 25 Aug: a pid twelve
+    /// seconds out of date, and a button that answered "couldn't find a
+    /// terminal for process 49931" about a pane one keystroke away.
+    ///
+    /// Claude Code writes the pane down itself. When it has, that is the
+    /// answer; when it hasn't — a Codex session, a session too old to
+    /// register — the join still runs, unchanged. A better source where one
+    /// exists, never a second mechanism.
+    ///
+    /// The registry's pane id is still checked against the live server before
+    /// it is returned: a registry file outlives the pane it names, and this
+    /// type's whole contract (19 Aug) is that a pane address is resolved from
+    /// LIVE inventory and never from a stored string.
+    public static func pane(forSessionId sessionId: String, pid: Int?) -> TmuxPaneAddress? {
+        if let entry = SessionRegistry.entry(forSessionId: sessionId),
+           let paneId = entry.paneId,
+           let address = paneById(paneId) {
+            return address
+        }
+        guard let pid else { return nil }
+        return pane(forPid: pid)
+    }
+
+    /// Confirm a pane id against live inventory, and fill in the rest of its
+    /// address from what the server says rather than from the file.
+    static func paneById(_ paneId: String) -> TmuxPaneAddress? {
+        for socket in sockets {
+            guard case .success(let out) = Tmux.run(
+                ["list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_tty}"],
+                socket: socket, timeout: 3)
+            else { continue }
+            for line in out.split(separator: "\n") {
+                let parts = line.split(separator: "\t", maxSplits: 2,
+                                       omittingEmptySubsequences: false).map(String.init)
+                guard parts.count == 3, parts[0] == paneId else { continue }
+                return TmuxPaneAddress(socketName: socket, paneId: parts[0],
+                                       sessionName: parts[1], paneTty: parts[2])
+            }
+        }
+        return nil
+    }
+
     /// The same question asked with a tty already in hand — the launcher's
     /// trust watcher holds one before any process fact exists.
     public static func pane(forTty tty: String) -> TmuxPaneAddress? {
@@ -530,6 +578,30 @@ public struct TmuxTransport: DispatchTransport {
         }
         Self.trace?("dispatch: \(target.sessionId.prefix(8)) NOT confirmed — "
             + "boxEmpty=\(composerIsEmpty(pane, target: target)) wasBusy=\(wasBusy)")
+
+        // One last look before calling it a failure.
+        //
+        // Every check above is bounded, and a bounded check that ran out of
+        // time is not evidence the message never arrived — under load the
+        // transcript write can simply be slower than the last poll. Measured
+        // 26 Aug by the copy-mode churn drill: ten messages, ten landed, and
+        // one send reported an error anyway. Nothing was lost; the report was
+        // wrong, which is its own kind of unreliable — it is the shape of
+        // every "it said it failed but it went" this app has produced.
+        //
+        // One file read, on a path that has already spent its whole budget,
+        // and it can only ever turn a false failure into a true confirmation.
+        // A glance, not a wait. A three-second poll was tried here and
+        // measured WORSE — 3 failures in 6 drill runs against 1 in 6 for the
+        // glance — because the extra seconds sit inside every failing send and
+        // hand the next one a busier pane. Tuning a timeout against a
+        // stochastic drill is how this file grew its knobs; this one is a free
+        // file read on a path that has already given up.
+        if alreadyDelivered(payload, target: target, fromByteOffset: watermark) {
+            Self.trace?("dispatch: \(target.sessionId.prefix(8)) confirmed on the final "
+                + "check — the verification window expired before the transcript caught up")
+            return .confirmed(latencyMs: elapsed())
+        }
 
         // A busy session may hold the words in its own queue for a while; the
         // enqueue record is read now, so this is genuinely the last resort

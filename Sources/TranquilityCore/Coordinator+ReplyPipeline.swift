@@ -245,7 +245,8 @@ extension Coordinator {
         // chosen BECAUSE it was tmux-owned dispatching a beat later as
         // `.terminalApp` is the 19 Aug misfire's shape exactly. The common
         // single-row path never paid that lookup, so it resolves fresh here.
-        var pane = resolvedPane ?? TmuxOwnership.pane(forPid: live.pid)
+        var pane = resolvedPane
+            ?? TmuxOwnership.pane(forSessionId: live.sessionId, pid: live.pid)
 
         // No tmux-owned row for this sessionId at all: a hand-started session
         // TB has never touched, on its FIRST dispatch. Resume it under tmux
