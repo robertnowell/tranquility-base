@@ -393,7 +393,17 @@ final class CollapsedStrip: NSView {
         // the mark is sized to this slot, so a full column cannot crowd it out.
         if hovering {
             drawGlyph(StateLegend.Glyph.denied, in: dismissRect, color: StateLegend.Palette.faint)
-            drawGlyph("+", in: newAgentRect, color: StateLegend.Palette.faint)
+            // Which harness a press launches (default launcher, 25 Aug) — the
+            // same single-letter-in-a-circle mark the menu's "New session"
+            // item already shows (`AppDelegate+Menu.swift`'s `rebuildMenu`),
+            // not either company's actual logo: no brand assets exist in
+            // this repo and none should. Read fresh each paint, same as the
+            // menu item re-reads it on every rebuild — this band only paints
+            // while hovering, so the cost is a stat call under a mouseover,
+            // not a hot loop.
+            let symbol = AgentDefaults.defaultHarness == CodexAdapter().id
+                ? "x.circle" : "c.circle"
+            drawSymbol(symbol, in: newAgentRect, color: StateLegend.Palette.faint)
             lastFloorPaint = .controls
         } else {
             drawPlate()
@@ -573,5 +583,26 @@ final class CollapsedStrip: NSView {
         let size = s.size(withAttributes: attrs)
         s.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
                withAttributes: attrs)
+    }
+
+    /// `drawGlyph`'s sibling for an SF Symbol: this view paints by hand
+    /// (see the type's own doc comment on why one `draw` holds everything),
+    /// so there is no `NSImageView` for AppKit's own template tinting to
+    /// apply to — the symbol is rendered into an offscreen template image
+    /// and re-inked to `color` with `.sourceAtop`, the same recolor-a-
+    /// template trick `SiteMark` already uses for the menu bar mark.
+    private func drawSymbol(_ systemName: String, in rect: NSRect, color: NSColor) {
+        guard let symbol = NSImage(systemSymbolName: systemName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+        else { return }
+        let size = symbol.size
+        let tinted = NSImage(size: size)
+        tinted.lockFocus()
+        symbol.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
+        color.set()
+        NSRect(origin: .zero, size: size).fill(using: .sourceAtop)
+        tinted.unlockFocus()
+        tinted.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
+                    from: .zero, operation: .sourceOver, fraction: 1)
     }
 }

@@ -2782,7 +2782,8 @@ final class StatusHUD: NSObject {
                 var pid = pid
                 var resolvedTty = ProcessProbe.tty(of: pid)
                 if resolvedTty == nil,
-                   let fresh = (ClaudeAgentsCLI().sessions() ?? [])
+                   let fresh = ((ClaudeAgentsCLI().sessions() ?? [])
+                       + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                        .first(where: { $0.sessionId == sessionId }),
                    fresh.pid != pid,
                    let freshTty = ProcessProbe.tty(of: fresh.pid) {
@@ -2811,7 +2812,12 @@ final class StatusHUD: NSObject {
                 // on its first reply — not a special case for typing into
                 // it. A tmux-owned tty already means this happened before;
                 // only a bare tty (no pane) triggers the transfer here.
-                if TmuxOwnership.pane(forTty: tty) == nil {
+                // Registry first, same reason: a session Claude Code has
+                // recorded as living in a pane is tmux-owned, whatever a
+                // recycled tty says. Getting this wrong the other way is
+                // worse than a failed jump — it ENDS the session and resumes
+                // it, which is what "Go to Agent killed my session" was.
+                if TmuxOwnership.pane(forSessionId: sessionId, pid: pid) == nil {
                     Permissions.log("goToSession: \(tty) is hand-started — transferring to tmux")
                     let attempt = SessionLauncher.OwnershipTransfer.attempt(sessionId: sessionId)
                     guard let transferred = attempt.moved else {
@@ -2855,7 +2861,8 @@ final class StatusHUD: NSObject {
                     await MainActor.run { [weak self] in
                         self?.attachLivePid(transferred.pid, sessionId: sessionId)
                     }
-                    let outcome = await TerminalTabFocus.focus(tty: transferred.pane.paneTty)
+                    let outcome = await TerminalTabFocus.focus(tty: transferred.pane.paneTty,
+                                                               sessionId: sessionId)
                     await MainActor.run { [weak self] in
                         guard let self else { return }
                         self.goToSessionInFlight = false
@@ -2876,7 +2883,7 @@ final class StatusHUD: NSObject {
                     }
                     return
                 }
-                let outcome = await TerminalTabFocus.focus(tty: tty)
+                let outcome = await TerminalTabFocus.focus(tty: tty, sessionId: sessionId)
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     self.goToSessionInFlight = false

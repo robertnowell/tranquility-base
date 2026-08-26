@@ -76,7 +76,8 @@ extension AppDelegate {
                     break
                 }
                 guard !recorder.isRecording else { break }
-                let live = (ClaudeAgentsCLI().sessions() ?? [])
+                let live = ((ClaudeAgentsCLI().sessions() ?? [])
+                    + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                     .first(where: { $0.sessionId == session })
                 let name = tabDisplayName(for: target, live: live)
                 hud.adoptTarget(sessionId: session, pid: live?.pid,
@@ -656,7 +657,8 @@ extension AppDelegate {
         let sessionId = target.sessionId
         Task.detached(priority: .userInitiated) { [weak self] in
             let front = await Self.frontmostTerminalTabTty()
-            let pid = front == nil ? nil : (ClaudeAgentsCLI().sessions() ?? [])
+            let pid = front == nil ? nil : ((ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                 .first(where: { $0.sessionId == sessionId })?.pid
             let onScreen = pid.flatMap { ProcessProbe.tty(of: $0) }
             let skip = front != nil && onScreen == front
@@ -919,7 +921,11 @@ extension AppDelegate {
     /// from the card's current target.
     func goToSession(_ sessionId: String) {
         Task.detached {
-            guard let live = (ClaudeAgentsCLI().sessions() ?? [])
+            // `agents` alone made GO TO AGENT a permanent no-op for every
+            // Codex session (26 Aug) — silently logged and returned, never
+            // navigated, because Codex has no registry to appear in here.
+            guard let live = ((ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                 .first(where: { $0.sessionId == sessionId }) else {
                 Permissions.log("goTo: \(sessionId.prefix(8)) is not live any more")
                 return
@@ -1021,7 +1027,24 @@ extension AppDelegate {
             // A reply that beats the process back is not lost: dispatch checks
             // readiness and says "can't take this yet, your words are kept."
             await MainActor.run { [weak self] in self?.announceNext(only: sessionId) }
-            switch SessionLauncher.resume(sessionId: sessionId, directory: command.cwd) {
+            // The session's OWN harness, not the default one. `resume` and
+            // `manualRevival` both default to Claude Code, and a Codex session
+            // reviving through that default gets Claude Code's flag spelling
+            // with Codex's binary: `codex --dangerously-bypass-… --resume <id>`,
+            // which Codex rejects outright ("unexpected argument '--resume'
+            // found" — it is `codex resume <id>`, a subcommand). The pane then
+            // exits inside a second and the launch survival check reports it as
+            // "gone within a second", which is true and says nothing about why.
+            //
+            // Measured 26 Aug on f83191a4. The same default made the RESCUE
+            // wrong in the same breath: the command copied to the clipboard was
+            // the same unusable spelling, so the card said "copied the manual
+            // revival command" and handed over something that could not work
+            // for that agent. One default, two lies.
+            let adapter = KnownHarnesses.adapter(for: fresh.harness)
+            let harnessCommand = AgentDefaults.load(for: fresh.harness)
+            switch SessionLauncher.resume(sessionId: sessionId, directory: command.cwd,
+                                          command: harnessCommand, adapter: adapter) {
             case .success:
                 await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
                 // The announce fired before this resume even started (see
@@ -1031,8 +1054,14 @@ extension AppDelegate {
                 // already know it. A few short retries, not a bare single
                 // shot, because that registration is still a separate
                 // process's own timing, not this call's.
+                // `agents` alone never carries a revived Codex session either
+                // (26 Aug) — attemptCodexResume already writes an ownership
+                // record on a successful attach, so liveNonRegistrySessions()
+                // has it from the first iteration, no retries needed for that
+                // harness, but the loop still costs nothing to share.
                 for _ in 0..<5 {
-                    if let pid = (ClaudeAgentsCLI().sessions() ?? [])
+                    if let pid = ((ClaudeAgentsCLI().sessions() ?? [])
+                        + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                         .first(where: { $0.sessionId == sessionId })?.pid {
                         await MainActor.run { [weak self] in
                             self?.hud.attachLivePid(pid, sessionId: sessionId)
@@ -1050,7 +1079,8 @@ extension AppDelegate {
                 // morning — and a retry offer only when a retry could differ.
                 Permissions.log("revive: failed \(sessionId.prefix(8)) — \(error.message)")
                 let manual = SessionLauncher.manualRevival(
-                    sessionId: sessionId, directory: command.cwd)
+                    sessionId: sessionId, directory: command.cwd,
+                    command: harnessCommand, adapter: adapter)
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     NSPasteboard.general.clearContents()
@@ -1165,8 +1195,7 @@ extension AppDelegate {
         Task.detached(priority: .userInitiated) { [weak self] in
             let before: Set<String>
             if isCodex {
-                before = Set(SessionDiscovery.discoverCodex().sessions
-                    .filter { $0.cwd == dir }.map(\.sessionId))
+                before = Set(CodexRollout.liveThreadIds())
             } else {
                 before = Set((ClaudeAgentsCLI().sessions() ?? [])
                     .filter { $0.cwd == dir }.map(\.sessionId))
@@ -1204,16 +1233,56 @@ extension AppDelegate {
             // — a walked-away launch must not be a silently stillborn
             // investigation.
             let sessionIdOrNil = isCodex
-                ? LaunchGreeting.awaitCodexRegistration(directory: dir, excluding: before)
+                ? LaunchGreeting.awaitCodexRegistration(excluding: before)
                 : LaunchGreeting.awaitRegistration(directory: dir, excluding: before)
             guard let sessionId = sessionIdOrNil else {
                 launch?.abandon()
                 Permissions.log("launcher: no session registered in \(dir) after 30s")
+                // showResult, not showIdleGrid(note:) — found live, 26 Aug,
+                // chasing a Codex launch that failed in total silence: the
+                // greeting card is on stage for the whole 30s wait (that's
+                // the point of "launch is a turn"), so canSurfaceAmbiently
+                // (idle/hidden only) was false the entire time and the note
+                // never painted, on this or any other launch that reaches
+                // this branch. showResult already has a case for exactly
+                // this state (`greetingAwaitsItsSession`, its own doc
+                // comment, 19 Aug) — it joins the message onto the card
+                // that's already up instead of requiring a quiet panel.
                 await MainActor.run { [weak self] in
-                    guard let self, self.hud.canSurfaceAmbiently else { return }
-                    self.showIdleGrid(note: "New agent is waiting on a prompt (attach to see it).")
+                    self?.hud.showResult(
+                        "Couldn't confirm the new agent started. Attach a "
+                        + "terminal to check, or try again.")
                 }
                 return
+            }
+
+            // Codex's one and only liveness fact (Coordinator+Announcer.swift's
+            // `waiting()`, its own 26 Aug doc comment) — without this record,
+            // the session that just registered reads as permanently "gone" to
+            // the announce/sweep pipeline, which has no other way to ask
+            // Codex whether it is still there. Best-effort: a miss (pid not
+            // found on this tty) records nothing, the same "no point writing
+            // a record this function does not trust" call `attemptCodexResume`
+            // already makes for the identical lookup.
+            //
+            // Matched on `command`, NOT `sessionId` — the id-matching form
+            // `attemptCodexResume` uses only works there because `codex
+            // resume <id>` puts the id directly on the process's own argv.
+            // A fresh launch's argv is just `command` (`codex
+            // --dangerously-...`); Codex mints the id internally, after the
+            // process starts, so it is never on the command line to match
+            // at all. Found live, 26 Aug: this silently matched nothing on
+            // every fresh launch, so no record was ever written and the
+            // liveness fix above had nothing to read. `command` is
+            // distinctive enough to skip a sibling MCP-server child on the
+            // same tty (measured live: a codex launch's own child process
+            // shares its tty and does not contain this string).
+            if isCodex, let pid = ProcessProbe.pid(onTty: tty, containing: command) {
+                let pane = TmuxOwnership.pane(forTty: tty)
+                FileSessionOwnershipStore.shared.record(SessionOwnershipRecord(
+                    sessionId: sessionId, harness: CodexAdapter().id, pid: pid,
+                    paneId: pane?.paneId, socketName: pane?.socketName,
+                    sessionName: pane?.sessionName, paneTty: tty, cwd: dir))
             }
 
             // Kept BEFORE the greeting row is written and before the card is
@@ -1268,7 +1337,8 @@ extension AppDelegate {
             }
 
             guard let store = await self?.store else { return }
-            let pid = (ClaudeAgentsCLI().sessions() ?? [])
+            let pid = ((ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                 .first(where: { $0.sessionId == sessionId })?.pid
             do {
                 // The durable half. The card is already on screen; this is what

@@ -171,8 +171,14 @@ public enum TerminalTabFocus {
     /// Never call from the main actor: the one Apple event still blocks for
     /// up to `timeout` when Terminal is busy, and a main-thread block past
     /// ~1 s trips the event-tap watchdog and silently kills the hotkeys.
-    public static func focus(tty: String, timeout: TimeInterval = 5) async -> Outcome {
-        if let pane = TmuxOwnership.pane(forTty: tty) {
+    public static func focus(tty: String, sessionId: String? = nil,
+                             timeout: TimeInterval = 5) async -> Outcome {
+        // Ask the session's own registry entry for its pane before inferring
+        // one from a tty. A tty is two stale hops away from the truth (`ps`
+        // for the pid, the server's inventory for the pane) and Claude Code
+        // writes the pane down itself — see `TmuxOwnership.pane(forSessionId:pid:)`.
+        let resolved = sessionId.flatMap { TmuxOwnership.pane(forSessionId: $0, pid: nil) }
+        if let pane = resolved ?? TmuxOwnership.pane(forTty: tty) {
             guard let binary = Tmux.resolveBinary() else {
                 return .failed("tmux binary not found")
             }

@@ -81,6 +81,21 @@ final class CoordinatorTests: XCTestCase {
         func sessions() -> [LiveSession]? { nil }
     }
 
+    /// A fixed set of ownership records — `waiting()`'s only source of
+    /// Codex liveness (26 Aug: `agents` never carries a Codex session at
+    /// all, registered or not). Never the real `FileSessionOwnershipStore`
+    /// in this file's tests, which must not read whatever this machine's
+    /// own real Codex sessions happen to have recorded.
+    struct StubOwnershipStore: SessionOwnershipStore {
+        let records: [SessionOwnershipRecord]
+        func record(_ r: SessionOwnershipRecord) {}
+        func current(sessionId: String) -> SessionOwnershipRecord? {
+            records.first { $0.sessionId == sessionId }
+        }
+        func remove(sessionId: String) {}
+        func all() -> [SessionOwnershipRecord] { records }
+    }
+
     /// A session that is not listed yet and appears after a few probes — a
     /// brand-new agent, which can register, bind, and briefly drop back out of
     /// `claude agents --json` before it has taken any input.
@@ -140,7 +155,11 @@ final class CoordinatorTests: XCTestCase {
         // transfer test needs an agents fake that answers DIFFERENTLY before
         // and after `resumeTwin` runs, since that is exactly the seam it
         // exercises (the real `resumeTwin` ends one pid and starts another).
-        agents overrideAgents: (any ClaudeAgentsReading)? = nil
+        agents overrideAgents: (any ClaudeAgentsReading)? = nil,
+        // Empty by default, and never the real FileSessionOwnershipStore —
+        // this file's tests must not read whatever this machine's own real
+        // Codex sessions happen to have recorded.
+        ownership: any SessionOwnershipStore = StubOwnershipStore(records: [])
     ) throws -> Coordinator {
         let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
         if enrolled { try registry.enrol(sessionId: "sess-1") }
@@ -158,6 +177,7 @@ final class CoordinatorTests: XCTestCase {
                                 name: "p", waitingFor: nil)
                   }
                 : []),
+            ownership: ownership,
             recovery: RecoveryChain(
                 providers: [FixedTranscript(text: "yes go ahead")],
                 maxAttemptsPerProvider: 1, backoff: [0]),
@@ -240,6 +260,89 @@ final class CoordinatorTests: XCTestCase {
         let coordinator = try makeCoordinator(sessionLive: true)
         try appendWithTranscript(session: "human", entrypoint: nil, at: 1_000)
         XCTAssertTrue(try coordinator.waiting().map(\.sessionId).contains("human"))
+    }
+
+    // MARK: - Codex liveness (26 Aug) — `agents` never carries one, ever
+
+    /// A Codex session never appears in `agents` — registered or not, that
+    /// registry is `claude agents --json` — so without an ownership record
+    /// it must NOT read as gone the instant it's first polled the way a
+    /// fresh launch was found doing live, seconds after registering.
+    func testACodexSessionWithALivePidIsAnnounced() throws {
+        let coordinator = try makeCoordinator(sessionLive: false, ownership: StubOwnershipStore(
+            records: [SessionOwnershipRecord(
+                sessionId: "codex-1", harness: "codex",
+                pid: Int(ProcessInfo.processInfo.processIdentifier))]))
+        try appendWithTranscript(session: "codex-1", entrypoint: "cli", at: 1_000)
+        XCTAssertTrue(try coordinator.waiting().map(\.sessionId).contains("codex-1"))
+    }
+
+    /// A Codex session recorded once but no longer running must not read as
+    /// live forever — the pid is the only liveness fact this record has,
+    /// same discipline `verifiedCurrent` already applies.
+    func testACodexSessionWithADeadPidIsNotAnnounced() throws {
+        var reaped: Process? = Process()
+        reaped?.executableURL = URL(fileURLWithPath: "/bin/echo")
+        try? reaped?.run()
+        let deadPid = Int(reaped?.processIdentifier ?? -1)
+        reaped?.waitUntilExit()
+        reaped = nil
+
+        let coordinator = try makeCoordinator(sessionLive: false, ownership: StubOwnershipStore(
+            records: [SessionOwnershipRecord(sessionId: "codex-1", harness: "codex", pid: deadPid)]))
+        try appendWithTranscript(session: "codex-1", entrypoint: "cli", at: 1_000)
+        XCTAssertFalse(try coordinator.waiting().map(\.sessionId).contains("codex-1"))
+    }
+
+    /// A live Claude Code session in `ownership` (recorded by a revive, say)
+    /// must not double-count or otherwise interfere — `agents` alone is
+    /// still authoritative for that harness.
+    func testOwnershipRecordsForOtherHarnessesDoNotChangeClaudeCodeLiveness() throws {
+        let coordinator = try makeCoordinator(sessionLive: true, ownership: StubOwnershipStore(
+            records: [SessionOwnershipRecord(sessionId: "human", harness: "claude-code", pid: -1)]))
+        try appendWithTranscript(session: "human", entrypoint: "cli", at: 1_000)
+        XCTAssertTrue(try coordinator.waiting().map(\.sessionId).contains("human"))
+    }
+
+    /// The fuller proof: being counted as "waiting" (above) is necessary but
+    /// not sufficient — `dispatch`'s OWN readiness resolution is a second,
+    /// independent call to `agents.sessions()` (Coordinator+ReplyPipeline.
+    /// swift), found live the same day a Codex session's greeting card
+    /// correctly stayed up and the reply that answered it still got refused
+    /// with "can't take this yet." A full submitReply → confirmAndSend round
+    /// trip against a session `agents` has never heard of must actually
+    /// reach the transport.
+    func testACodexSessionsReplyActuallyDispatches() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(
+            tmuxTransport: transport, sessionLive: false,
+            ownership: StubOwnershipStore(records: [SessionOwnershipRecord(
+                sessionId: "codex-1", harness: "codex",
+                pid: Int(ProcessInfo.processInfo.processIdentifier),
+                paneId: "%1", socketName: "tb", sessionName: "tb-codex-1", paneTty: "/dev/ttys999")]))
+        try append(session: "codex-1")
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, _, _, let sessionId) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+        XCTAssertEqual(sessionId, "codex-1")
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("a Codex session agents has never heard of must still receive the reply") }
+        XCTAssertEqual(transport.sent.count, 1)
+
+        // `RecordingTransport.readiness(for:)` always answers `.ready`
+        // regardless of what it's asked, so this loop alone cannot catch the
+        // real `TmuxTransport.readiness(for:)` refusing a Codex target that
+        // was built Claude-Code-shaped (found live, 26 Aug — see
+        // `dispatchTarget`'s own doc comment in Coordinator+ReplyPipeline.
+        // swift). What CAN be asserted here is the shape of the target
+        // `dispatch()` actually built: wrong fields would sail through this
+        // fake and still fail against the real transport.
+        let built = try XCTUnwrap(transport.sentTargets.last)
+        XCTAssertEqual(built.readinessSource, .rolloutTail)
+        XCTAssertEqual(built.promptGlyph, CodexAdapter().capabilities.promptGlyph)
+        XCTAssertEqual(built.idlePlaceholder, CodexAdapter().trustPrompt?.settledBannerNeedle)
     }
 
     // MARK: - The full loop

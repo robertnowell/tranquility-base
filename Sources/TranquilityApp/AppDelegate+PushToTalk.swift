@@ -319,7 +319,8 @@ extension AppDelegate {
                 // announcement does (ui-pass-7, ruling 2): the rung path used
                 // to pass nil, which hid "Go to agent" the moment the walk
                 // began — the button persists through the entire ladder.
-                let live = (ClaudeAgentsCLI().sessions() ?? [])
+                let live = ((ClaudeAgentsCLI().sessions() ?? [])
+                    + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                     .first { $0.sessionId == announcement.event.sessionId }
                 hud.showAnnouncement(
                     spoken: rung.spoken,
@@ -669,7 +670,8 @@ extension AppDelegate {
                         // Render BEFORE the audio starts. Showing it afterwards is
                         // useless — you have already heard the whole thing by then.
                         guard let self else { return false }
-                        let live = (ClaudeAgentsCLI().sessions() ?? [])
+                        let live = ((ClaudeAgentsCLI().sessions() ?? [])
+                            + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                             .first { $0.sessionId == announcement.event.sessionId }
                         // One displayed identity (re-ruled 05 Aug): the terminal
                         // tab's own string. It is now the ONLY identity — the

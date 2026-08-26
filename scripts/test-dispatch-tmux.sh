@@ -106,16 +106,25 @@ touch "$PWD/.tmux-drill-adversary"
     sleep 0.$((RANDOM % 3 + 1))
   done ) &
 EXACT_FAIL=0
+EXACT_WHY=""
 for i in $(seq 1 10); do
-  "$BIN/tbase" send-raw-tmux "$PID" "$PANE" "$TRANSCRIPT" "exact-once probe $i" >/dev/null 2>&1 \
-    || EXACT_FAIL=$((EXACT_FAIL+1))
+  OUT=$(TB_TRACE=1 "$BIN/tbase" send-raw-tmux "$PID" "$PANE" "$TRANSCRIPT" "exact-once probe $i" 2>&1) \
+    || { EXACT_FAIL=$((EXACT_FAIL+1)); EXACT_WHY="probe $i:"$'\n'"$(echo "$OUT" | grep '^trace:' | tail -6)"; }
 done
 rm -f "$PWD/.tmux-drill-adversary"; sleep 1
-LANDED=$(grep -c "exact-once probe" "$TRANSCRIPT" 2>/dev/null || echo 0)
-if [ "$EXACT_FAIL" -eq 0 ] && [ "$LANDED" -eq 10 ]; then
-  echo "  ok    exact-once under copy-mode churn (10/10, no duplicates)"; PASS=$((PASS+1))
+# DISTINCT probes, not lines. A line count cannot tell nine-plus-a-duplicate
+# from ten, and those are opposite verdicts: one is a lost message and a
+# double-send, the other is a clean run. Counting lines hid exactly that for
+# as long as this case has existed.
+DISTINCT=$(grep -o "exact-once probe [0-9]*" "$TRANSCRIPT" 2>/dev/null | sort -u | wc -l | tr -d ' ')
+TOTAL=$(grep -o "exact-once probe [0-9]*" "$TRANSCRIPT" 2>/dev/null | wc -l | tr -d ' ')
+DUPES=$((TOTAL - DISTINCT))
+if [ "$EXACT_FAIL" -eq 0 ] && [ "$DISTINCT" -eq 10 ] && [ "$DUPES" -eq 0 ]; then
+  echo "  ok    exact-once under copy-mode churn (10/10 distinct, no duplicates)"; PASS=$((PASS+1))
 else
-  echo "  FAIL  exact-once (errors=$EXACT_FAIL landed=$LANDED wanted 10)"; FAIL=$((FAIL+1))
+  echo "  FAIL  exact-once (errors=$EXACT_FAIL distinct=$DISTINCT dupes=$DUPES wanted 10/0)"
+  [ -n "$EXACT_WHY" ] && echo "        last error — $EXACT_WHY"
+  FAIL=$((FAIL+1))
 fi
 
 echo

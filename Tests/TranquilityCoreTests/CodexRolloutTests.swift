@@ -296,4 +296,70 @@ final class CodexRolloutTests: XCTestCase {
         let sessions = tempSessionsDir()
         XCTAssertNil(CodexRollout.parse(sessionId: "never-written", sessions: sessions))
     }
+
+    // MARK: - liveThreadIds (App-lane, default launcher, 26 Aug)
+    //
+    // Found live: a brand-new, message-less `codex` launch writes a
+    // <threadId>.lock here immediately — before any rollout exists, which
+    // is exactly the case testParseSessionIdIsNilWhenTheFileDoesNotExistYet
+    // above already knew was real. This is the seam that actually answers
+    // "has a new thread started" for that case.
+
+    private func tempLocksDir() -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-locks-\(UUID().uuidString)")
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    func testLiveThreadIdsReadsEveryLockStrippedOfItsExtension() throws {
+        let locks = tempLocksDir()
+        let a = UUID().uuidString, b = UUID().uuidString
+        try Data().write(to: locks.appendingPathComponent("\(a).lock"))
+        try Data().write(to: locks.appendingPathComponent("\(b).lock"))
+        XCTAssertEqual(Set(CodexRollout.liveThreadIds(locks: locks)), [a, b])
+    }
+
+    /// Only `.lock` files count — a stray file of another kind in the same
+    /// directory must not read as a thread id.
+    func testLiveThreadIdsIgnoresNonLockFiles() throws {
+        let locks = tempLocksDir()
+        let a = UUID().uuidString
+        try Data().write(to: locks.appendingPathComponent("\(a).lock"))
+        try Data("not a lock".utf8).write(to: locks.appendingPathComponent("README.txt"))
+        XCTAssertEqual(CodexRollout.liveThreadIds(locks: locks), [a])
+    }
+
+    /// Found live sharing this exact directory: `.coordination.lock`, a
+    /// stable file with no thread behind it at all — a `.lock` suffix
+    /// alone is not enough, the base name has to be a real thread id.
+    func testLiveThreadIdsIgnoresNonUUIDLockFiles() throws {
+        let locks = tempLocksDir()
+        let a = UUID().uuidString
+        try Data().write(to: locks.appendingPathComponent("\(a).lock"))
+        try Data().write(to: locks.appendingPathComponent(".coordination.lock"))
+        XCTAssertEqual(CodexRollout.liveThreadIds(locks: locks), [a])
+    }
+
+    func testLiveThreadIdsIsEmptyForAMissingDirectory() {
+        let locks = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-locks-never-created-\(UUID().uuidString)")
+        XCTAssertEqual(CodexRollout.liveThreadIds(locks: locks), [])
+    }
+
+    /// Newest first — the ordering `awaitCodexRegistration` relies on when
+    /// more than one lock is new in the same poll.
+    func testLiveThreadIdsOrdersNewestFirst() throws {
+        let locks = tempLocksDir()
+        let olderId = UUID().uuidString, newerId = UUID().uuidString
+        let older = locks.appendingPathComponent("\(olderId).lock")
+        try Data().write(to: older)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -60)], ofItemAtPath: older.path)
+        let newer = locks.appendingPathComponent("\(newerId).lock")
+        try Data().write(to: newer)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date()], ofItemAtPath: newer.path)
+        XCTAssertEqual(CodexRollout.liveThreadIds(locks: locks), [newerId, olderId])
+    }
 }

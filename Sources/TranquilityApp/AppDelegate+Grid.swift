@@ -46,8 +46,14 @@ extension AppDelegate {
         // WHICH duplicate is the right target is a separate, open question — both
         // processes are alive and both answer to the id — so the collision is logged
         // rather than silently settled.
+        // `agents` alone missed a live Codex session at every downstream use
+        // of `liveById` (26 Aug) — a genuinely running Codex row could be
+        // skipped from the grid, or read blockedOnYou wrong, because Codex
+        // has no registry of its own to appear in here. `liveNonRegistrySessions()`
+        // adds ownership's own answer for a harness with no registry.
         var liveById: [String: LiveSession] = [:]
-        for session in ClaudeAgentsCLI().sessions() ?? [] {
+        for session in (ClaudeAgentsCLI().sessions() ?? [])
+            + FileSessionOwnershipStore.shared.liveNonRegistrySessions() {
             if let existing = liveById[session.sessionId] {
                 Permissions.log("agents: duplicate sessionId \(session.sessionId.prefix(8)) "
                     + "— pids \(existing.pid) and \(session.pid); keeping \(existing.pid)")
