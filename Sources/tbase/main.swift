@@ -927,7 +927,8 @@ case "reconcile":
         // Reused from selection above rather than re-resolved: two live
         // lookups for the same pid, moments apart, can disagree if a pane
         // closes in between (the 19 Aug misfire's shape).
-        var pane = resolvedPane ?? TmuxOwnership.pane(forPid: live.pid)
+        var pane = resolvedPane
+            ?? TmuxOwnership.pane(forSessionId: live.sessionId, pid: live.pid)
         var dispatchPid = live.pid
         if pane == nil, let cwd = live.cwd {
             // Same transfer the real app's `Coordinator.dispatch` makes —

@@ -139,6 +139,35 @@ for pair in "4:$S4:$C4" "5:$S5:$C5"; do
   esac
 done
 
+# ── 5. the session's own registry agrees with the live server
+#
+# The pane address this app now dispatches to comes from the harness's own
+# `~/.claude/sessions/<pid>.json`, not from a ps-to-tty-to-inventory join. If
+# the two ever disagree, every jump and every dispatch is addressing the wrong
+# thing, so the drill checks them against each other on a session it created
+# and therefore knows the truth about.
+REG=$(python3 - "$SID" <<'PY'
+import json,glob,io,sys
+sid=sys.argv[1]
+best=None
+for f in glob.glob("/Users/robertnowell/.claude/sessions/*.json"):
+    try: d=json.load(io.open(f))
+    except Exception: continue
+    if d.get("sessionId")==sid and (best is None or (d.get("updatedAt") or 0)>(best.get("updatedAt") or 0)):
+        best=d
+print((best or {}).get("tmux") or "")
+PY
+)
+REG_PANE="${REG##*.}"
+LIVE_PANE=$("$TMUX" -L "$SOCKET" list-panes -t "$SESSION" -F "#{pane_id}" 2>/dev/null | head -1)
+if [ -n "$REG_PANE" ] && [ "$REG_PANE" = "$LIVE_PANE" ]; then
+  ok "registry: the pane the harness recorded is the pane tmux has ($REG_PANE)"
+else
+  bad "registry: harness says '$REG_PANE', tmux says '$LIVE_PANE'"
+fi
+[ -n "$REG" ] && ok "registry: the session recorded a tmux pane at all" \
+              || bad "registry: no tmux pane recorded for $SID"
+
 echo
 echo "live TUI dispatch: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
