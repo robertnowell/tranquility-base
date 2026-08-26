@@ -104,4 +104,45 @@ final class SessionOwnershipTests: XCTestCase {
         let store = StubStore(value: nil)
         XCTAssertNil(store.verifiedCurrent(sessionId: "s1"))
     }
+
+    // MARK: - liveNonRegistrySessions (26 Aug, the shared fix for ~30
+    // call sites that all asked "is this session alive" by calling
+    // agents.sessions() alone, which never carries Codex)
+
+    func testLiveNonRegistrySessionsIncludesACodexRecordWithALivePid() throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        store.record(SessionOwnershipRecord(
+            sessionId: "codex-1", harness: "codex",
+            pid: Int(ProcessInfo.processInfo.processIdentifier), cwd: "/tmp/x"))
+        let live = store.liveNonRegistrySessions()
+        XCTAssertEqual(live.map(\.sessionId), ["codex-1"])
+        XCTAssertEqual(live.first?.cwd, "/tmp/x")
+    }
+
+    /// Claude Code is excluded even when this store holds a record for it
+    /// (a revive writes one) — `agents.sessions()` is already authoritative
+    /// there, and combining both would double-count the same session.
+    func testLiveNonRegistrySessionsExcludesClaudeCode() throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        store.record(SessionOwnershipRecord(
+            sessionId: "cc-1", harness: "claude-code",
+            pid: Int(ProcessInfo.processInfo.processIdentifier)))
+        XCTAssertTrue(store.liveNonRegistrySessions().isEmpty)
+    }
+
+    func testLiveNonRegistrySessionsExcludesADeadPid() throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var reaped: Process? = Process()
+        reaped?.executableURL = URL(fileURLWithPath: "/bin/echo")
+        try? reaped?.run()
+        let deadPid = Int(reaped?.processIdentifier ?? -1)
+        reaped?.waitUntilExit()
+        reaped = nil
+
+        store.record(SessionOwnershipRecord(sessionId: "codex-1", harness: "codex", pid: deadPid))
+        XCTAssertTrue(store.liveNonRegistrySessions().isEmpty)
+    }
 }

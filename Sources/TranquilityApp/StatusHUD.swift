@@ -2782,7 +2782,8 @@ final class StatusHUD: NSObject {
                 var pid = pid
                 var resolvedTty = ProcessProbe.tty(of: pid)
                 if resolvedTty == nil,
-                   let fresh = (ClaudeAgentsCLI().sessions() ?? [])
+                   let fresh = ((ClaudeAgentsCLI().sessions() ?? [])
+                       + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                        .first(where: { $0.sessionId == sessionId }),
                    fresh.pid != pid,
                    let freshTty = ProcessProbe.tty(of: fresh.pid) {

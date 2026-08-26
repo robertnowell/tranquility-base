@@ -164,12 +164,12 @@ extension Coordinator {
         // Codex session is never in it, registered or not. Found live, 26
         // Aug: a fresh Codex launch's greeting card read as "gone" the
         // instant this function first polled it, seconds after it had
-        // actually registered — `ownership`'s own recorded pid is the only
-        // other liveness fact this app has for a harness with no registry.
-        let codexLive = Set(ownership.all()
-            .filter { $0.harness == CodexAdapter().id && ProcessProbe.isAlive($0.pid) }
-            .map(\.sessionId))
-        let live = Set(sessions.map(\.sessionId)).union(codexLive)
+        // actually registered. `liveNonRegistrySessions()` is `ownership`'s
+        // own recorded pid — the only other liveness fact this app has for
+        // a harness with no registry — factored out once (26 Aug) after the
+        // same gap turned up at roughly thirty call sites, not just this one.
+        let live = Set(sessions.map(\.sessionId))
+            .union(ownership.liveNonRegistrySessions().map(\.sessionId))
         let all = yours(try store.waitingSessions())
         sweep.sweep(all, live: live, trace: Coordinator.trace)
         return all.filter { live.contains($0.sessionId) }
@@ -326,8 +326,11 @@ extension Coordinator {
 
         // One agents probe serves both the lexicon's live names and the label
         // stripping in `strippingModelLabels` — summarizing must not double the
-        // subprocess cost it already pays.
-        let liveSessions = agents.sessions()
+        // subprocess cost it already pays. Codex names, from `ownership`, ride
+        // along too (26 Aug) — cosmetic on its own (a name capitalized wrong
+        // in speech, not a functional break), fixed anyway since a full audit
+        // means closing the small instances too, not just the loud ones.
+        let liveSessions: [LiveSession]? = agents.sessions().map { $0 + ownership.liveNonRegistrySessions() }
 
         // A7: the rolling lexicon joins the per-message allowlist, so a name
         // recent sessions established survives speech even when this one

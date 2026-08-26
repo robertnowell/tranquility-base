@@ -765,11 +765,13 @@ case "reconcile":
             // the transcript's job — building a page for every session that
             // ever ran fills the directory with agents nobody will open again,
             // which is the same mess in a different window.
-            ids = (ClaudeAgentsCLI().sessions() ?? []).map(\.sessionId)
+            ids = ((ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions()).map(\.sessionId)
         default:
             ids = [args[1]]
         }
-        let live = ClaudeAgentsCLI().sessions() ?? []
+        let live = (ClaudeAgentsCLI().sessions() ?? [])
+            + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
         for id in ids {
             // Priming: the CLI is not the main actor, and somebody typing
             // `tbase homebase` is asking for the finished page — a hub written
@@ -831,9 +833,12 @@ case "reconcile":
 
     case "targets":
         let enrolment = EnrolmentRegistry()
-        guard let live = ClaudeAgentsCLI().sessions() else {
+        guard let claudeLive = ClaudeAgentsCLI().sessions() else {
             print("(liveness probe FAILED — the app is failing open right now)"); break
         }
+        // Codex has no probe to fail — its half of this list is whatever
+        // `ownership` currently verifies as alive, unconditionally.
+        let live = claudeLive + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
         if live.isEmpty { print("(no live sessions)"); break }
         print("\(pad("STATUS", 8))  \(pad("PID", 7))  \(pad("TTY", 14))  \(pad("ENROLLED", 9))  PROJECT")
         for s in live.sorted(by: { ($0.cwd ?? "") < ($1.cwd ?? "") }) {
