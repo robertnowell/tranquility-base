@@ -72,75 +72,41 @@ final class TmuxTransportTests: XCTestCase {
     // MARK: prompt-line classification (the floor check)
 
     // MARK: - PASTE AT MOST ONCE PER SEND (live regression, 24 Aug)
+    // MARK: - The floor decision
+    //
+    // Rewritten 26 Aug with `send`. `decide` used to answer "is a second
+    // paste safe now", which is why it took `everEchoed` and `firstAttempt`
+    // and why it had a `.stop` case. A send pastes once, by construction, so
+    // the question no longer exists and neither do the tests that asked it.
+    // What is left is the only thing the box can still tell us: whose words
+    // are in it.
 
-    /// The bug, exactly: ONE dispatch into a mid-turn session left FIVE
-    /// identical messages in Claude Code's queue (session 60fbc8e7). A queued
-    /// message is in neither the transcript nor the box, so every attempt read
-    /// `.empty` and pasted again.
-    func testAnEmptyBoxAfterOurOwnEchoIsAnAcceptedMessage() {
-        XCTAssertEqual(TmuxTransport.decide(line: .empty, everEchoed: true), .stop,
-                       "the box released OUR words — it took the message, it did not lose it")
+    /// An empty box is the ordinary case and it pastes.
+    func testAnEmptyBoxIsPastedInto() {
+        XCTAssertEqual(TmuxTransport.decide(line: .empty), .paste)
     }
 
-    func testAnEmptyBoxBeforeAnyEchoIsAFreshFloor() {
-        XCTAssertEqual(TmuxTransport.decide(line: .empty, everEchoed: false), .paste)
+    /// Our own unsubmitted words get a Return and never a second copy. This
+    /// is the branch that was always right, and it is now the only defence
+    /// against duplication that `decide` is asked to provide — the rest is
+    /// structural.
+    func testOurOwnUnsubmittedTextGetsReturnAndNeverAPaste() {
+        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: true)), .returnOnly)
     }
 
-    /// The five copies in one sentence: whatever the loop does, it may paste
-    /// on at most one attempt.
-    func testNoAttemptAfterTheEchoEverPastesAgain() {
-        for line in [TmuxTransport.PromptLine.empty, .unreadable,
-                     .holds(ours: true), .holds(ours: false)] {
-            let action = TmuxTransport.decide(line: line, everEchoed: true)
-            XCTAssertNotEqual(action, .paste, "\(line) pasted a second copy")
-            XCTAssertNotEqual(action, .clearThenPaste, "\(line) pasted a second copy")
-        }
-    }
-
-    /// An unreadable screen fails toward pasting only while nothing of ours has
-    /// landed. Once it has, "I cannot see" is not permission to send twice.
-    func testAnUnreadableScreenStopsFailingTowardPastingOnceOursHasLanded() {
-        XCTAssertEqual(TmuxTransport.decide(line: .unreadable, everEchoed: false), .paste)
-        XCTAssertEqual(TmuxTransport.decide(line: .unreadable, everEchoed: true), .stop)
-    }
-
-    /// Protects the HUMAN's text, not ours: a line that appears after our
-    /// message went in belongs to whoever typed it.
-    func testAForeignLineIsNeverClearedOnceOurMessageHasGoneIn() {
-        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: false), everEchoed: true), .stop,
-                       "clearing here would delete a person's typing for an already-delivered message")
-    }
-
-    /// Ruled 25 Aug, from a live loss: a URL Robert had pasted was deleted to
+    /// Ruled 25 Aug from a live loss: a URL Robert had pasted was deleted to
     /// make room for the dictated instruction that referred to it.
-    func testTextAlreadyInTheBoxIsJoinedRatherThanDeleted() {
-        XCTAssertEqual(
-            TmuxTransport.decide(line: .holds(ours: false), everEchoed: false,
-                                 firstAttempt: true),
-            .joinExisting,
-            "the two things the user meant as one message must arrive as one message")
+    func testSomebodyElsesTextIsJoinedNeverDeleted() {
+        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: false)), .joinExisting,
+                       "the two things the user meant as one message arrive as one message")
     }
 
-    /// The join is first-attempt only. A paste whose echo was never detected
-    /// is allowed one more paste (the step 5 mode-race `continue`), and
-    /// joining there could append a second copy onto the first — so after the
-    /// first attempt this falls back to exactly the old behaviour. The worst
-    /// case is unchanged; only the common case improves.
-    func testAJoinIsNeverRetried() {
-        XCTAssertEqual(
-            TmuxTransport.decide(line: .holds(ours: false), everEchoed: false,
-                                 firstAttempt: false),
-            .clearThenPaste,
-            "a second join could glue two copies of our payload onto the user's line")
-    }
-
-    /// The branch that was always right stays right: our own unsubmitted text
-    /// gets a Return, never another paste.
-    func testOurOwnUnsubmittedTextAlwaysGetsReturnAndNeverAPaste() {
-        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: true), everEchoed: false),
-                       .returnOnly)
-        XCTAssertEqual(TmuxTransport.decide(line: .holds(ours: true), everEchoed: true),
-                       .returnOnly)
+    /// An unreadable screen still delivers. It used to matter enormously
+    /// whether this pasted, because pasting could happen five times; now the
+    /// worst case is one splice into text nobody could see, against the
+    /// certainty of a message never sent.
+    func testAnUnreadableScreenStillDelivers() {
+        XCTAssertEqual(TmuxTransport.decide(line: .unreadable), .paste)
     }
 
     func testEmptyPromptLine() {
@@ -484,7 +450,7 @@ final class MultiRowComposerTests: XCTestCase {
         let screen = liveBox(["somebody's half-typed line"])
         let line = TmuxTransport.classifyPromptLine(screen: screen, payload: "ours",
                                                     glyph: glyph)
-        XCTAssertNotEqual(TmuxTransport.decide(line: line, everEchoed: false), .paste)
+        XCTAssertNotEqual(TmuxTransport.decide(line: line), .paste)
     }
 
     /// Our own payload, drawn across rows the same way, is still ours — the

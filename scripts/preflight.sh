@@ -132,6 +132,23 @@ echo "✓ build clean, tests green"
 echo "→ tmux dispatch drill"
 scripts/test-dispatch-tmux.sh
 
+# test-dispatch-live-tui.sh is the one that closes the gap the eight repairs
+# between 19 and 26 Aug all fell through: the drill above is nine good tests
+# against a plain SHELL, which has no prompt glyph, so the composer reader is
+# never exercised by it at all. Every one of those eight was found by a human
+# losing a message. This one runs the real harness.
+#
+# Informational, not a hard gate, for the same reason the Codex drill is: it
+# needs a logged-in `claude` and it creates a session on the app's own tmux
+# server, so it can be affected by what else is running. It is loud when it
+# fails and that is what it is for.
+echo "→ live TUI dispatch drill (informational — needs a logged-in claude)"
+if scripts/test-dispatch-live-tui.sh; then
+  echo "✓ live TUI dispatch drill passed"
+else
+  echo "⚠ live TUI dispatch drill failed — read it before landing composer changes"
+fi
+
 # test-codex-lifecycle.sh is NOT that isolated, discovered the hard way (24
 # Aug, minutes after first wiring this in): it drives the real `tbase` CLI
 # against the real, shared session-ownership.json and the real tmux server —
