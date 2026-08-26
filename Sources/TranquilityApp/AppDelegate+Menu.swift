@@ -62,6 +62,15 @@ extension AppDelegate {
         let newSession = NSMenuItem(title: "New session",
                                     action: #selector(newSessionTapped), keyEquivalent: "")
         newSession.target = self
+        // Which harness a bare press launches (default launcher, 25 Aug) —
+        // a single letter in a circle, not either company's actual mark:
+        // no brand assets exist in this repo and none should (see
+        // HarnessPickerRow's own reasoning for the same call).
+        let symbol = AgentDefaults.defaultHarness == CodexAdapter().id
+            ? "x.circle" : "c.circle"
+        let icon = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        icon?.isTemplate = true
+        newSession.image = icon
         menu.addItem(newSession)
 
         // Picking a voice plays it immediately. A name in a list tells you nothing

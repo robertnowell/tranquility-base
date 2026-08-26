@@ -359,21 +359,49 @@ extension StatusHUD {
         ])
 
         // How agents start, in the pane where settings live (ruled 15 Aug).
-        // One pair of values for the whole machine — "a global setting for now
-        // and see if we need more granular later" — read by every path that
-        // starts an agent: the menu item, the grid's + row, and revival.
+        // Per harness as of 25 Aug (default launcher) — was one pair of
+        // values for the whole machine ("a global setting for now and see if
+        // we need more granular later"); read by every path that starts an
+        // agent: the menu item, the grid's + row, and revival.
         settingsTabs = SettingsTabBar(width: Self.gridWidth)
         settingsTabs.isHidden = true
         settingsTabs.onSelect = { [weak self] tab in self?.showSettingsTab(tab) }
 
+        harnessPicker = HarnessPickerRow(
+            width: Self.gridWidth,
+            harnesses: KnownHarnesses.all.map { ($0.id, $0.id == CodexAdapter().id ? "CODEX" : "CLAUDE") },
+            selected: AgentDefaults.defaultHarness, defaultHarness: AgentDefaults.defaultHarness)
+        harnessPicker.onSelect = { [weak self] harness in
+            guard let self else { return }
+            self.viewingHarness = harness
+            self.showAgentFields(for: harness)
+        }
+        // Viewing a harness's settings and making it the one New Agent
+        // launches are different questions (see HarnessPickerRow's own doc
+        // comment) — this is the only place `AgentDefaults.defaultHarness`
+        // is ever written from this pane.
+        harnessPicker.onMakeDefault = { [weak self] harness in
+            guard let self else { return }
+            AgentDefaults.defaultHarness = harness
+            self.harnessPicker.update(selected: harness, defaultHarness: harness)
+            self.onDefaultHarnessChanged?()
+        }
+
         launchRow = SettingRowView(width: Self.gridWidth, label: "LAUNCH",
                                    placeholder: AgentDefaults.fallback)
-        launchRow.onCommit = { AgentDefaults.save($0) }
+        launchRow.onCommit = { [weak self] in
+            guard let self else { return }
+            AgentDefaults.save($0, for: self.viewingHarness)
+        }
         directoryRow = SettingRowView(width: Self.gridWidth, label: "DIRECTORY",
                                       placeholder: AgentDefaults.fallbackDirectory,
                                       browsable: true)
-        directoryRow.onCommit = { AgentDefaults.save(directory: $0) }
+        directoryRow.onCommit = { [weak self] in
+            guard let self else { return }
+            AgentDefaults.save(directory: $0, for: self.viewingHarness)
+        }
         directoryRow.onBrowse = { [weak self] in self?.pickAgentDirectory() }
+        harnessPicker.isHidden = true
         launchRow.isHidden = true; directoryRow.isHidden = true
 
         pastList = PastAgentsList(width: Self.gridWidth, height: 420)
@@ -447,7 +475,7 @@ extension StatusHUD {
                                         waitingRows, pastList, bodyLabel,
                                         stripRule, stripLabel, trayRow, gridFooter,
                                         countdownBar, meter,
-                                        settingsTabs, launchRow, directoryRow,
+                                        settingsTabs, harnessPicker, launchRow, directoryRow,
                                         voiceList, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
