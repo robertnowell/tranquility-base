@@ -791,8 +791,41 @@ public enum TranscriptWatcher {
         var found: [String] = []
         for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  (obj["type"] as? String) == "user",
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+
+            // A message typed into a session that is mid-turn does not become
+            // a `user` record until the turn ends — it goes to the TUI's own
+            // queue first. Claude Code writes that decision down:
+            //
+            //   {"type":"queue-operation","operation":"enqueue",
+            //    "timestamp":…,"sessionId":…,"content":"…"}
+            //
+            // which is a FIRST-HAND record, by the program that took the
+            // message, that it has the message. Counting it is not a
+            // relaxation of the evidence standard; it is a stricter witness
+            // than the screen, and it is the one the transport was missing.
+            //
+            // Measured 25 Aug, and the whole point of the fix. A dispatch
+            // landed at 02:06:45.576 as exactly this record; the transport
+            // read only `user` lines, never saw it, and told Robert "typed it
+            // into Projects, but couldn't confirm it landed" at 02:07:02 —
+            // seventeen seconds after the proof was on disk. The 24 Aug
+            // five-copies incident has the same root: its commit says a
+            // queued message "is not in the transcript", which was true of
+            // the records we were reading and not true of the file.
+            //
+            // Reading it also hardens `alreadyDelivered`: a busy session's
+            // delivery is now provable at step 0, so the dedupe that makes
+            // every retry safe works on the exact case that used to defeat it.
+            if (obj["type"] as? String) == "queue-operation",
+               (obj["operation"] as? String) == "enqueue",
+               let content = obj["content"] as? String {
+                found.append(content)
+                continue
+            }
+
+            guard (obj["type"] as? String) == "user",
                   let message = obj["message"] as? [String: Any]
             else { continue }
 
