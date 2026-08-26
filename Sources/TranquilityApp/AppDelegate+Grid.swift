@@ -17,7 +17,7 @@ extension AppDelegate {
             menuBarWasPresent = present
             Permissions.log(present
                 ? "menubar: item is on the bar"
-                : "menubar: item DROPPED for space — bar is full; ⌘-drag it toward the clock once (position autosaves)")
+                : "menubar: item DROPPED for space — bar is full; ⌘-drag it toward the clock once (position autosaves)")  // key-names:exempt — diagnostic
         }
     }
 
@@ -426,6 +426,7 @@ extension AppDelegate {
             lastMenuBarCount = count
             Permissions.log("menubar: count=\(count.isEmpty ? "0 (quiet)" : count)")
         }
-        button.toolTip = "Tranquility Base. Click for the grid. Tap ⌃⌥ to hear, hold ⌥ to reply"
+        button.toolTip = "Tranquility Base. Click for the grid. "
+            + "Tap ⌃ Ctrl + ⌥ Option to hear, hold ⌥ Option to reply"
     }
 }

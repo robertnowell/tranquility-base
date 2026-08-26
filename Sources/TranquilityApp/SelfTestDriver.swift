@@ -1611,8 +1611,8 @@ extension StatusHUD {
             && bodyLabel.alignment == .center
         // The ruling's other half: this surface spells the keys out. A glyph
         // creeping back in is the failure the drill is here to catch.
-        let spelledOut = !StateLegend.gettingStartedMessage.contains("⌃")
-            && !StateLegend.gettingStartedMessage.contains("⌥")
+        let spelledOut = !StateLegend.gettingStartedMessage.contains("⌃")  // key-names:exempt — asserts absence
+            && !StateLegend.gettingStartedMessage.contains("⌥")  // key-names:exempt — asserts absence
         // An agent reporting in takes the room back, and the ambient repaint
         // that follows must not inherit the big centred type.
         showIdle(rows: [SessionRow(
@@ -1645,6 +1645,7 @@ extension StatusHUD {
         dropTrayDrill()
         elasticGridDrill()
         goToSessionDrill()
+        speechCallbackDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])

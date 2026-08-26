@@ -176,4 +176,58 @@ extension AppDelegate {
             + "\(clean ? "PASS" : "FAIL")")
         showIdleGrid()
     }
+
+    /// The drill for rule 9 on the badge path (incident 51344D00, thread 0).
+    ///
+    /// `refresh()` runs on a 1.5-second timer and used to reach
+    /// `Coordinator.waitingCount()` inline, which spawns `claude agents --json`
+    /// with an 8-second deadline. The crash report that caught the Speech trap
+    /// also caught the main thread sitting in that wait. The repair is a
+    /// snapshot sampled off-main; this is what holds it there.
+    ///
+    /// Three checks, because timing alone is not enough to tell the two designs
+    /// apart — a warm 6-second cache makes the OLD code fast too, so a drill
+    /// that only timed `refresh()` would pass on a broken build most runs.
+    ///
+    ///   `refreshIsCheap`      — the paint path itself never pays for a probe.
+    ///   `probeRanOffMain`     — the replacement mechanism actually completes,
+    ///                           so "fast" is not "fast because it does nothing".
+    ///   `probeIsNotReentrant` — a second tick while one is in flight does not
+    ///                           stack another child process behind it.
+    func refreshIsCheapDrill() {
+        var worst: TimeInterval = 0
+        for _ in 0..<5 {
+            let t0 = Date()
+            refresh()
+            worst = max(worst, Date().timeIntervalSince(t0))
+        }
+
+        // Counters, not the in-flight flag. The flag belongs to whichever probe
+        // is current, and this app starts one every 1.5 seconds, so reading it
+        // answers "is A probe running" and never "did MINE finish". Asserting
+        // on it failed on the first deploy that ran this drill, on a build
+        // whose repair was working perfectly: worstRefresh=4ms, badge=15, and
+        // a flag that read true because the timer had started the next one.
+        // A count that went up cannot be somebody else's.
+        let startedBefore = waitingProbesStarted
+        let completedBefore = waitingProbesCompleted
+        refreshWaitingSnapshot()
+        refreshWaitingSnapshot()          // second call, same instant
+        let startedByTwoCalls = waitingProbesStarted - startedBefore
+
+        // 15s, not 10: `sessions()` allows the CLI an 8-second deadline and
+        // then two more seconds to drain its pipes, so 10 is exactly the worst
+        // case it is meant to tolerate rather than comfortably past it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+            guard let self else { return }
+            SelfTest.report("refreshIsCheap", [
+                ("paintNeverProbes", worst < 0.1),
+                ("probeCompletedOffMain", self.waitingProbesCompleted > completedBefore),
+                ("probeIsNotReentrant", startedByTwoCalls == 1),
+            ])
+            Permissions.log("refreshIsCheap: worstRefresh=\(Int(worst * 1000))ms "
+                            + "badge=\(self.waitingCountSnapshot)")
+        }
+    }
+
 }

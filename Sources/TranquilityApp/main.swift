@@ -25,6 +25,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var lastStatusLine = "starting…"
     var isBusy = false
 
+    /// The menu-bar badge's waiting count, sampled OFF the main thread.
+    ///
+    /// `Coordinator.waitingCount()` reaches `ClaudeAgentsCLI.sessions()`, which
+    /// runs `claude agents --json` as a child process with an 8-second deadline.
+    /// `updateTitle()` called it inline, `refresh()` calls `updateTitle()`, and
+    /// the permission timer calls `refresh()` every 1.5 seconds — so the main
+    /// thread went into a subprocess wait on a repeating timer. The 6-second
+    /// result cache hid it most ticks and hid it completely on a fast machine
+    /// with a warm CLI; on the first external user's Mac the crash report caught
+    /// thread 0 mid-wait, three frames deep in `Subprocess.run` (incident
+    /// 51344D00, 25 Aug).
+    ///
+    /// That is rule 9 exactly — "anything whose cost a human would feel as a
+    /// frozen frame runs detached and hops back for the UI half" — and the
+    /// deadline that was added when this last bit (audit R5) bounded how long
+    /// the freeze lasts without moving which thread freezes.
+    ///
+    /// So the badge reads a number and never a process. `refreshWaitingSnapshot`
+    /// samples off-main and repaints only on change. The count starts at 0 and
+    /// is correct within one probe of launch, which is the honest trade: a badge
+    /// that is briefly zero beats a menu bar that is briefly frozen.
+    ///
+    /// It also warms the shared 6-second cache every tick, so the keypress paths
+    /// that still call `waiting()` inline (they need the rows, not a count, and
+    /// freshness at the moment of a press is load-bearing) almost always hit a
+    /// warm cache instead of a spawn.
+    var waitingCountSnapshot = 0
+
+    /// One probe at a time. Without this a slow CLI stacks a new child process
+    /// every 1.5 seconds behind the last one that has not come back.
+    var waitingProbeInFlight = false
+
+    /// Probes started and probes finished, monotonic.
+    ///
+    /// `waitingProbeInFlight` cannot answer "did MY probe run", because this
+    /// app probes on a 1.5-second timer and the flag belongs to whichever
+    /// probe is current. `refreshIsCheapDrill` asserted on it anyway and
+    /// failed on the first deploy that ran it: its own probe had long since
+    /// completed (the badge had the answer) while the flag read true for the
+    /// timer's next one. Counters are the fix, because a count that went up
+    /// cannot be somebody else's.
+    var waitingProbesStarted = 0
+    var waitingProbesCompleted = 0
+
     /// Tap versus hold on the same chord. A tap plays the next waiting update; a
     /// hold records a reply to whatever last spoke. One gesture, two verbs — which
     /// beats two chords to remember, and the boundary is unambiguous in practice
@@ -980,10 +1024,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.log("startup: hooks installed and reachable")
         }
 
+        // Look at the checklist without launching a second live instance.
+        //   TranquilityApp --dump-onboarding /tmp/gate.png
+        if let i = CommandLine.arguments.firstIndex(of: "--dump-onboarding"),
+           i + 1 < CommandLine.arguments.count {
+            // Optional third argument names a scenario, so the states a
+            // developer machine cannot reach are still reviewable:
+            //   --dump-onboarding /tmp/a.png fresh|midway|done
+            if i + 2 < CommandLine.arguments.count {
+                switch CommandLine.arguments[i + 2] {
+                case "fresh":
+                    Permissions.previewStates = [.microphone: .notAsked,
+                                                 .speechRecognition: .notAsked,
+                                                 .inputMonitoring: .notAsked,
+                                                 .accessibility: .notAsked]
+                case "midway":
+                    Permissions.previewStates = [.microphone: .active,
+                                                 .speechRecognition: .notAsked,
+                                                 .inputMonitoring: .pendingRestart,
+                                                 .accessibility: .denied]
+                default: break
+                }
+            }
+            onboarding.writePreview(to: CommandLine.arguments[i + 1])
+            NSApp.terminate(nil)
+            return
+        }
         if CommandLine.arguments.contains("--show-onboarding") {
             onboarding.show { }
         }
         if CommandLine.arguments.contains("--selftest-hud") {
+            refreshIsCheapDrill()
             hud.selfTest()
             // Before selfTestPendingSend: that one holds the panel for five more
             // seconds and releases the drill hold when it is done.
@@ -1108,6 +1179,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // The checklist's restart question is answered by the live tap, not by
+        // a table of which permissions "need a restart" — see `Permissions.State`.
+        Permissions.listeningProbe = { [weak self] in self?.hotkey?.isListening ?? false }
+
         startPermissionPolling()
         refresh()
 
@@ -1144,7 +1219,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // updates), and announcing yourself each time is noise from the exact
         // product that promised calm. The idle card appearing IS the greeting.
         Task { @MainActor in
-            if !Permissions.allGranted {
+            // `allActive`, not `allGranted`. A permission granted while the app
+            // was already running can be recorded by macOS and still unusable
+            // here, and an app that skips its own checklist on the strength of
+            // that reads as broken rather than unfinished.
+            if !Permissions.allActive {
                 onboarding.show { [weak self] in self?.refresh() }
             }
         }
