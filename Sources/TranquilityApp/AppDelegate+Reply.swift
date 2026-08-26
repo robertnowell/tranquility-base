@@ -50,7 +50,11 @@ extension AppDelegate {
             // which is the ordinary case for `sessionNotReady`/
             // `verificationTimedOut`. One lookup, reused everywhere below;
             // naturally nil for the "tab is gone" branches, where nil is right.
-            let pid = (ClaudeAgentsCLI().sessions() ?? [])
+            // `agents` alone missed a live Codex session every time (26 Aug) —
+            // `liveNonRegistrySessions()` adds ownership's own answer for a
+            // harness with no registry of its own.
+            let pid = ((ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                 .first(where: { $0.sessionId == sessionId })?.pid
             do {
                 let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
@@ -187,7 +191,8 @@ extension AppDelegate {
     /// probe, and tangling the probe with the choice is what kept the most
     /// consequential decision the app makes in the layer that has no unit tests.
     func describe(session id: String) -> (sessionId: String, pid: Int?, label: String, cwd: String?) {
-        let live = (ClaudeAgentsCLI().sessions() ?? []).first { $0.sessionId == id }
+        let live = ((ClaudeAgentsCLI().sessions() ?? [])
+            + FileSessionOwnershipStore.shared.liveNonRegistrySessions()).first { $0.sessionId == id }
         if let conversation = activeConversation, conversation.sessionId == id {
             return (id, live?.pid, conversation.label, conversation.cwd)
         }

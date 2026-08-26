@@ -76,7 +76,8 @@ extension AppDelegate {
                     break
                 }
                 guard !recorder.isRecording else { break }
-                let live = (ClaudeAgentsCLI().sessions() ?? [])
+                let live = ((ClaudeAgentsCLI().sessions() ?? [])
+                    + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                     .first(where: { $0.sessionId == session })
                 let name = tabDisplayName(for: target, live: live)
                 hud.adoptTarget(sessionId: session, pid: live?.pid,
@@ -655,7 +656,8 @@ extension AppDelegate {
         let sessionId = target.sessionId
         Task.detached(priority: .userInitiated) { [weak self] in
             let front = await Self.frontmostTerminalTabTty()
-            let pid = front == nil ? nil : (ClaudeAgentsCLI().sessions() ?? [])
+            let pid = front == nil ? nil : ((ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                 .first(where: { $0.sessionId == sessionId })?.pid
             let onScreen = pid.flatMap { ProcessProbe.tty(of: $0) }
             let skip = front != nil && onScreen == front
@@ -918,7 +920,11 @@ extension AppDelegate {
     /// from the card's current target.
     func goToSession(_ sessionId: String) {
         Task.detached {
-            guard let live = (ClaudeAgentsCLI().sessions() ?? [])
+            // `agents` alone made GO TO AGENT a permanent no-op for every
+            // Codex session (26 Aug) — silently logged and returned, never
+            // navigated, because Codex has no registry to appear in here.
+            guard let live = ((ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                 .first(where: { $0.sessionId == sessionId }) else {
                 Permissions.log("goTo: \(sessionId.prefix(8)) is not live any more")
                 return
@@ -1047,8 +1053,14 @@ extension AppDelegate {
                 // already know it. A few short retries, not a bare single
                 // shot, because that registration is still a separate
                 // process's own timing, not this call's.
+                // `agents` alone never carries a revived Codex session either
+                // (26 Aug) — attemptCodexResume already writes an ownership
+                // record on a successful attach, so liveNonRegistrySessions()
+                // has it from the first iteration, no retries needed for that
+                // harness, but the loop still costs nothing to share.
                 for _ in 0..<5 {
-                    if let pid = (ClaudeAgentsCLI().sessions() ?? [])
+                    if let pid = ((ClaudeAgentsCLI().sessions() ?? [])
+                        + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                         .first(where: { $0.sessionId == sessionId })?.pid {
                         await MainActor.run { [weak self] in
                             self?.hud.attachLivePid(pid, sessionId: sessionId)
@@ -1324,7 +1336,8 @@ extension AppDelegate {
             }
 
             guard let store = await self?.store else { return }
-            let pid = (ClaudeAgentsCLI().sessions() ?? [])
+            let pid = ((ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                 .first(where: { $0.sessionId == sessionId })?.pid
             do {
                 // The durable half. The card is already on screen; this is what
