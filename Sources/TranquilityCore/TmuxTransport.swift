@@ -336,6 +336,16 @@ public struct TmuxTransport: DispatchTransport {
         // reports with the same word — see the step 3 switch below.
         var everEchoed = false
 
+        // What the box should hold once this attempt's paste has landed.
+        // Normally the payload; after a JOIN it is the pre-existing text plus
+        // the payload, because that is what is actually in there — and
+        // `boxHolds` is an EQUALITY test, so handing it the payload alone
+        // after a join answers "no" about a paste that plainly worked. That
+        // was the 25 Aug failure: the join landed, the echo check could not
+        // recognise it, and Return was therefore never pressed. Robert's
+        // words sat in the box, complete, unsent, five times over.
+        var expectedInBox = payload
+
         // Whether this attempt is appending to text somebody already typed.
         // Reset every attempt: the box is re-read each time, and a line that
         // was there a moment ago may have been submitted since.
@@ -345,6 +355,7 @@ public struct TmuxTransport: DispatchTransport {
         attemptLoop: for attempt in 0..<attempts {
             let lastAttempt = attempt == attempts - 1
             joining = false
+            expectedInBox = payload
             // Step 0 — dedupe against ground truth, EVERY attempt. This is
             // what makes every retry below safe: our payload appended after
             // the watermark is a delivery this send already made.
@@ -413,6 +424,14 @@ public struct TmuxTransport: DispatchTransport {
                 }
                 break attemptLoop
             case .joinExisting:
+                // Read what is there BEFORE adding to it: this is the only
+                // moment the pre-existing text is separable from ours, and
+                // every check downstream needs to expect both.
+                if let existing = Self.boxRows(screen: screen(pane) ?? "",
+                                               glyph: target.promptGlyph) {
+                    let before = Self.collapsed(existing.joined(separator: " "))
+                    if !before.isEmpty { expectedInBox = before + " " + payload }
+                }
                 // Keep what is already in the box and put ours after it.
                 // C-e first so "after" means after the text rather than
                 // wherever the cursor happened to be left; the newline that
@@ -425,8 +444,17 @@ public struct TmuxTransport: DispatchTransport {
                 // alone, since C-u only clears BACK from wherever the cursor
                 // sits, and after a paste that never got submitted the
                 // cursor's position is not known.
-                Tmux.run(["send-keys", "-t", pane.paneId, "C-a"], socket: pane.socketName)
-                Tmux.run(["send-keys", "-t", pane.paneId, "C-k"], socket: pane.socketName)
+                //
+                // ONCE was never enough and it took a multi-row box to show
+                // it: C-a/C-k is a LINE operation, so on a composer holding
+                // several rows it removes one of them and leaves the rest. A
+                // paste then lands underneath what was supposed to be gone,
+                // and the next attempt does it again — which is how one
+                // dispatch drew four visibly glued copies of itself on 25
+                // Aug. Clear until the box says it is empty, and bound it so
+                // an unreadable box cannot spin here.
+                Self.clearBox(pane: pane, glyph: target.promptGlyph,
+                              screen: { self.screen(pane) })
             case .returnOnly:
                 // Our text is already sitting unsubmitted — a previous
                 // attempt's paste landed and its Enter was eaten. Submit
@@ -491,7 +519,8 @@ public struct TmuxTransport: DispatchTransport {
             // our words are in the box, Return is safe to press.
             var echo = PasteEcho.absent
             guard poll(deadline: 2.0, every: 0.05, until: {
-                echo = pasteEcho(payload, pane, target: target, chipsBefore: chipsBefore)
+                echo = pasteEcho(payload, pane, target: target, chipsBefore: chipsBefore,
+                                 expectedInBox: expectedInBox)
                 return echo != .absent
             }) else {
                 continue    // a mode race ate the paste; loop — dedupe guards the retry
@@ -519,7 +548,8 @@ public struct TmuxTransport: DispatchTransport {
                 return .confirmed(latencyMs: Int(Date().timeIntervalSince(start) * 1000))
             }
             // Enter may have been swallowed while the words arrived.
-            if stillHolding(payload, pane, target: target, ourChips: ourChips) {
+            if stillHolding(payload, pane, target: target, ourChips: ourChips,
+                            expectedInBox: expectedInBox) {
                 // The one-Return retry, with the #163 lesson applied: a
                 // session can pop a modal between the first Enter and this
                 // one, and a Return at a dialog ANSWERS it (gate finding V4).
@@ -564,6 +594,20 @@ public struct TmuxTransport: DispatchTransport {
         return !inMode(pane)
     }
 
+    /// Empty the composer, however many rows it is holding, and stop as soon
+    /// as it is empty rather than after a fixed number of keys. Bounded: an
+    /// unreadable box gets the same handful of attempts and no more.
+    static func clearBox(pane: TmuxPaneAddress, glyph: String,
+                         screen: () -> String?) {
+        for _ in 0..<12 {
+            let rows = boxRows(screen: screen() ?? "", glyph: glyph) ?? []
+            let text = collapsed(rows.joined(separator: " "))
+            if text.isEmpty { return }
+            Tmux.run(["send-keys", "-t", pane.paneId, "C-a"], socket: pane.socketName)
+            Tmux.run(["send-keys", "-t", pane.paneId, "C-k"], socket: pane.socketName)
+        }
+    }
+
     private func screen(_ pane: TmuxPaneAddress) -> String? {
         guard case .success(let out) = Tmux.run(
             ["capture-pane", "-p", "-J", "-t", pane.paneId],
@@ -586,10 +630,11 @@ public struct TmuxTransport: DispatchTransport {
     }
 
     private func pasteEcho(_ payload: String, _ pane: TmuxPaneAddress,
-                           target: DispatchTarget, chipsBefore: Set<String>) -> PasteEcho {
+                           target: DispatchTarget, chipsBefore: Set<String>,
+                           expectedInBox: String) -> PasteEcho {
         guard let text = screen(pane) else { return .absent }
         if text.contains(payload)
-            || Self.boxHolds(payload: payload, screen: text, glyph: target.promptGlyph) {
+            || Self.boxHolds(payload: expectedInBox, screen: text, glyph: target.promptGlyph) {
             return .literal
         }
         // Sorted so the choice is deterministic if a paste ever draws two
@@ -605,10 +650,11 @@ public struct TmuxTransport: DispatchTransport {
     /// and identity is the right one: is what sits there still the thing
     /// this send put there.
     private func stillHolding(_ payload: String, _ pane: TmuxPaneAddress,
-                              target: DispatchTarget, ourChips: Set<String>) -> Bool {
+                              target: DispatchTarget, ourChips: Set<String>,
+                              expectedInBox: String) -> Bool {
         guard let text = screen(pane) else { return false }
         if text.contains(payload)
-            || Self.boxHolds(payload: payload, screen: text, glyph: target.promptGlyph) {
+            || Self.boxHolds(payload: expectedInBox, screen: text, glyph: target.promptGlyph) {
             return true
         }
         return !Self.pasteChips(screen: text, glyph: target.promptGlyph,
