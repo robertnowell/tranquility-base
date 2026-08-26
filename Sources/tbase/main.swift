@@ -965,6 +965,16 @@ case "reconcile":
         let target = DispatchTarget(
             kind: .tmux, sessionId: "harness-\(pid)", pid: pid, pane: pane,
             transcriptPath: args[3], label: "test harness", readinessSource: .processAlive)
+        // The drill's own eyes. Without this, a failing send in
+        // test-dispatch-tmux.sh reports only its outcome, and working out WHY
+        // meant adding a print, rebuilding, and hoping the flake recurred —
+        // which is how three rounds of timeout-tuning got argued from noise.
+        // stderr, so the drill's stdout parsing is untouched.
+        if ProcessInfo.processInfo.environment["TB_TRACE"] != nil {
+            TmuxTransport.trace = { line in
+                FileHandle.standardError.write(Data(("trace: " + line + "\n").utf8))
+            }
+        }
         report(await TmuxTransport().send(text: args.dropFirst(4).joined(separator: " "), to: target))
 
     // MARK: summarize
