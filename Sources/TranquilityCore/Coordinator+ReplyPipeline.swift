@@ -168,6 +168,20 @@ extension Coordinator {
         try store.update(utterance: utterance)
     }
 
+    /// `dispatch`'s Codex twin for `preferringTmuxOwned` — same question
+    /// (is this session live, and which pane does it own), a different
+    /// source, for the same reason `Coordinator+Announcer.swift`'s
+    /// `waiting()` needed one (26 Aug): Codex is never in `agents`. The
+    /// ownership record already carries a verified pid and, since 26 Aug,
+    /// its pane — nothing here shells out or waits.
+    private func codexResolved(_ sessionId: String) -> (session: LiveSession, pane: TmuxPaneAddress?)? {
+        guard let record = ownership.verifiedCurrent(sessionId: sessionId),
+              record.harness == CodexAdapter().id else { return nil }
+        let session = LiveSession(pid: record.pid, sessionId: sessionId, cwd: record.cwd,
+                                  status: "idle", name: nil, waitingFor: nil)
+        return (session, record.pane)
+    }
+
     private func dispatch(
         utterance: inout Utterance, text: String, target: WaitingSession
     ) async throws -> ReplyOutcome {
@@ -185,8 +199,22 @@ extension Coordinator {
         // dialog, where no amount of waiting helps and the refusal below is the
         // honest answer. This buys the booting case and costs the blocked case
         // a few seconds it was going to lose anyway.
+        // `agents` never carries a Codex session — the SAME gap `waiting()`
+        // had (its own 26 Aug doc comment), found here the same day by
+        // asking one question further: a Codex session's greeting card now
+        // correctly stays on stage, but the reply that answers it still
+        // reaches THIS resolution, which would wait the full
+        // `readinessGrace` doing nothing (Codex is never coming back from a
+        // probe it was never in) and then refuse with "can't take this yet"
+        // — a real, working session, telling the truth about its own
+        // absence from a registry that was never going to carry it. Checked
+        // first, not folded into the retry loop below: `ownership`'s record
+        // already carries the pid and pane, so there is nothing to wait
+        // for, unlike the grace period's actual job of tolerating Claude
+        // Code's OWN transient registry gaps.
         var resolved = (agents.sessions() ?? [])
             .preferringTmuxOwned(sessionId: target.sessionId, trace: Coordinator.trace)
+            ?? codexResolved(target.sessionId)
         if resolved == nil {
             let deadline = Date().addingTimeInterval(readinessGrace)
             while resolved == nil, Date() < deadline {
