@@ -1378,6 +1378,12 @@ extension AppDelegate {
                     Permissions.log("launcher: nothing registered in \(dir) after 30s, but the "
                         + "process is alive on \(tty) — reporting it as started, not failed")
                     await MainActor.run { [weak self] in
+                        // Settle FIRST. Showing a result over a card that is
+                        // still waiting leaves the spinner up underneath it,
+                        // which is exactly what this branch shipped: an agent
+                        // that started fine, a message nobody could see, and
+                        // "Starting agent…" forever.
+                        self?.hud.settleLaunchCard()
                         self?.hud.showResult(
                             "Started in \((dir as NSString).lastPathComponent). It'll appear on the grid "
                             + "once it starts working.")
