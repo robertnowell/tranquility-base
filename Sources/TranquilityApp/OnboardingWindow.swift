@@ -196,15 +196,17 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         rows[kind] = dot
         row.addArrangedSubview(dot)
 
-        // Not "(optional)": reported directly, 26 Aug: "that's not optional,
-        // that's a critical fallback, why are we calling that optional?"
-        // `isRequired == false` only ever means "does not hold the Start
-        // gate" (this row's own doc comment, and `Permissions.allActive`),
-        // never "skip it": Speech Recognition is what keeps transcription
-        // working when the network is down (its own detail string below).
-        // "(fallback)" says what it actually is instead of undermining it.
-        let name = NSTextField(labelWithString:
-            "\(step). " + kind.title + (kind.isRequired ? "" : "  (fallback)"))
+        // No suffix, because there is no second class of row any more.
+        //
+        // This label went "(optional)" → "(fallback)" → nothing, and each step
+        // was the same complaint getting sharper. 26 Aug, first: "that's not
+        // optional, that's a critical fallback, why are we calling that
+        // optional?" Then, later the same day, on the replacement: "we either
+        // need them or we don't" — and we do, so every row is required and
+        // there is nothing left to qualify. A parenthesis that quietly tells
+        // the reader a step is skippable is how one of them ended up with no
+        // row at all.
+        let name = NSTextField(labelWithString: "\(step). " + kind.title)
         name.font = ChromeType.mono(ofSize: 12, weight: .medium)
         name.textColor = StateLegend.Palette.ink
         name.drawsBackground = false
