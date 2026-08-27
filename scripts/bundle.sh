@@ -24,6 +24,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG="${1:-debug}"
+# Overridable so release.sh can stamp a real version without editing this file.
+# CFBundleVersion must increase for every build macOS is asked to distinguish;
+# the marketing version is what a human reads.
+APP_VERSION="${TB_VERSION:-0.1.0}"
+APP_BUILD="${TB_BUILD:-1}"
 APP_NAME="${VD_APP_NAME:-Tranquility Base}"
 BUNDLE_ID="${VD_BUNDLE_ID:-com.robertnowell.voice-dispatch}"
 BUILD_DIR=".build/$CONFIG"
@@ -42,6 +47,20 @@ cp "$BUILD_DIR/TranquilityApp" "$APP_DIR/Contents/MacOS/TranquilityApp"
 # thing to forget. If these are missing the app still runs; it just goes
 # silent, and Earcons logs "no audio for <cue>".
 cp Resources/Sounds/*.wav "$APP_DIR/Contents/Resources/"
+
+# The Claude Code hooks travel INSIDE the bundle.
+#
+# Until now they lived only in the repo, and settings.json pointed at that
+# checkout by absolute path — so hooks broke whenever the repo moved, and a user
+# handed a built .app had no hooks at all, because there was no repo to point at.
+# HookManifest documents the moved-repo case as failure mode 3; bundling is what
+# actually closes it, because a path inside the app moves with the app.
+#
+# Copied, not symlinked: codesign seals Contents/Resources, and a symlink out of
+# the bundle would point at a checkout the user may not have.
+mkdir -p "$APP_DIR/Contents/Resources/hooks"
+cp hooks/*.sh "$APP_DIR/Contents/Resources/hooks/"
+chmod +x "$APP_DIR/Contents/Resources/hooks/"*.sh
 
 # The app icon, drawn by the app itself.
 #
@@ -106,8 +125,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>TranquilityApp</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
+  <key>CFBundleVersion</key><string>$APP_BUILD</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <!-- tranquilitybase:// deep links, so any local HTML page can carry buttons
        that open the agent that made it. The browser confirms before launching
@@ -188,7 +207,14 @@ if [ -z "$IDENTITY" ]; then
   # that, so the first run has to be correct by construction rather than by advice.
   if [ -z "$IDENTITY" ]; then
     echo "no code-signing identity found — creating a stable local one (once)."
-    "$(dirname "$0")/make-signing-identity.sh" >/dev/null 2>&1 || true
+    # Output is NOT swallowed, and the failure is NOT swallowed either beyond
+    # letting the ad-hoc branch below report it. `>/dev/null 2>&1 || true` hid a
+    # real breakage for weeks (25 Aug): the script failed on every machine with
+    # Homebrew's openssl ahead of /usr/bin, and the only visible symptom was
+    # permissions that silently died on the next rebuild. If this script fails,
+    # its own diagnostics are the most useful thing on screen.
+    "$(dirname "$0")/make-signing-identity.sh" || \
+      echo "   (make-signing-identity.sh failed — see its output above)"
     IDENTITY=$(security find-identity -p codesigning 2>/dev/null \
       | grep "$LOCAL_CN" | head -1 \
       | sed -E 's/^ *[0-9]+\) ([0-9A-F]+) .*/\1/' || true)

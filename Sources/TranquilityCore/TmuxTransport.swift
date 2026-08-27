@@ -43,12 +43,29 @@ public enum Tmux {
             if !resolved { path = locate(); resolved = true }
             return path
         }
+        func forget() {
+            lock.lock(); defer { lock.unlock() }
+            resolved = false; path = nil
+        }
     }
     private static let binaryCache = BinaryCache()
 
     public static func resolveBinary() -> String? {
         binaryCache.get(or: locateBinary)
     }
+
+    /// Drop the memo so the next `resolveBinary` looks again.
+    ///
+    /// The cache above deliberately remembers a MISS and states the trade: "a
+    /// binary that appears later costs one relaunch." Fine while the only caller
+    /// is the dispatch path; wrong the moment a first-run row tells someone to
+    /// run `brew install tmux`, because the row would go green off its own
+    /// uncached scan while dispatch kept refusing from the nil cached before the
+    /// install. One machine, two answers, and the visible one wrong.
+    ///
+    /// Called only on that transition, so the login-shell fallback is not re-paid
+    /// on every probe.
+    public static func forgetBinary() { binaryCache.forget() }
 
     private static func locateBinary() -> String? {
         let candidates = [

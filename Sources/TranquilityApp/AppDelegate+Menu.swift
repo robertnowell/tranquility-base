@@ -154,6 +154,40 @@ extension AppDelegate {
         }
         micItem.submenu = micMenu
         menu.addItem(micItem)
+
+        // API keys, beside the microphone and the voice for the same reason they
+        // are: a one-click errand, not a pane.
+        //
+        // First run is where most people will type these, but a key set ONLY at
+        // first run is a key that cannot be rotated -- and rotating is the first
+        // thing anyone does with one that has leaked or expired. "Reinstall the
+        // app" is not an answer to that. `tbase set-key` covered the terminal
+        // case; somebody handed a built .app has no repo to run it from.
+        //
+        // The checkmark is the only report on whether a key is stored. The value
+        // is never shown: proving a secret is present by displaying it is how
+        // secrets end up in screen recordings.
+        let keysItem = NSMenuItem(title: "API keys", action: nil, keyEquivalent: "")
+        let keysMenu = NSMenu()
+        for key in Secrets.Key.allCases {
+            let present = Secrets.read(key) != nil
+            let mark = present ? StateLegend.Glyph.confirm : StateLegend.Glyph.denied
+            let entry = NSMenuItem(
+                title: "\(mark)  \(key.provider)",
+                action: #selector(editKey(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = key.rawValue
+            entry.toolTip = key.purpose
+            keysMenu.addItem(entry)
+        }
+        keysMenu.addItem(.separator())
+        let check = NSMenuItem(title: "Check all keys",
+                               action: #selector(checkAllKeys), keyEquivalent: "")
+        check.target = self
+        check.toolTip = "Ask each provider whether its stored key still works"
+        keysMenu.addItem(check)
+        keysItem.submenu = keysMenu
+        menu.addItem(keysItem)
         cost.mic = Date().timeIntervalSince(micStart) * 1000
 
         menu.addItem(.separator())

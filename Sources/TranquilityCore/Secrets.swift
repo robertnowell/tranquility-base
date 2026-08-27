@@ -24,6 +24,41 @@ public enum Secrets {
         case elevenLabsAPIKey = "elevenlabs-api-key"
         case assemblyAIAPIKey = "assemblyai-api-key"
         case openAIAPIKey = "openai-api-key"
+
+        /// The provider's name, as a person would say it.
+        public var provider: String {
+            switch self {
+            case .anthropicAPIKey: return "Anthropic"
+            case .elevenLabsAPIKey: return "ElevenLabs"
+            case .assemblyAIAPIKey: return "AssemblyAI"
+            case .openAIAPIKey: return "OpenAI"
+            }
+        }
+
+        /// What breaks without it, never what it is.
+        public var purpose: String {
+            switch self {
+            case .anthropicAPIKey: return "spoken summaries, about $0.001 each"
+            case .elevenLabsAPIKey: return "the voice; without it, the system one"
+            case .assemblyAIAPIKey: return "the live transcript while you speak"
+            case .openAIAPIKey: return "Whisper, the durable transcript when streaming fails"
+            }
+        }
+
+        /// Where the key actually comes from.
+        ///
+        /// A prompt that asks for a key without saying where to get one has
+        /// handed the user a search. Lives on the key rather than on the
+        /// checklist row so the menu editor and the first-run row cannot drift
+        /// apart. All four verified to resolve, 26 Aug.
+        public var consoleURL: URL? {
+            switch self {
+            case .anthropicAPIKey: return URL(string: "https://console.anthropic.com/settings/keys")
+            case .elevenLabsAPIKey: return URL(string: "https://elevenlabs.io/app/settings/api-keys")
+            case .assemblyAIAPIKey: return URL(string: "https://www.assemblyai.com/dashboard/api-keys")
+            case .openAIAPIKey: return URL(string: "https://platform.openai.com/api-keys")
+            }
+        }
     }
 
     /// Read-through cache.
