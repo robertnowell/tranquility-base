@@ -585,6 +585,9 @@ final class StatusHUD: NSObject {
         currentSpoken = nil
         currentTarget = nil
         awaitingGreetingBinding = true
+        // Armed with the card, so no launch path has to remember to arm it —
+        // the one that forgot to SETTLE the card is the reason this exists.
+        startLaunchCardWatchdog { Permissions.log($0) }
         face = Face(title: label, body: line)
         // The one visible sign, from the instant the card paints, that
         // something is actually happening: `bindGreeting` clears it on
@@ -641,10 +644,71 @@ final class StatusHUD: NSObject {
     /// this. Guarded on `awaitingGreetingBinding` the same way `bindGreeting`
     /// is: a launch that has already been answered, one way or the other,
     /// has nothing left for this to clear.
-    func markLaunchFailed() {
-        guard awaitingGreetingBinding else { return }
+    func markLaunchFailed() { settleLaunchCard() }
+
+    /// The launch card stops waiting.
+    ///
+    /// It was only ever reachable through `markLaunchFailed`, so releasing it
+    /// looked like a thing you did when a launch FAILED — and on 27 Aug a new
+    /// exit path that ends in success forgot to call it, because calling
+    /// something named "failed" on a good launch reads wrong. The card span
+    /// forever: "Starting agent…" with a spinner, over an agent that had
+    /// started fine and was running in a pane.
+    ///
+    /// So the honest name exists now, and the failure case is the special one.
+    func settleLaunchCard() {
+        launchCardWatchdog?.invalidate(); launchCardWatchdog = nil
+        guard launchCardIsWaiting else { return }
         face.placardOverride = ""
         render()
+    }
+
+    /// True while the "Starting agent…" spinner is on the card.
+    ///
+    /// The spinner is the PLACARD, deliberately, not `awaitingGreetingBinding`.
+    /// That flag means something narrower and longer-lived: this card has no
+    /// session yet and can still adopt one that registers late — which is why
+    /// `markLaunchFailed` has never cleared it, and why the greeting drill's
+    /// `boundAfterAMicFault` passes. Settling a card ends the SPINNER; it does
+    /// not close the binding window, and reading the flag here would have
+    /// closed that window on every launch that failed.
+    ///
+    /// Caught by `launchCardDrill` on the very deploy that shipped it, which is
+    /// the whole argument for the drill: the same conflation twice in one day,
+    /// and the second time a machine found it in ninety seconds.
+    var launchCardIsWaiting: Bool {
+        face.placardOverride == StateLegend.startingAgentPlacard
+    }
+
+    /// Invalidated whenever a card settles or a new launch arms one, so a stale
+    /// timer can never settle a card it was not started for.
+    private var launchCardWatchdog: Timer?
+
+    /// A launch card that never settles is a bug, and the app can see it.
+    ///
+    /// Every exit from `newSession` is supposed to settle the card. On 27 Aug
+    /// one did not, and the way that surfaced was Robert watching a spinner and
+    /// saying "how do we not know that creating new agents is broken?" The
+    /// answer was that nothing watched. The log said "reporting it as started"
+    /// twice, an hour apart, and no one was reading it.
+    ///
+    /// This is the backstop: whatever an exit path forgets, the card settles
+    /// anyway, and the omission is recorded rather than displayed as a spinner.
+    /// It does not replace getting the exit paths right — it makes getting one
+    /// wrong cost a log line instead of a dead panel.
+    func startLaunchCardWatchdog(after seconds: TimeInterval = 75,
+                                 log: @escaping @Sendable (String) -> Void) {
+        launchCardWatchdog?.invalidate()
+        launchCardWatchdog = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.launchCardIsWaiting else { return }
+                log("launch card still waiting \(Int(seconds))s after a launch — an exit path "
+                    + "did not settle it. Releasing; this is a bug in that path, not in the launch.")
+                self.settleLaunchCard()
+                self.showResult("That agent may have started, but the panel lost track of it. "
+                                + "Check the grid, or attach a terminal.")
+            }
+        }
     }
 
     /// The first reply to a session asks once, showing the words that are about to
