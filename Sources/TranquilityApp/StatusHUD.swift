@@ -657,14 +657,32 @@ final class StatusHUD: NSObject {
     ///
     /// So the honest name exists now, and the failure case is the special one.
     func settleLaunchCard() {
-        guard awaitingGreetingBinding else { return }
+        launchCardWatchdog?.invalidate(); launchCardWatchdog = nil
+        guard launchCardIsWaiting else { return }
         face.placardOverride = ""
         render()
     }
 
-    /// True while a launch card is still waiting for a session to bind. Read
-    /// by the watchdog below; nothing else outside this type needs it.
-    var launchCardIsWaiting: Bool { awaitingGreetingBinding }
+    /// True while the "Starting agent…" spinner is on the card.
+    ///
+    /// The spinner is the PLACARD, deliberately, not `awaitingGreetingBinding`.
+    /// That flag means something narrower and longer-lived: this card has no
+    /// session yet and can still adopt one that registers late — which is why
+    /// `markLaunchFailed` has never cleared it, and why the greeting drill's
+    /// `boundAfterAMicFault` passes. Settling a card ends the SPINNER; it does
+    /// not close the binding window, and reading the flag here would have
+    /// closed that window on every launch that failed.
+    ///
+    /// Caught by `launchCardDrill` on the very deploy that shipped it, which is
+    /// the whole argument for the drill: the same conflation twice in one day,
+    /// and the second time a machine found it in ninety seconds.
+    var launchCardIsWaiting: Bool {
+        face.placardOverride == StateLegend.startingAgentPlacard
+    }
+
+    /// Invalidated whenever a card settles or a new launch arms one, so a stale
+    /// timer can never settle a card it was not started for.
+    private var launchCardWatchdog: Timer?
 
     /// A launch card that never settles is a bug, and the app can see it.
     ///
@@ -680,9 +698,10 @@ final class StatusHUD: NSObject {
     /// wrong cost a log line instead of a dead panel.
     func startLaunchCardWatchdog(after seconds: TimeInterval = 75,
                                  log: @escaping @Sendable (String) -> Void) {
-        Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+        launchCardWatchdog?.invalidate()
+        launchCardWatchdog = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.awaitingGreetingBinding else { return }
+                guard let self, self.launchCardIsWaiting else { return }
                 log("launch card still waiting \(Int(seconds))s after a launch — an exit path "
                     + "did not settle it. Releasing; this is a bug in that path, not in the launch.")
                 self.settleLaunchCard()
