@@ -75,7 +75,7 @@ final class StoppedLaunchTests: XCTestCase {
         TrustPromptWatcher.watch(
             spec: CodexAdapter().trustPrompt!,
             read: { self.codexUpdateScreen },
-            press: { box.pressed += 1 },
+            press: { _ in box.pressed += 1 },
             trace: { box.traced.append($0) },
             label: "tb-test",
             pollInterval: 0.001, maxPolls: 3,
@@ -95,7 +95,7 @@ final class StoppedLaunchTests: XCTestCase {
         TrustPromptWatcher.watch(
             spec: spec,
             read: { "\(spec.settledBannerNeedle)\n› " },
-            press: {},
+            press: { _ in },
             label: "tb-test",
             pollInterval: 0.001, maxPolls: 6,
             onNeedsHuman: { _ in box.opened += 1 })
