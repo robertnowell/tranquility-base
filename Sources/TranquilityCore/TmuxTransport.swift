@@ -230,15 +230,47 @@ public enum TmuxOwnership {
         case unknown
     }
 
+    /// Whether tmux said the server is not running, as opposed to failing to
+    /// answer one that is.
+    ///
+    /// Read from tmux's own words rather than guessed from a socket path: the
+    /// socket lives under `TMUX_TMPDIR`, which differs between this app and
+    /// the shell a user runs tmux from, so any path this code reconstructs is
+    /// a second source of truth that can disagree with the first. tmux says
+    /// exactly one of two things when there is nothing to talk to, and both
+    /// are definitive.
+    static func serverIsAbsent(_ stderr: String) -> Bool {
+        stderr.contains("no server running")
+            || stderr.contains("No such file or directory")
+    }
+
     public static func ownership(forTty tty: String) -> Ownership {
         var everyServerAnswered = true
         for socket in sockets {
-            guard case .success(let out) = Tmux.run(
+            let listing = Tmux.run(
                 ["list-panes", "-a", "-F", "#{pane_tty}\t#{pane_id}\t#{session_name}"],
                 socket: socket, timeout: 3)
-            else {
-                everyServerAnswered = false
-                Tmux.trace?("ownership: \(socket ?? "default") server did not answer for \(tty)")
+            guard case .success(let out) = listing else {
+                guard case .failure(let error) = listing else { continue }
+                // A server that is not running is not a server that failed to
+                // answer. It holds no panes, definitively, and saying so is a
+                // fact — the same fact an empty listing would be.
+                //
+                // Conflating the two, which this did for one hour on 26 Aug,
+                // poisons every lookup on a machine that has no DEFAULT tmux
+                // server: `sockets` asks ours and then the user's, the user's
+                // does not exist, and the whole answer collapses to `.unknown`
+                // even though our own server answered perfectly. GO TO AGENT
+                // then ended live sessions and reported "the resumed pane is
+                // not on any live tmux server" about a pane sitting on the
+                // server it had just been created on. My regression, found by
+                // the trace added in the same change — which is the only
+                // reason it took minutes instead of an evening.
+                if !Self.serverIsAbsent(error.message) {
+                    everyServerAnswered = false
+                    Tmux.trace?("ownership: \(socket ?? "default") server did not answer "
+                        + "for \(tty)")
+                }
                 continue
             }
             if let address = match(inventory: out, tty: tty, socket: socket) {
