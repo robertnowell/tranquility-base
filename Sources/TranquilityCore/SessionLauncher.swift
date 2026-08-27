@@ -428,18 +428,27 @@ public enum SessionLauncher {
             else { lastSeen = nil; continue }
             let parts = line.split(separator: "\t", maxSplits: 1,
                                    omittingEmptySubsequences: false).map(String.init)
-            // Alive is asserted, never inferred from the absence of a "1".
+            // The flag has to BE a flag. Alive is read off a rendered
+            // `pane_dead`, never inferred from the absence of a "1".
             //
             // This read `parts.first == "1"` for dead, which on any line that
-            // failed to split — the 27 Aug locale bug turned every TAB into
+            // failed to render — the 27 Aug locale bug turned every TAB into
             // `_`, so every line was one field — is false for a DEAD pane
             // just as surely as for a live one. The check written to catch
             // "the pane exited instantly and printed a tty on its way out"
-            // would have passed that pane. It was reporting health from a
-            // line it could not read, which is the same mistake
-            // `ownership(forTty:)` was making one file over.
-            guard parts.count == 2 else { lastSeen = nil; continue }
-            lastSeen = (dead: parts[0] != "0", status: parts[1])
+            // would have waved that pane through.
+            //
+            // Field COUNT cannot be the test, though, and assuming it could
+            // cost a working launcher for ten minutes: a live pane's
+            // `pane_dead_status` is empty, so tmux emits "0\t" and
+            // `PipeBuffer.text` trims the trailing TAB away with the
+            // newline. One field is what a healthy row looks like here. So
+            // the check is on the flag's VALUE, which a mangled row fails
+            // ("0_%1" is neither "0" nor "1") and a trimmed row passes.
+            guard let flag = parts.first, flag == "0" || flag == "1" else {
+                lastSeen = nil; continue
+            }
+            lastSeen = (dead: flag == "1", status: parts.count > 1 ? parts[1] : "")
             if lastSeen?.dead == false { return nil }
             break
         }

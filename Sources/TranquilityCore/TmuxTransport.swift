@@ -291,6 +291,28 @@ public enum TmuxOwnership {
             || stderr.contains("No such file or directory")
     }
 
+    /// A server that is RUNNING and holds nothing. Also a definitive answer,
+    /// and a state this app manufactures on purpose.
+    ///
+    /// `list-panes -a` against a server with no sessions does not print an
+    /// empty list — it exits 1 with "no current target". Ours reaches that
+    /// state routinely, because `launchTmux` sets `exit-empty off` so the
+    /// server outlives its last pane (without it, terminating the last
+    /// session takes the whole server down mid-flight). So the app's own
+    /// posture guarantees this error will be seen, and reading it as a
+    /// question that failed makes every lookup `.unknown` the moment no
+    /// agents are running.
+    ///
+    /// Measured 27 Aug, after the locale fix landed: with an empty tb server
+    /// and no default server, every Go To Agent refused with "it is still
+    /// running in its own terminal" — the new safety guard firing on a false
+    /// premise. Before that guard existed the same false `.unknown` did
+    /// something worse and quieter: `pane(forTty:)` flattened it to nil and
+    /// the session was killed as hand-started.
+    static func serverHoldsNoPanes(_ stderr: String) -> Bool {
+        stderr.contains("no current target")
+    }
+
     public static func ownership(forTty tty: String) -> Ownership {
         var everyServerAnswered = true
         for socket in sockets {
@@ -313,7 +335,7 @@ public enum TmuxOwnership {
                 // server it had just been created on. My regression, found by
                 // the trace added in the same change — which is the only
                 // reason it took minutes instead of an evening.
-                if !Self.serverIsAbsent(error.message) {
+                if !Self.serverIsAbsent(error.message), !Self.serverHoldsNoPanes(error.message) {
                     everyServerAnswered = false
                     Tmux.trace?("ownership: \(socket ?? "default") server did not answer "
                         + "for \(tty)")
