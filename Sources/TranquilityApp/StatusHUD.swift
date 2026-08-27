@@ -663,6 +663,59 @@ final class StatusHUD: NSObject {
         render()
     }
 
+    /// The launch stopped on a question only the human can answer.
+    ///
+    /// The third ending a launch can have, and until 27 Aug the app could not
+    /// express it. There was "it started" and there was "it failed", and a
+    /// Codex launch that hit codex-cli 0.150.0's update menu was neither: the
+    /// process was alive, the pane was fine, and the only thing between the
+    /// user and their agent was a menu that the panel — by design — never
+    /// shows them. It got reported as "Started … it'll appear on the grid once
+    /// it starts working", which was false in the way that costs the most: it
+    /// named no action, so nobody took one, twenty-one panes deep.
+    ///
+    /// So the question gets the needs-you channel and the card that is already
+    /// on stage, and the launch's own window opens behind it
+    /// (`SessionLauncher.watchForTrustPrompt`). The card says what is being
+    /// asked; the window is where it gets answered.
+    ///
+    /// **The binding window deliberately survives this.** `awaitingGreetingBinding`
+    /// is restored across the transition because answering the question is
+    /// exactly the thing that makes the agent register — usually within
+    /// seconds, well inside the launch's own wait — and a card that could not
+    /// then adopt the session it was opened for would send the user back to
+    /// the grid to find an agent they had just personally started.
+    func showLaunchQuestion(_ question: String, windowOpened: Bool = true) {
+        guard launchCardIsWaiting else {
+            // Never onto a stranger's card. A launch question carries no
+            // session id, so it would attach to whatever happens to be on
+            // stage and be read as that agent's news — the misattribution
+            // `showResult`'s own `cardIsTheSubject` guard exists to refuse.
+            // The log always has it, and an idle panel gets the amber strip,
+            // which is the one slot that belongs to nobody in particular.
+            Permissions.log("launch question, with no card waiting for it: \(question)")
+            flashNotice("\(StateLegend.Glyph.needsYou) A launch is waiting on you")
+            return
+        }
+        let label = face.title
+        let stillBinding = awaitingGreetingBinding
+        // The spinner comes down whatever happens next: it claims activity,
+        // and a pane sitting on a menu has none. Settling first also means a
+        // refused transition leaves an honest card rather than a spinning one.
+        settleLaunchCard()
+        guard transition(to: .result, because: "the launch stopped on a question")
+        else { return }
+        awaitingGreetingBinding = stillBinding
+        Permissions.log("launch question: \(question)")
+        face = Face(title: label,
+                    body: "It's asking you something before it starts:\n\n\(question)\n\n"
+                        + (windowOpened
+                           ? "Its window is open — answer there and it'll come up here."
+                           : "I couldn't open its window; Go to Agent will."),
+                    placardOverride: StateLegend.needsAnswerPlacard)
+        render()
+    }
+
     /// True while the "Starting agent…" spinner is on the card.
     ///
     /// The spinner is the PLACARD, deliberately, not `awaitingGreetingBinding`.
@@ -1274,7 +1327,10 @@ final class StatusHUD: NSObject {
     /// idle that expires on its own clock, and it cannot exist anywhere else —
     /// if the panel has moved to a card, whatever that card is about outranks a
     /// stale word about the microphone.
-    private var notice: String?
+    /// Readable outside this file so a drill can assert the strip actually
+    /// spoke; written only here, because the expiry timer below is the only
+    /// thing entitled to take it away again.
+    private(set) var notice: String?
     /// Which channel the live notice speaks on. Amber is the needs-you channel;
     /// advisory blue is news you may ignore. A notice that picked the wrong one
     /// is worse than no notice: amber trains the eye to check, and spending that

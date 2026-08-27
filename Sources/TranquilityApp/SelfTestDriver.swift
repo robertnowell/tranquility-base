@@ -1640,6 +1640,7 @@ extension StatusHUD {
         resumePromptDrill()
         readIntensityDrill()
         launchCardDrill()
+        launchQuestionDrill()
         terminateDrill()
         pastAgentsDrill()
         launchSettingsDrill()
