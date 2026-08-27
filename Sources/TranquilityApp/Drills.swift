@@ -1449,17 +1449,28 @@ extension AppDelegate {
         let everyKindHasARoute = Permissions.Kind.allCases.allSatisfy {
             URL(string: $0.settingsURL) != nil
         }
-        // The one that would have caught the 10 Aug regression AND kept this
-        // change honest: a permission nothing has ever asked for must not be
-        // able to hold the onboarding window open at every launch.
+        // The guard that makes "everything is required" safe rather than a
+        // lockout: a required permission with no way to ask for it holds the
+        // onboarding window open forever. That is the 10 Aug failure, and it
+        // is only survivable because every row can now both prompt and route.
+        // Every kind is answerable: it has a row in this menu (asserted above)
+        // AND a Grant action wired to it. An enabled row with no target is the
+        // shape that makes a required permission a lockout.
+        let everyMissingRowCanBeActedOn = (statusMenu?.items ?? [])
+            .filter { $0.representedObject is Permissions.Kind }
+            .allSatisfy { $0.isEnabled ? $0.target != nil : true }
         let automationIsModelled = Permissions.Kind.allCases.contains(.automation)
-        let automationNeverBlocks = !Permissions.Kind.automation.isRequired
+        // No third tier. Every permission this app models either blocks or is
+        // not modelled at all — ruled 26 Aug, after "(optional)" and then
+        // "(fallback)" both turned out to mean "the row nobody maintains".
+        let nothingIsOptional = Permissions.Kind.allCases.allSatisfy(\.isRequired)
         SelfTest.report("permissionSurfaces", [
             ("everyKindHasARow", everyKindHasARow),
             ("checklistIsReachable", checklistIsReachable),
             ("everyKindHasARoute", everyKindHasARoute),
             ("automationIsModelled", automationIsModelled),
-            ("automationNeverBlocks", automationNeverBlocks),
+            ("nothingIsOptional", nothingIsOptional),
+            ("everyMissingRowCanBeActedOn", everyMissingRowCanBeActedOn),
         ])
     }
 }
