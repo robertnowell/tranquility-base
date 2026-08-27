@@ -38,6 +38,11 @@ export VD_APP_NAME="Tranquility Base TEST"
 export VD_BUNDLE_ID="com.robertnowell.voice-dispatch-test"
 APP_PATH=".build/debug/$VD_APP_NAME.app"
 DATA_DIR="$HOME/Library/Application Support/VoiceDispatchTEST"
+# Baked into the built .app's Info.plist as LSEnvironment (bundle.sh), so
+# every launch of THIS app carries it, however it is opened. Fixed and
+# deterministic across runs of this script, so a rebuild always bakes in
+# the same value.
+export VD_DATA_DIR="$DATA_DIR"
 
 # No separate signing identity needed: TCC's designated requirement is
 # identifier + certificate, and the identifier alone (VD_BUNDLE_ID above)
@@ -72,12 +77,24 @@ for arg in "$@"; do
     --open)
       mkdir -p "$DATA_DIR"
       echo "-> opening $APP_PATH (data dir: $DATA_DIR)"
-      # Not `open -a`: it has no way to hand an env var to the launched
-      # process, and VOICE_DISPATCH_SUPPORT_DIR is the whole point.
-      # Launched directly, detached from this shell.
-      (VOICE_DISPATCH_SUPPORT_DIR="$DATA_DIR" \
-        "$PWD/$APP_PATH/Contents/MacOS/TranquilityApp" --allow-second-instance \
-        >/dev/null 2>&1 &)
+      # `open -a`, not a direct exec of the binary: found live, 26 Aug, that
+      # a directly-executed child of this shell inherited Terminal's own
+      # Accessibility/Input Monitoring trust (macOS's "responsible process"
+      # attribution for a process that never went through LaunchServices),
+      # so every permission read back as already granted no matter what
+      # tccutil said. `open -a` launches through LaunchServices like a real
+      # double-click would, which is what actually produces real,
+      # un-granted system prompts.
+      #
+      # No env-var juggling needed here any more: VD_DATA_DIR above is
+      # already baked into this exact build's Info.plist (bundle.sh's
+      # LSEnvironment), so `open -a` alone carries it correctly. An earlier
+      # version of this tried `launchctl setenv`/`unsetenv` around the
+      # launch instead, and measured live that it does not reliably reach
+      # the new process before this script's own `unsetenv` -- the test
+      # app wrote straight into the REAL app's queue.sqlite and app.log
+      # again, twice, before this was caught both times.
+      open --new -a "$PWD/$APP_PATH" --args --allow-second-instance
       ;;
   esac
 done

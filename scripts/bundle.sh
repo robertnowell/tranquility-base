@@ -55,7 +55,13 @@ cp Resources/Sounds/*.wav "$APP_DIR/Contents/Resources/"
 # onboarding flips the app to .regular, which put the GENERIC DEFAULT icon in
 # the Dock and ⌘-Tab at exactly the moment a new user meets it.
 ICONSET="$(mktemp -d)/AppIcon.iconset"
-if "$APP_DIR/Contents/MacOS/TranquilityApp" --write-iconset "$ICONSET" >/dev/null; then
+# The test build's icon is unmistakable at a glance (SiteMark.swift's
+# `isTestBuild`, keyed on this same env var): an amber plate instead of the
+# real app's, so it never gets confused with it in the Dock or Cmd-Tab.
+ICON_ENV=()
+[ "$BUNDLE_ID" = "com.robertnowell.voice-dispatch-test" ] \
+  && ICON_ENV=(env VOICE_DISPATCH_TEST_ICON=1)
+if "${ICON_ENV[@]}" "$APP_DIR/Contents/MacOS/TranquilityApp" --write-iconset "$ICONSET" >/dev/null; then
   if iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/AppIcon.icns"; then
     echo "→ icon: AppIcon.icns"
   else
@@ -65,6 +71,22 @@ else
   echo "✗ could not draw the iconset — the bundle will show the default icon" >&2
 fi
 rm -rf "$(dirname "$ICONSET")"
+
+# Set only when VD_DATA_DIR is provided (scripts/bundle-test.sh's isolated
+# build): baked into the bundle's own Info.plist as LSEnvironment, which
+# LaunchServices applies to every launch of THIS app however it is opened
+# (Dock, Spotlight, `open`) -- unlike `launchctl setenv`, which is a global,
+# per-session override with no guarantee it reaches a launch that races it
+# (measured live, 26 Aug: it didn't). QueueStore.swift reads this as
+# VOICE_DISPATCH_SUPPORT_DIR. Empty for the real app, so its Info.plist is
+# byte-identical to before.
+LS_ENV_XML=""
+if [ -n "${VD_DATA_DIR:-}" ]; then
+  LS_ENV_XML="  <key>LSEnvironment</key>
+  <dict>
+    <key>VOICE_DISPATCH_SUPPORT_DIR</key><string>$VD_DATA_DIR</string>
+  </dict>"
+fi
 
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -118,6 +140,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <!-- Only needed if Apple's on-device recogniser is used as the fallback tier. -->
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Tranquility Base can transcribe your reply on-device when no cloud provider is available, so a recording is never lost.</string>
+$LS_ENV_XML
 </dict>
 </plist>
 PLIST
@@ -194,6 +217,7 @@ echo
 echo "Run it:    open \"$APP_DIR\""
 echo "Stop it:   pkill -f TranquilityApp"
 echo
-echo "On first launch it will ask for the microphone. Grant ACCESSIBILITY for the"
-echo "gestures — the checklist links straight to the pane — then relaunch once, since"
+echo "On first launch the checklist appears; nothing is asked until you press"
+echo "Grant on a row. Grant ACCESSIBILITY for the gestures -- the checklist"
+echo "links straight to the pane -- then relaunch once, since"
 echo "macOS only evaluates that grant when the process starts."

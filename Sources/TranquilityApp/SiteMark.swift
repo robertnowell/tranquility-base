@@ -127,6 +127,17 @@ enum SiteMark {
     /// from Apple's own icon templates. They are not published as prose
     /// anywhere — an Apple Developer Forums thread complains about exactly that
     /// — so they are recorded here as measured convention rather than spec.
+    /// `VOICE_DISPATCH_TEST_ICON`, set only by `scripts/bundle.sh` when it is
+    /// building `scripts/bundle-test.sh`'s isolated variant: the real app's
+    /// plate colour is the whole point of a recognisable icon, and the test
+    /// build needs to be UNMISTAKABLE at a glance in the Dock and
+    /// Cmd-Tab, not just correctly TCC-isolated. Requested directly, 26 Aug
+    /// ("change logo on test app"), after the two builds shared the exact
+    /// same icon and were genuinely hard to tell apart at a glance.
+    private static var isTestBuild: Bool {
+        ProcessInfo.processInfo.environment["VOICE_DISPATCH_TEST_ICON"] != nil
+    }
+
     static func iconImage(pixels: CGFloat) -> NSImage {
         let unit = pixels / 1024
         return NSImage(size: NSSize(width: pixels, height: pixels),
@@ -134,7 +145,7 @@ enum SiteMark {
             let inset = (1024 - 824) / 2 * unit
             let plate = NSRect(x: inset, y: inset,
                                width: pixels - inset * 2, height: pixels - inset * 2)
-            StateLegend.Palette.surface.setFill()
+            (isTestBuild ? StateLegend.Palette.fault : StateLegend.Palette.surface).setFill()
             NSBezierPath(roundedRect: plate, xRadius: 185.4 * unit,
                          yRadius: 185.4 * unit).fill()
 
@@ -156,7 +167,11 @@ enum SiteMark {
                                  yBy: plate.midY - (drawn.midY * scale))
             transform.scale(by: scale)
             transform.concat()
-            StateLegend.Palette.secondary.setFill()
+            // On the amber test plate, the mark's usual grey-beige has almost
+            // no contrast against it (both are mid-luminance). The dark
+            // surface colour that is the REAL app's plate reads clearly on
+            // amber instead.
+            (isTestBuild ? StateLegend.Palette.surface : StateLegend.Palette.secondary).setFill()
             path(filled: false, wall: wall, bar: bar).fill()
             return true
         }

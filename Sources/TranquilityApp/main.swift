@@ -1187,45 +1187,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startPermissionPolling()
         refresh()
 
-        // Ask for the microphone at LAUNCH, not on a button press.
-        // Calling requestAccess is what registers the app in the Microphone pane —
-        // an app that has never asked is not listed there at all, so waiting for a
-        // click left the user staring at a list this app could never appear in.
+        // NOTHING asks for a permission at launch any more. Reported
+        // directly, 26 Aug, against the very build meant to fix this class
+        // of complaint: "it shouldn't ask for any permissions before the
+        // user clicks grant." This block used to call
+        // `Permissions.request(.microphone)` unconditionally right here,
+        // which fired the system's own microphone dialog before the
+        // checklist window had even painted, over an app that, from the
+        // user's side, had shown nothing yet. The concern that motivated
+        // the original call, that an app which has never asked is not
+        // listed in the Microphone pane at all, is still satisfied, just
+        // later: the FIRST press of that row's own Grant button
+        // (`grantTapped`, OnboardingWindow.swift) is what registers it,
+        // which is also the first moment a person actually asked for it.
+        //
+        // `allActive`, not `allGranted`: a permission granted while the
+        // app was already running can be recorded by macOS and still
+        // unusable here, and the grid must never be the thing shown in
+        // that state, because it cannot hear or dispatch anything.
+        // Reported directly, also 26 Aug, by a three-months user whose own
+        // relaunch landed mid-permission-grant: "if critical permissions
+        // are ever missing you should show the onboarding screen not the
+        // grid because the grid won't work."
         Permissions.logEnvironment()
-        Task { @MainActor in
-            let granted = await Permissions.request(.microphone)
-            Permissions.log("requestAccess(.audio) returned \(granted); status now \(Permissions.statusDescription(.microphone))")
-            refresh()
-            // No spoken greeting: launch is a state the user caused, watching
-            // the screen (the away-channel law at its purest, if it can be
-            // communicated visually it is not spoken), and apps also relaunch
-            // mid-work (rebuilds, updates) where announcing yourself every
-            // time is noise from the exact product that promised calm.
-            //
-            // `allActive`, not `allGranted`: a permission granted while the
-            // app was already running can be recorded by macOS and still
-            // unusable here, and the grid must never be the thing shown in
-            // that state, because it cannot hear or dispatch anything.
-            // Reported directly, 26 Aug, by a three-months user whose own
-            // relaunch landed mid-permission-grant: "if critical permissions
-            // are ever missing you should show the onboarding screen not
-            // the grid because the grid won't work." Before this, the grid
-            // painted unconditionally right after this check, so a launch
-            // with incomplete permissions raced two windows against each
-            // other with no ordering guarantee, and the grid usually won,
-            // showing a normal-looking panel that answered nothing. Now the
-            // grid paints only once onboarding is actually done (its own
-            // `onDone` callback), or immediately when nothing was missing.
-            if Permissions.allActive {
-                // Visible proof of life. A menu-bar-only app with a full
-                // menu bar is indistinguishable from a broken one; this
-                // makes launch observable.
-                showIdleGrid()
-            } else {
-                onboarding.show { [weak self] in
-                    self?.refresh()
-                    self?.showIdleGrid()
-                }
+        if Permissions.allActive {
+            // Visible proof of life. A menu-bar-only app with a full menu
+            // bar is indistinguishable from a broken one; this makes
+            // launch observable.
+            showIdleGrid()
+        } else {
+            onboarding.show { [weak self] in
+                self?.refresh()
+                self?.showIdleGrid()
             }
         }
     }
