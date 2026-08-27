@@ -1187,6 +1187,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The checklist's restart question is answered by the live tap, not by
         // a table of which permissions "need a restart" — see `Permissions.State`.
         Permissions.listeningProbe = { [weak self] in self?.hotkey?.isListening ?? false }
+        // The real registration attempt for Input Monitoring, run from the
+        // checklist's own Grant button. See `Permissions.startListening`'s
+        // own doc comment for why this is needed at all.
+        Permissions.startListening = { [weak self] in _ = self?.hotkey?.start() }
 
         startPermissionPolling()
         refresh()

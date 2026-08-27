@@ -202,6 +202,20 @@ struct Permissions {
     /// restart prompt out of missing information.
     @MainActor static var listeningProbe: (() -> Bool)?
 
+    /// Bridges to `HotkeyMonitor.start()`, wired from main.swift the same
+    /// way `listeningProbe` is. Found live, 26 Aug: `CGRequestListenEventAccess()`
+    /// alone (the call `request(.inputMonitoring)` below already made) did
+    /// not reliably register the app in the Input Monitoring pane at
+    /// all, on a genuinely fresh build. Clicked Grant, no system prompt, the
+    /// app never appeared in the list, and Settings opened to a pane with
+    /// nothing to toggle. `CGEvent.tapCreate` (what `HotkeyMonitor.start()`
+    /// actually calls) is the mechanism `AppDelegate+Grid.swift`'s own
+    /// launch-time gate exists around precisely because it is what really
+    /// registers and prompts; this hook lets that same real attempt run
+    /// from the checklist's Grant button too, still only on a user click,
+    /// never automatically.
+    @MainActor static var startListening: (() -> Void)?
+
     /// Forced states, for rendering the checklist in situations this machine is
     /// not in. Preview and drills only — set by `--dump-onboarding`, never in a
     /// normal launch.
@@ -398,9 +412,18 @@ struct Permissions {
             }
             return isGranted(kind)
         case .inputMonitoring:
-            // Prompts the first time and lists the app thereafter. Safe to call
-            // repeatedly — it returns the current state once already decided.
-            return CGRequestListenEventAccess()
+            // Prompts the first time and lists the app thereafter. Safe to
+            // call repeatedly: it returns the current state once already
+            // decided.
+            let granted = CGRequestListenEventAccess()
+            // See `startListening`'s own doc comment: that call alone was
+            // not enough to register the app on this machine. The real
+            // tap-creation attempt is safe to run here too, since it is
+            // still reached only from a user's own Grant click, and
+            // `HotkeyMonitor.start()` already no-ops harmlessly when the
+            // tap cannot be created.
+            if !granted { startListening?() }
+            return granted
         case .accessibility:
             FocusedInput.requestTrustOnce()
             // Start the clock. If the grant does not reach this process before
