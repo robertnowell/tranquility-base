@@ -515,6 +515,25 @@ final class OwnershipUnknownTests: XCTestCase {
         XCTAssertNotEqual(TmuxOwnership.Ownership.pane(addr), .notInTmux)
     }
 
+    /// An absent server is a FACT, not a failed question. Conflating them
+    /// poisoned every lookup on this machine, which has no default tmux
+    /// server: our own server answered fine, the user's did not exist, and the
+    /// combined answer collapsed to `.unknown` — so GO TO AGENT ended live
+    /// sessions and then said the pane it had just made was "not on any live
+    /// tmux server".
+    func testAnAbsentServerIsAnAnswerNotAFailure() {
+        XCTAssertTrue(TmuxOwnership.serverIsAbsent(
+            "error connecting to /private/tmp/tmux-501/default (No such file or directory)"))
+        XCTAssertTrue(TmuxOwnership.serverIsAbsent("no server running on /tmp/tmux-501/default"))
+    }
+
+    /// A real failure still counts as one — this must not become a blanket
+    /// "any error means empty", which would put the destructive read back.
+    func testARealFailureIsStillUnknown() {
+        XCTAssertFalse(TmuxOwnership.serverIsAbsent("server exited unexpectedly"))
+        XCTAssertFalse(TmuxOwnership.serverIsAbsent(""))
+    }
+
     /// A listing that came back and simply doesn't hold the tty is a real
     /// negative — that one is safe to act on.
     func testAnAnsweredListingWithoutTheTtyIsARealNegative() {
