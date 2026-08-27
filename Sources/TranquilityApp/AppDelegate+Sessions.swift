@@ -1176,7 +1176,7 @@ extension AppDelegate {
             let launch = HarnessLaunch(harness: fresh.harness)
             switch SessionLauncher.resume(sessionId: sessionId, directory: command.cwd,
                                           launch: launch) {
-            case .success:
+            case .success(let revivedTty):
                 // The receipt waits for the session to actually come back.
                 // It used to fire here, the instant `resume` returned — which
                 // means only that a command was issued and its pane did not
@@ -1220,8 +1220,29 @@ extension AppDelegate {
                         // hand over the line that does not need us — the same
                         // rescue the failure branch offers, for the same
                         // reason: this is the state where the app cannot help.
+                        // What the pane SAYS, not merely that it said nothing
+                        // to us. The 27 Aug lesson applied to the second path
+                        // that has it: a revive stuck on an update prompt, an
+                        // auth screen, or a resume-depth question is a pane
+                        // with the answer on it, and this branch used to log
+                        // only the absence — the shape that cost an afternoon
+                        // on the launch path.
+                        let revivedState = SessionLauncher.paneState(
+                            tty: revivedTty, adapter: launch.adapter)
+                        if case .stopped(let screen) = revivedState {
+                            Permissions.log("revive: \(sessionId.prefix(8)) launched but never "
+                                + "registered — its screen says: \(screen). Opening a window.")
+                            SessionLauncher.showPane(
+                                tty: revivedTty,
+                                why: "the revive stopped on something only you can answer")
+                            self.hud.showResult(
+                                "\(name) is waiting for you — I opened its terminal. It says: "
+                                + screen)
+                            return
+                        }
                         Permissions.log("revive: \(sessionId.prefix(8)) launched but never "
-                            + "registered — reporting it rather than claiming success")
+                            + "registered (its banner is up) — reporting it rather than "
+                            + "claiming success")
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(
                             SessionLauncher.manualRevival(
@@ -1443,9 +1464,44 @@ extension AppDelegate {
                 }
                 let started = ProcessProbe.pid(
                     onTty: tty, containing: command.split(separator: " ").first.map(String.init) ?? command)
+                // Alive is not started, and this branch treated them as one
+                // fact. Robert, 27 Aug, on the third broken launch in a row:
+                // "starting new agents still broken."
+                //
+                // Codex 0.149.0 had begun opening every fresh pane with
+                // "✨ Update available! … Press enter to continue" and stopping
+                // there. The `codex` process on such a pane is perfectly alive,
+                // so this probe said yes and the panel announced a launch over
+                // a menu — twenty-one of twenty-two panes on the machine, under
+                // a card reading "It'll appear on the grid once it starts
+                // working" over an agent that never would.
+                //
+                // So ask the pane, not the process table. `.started` means the
+                // harness's own banner is up; anything else means it stopped on
+                // something, and a launch that has stopped is not a background
+                // act any more.
+                let state = started == nil
+                    ? SessionLauncher.PaneState.unknown
+                    : SessionLauncher.paneState(tty: tty, adapter: adapter)
+                if case .stopped(let screen) = state {
+                    Permissions.log("launcher: \(tty) is alive but never started — its screen "
+                        + "says: \(screen). Opening a window on it.")
+                    let opened = SessionLauncher.showPane(
+                        tty: tty, why: "the launch stopped on something only you can answer")
+                    // The same amber card the watcher paints at ~8s, on the
+                    // slower path that catches what the watcher's stability
+                    // test cannot: a screen that never stops changing (a
+                    // spinner, a countdown) and still never starts. One face
+                    // for one situation, whichever clock finds it.
+                    await MainActor.run { [weak self] in
+                        self?.hud.showLaunchQuestion(screen, windowOpened: opened)
+                    }
+                    return
+                }
                 if started != nil {
                     Permissions.log("launcher: nothing registered in \(dir) after 30s, but the "
-                        + "process is alive on \(tty) — reporting it as started, not failed")
+                        + "process is alive on \(tty) and its banner is up — reporting it "
+                        + "as started, not failed")
                     await MainActor.run { [weak self] in
                         // Settle FIRST. Showing a result over a card that is
                         // still waiting leaves the spinner up underneath it,

@@ -129,8 +129,11 @@ extension StatusHUD {
         // And a question with no launch card waiting is refused rather than
         // painted over whatever the panel has moved on to.
         showIdle(rows: [])
-        showLaunchQuestion("Should never paint.")
-        let refusedWithNoCard = !face.body.contains("Should never paint.")
+        showLaunchQuestion("Should never paint on a stranger's card.")
+        let refusedWithNoCard = !face.body.contains("Should never paint")
+        // Refused is not the same as swallowed: an idle panel still gets the
+        // amber strip, which belongs to nobody in particular.
+        let saidItAnyway = notice != nil
         SelfTest.report("launchQuestion", [
             ("spinnerBeforeTheQuestion", spinnerFirst),
             ("spinnerDownAfterIt", spinnerDown),
@@ -139,6 +142,7 @@ extension StatusHUD {
             ("onTheNeedsYouChannel", onTheNeedsYouChannel),
             ("stillAdoptsItsAgent", stillAdoptsItsAgent),
             ("refusedWhenNoCardIsWaiting", refusedWithNoCard),
+            ("stillSaysItOnTheStrip", saidItAnyway),
         ])
     }
 
