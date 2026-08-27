@@ -374,7 +374,28 @@ extension AppDelegate {
     }
 
     func refresh() {
-        if !hotkey.isRunning { _ = hotkey.start() }
+        // Gated on the permission actually being active, not attempted
+        // unconditionally: `hotkey.start()` calls `CGEvent.tapCreate`,
+        // which pops its OWN Input Monitoring consent dialog as a side
+        // effect of merely creating the tap. That is a SEPARATE system
+        // prompt from the checklist's own Grant button
+        // (`Permissions.request(.inputMonitoring)`, `CGRequestListenEventAccess()`),
+        // and `refresh()` runs at launch before the user has clicked
+        // anything, so it fired regardless of whether they had asked for
+        // it. Reported directly, 26 Aug, the same complaint as the
+        // microphone instance of this bug ("it shouldn't ask for any
+        // permissions before the user clicks grant"), caught live via the
+        // isolated test build's own screenshot: a "Keystroke Receiving"
+        // dialog sitting over a checklist that had just, correctly,
+        // stopped the microphone from doing the same thing.
+        //
+        // Input Monitoring also needs a restart to take effect once
+        // granted (`Permissions.State.pendingRestart`, this app's own
+        // model), so a process that reads `.active` here is genuinely
+        // fresh and trusted, and `tapCreate` succeeds silently.
+        if !hotkey.isRunning, Permissions.state(.inputMonitoring) == .active {
+            _ = hotkey.start()
+        }
         rebuildMenu()
         updateTitle()
     }
