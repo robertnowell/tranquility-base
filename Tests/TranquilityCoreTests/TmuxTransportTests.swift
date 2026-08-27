@@ -474,3 +474,26 @@ final class MultiRowComposerTests: XCTestCase {
             .empty)
     }
 }
+
+/// A revoked permission is a setting, not a fault.
+final class AutomationDenialTests: XCTestCase {
+
+    /// The literal string macOS produced on 26 Aug, when GO TO AGENT stopped
+    /// working entirely because Automation had been revoked during a
+    /// first-run test and macOS never re-prompts once denied.
+    func testTheAppleEventsDenialBecomesAnInstruction() {
+        let raw = "41:537: execution error: Not authorized to send Apple events to Terminal. (-1743)"
+        let said = TerminalTabFocus.plainWords(for: raw)
+        XCTAssertFalse(said.contains("-1743"), "an error number is not an action: \(said)")
+        XCTAssertTrue(said.contains("Automation"),
+                      "the reader needs the name of the setting to go and change: \(said)")
+    }
+
+    /// Everything else passes through untouched — this is a translation for
+    /// one known condition, not a blanket rewrite of failures we don't
+    /// understand, which would hide the next new one.
+    func testEveryOtherFailureIsLeftAlone() {
+        XCTAssertEqual(TerminalTabFocus.plainWords(for: "some other AppleScript trouble"),
+                       "some other AppleScript trouble")
+    }
+}
