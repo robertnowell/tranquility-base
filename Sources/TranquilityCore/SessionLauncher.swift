@@ -982,7 +982,16 @@ public enum SessionLauncher {
                     socket: pane.socketName, timeout: 3) else { return nil }
                 return text
             },
-            press: {
+            press: { steps in
+                // Walk the selection onto the accepting row before confirming.
+                // One send-keys per press rather than one call with N keys:
+                // tmux delivers them as a burst either way, but a TUI that
+                // drops a repeat under load loses one row of travel here and
+                // the whole keystroke sequence there.
+                for _ in 0..<abs(steps) {
+                    Tmux.run(["send-keys", "-t", pane.paneId, steps > 0 ? "Down" : "Up"],
+                             socket: pane.socketName)
+                }
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
             },
             trace: Self.trace, label: pane.sessionName,

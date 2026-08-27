@@ -158,6 +158,42 @@ public struct TrustPromptSpec: Sendable {
     /// since the last review, not the common first-run case.
     public var neverAutoAcceptNeedles: [String]
 
+    /// The menu row that GRANTS trust, and the glyph marking whichever row is
+    /// currently selected.
+    ///
+    /// Empty needles mean "the accepting row is the selected one" — press
+    /// Return where it stands, which is what this watcher did unconditionally
+    /// until 27 Aug, and is still right for a harness whose prompt defaults to
+    /// yes (Codex).
+    ///
+    /// It is NOT right for Claude Code, and the cost of assuming it was is the
+    /// whole reason this field exists. Measured live, 27 Aug, in a pane TB had
+    /// just launched:
+    ///
+    ///     ❯ No, exit
+    ///       Yes, I trust this folder
+    ///     Enter to confirm · Esc to cancel
+    ///
+    /// The cursor starts on **No, exit**. The v2.1 screen this watcher was
+    /// written against put the accepting option first and numbered it
+    /// ("❯ 1. Yes, I trust this folder"), so a bare Return accepted; the
+    /// current screen drops the numbering and leads with the refusal, so the
+    /// exact same keystroke DECLINES and Claude Code exits 1. The launch then
+    /// dies in the most confusing way available: `new-session` printed a tty,
+    /// the pane survived its one-second survival check, the watcher logged
+    /// "accepted the trust prompt", and thirty seconds later nothing had
+    /// registered and the panel said "Couldn't confirm the new agent started."
+    /// Three launches in a row, 22:57 and 23:27, and the pane was already gone
+    /// by the time anyone could attach to it and look.
+    ///
+    /// So the row is found by name and navigated to, rather than assumed to be
+    /// under the cursor. Position is the thing that rotted; the words on the
+    /// two rows are what actually distinguish them.
+    public var acceptOptionNeedles: [String]
+    /// The glyph tmux shows against the selected row. Substring-matched like
+    /// every other needle here.
+    public var selectionGlyph: String
+
     /// How many consecutive IDENTICAL, unrecognized screens mean the pane has
     /// STOPPED on something rather than still booting.
     ///
@@ -187,11 +223,15 @@ public struct TrustPromptSpec: Sendable {
 
     public init(promptNeedles: [String], startedWithNoPromptNeedle: String?,
                settledBannerNeedle: String, settledThreshold: Int = 2,
-               neverAutoAcceptNeedles: [String] = [], stuckThreshold: Int = 3) {
+               neverAutoAcceptNeedles: [String] = [], stuckThreshold: Int = 3,
+               acceptOptionNeedles: [String] = [],
+               selectionGlyph: String = "❯") {
         self.promptNeedles = promptNeedles
         self.startedWithNoPromptNeedle = startedWithNoPromptNeedle
         self.settledBannerNeedle = settledBannerNeedle
         self.settledThreshold = settledThreshold
+        self.acceptOptionNeedles = acceptOptionNeedles.filter { !$0.isEmpty }
+        self.selectionGlyph = selectionGlyph
         self.stuckThreshold = stuckThreshold
         // An empty string here would match every screen — `"".isEmpty ==
         // false` for `text.contains("")` — and permanently disable the
@@ -199,6 +239,33 @@ public struct TrustPromptSpec: Sendable {
         // today; making it impossible is cheaper than trusting that stays
         // true (gate finding, 21 Aug).
         self.neverAutoAcceptNeedles = neverAutoAcceptNeedles.filter { !$0.isEmpty }
+    }
+
+    /// How far the selection must move for Return to accept: positive means
+    /// that many `Down` presses, negative that many `Up`, zero means press
+    /// where it stands.
+    ///
+    /// `nil` means the screen could not be read as a menu — the accepting row
+    /// or the cursor is missing — and is deliberately NOT the same answer as
+    /// zero. Pressing blind is what shipped the bug this replaces, so an
+    /// unreadable menu is escalated to the human instead of guessed at; a
+    /// prompt left sitting with a window open on it is recoverable, a silently
+    /// declined launch is not.
+    ///
+    /// Rows are one line each on both harnesses' prompts, so line distance IS
+    /// selection distance. A prompt that ever wraps an option across two lines
+    /// would need this to count rows rather than lines — it would misnavigate
+    /// rather than fail loudly, which is the one weakness worth naming here.
+    public func stepsToAccept(on screen: String) -> Int? {
+        guard !acceptOptionNeedles.isEmpty else { return 0 }
+        let lines = screen.split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        guard let accept = lines.firstIndex(where: { line in
+            acceptOptionNeedles.contains(where: { line.contains($0) })
+        }) else { return nil }
+        guard let cursor = lines.firstIndex(where: { $0.contains(selectionGlyph) })
+        else { return nil }
+        return accept - cursor
     }
 }
 
@@ -233,7 +300,14 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
             // broken." `TrustPromptWatcher`'s `onNeedsHuman` now opens the
             // pane automatically whenever any needle in this list is hit —
             // this one included.
-            neverAutoAcceptNeedles: ["Resuming the full session will consume"])
+            neverAutoAcceptNeedles: ["Resuming the full session will consume"],
+            // Both wordings, for the same reason `promptNeedles` carries
+            // both: the numbered v2.1 row ("1. Yes, I trust this folder")
+            // and the current unnumbered one are the same substring from
+            // "Yes" onward, so one needle covers each. See
+            // `acceptOptionNeedles` for what pressing Return without this
+            // cost on 27 Aug.
+            acceptOptionNeedles: ["Yes, I trust this folder"])
     }
 
     public var capabilities: HarnessCapabilities {
@@ -387,7 +461,11 @@ public enum TrustPromptWatcher {
     public static func watch(
         spec: TrustPromptSpec,
         read: () -> String?,
-        press: () -> Void,
+        // Moves the selection `steps` rows (negative is up) and confirms.
+        // Took no argument until 27 Aug, when "confirm whatever is selected"
+        // turned out to mean "exit" on Claude Code's current trust screen —
+        // see `TrustPromptSpec.acceptOptionNeedles`.
+        press: (_ steps: Int) -> Void,
         trace: (@Sendable (String) -> Void)? = nil,
         label: String = "",
         pollInterval: TimeInterval = 2.0,
@@ -432,8 +510,25 @@ public enum TrustPromptWatcher {
                 return
             }
             if spec.promptNeedles.contains(where: { text.contains($0) }) {
-                press()
-                trace?("newSession: accepted the trust prompt in \(label) — user-commanded launch")
+                // Where the accepting row is RELATIVE TO THE CURSOR, read off
+                // the same capture that matched the needle — not a second read
+                // that could catch the menu mid-repaint with the selection
+                // somewhere else.
+                guard let steps = spec.stepsToAccept(on: text) else {
+                    trace?("newSession: \(label) is on a trust prompt whose accepting option "
+                        + "this build cannot find — refusing to press blind; opening a window")
+                    // The screen itself, same as every other needs-a-human
+                    // exit: the one thing that resolves an unrecognised menu
+                    // is seeing it, and this branch exists precisely because
+                    // nothing here knows what the options say.
+                    onNeedsHuman(Self.questionOnScreen(text)
+                        ?? "It is asking whether you trust this folder.")
+                    return
+                }
+                press(steps)
+                trace?("newSession: accepted the trust prompt in \(label) "
+                    + "(\(steps) row\(abs(steps) == 1 ? "" : "s") to the accepting option) "
+                    + "— user-commanded launch")
                 // A second, DIFFERENT dialog (Claude Code's resume-depth
                 // prompt) can render a beat after this one is answered, not
                 // simultaneously with it — found live, 23 Aug: this loop
