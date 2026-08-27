@@ -410,11 +410,22 @@ public enum TrustPromptWatcher {
         onNeedsHuman: (String) -> Void = { _ in }
     ) {
         var settled = 0
+        // The screen this loop last looked at, kept for two things it could
+        // not do without it. The give-up exit can SAY what it saw: every
+        // version before 27 Aug read the pane fifteen times, matched each read
+        // against a fixed list of needles, threw the text away on every miss,
+        // and then logged the absence. And the loop can tell a pane that is
+        // STILL BOOTING from one that has STOPPED, which is the only evidence
+        // available about a screen no needle knows — see `stuckThreshold`.
         var lastScreen: String?
         var unchanged = 0
         for _ in 0..<maxPolls {
             usleep(UInt32(pollInterval * 1_000_000))
             guard let text = read() else { continue }
+            // Counted BEFORE the needles, so the count is about the pane
+            // rather than about which branch happened to look at it.
+            if text == lastScreen { unchanged += 1 } else { unchanged = 1 }
+            lastScreen = text
             if spec.neverAutoAcceptNeedles.contains(where: { text.contains($0) }) {
                 trace?("newSession: \(label) needs a human choice, never auto-accepted; leaving it be")
                 onNeedsHuman(Self.questionOnScreen(text) ?? "It is asking you something.")
@@ -459,7 +470,6 @@ public enum TrustPromptWatcher {
             // to the last one instead of to a needle — see
             // `TrustPromptSpec.stuckThreshold` for the 27 Aug launch that
             // this is the whole answer to.
-            if text == lastScreen { unchanged += 1 } else { unchanged = 1; lastScreen = text }
             if unchanged >= spec.stuckThreshold, let question = Self.questionOnScreen(text) {
                 trace?("newSession: \(label) has stopped on a screen this launcher does not "
                     + "know and cannot answer: \(question)")
@@ -467,8 +477,55 @@ public enum TrustPromptWatcher {
                 return
             }
         }
+        // Giving up is a THIRD kind of needs-a-human, and until 27 Aug it was
+        // the only one with no promise attached to it at all.
+        //
+        // The 23 Aug ruling separated two promises — "never press it" and
+        // "never let anyone SEE it" — and wired `onNeedsHuman` to the first
+        // list of needles that needed both. This exit is the case the ruling
+        // did not reach: a screen we do not RECOGNISE. It got neither promise,
+        // because a needle list can only speak about prompts somebody already
+        // knew to name.
+        //
+        // Measured, 27 Aug: Codex 0.149.0 began greeting every fresh pane with
+        // "✨ Update available! 0.149.0 -> 0.150.0 … Press enter to continue"
+        // and stopped there. This loop read that screen fifteen times over
+        // thirty seconds, matched it against every needle, missed on all of
+        // them, discarded it, and logged "no trust prompt seen". Twenty-one of
+        // twenty-two Codex panes on the machine were sitting on it. Nothing in
+        // the app had ever said the words "Update available" — not because the
+        // app could not see them, but because it only ever wrote down what it
+        // was LOOKING for.
+        //
+        // So: a watcher that gives up logs what it was looking AT. A timeout
+        // line naming only its expectation is unfalsifiable — identical
+        // whether the pane was blank, crashed, or showing the answer.
         let waited = Int(pollInterval * Double(maxPolls))
-        trace?("newSession: no trust prompt seen in \(label) within \(waited)s; leaving it be")
+        let screen = lastScreen.map { Self.meaningfulTail($0) } ?? "(nothing readable)"
+        trace?("newSession: \(label) never looked started within \(waited)s. Its screen says: "
+            + screen)
+        // And it opens a window, because a pane stopped on something we cannot
+        // name is exactly the pane a human should be looking at. `onNeedsHuman`
+        // already does this and has since 23 Aug; it was wired to one needle
+        // list, and the failures that matter are the ones nobody listed.
+        onNeedsHuman(Self.questionOnScreen(lastScreen ?? "") ?? screen)
+    }
+
+    /// The bottom of a captured screen with the blank lines squeezed out —
+    /// what a person would read if they glanced at the pane.
+    ///
+    /// Bottom, not top: a TUI's answer is on its last lines (the prompt, the
+    /// menu, the error), while the top is the banner that is identical on
+    /// every launch. Bounded, because this goes in a log line, and a log line
+    /// nobody can scan is the same problem one layer along.
+    static func meaningfulTail(_ screen: String, lines: Int = 6, width: Int = 400) -> String {
+        let kept = screen
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .suffix(lines)
+            .joined(separator: " ⏎ ")
+        return kept.count > width ? String(kept.prefix(width)) + "…" : kept
     }
 
     /// The one line of a stopped screen worth repeating to the user.
