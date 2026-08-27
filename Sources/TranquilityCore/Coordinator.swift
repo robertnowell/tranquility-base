@@ -35,7 +35,13 @@ public struct Coordinator: Sendable {
     /// refused to end, or the tmux resume itself failed) or wasn't
     /// attempted; the caller falls back to `transport` exactly as it did
     /// before this existed.
-    public let resumeTwin: @Sendable (_ sessionId: String, _ directory: String) -> TmuxPaneAddress?
+    /// Carries the HARNESS, because a transfer ends the session before it
+    /// resumes it and the wrong harness ends an agent it cannot bring back.
+    /// It used to take only an id and a directory, so the resume fell back to
+    /// the Settings default launcher — which on 26 Aug was Codex, and killed
+    /// a Claude Code session trying to reopen it as `codex --resume`.
+    public let resumeTwin: @Sendable (_ sessionId: String, _ directory: String,
+                                      _ harness: String) -> TmuxPaneAddress?
 
     public let enrolment: EnrolmentRegistry
     public let agents: ClaudeAgentsReading
@@ -91,8 +97,9 @@ public struct Coordinator: Sendable {
         attachments: AttachmentStore = AttachmentStore(),
         replyWindow: TimeInterval = 15 * 60,
         readinessGrace: TimeInterval = 12,
-        resumeTwin: @escaping @Sendable (_ sessionId: String, _ directory: String) -> TmuxPaneAddress?
-            = { sessionId, directory in
+        resumeTwin: @escaping @Sendable (_ sessionId: String, _ directory: String,
+                                         _ harness: String) -> TmuxPaneAddress?
+            = { sessionId, directory, harness in
                 // Ownership TRANSFER, not a parallel twin (reversed 23 Aug,
                 // on the operator's direct correction) — the shared
                 // mechanism, `SessionLauncher.OwnershipTransfer.toTmux`, also
@@ -102,7 +109,9 @@ public struct Coordinator: Sendable {
                 // that function's own doc comment for the "dual-live is
                 // safe" premise this reverses and why.
                 SessionLauncher.OwnershipTransfer.toTmux(
-                    sessionId: sessionId, directory: directory)?.pane
+                    sessionId: sessionId,
+                    launch: HarnessLaunch(harness: harness),
+                    directory: directory)?.pane
             }
     ) {
         self.store = store

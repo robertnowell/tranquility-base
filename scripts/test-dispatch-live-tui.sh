@@ -28,6 +28,17 @@ PASS=0; FAIL=0
 cleanup() {
   "$TMUX" -L "$SOCKET" kill-session -t "$SESSION" 2>/dev/null
   rm -rf "$DIR"
+  # And the transcript the session wrote. Killing the pane and deleting the
+  # cwd does NOT remove it: Claude Code's record lives under ~/.claude/projects
+  # keyed by the directory this drill invented, survives the directory, and is
+  # what Past Agents lists. Twenty-five runs in one afternoon put twenty-odd
+  # rows named MARKER-ONE at the top of a real user's history. A drill that
+  # leaves litter in the product is not a drill, it is a second bug.
+  if [ -n "${SID:-}" ]; then
+    for t in "$HOME/.claude/projects/"*"/$SID.jsonl"; do
+      [ -f "$t" ] && rm -f "$t" && rmdir "$(dirname "$t")" 2>/dev/null
+    done
+  fi
 }
 trap cleanup EXIT
 

@@ -16,6 +16,67 @@ import Foundation
 /// path. `resume` (reviving a dead session) is routed through `resumeTmux`
 /// (22 Aug) — see its own doc comment for why the Terminal.app/Automation
 /// path it used until then is gone, not merely bypassed.
+/// A harness and the command that starts it, resolved together.
+///
+/// These were two independently-defaulted parameters — `command:` defaulting
+/// to the app-wide DEFAULT LAUNCHER setting, `adapter:` hardcoded to
+/// `ClaudeCodeAdapter()` — on `launchTmux`, `resumeTmux`, `resume` and
+/// `manualRevival`. Any caller that passed neither got the default harness's
+/// BINARY with Claude Code's FLAGS, and the two only agreed while the default
+/// launcher happened to be Claude Code.
+///
+/// It stopped agreeing the day the setting was changed to Codex. GO TO AGENT
+/// ended a live Claude Code session and tried to resume it as
+/// `codex --dangerously-bypass-approvals-and-sandbox --resume <id>` — Codex's
+/// binary, Claude Code's flag spelling, rejected outright — so the pane died
+/// in a second, and the rescue command copied to the clipboard was the same
+/// impossible string. One session ended, nothing restarted, and the offered
+/// remedy could not run.
+///
+/// Fixing the two call sites would have left the footgun loaded for the next
+/// one; there were seven more signatures carrying the same pair. So the pair
+/// is gone: one harness id in, both values out, and disagreement is no longer
+/// something a caller can express.
+public struct HarnessLaunch: Sendable {
+    public let adapter: any HarnessAdapter
+    public let command: String
+
+    /// Both halves from one id — the only way to build one, unless a caller
+    /// genuinely needs a command the settings do not hold (see below).
+    public init(harness: String) {
+        self.adapter = KnownHarnesses.adapter(for: harness)
+        self.command = AgentDefaults.load(for: harness)
+    }
+
+    /// An explicit pair, for the one caller that runs a bare binary rather
+    /// than the configured launch command (`attemptCodexResume`, which needs
+    /// `codex` without the settings' flags). Still built from an adapter, so
+    /// the flags and the binary still come from the same harness.
+    public init(adapter: any HarnessAdapter, command: String) {
+        self.adapter = adapter
+        self.command = command
+    }
+
+    /// The Settings default, for a NEW agent, which by definition has no
+    /// session of its own to take a harness from.
+    public static var settingsDefault: HarnessLaunch {
+        HarnessLaunch(harness: AgentDefaults.defaultHarness)
+    }
+
+    /// The harness an EXISTING session belongs to, from disk.
+    ///
+    /// Codex records every session as a rollout file named after its id, so
+    /// the presence of one is positive evidence and its absence is positive
+    /// evidence the other way — the same disk fact `revive` already leans on
+    /// when `SessionDiscovery` comes up empty. Deliberately not the Settings
+    /// default: what a NEW agent would be has nothing to do with what THIS
+    /// session is, and confusing the two is what ended a live session.
+    public static func forExistingSession(_ sessionId: String) -> HarnessLaunch {
+        let isCodex = CodexRollout.rolloutPath(forSessionId: sessionId) != nil
+        return HarnessLaunch(harness: isCodex ? CodexAdapter().id : ClaudeCodeAdapter().id)
+    }
+}
+
 public enum SessionLauncher {
 
     /// Same shape as Coordinator.trace / QueueStore.trace: Core stays silent
@@ -67,9 +128,8 @@ public enum SessionLauncher {
     @discardableResult
     public static func launch(
         directory: String = defaultDirectory,
-        command: String = defaultCommand,
-        acceptTrustPrompt: Bool = true,
-        adapter: any HarnessAdapter = ClaudeCodeAdapter()
+        launch: HarnessLaunch = .settingsDefault,
+        acceptTrustPrompt: Bool = true
     ) -> Result<String, ScriptError> {
         // Ruled 21 Aug: no flags, no parallel launch paths. A launch is a
         // detached tmux session on the app's own server, full stop — the
@@ -79,8 +139,8 @@ public enum SessionLauncher {
         // than left as an unreachable second path. `resume` (below) still
         // opens a Terminal.app window for a REVIVED session — a separate,
         // not-yet-decided piece of this same cleanup; see its doc comment.
-        launchTmux(directory: directory, command: command,
-                  acceptTrustPrompt: acceptTrustPrompt, adapter: adapter)
+        launchTmux(directory: directory, launch: launch,
+                   acceptTrustPrompt: acceptTrustPrompt)
     }
 
     /// The tmux launch path: a detached session on the app's own server, no
@@ -100,10 +160,11 @@ public enum SessionLauncher {
     @discardableResult
     static func launchTmux(
         directory: String,
-        command: String,
-        acceptTrustPrompt: Bool,
-        adapter: any HarnessAdapter = ClaudeCodeAdapter()
+        launch: HarnessLaunch,
+        acceptTrustPrompt: Bool
     ) -> Result<String, ScriptError> {
+        let command = launch.command
+        let adapter = launch.adapter
         let name = "tb-" + String(UUID().uuidString.prefix(8)).lowercased()
         let path = adapter.pathCandidates.joined(separator: ":")
 
@@ -229,10 +290,11 @@ public enum SessionLauncher {
     public static func resumeTmux(
         sessionId: String,
         directory: String,
-        command: String = defaultCommand,
-        acceptTrustPrompt: Bool = true,
-        adapter: any HarnessAdapter = ClaudeCodeAdapter()
+        launch: HarnessLaunch,
+        acceptTrustPrompt: Bool = true
     ) -> Result<String, ScriptError> {
+        let adapter = launch.adapter
+        let command = launch.command
         let resumeArgs = adapter.resumeArguments(sessionId: sessionId)
         guard !resumeArgs.isEmpty else {
             Self.trace?("resumeTmux: \(adapter.id) adapter returned no resume arguments "
@@ -248,8 +310,9 @@ public enum SessionLauncher {
         // in the same raw `/bin/zsh -c "..."` string `directory` does.
         let quotedArgs = resumeArgs.map(Self.shellQuoted)
         let fullCommand = ([command] + quotedArgs).joined(separator: " ")
-        return launchTmux(directory: directory, command: fullCommand,
-                          acceptTrustPrompt: acceptTrustPrompt, adapter: adapter)
+        return launchTmux(directory: directory,
+                          launch: HarnessLaunch(adapter: adapter, command: fullCommand),
+                          acceptTrustPrompt: acceptTrustPrompt)
     }
 
     /// Single-quote wrapping, the shell's own escape for "trust nothing
@@ -272,9 +335,10 @@ public enum SessionLauncher {
     public static func manualRevival(
         sessionId: String,
         directory: String,
-        command: String = defaultCommand,
-        adapter: any HarnessAdapter = ClaudeCodeAdapter()
+        launch: HarnessLaunch
     ) -> String {
+        let adapter = launch.adapter
+        let command = launch.command
         // Quote only what needs it. A human has to read this line and decide
         // whether to trust it before pasting it, and a line where every token
         // wears quotes — `codex 'resume' 'abc'` — reads like something is
@@ -443,8 +507,16 @@ public enum SessionLauncher {
         }
 
         /// The transfer, with its outcome stated rather than collapsed to nil.
+        /// `launch` is REQUIRED, and has no default on purpose. A transfer
+        /// ends a live session before it resumes it, so getting the harness
+        /// wrong here does not fail harmlessly — it kills an agent and cannot
+        /// bring it back. A caller must say which harness it is acting on;
+        /// there is no sensible guess, and the guess this used to make (the
+        /// Settings default) is what ended a Claude Code session and tried to
+        /// resume it with Codex on 26 Aug.
         public static func attempt(
             sessionId: String,
+            launch: HarnessLaunch,
             directory: String? = nil,
             agents: any ClaudeAgentsReading = ClaudeAgentsCLI()
         ) -> Outcome {
@@ -482,9 +554,10 @@ public enum SessionLauncher {
                 return .endedButNotRestarted(
                     why, worthRetrying: worthRetrying,
                     manualRevival: SessionLauncher.manualRevival(
-                        sessionId: sessionId, directory: resolvedDirectory))
+                        sessionId: sessionId, directory: resolvedDirectory, launch: launch))
             }
-            let resumed = resumeTmux(sessionId: sessionId, directory: resolvedDirectory)
+            let resumed = resumeTmux(sessionId: sessionId, directory: resolvedDirectory,
+                                     launch: launch)
             guard case .success(let tty) = resumed else {
                 guard case .failure(let error) = resumed else {
                     return failed("could not start a tmux pane to resume into")
@@ -505,10 +578,12 @@ public enum SessionLauncher {
         /// no-pane refusal).
         public static func toTmux(
             sessionId: String,
+            launch: HarnessLaunch,
             directory: String? = nil,
             agents: any ClaudeAgentsReading = ClaudeAgentsCLI()
         ) -> (pane: TmuxPaneAddress, pid: Int)? {
-            attempt(sessionId: sessionId, directory: directory, agents: agents).moved
+            attempt(sessionId: sessionId, launch: launch,
+                    directory: directory, agents: agents).moved
         }
     }
 
@@ -608,8 +683,9 @@ public enum SessionLauncher {
         settleMaxPolls: Int = 20,
         ownership: any SessionOwnershipStore = FileSessionOwnershipStore.shared
     ) -> Result<CodexResumeOutcome, ScriptError> {
-        switch resumeTmux(sessionId: sessionId, directory: directory, command: "codex",
-                          acceptTrustPrompt: false, adapter: adapter) {
+        switch resumeTmux(sessionId: sessionId, directory: directory,
+                          launch: HarnessLaunch(adapter: adapter, command: "codex"),
+                          acceptTrustPrompt: false) {
         case .failure(let error):
             return .failure(error)
         case .success(let tty):
@@ -735,12 +811,11 @@ public enum SessionLauncher {
     public static func resume(
         sessionId: String,
         directory: String,
-        command: String = AgentDefaults.load(),
-        acceptTrustPrompt: Bool = true,
-        adapter: any HarnessAdapter = ClaudeCodeAdapter()
+        launch: HarnessLaunch,
+        acceptTrustPrompt: Bool = true
     ) -> Result<Void, ScriptError> {
-        switch resumeTmux(sessionId: sessionId, directory: directory, command: command,
-                          acceptTrustPrompt: acceptTrustPrompt, adapter: adapter) {
+        switch resumeTmux(sessionId: sessionId, directory: directory, launch: launch,
+                          acceptTrustPrompt: acceptTrustPrompt) {
         case .success:
             return .success(())
         case .failure(let error):

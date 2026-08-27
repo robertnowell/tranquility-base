@@ -125,6 +125,11 @@ public enum SessionDiscovery {
         /// on this machine as of 11 Aug; counted anyway, because a silent zero
         /// and a silent thousand look identical.
         public var unclassifiable = 0
+        /// Ran in a directory the OS reaps — a drill fixture, not an agent.
+        /// Counted rather than silently dropped, for the same reason every
+        /// other exclusion here is: a silent zero and a silent thousand look
+        /// identical.
+        public var temporary = 0
         /// Dropped by `limit` after ranking, so the caller can say "and more".
         public var beyondLimit = 0
         /// The liveness probe could not answer, so every row is `unknown`.
@@ -302,14 +307,18 @@ public enum SessionDiscovery {
         live: ClaudeAgentsReading = ClaudeAgentsCLI(),
         projects: URL = TranscriptArchive.projectsDirectory,
         titles: TranscriptTitles = TranscriptTitles.shared,
-        ttl: TimeInterval = scanTTL
+        ttl: TimeInterval = scanTTL,
+        /// See `scan`. A fixture-based caller passes `[]` so its own temp
+        /// directory is not mistaken for a drill's.
+        temporaryRoots: [String] = defaultTemporaryRoots
     ) -> Result {
         let key = ScanCache.key(window, limit, projects)
         let held = scans.get(key: key, now: now, ttl: ttl)
         let result: Result = {
             if let held, !held.stale { return held.result }
             let scanned = scan(window: window, limit: limit, now: now,
-                               projects: projects, titles: titles)
+                               projects: projects, titles: titles,
+                               temporaryRoots: temporaryRoots)
             scans.put(key: key, now: now, result: scanned)
             return scanned
         }()
@@ -350,7 +359,12 @@ public enum SessionDiscovery {
         limit: Int,
         now: Date,
         projects: URL,
-        titles: TranscriptTitles
+        titles: TranscriptTitles,
+        /// Injectable so a test can build fixtures where tests build things —
+        /// in a temp directory — without being filtered out by the very rule
+        /// it is checking. Empty means "exclude nothing", which is what every
+        /// existing fixture-based test wants and is why they pass it.
+        temporaryRoots: [String] = defaultTemporaryRoots
     ) -> Result {
         var result = Result()
         let fm = FileManager.default
@@ -390,10 +404,28 @@ public enum SessionDiscovery {
             let entry = entrypoint(head: head)
             if entry == nil { result.unclassifiable += 1 }
             guard !isHeadless(entry) else { result.headless += 1; continue }
-
+            // A session that ran in a directory the OS reaps is a fixture,
+            // not an agent. `isTemporary` already governs whether one may be
+            // REVIVED — "nothing real runs there, so nothing real is lost by
+            // refusing to reopen there" — but nothing stopped it being
+            // LISTED, and the list is where it does the damage.
+            //
+            // Measured 26 Aug: the live-TUI drill launches a real interactive
+            // `claude` in /private/tmp and was run some twenty-five times in
+            // an afternoon. Its transcripts are indistinguishable from a real
+            // session's — same `entrypoint: cli` — so `isHeadless` waves them
+            // through, and Past Agents filled with rows named MARKER-ONE
+            // while the user's own work scrolled off the bottom. Nine of the
+            // ten visible rows were test fixtures.
+            //
             let sessionId = url.deletingPathExtension().lastPathComponent
             let tail = SessionActivity.tail(of: path) ?? []
             let cwd = firstCwd(head: head, tail: tail)
+            // Same predicate as the revive guard, one gate earlier.
+            guard !isTemporary(cwd ?? "", temporaryRoots) else {
+                result.temporary += 1
+                continue
+            }
             let moved = lastMoved(tail: tail) ?? modified
 
             // The window re-applied to the conversation's own clock: a touched

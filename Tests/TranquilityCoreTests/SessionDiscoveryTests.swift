@@ -271,7 +271,7 @@ final class SessionDiscoveryTests: XCTestCase {
         }
 
         let result = SessionDiscovery.discover(
-            live: StubAgents([]), projects: root, titles: TranscriptTitles())
+            live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
 
         // The entrypoint-less transcript is KEPT, and counted so the drop is
         // never silent either way.
@@ -294,7 +294,7 @@ final class SessionDiscoveryTests: XCTestCase {
         }
 
         let result = SessionDiscovery.discover(
-            live: StubAgents(nil), projects: root, titles: TranscriptTitles())
+            live: StubAgents(nil), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertTrue(result.livenessUnavailable)
         XCTAssertEqual(result.sessions.first?.liveness, .unknown)
@@ -314,7 +314,7 @@ final class SessionDiscoveryTests: XCTestCase {
         let live = LiveSession(pid: 42, sessionId: "awake", cwd: "/tmp",
                                status: nil, name: nil, waitingFor: nil)
         let result = SessionDiscovery.discover(
-            live: StubAgents([live]), projects: root, titles: TranscriptTitles())
+            live: StubAgents([live]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.sessions.first?.liveness, .live)
         XCTAssertFalse(result.sessions.first?.revivable ?? true)
@@ -331,7 +331,7 @@ final class SessionDiscoveryTests: XCTestCase {
         }
 
         let result = SessionDiscovery.discover(
-            live: StubAgents([]), projects: root, titles: TranscriptTitles())
+            live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
 
         let session = try XCTUnwrap(result.sessions.first)
         XCTAssertEqual(session.liveness, .gone)
@@ -352,7 +352,7 @@ final class SessionDiscoveryTests: XCTestCase {
 
         let result = SessionDiscovery.discover(
             window: 60, now: Date().addingTimeInterval(3600),
-            live: StubAgents([]), projects: root, titles: TranscriptTitles())
+            live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.scanned, 0)
         XCTAssertTrue(result.sessions.isEmpty)
@@ -369,7 +369,7 @@ final class SessionDiscoveryTests: XCTestCase {
         }
 
         let result = SessionDiscovery.discover(
-            limit: 2, live: StubAgents([]), projects: root, titles: TranscriptTitles())
+            limit: 2, live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.sessions.count, 2)
         XCTAssertEqual(result.beyondLimit, 2)
@@ -413,7 +413,7 @@ final class SessionDiscoveryTests: XCTestCase {
         try setMtime(root, "-tmp-a", "fresh", to: now.addingTimeInterval(-600))
 
         let result = SessionDiscovery.discover(
-            now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles())
+            now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.sessions.map(\.sessionId), ["fresh", "stale"])
         let stale = try XCTUnwrap(result.sessions.last)
@@ -435,7 +435,7 @@ final class SessionDiscoveryTests: XCTestCase {
         try setMtime(root, "-tmp-a", "ancient", to: now)
 
         let result = SessionDiscovery.discover(
-            now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles())
+            now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.scanned, 1)
         XCTAssertTrue(result.sessions.isEmpty)
@@ -455,7 +455,7 @@ final class SessionDiscoveryTests: XCTestCase {
         try setMtime(root, "-tmp-a", "undated", to: now.addingTimeInterval(-120))
 
         let result = SessionDiscovery.discover(
-            now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles())
+            now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
 
         let session = try XCTUnwrap(result.sessions.first)
         XCTAssertEqual(session.lastActivityAt.timeIntervalSince(now), -120, accuracy: 1)
@@ -480,7 +480,7 @@ final class SessionDiscoveryTests: XCTestCase {
         }
 
         let result = SessionDiscovery.discover(
-            limit: 2, now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles())
+            limit: 2, now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.sessions.map(\.sessionId), ["s0", "s1"])
         XCTAssertEqual(result.beyondLimit, 2)
@@ -500,7 +500,7 @@ final class SessionDiscoveryTests: XCTestCase {
         }
 
         let result = SessionDiscovery.discover(
-            live: StubAgents([]), projects: root, titles: TranscriptTitles())
+            live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.sessions.map(\.sessionId), ["parent"])
     }
@@ -524,7 +524,7 @@ final class SessionDiscoveryTests: XCTestCase {
         let live = LiveSession(pid: 7, sessionId: "s1", cwd: "/tmp",
                                status: nil, name: nil, waitingFor: nil)
         let first = SessionDiscovery.discover(
-            live: StubAgents([live]), projects: root, titles: titles)
+            live: StubAgents([live]), projects: root, titles: titles, temporaryRoots: [])
         XCTAssertEqual(first.sessions.first?.liveness, .live)
         XCTAssertFalse(first.sessions.first?.revivable ?? true)
 
@@ -535,7 +535,7 @@ final class SessionDiscoveryTests: XCTestCase {
             at: root.appendingPathComponent("-tmp-a/s1.jsonl"))
 
         let second = SessionDiscovery.discover(
-            live: StubAgents([]), projects: root, titles: titles)
+            live: StubAgents([]), projects: root, titles: titles, temporaryRoots: [])
         XCTAssertEqual(second.sessions.first?.sessionId, "s1", "the scan should be cached")
         XCTAssertEqual(second.sessions.first?.liveness, .gone, "liveness must not be cached")
         XCTAssertTrue(second.sessions.first?.revivable ?? false)
@@ -560,14 +560,14 @@ final class SessionDiscoveryTests: XCTestCase {
         let titles = TranscriptTitles()
 
         let first = SessionDiscovery.discover(
-            live: StubAgents([]), projects: root, titles: titles)
+            live: StubAgents([]), projects: root, titles: titles, temporaryRoots: [])
         XCTAssertTrue(first.sessions.first?.revivable ?? false)
         XCTAssertNotNil(first.sessions.first?.reviveCommand)
 
         try FileManager.default.removeItem(at: cwd)
 
         let second = SessionDiscovery.discover(
-            live: StubAgents([]), projects: root, titles: titles)
+            live: StubAgents([]), projects: root, titles: titles, temporaryRoots: [])
         XCTAssertEqual(second.sessions.first?.liveness, .gone)
         XCTAssertFalse(second.sessions.first?.revivable ?? true,
                        "a directory that vanished must withdraw the offer")
@@ -591,10 +591,10 @@ final class SessionDiscoveryTests: XCTestCase {
         }
         let titles = TranscriptTitles()
         XCTAssertEqual(SessionDiscovery.discover(
-            live: StubAgents([]), projects: a, titles: titles).sessions.map(\.sessionId),
+            live: StubAgents([]), projects: a, titles: titles, temporaryRoots: []).sessions.map(\.sessionId),
             ["from-a"])
         XCTAssertEqual(SessionDiscovery.discover(
-            live: StubAgents([]), projects: b, titles: titles).sessions.map(\.sessionId),
+            live: StubAgents([]), projects: b, titles: titles, temporaryRoots: []).sessions.map(\.sessionId),
             ["from-b"])
     }
 
@@ -617,7 +617,7 @@ final class SessionDiscoveryTests: XCTestCase {
             "a cold cache must not block the caller")
 
         // Prime it the way the background refresh would.
-        _ = SessionDiscovery.discover(live: StubAgents([]), projects: root, titles: titles)
+        _ = SessionDiscovery.discover(live: StubAgents([]), projects: root, titles: titles, temporaryRoots: [])
 
         let warm = SessionDiscovery.discoverIfScanned(
             live: StubAgents([]), projects: root, titles: titles)
@@ -646,7 +646,7 @@ final class SessionDiscoveryTests: XCTestCase {
         let t0 = Date(timeIntervalSince1970: 2_000_000)
 
         _ = SessionDiscovery.discover(
-            now: t0, live: StubAgents([]), projects: root, titles: titles)
+            now: t0, live: StubAgents([]), projects: root, titles: titles, temporaryRoots: [])
 
         // Well past the TTL, which is exactly when the band used to empty.
         let later = t0.addingTimeInterval(SessionDiscovery.scanTTL * 10)
