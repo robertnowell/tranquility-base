@@ -9,6 +9,9 @@ import Foundation
 /// busy Apple-events targets.
 public enum Tmux {
 
+    /// Wired by the host like every other Core trace.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
     /// The socket TB-launched agents live on. A dedicated server, never the
     /// user's interactive one: kill-server blast radius, environment
     /// propagation, and name collisions all stop at this boundary (claude-squad
@@ -192,16 +195,62 @@ public enum TmuxOwnership {
     /// The same question asked with a tty already in hand — the launcher's
     /// trust watcher holds one before any process fact exists.
     public static func pane(forTty tty: String) -> TmuxPaneAddress? {
+        if case .pane(let address) = ownership(forTty: tty) { return address }
+        return nil
+    }
+
+    /// What the live servers say about a tty — including "they did not say".
+    ///
+    /// `pane(forTty:)` collapses three different answers into nil: the pane
+    /// is there, the servers listed their panes and this tty is not among
+    /// them, and the servers could not be asked. The first two are facts. The
+    /// third is an absence of one, and it was being read as the second.
+    ///
+    /// That read has teeth. A session whose pane cannot be looked up is
+    /// classified "hand-started", and a hand-started session is ENDED and
+    /// resumed under tmux, on purpose, because a human and this app cannot
+    /// both hold a bare terminal process. So a `list-panes` that times out —
+    /// three seconds, on a machine with dozens of panes and a busy server —
+    /// does not degrade to a missed jump. It kills a live agent.
+    ///
+    /// That is the unexplained half of the 26 Aug incident: a session that
+    /// had been dispatching cleanly all day was SIGTERMed as if nobody had
+    /// started it under tmux. The log recorded the conclusion ("is
+    /// hand-started — transferring to tmux") and never the evidence, so
+    /// after the fact there was no way to tell a real absence from a failed
+    /// question. Both halves are fixed here: the answer distinguishes them,
+    /// and the trace says which one it was.
+    public enum Ownership: Equatable {
+        /// A live server has this tty, at this address.
+        case pane(TmuxPaneAddress)
+        /// Every server answered, and none of them has it. A fact.
+        case notInTmux
+        /// At least one server could not be asked. NOT a fact, and never
+        /// grounds for anything destructive.
+        case unknown
+    }
+
+    public static func ownership(forTty tty: String) -> Ownership {
+        var everyServerAnswered = true
         for socket in sockets {
             guard case .success(let out) = Tmux.run(
                 ["list-panes", "-a", "-F", "#{pane_tty}\t#{pane_id}\t#{session_name}"],
                 socket: socket, timeout: 3)
-            else { continue }
+            else {
+                everyServerAnswered = false
+                Tmux.trace?("ownership: \(socket ?? "default") server did not answer for \(tty)")
+                continue
+            }
             if let address = match(inventory: out, tty: tty, socket: socket) {
-                return address
+                return .pane(address)
             }
         }
-        return nil
+        if !everyServerAnswered {
+            Tmux.trace?("ownership: \(tty) UNKNOWN — a server could not be asked, so this is "
+                + "not evidence the session is hand-started")
+            return .unknown
+        }
+        return .notInTmux
     }
 
     /// Pure half, testable without a server.

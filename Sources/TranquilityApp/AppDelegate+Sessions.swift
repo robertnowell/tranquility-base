@@ -1356,6 +1356,33 @@ extension AppDelegate {
                 : LaunchGreeting.awaitRegistration(directory: dir, excluding: before)
             guard let sessionId = sessionIdOrNil else {
                 launch?.abandon()
+                // Did it actually fail, or did it just not have anything to
+                // register yet? Those are opposite facts and this branch was
+                // reporting the first for both.
+                //
+                // Codex registers a THREAD, and a freshly launched Codex TUI
+                // sitting at its prompt has no thread — it gets one when it
+                // does work. So a perfectly good Codex launch waits the full
+                // thirty seconds and is then announced as a failure, every
+                // time, and the agent it says didn't start is running in a
+                // pane with a cursor blinking in it. Measured 26 Aug: four
+                // codex processes alive, three thread locks on disk, the
+                // missing one being the launch this card was calling dead.
+                //
+                // The process we started, in the pane we made, is the fact
+                // this app actually owns. Ask that.
+                let started = ProcessProbe.pid(
+                    onTty: tty, containing: command.split(separator: " ").first.map(String.init) ?? command)
+                if started != nil {
+                    Permissions.log("launcher: nothing registered in \(dir) after 30s, but the "
+                        + "process is alive on \(tty) — reporting it as started, not failed")
+                    await MainActor.run { [weak self] in
+                        self?.hud.showResult(
+                            "Started in \((dir as NSString).lastPathComponent). It'll appear on the grid "
+                            + "once it starts working.")
+                    }
+                    return
+                }
                 Permissions.log("launcher: no session registered in \(dir) after 30s")
                 // showResult, not showIdleGrid(note:) — found live, 26 Aug,
                 // chasing a Codex launch that failed in total silence: the
