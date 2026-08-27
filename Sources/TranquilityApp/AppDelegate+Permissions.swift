@@ -30,6 +30,63 @@ extension AppDelegate {
             }())
     }
 
+    /// A required permission revoked while the app runs sends it back to
+    /// onboarding — but only on evidence, and never on one reading.
+    ///
+    /// Ruled 26 Aug: "any time there's a missing permission, revert back to the
+    /// onboarding screen instead of showing the grid… even if they've been
+    /// using it for three months." The launch check already did that. This is
+    /// the same rule for a permission pulled mid-session, which is the case
+    /// that actually happened and the one the launch check cannot see.
+    ///
+    /// TWO DELIBERATE CHOICES, both against the obvious implementation.
+    ///
+    /// It listens for ACTIVATION rather than polling. Apple publishes no
+    /// notification for a TCC change, and their own guidance is to re-check
+    /// when the app becomes active: a user must leave this app to reach System
+    /// Settings, so coming back is the signal. A timer would ask constantly and
+    /// still not learn anything sooner.
+    ///
+    /// And it requires TWO consecutive misses. `AXIsProcessTrusted()` is
+    /// documented returning wrong values on Ventura and later while a toggle is
+    /// being flipped — Apple's own DTS advice is to probe functionally rather
+    /// than trust the boolean — and there is a known bug where checking
+    /// Accessibility first corrupts a later Input Monitoring read. A single
+    /// false negative is plausible, and acting on one would take a working
+    /// panel away mid-sentence. Two readings a beat apart is the cheapest thing
+    /// that cannot be fooled by a toggle in motion.
+    func startWatchingForRevokedPermissions() {
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.confirmPermissionsStillHold() }
+        }
+    }
+
+    /// The second look. Only a miss that survives it counts.
+    @MainActor
+    private func confirmPermissionsStillHold() {
+        guard !Permissions.allActive else { return }
+        let firstMiss = Permissions.Kind.allCases
+            .filter(\.isRequired).filter { Permissions.state($0) != .active }
+        Permissions.log("permissions: \(firstMiss.map(\.title)) read as missing on activation "
+            + "— confirming before acting")
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self, !Permissions.allActive else {
+                Permissions.log("permissions: the miss did not survive a second look — "
+                    + "leaving the panel alone")
+                return
+            }
+            let confirmed = Permissions.Kind.allCases
+                .filter(\.isRequired).filter { Permissions.state($0) != .active }
+            Permissions.log("permissions: \(confirmed.map(\.title)) confirmed missing — "
+                + "back to onboarding")
+            self.onboarding.show { [weak self] in self?.refresh() }
+        }
+    }
+
     func startPermissionPolling() {
         Earcons.clearOldNotifications()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in

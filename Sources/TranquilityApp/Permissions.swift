@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Speech
 import CoreGraphics
+import CoreServices
 import Foundation
 import TranquilityCore
 
@@ -18,6 +19,15 @@ struct Permissions {
         case speechRecognition
         case inputMonitoring
         case accessibility
+        /// Apple Events — what GO TO AGENT needs to open a terminal window.
+        ///
+        /// Absent from this model until 26 Aug, which is how it broke GO TO
+        /// AGENT completely for two hours with no row, no state, no Grant
+        /// button and nothing but an AppleScript error number on a card. macOS
+        /// asks for it exactly once, at the first Apple event, and never asks
+        /// again — so a user who declines that prompt, or whose permissions
+        /// were reset, has no route back the app ever mentions.
+        case automation
 
         var title: String {
             switch self {
@@ -25,6 +35,7 @@ struct Permissions {
             case .speechRecognition: return "Speech Recognition"
             case .inputMonitoring: return "Input Monitoring"
             case .accessibility: return "Accessibility"
+            case .automation: return "Automation"
             }
         }
 
@@ -34,6 +45,7 @@ struct Permissions {
             case .speechRecognition: return "so transcription still works when the network is down"
             case .inputMonitoring: return "to notice the hotkeys while you're in another app (measured: Accessibility alone does NOT do this)"
             case .accessibility: return "so dictation can type at your cursor"
+            case .automation: return "so Go to Agent can open an agent's terminal window"
             }
         }
 
@@ -70,7 +82,19 @@ struct Permissions {
         /// from a login item. Asked for, visible, never blocking.
         var isRequired: Bool {
             switch self {
-            case .speechRecognition: return false
+            // Automation joins Speech Recognition on the not-blocking side,
+            // and for the reason the 10 Aug ruling gave: without it the app
+            // still hears you, still sees the hotkey, still types into a tab.
+            // One feature stops — GO TO AGENT cannot raise a window — and now
+            // it stops honestly, with a row that says so.
+            //
+            // Required would be worse than the bug it fixes. macOS only asks
+            // at the first Apple event, so a user who has never pressed GO TO
+            // AGENT has never been asked, and a required Automation would hold
+            // the onboarding window open at every launch over a permission
+            // nothing had requested — the exact mistake Speech Recognition
+            // made on 10 Aug.
+            case .speechRecognition, .automation: return false
             case .microphone, .inputMonitoring, .accessibility: return true
             }
         }
@@ -82,6 +106,15 @@ struct Permissions {
             case .speechRecognition: return base + "Privacy_SpeechRecognition"
             case .inputMonitoring: return base + "Privacy_ListenEvent"
             case .accessibility: return base + "Privacy_Accessibility"
+            // No anchor, deliberately. `Privacy_Automation` appears in the
+            // community tables but is unverified on current macOS, a batch of
+            // these anchors broke outright in the Ventura System Settings
+            // rewrite, and Automation's pane is a dynamically built list of
+            // app-to-app pairs that users report finding empty. The general
+            // Privacy & Security pane always opens, and the row's own text
+            // says where to go next. A door that always works beats a shortcut
+            // that sometimes does.
+            case .automation: return "x-apple.systempreferences:com.apple.preference.security"
             }
         }
     }
@@ -259,8 +292,44 @@ struct Permissions {
             guard let asked = accessibilityAskedAt else { return .notAsked }
             return Date().timeIntervalSince(asked) > liveGrantGrace
                 ? .pendingRestart : .notAsked
+        case .automation:
+            // Silent by contract: `askUserIfNeeded: false` never prompts and
+            // never registers the app. It also cannot tell "never asked" from
+            // "denied" — macOS returns one code for both — so this row asks the
+            // clock exactly the way `.accessibility` above does.
+            //
+            // And a grant made in System Settings is invisible to a process
+            // already running: the check keeps reading not-permitted until
+            // relaunch. That is the same restart gap the checklist already ends
+            // on, which is why `.pendingRestart` is the honest answer once the
+            // grace period has passed rather than a wrong `.denied`.
+            if automationStatus() == noErr { return .active }
+            guard let asked = automationAskedAt else { return .notAsked }
+            return Date().timeIntervalSince(asked) > liveGrantGrace
+                ? .pendingRestart : .notAsked
         }
     }
+
+    /// Whether this app may drive Terminal, asked without asking the user.
+    ///
+    /// Terminal is the target because it is the one this app automates — GO TO
+    /// AGENT opens a window there. `procNotFound`, when Terminal is not
+    /// running, is genuinely "cannot tell" and reads as not-yet-granted rather
+    /// than denied: an app that has never been able to check must not accuse
+    /// the user of refusing something.
+    private static func automationStatus() -> OSStatus {
+        guard var target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.Terminal")
+            .aeDesc?.pointee
+        else { return OSStatus(procNotFound) }
+        defer { AEDisposeDesc(&target) }
+        return AEDeterminePermissionToAutomateTarget(
+            &target, typeWildCard, typeWildCard, /* askUserIfNeeded: */ false)
+    }
+
+    /// When `request(.automation)` last put the system dialog up. Same reason
+    /// as `accessibilityAskedAt`: the state it distinguishes is a clock, not a
+    /// flag macOS will ever hand us.
+    @MainActor private static var automationAskedAt: Date?
 
     /// When `request(.accessibility)` last put the system dialog up. See the
     /// `.accessibility` branch of `state(_:)` for why a timestamp and not a flag.
@@ -308,6 +377,8 @@ struct Permissions {
             return CGPreflightListenEventAccess()
         case .accessibility:
             return AXIsProcessTrusted()
+        case .automation:
+            return automationStatus() == noErr
         }
     }
 
@@ -340,6 +411,17 @@ struct Permissions {
         case .accessibility:
             return AXIsProcessTrusted() ? "granted"
                 : "not granted. Click Grant, dictation types at your cursor with it"
+        
+        case .automation:
+            switch state(.automation) {
+            case .active: return "granted"
+            case .pendingRestart: return "granted — restart to use it"
+            // macOS returns one code for never-asked and denied, so this row
+            // does not pretend to know which. Both are answered the same way:
+            // press Grant, which prompts if it can and opens Settings if it
+            // cannot.
+            default: return "not granted. Click Grant, then Privacy & Security → Automation"
+            }
         }
     }
 
@@ -408,6 +490,21 @@ struct Permissions {
             // to "restart to finish" on its own.
             if accessibilityAskedAt == nil { accessibilityAskedAt = Date() }
             return isGranted(kind)
+        
+        case .automation:
+            // The only call that can put the Automation prompt on screen —
+            // macOS asks at the first Apple event and never again, so this IS
+            // the ask. Off the main actor because it blocks while the dialog
+            // is up.
+            automationAskedAt = Date()
+            return await Task.detached { () -> Bool in
+                guard var target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.Terminal")
+                    .aeDesc?.pointee
+                else { return false }
+                defer { AEDisposeDesc(&target) }
+                return AEDeterminePermissionToAutomateTarget(
+                    &target, typeWildCard, typeWildCard, /* askUserIfNeeded: */ true) == noErr
+            }.value
         }
     }
 
