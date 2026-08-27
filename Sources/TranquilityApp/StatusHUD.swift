@@ -2798,160 +2798,51 @@ final class StatusHUD: NSObject {
     // therefore redundant, and it was not free: it crashed in swift_getObjectType
     // on a bad executor pointer, killing the app on a button press. `nonisolated`
     // plus assumeIsolated keeps the isolation guarantee without the check.
+    /// The card's GO TO AGENT — the UI half only.
+    ///
+    /// The work lives in `AppDelegate.goToSession(_:)`, which is the same
+    /// function the grid rows call. It used to live in BOTH, and the two
+    /// drifted: the card learned on 23 Aug to end a hand-started session and
+    /// resume it under tmux, and the grid's copy never did, so tapping an
+    /// amber row for such a session silently did nothing for three days. A
+    /// verb with two implementations gets fixed in one of them.
+    ///
+    /// What stays here is what only the card has: the in-flight guard, the
+    /// "Opening…" paint, and returning immediately so the panel never blocks
+    /// on a tmux call. The app calls `finishGoToSession` when the work ends,
+    /// whatever the outcome, which is what drops the guard.
     @objc nonisolated func goToSession() {
         MainActor.assumeIsolated {
             guard !goToSessionInFlight else { return }
-            guard let target = currentTarget, let pid = target.pid else {
+            guard let target = currentTarget else {
                 bodyLabel.stringValue = "That agent is no longer running, so there's no tab to open."
                 return
             }
-            let sessionId = target.sessionId
             goToSessionInFlight = true
-            let priorBody = bodyLabel.stringValue
+            goToSessionPriorBody = bodyLabel.stringValue
             bodyLabel.stringValue = "Opening that session's tab…"
-            Task.detached(priority: .userInitiated) { [weak self] in
-                // The card's pid is a fact with a shelf life, and this button
-                // is pressed minutes after the card was painted. A session
-                // that was transferred to tmux in between is alive under a
-                // NEW pid, and the old one names nothing — so a miss here is
-                // a reason to ask the session again, not to give up on it.
-                // The session id is the durable name; the pid never was.
-                var pid = pid
-                var resolvedTty = ProcessProbe.tty(of: pid)
-                if resolvedTty == nil,
-                   let fresh = ((ClaudeAgentsCLI().sessions() ?? [])
-                       + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
-                       .first(where: { $0.sessionId == sessionId }),
-                   fresh.pid != pid,
-                   let freshTty = ProcessProbe.tty(of: fresh.pid) {
-                    Permissions.log("goToSession: pid \(pid) is gone — "
-                        + "\(sessionId.prefix(8)) runs as \(fresh.pid) now, following it")
-                    pid = fresh.pid
-                    resolvedTty = freshTty
-                    await MainActor.run { [weak self] in
-                        self?.rebindLivePid(fresh.pid, sessionId: sessionId)
-                    }
-                }
-                guard let tty = resolvedTty else {
-                    Permissions.log("goToSession: no tty for pid \(pid), and "
-                        + "\(sessionId.prefix(8)) is not running under any other")
-                    await MainActor.run { [weak self] in
-                        guard let self else { return }
-                        self.goToSessionInFlight = false
-                        self.bodyLabel.stringValue =
-                            "That agent isn't running any more. Revive it from Past Agents."
-                    }
-                    return
-                }
-                // No parallel human+tmux session, ever (ruled 23 Aug):
-                // bringing a hand-started session forward TRANSFERS it, the
-                // same mechanism `Coordinator.dispatch`'s `resumeTwin` uses
-                // on its first reply — not a special case for typing into
-                // it. A tmux-owned tty already means this happened before;
-                // only a bare tty (no pane) triggers the transfer here.
-                // Registry first, same reason: a session Claude Code has
-                // recorded as living in a pane is tmux-owned, whatever a
-                // recycled tty says. Getting this wrong the other way is
-                // worse than a failed jump — it ENDS the session and resumes
-                // it, which is what "Go to Agent killed my session" was.
-                if TmuxOwnership.pane(forSessionId: sessionId, pid: pid) == nil {
-                    Permissions.log("goToSession: \(tty) is hand-started — transferring to tmux")
-                    // The harness THIS session belongs to, read off disk —
-                    // not the Settings default, which is what a new agent
-                    // would be and has nothing to do with this one. Getting
-                    // it wrong here ends a live session and cannot restart
-                    // it, which is exactly what happened on 26 Aug.
-                    let attempt = SessionLauncher.OwnershipTransfer.attempt(
-                        sessionId: sessionId,
-                        launch: HarnessLaunch.forExistingSession(sessionId))
-                    guard let transferred = attempt.moved else {
-                        // Two failures, two sentences (ruled 24 Aug). Saying
-                        // "Nothing was closed" over a session this button had
-                        // just killed sent its owner looking for a terminal
-                        // that no longer had one.
-                        // The reason goes to the log, never to the card. Ruled
-                        // 25 Aug: an exit status and a line of somebody else's
-                        // stderr is not something a person can act on, and a
-                        // card is not a log viewer. What the card owes is the
-                        // one move that works — and "try again" is only that
-                        // move when the failure could plausibly go differently.
-                        let message: String
-                        switch attempt {
-                        case .endedButNotRestarted(let why, let worthRetrying, let manual):
-                            Permissions.log("goToSession: transfer ended but did not restart "
-                                + "\(sessionId.prefix(8)) — \(why)")
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(manual, forType: .string)
-                            message = "That session was closed and couldn't be reopened here. "
-                                + "Copied the manual revival command to your clipboard — "
-                                + "paste it in a terminal."
-                                + (worthRetrying ? " Or try Go to Agent again." : "")
-                        case .refused(let why):
-                            Permissions.log("goToSession: transfer refused "
-                                + "\(sessionId.prefix(8)) — \(why)")
-                            message = "Couldn't move that session under tmux — it is still "
-                                + "running in its own terminal. Nothing was closed."
-                        case .moved:
-                            message = "Couldn't move that session under tmux — it is still "
-                                + "running in its own terminal. Nothing was closed."
-                        }
-                        await MainActor.run { [weak self] in
-                            guard let self else { return }
-                            self.goToSessionInFlight = false
-                            self.bodyLabel.stringValue = message
-                        }
-                        return
-                    }
-                    await MainActor.run { [weak self] in
-                        self?.attachLivePid(transferred.pid, sessionId: sessionId)
-                    }
-                    let outcome = await TerminalTabFocus.focus(tty: transferred.pane.paneTty,
-                                                               sessionId: sessionId)
-                    await MainActor.run { [weak self] in
-                        guard let self else { return }
-                        self.goToSessionInFlight = false
-                        switch outcome {
-                        case .focused:
-                            self.bodyLabel.stringValue = priorBody
-                            Permissions.log("goToSession: transferred and focused "
-                                + "\(transferred.pane.paneTty)")
-                        default:
-                            // The transfer itself succeeded — a follow-up window
-                            // failing to open is the SAME class of failure the
-                            // outcomes below already report, just one hop later.
-                            self.bodyLabel.stringValue =
-                                "Moved that session under tmux, but couldn't open a window "
-                                + "for it. It's reachable — try Go to Agent again."
-                            Permissions.log("goToSession: transfer ok, open failed: \(outcome)")
-                        }
-                    }
-                    return
-                }
-                let outcome = await TerminalTabFocus.focus(tty: tty, sessionId: sessionId)
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.goToSessionInFlight = false
-                    switch outcome {
-                    case .focused:
-                        // The jump worked; the card says what it said before,
-                        // not a stale "Opening…".
-                        self.bodyLabel.stringValue = priorBody
-                        Permissions.log("goToSession: focused \(tty)")
-                    case .tabGone:
-                        self.bodyLabel.stringValue =
-                            "That agent's tab isn't open in Terminal any more (\(tty))."
-                        Permissions.log("goToSession: tab not found for \(tty)")
-                    case .timedOut(let seconds):
-                        self.bodyLabel.stringValue =
-                            "Terminal didn't answer within \(seconds) seconds, it looks busy. The tab is still there; try again in a moment."
-                        Permissions.log("goToSession TIMEOUT after \(seconds)s for \(tty)")
-                    case .failed(let message):
-                        self.bodyLabel.stringValue = "Couldn't control Terminal: \(message)"
-                        Permissions.log("goToSession FAILED: \(message)")
-                    }
-                }
-            }
+            onGoToSession?(target.sessionId)
         }
+    }
+
+    /// What the card said before "Opening…" replaced it, so a successful jump
+    /// can put it back rather than leaving a stale progress line on screen.
+    private var goToSessionPriorBody: String?
+
+    /// The end of a GO TO AGENT, from wherever it started.
+    ///
+    /// The HUD decides how to say it, because the HUD is what knows whether a
+    /// card is mid-flight: from the card, restore or replace its body and drop
+    /// the guard; from a grid row, there is no card to restore, so a message
+    /// gets its own result card and silence stays silent.
+    func finishGoToSession(_ message: String?) {
+        if goToSessionInFlight {
+            goToSessionInFlight = false
+            bodyLabel.stringValue = message ?? goToSessionPriorBody ?? bodyLabel.stringValue
+            goToSessionPriorBody = nil
+            return
+        }
+        if let message { showResult(message) }
     }
 
     /// Advance the highlight to the character range currently being spoken.
