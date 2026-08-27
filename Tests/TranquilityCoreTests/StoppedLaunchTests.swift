@@ -79,7 +79,7 @@ final class StoppedLaunchTests: XCTestCase {
             trace: { box.traced.append($0) },
             label: "tb-test",
             pollInterval: 0.001, maxPolls: 3,
-            onNeedsHuman: { box.opened += 1 })
+            onNeedsHuman: { _ in box.opened += 1 })
 
         XCTAssertEqual(box.pressed, 0, "an unrecognised screen is never pressed through")
         XCTAssertEqual(box.opened, 1, "an unrecognised screen is shown to a human, exactly once")
@@ -98,7 +98,7 @@ final class StoppedLaunchTests: XCTestCase {
             press: {},
             label: "tb-test",
             pollInterval: 0.001, maxPolls: 6,
-            onNeedsHuman: { box.opened += 1 })
+            onNeedsHuman: { _ in box.opened += 1 })
         XCTAssertEqual(box.opened, 0, "starting an agent that works is still a background act")
     }
 }

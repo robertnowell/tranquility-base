@@ -767,6 +767,16 @@ enum StateLegend {
     /// one `startSessionPlacard` reaches for above.
     static let startingAgentPlacard = "\(Glyph.dot) Starting agent\u{2026}"
 
+    /// The amber twin of the placard above: the launch has stopped, and what
+    /// stopped it is a question addressed to you.
+    ///
+    /// `Glyph.needsYou`, not `.dot`, because it is no longer activity — it is
+    /// the needs-you channel, spent on the one thing that channel is for. A
+    /// launch waiting on a human is not a failure and must not be dressed as
+    /// one ("No agent", "Couldn't start"): nothing is broken, the agent is a
+    /// keypress away, and the card's job is to say which keypress and where.
+    static let needsAnswerPlacard = "\(Glyph.needsYou) Asking you"
+
     /// Names the artifact, because that is the whole content of the offer: a
     /// fresh agent is worth starting only if it opens holding the thing you
     /// were reading.

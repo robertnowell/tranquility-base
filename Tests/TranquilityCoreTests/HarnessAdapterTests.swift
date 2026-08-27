@@ -174,6 +174,118 @@ final class HarnessAdapterTests: XCTestCase {
         XCTAssertFalse(pressed, "the screen matches BOTH needle lists; never-auto-accept must still win")
     }
 
+    // MARK: The screen that stopped changing (27 Aug)
+
+    /// codex-cli 0.150.0's update menu, transcribed off a real stuck pane. No
+    /// needle in this app knows it, and none needs to: it stops changing.
+    private static let codexUpdateScreen = [
+        "",
+        "  \u{2728} Update available! 0.149.0 -> 0.150.0",
+        "",
+        "  Release notes: https://github.com/openai/codex/releases/latest",
+        "",
+        "\u{203A} 1. Update now",
+        "  2. Skip",
+        "  3. Skip until next version",
+        "",
+        "  Press enter to continue",
+    ].joined(separator: "\n")
+
+    /// The early exit and the give-up exit BOTH open a window now (the
+    /// give-up one since `98cc767`), so "did onNeedsHuman fire" no longer
+    /// separates them. The trace does: only the stability test says "has
+    /// stopped on a screen", and only it can say it before the loop has spent
+    /// its thirty seconds. That difference is the whole point — it is twenty-two
+    /// seconds of spinner, on every launch, for every user of a harness that
+    /// has started asking something new.
+    private static let stoppedEarly = "has stopped on a screen"
+
+    /// `trace` is `@Sendable`, so its sink cannot be a captured local var.
+    private final class Traced: @unchecked Sendable {
+        var lines: [String] = []
+        var sawStoppedEarly: Bool { lines.contains { $0.contains(stoppedEarly) } }
+    }
+
+    func testAnUnknownScreenThatStopsChangingIsReportedEarly() {
+        let spec = CodexAdapter().trustPrompt!
+        var pressed = false
+        var asked: String?
+        let traced = Traced()
+        var reads = Array(repeating: Self.codexUpdateScreen, count: 9)
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: { pressed = true },
+                                 trace: { traced.lines.append($0) },
+                                 pollInterval: 0.001, maxPolls: 9,
+                                 onNeedsHuman: { asked = $0 })
+        XCTAssertFalse(pressed, "an unrecognized screen is never pressed through")
+        XCTAssertEqual(asked, "Update available! 0.149.0 -> 0.150.0",
+                       "the panel is told what the pane is actually asking")
+        XCTAssertTrue(traced.sawStoppedEarly)
+        XCTAssertEqual(reads.count, 6,
+                       "called it on the third identical screen, not after fifteen polls")
+    }
+
+    func testABootingPaneIsNotCalledStoppedWhileItIsStillRedrawing() {
+        // The screen changes on every poll — a TUI drawing itself. It may
+        // still be escalated when the loop finally gives up; what it may not
+        // be is called STOPPED while it is visibly moving.
+        let spec = CodexAdapter().trustPrompt!
+        let traced = Traced()
+        var reads = ["booting one", "booting two", "booting three",
+                     "booting four", "booting five"]
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: {},
+                                 trace: { traced.lines.append($0) },
+                                 pollInterval: 0.001, maxPolls: 5,
+                                 onNeedsHuman: { _ in })
+        XCTAssertFalse(traced.sawStoppedEarly)
+    }
+
+    func testASettledComposerIsNeverEscalatedEvenThoughItAlsoStopsChanging() {
+        // The one screen that is BOTH stable and perfectly fine. Settled
+        // (threshold 2) must beat stuck (threshold 3), or every ordinary
+        // launch would be announced as a question.
+        let spec = CodexAdapter().trustPrompt!
+        var asked: String?
+        var reads = Array(repeating: "  Ask Codex to do anything", count: 9)
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: {},
+                                 pollInterval: 0.001, maxPolls: 9,
+                                 onNeedsHuman: { asked = $0 })
+        XCTAssertNil(asked, "starting an agent that works is still a background act")
+    }
+
+    func testAPaneWithNothingOnItIsNotCalledStoppedEarly() {
+        // Stable, and with nothing to say. It still earns a window at the
+        // give-up — an empty pane thirty seconds in is its own kind of wrong —
+        // but there is no question to put on a card, so the early exit that
+        // exists to NAME one must not take it.
+        let spec = CodexAdapter().trustPrompt!
+        let traced = Traced()
+        var reads = Array(repeating: "\n   \n  \u{2500}\u{2500}\u{2500}\n", count: 9)
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: {},
+                                 trace: { traced.lines.append($0) },
+                                 pollInterval: 0.001, maxPolls: 9,
+                                 onNeedsHuman: { _ in })
+        XCTAssertFalse(traced.sawStoppedEarly)
+    }
+
+    func testQuestionOnScreenSkipsDecorationAndTakesTheFirstRealLine() {
+        let screen = [
+            "", "\u{250C}\u{2500}\u{2500}\u{2510}",
+            "  \u{276F} Do you trust the contents of this directory?",
+            "  1. Yes",
+        ].joined(separator: "\n")
+        XCTAssertEqual(TrustPromptWatcher.questionOnScreen(screen),
+                       "Do you trust the contents of this directory?")
+        XCTAssertNil(TrustPromptWatcher.questionOnScreen("\n \n  \u{2502}\n"))
+    }
+
     // MARK: reviveCommand goes through the adapter now, not a second literal
 
     // MARK: empty resumeArguments must refuse, never emit broken AppleScript

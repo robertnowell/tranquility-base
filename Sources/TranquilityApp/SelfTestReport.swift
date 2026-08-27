@@ -32,4 +32,16 @@ enum SelfTest {
     static func skipped(_ name: String, because reason: String) {
         Permissions.log("selftest \(name): SKIP — \(reason)")
     }
+
+    /// The line that says the slate is finished, so nothing has to guess how
+    /// long a slate takes.
+    ///
+    /// Deliberately NOT in the `selftest <name>: <verdict>` shape the gate
+    /// scans for verdicts: it is a boundary, not a drill, and counting it as
+    /// one would let a run with zero drills look like a run with one.
+    static let slateCompleteMarker = "selftest: slate complete"
+
+    static func slateComplete() {
+        Permissions.log(slateCompleteMarker)
+    }
 }
