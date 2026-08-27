@@ -428,7 +428,18 @@ public enum SessionLauncher {
             else { lastSeen = nil; continue }
             let parts = line.split(separator: "\t", maxSplits: 1,
                                    omittingEmptySubsequences: false).map(String.init)
-            lastSeen = (dead: parts.first == "1", status: parts.count > 1 ? parts[1] : "")
+            // Alive is asserted, never inferred from the absence of a "1".
+            //
+            // This read `parts.first == "1"` for dead, which on any line that
+            // failed to split — the 27 Aug locale bug turned every TAB into
+            // `_`, so every line was one field — is false for a DEAD pane
+            // just as surely as for a live one. The check written to catch
+            // "the pane exited instantly and printed a tty on its way out"
+            // would have passed that pane. It was reporting health from a
+            // line it could not read, which is the same mistake
+            // `ownership(forTty:)` was making one file over.
+            guard parts.count == 2 else { lastSeen = nil; continue }
+            lastSeen = (dead: parts[0] != "0", status: parts[1])
             if lastSeen?.dead == false { return nil }
             break
         }
@@ -524,6 +535,30 @@ public enum SessionLauncher {
             guard let resolvedDirectory = directory ?? live?.cwd else {
                 let why = "no directory to resume into — neither the caller nor a live lookup "
                     + "supplied one"
+                SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(why)")
+                return .refused(why)
+            }
+            // The last gate before something irreversible, and the one that
+            // was missing on 27 Aug.
+            //
+            // `TmuxOwnership.Ownership` was built to separate "no server has
+            // this tty" (a fact) from "a server could not be asked" (not
+            // one), on the stated rule that the second is never grounds for
+            // anything destructive. It had no caller: every consumer reached
+            // it through `pane(forTty:)`, which collapses both to nil, so the
+            // rule could not fire for anybody and the distinction survived
+            // only in a log line. This is the caller.
+            //
+            // It goes HERE rather than at the classification site because
+            // this is the function that kills. A caller deciding
+            // "hand-started" from a nil pane is making a reasonable
+            // inference; this line is where that inference stops being
+            // cheap, so this is where it gets checked against the stronger
+            // answer.
+            if let live, let tty = ProcessProbe.tty(of: live.pid),
+               case .unknown = TmuxOwnership.ownership(forTty: tty) {
+                let why = "tmux could not be asked whether \(tty) is a pane — refusing to end a "
+                    + "session on an unanswered question"
                 SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(why)")
                 return .refused(why)
             }
