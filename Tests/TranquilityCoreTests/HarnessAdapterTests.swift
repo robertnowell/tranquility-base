@@ -174,6 +174,92 @@ final class HarnessAdapterTests: XCTestCase {
         XCTAssertFalse(pressed, "the screen matches BOTH needle lists; never-auto-accept must still win")
     }
 
+    // MARK: The screen that stopped changing (27 Aug)
+
+    /// codex-cli 0.150.0's update menu, transcribed off a real stuck pane. No
+    /// needle in this app knows it, and none needs to: it stops changing.
+    private static let codexUpdateScreen = [
+        "",
+        "  \u{2728} Update available! 0.149.0 -> 0.150.0",
+        "",
+        "  Release notes: https://github.com/openai/codex/releases/latest",
+        "",
+        "\u{203A} 1. Update now",
+        "  2. Skip",
+        "  3. Skip until next version",
+        "",
+        "  Press enter to continue",
+    ].joined(separator: "\n")
+
+    func testAnUnknownScreenThatStopsChangingIsReportedAsAQuestion() {
+        let spec = CodexAdapter().trustPrompt!
+        var pressed = false
+        var asked: String?
+        var reads = Array(repeating: Self.codexUpdateScreen, count: 6)
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: { pressed = true },
+                                 pollInterval: 0.001,
+                                 onNeedsHuman: { asked = $0 })
+        XCTAssertFalse(pressed, "an unrecognized screen is never pressed through")
+        XCTAssertEqual(asked, "Update available! 0.149.0 -> 0.150.0",
+                       "the panel is told what the pane is actually asking")
+    }
+
+    func testABootingPaneIsNotMistakenForAQuestion() {
+        // The screen changes on every poll — a TUI drawing itself. Nothing
+        // has stopped, so nothing may be escalated.
+        let spec = CodexAdapter().trustPrompt!
+        var asked: String?
+        var reads = ["booting one", "booting two", "booting three",
+                     "booting four", "booting five"]
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: {},
+                                 pollInterval: 0.001,
+                                 onNeedsHuman: { asked = $0 })
+        XCTAssertNil(asked)
+    }
+
+    func testASettledComposerIsNotAQuestionEvenThoughItAlsoStopsChanging() {
+        // The one screen that is BOTH stable and perfectly fine. Settled
+        // (threshold 2) must beat stuck (threshold 3), or every ordinary
+        // launch would be announced as a question.
+        let spec = CodexAdapter().trustPrompt!
+        var asked: String?
+        var reads = Array(repeating: "  Ask Codex to do anything", count: 6)
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: {},
+                                 pollInterval: 0.001,
+                                 onNeedsHuman: { asked = $0 })
+        XCTAssertNil(asked)
+    }
+
+    func testAnEmptyPaneIsNeverAnnouncedAsAQuestion() {
+        // A pane with nothing on it is stable too, and has nothing to say.
+        let spec = CodexAdapter().trustPrompt!
+        var asked: String?
+        var reads = Array(repeating: "\n   \n  \u{2500}\u{2500}\u{2500}\n", count: 6)
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: {},
+                                 pollInterval: 0.001,
+                                 onNeedsHuman: { asked = $0 })
+        XCTAssertNil(asked)
+    }
+
+    func testQuestionOnScreenSkipsDecorationAndTakesTheFirstRealLine() {
+        let screen = [
+            "", "\u{250C}\u{2500}\u{2500}\u{2510}",
+            "  \u{276F} Do you trust the contents of this directory?",
+            "  1. Yes",
+        ].joined(separator: "\n")
+        XCTAssertEqual(TrustPromptWatcher.questionOnScreen(screen),
+                       "Do you trust the contents of this directory?")
+        XCTAssertNil(TrustPromptWatcher.questionOnScreen("\n \n  \u{2502}\n"))
+    }
+
     // MARK: reviveCommand goes through the adapter now, not a second literal
 
     // MARK: empty resumeArguments must refuse, never emit broken AppleScript

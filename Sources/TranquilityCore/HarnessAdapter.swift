@@ -158,13 +158,41 @@ public struct TrustPromptSpec: Sendable {
     /// since the last review, not the common first-run case.
     public var neverAutoAcceptNeedles: [String]
 
+    /// How many consecutive IDENTICAL, unrecognized screens mean the pane has
+    /// STOPPED on something rather than still booting.
+    ///
+    /// The needle lists above enumerate; this counts. Enumeration is what
+    /// failed on 27 Aug: codex-cli 0.150.0 shipped an "Update available!"
+    /// menu that runs BEFORE the TUI boots, no needle knew it, and so every
+    /// Codex launch on the machine sat on a menu nobody could see while the
+    /// panel waited thirty seconds for a registration that could never come.
+    /// Twenty-one panes deep before a human noticed, because the one thing
+    /// that would have resolved it — the pane itself — was the one thing a
+    /// deliberately detached launch never shows you.
+    ///
+    /// A needle for that screen would have fixed that screen. The next
+    /// prompt (an auth expiry, a model picker, a migration notice) would
+    /// have failed exactly the same way, silently, and the fix would again
+    /// be a string added after the fact. So the rule underneath the needles
+    /// is a shape, not a word: **a pane that has stopped changing and is not
+    /// showing its composer is waiting on a human.** Whatever the question
+    /// is, that is the one fact the panel needs, and it is true of every
+    /// question a harness has not been born with yet.
+    ///
+    /// Three, not two: the settled-banner threshold is two, and a stuck
+    /// screen must never be able to beat a settling one to the verdict. At
+    /// the live 2s poll that is a call at ~8s, comfortably inside the 30s
+    /// registration wait it exists to pre-empt.
+    public var stuckThreshold: Int
+
     public init(promptNeedles: [String], startedWithNoPromptNeedle: String?,
                settledBannerNeedle: String, settledThreshold: Int = 2,
-               neverAutoAcceptNeedles: [String] = []) {
+               neverAutoAcceptNeedles: [String] = [], stuckThreshold: Int = 3) {
         self.promptNeedles = promptNeedles
         self.startedWithNoPromptNeedle = startedWithNoPromptNeedle
         self.settledBannerNeedle = settledBannerNeedle
         self.settledThreshold = settledThreshold
+        self.stuckThreshold = stuckThreshold
         // An empty string here would match every screen — `"".isEmpty ==
         // false` for `text.contains("")` — and permanently disable the
         // watcher on the very first poll. Can't happen from either adapter
@@ -373,15 +401,23 @@ public enum TrustPromptWatcher {
         // exactly the gap ruled a real bug 23 Aug (see ClaudeCodeAdapter's
         // own comment on this needle) — default no-op so every caller that
         // predates this stays byte-for-byte unchanged.
-        onNeedsHuman: () -> Void = {}
+        //
+        // It carries the question as of 27 Aug, because "someone should look
+        // at this pane" and "Codex is asking whether to update" are different
+        // amounts of help, and the second one costs a `first(where:)` over a
+        // screen this loop has already read. A caller that only wants to open
+        // a window ignores it.
+        onNeedsHuman: (String) -> Void = { _ in }
     ) {
         var settled = 0
+        var lastScreen: String?
+        var unchanged = 0
         for _ in 0..<maxPolls {
             usleep(UInt32(pollInterval * 1_000_000))
             guard let text = read() else { continue }
             if spec.neverAutoAcceptNeedles.contains(where: { text.contains($0) }) {
                 trace?("newSession: \(label) needs a human choice, never auto-accepted; leaving it be")
-                onNeedsHuman()
+                onNeedsHuman(Self.questionOnScreen(text) ?? "It is asking you something.")
                 return
             }
             if spec.promptNeedles.contains(where: { text.contains($0) }) {
@@ -403,7 +439,7 @@ public enum TrustPromptWatcher {
                     if spec.neverAutoAcceptNeedles.contains(where: { followUp.contains($0) }) {
                         trace?("newSession: \(label) needs a human choice after the trust "
                             + "prompt; leaving it be")
-                        onNeedsHuman()
+                        onNeedsHuman(Self.questionOnScreen(followUp) ?? "It is asking you something.")
                         return
                     }
                 }
@@ -417,8 +453,45 @@ public enum TrustPromptWatcher {
                 trace?("newSession: started with no trust prompt in \(label); watcher done")
                 return
             }
+            // Nothing above recognized this screen. Recognition is not the
+            // only evidence available: a TUI that is booting REDRAWS, and one
+            // that has stopped on a question does not. So compare the screen
+            // to the last one instead of to a needle — see
+            // `TrustPromptSpec.stuckThreshold` for the 27 Aug launch that
+            // this is the whole answer to.
+            if text == lastScreen { unchanged += 1 } else { unchanged = 1; lastScreen = text }
+            if unchanged >= spec.stuckThreshold, let question = Self.questionOnScreen(text) {
+                trace?("newSession: \(label) has stopped on a screen this launcher does not "
+                    + "know and cannot answer: \(question)")
+                onNeedsHuman(question)
+                return
+            }
         }
         let waited = Int(pollInterval * Double(maxPolls))
         trace?("newSession: no trust prompt seen in \(label) within \(waited)s; leaving it be")
+    }
+
+    /// The one line of a stopped screen worth repeating to the user.
+    ///
+    /// A capture is a rectangle of terminal, most of it chrome: box rules,
+    /// a menu of numbered options, an ANSI-styled cursor glyph. The sentence
+    /// a human needs is almost always the first one with words in it —
+    /// "Update available! 0.149.0 -> 0.150.0", "Do you trust the contents of
+    /// this directory?" — so that is what this takes, with the decoration in
+    /// front of it (✨, ›, ❯, ─) trimmed off so the line starts where the
+    /// words do.
+    ///
+    /// `nil` for a screen with nothing to say — an empty pane, a lone box
+    /// rule — and that nil is load-bearing: it is what stops a pane that is
+    /// merely slow to paint anything at all from being announced as a
+    /// question. Four characters of actual word, minimum.
+    public static func questionOnScreen(_ screen: String) -> String? {
+        for raw in screen.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let words = line.drop(while: { !$0.isLetter && !$0.isNumber })
+            guard words.count >= 4 else { continue }
+            return String(words.prefix(140))
+        }
+        return nil
     }
 }

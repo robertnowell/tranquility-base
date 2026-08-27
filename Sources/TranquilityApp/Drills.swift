@@ -107,6 +107,41 @@ extension StatusHUD {
         ])
     }
 
+    /// A launch that stops on a question says so, in amber, on the card that
+    /// is already up — and can still adopt the agent once the question is
+    /// answered. The 27 Aug failure had no drill and could not have had one:
+    /// nothing in the app could express "asking you" at all.
+    func launchQuestionDrill() {
+        _ = showGreeting(line: "Drill greeting.", label: "question-drill")
+        let spinnerFirst = launchCardIsWaiting
+        showLaunchQuestion("Update available! 0.149.0 -> 0.150.0")
+        let spinnerDown = !launchCardIsWaiting
+        let saysWhatItAsks = face.body.contains("Update available! 0.149.0 -> 0.150.0")
+        let amberPlacard = face.placardOverride == StateLegend.needsAnswerPlacard
+        // Amber is not painted by the placard string; `.result` reads
+        // `face.lens`, and a launch question must arrive on the needs-you
+        // channel rather than the advisory one the invitation uses.
+        let onTheNeedsYouChannel = face.lens == .fault
+        // The whole point of restoring the binding window: answer the
+        // question and the agent lands on the card you already have.
+        let stillAdoptsItsAgent = bindGreeting(
+            sessionId: "question-drill", pid: nil, label: "adopted", cwd: nil)
+        // And a question with no launch card waiting is refused rather than
+        // painted over whatever the panel has moved on to.
+        showIdle(rows: [])
+        showLaunchQuestion("Should never paint.")
+        let refusedWithNoCard = !face.body.contains("Should never paint.")
+        SelfTest.report("launchQuestion", [
+            ("spinnerBeforeTheQuestion", spinnerFirst),
+            ("spinnerDownAfterIt", spinnerDown),
+            ("saysWhatItAsks", saysWhatItAsks),
+            ("wearsTheAskingYouPlacard", amberPlacard),
+            ("onTheNeedsYouChannel", onTheNeedsYouChannel),
+            ("stillAdoptsItsAgent", stillAdoptsItsAgent),
+            ("refusedWhenNoCardIsWaiting", refusedWithNoCard),
+        ])
+    }
+
     func terminateDrill() {
         func row(_ id: String, _ lamp: Lamp,
                  revivable: Bool = false) -> SessionRow {

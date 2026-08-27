@@ -1353,6 +1353,19 @@ extension AppDelegate {
         // reusing `awaitRegistration`.
         let isCodex = adapter.id == CodexAdapter().id
 
+        // The trust watcher and the registration wait run concurrently and can
+        // reach opposite conclusions about the same launch, so they share one
+        // fact rather than each guessing at it. Built here, on the main actor,
+        // rather than inside the detached task: this is the scope that still
+        // has a real `self` to weakly capture. Per-launch, deliberately not a
+        // property on the delegate — two launches can be in flight at once and
+        // neither one's question is news about the other.
+        let launchQuestion = LaunchQuestionSeen()
+        let reportQuestion: @Sendable (String) -> Void = { [weak self] asked in
+            launchQuestion.mark()
+            Task { @MainActor in self?.hud.showLaunchQuestion(asked) }
+        }
+
         Task.detached(priority: .userInitiated) { [weak self] in
             let before: Set<String>
             if isCodex {
@@ -1383,7 +1396,8 @@ extension AppDelegate {
                 return
             }
             Task.detached(priority: .utility) {
-                SessionLauncher.watchForTrustPrompt(tty: tty, adapter: adapter)
+                SessionLauncher.watchForTrustPrompt(
+                    tty: tty, adapter: adapter, onNeedsHuman: reportQuestion)
             }
             await MainActor.run { [weak self] in
                 self?.lastStatusLine = "new session launched"
@@ -1415,6 +1429,18 @@ extension AppDelegate {
                 //
                 // The process we started, in the pane we made, is the fact
                 // this app actually owns. Ask that.
+                // A question already answered this wait, out loud, seconds
+                // ago — the card names it and the pane's window is open. The
+                // two branches below would talk over that with a guess: one
+                // says "Started … it'll appear on the grid once it starts
+                // working" (it will not; it is sitting on a menu), the other
+                // says it never started (it did). Silence here is the honest
+                // move, and the log keeps the receipt.
+                if launchQuestion.wasAsked {
+                    Permissions.log("launcher: nothing registered in \(dir) after 30s because the "
+                        + "pane is stopped on a question — the card is already saying so")
+                    return
+                }
                 let started = ProcessProbe.pid(
                     onTty: tty, containing: command.split(separator: " ").first.map(String.init) ?? command)
                 if started != nil {
@@ -1578,4 +1604,20 @@ extension AppDelegate {
     }
 
     @objc func newSessionTapped() { newSession() }
+}
+
+/// One launch's answer to "did this pane turn out to be asking us something?".
+///
+/// Shared between the trust watcher (which finds out, off-main, at ~8s) and
+/// the registration wait (which needs to know, on another queue, at 30s). A
+/// lock around a Bool rather than an actor because the watcher's side is a
+/// synchronous callback inside a polling loop, and making that side `await`
+/// would mean making the whole loop async to carry one flag.
+final class LaunchQuestionSeen: @unchecked Sendable {
+    private let lock = NSLock()
+    private var asked = false
+
+    func mark() { lock.lock(); asked = true; lock.unlock() }
+
+    var wasAsked: Bool { lock.lock(); defer { lock.unlock() }; return asked }
 }
