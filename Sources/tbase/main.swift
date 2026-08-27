@@ -362,7 +362,8 @@ do {
         print("in         \(command.cwd)")
         if args.contains("--dry-run") { print(""); print("dry run — nothing launched"); break }
         print("")
-        switch SessionLauncher.resume(sessionId: session.sessionId, directory: command.cwd) {
+        switch SessionLauncher.resume(sessionId: session.sessionId, directory: command.cwd,
+                                      launch: HarnessLaunch(harness: session.harness)) {
         case .success:
             print("resumed in a detached tmux pane — `tbase targets` finds it, "
                 + "or click Go to Agent")
@@ -630,7 +631,8 @@ case "reconcile":
         let before = useCodex ? Set(CodexRollout.liveThreadIds())
                               : Set((ClaudeAgentsCLI().sessions() ?? [])
                                     .filter { $0.cwd == dir }.map(\.sessionId))
-        switch SessionLauncher.launch(directory: dir, command: command, adapter: adapter) {
+        switch SessionLauncher.launch(
+            directory: dir, launch: HarnessLaunch(adapter: adapter, command: command)) {
         case .success(let tty):
             print("detached tmux session (attach on demand): `\(command)` in \(dir)")
             print("waiting for it to register…")
@@ -942,7 +944,13 @@ case "reconcile":
             // hand-started session gets the same ownership TRANSFER here,
             // not a different refusal.
             if let transferred = SessionLauncher.OwnershipTransfer.toTmux(
-                sessionId: sessionId, directory: cwd) {
+                sessionId: sessionId,
+                // `live` came from `ClaudeAgentsCLI`, so this session is a
+                // Claude Code one by construction; Codex targets never reach
+                // this branch. Named rather than defaulted, because a default
+                // here is exactly what ended a session with the wrong binary.
+                launch: HarnessLaunch(harness: ClaudeCodeAdapter().id),
+                directory: cwd) {
                 pane = transferred.pane
                 dispatchPid = transferred.pid
             }
