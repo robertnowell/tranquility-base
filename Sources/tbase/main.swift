@@ -21,6 +21,7 @@ func usage() -> Never {
       tbase hooks               which hooks are wired, broken, or missing
       tbase voices              installed free voices, and what is a download away
       tbase secrets             which credentials are readable, and from where
+      tbase check-keys          ask each provider whether its stored key works
       tbase discover [days] [n] every session in the window, awake or not,
                                 with what would bring each dead one back —
                                 Claude Code, then a Codex table underneath
@@ -549,6 +550,29 @@ do {
         print("  \(key.rawValue): \(value == nil ? "MISSING" : "present (\(value!.count) chars)")")
     }
     exit(0)
+
+case "check-keys":
+    // Asks each provider whether the stored key works, and prints only the
+    // verdict. The value is read from the keychain, used for one read-only
+    // request, and never printed -- which is what makes this safe to run while
+    // somebody is watching the terminal.
+    var anyBad = false
+    for key in Secrets.Key.allCases {
+        guard Secrets.read(key) != nil else {
+            print("  \(pad(key.rawValue, 22)) not set")
+            continue
+        }
+        let outcome = await KeyCheck.verifyStored(key)
+        let verdict = outcome?.summary ?? "not set"
+        print("  \(pad(key.rawValue, 22)) \(verdict)")
+        if outcome?.isBad == true { anyBad = true }
+    }
+    if anyBad {
+        print("")
+        print("A rejected key is the one worth acting on: the provider looked at it")
+        print("and said no. Unreachable says nothing about the key.")
+        exit(1)
+    }
 
 case "calls":
     // Every model call, whole. A summary that reads wrong is otherwise

@@ -1055,7 +1055,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
-        if CommandLine.arguments.contains("--show-onboarding") {
+        if CommandLine.arguments.contains("--show-onboarding")
+            || CommandLine.arguments.contains("--show-prerequisites") {
             onboarding.show { }
         }
         if CommandLine.arguments.contains("--selftest-hud") {
