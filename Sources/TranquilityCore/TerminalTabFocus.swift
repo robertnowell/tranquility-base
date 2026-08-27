@@ -99,8 +99,30 @@ public enum TerminalTabFocus {
         case .success(let out) where out.contains("notfound"): return .tabGone
         case .success: return .focused
         case .failure(let e) where e.timedOut: return .timedOut(seconds: Int(timeout))
-        case .failure(let e): return .failed(e.message)
+        case .failure(let e): return .failed(Self.plainWords(for: e.message))
         }
+    }
+
+    /// AppleScript's own error text, translated into the one thing the reader
+    /// can act on.
+    ///
+    /// `-1743` is macOS refusing to let this app send Apple events to
+    /// Terminal — the Automation permission. It is a SETTING, not a fault:
+    /// nothing is broken, nothing was lost, and there is exactly one action
+    /// that fixes it. Surfacing the raw string instead ("41:537: execution
+    /// error: Not authorized to send Apple events to Terminal. (-1743)")
+    /// tells a person their app is broken in a language written for whoever
+    /// wrote the app.
+    ///
+    /// Reported 26 Aug, and it is the reason GO TO AGENT stopped working at
+    /// all: the permission was revoked deliberately while testing the
+    /// first-run experience and never granted back. macOS does not re-prompt
+    /// once denied, so nothing would ever have asked again.
+    static func plainWords(for message: String) -> String {
+        guard message.contains("-1743") || message.contains("Not authorized to send Apple events")
+        else { return message }
+        return "Tranquility Base isn't allowed to control Terminal, so it can't open the "
+            + "agent's window. Grant it under Privacy & Security → Automation, then try again."
     }
 
     /// Only a name shaped the way `launchTmux` actually makes one (`tb-`

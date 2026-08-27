@@ -923,8 +923,35 @@ extension AppDelegate {
     /// hand-started one — from the list. Same door `StatusHUD.goToSession()`
     /// uses from the card; this one is reached from a session id rather than
     /// from the card's current target.
+    /// GO TO AGENT, from a grid row.
+    ///
+    /// This used to be a SECOND implementation of the verb, and a lesser one:
+    /// it found the tty and asked Terminal to raise a tab, full stop. The
+    /// card's version has, since 23 Aug, done the thing that actually works
+    /// for a session nobody started under tmux — end it and resume it in a
+    /// pane — and the grid's never learned it. So tapping an amber row for a
+    /// hand-started session searched Terminal for a tab that was not there,
+    /// logged `tab not found`, and returned. Nothing moved, nothing was said.
+    ///
+    /// Reported 26 Aug: *"I clicked on default launcher here and it didn't go
+    /// to the agent, it didn't do anything, no error just nothing, absolutely
+    /// terrible experience. It should end manual session and open tmux —
+    /// we've fixed this issue before already."* Both halves of that are right:
+    /// it is the fix that already exists, on the other copy of the verb.
+    ///
+    /// The two copies now DO the same thing. They are still two copies —
+    /// `StatusHUD.goToSession()` keeps its own body because the launch
+    /// self-tests pin its in-flight guard and its "Opening that session's
+    /// tab…" paint, and collapsing them is a change worth making on its own
+    /// rather than inside a fix for the behaviour. That collapse is the
+    /// follow-up; until it happens, a change to this verb has to be made
+    /// twice, and this comment is the warning that it does.
+    ///
+    /// And every outcome speaks. Four of the five exits used to be a log line
+    /// and a silent return, which on a control you just pressed is
+    /// indistinguishable from the app being broken — the exact complaint.
     func goToSession(_ sessionId: String) {
-        Task.detached {
+        Task.detached { [weak self] in
             // `agents` alone made GO TO AGENT a permanent no-op for every
             // Codex session (26 Aug) — silently logged and returned, never
             // navigated, because Codex has no registry to appear in here.
@@ -932,17 +959,74 @@ extension AppDelegate {
                 + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                 .first(where: { $0.sessionId == sessionId }) else {
                 Permissions.log("goTo: \(sessionId.prefix(8)) is not live any more")
+                await MainActor.run { [weak self] in
+                    self?.hud.showResult("That agent isn't running any more. "
+                                         + "Revive it from Past Agents.")
+                }
                 return
             }
-            guard let tty = ProcessProbe.tty(of: live.pid) else {
-                Permissions.log("goTo: no tty for pid \(live.pid)")
-                return
+
+            // Already in a pane? Then this is only a matter of raising a
+            // window. Registry first — a tty is two stale hops from the truth.
+            let owned = TmuxOwnership.pane(forSessionId: sessionId, pid: live.pid)
+            let tty: String
+            if let owned {
+                tty = owned.paneTty
+            } else {
+                // Hand-started: end it and bring it up under tmux, which is
+                // the only way a human and this app can both reach it. Same
+                // mechanism the card uses, with the session's OWN harness.
+                Permissions.log("goTo: \(sessionId.prefix(8)) is hand-started — "
+                    + "transferring to tmux")
+                let attempt = SessionLauncher.OwnershipTransfer.attempt(
+                    sessionId: sessionId,
+                    launch: HarnessLaunch.forExistingSession(sessionId))
+                guard let moved = attempt.moved else {
+                    let message: String
+                    switch attempt {
+                    case .endedButNotRestarted(let why, _, let manual):
+                        Permissions.log("goTo: transfer ended but did not restart "
+                            + "\(sessionId.prefix(8)) — \(why)")
+                        await MainActor.run {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(manual, forType: .string)
+                        }
+                        message = "That session was closed and couldn't be reopened here. "
+                            + "Copied the manual revival command to your clipboard — "
+                            + "paste it in a terminal."
+                    case .refused(let why):
+                        Permissions.log("goTo: transfer refused \(sessionId.prefix(8)) — \(why)")
+                        message = "Couldn't move that session under tmux — it is still "
+                            + "running in its own terminal. Nothing was closed."
+                    case .moved:
+                        message = ""
+                    }
+                    await MainActor.run { [weak self] in self?.hud.showResult(message) }
+                    return
+                }
+                await MainActor.run { [weak self] in
+                    self?.hud.attachLivePid(moved.pid, sessionId: sessionId)
+                }
+                tty = moved.pane.paneTty
             }
-            switch await TerminalTabFocus.focus(tty: tty) {
-            case .focused: Permissions.log("goTo: focused \(tty)")
-            case .tabGone: Permissions.log("goTo: tab not found for \(tty)")
-            case .timedOut(let seconds): Permissions.log("goTo TIMEOUT after \(seconds)s for \(tty)")
-            case .failed(let message): Permissions.log("goTo FAILED: \(message)")
+
+            let outcome = await TerminalTabFocus.focus(tty: tty, sessionId: sessionId)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                switch outcome {
+                case .focused:
+                    Permissions.log("goTo: focused \(tty)")
+                case .tabGone:
+                    Permissions.log("goTo: tab not found for \(tty)")
+                    self.hud.showResult("That agent's window isn't open any more.")
+                case .timedOut(let seconds):
+                    Permissions.log("goTo TIMEOUT after \(seconds)s for \(tty)")
+                    self.hud.showResult("Terminal didn't answer within \(seconds) seconds. "
+                                        + "The session is fine — try again in a moment.")
+                case .failed(let message):
+                    Permissions.log("goTo FAILED: \(message)")
+                    self.hud.showResult("Couldn't control Terminal: \(message)")
+                }
             }
         }
     }
