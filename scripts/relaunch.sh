@@ -196,6 +196,28 @@ APP_PATH=$(scripts/build-clean.sh "$REF")
 # before, so this is safe on a machine that has never run the installer.
 INSTALLED="/Applications/$APP"
 if [ -d "$INSTALLED" ]; then
+  # STOP FIRST. `rm -rf` on the installed bundle deletes the executable of a
+  # process that is still running, and macOS does not keep a deleted binary's
+  # pages alive: every page the live app has not already faulted in becomes
+  # unreadable, and it dies with SIGBUS / KERN_PROTECTION_FAILURE at whatever
+  # instruction happens to need one next.
+  #
+  # That is why the crash never looked like a deploy. Four reports on 26 Aug,
+  # in four unrelated places — `swift_release`, `_getWitnessTable`, a
+  # deduplicated symbol, `sqlite3FkRequired` — on two different threads, which
+  # reads as memory corruption until you line them up against the ledger: one
+  # crash TWO SECONDS after a deploy, and every one of the others within
+  # minutes of one. The app was running with its own bundle deleted, and it
+  # died the next time it ran code it had not run yet. Robert saw it as "the
+  # app crashes after I reply", because a reply is exactly when it touches
+  # pages it has not touched before.
+  #
+  # The old order was deliberate — see `app_stop`'s comment below, which wanted
+  # the gap between stopping and starting kept short. That intent survives:
+  # the BUILD still happens before any of this, so stopping here is still
+  # "immediately before the new one comes up", just not after deleting the
+  # binary out from under the old one.
+  app_stop
   echo "→ updating the installed copy"
   rm -rf "$INSTALLED"
   cp -R "$APP_PATH" "$INSTALLED"
@@ -210,8 +232,10 @@ if [ -d "$INSTALLED" ]; then
   [ -n "$INSTALLED" ] && APP_PATH="$INSTALLED"
 fi
 
-# Only now. Two instances racing for one global hotkey is its own bug, so the old
-# one goes down immediately before the new one comes up, not before the build.
+# Belt and braces: a no-op when the branch above already stopped it, and the
+# real stop on a machine with no installed copy (the worktree-build path).
+# Two instances racing for one global hotkey is its own bug, so the old one
+# goes down immediately before the new one comes up, not before the build.
 app_stop
 
 echo "→ launching (with panel self-tests)"
