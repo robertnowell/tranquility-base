@@ -30,7 +30,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 446),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered, defer: false)
         // The first thing anyone sees of this app must look like this app.
@@ -103,7 +103,15 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
-        stack.edgeInsets = NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24)
+        // Top clearance for the traffic lights, not just the corner radius.
+        // `fullSizeContentView` + a transparent title bar means our content's
+        // top edge IS the window's top edge, and the close button sits
+        // there too (`.closable`, `windowShouldClose`'s own gate). 24pt put
+        // the wordmark almost directly under the lights, reported live 26
+        // Aug ("the TRANQUILITY BASE text looks janky against the traffic
+        // light [buttons]"). 40pt clears the standard ~28pt titlebar band
+        // with room to spare.
+        stack.edgeInsets = NSEdgeInsets(top: 40, left: 24, bottom: 24, right: 24)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         stack.addArrangedSubview(wordmark())
@@ -159,7 +167,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         doneButton = done
         stack.addArrangedSubview(done)
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 430))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 446))
         container.wantsLayer = true
         container.layer?.backgroundColor = StateLegend.Palette.surface.cgColor
         container.addSubview(stack)
@@ -188,8 +196,15 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         rows[kind] = dot
         row.addArrangedSubview(dot)
 
+        // Not "(optional)": reported directly, 26 Aug: "that's not optional,
+        // that's a critical fallback, why are we calling that optional?"
+        // `isRequired == false` only ever means "does not hold the Start
+        // gate" (this row's own doc comment, and `Permissions.allActive`),
+        // never "skip it": Speech Recognition is what keeps transcription
+        // working when the network is down (its own detail string below).
+        // "(fallback)" says what it actually is instead of undermining it.
         let name = NSTextField(labelWithString:
-            "\(step). " + kind.title + (kind.isRequired ? "" : "  (optional)"))
+            "\(step). " + kind.title + (kind.isRequired ? "" : "  (fallback)"))
         name.font = ChromeType.mono(ofSize: 12, weight: .medium)
         name.textColor = StateLegend.Palette.ink
         name.drawsBackground = false

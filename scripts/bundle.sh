@@ -12,13 +12,20 @@
 # same trap that made the keychain re-prompt on every `swift build`.
 #
 # Usage: scripts/bundle.sh [debug|release]
+#
+# APP_NAME and BUNDLE_ID are overridable (VD_APP_NAME, VD_BUNDLE_ID) so
+# scripts/bundle-test.sh can stamp out a SEPARATE app -- different bundle
+# id, different code identity, so TCC treats it as an entirely different
+# app with its own, independently resettable permission grants. Every
+# other caller of this script (relaunch.sh, preflight.sh) leaves both
+# unset and gets the real app, unchanged.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG="${1:-debug}"
-APP_NAME="Tranquility Base"
-BUNDLE_ID="com.robertnowell.voice-dispatch"
+APP_NAME="${VD_APP_NAME:-Tranquility Base}"
+BUNDLE_ID="${VD_BUNDLE_ID:-com.robertnowell.voice-dispatch}"
 BUILD_DIR=".build/$CONFIG"
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 

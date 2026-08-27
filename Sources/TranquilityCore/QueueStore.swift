@@ -20,7 +20,24 @@ public final class QueueStore: Sendable {
     /// callsign in a new voice, and the replay corpus would be orphaned. When it
     /// moves, it moves behind a one-time migration with a fallback read path — not
     /// as a side effect of the 2026 rename (Voice Dispatch → Tranquility Base).
+    /// `VOICE_DISPATCH_SUPPORT_DIR` overrides this, for exactly one caller:
+    /// `scripts/bundle-test.sh`'s isolated test build. That build gets a
+    /// different bundle id so TCC treats it as a different app with its own
+    /// permission grants, but this directory is a hardcoded path, not keyed
+    /// to bundle id at all, and every OTHER piece of state lives here: the
+    /// queue database, session ownership, secrets.json (real API keys), the
+    /// capture marker, the hotkey lock. Found live, 26 Aug: a "TCC-isolated"
+    /// test build ran for two minutes alongside the real app, both reading
+    /// and writing the same `queue.sqlite` and the same session-sweep
+    /// state, real API keys included. TCC isolation had bought nothing,
+    /// because this was never gated on bundle id at all. Unset in every
+    /// normal launch, so the real app's own path is unchanged by
+    /// construction.
     public static var supportDirectory: URL {
+        if let override = ProcessInfo.processInfo.environment["VOICE_DISPATCH_SUPPORT_DIR"],
+           !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("VoiceDispatch", isDirectory: true)
     }

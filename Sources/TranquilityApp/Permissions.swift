@@ -115,8 +115,12 @@ struct Permissions {
         // grep separates them — and the mic acceptance run can measure
         // exactly the process it deployed.
         let line = "\(ISO8601DateFormatter().string(from: Date())) \(Self.pidTag)  \(message)\n"
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/VoiceDispatch/app.log")
+        // `QueueStore.supportDirectory`, not a second hardcoded copy of the
+        // same path: the isolated test build (`VOICE_DISPATCH_SUPPORT_DIR`,
+        // scripts/bundle-test.sh) needs its own log file too, or its
+        // activity keeps landing in the real app's app.log regardless of
+        // how isolated everything else is (found live, 26 Aug).
+        let url = QueueStore.supportDirectory.appendingPathComponent("app.log")
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let fd = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)

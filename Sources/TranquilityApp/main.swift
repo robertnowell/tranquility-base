@@ -972,8 +972,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Existing installations were created before storage was private by
         // default, so their modes are only fixed by doing it explicitly at startup.
-        PrivateStorage.harden(directory: FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/VoiceDispatch"))
+        // `QueueStore.supportDirectory`, so the isolated test build hardens
+        // its OWN directory rather than reaching into the real app's.
+        PrivateStorage.harden(directory: QueueStore.supportDirectory)
 
         ElevenLabsSpeechProvider.trace = { Permissions.log("11labs: \($0)") }
         // Populate the picker from the account rather than a hardcoded list.
@@ -1195,36 +1196,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let granted = await Permissions.request(.microphone)
             Permissions.log("requestAccess(.audio) returned \(granted); status now \(Permissions.statusDescription(.microphone))")
             refresh()
-            announceLaunch()
-            // Visible proof of life. A menu-bar-only app with a full menu bar is
-            // indistinguishable from a broken one; this makes launch observable.
-            showIdleGrid()
-        }
-    }
-
-    /// Say something on launch.
-    ///
-    /// A menu-bar-only app gives no other evidence that it started — there is no
-    /// window, no dock icon, and the status item is easy to miss. Since the whole
-    /// product is a voice, using it to confirm its own liveness is both the cheapest
-    /// signal and a real smoke test of the speech path.
-    func announceLaunch() {
-        let missing = [micGranted ? nil : "microphone",
-                       hotkeyWorking ? nil : "input monitoring"].compactMap { $0 }
-        _ = missing  // still logged below; the panel and menu carry the status
-
-        // No spoken greeting. Launch is a state the user caused, watching the
-        // screen — the away-channel law at its purest: if it can be communicated
-        // visually, it is not spoken. Apps also relaunch mid-work (rebuilds,
-        // updates), and announcing yourself each time is noise from the exact
-        // product that promised calm. The idle card appearing IS the greeting.
-        Task { @MainActor in
-            // `allActive`, not `allGranted`. A permission granted while the app
-            // was already running can be recorded by macOS and still unusable
-            // here, and an app that skips its own checklist on the strength of
-            // that reads as broken rather than unfinished.
-            if !Permissions.allActive {
-                onboarding.show { [weak self] in self?.refresh() }
+            // No spoken greeting: launch is a state the user caused, watching
+            // the screen (the away-channel law at its purest, if it can be
+            // communicated visually it is not spoken), and apps also relaunch
+            // mid-work (rebuilds, updates) where announcing yourself every
+            // time is noise from the exact product that promised calm.
+            //
+            // `allActive`, not `allGranted`: a permission granted while the
+            // app was already running can be recorded by macOS and still
+            // unusable here, and the grid must never be the thing shown in
+            // that state, because it cannot hear or dispatch anything.
+            // Reported directly, 26 Aug, by a three-months user whose own
+            // relaunch landed mid-permission-grant: "if critical permissions
+            // are ever missing you should show the onboarding screen not
+            // the grid because the grid won't work." Before this, the grid
+            // painted unconditionally right after this check, so a launch
+            // with incomplete permissions raced two windows against each
+            // other with no ordering guarantee, and the grid usually won,
+            // showing a normal-looking panel that answered nothing. Now the
+            // grid paints only once onboarding is actually done (its own
+            // `onDone` callback), or immediately when nothing was missing.
+            if Permissions.allActive {
+                // Visible proof of life. A menu-bar-only app with a full
+                // menu bar is indistinguishable from a broken one; this
+                // makes launch observable.
+                showIdleGrid()
+            } else {
+                onboarding.show { [weak self] in
+                    self?.refresh()
+                    self?.showIdleGrid()
+                }
             }
         }
     }
