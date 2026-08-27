@@ -450,10 +450,14 @@ extension AppDelegate {
                     hud.showResult("Nothing to reply to yet. "
                                    + "Tap ⌃ Ctrl + ⌥ Option to hear one first.")
                 case .readyToSend(let utteranceId, let text, let coreLabel, let sessionId):
-                    // One identity: Core's outcome still carries the project
-                    // label; the visual "Sending to X" upgrades it to the minted
-                    // callsign when one exists.
-                    let label = (try? store?.callsign(for: sessionId)).flatMap { $0 } ?? coreLabel
+                    // Core resolves the identity now — through the same
+                    // `tabDisplayName` the grid uses — so this no longer
+                    // second-guesses it with a DB callsign that is only minted
+                    // at a session's first successful summary and is absent
+                    // for exactly the freshly-launched sessions most likely to
+                    // be replied to. The old fallback chain ended at the raw
+                    // cwd basename, which is how "arc-work" reached a card.
+                    let label = coreLabel
                     // Sending is the default. The window exists to stop it, not to
                     // permit it: approving every correct transcript is a toll.
                     lastStatusLine = "sending to \(label)…"
@@ -1041,12 +1045,17 @@ extension AppDelegate {
             // the same unusable spelling, so the card said "copied the manual
             // revival command" and handed over something that could not work
             // for that agent. One default, two lies.
-            let adapter = KnownHarnesses.adapter(for: fresh.harness)
-            let harnessCommand = AgentDefaults.load(for: fresh.harness)
+            let launch = HarnessLaunch(harness: fresh.harness)
             switch SessionLauncher.resume(sessionId: sessionId, directory: command.cwd,
-                                          command: harnessCommand, adapter: adapter) {
+                                          launch: launch) {
             case .success:
-                await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
+                // The receipt waits for the session to actually come back.
+                // It used to fire here, the instant `resume` returned — which
+                // means only that a command was issued and its pane did not
+                // die within a second. Measured 26 Aug: a revive said
+                // "✓ RESUMED" and the process it started sat five minutes
+                // without ever registering — no live row, no Go to Agent, no
+                // correction. "Revived" has to mean "confirmed live".
                 // The announce fired before this resume even started (see
                 // `attachLivePid`'s doc comment) — by the time `resume` has
                 // returned, the process has been up for however long the
@@ -1059,16 +1068,41 @@ extension AppDelegate {
                 // record on a successful attach, so liveNonRegistrySessions()
                 // has it from the first iteration, no retries needed for that
                 // harness, but the loop still costs nothing to share.
-                for _ in 0..<5 {
+                var registered = false
+                // Twenty tries, not five. Two seconds was a deadline chosen
+                // when nothing depended on it; now the receipt does.
+                for _ in 0..<20 {
                     if let pid = ((ClaudeAgentsCLI().sessions() ?? [])
                         + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                         .first(where: { $0.sessionId == sessionId })?.pid {
+                        registered = true
                         await MainActor.run { [weak self] in
                             self?.hud.attachLivePid(pid, sessionId: sessionId)
                         }
                         break
                     }
                     try? await Task.sleep(nanoseconds: 400_000_000)
+                }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    if registered {
+                        self.hud.showReceipt(.revived(name))
+                    } else {
+                        // It launched and it is not answering. Say so, and
+                        // hand over the line that does not need us — the same
+                        // rescue the failure branch offers, for the same
+                        // reason: this is the state where the app cannot help.
+                        Permissions.log("revive: \(sessionId.prefix(8)) launched but never "
+                            + "registered — reporting it rather than claiming success")
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(
+                            SessionLauncher.manualRevival(
+                                sessionId: sessionId, directory: command.cwd, launch: launch),
+                            forType: .string)
+                        self.hud.showResult(
+                            "\(name) started but hasn't come back yet. Copied the manual "
+                            + "revival command to your clipboard — paste it in a terminal.")
+                    }
                 }
             case .failure(let error):
                 // The cause is a log line, not a card: an exit status means
@@ -1079,8 +1113,7 @@ extension AppDelegate {
                 // morning — and a retry offer only when a retry could differ.
                 Permissions.log("revive: failed \(sessionId.prefix(8)) — \(error.message)")
                 let manual = SessionLauncher.manualRevival(
-                    sessionId: sessionId, directory: command.cwd,
-                    command: harnessCommand, adapter: adapter)
+                    sessionId: sessionId, directory: command.cwd, launch: launch)
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     NSPasteboard.general.clearContents()
@@ -1204,8 +1237,9 @@ extension AppDelegate {
             // parallel, immediately below. It blocks for at least two settled
             // polls and up to thirty seconds, and until now the registration
             // this greeting binds to queued behind it.
-            let result = SessionLauncher.launch(directory: dir, command: command,
-                                                acceptTrustPrompt: false, adapter: adapter)
+            let result = SessionLauncher.launch(
+                directory: dir, launch: HarnessLaunch(adapter: adapter, command: command),
+                acceptTrustPrompt: false)
             guard case .success(let tty) = result else {
                 // Every exit from here on releases the promise. A waiter left
                 // hanging is a reply that never lands and never says why, which

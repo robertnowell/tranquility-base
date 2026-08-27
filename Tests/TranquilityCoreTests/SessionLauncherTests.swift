@@ -70,7 +70,8 @@ final class ManualRevivalTests: XCTestCase {
     /// command someone is asked to paste should be short enough to read.
     func testTheManualLineIsWhatAHumanWouldType() {
         let line = SessionLauncher.manualRevival(
-            sessionId: "abc-123", directory: "/Users/x/Projects/thing", command: "claude")
+            sessionId: "abc-123", directory: "/Users/x/Projects/thing",
+            launch: HarnessLaunch(adapter: ClaudeCodeAdapter(), command: "claude"))
         XCTAssertEqual(line, "cd '/Users/x/Projects/thing' && claude --resume abc-123")
         XCTAssertFalse(line.contains("export PATH"),
                        "the app's PATH is the app's problem; a human shell has its own")
@@ -110,7 +111,8 @@ final class NativeArchTests: XCTestCase {
     /// asked to trust is noise they would have to evaluate.
     func testTheManualLineIsNotReExeced() {
         let line = SessionLauncher.manualRevival(
-            sessionId: "abc", directory: "/tmp/x", command: "claude")
+            sessionId: "abc", directory: "/tmp/x",
+            launch: HarnessLaunch(adapter: ClaudeCodeAdapter(), command: "claude"))
         XCTAssertFalse(line.contains("arch -arm64"), line)
     }
 }
@@ -136,11 +138,13 @@ final class HarnessSpecificRevivalTests: XCTestCase {
     /// the bug was a DEFAULT quietly applying the wrong one.
     func testTheManualLineMatchesTheHarnessItIsFor() {
         let codex = SessionLauncher.manualRevival(
-            sessionId: "abc", directory: "/x", command: "codex", adapter: CodexAdapter())
+            sessionId: "abc", directory: "/x",
+            launch: HarnessLaunch(adapter: CodexAdapter(), command: "codex"))
         XCTAssertEqual(codex, "cd '/x' && codex resume abc")
 
         let claude = SessionLauncher.manualRevival(
-            sessionId: "abc", directory: "/x", command: "claude", adapter: ClaudeCodeAdapter())
+            sessionId: "abc", directory: "/x",
+            launch: HarnessLaunch(adapter: ClaudeCodeAdapter(), command: "claude"))
         XCTAssertEqual(claude, "cd '/x' && claude --resume abc")
     }
 
@@ -150,5 +154,47 @@ final class HarnessSpecificRevivalTests: XCTestCase {
         XCTAssertEqual(KnownHarnesses.adapter(for: CodexAdapter().id).id, CodexAdapter().id)
         XCTAssertEqual(KnownHarnesses.adapter(for: ClaudeCodeAdapter().id).id,
                        ClaudeCodeAdapter().id)
+    }
+}
+
+/// The command and the harness cannot disagree any more.
+///
+/// They were two independently-defaulted parameters — `command:` defaulting
+/// to the Settings default launcher, `adapter:` hardcoded to Claude Code — on
+/// four signatures. While the default launcher was Claude Code they agreed by
+/// luck. The day it was set to Codex, GO TO AGENT ended a live Claude Code
+/// session and tried to reopen it as `codex … --resume <id>`, which Codex
+/// rejects outright, and the rescue command copied to the clipboard was the
+/// same impossible string. One session ended, nothing restarted, remedy
+/// unusable.
+final class HarnessLaunchTests: XCTestCase {
+
+    /// One id in, both values out — the property that makes the old bug
+    /// unexpressible.
+    func testOneHarnessDecidesBothTheBinaryAndTheFlags() {
+        let codex = HarnessLaunch(harness: CodexAdapter().id)
+        XCTAssertEqual(codex.adapter.id, CodexAdapter().id)
+        XCTAssertEqual(codex.adapter.resumeArguments(sessionId: "x"), ["resume", "x"])
+
+        let claude = HarnessLaunch(harness: ClaudeCodeAdapter().id)
+        XCTAssertEqual(claude.adapter.id, ClaudeCodeAdapter().id)
+        XCTAssertEqual(claude.adapter.resumeArguments(sessionId: "x"), ["--resume", "x"])
+    }
+
+    /// An unknown id resolves to Claude Code rather than trapping — the same
+    /// fail-safe direction `KnownHarnesses.adapter(for:)` already takes.
+    func testAnUnknownHarnessFallsSafeRatherThanTrapping() {
+        XCTAssertEqual(HarnessLaunch(harness: "a-harness-from-the-future").adapter.id,
+                       ClaudeCodeAdapter().id)
+    }
+
+    /// The Settings default is for a NEW agent only. An EXISTING session takes
+    /// its harness from disk, because what a new agent would be has nothing to
+    /// do with what this session is — confusing the two is the whole bug.
+    func testAnExistingSessionIsNotResolvedFromTheSettingsDefault() {
+        // No Codex rollout exists for a random id, so it must read as Claude
+        // Code regardless of what the default launcher is set to.
+        let launch = HarnessLaunch.forExistingSession(UUID().uuidString)
+        XCTAssertEqual(launch.adapter.id, ClaudeCodeAdapter().id)
     }
 }
