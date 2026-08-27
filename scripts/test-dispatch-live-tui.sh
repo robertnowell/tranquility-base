@@ -36,7 +36,20 @@ cleanup() {
   # leaves litter in the product is not a drill, it is a second bug.
   if [ -n "${SID:-}" ]; then
     for t in "$HOME/.claude/projects/"*"/$SID.jsonl"; do
-      [ -f "$t" ] && rm -f "$t" && rmdir "$(dirname "$t")" 2>/dev/null
+      [ -f "$t" ] || continue
+      d="$(dirname "$t")"
+      rm -f "$t"
+      # `rmdir` was not enough: Claude Code also writes a `memory/` directory
+      # beside the transcript, so the project directory was never empty and
+      # every run left one behind. Harmless to Past Agents — the listing looks
+      # for transcripts — but litter is litter, and the drill's own claim is
+      # that it cleans up after itself.
+      #
+      # Guarded on there being no OTHER transcript in there, so this can only
+      # ever remove a directory this drill created for itself.
+      if [ -z "$(find "$d" -name '*.jsonl' -print -quit 2>/dev/null)" ]; then
+        rm -rf "$d"
+      fi
     done
   fi
 }
