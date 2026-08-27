@@ -954,13 +954,16 @@ public enum SessionLauncher {
     /// longer CAN be reached — `launchTmux` is the only launch path left,
     /// and every tty it produces is tmux-owned by construction. See
     /// `watchForTrustPrompt(pane:)` for the one remaining watch loop.
-    public static func watchForTrustPrompt(tty: String, adapter: any HarnessAdapter = ClaudeCodeAdapter()) {
+    public static func watchForTrustPrompt(
+        tty: String, adapter: any HarnessAdapter = ClaudeCodeAdapter(),
+        onNeedsHuman: (@Sendable (String) -> Void)? = nil
+    ) {
         guard let pane = TmuxOwnership.pane(forTty: tty) else {
             Self.trace?("newSession: \(tty) has no resolvable tmux pane — trust watcher has "
                 + "nothing to watch")
             return
         }
-        watchForTrustPrompt(pane: pane, adapter: adapter)
+        watchForTrustPrompt(pane: pane, adapter: adapter, onNeedsHuman: onNeedsHuman)
     }
 
     /// Watch a just-launched pane; if the harness's trust prompt renders,
@@ -1002,7 +1005,18 @@ public enum SessionLauncher {
     /// that no longer exists) — deleted, not merely superseded, once the
     /// tty-based overload above stopped being reachable through anything
     /// but this one.
-    static func watchForTrustPrompt(pane: TmuxPaneAddress, adapter: any HarnessAdapter = ClaudeCodeAdapter()) {
+    /// `onNeedsHuman` is the panel's half of the same event, added 27 Aug.
+    /// Opening the window is necessary and was never sufficient: a launch you
+    /// walked away from puts a window somewhere behind whatever you are
+    /// actually looking at, and the panel — the one surface this app promises
+    /// you can watch instead of a terminal — went on showing a spinner. The
+    /// window is the place to ANSWER; the card is the place to find out there
+    /// is something to answer. Optional, so `tbase` and the tests keep the
+    /// window-only behaviour they had.
+    static func watchForTrustPrompt(
+        pane: TmuxPaneAddress, adapter: any HarnessAdapter = ClaudeCodeAdapter(),
+        onNeedsHuman: (@Sendable (String) -> Void)? = nil
+    ) {
         guard let spec = adapter.trustPrompt else { return }
         TrustPromptWatcher.watch(
             spec: spec,
@@ -1016,7 +1030,14 @@ public enum SessionLauncher {
                 Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
             },
             trace: Self.trace, label: pane.sessionName,
-            onNeedsHuman: {
+            onNeedsHuman: { question in
+                // The panel first, the window second — on purpose. Opening a
+                // window is an AppleScript round trip that can take a second
+                // and can fail outright (Automation permission, no Terminal);
+                // saying WHAT the pane is asking costs nothing and must not
+                // queue behind it, least of all on the path where the window
+                // never opens.
+                onNeedsHuman?(question)
                 // The same door Go to Agent uses, called automatically
                 // rather than waiting for a click: a screen that genuinely
                 // needs the human's own decision is not "resumed" until
