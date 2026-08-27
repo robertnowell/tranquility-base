@@ -585,6 +585,49 @@ extension AppDelegate {
         rebuildMenu()
     }
 
+    @objc func editKey(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let key = Secrets.Key(rawValue: raw) else { return }
+        KeySheet.prompt(for: key) { status in
+            // The menu is gone by the time a verdict lands, so it goes to the
+            // HUD, which is where this app already says things that outlive the
+            // click that caused them.
+            Permissions.log("keys: \(key.rawValue) -- \(status)")
+        }
+    }
+
+    /// Ask every provider whether the key it has still works.
+    ///
+    /// Keys rot without any local symptom: revoked in a console months later,
+    /// or expired on a plan change. Until this existed the first sign was the
+    /// away-channel going quiet, or the system voice arriving where the good one
+    /// should have been -- both of which read as the app being broken rather
+    /// than a credential having lapsed.
+    @objc func checkAllKeys() {
+        let stored = Secrets.Key.allCases.filter { Secrets.read($0) != nil }
+        guard !stored.isEmpty else {
+            hud.note("No API keys are stored yet.")
+            return
+        }
+        hud.note("Checking \(stored.count) key\(stored.count == 1 ? "" : "s")...")
+        Task.detached {
+            var lines: [String] = []
+            for key in stored {
+                let outcome = await KeyCheck.verifyStored(key)
+                let summary = outcome?.summary ?? "not set"
+                Permissions.log("keys: \(key.rawValue) -- \(summary)")
+                // Only the bad news is worth a line: a list of four "working"
+                // is a notification nobody reads twice.
+                if outcome?.isBad == true { lines.append("\(key.provider): \(summary)") }
+            }
+            await MainActor.run {
+                self.hud.note(lines.isEmpty
+                    ? "All \(stored.count) keys are working."
+                    : lines.joined(separator: "  ·  "))
+            }
+        }
+    }
+
     @objc func chooseVoice(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
         // Two catalogues, two settings. Writing a macOS identifier into

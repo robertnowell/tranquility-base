@@ -92,14 +92,7 @@ public enum Prerequisites {
         /// A row that says "add a key" and does not say where to get one has
         /// handed the user a search, which is the thing this whole screen exists
         /// to stop doing. Verified to resolve 26 Aug.
-        public var signupURL: URL? {
-            switch self {
-            case .tmux, .hooks: return nil
-            case .anthropicKey: return URL(string: "https://console.anthropic.com/settings/keys")
-            case .elevenLabsKey: return URL(string: "https://elevenlabs.io/app/settings/api-keys")
-            case .assemblyAIKey: return URL(string: "https://www.assemblyai.com/dashboard/api-keys")
-            }
-        }
+        public var signupURL: URL? { secret?.consoleURL }
 
         /// What the fix button says. Core names it so the view cannot drift from
         /// it and a test can assert on it.

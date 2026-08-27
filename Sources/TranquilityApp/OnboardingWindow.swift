@@ -459,54 +459,14 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         }
     }
 
-    /// A secure field, and a door to where the key comes from.
-    ///
-    /// `tbase set-key` already does this for anyone living in a terminal.
-    /// Somebody handed a built app has no repo to run it from, which is the
-    /// whole reason this screen exists.
+    /// The shared sheet. Onboarding and the menu must offer the same thing:
+    /// a key you can only set during first run is a key you cannot rotate.
     private func promptForKey(_ item: Prerequisites.Item) {
         guard let secret = item.secret else { return }
-        NSApp.activate(ignoringOtherApps: true)
-
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "\(item.title) API key"
-        alert.informativeText = """
-            \(item.why.prefix(1).uppercased() + item.why.dropFirst()).
-
-            Stored in your login keychain. Nothing is ever read from the \
-            environment, so a stale key in a shell profile cannot shadow this one.
-            """
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        // The link is a button on the sheet rather than a line of prose, because
-        // the answer to "I do not have one" has to be pressable.
-        if item.signupURL != nil { alert.addButton(withTitle: "Get a key") }
-        alert.window.initialFirstResponder = field
-
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !value.isEmpty else { return }
-            do {
-                try Secrets.write(secret, value: value)
-                prereqNote[item] = "saved"
-            } catch {
-                // Said out loud, never swallowed: a key that silently failed to
-                // save looks exactly like a key that was never typed.
-                prereqNote[item] = "could not save. \(error.localizedDescription)"
-                Permissions.log("onboarding: key write failed -- \(error)")
-            }
-            renderPrerequisites()
-        case .alertThirdButtonReturn:
-            if let url = item.signupURL { NSWorkspace.shared.open(url) }
-            // Straight back to the field, because they left to fetch the thing
-            // it wants and returning to nothing would mean starting over.
-            promptForKey(item)
-        default:
-            return
+        KeySheet.prompt(for: secret) { [weak self] status in
+            guard let self else { return }
+            self.prereqNote[item] = status
+            self.renderPrerequisites()
         }
     }
 
