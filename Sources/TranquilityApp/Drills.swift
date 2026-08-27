@@ -43,10 +43,13 @@ extension StatusHUD {
             SelfTest.report("goToSession.roundTrip", [
                 ("guardDropped", !self.goToSessionInFlight),
             ])
-            // The background half painted "no terminal for pid 1" over
-            // whatever the cleanup left up; a deploy's selftest must not
-            // strand that on the live panel.
-            if self.bodyLabel.stringValue.contains("Couldn't find a terminal") {
+            // The background half paints its outcome over whatever the
+            // cleanup left up; a deploy's selftest must not strand that on
+            // the live panel. The wording follows the one implementation now
+            // — the drill's fixture session does not exist, so the answer is
+            // "isn't running any more".
+            if self.bodyLabel.stringValue.contains("isn't running any more")
+                || self.bodyLabel.stringValue.contains("Couldn't find a terminal") {
                 self.showIdle(rows: [])
             }
         }
