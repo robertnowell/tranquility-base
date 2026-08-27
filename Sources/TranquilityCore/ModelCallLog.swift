@@ -9,8 +9,7 @@ import Foundation
 /// reading a file.
 public enum ModelCallLog {
     public static var url: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/VoiceDispatch/model-calls.jsonl")
+        QueueStore.supportDirectory.appendingPathComponent("model-calls.jsonl")
     }
 
     public static func record(

@@ -244,8 +244,7 @@ final class CollapsedStrip: NSView {
         guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
         cacheDisplay(in: bounds, to: rep)
         guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
-        let url = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/Application Support/VoiceDispatch/strip-shot.png")
+        let url = QueueStore.supportDirectory.appendingPathComponent("strip-shot.png")
         do { try png.write(to: url) } catch { return nil }
         return url
     }
