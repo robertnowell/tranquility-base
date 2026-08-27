@@ -169,12 +169,34 @@ extension AppDelegate {
         }
         menu.addItem(.separator())
 
-        menu.addItem(permissionRow(
-            title: "Microphone", granted: micGranted,
-            action: #selector(openMicrophoneSettings)))
-        menu.addItem(permissionRow(
-            title: "Input Monitoring (hotkey)", granted: hotkeyWorking,
-            action: #selector(openInputMonitoringSettings)))
+        // EVERY permission, not two of five. This menu showed Microphone and
+        // Input Monitoring only, so Accessibility, Speech Recognition and
+        // Automation were invisible on the one surface a person actually opens
+        // mid-session to find out what is wrong. A permissions list that omits
+        // the permission that broke your feature is worse than none, because it
+        // looks like a complete answer.
+        //
+        // Input Monitoring keeps its live probe (`hotkeyWorking`) rather than
+        // the recorded grant: it is the one row where "granted" and "working"
+        // genuinely disagree, and the working answer is the useful one.
+        for kind in Permissions.Kind.allCases {
+            let granted = kind == .inputMonitoring
+                ? hotkeyWorking
+                : Permissions.state(kind) == .active
+            menu.addItem(permissionRow(
+                title: kind == .inputMonitoring ? "Input Monitoring (hotkey)" : kind.title,
+                granted: granted,
+                action: #selector(openPermissionSettings(_:)),
+                kind: kind))
+        }
+        // The whole checklist, one click away, for the case the rows above
+        // cannot cover — a permission the app cannot read, or a user who wants
+        // the ordered walkthrough again. `showOnboarding()` existed and nothing
+        // called it: the complete surface was written and unreachable.
+        let checklist = NSMenuItem(title: "Permissions checklist…",
+                                   action: #selector(showOnboarding), keyEquivalent: "")
+        checklist.target = self
+        menu.addItem(checklist)
         menu.addItem(.separator())
 
         // No "N waiting" row here. It read from the unfiltered store count and
@@ -197,12 +219,30 @@ extension AppDelegate {
         return item
     }
 
-    func permissionRow(title: String, granted: Bool, action: Selector) -> NSMenuItem {
+    func permissionRow(title: String, granted: Bool, action: Selector,
+                       kind: Permissions.Kind? = nil) -> NSMenuItem {
         let item = NSMenuItem(title: "\(granted ? StateLegend.Glyph.confirm : StateLegend.Glyph.denied)  \(title)", action: granted ? nil : action,
                               keyEquivalent: "")
         item.target = granted ? nil : self
         item.isEnabled = !granted
+        // Which permission this row is for, so one selector can serve them all
+        // rather than a hand-written `open<Name>Settings` per kind — the reason
+        // three of them never got a row in the first place.
+        item.representedObject = kind
         return item
+    }
+
+    /// Route a row to its own pane. One action for every permission, so adding
+    /// a kind adds a working row rather than a row that does nothing.
+    @objc func openPermissionSettings(_ sender: NSMenuItem) {
+        guard let kind = sender.representedObject as? Permissions.Kind else { return }
+        Task { @MainActor in
+            // Ask first — for a permission that has never been asked, the
+            // system prompt is a better experience than a settings pane, and
+            // for Automation it is the ONLY thing that can ever prompt.
+            if await Permissions.request(kind) { refresh(); return }
+            Permissions.openSettings(for: kind)
+        }
     }
 
     @objc func showOnboarding() {
