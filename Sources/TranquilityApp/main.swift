@@ -984,6 +984,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Coordinator.trace = { Permissions.log("routing: \($0)") }
         TmuxTransport.trace = { Permissions.log($0) }
+        // The ownership lookup's own evidence. Without it, a session killed
+        // for being "hand-started" leaves only the conclusion in the log and
+        // no way to tell a real absence from a question that timed out.
+        Tmux.trace = { Permissions.log($0) }
         ClaudeAgentsCLI.trace = { Permissions.log("liveness: \($0)") }
         SessionLauncher.trace = { Permissions.log("launcher: \($0)") }
         Recorder.trace = { Permissions.log($0) }

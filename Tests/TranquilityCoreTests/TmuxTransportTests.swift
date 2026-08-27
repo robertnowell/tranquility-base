@@ -497,3 +497,28 @@ final class AutomationDenialTests: XCTestCase {
                        "some other AppleScript trouble")
     }
 }
+
+/// "Could not ask" is not "no".
+final class OwnershipUnknownTests: XCTestCase {
+
+    /// The distinction that keeps a timed-out `list-panes` from killing a
+    /// live agent. A session whose pane cannot be looked up is classified
+    /// hand-started, and a hand-started session is deliberately ENDED and
+    /// resumed — so collapsing "the server did not answer" into "it is not in
+    /// tmux" is a destructive read of an absent fact.
+    func testTheThreeAnswersAreDistinct() {
+        XCTAssertNotEqual(TmuxOwnership.Ownership.notInTmux, .unknown,
+                          "a fact and the absence of one must not compare equal")
+        let addr = TmuxPaneAddress(socketName: "tb", paneId: "%1",
+                                   sessionName: "tb-x", paneTty: "/dev/ttys1")
+        XCTAssertNotEqual(TmuxOwnership.Ownership.pane(addr), .unknown)
+        XCTAssertNotEqual(TmuxOwnership.Ownership.pane(addr), .notInTmux)
+    }
+
+    /// A listing that came back and simply doesn't hold the tty is a real
+    /// negative — that one is safe to act on.
+    func testAnAnsweredListingWithoutTheTtyIsARealNegative() {
+        XCTAssertNil(TmuxOwnership.match(
+            inventory: "/dev/ttys9\t%2\ttb-other", tty: "/dev/ttys1", socket: "tb"))
+    }
+}
