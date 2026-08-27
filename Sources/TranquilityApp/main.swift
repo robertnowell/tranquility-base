@@ -1060,6 +1060,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if CommandLine.arguments.contains("--selftest-hud") {
             refreshIsCheapDrill()
+            permissionSurfacesDrill()
             hud.selfTest()
             // Before selfTestPendingSend: that one holds the panel for five more
             // seconds and releases the drill hold when it is done.
@@ -1189,6 +1190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Permissions.listeningProbe = { [weak self] in self?.hotkey?.isListening ?? false }
 
         startPermissionPolling()
+        startWatchingForRevokedPermissions()
         refresh()
 
         // NOTHING asks for a permission at launch any more. Reported
