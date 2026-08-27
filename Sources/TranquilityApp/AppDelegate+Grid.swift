@@ -389,11 +389,26 @@ extension AppDelegate {
         // dialog sitting over a checklist that had just, correctly,
         // stopped the microphone from doing the same thing.
         //
-        // Input Monitoring also needs a restart to take effect once
-        // granted (`Permissions.State.pendingRestart`, this app's own
-        // model), so a process that reads `.active` here is genuinely
-        // fresh and trusted, and `tapCreate` succeeds silently.
-        if !hotkey.isRunning, Permissions.state(.inputMonitoring) == .active {
+        // Gate on the RECORDED grant, never on `.active`.
+        //
+        // `.active` for Input Monitoring means "granted AND the tap is
+        // delivering right now" — `state(_:)` asks `listeningProbe`, and that
+        // probe is `hotkey.isListening`. Gating the START of the tap on it
+        // makes a circle the app cannot leave: the tap will not start until it
+        // is listening, and it cannot listen until it starts.
+        //
+        // Live consequence, 26 Aug: Input Monitoring stuck on "granted,
+        // restart to finish" forever, the hotkeys dead, and every restart
+        // landing on the same screen — Robert restarted by hand and it changed
+        // nothing, because no number of restarts can satisfy a condition that
+        // depends on the thing it is blocking.
+        //
+        // `isGranted` is the right question and keeps the reason the gate was
+        // added at all (18:12 today): `CGPreflightListenEventAccess()` is false
+        // until the permission is granted, so the tap is still never created
+        // speculatively and `tapCreate` still never pops its own dialog. It
+        // just does not also require the outcome as its own precondition.
+        if !hotkey.isRunning, Permissions.isGranted(.inputMonitoring) {
             _ = hotkey.start()
         }
         rebuildMenu()

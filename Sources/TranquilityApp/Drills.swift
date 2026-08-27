@@ -1417,3 +1417,49 @@ extension StatusHUD {
     }
 
 }
+
+/// The permission surfaces live on the app delegate, not the panel — the menu
+/// and the checklist are its windows, so this drill sits where its subjects do.
+extension AppDelegate {
+    /// Every permission the app models has a row, a route and a reachable
+    /// checklist.
+    ///
+    /// Automation was absent from `Permissions.Kind` entirely until 26 Aug, so
+    /// GO TO AGENT could stop working with no row, no state, no Grant button
+    /// and nothing but an AppleScript error number on a card. The menu showed
+    /// two of the four kinds it did model, and the complete checklist was
+    /// written and unreachable — `showOnboarding()` existed and nothing called
+    /// it. Every one of those is a thing a drill can see, which is why none of
+    /// them should have survived a deploy.
+    ///
+    /// Deliberately asserts SHAPE, not grants: this machine's own permissions
+    /// are whatever they are, and a drill that needed a denied one could only
+    /// run on a machine that was broken.
+    func permissionSurfacesDrill() {
+        rebuildMenu()
+        let titles = (statusMenu?.items ?? []).map(\.title)
+        // Input Monitoring wears a suffix naming what it is for, so match on
+        // the kind's own title as a prefix rather than equality.
+        let everyKindHasARow = Permissions.Kind.allCases.allSatisfy { kind in
+            titles.contains { $0.contains(kind.title) }
+        }
+        let checklistIsReachable = (statusMenu?.items ?? []).contains {
+            $0.title.hasPrefix("Permissions checklist") && $0.target != nil
+        }
+        let everyKindHasARoute = Permissions.Kind.allCases.allSatisfy {
+            URL(string: $0.settingsURL) != nil
+        }
+        // The one that would have caught the 10 Aug regression AND kept this
+        // change honest: a permission nothing has ever asked for must not be
+        // able to hold the onboarding window open at every launch.
+        let automationIsModelled = Permissions.Kind.allCases.contains(.automation)
+        let automationNeverBlocks = !Permissions.Kind.automation.isRequired
+        SelfTest.report("permissionSurfaces", [
+            ("everyKindHasARow", everyKindHasARow),
+            ("checklistIsReachable", checklistIsReachable),
+            ("everyKindHasARoute", everyKindHasARoute),
+            ("automationIsModelled", automationIsModelled),
+            ("automationNeverBlocks", automationNeverBlocks),
+        ])
+    }
+}
