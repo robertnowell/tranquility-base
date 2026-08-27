@@ -1651,6 +1651,32 @@ extension StatusHUD {
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
+
+        // The slate is not finished when this function returns.
+        //
+        // Two drills assert that something stays dead PAST the window it was
+        // armed for, so they report five seconds later, on a timer, after this
+        // call has already gone home. Nothing said when the last of them had
+        // landed, so `relaunch.sh` guessed with `sleep 6` — measured from
+        // launch, not from here — and the guess held only while the synchronous
+        // slate finished inside a second.
+        //
+        // It stopped holding on 27 Aug, on a machine busy with a build and
+        // twenty-two tmux panes: the gate read a slate seven verdicts short,
+        // whose last line happened to be `pendingSend: PASS`, with that drill's
+        // legitimate, transient stage-claim still open behind it. It called
+        // that a stuck panel, refused the deploy, and the restore trap then
+        // brought the app back up BARE — the correct build running with zero
+        // drills behind a red line that was about the wrong thing. That is the
+        // 13 Aug shape (CLAUDE.md rule 6) reached by a different road.
+        //
+        // So the slate says when it is done, and the gate waits for the saying
+        // instead of sleeping for a length. Later than the five-second drills
+        // by construction; both were scheduled before this one, from earlier
+        // deadlines, and the main queue fires them in that order.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+            SelfTest.slateComplete()
+        }
     }
 
     /// Every widget's visibility in one line, so the selftest log IS the render
