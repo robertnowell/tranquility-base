@@ -56,15 +56,41 @@ read_window() {
 # such knowledge. The ceiling is generous because the cost of waiting is a few
 # seconds on a deploy and the cost of not waiting is a false failure that
 # teaches the operator to ignore this script.
+# Quiescence was the right idea and the wrong measure, and it failed on the one
+# shape it was written to survive.
+#
+# A drill that reports FIVE seconds late is invisible to a THREE-second quiet
+# threshold: the count stops moving the instant the synchronous slate ends, the
+# loop calls that settled, and the deferred verdicts land after the gate has
+# already read. It held only while some other drill happened to run after
+# `pendingSend` and keep the count ticking until the late ones arrived. On
+# 27 Aug the drill order changed, `pendingSend` became the last synchronous
+# drill, and the gate started reading a slate seven verdicts short — with that
+# drill's legitimate, transient stage-claim as the last line, which check 1
+# below correctly reads as a panel holding the stage. A healthy build failed
+# its deploy, and the restore trap then brought the app back up with no drills
+# at all: a red line about the wrong thing, and no coverage behind it.
+#
+# The old comment here named its own successor: "waiting for
+# `pendingSend.afterWindow` would work today and would have to be edited by
+# whoever adds the next drill that reports late." A marker is that idea without
+# the maintenance — the slate says when it is done, so nothing here has to know
+# what is in it or how long it takes.
+SLATE_COMPLETE="selftest: slate complete"
 SETTLE_QUIET_SECONDS=3
 SETTLE_CEILING_SECONDS=45
 settle() {
   local waited=0 stable=0 last=-1 now
   while [ "$waited" -lt "$SETTLE_CEILING_SECONDS" ]; do
+    # The fact, when the build is new enough to state it.
+    if read_window | grep -qF "$SLATE_COMPLETE"; then return 0; fi
+    # The guess, for a build that predates the marker. Kept so this script can
+    # still gate an older ref (a rollback, a bisect) rather than hanging for
+    # the full ceiling on every one.
     now=$(read_window | grep -cE "selftest .*: (PASS|FAIL|SKIP)" || true)
     if [ "$now" -eq "$last" ]; then
       stable=$((stable + 1))
-      [ "$stable" -ge "$SETTLE_QUIET_SECONDS" ] && return 0
+      [ "$stable" -ge "$SETTLE_QUIET_SECONDS" ] && [ "$waited" -ge 12 ] && return 0
     else
       stable=0
       last="$now"
