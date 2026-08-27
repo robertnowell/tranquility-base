@@ -813,16 +813,92 @@ public enum SessionLauncher {
         directory: String,
         launch: HarnessLaunch,
         acceptTrustPrompt: Bool = true
-    ) -> Result<Void, ScriptError> {
+    ) -> Result<String, ScriptError> {
+        // The tty travels back out, where it used to be dropped here.
+        //
+        // A caller that cannot name the pane cannot ask it anything, and the
+        // revive path's "launched but never registered" branch spent its whole
+        // life logging an absence for exactly that reason — the address of the
+        // thing that could have explained it was discarded one frame up. Same
+        // shape `launchTmux` and `resumeTmux` already return.
         switch resumeTmux(sessionId: sessionId, directory: directory, launch: launch,
                           acceptTrustPrompt: acceptTrustPrompt) {
-        case .success:
-            return .success(())
+        case .success(let tty):
+            return .success(tty)
         case .failure(let error):
             Self.trace?("revive FAILED for \(sessionId.prefix(8)): \(error.message)")
             return .failure(error)
         }
     }
+
+    /// What a pane is actually showing, asked directly, for the moment a
+    /// launch did not land the way it was supposed to.
+    ///
+    /// "A process is alive on the tty" is not the same fact as "the agent
+    /// started", and conflating them is what shipped on 26 Aug: a Codex pane
+    /// frozen on an update prompt has a perfectly healthy `codex` process in
+    /// it, so the liveness probe said yes and the panel announced a launch
+    /// over a menu. The harness's own banner is the narrower, truer question,
+    /// and the adapter has always known how to ask it.
+    public enum PaneState: Sendable, Equatable {
+        /// The harness's banner is up: this TUI started, and whatever it is
+        /// waiting for, it is waiting the way it is supposed to.
+        case started
+        /// Something else is on screen — an update prompt, an auth screen, a
+        /// picker nobody has named yet. Carries the text, because the whole
+        /// lesson of 27 Aug is that this is the part worth keeping.
+        case stopped(screen: String)
+        /// No resolvable pane, or nothing readable in it.
+        case unknown
+    }
+
+    public static func paneState(tty: String, adapter: any HarnessAdapter) -> PaneState {
+        guard let spec = adapter.trustPrompt,
+              let pane = TmuxOwnership.pane(forTty: tty),
+              case .success(let text) = Tmux.run(
+                ["capture-pane", "-p", "-t", pane.paneId],
+                socket: pane.socketName, timeout: 3)
+        else { return .unknown }
+        return classifyPaneScreen(text, spec: spec)
+    }
+
+    /// Pure half of `paneState`, the same read-it/decide-it split
+    /// `classifyCodexResumeScreen` and `TmuxTransport.classifyPromptLine`
+    /// already keep — so the decision is testable against captured screens
+    /// (including the real Codex update prompt) with no live pane.
+    static func classifyPaneScreen(_ text: String, spec: TrustPromptSpec) -> PaneState {
+        if text.contains(spec.settledBannerNeedle) { return .started }
+        if let noPrompt = spec.startedWithNoPromptNeedle, text.contains(noPrompt) { return .started }
+        return .stopped(screen: TrustPromptWatcher.meaningfulTail(text))
+    }
+
+    /// Put a real window on a pane — the same door `onNeedsHuman` opens, and
+    /// the same one Go to Agent uses, lifted out of the trust watcher's
+    /// closure so a caller that is not a watcher can open it too.
+    ///
+    /// A launch is detached because a launch that is WORKING needs no window
+    /// ("starting an agent is a background act", `launch`'s own comment). The
+    /// instant it stops needing that description, the reason evaporates:
+    /// detached while it is progressing, attached the moment it is not.
+    @discardableResult
+    public static func showPane(tty: String, why: String) -> Bool {
+        guard let pane = TmuxOwnership.pane(forTty: tty),
+              let binary = Tmux.resolveBinary(),
+              let script = TerminalTabFocus.attachScript(
+                binary: binary, socket: pane.socketName,
+                tmuxTmpDir: Tmux.socketDirectory.path, sessionName: pane.sessionName)
+        else {
+            Self.trace?("showPane: \(tty) — \(why), but no window could be opened for it")
+            return false
+        }
+        if case .failure(let error) = AppleScript.run(script: script) {
+            Self.trace?("showPane: \(tty) — \(why), but opening a window failed: \(error.message)")
+            return false
+        }
+        Self.trace?("showPane: opened a window on \(tty) — \(why)")
+        return true
+    }
+
 
     /// Resolves `tty` to its tmux pane and watches that — a thin
     /// convenience for the two callers (`launchTmux`, and the app's own
