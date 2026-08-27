@@ -71,6 +71,42 @@ extension StatusHUD {
     /// item that kills a process is never where a fast pointer lands. A silent
     /// reorder would be invisible in every screenshot and expensive exactly
     /// once.
+    /// A launch card always settles, on every path.
+    ///
+    /// The card that says "Starting agent…" is released by exactly one call,
+    /// and until 27 Aug that call was named `markLaunchFailed` — so a new exit
+    /// path that ended in SUCCESS did not make it, because calling something
+    /// named "failed" on a good launch reads wrong. The spinner ran forever
+    /// over an agent that had started fine, and the way we found out was Robert
+    /// watching it.
+    ///
+    /// This asserts the backstop rather than the exit paths: whatever a path
+    /// forgets, the watchdog settles the card. A drill cannot enumerate every
+    /// future exit; it can prove the net is under them.
+    func launchCardDrill() {
+        _ = showGreeting(line: "Drill greeting.", label: "launch-drill")
+        let waitedWhileStarting = launchCardIsWaiting
+        // The path that success takes, which is the one that forgot.
+        settleLaunchCard()
+        let settlesOnSuccess = !launchCardIsWaiting
+        // And the net, on a card nobody settles.
+        _ = showGreeting(line: "Drill greeting, abandoned.", label: "launch-drill")
+        let waitingAgain = launchCardIsWaiting
+        startLaunchCardWatchdog(after: 0.2) { _ in }
+        let deadline = Date().addingTimeInterval(3)
+        while launchCardIsWaiting && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        let watchdogReleasedIt = !launchCardIsWaiting
+        showIdle(rows: [])
+        SelfTest.report("launchCard", [
+            ("waitsWhileStarting", waitedWhileStarting),
+            ("settlesOnSuccess", settlesOnSuccess),
+            ("waitsAgainForANewLaunch", waitingAgain),
+            ("watchdogReleasesAnAbandonedCard", watchdogReleasedIt),
+        ])
+    }
+
     func terminateDrill() {
         func row(_ id: String, _ lamp: Lamp,
                  revivable: Bool = false) -> SessionRow {
