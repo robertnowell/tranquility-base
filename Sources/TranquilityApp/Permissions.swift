@@ -42,7 +42,11 @@ struct Permissions {
         var why: String {
             switch self {
             case .microphone: return "to record your spoken reply"
-            case .speechRecognition: return "so transcription still works when the network is down"
+            // Says what it carries, not when it might help. It is the floor of
+            // the recovery chain — the one provider that can never be
+            // unavailable — so without it a stalled cloud vendor means a reply
+            // that never arrives at all.
+            case .speechRecognition: return "so a reply still arrives when a transcription service stalls"
             case .inputMonitoring: return "to notice the hotkeys while you're in another app (measured: Accessibility alone does NOT do this)"
             case .accessibility: return "so dictation can type at your cursor"
             case .automation: return "so Go to Agent can open an agent's terminal window"
@@ -80,24 +84,41 @@ struct Permissions {
         /// went false on a machine where it had never been asked for, which put
         /// the onboarding window on screen at every launch of an app that starts
         /// from a login item. Asked for, visible, never blocking.
-        var isRequired: Bool {
-            switch self {
-            // Automation joins Speech Recognition on the not-blocking side,
-            // and for the reason the 10 Aug ruling gave: without it the app
-            // still hears you, still sees the hotkey, still types into a tab.
-            // One feature stops — GO TO AGENT cannot raise a window — and now
-            // it stops honestly, with a row that says so.
-            //
-            // Required would be worse than the bug it fixes. macOS only asks
-            // at the first Apple event, so a user who has never pressed GO TO
-            // AGENT has never been asked, and a required Automation would hold
-            // the onboarding window open at every launch over a permission
-            // nothing had requested — the exact mistake Speech Recognition
-            // made on 10 Aug.
-            case .speechRecognition, .automation: return false
-            case .microphone, .inputMonitoring, .accessibility: return true
-            }
-        }
+        /// Required means required. There is no third tier.
+        ///
+        /// Ruled 07 Aug — "it's either required or it's not, make them both
+        /// required or get rid of one" — and applied then to Input Monitoring.
+        /// Two permissions kept living outside that rule anyway, wearing
+        /// "(fallback)" and "(optional)", and Robert struck the hedge on 26
+        /// Aug: *"what the fuck are the two fallback things, do we need them or
+        /// not? If we need them then mark them just as required, don't hedge."*
+        ///
+        /// Both are needed, and both reversals cite a measurement rather than
+        /// an argument, as a reversal here has to.
+        ///
+        /// SPEECH RECOGNITION is not a nicety, it is the FLOOR of the recovery
+        /// chain — `RecoveryChain`'s own words: "on-device last because it can
+        /// never be unavailable". Earned 19 Aug: a 2m46s reply sat behind a
+        /// silently stalled cloud upload whose turn was up to six minutes away,
+        /// and the user gave up at 68 seconds. Without this permission the
+        /// chain has no floor, so a stalled vendor means a reply that simply
+        /// does not arrive. That is the app's core promise failing quietly.
+        ///
+        /// AUTOMATION is what GO TO AGENT is. Measured expensively on 26 Aug:
+        /// because it sat outside this list it had no row, no state, no route
+        /// and no Grant button, so when it was revoked the feature died in
+        /// silence for two hours and the app's only comment was an AppleScript
+        /// error number. A permission the app will not admit to needing is a
+        /// permission nobody can grant.
+        ///
+        /// The 10 Aug objection is answered rather than ignored. Requiring
+        /// Speech Recognition then put the onboarding window up at every launch
+        /// on a machine where it had never been asked — but that was a
+        /// checklist that could not ask, and the checklist can ask now, for
+        /// every kind here including Automation, whose prompt this app is the
+        /// only thing that can trigger. The cost of requiring is one more row
+        /// to grant once. The cost of hedging was tonight.
+        var isRequired: Bool { true }
 
         var settingsURL: String {
             let base = "x-apple.systempreferences:com.apple.preference.security?"
