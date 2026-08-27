@@ -103,9 +103,67 @@ final class HarnessAdapterTests: XCTestCase {
         var reads = ["", "  Do you trust this folder …"]
         TrustPromptWatcher.watch(spec: spec,
                                  read: { reads.isEmpty ? nil : reads.removeFirst() },
-                                 press: { pressed = true },
+                                 press: { _ in pressed = true },
                                  pollInterval: 0.001)
         XCTAssertTrue(pressed)
+    }
+
+    /// The 27 Aug regression, as a fixture: `capture-pane -p -J` output from a
+    /// pane TB had just launched, trimmed to the menu. The cursor is on the
+    /// REFUSING row, so the bare Return this watcher used to send exited
+    /// Claude Code with status 1 and the launch died as "Couldn't confirm the
+    /// new agent started."
+    private static let liveClaudeTrustScreen = """
+     Accessing workspace:
+     /Users/robertnowell
+     Quick safety check: Is this a project you created or one you trust?
+     Claude Code'll be able to read, edit, and execute files here.
+     Security guide
+     ❯ No, exit
+       Yes, I trust this folder
+     Enter to confirm · Esc to cancel
+    """
+
+    func testWatcherNavigatesToTheAcceptingRowRatherThanPressingWhereTheCursorSits() {
+        let spec = ClaudeCodeAdapter().trustPrompt!
+        var steps: Int?
+        var reads = [Self.liveClaudeTrustScreen]
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: { steps = $0 },
+                                 pollInterval: 0.001)
+        XCTAssertEqual(steps, 1,
+            "the accepting row is one below the cursor; pressing Return where it sits picks \"No, exit\"")
+    }
+
+    func testClaudeCodeStillAcceptsTheNumberedV21Screen() {
+        // The older wording, kept working: same two rows, accepting one first
+        // and numbered, cursor already on it. Zero travel, bare Return — the
+        // behaviour that was correct before the screen changed under us.
+        let spec = ClaudeCodeAdapter().trustPrompt!
+        let v21 = """
+         Do you trust the files in this folder?
+         ❯ 1. Yes, I trust this folder
+           2. No, exit
+        """
+        XCTAssertEqual(spec.stepsToAccept(on: v21), 0)
+    }
+
+    func testWatcherRefusesToPressAMenuItCannotRead() {
+        // A trust prompt whose accepting row this build has no name for. The
+        // old loop would press Return into it and hope; the whole point of
+        // the 27 Aug fix is that hoping is what declined three launches.
+        let spec = ClaudeCodeAdapter().trustPrompt!
+        var pressed = false
+        var neededHuman = false
+        var reads = ["Quick safety check: do you trust this folder?\n ❯ Nope\n   Affirmative"]
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: { _ in pressed = true },
+                                 pollInterval: 0.001,
+                                 onNeedsHuman: { _ in neededHuman = true })
+        XCTAssertFalse(pressed, "an unrecognised menu must never be pressed blind")
+        XCTAssertTrue(neededHuman, "and it must open a window rather than fail silently")
     }
 
     func testWatcherStopsOnNoPromptSentinelWithoutPressing() {
@@ -116,7 +174,7 @@ final class HarnessAdapterTests: XCTestCase {
         var reads = ["Claude Code v2 — ? for shortcuts"]
         TrustPromptWatcher.watch(spec: spec,
                                  read: { reads.isEmpty ? nil : reads.removeFirst() },
-                                 press: { pressed = true },
+                                 press: { _ in pressed = true },
                                  pollInterval: 0.001)
         XCTAssertFalse(pressed)
     }
@@ -129,7 +187,7 @@ final class HarnessAdapterTests: XCTestCase {
         var pressed = false
         TrustPromptWatcher.watch(spec: spec,
                                  read: { reads.isEmpty ? nil : reads.removeFirst() },
-                                 press: { pressed = true },
+                                 press: { _ in pressed = true },
                                  pollInterval: 0.001)
         // Settled twice on the banner before a (late) prompt needle ever
         // showed up — the watcher must already have stood down.
@@ -149,7 +207,7 @@ final class HarnessAdapterTests: XCTestCase {
         var reads = ["Hooks need review… Trust all and continue"]
         TrustPromptWatcher.watch(spec: spec,
                                  read: { reads.isEmpty ? nil : reads.removeFirst() },
-                                 press: { pressed = true },
+                                 press: { _ in pressed = true },
                                  pollInterval: 0.001)
         XCTAssertFalse(pressed, "a dialog needing a human choice must never be pressed through")
     }
@@ -169,7 +227,7 @@ final class HarnessAdapterTests: XCTestCase {
         var reads = ["Hooks need review… Trust all and continue"]
         TrustPromptWatcher.watch(spec: spec,
                                  read: { reads.isEmpty ? nil : reads.removeFirst() },
-                                 press: { pressed = true },
+                                 press: { _ in pressed = true },
                                  pollInterval: 0.001)
         XCTAssertFalse(pressed, "the screen matches BOTH needle lists; never-auto-accept must still win")
     }
@@ -214,7 +272,7 @@ final class HarnessAdapterTests: XCTestCase {
         var reads = Array(repeating: Self.codexUpdateScreen, count: 9)
         TrustPromptWatcher.watch(spec: spec,
                                  read: { reads.isEmpty ? nil : reads.removeFirst() },
-                                 press: { pressed = true },
+                                 press: { _ in pressed = true },
                                  trace: { traced.lines.append($0) },
                                  pollInterval: 0.001, maxPolls: 9,
                                  onNeedsHuman: { asked = $0 })
@@ -236,7 +294,7 @@ final class HarnessAdapterTests: XCTestCase {
                      "booting four", "booting five"]
         TrustPromptWatcher.watch(spec: spec,
                                  read: { reads.isEmpty ? nil : reads.removeFirst() },
-                                 press: {},
+                                 press: { _ in },
                                  trace: { traced.lines.append($0) },
                                  pollInterval: 0.001, maxPolls: 5,
                                  onNeedsHuman: { _ in })
@@ -252,7 +310,7 @@ final class HarnessAdapterTests: XCTestCase {
         var reads = Array(repeating: "  Ask Codex to do anything", count: 9)
         TrustPromptWatcher.watch(spec: spec,
                                  read: { reads.isEmpty ? nil : reads.removeFirst() },
-                                 press: {},
+                                 press: { _ in },
                                  pollInterval: 0.001, maxPolls: 9,
                                  onNeedsHuman: { asked = $0 })
         XCTAssertNil(asked, "starting an agent that works is still a background act")
@@ -268,7 +326,7 @@ final class HarnessAdapterTests: XCTestCase {
         var reads = Array(repeating: "\n   \n  \u{2500}\u{2500}\u{2500}\n", count: 9)
         TrustPromptWatcher.watch(spec: spec,
                                  read: { reads.isEmpty ? nil : reads.removeFirst() },
-                                 press: {},
+                                 press: { _ in },
                                  trace: { traced.lines.append($0) },
                                  pollInterval: 0.001, maxPolls: 9,
                                  onNeedsHuman: { _ in })
