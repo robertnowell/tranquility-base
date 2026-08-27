@@ -960,7 +960,7 @@ extension AppDelegate {
                 .first(where: { $0.sessionId == sessionId }) else {
                 Permissions.log("goTo: \(sessionId.prefix(8)) is not live any more")
                 await MainActor.run { [weak self] in
-                    self?.hud.showResult("That agent isn't running any more. "
+                    self?.hud.finishGoToSession("That agent isn't running any more. "
                                          + "Revive it from Past Agents.")
                 }
                 return
@@ -1001,7 +1001,7 @@ extension AppDelegate {
                     case .moved:
                         message = ""
                     }
-                    await MainActor.run { [weak self] in self?.hud.showResult(message) }
+                    await MainActor.run { [weak self] in self?.hud.finishGoToSession(message) }
                     return
                 }
                 await MainActor.run { [weak self] in
@@ -1016,16 +1016,17 @@ extension AppDelegate {
                 switch outcome {
                 case .focused:
                     Permissions.log("goTo: focused \(tty)")
+                    self.hud.finishGoToSession(nil)
                 case .tabGone:
                     Permissions.log("goTo: tab not found for \(tty)")
-                    self.hud.showResult("That agent's window isn't open any more.")
+                    self.hud.finishGoToSession("That agent's window isn't open any more.")
                 case .timedOut(let seconds):
                     Permissions.log("goTo TIMEOUT after \(seconds)s for \(tty)")
-                    self.hud.showResult("Terminal didn't answer within \(seconds) seconds. "
+                    self.hud.finishGoToSession("Terminal didn't answer within \(seconds) seconds. "
                                         + "The session is fine — try again in a moment.")
                 case .failed(let message):
                     Permissions.log("goTo FAILED: \(message)")
-                    self.hud.showResult("Couldn't control Terminal: \(message)")
+                    self.hud.finishGoToSession("Couldn't control Terminal: \(message)")
                 }
             }
         }
