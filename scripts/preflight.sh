@@ -73,6 +73,12 @@ fi
 echo "→ key names"
 python3 scripts/check-key-names.sh
 
+# Same shape, different rule: no em dashes in copy a human reads in the
+# product. Added 27 Aug after one shipped to a card and the rule turned out
+# to have been fixed by hand once already (copy/no-em-dashes-and-a-tooltip).
+echo "→ house copy"
+python3 scripts/check-house-copy.sh
+
 echo "→ building"
 swift build 2>&1 | grep -E "error:|warning: .*never used" || true
 swift build >/dev/null
