@@ -21,6 +21,31 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     private var refreshTimer: Timer?
     private var onDone: (() -> Void)?
 
+    /// Two screens, in the order the work actually happens.
+    ///
+    /// Permissions first, because until macOS has answered nothing else can be
+    /// tried. Then, and only then, what the loop runs on. Ruled 26 Aug: "after
+    /// permissions you move on, you hit next, and it checks your tmux and your
+    /// API keys." One long list would have put five optional-looking rows under
+    /// four blocking ones and asked the user to work out which was which.
+    private enum Stage { case permissions, prerequisites }
+    private var stage: Stage = .permissions
+
+    // Stage two.
+    private var prereqDots: [Prerequisites.Item: NSTextField] = [:]
+    private var prereqNames: [Prerequisites.Item: NSTextField] = [:]
+    private var prereqDetails: [Prerequisites.Item: NSTextField] = [:]
+    private var prereqButtons: [Prerequisites.Item: ConsoleButton] = [:]
+    private var prereqRows: [Prerequisites.Item: NSView] = [:]
+    private var prereqProgress: NSTextField?
+    private var startButton: ConsoleButton?
+    /// Last computed off-main. Empty until the first scan lands, which is why the
+    /// rows render from it rather than probing inline.
+    private var prereqStates: [Prerequisites.State] = []
+    private var prereqScanInFlight = false
+    /// Set by a fix button to say what just happened; cleared by the next scan.
+    private var prereqNote: [Prerequisites.Item: String] = [:]
+
     func show(onDone: @escaping () -> Void) {
         self.onDone = onDone
         if let window {
@@ -46,7 +71,15 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         window.center()
         window.isReleasedWhenClosed = false
         window.delegate = self
-        window.contentView = buildContent()
+        // Stage two is otherwise reachable only by finishing four TCC grants and
+        // a restart, which makes the screen most likely to be wrong the screen
+        // hardest to look at. Same reasoning as Clicky's reset-to-first-run
+        // button: a first run you cannot replay is a first run nobody checks.
+        if CommandLine.arguments.contains("--show-prerequisites") {
+            stage = .prerequisites
+        }
+        window.contentView = stage == .permissions
+            ? buildContent() : buildPrerequisitesContent()
         self.window = window
 
         // The app is an accessory (no dock icon), so it must be activated explicitly
@@ -72,6 +105,21 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     /// without it, and a blocker on a permission that does not block is exactly
     /// the mistake ruled against on 10 Aug.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        // Stage two has its own required set, and permissions are behind it.
+        if stage == .prerequisites {
+            if Prerequisites.allRequiredSatisfied(prereqStates) { return true }
+            Permissions.log("onboarding: close refused — prerequisites unfinished")
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = "tmux is still missing"
+            alert.informativeText =
+                "Replies are typed into a session through tmux, so without it "
+                + "Tranquility Base can announce a turn and then has nowhere to "
+                + "put your answer. The row has the command, one paste."
+            alert.addButton(withTitle: "OK")
+            alert.beginSheetModal(for: sender) { _ in }
+            return false
+        }
         if Permissions.allActive { return true }
         Permissions.log("onboarding: close refused — required set unfinished")
         let alert = NSAlert()
@@ -160,8 +208,12 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         restartButton = restart
         stack.addArrangedSubview(restart)
 
-        let done = door("Start using Tranquility Base", ink: StateLegend.Palette.ready,
-                        action: #selector(doneTapped))
+        // "Next", not "Start". The permissions being green is not the app being
+        // ready, and a door that says Start here would be the second lie this
+        // screen used to tell (the first was closing itself while tmux was
+        // missing). Stage two carries the Start door.
+        let done = door("Next", ink: StateLegend.Palette.ready,
+                        action: #selector(nextTapped))
         done.keyEquivalent = "\r"
         done.isEnabled = false
         doneButton = done
@@ -250,6 +302,289 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
 
     @objc private func doneTapped() { window?.close() }
 
+    // MARK: - Stage two: what the loop runs on
+
+    @objc private func nextTapped() {
+        stage = .prerequisites
+        prereqStates = []
+        window?.contentView = buildPrerequisitesContent()
+        Permissions.log("onboarding: advanced to prerequisites")
+        refresh()
+    }
+
+    private func buildPrerequisitesContent() -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 14
+        stack.edgeInsets = NSEdgeInsets(top: 40, left: 24, bottom: 24, right: 24)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        stack.addArrangedSubview(wordmark())
+        stack.addArrangedSubview(label(
+            "macOS is done asking. These are the parts that are not its to give.",
+            size: 15, weight: .medium, width: 560))
+
+        stack.addArrangedSubview(spacer(10))
+        let progress = sectionLabel("STEP 2 OF 2 \u{00B7} WHAT IT RUNS ON")
+        prereqProgress = progress
+        stack.addArrangedSubview(progress)
+
+        // Built from the item list, not from a scan: the scan is off-main and
+        // has not landed yet on the frame this runs in. `hooks` is in the list
+        // and hidden below whenever it is healthy, which is almost always.
+        for (index, item) in Prerequisites.Item.allCases.enumerated() {
+            stack.addArrangedSubview(prerequisiteRow(item, step: index + 1))
+        }
+
+        stack.addArrangedSubview(spacer(8))
+        stack.addArrangedSubview(label(
+            "The keys are optional and the app runs without them. Anthropic is the "
+            + "one worth having: it is what turns a finished turn into a sentence "
+            + "worth hearing, at about a tenth of a cent each.",
+            size: 11, secondary: true, width: 560))
+
+        let start = door("Start using Tranquility Base", ink: StateLegend.Palette.ready,
+                         action: #selector(doneTapped))
+        start.keyEquivalent = "\r"
+        start.isEnabled = false
+        startButton = start
+        stack.addArrangedSubview(start)
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 446))
+        container.wantsLayer = true
+        container.layer?.backgroundColor = StateLegend.Palette.surface.cgColor
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
+        ])
+        return container
+    }
+
+    /// The permission row's shape, with a different verb.
+    ///
+    /// Same lamp, same numbering, same door. To the person reading this there is
+    /// one list of things that are not ready; that macOS owns four of them and
+    /// Homebrew owns another is our problem, not theirs.
+    private func prerequisiteRow(_ item: Prerequisites.Item, step: Int) -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 10
+        row.alignment = .firstBaseline
+
+        let dot = NSTextField(labelWithString: StateLegend.Glyph.dot)
+        dot.font = ChromeType.mono(ofSize: 11, weight: .regular)
+        dot.drawsBackground = false
+        prereqDots[item] = dot
+        row.addArrangedSubview(dot)
+
+        // "recommended", never "(optional)". Same ruling as the permission
+        // screen's "(fallback)": a word that undermines a row is worse than no
+        // word, and these rows have to survive being skimmed by someone who has
+        // already spent a minute on permissions.
+        // The number is set at RENDER time, not here. `hooks` is hidden whenever
+        // it is healthy, and a number baked in at build time counts a row the
+        // user cannot see: the first look at this screen read "1. tmux, 3.
+        // Anthropic, 4. ElevenLabs" and invited everyone to hunt for step 2.
+        _ = step
+        let name = NSTextField(labelWithString: item.title)
+        name.font = ChromeType.mono(ofSize: 12, weight: .medium)
+        name.textColor = StateLegend.Palette.ink
+        name.drawsBackground = false
+        name.translatesAutoresizingMaskIntoConstraints = false
+        name.widthAnchor.constraint(equalToConstant: 215).isActive = true
+        prereqNames[item] = name
+        row.addArrangedSubview(name)
+        prereqRows[item] = row
+
+        let detail = NSTextField(wrappingLabelWithString: item.why)
+        detail.font = ChromeType.mono(ofSize: 11, weight: .regular)
+        detail.textColor = StateLegend.Palette.secondary
+        detail.drawsBackground = false
+        detail.translatesAutoresizingMaskIntoConstraints = false
+        detail.widthAnchor.constraint(equalToConstant: 205).isActive = true
+        prereqDetails[item] = detail
+        row.addArrangedSubview(detail)
+
+        let button = door(item.fixLabel, ink: StateLegend.Palette.fault,
+                          action: #selector(fixTapped(_:)))
+        button.identifier = NSUserInterfaceItemIdentifier("prereq." + item.rawValue)
+        prereqButtons[item] = button
+        row.addArrangedSubview(button)
+
+        return row
+    }
+
+    /// Every row carries its own fix. None of them points at a document.
+    @objc private func fixTapped(_ sender: NSButton) {
+        let raw = sender.identifier?.rawValue ?? ""
+        guard raw.hasPrefix("prereq."),
+              let item = Prerequisites.Item(rawValue: String(raw.dropFirst(7)))
+        else { return }
+
+        switch item {
+        case .tmux:
+            // The clipboard, not a subprocess. Installing software into
+            // somebody's machine unasked is not a thing a setup window gets to
+            // do, and `brew` may not be there either -- in which case the pasted
+            // command reports that far better than we could.
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("brew install tmux", forType: .string)
+            prereqNote[item] = "copied. Paste it in a terminal"
+            renderPrerequisites()
+
+        case .hooks:
+            // Off-main: this parses and rewrites a file (rule 9).
+            prereqNote[item] = "wiring..."
+            renderPrerequisites()
+            Task.detached {
+                let outcome = HookManifest.repair()
+                await MainActor.run {
+                    switch outcome {
+                    case .healthy: self.prereqNote[item] = "already wired"
+                    case .repaired(let rewired, let added):
+                        self.prereqNote[item] =
+                            "wired \(rewired + added). Restart your sessions"
+                    case .unavailable(let reason): self.prereqNote[item] = reason
+                    }
+                    Permissions.log("onboarding: hook repair -- \(outcome)")
+                    self.renderPrerequisites()
+                }
+            }
+
+        case .anthropicKey, .elevenLabsKey, .assemblyAIKey:
+            promptForKey(item)
+        }
+    }
+
+    /// A secure field, and a door to where the key comes from.
+    ///
+    /// `tbase set-key` already does this for anyone living in a terminal.
+    /// Somebody handed a built app has no repo to run it from, which is the
+    /// whole reason this screen exists.
+    private func promptForKey(_ item: Prerequisites.Item) {
+        guard let secret = item.secret else { return }
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "\(item.title) API key"
+        alert.informativeText = """
+            \(item.why.prefix(1).uppercased() + item.why.dropFirst()).
+
+            Stored in your login keychain. Nothing is ever read from the \
+            environment, so a stale key in a shell profile cannot shadow this one.
+            """
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        // The link is a button on the sheet rather than a line of prose, because
+        // the answer to "I do not have one" has to be pressable.
+        if item.signupURL != nil { alert.addButton(withTitle: "Get a key") }
+        alert.window.initialFirstResponder = field
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { return }
+            do {
+                try Secrets.write(secret, value: value)
+                prereqNote[item] = "saved"
+            } catch {
+                // Said out loud, never swallowed: a key that silently failed to
+                // save looks exactly like a key that was never typed.
+                prereqNote[item] = "could not save. \(error.localizedDescription)"
+                Permissions.log("onboarding: key write failed -- \(error)")
+            }
+            renderPrerequisites()
+        case .alertThirdButtonReturn:
+            if let url = item.signupURL { NSWorkspace.shared.open(url) }
+            // Straight back to the field, because they left to fetch the thing
+            // it wants and returning to nothing would mean starting over.
+            promptForKey(item)
+        default:
+            return
+        }
+    }
+
+    /// Re-read the dependencies off the main actor.
+    ///
+    /// Rule 9. A hooks audit parses a file, a keychain read is a round trip, and
+    /// the tmux probe's uncached path can spawn a login shell that has taken
+    /// seconds. None of that may sit on a 1 Hz timer. Single-flighted, because a
+    /// slow scan on a repeating timer must not stack.
+    private func scanPrerequisites() {
+        guard !prereqScanInFlight else { return }
+        prereqScanInFlight = true
+        let demo = ProcessInfo.processInfo.environment["TB_PREREQ_DEMO"] != nil
+        Task.detached {
+            // The state a NEW user sees is the one worth looking at, and it is
+            // the one a developer machine can never show: tmux is installed and
+            // the keys are in the login keychain, which `bundle-test.sh --reset`
+            // rightly does not touch (they are the real ones). Rather than
+            // delete somebody's credentials to photograph a screen, inject a
+            // snapshot where nothing is present. Reads nothing, writes nothing.
+            let states = demo
+                ? Prerequisites.snapshot(Prerequisites.Probes(
+                    tmuxPath: { nil },
+                    hooksProblem: { "hooks: 2 not installed" },
+                    hasSecret: { _ in false }))
+                : Prerequisites.snapshot()
+            await MainActor.run {
+                self.prereqScanInFlight = false
+                guard states != self.prereqStates else { return }
+                // A row that changed has superseded whatever its own button last
+                // said, so the transient note goes.
+                for state in states where !self.prereqStates.contains(state) {
+                    self.prereqNote[state.item] = nil
+                }
+                self.prereqStates = states
+                self.renderPrerequisites()
+            }
+        }
+    }
+
+    private func renderPrerequisites() {
+        let shownStates = Prerequisites.visible(prereqStates)
+        let visible = Set(shownStates.map(\.item))
+        // Hiding the ROW, not its contents. Hiding the labels individually left
+        // the row in the stack at zero height but still carrying the stack's
+        // spacing, so a hidden hooks row showed up as an unexplained gap.
+        // NSStackView collapses a hidden arranged subview; it cannot collapse a
+        // visible one full of hidden labels.
+        for (item, row) in prereqRows { row.isHidden = !visible.contains(item) }
+
+        // Numbered over what is actually on screen, so the sequence never skips.
+        let position = Dictionary(uniqueKeysWithValues:
+            shownStates.enumerated().map { ($0.element.item, $0.offset + 1) })
+
+        for state in shownStates {
+            let item = state.item
+            let suffix = item.isRecommended ? "  (recommended)" : ""
+            prereqNames[item]?.stringValue =
+                "\(position[item] ?? 1). " + item.title + suffix
+            // A satisfied tmux or hooks row has nothing left to do; a key row
+            // keeps its door, because a key is a thing you rotate.
+            prereqButtons[item]?.isHidden = state.satisfied && item.secret == nil
+
+            // The panel's lamp vocabulary, same meanings as stage one. Amber is
+            // "needs action", so an unmet REQUIRED row is amber. An unmet key is
+            // not amber: it is not waiting on anybody, and colouring it the same
+            // as a blocker is how "optional" stops meaning anything.
+            prereqDots[item]?.textColor = state.satisfied
+                ? StateLegend.Palette.ready
+                : (item.isRequired ? StateLegend.Palette.fault : StateLegend.Palette.faint)
+            prereqDetails[item]?.textColor = state.satisfied
+                ? StateLegend.Palette.hint : StateLegend.Palette.secondary
+            prereqDetails[item]?.stringValue = prereqNote[item] ?? state.detail
+        }
+        startButton?.isEnabled = !prereqStates.isEmpty
+            && Prerequisites.allRequiredSatisfied(prereqStates)
+    }
+
     // MARK: - Chrome
 
     /// The panel signs the top of this window the way it signs its own corner.
@@ -322,6 +657,13 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     /// something the first source already knows, and the two would drift the
     /// first time a user changed a switch in Settings while the app was closed.
     private func refresh() {
+        switch stage {
+        case .permissions: refreshPermissions()
+        case .prerequisites: scanPrerequisites()
+        }
+    }
+
+    private func refreshPermissions() {
         let states = Permissions.Kind.allCases.map { ($0, Permissions.state($0)) }
 
         // The one step to do NOW is the first that is not finished. Everything
@@ -408,11 +750,14 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
             .map { "\($0.0.title.prefix(4))=\($0.1)" }
             .joined(separator: " ") + " progress=\(done)/\(total)")
 
-        // Auto-close only when literally everything is finished — including the
-        // optional row, and including anything that would need a restart.
-        if states.allSatisfy({ $0.1 == .active }), let window {
-            window.close()
-        }
+        // Deliberately does NOT auto-advance, where it used to auto-close.
+        //
+        // Closing itself was right when this was the whole of setup. It is wrong
+        // now for two reasons: there is a second screen behind it that the user
+        // has never seen, and skipping them past it silently is how tmux stayed
+        // invisible in the first place. Advancing automatically would be its own
+        // version of the same mistake, yanking the screen out from under someone
+        // mid-grant. The Next door lights up; they press it.
     }
 
     /// The live state text, in the user's terms rather than the API's.
