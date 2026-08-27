@@ -58,7 +58,14 @@ ICONSET="$(mktemp -d)/AppIcon.iconset"
 # The test build's icon is unmistakable at a glance (SiteMark.swift's
 # `isTestBuild`, keyed on this same env var): an amber plate instead of the
 # real app's, so it never gets confused with it in the Dock or Cmd-Tab.
-ICON_ENV=()
+#
+# `env` as the no-op prefix, not an empty array: `"${ICON_ENV[@]}"` on an
+# EMPTY array is an unbound-variable error under `set -u` in bash 3.2,
+# which is what /usr/bin/env bash still is on macOS -- broke the REAL
+# app's own build the first time this shipped, on a bash that never
+# takes the test-build branch below at all. scripts/test.sh's own
+# comment already documents this exact trap; reproduced it anyway.
+ICON_ENV=(env)
 [ "$BUNDLE_ID" = "com.robertnowell.voice-dispatch-test" ] \
   && ICON_ENV=(env VOICE_DISPATCH_TEST_ICON=1)
 if "${ICON_ENV[@]}" "$APP_DIR/Contents/MacOS/TranquilityApp" --write-iconset "$ICONSET" >/dev/null; then
