@@ -436,6 +436,19 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
                         + Permissions.pendingRestart.map(\.title).joined(separator: ","))
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
+        // Without this, the new process's OWN single-instance guard
+        // (main.swift's applicationDidFinishLaunching) sees THIS process
+        // still alive at its own launch, reads it as an accidental double
+        // launch, and refuses outright before showing anything -- found
+        // live, 26 Aug: "I clicked restart and the app did not restart, it
+        // just closed." The log confirmed it exactly: the new pid logged
+        // `launch: REFUSED, instance already running (pid <this one>)`,
+        // and this process then terminated a moment later per the
+        // completion handler below, leaving nothing running. This restart
+        // is a deliberate, sequenced handoff, not the accidental
+        // double-launch that guard exists to catch, so it gets the same
+        // exemption the self-test path already has.
+        config.arguments = ["--allow-second-instance"]
         NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in
             DispatchQueue.main.async { NSApp.terminate(nil) }
         }
