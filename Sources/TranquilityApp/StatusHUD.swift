@@ -2856,7 +2856,14 @@ final class StatusHUD: NSObject {
                 // it, which is what "Go to Agent killed my session" was.
                 if TmuxOwnership.pane(forSessionId: sessionId, pid: pid) == nil {
                     Permissions.log("goToSession: \(tty) is hand-started — transferring to tmux")
-                    let attempt = SessionLauncher.OwnershipTransfer.attempt(sessionId: sessionId)
+                    // The harness THIS session belongs to, read off disk —
+                    // not the Settings default, which is what a new agent
+                    // would be and has nothing to do with this one. Getting
+                    // it wrong here ends a live session and cannot restart
+                    // it, which is exactly what happened on 26 Aug.
+                    let attempt = SessionLauncher.OwnershipTransfer.attempt(
+                        sessionId: sessionId,
+                        launch: HarnessLaunch.forExistingSession(sessionId))
                     guard let transferred = attempt.moved else {
                         // Two failures, two sentences (ruled 24 Aug). Saying
                         // "Nothing was closed" over a session this button had

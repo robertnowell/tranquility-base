@@ -146,8 +146,8 @@ final class CoordinatorTests: XCTestCase {
         // `LiveSession` below, cwd "/tmp/p") needs SOME resolved pane to
         // reach `tmuxTransport` at all, the same way production reaches it
         // via a real `resumeTmux`. The two tests that assert the refusal
-        // itself pass `resumeTwin: { _, _ in nil }` explicitly.
-        resumeTwin: @escaping @Sendable (String, String) -> TmuxPaneAddress? = { _, _ in
+        // itself pass `resumeTwin: { _, _, _ in nil }` explicitly.
+        resumeTwin: @escaping @Sendable (String, String, String) -> TmuxPaneAddress? = { _, _, _ in
             TmuxPaneAddress(socketName: "tb", paneId: "%1",
                             sessionName: "tb-fixture", paneTty: "/dev/ttys999")
         },
@@ -765,7 +765,7 @@ final class CoordinatorTests: XCTestCase {
         let resumeTwinCalls = Calls()
         let coordinator = try makeCoordinator(
             tmuxTransport: tmux,
-            resumeTwin: { sessionId, directory in
+            resumeTwin: { sessionId, directory, _ in
                 resumeTwinCalls.record(sessionId, directory)
                 return fabricatedPane
             })
@@ -818,7 +818,7 @@ final class CoordinatorTests: XCTestCase {
         let agents = SwappableAgents(rows(111))
         let coordinator = try makeCoordinator(
             tmuxTransport: tmux,
-            resumeTwin: { _, _ in
+            resumeTwin: { _, _, _ in
                 // The real closure's own effect, faked here: the
                 // hand-started pid is gone, a fresh one is live under tmux.
                 agents.replace(rows(222))
@@ -851,7 +851,7 @@ final class CoordinatorTests: XCTestCase {
     func testATwinThatFailsToResumeRefusesCleanly() async throws {
         let tmux = RecordingTransport()
         let coordinator = try makeCoordinator(
-            tmuxTransport: tmux, resumeTwin: { _, _ in nil })
+            tmuxTransport: tmux, resumeTwin: { _, _, _ in nil })
         try append()
         _ = try await coordinator.announceNext()
 
@@ -1062,7 +1062,7 @@ final class CoordinatorTests: XCTestCase {
             // resolve a real tmux pane, and the point of this test is the
             // wait-for-late-arrival behavior, not resumeTwin itself — see
             // makeCoordinator's own default for the same reasoning.
-            resumeTwin: { _, _ in
+            resumeTwin: { _, _, _ in
                 TmuxPaneAddress(socketName: "tb", paneId: "%1",
                                 sessionName: "tb-fixture", paneTty: "/dev/ttys999")
             })

@@ -191,9 +191,10 @@ final class HarnessAdapterTests: XCTestCase {
                                     allowsConcurrentResume: false)
             }
         }
-        let result = SessionLauncher.resume(sessionId: "x", directory: NSTemporaryDirectory(),
-                                            command: "true", acceptTrustPrompt: false,
-                                            adapter: SilentAdapter())
+        let result = SessionLauncher.resume(
+            sessionId: "x", directory: NSTemporaryDirectory(),
+            launch: HarnessLaunch(adapter: SilentAdapter(), command: "true"),
+            acceptTrustPrompt: false)
         guard case .failure(let error) = result else {
             return XCTFail("an adapter with no resume arguments must refuse, not run AppleScript")
         }
@@ -217,9 +218,10 @@ final class HarnessAdapterTests: XCTestCase {
                                     allowsConcurrentResume: false)
             }
         }
-        let result = SessionLauncher.resumeTmux(sessionId: "x", directory: NSTemporaryDirectory(),
-                                                command: "true", acceptTrustPrompt: false,
-                                                adapter: SilentAdapter())
+        let result = SessionLauncher.resumeTmux(
+            sessionId: "x", directory: NSTemporaryDirectory(),
+            launch: HarnessLaunch(adapter: SilentAdapter(), command: "true"),
+            acceptTrustPrompt: false)
         guard case .failure(let error) = result else {
             return XCTFail("an adapter with no resume arguments must refuse, not spawn a pane")
         }

@@ -125,7 +125,21 @@ extension Coordinator {
         return .readyToSend(
             utteranceId: utterance.id,
             text: AttachmentTray.compose(transcript: text, paths: carrying),
-            label: target.projectLabel,
+            // The name the grid shows, not the folder the session happens to
+            // sit in. `projectLabel` is the raw last path component of the
+            // cwd, so a session in `.claude/worktrees/arc-work` was announced
+            // as "arc-work" — a string that appears on no other surface and
+            // that the user had, correctly, never seen before. Reported 26
+            // Aug: "I don't know what arc-work is; that's an internal call
+            // sign we don't show anywhere."
+            //
+            // `tabDisplayName` is the resolution the grid and Past Agents
+            // already use, and its own doc comment claims to be the one every
+            // displayed identity goes through — which was true everywhere
+            // except the reply path.
+            label: GridAssembler.tabDisplayName(
+                for: target,
+                live: (agents.sessions() ?? []).first { $0.sessionId == target.sessionId }),
             sessionId: target.sessionId)
     }
 
@@ -322,7 +336,8 @@ extension Coordinator {
         // tmux-launched from the start; see `TmuxTransport.swift`'s own
         // audit note on this, 26 Aug).
         if pane == nil, !isCodex, let cwd = live.cwd {
-            pane = resumeTwin(target.sessionId, cwd)
+            pane = resumeTwin(target.sessionId, cwd,
+                              isCodex ? CodexAdapter().id : ClaudeCodeAdapter().id)
             if pane != nil {
                 // The transfer just ended `live.pid`'s process on purpose
                 // (ownership TRANSFER, not a parallel twin — see resumeTwin's
@@ -391,7 +406,9 @@ extension Coordinator {
                 ? CodexRollout.rolloutPath(forSessionId: target.sessionId)
                 : (target.transcriptPath
                     ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId)),
-            label: target.projectLabel,
+            // Same identity as the receipt and the grid — `live` is already
+            // resolved here, so this costs nothing.
+            label: GridAssembler.tabDisplayName(for: target, live: live),
             readinessSource: isCodex ? .rolloutTail : .claudeAgents,
             promptGlyph: isCodex ? CodexAdapter().capabilities.promptGlyph : "❯",
             idlePlaceholder: isCodex ? CodexAdapter().trustPrompt?.settledBannerNeedle : nil,
