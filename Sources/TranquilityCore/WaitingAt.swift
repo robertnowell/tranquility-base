@@ -90,7 +90,7 @@ public enum WaitingAt: Equatable, Sendable {
             return "The agent has asked you something and is holding for an answer."
         case .permission:
             return "The agent wants permission to run something and is holding for "
-                + "a yes or no. That is a decision, not a question — the panel will "
+                + "a yes or no. That is a decision, not a question, so the panel will "
                 + "not send a typed reply to it; answer it in the terminal."
         case .dialog:
             return "A dialog is open in this session's terminal and nothing runs "
