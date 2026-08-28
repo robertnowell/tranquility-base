@@ -41,6 +41,30 @@ final class TmuxTransportTests: XCTestCase {
         XCTAssertNil(TmuxOwnership.match(inventory: "garbage line\n\n", tty: "/dev/ttys011", socket: nil))
     }
 
+    // MARK: intelligibility — the 27 Aug locale failure
+
+    /// The exact bytes a non-UTF-8 tmux client returned on 27 Aug: every TAB
+    /// in the format output replaced by `_`. `match` misses, as it must —
+    /// there is nothing here it can read — and the point of this test is that
+    /// the miss is now DISTINGUISHABLE from a real absence, because that
+    /// difference is what stands between a bad lookup and a killed agent.
+    func testSanitisedSeparatorsReadAsUnintelligibleNotAsAbsent() {
+        let mangled = """
+        /dev/ttys027_%1_probe-x
+        /dev/ttys026_%0_tb-ae813b43
+        """
+        XCTAssertNil(TmuxOwnership.match(inventory: mangled, tty: "/dev/ttys026", socket: "tb"))
+        XCTAssertFalse(TmuxOwnership.inventoryIsIntelligible(mangled))
+    }
+
+    func testWellFormedInventoryIsIntelligibleWhetherOrNotItMatches() {
+        let good = "/dev/ttys003\t%1\ttarget\n/dev/ttys011\t%4\ttb-a1b2c3d4"
+        XCTAssertTrue(TmuxOwnership.inventoryIsIntelligible(good))
+        // A server with no panes is a true answer, not an unreadable one.
+        XCTAssertTrue(TmuxOwnership.inventoryIsIntelligible(""))
+        XCTAssertTrue(TmuxOwnership.inventoryIsIntelligible("\n\n"))
+    }
+
     // MARK: kind decoding
 
     func decode(_ json: String) throws -> [LiveSession] {

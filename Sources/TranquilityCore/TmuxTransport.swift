@@ -113,6 +113,36 @@ public enum Tmux {
         // Never let a nested-TMUX guard misfire when the app itself was
         // launched from inside somebody's tmux.
         env.removeValue(forKey: "TMUX")
+        // A UTF-8 locale for the CLIENT, not just for the panes it makes.
+        //
+        // Measured 27 Aug, byte for byte, against a live server: outside a
+        // UTF-8 locale tmux sanitises control characters out of `-F` output,
+        // so the TAB every format string here uses as its field separator
+        // comes back as `_`. `#{pane_tty}\t#{pane_id}` arrives as one field
+        // instead of two, `match(inventory:tty:socket:)` never matches, and
+        // `ownership(forTty:)` answers `.notInTmux` — a definitive "this
+        // session is not under tmux" about a pane sitting on the server it
+        // was just created on. Everything downstream is then correct about a
+        // false premise: a session with no pane IS hand-started, and a
+        // hand-started session is ended and resumed by ruling. It killed
+        // three live agents in seventeen minutes.
+        //
+        // This is `launchTmux`'s PATH lesson on a second variable, and it
+        // has the same tell: launched by relaunch.sh from a shell the app
+        // inherits a terminal's LANG and every lookup works by accident;
+        // launched by launchd — a login item, a GUI app's normal life — the
+        // environment is nine variables and none of them is LANG. That is
+        // why this survived to the first day the app ran from /Applications.
+        //
+        // `launchTmux` already passes `-e LANG=en_US.UTF-8` for the pane's
+        // own sake. The client needs it for the app's sake, and the client
+        // is the half nobody had a reason to think about. Deferring to any
+        // locale the environment DOES set: an inherited UTF-8 locale is
+        // already correct, and overriding a user's own is not this
+        // function's business.
+        if env["LC_ALL"] == nil, env["LANG"] == nil, env["LC_CTYPE"] == nil {
+            env["LANG"] = "en_US.UTF-8"
+        }
         return Subprocess.run(binary, argv, environment: env, stdin: stdin,
                               timeout: timeout)
     }
@@ -261,6 +291,28 @@ public enum TmuxOwnership {
             || stderr.contains("No such file or directory")
     }
 
+    /// A server that is RUNNING and holds nothing. Also a definitive answer,
+    /// and a state this app manufactures on purpose.
+    ///
+    /// `list-panes -a` against a server with no sessions does not print an
+    /// empty list — it exits 1 with "no current target". Ours reaches that
+    /// state routinely, because `launchTmux` sets `exit-empty off` so the
+    /// server outlives its last pane (without it, terminating the last
+    /// session takes the whole server down mid-flight). So the app's own
+    /// posture guarantees this error will be seen, and reading it as a
+    /// question that failed makes every lookup `.unknown` the moment no
+    /// agents are running.
+    ///
+    /// Measured 27 Aug, after the locale fix landed: with an empty tb server
+    /// and no default server, every Go To Agent refused with "it is still
+    /// running in its own terminal" — the new safety guard firing on a false
+    /// premise. Before that guard existed the same false `.unknown` did
+    /// something worse and quieter: `pane(forTty:)` flattened it to nil and
+    /// the session was killed as hand-started.
+    static func serverHoldsNoPanes(_ stderr: String) -> Bool {
+        stderr.contains("no current target")
+    }
+
     public static func ownership(forTty tty: String) -> Ownership {
         var everyServerAnswered = true
         for socket in sockets {
@@ -283,7 +335,7 @@ public enum TmuxOwnership {
                 // server it had just been created on. My regression, found by
                 // the trace added in the same change — which is the only
                 // reason it took minutes instead of an evening.
-                if !Self.serverIsAbsent(error.message) {
+                if !Self.serverIsAbsent(error.message), !Self.serverHoldsNoPanes(error.message) {
                     everyServerAnswered = false
                     Tmux.trace?("ownership: \(socket ?? "default") server did not answer "
                         + "for \(tty)")
@@ -293,6 +345,13 @@ public enum TmuxOwnership {
             if let address = match(inventory: out, tty: tty, socket: socket) {
                 return .pane(address)
             }
+            // A listing this code cannot read is a question that failed, not
+            // an answer that came back empty. See `inventoryIsIntelligible`.
+            if !inventoryIsIntelligible(out) {
+                everyServerAnswered = false
+                Tmux.trace?("ownership: \(socket ?? "default") server answered for \(tty) with a "
+                    + "listing this build cannot parse — treating it as unasked, not as absent")
+            }
         }
         if !everyServerAnswered {
             Tmux.trace?("ownership: \(tty) UNKNOWN — a server could not be asked, so this is "
@@ -300,6 +359,30 @@ public enum TmuxOwnership {
             return .unknown
         }
         return .notInTmux
+    }
+
+    /// Whether a listing is a listing at all — the difference between "the
+    /// server told me its panes and yours is not among them" and "the server
+    /// said something I cannot read".
+    ///
+    /// `match` collapses those two, and on 27 Aug the second one wore the
+    /// first one's clothes: a non-UTF-8 locale made tmux replace the TAB in
+    /// its own `-F` output with `_`, so every line arrived as a single
+    /// unsplittable field, every lookup missed, and `.notInTmux` was returned
+    /// as a fact about a live pane. `Tmux.run` now sets the locale, which
+    /// removes the cause — this removes the CLASS. Any future reason a format
+    /// string fails to render (a tmux release changing its sanitising, a
+    /// field renamed, a locale this code cannot fix) lands on `.unknown`,
+    /// which by rule is never grounds for anything destructive, instead of on
+    /// the one answer that gets a live agent killed.
+    ///
+    /// An EMPTY listing stays intelligible: a server with no panes is a real
+    /// state and a true answer.
+    static func inventoryIsIntelligible(_ inventory: String) -> Bool {
+        let lines = inventory.split(separator: "\n").filter {
+            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        return lines.allSatisfy { $0.contains("\t") }
     }
 
     /// Pure half, testable without a server.

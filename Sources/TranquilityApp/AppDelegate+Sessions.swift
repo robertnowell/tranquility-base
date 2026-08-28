@@ -1035,8 +1035,8 @@ extension AppDelegate {
                             NSPasteboard.general.setString(manual, forType: .string)
                         }
                         message = "That session was closed and couldn't be reopened here. "
-                            + "Copied the manual revival command to your clipboard — "
-                            + "paste it in a terminal."
+                            + "Copied the manual revival command to your clipboard. "
+                            + "Paste it in a terminal."
                     case .refused(let why):
                         Permissions.log("goTo: transfer refused \(sessionId.prefix(8)) — \(why)")
                         // A refusal because ANOTHER process already holds this
@@ -1065,9 +1065,12 @@ extension AppDelegate {
                             }
                             Permissions.log("goTo: could not raise \(pane.paneTty) — \(outcome)")
                         }
+                        // Copy per the house rule: no em dashes on a card
+                        // (`scripts/check-house-copy.sh`, landed with the
+                        // locale fix). The no-holders wording is main's.
                         message = holders.isEmpty
-                            ? "Couldn't move that session under tmux — it is still "
-                                + "running in its own terminal. Nothing was closed."
+                            ? "Couldn't move that session under tmux. It is still running "
+                                + "in its own terminal, and nothing was closed."
                             : "That session is already running elsewhere and its window "
                                 + "could not be raised. Nothing was closed."
                     case .moved:
@@ -1095,7 +1098,7 @@ extension AppDelegate {
                 case .timedOut(let seconds):
                     Permissions.log("goTo TIMEOUT after \(seconds)s for \(tty)")
                     self.hud.finishGoToSession("Terminal didn't answer within \(seconds) seconds. "
-                                        + "The session is fine — try again in a moment.")
+                                        + "The session is fine. Try again in a moment.")
                 case .failed(let message):
                     Permissions.log("goTo FAILED: \(message)")
                     self.hud.finishGoToSession("Couldn't control Terminal: \(message)")
@@ -1140,7 +1143,7 @@ extension AppDelegate {
                     Permissions.log("revive: refused \(sessionId.prefix(8)) — already live elsewhere")
                     await MainActor.run { [weak self] in
                         self?.hud.showReceipt(.notRevived(
-                            "it's already running somewhere I don't control — end it in that terminal"))
+                            "it's already running somewhere I don't control. End it in that terminal"))
                     }
                 case .failure(let error):
                     Permissions.log("revive: failed codex \(sessionId.prefix(8)) — \(error.message)")
@@ -1265,7 +1268,7 @@ extension AppDelegate {
                                 tty: revivedTty,
                                 why: "the revive stopped on something only you can answer")
                             self.hud.showResult(
-                                "\(name) is waiting for you — I opened its terminal. It says: "
+                                "\(name) is waiting for you. I opened its terminal. It says: "
                                 + screen)
                             return
                         }
@@ -1279,7 +1282,7 @@ extension AppDelegate {
                             forType: .string)
                         self.hud.showResult(
                             "\(name) started but hasn't come back yet. Copied the manual "
-                            + "revival command to your clipboard — paste it in a terminal.")
+                            + "revival command to your clipboard. Paste it in a terminal.")
                     }
                 }
             case .failure(let error):
@@ -1298,7 +1301,7 @@ extension AppDelegate {
                     NSPasteboard.general.setString(manual, forType: .string)
                     self.hud.showResult(
                         "Couldn't reopen \(name) here. Copied the manual revival command to "
-                        + "your clipboard — paste it in a terminal."
+                        + "your clipboard. Paste it in a terminal."
                         + (error.worthRetrying ? " Or tap it again." : ""))
                 }
             }
