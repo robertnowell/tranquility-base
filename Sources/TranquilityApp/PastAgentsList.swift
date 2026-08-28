@@ -261,7 +261,7 @@ final class PastAgentsList: NSView {
     }
 
     private func rebuild() {
-        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        stack.removeAllArrangedSubviews()
         for (index, item) in shown.enumerated() {
             let row = PastRowView(item: item, target: self,
                                   action: #selector(rowTapped(_:)))
