@@ -100,9 +100,22 @@ func runInputLoop(sessionId: String, transcriptPath: String) {
 
 // MARK: - Entry
 
-let home = FileManager.default.homeDirectoryForCurrentUser
-let dir = home.appendingPathComponent(
-    "Library/Application Support/VoiceDispatch/test-targets", isDirectory: true)
+// Honours `VOICE_DISPATCH_SUPPORT_DIR`, the same override
+// `QueueStore.supportDirectory` reads — which is the authority; this is a
+// deliberate three-line copy of one lookup rather than a TranquilityCore
+// dependency in a fake TUI that exists to have none.
+//
+// It was a hardcoded path, so the drill's isolation silently did not reach it:
+// the script wrote its sandbox address into every `send-raw-tmux` call, this
+// binary appended somewhere else entirely, and the five checks that only assert
+// an exit code all passed while the two that actually READ the transcript found
+// an empty file. A drill can be broken and still look mostly green, and the
+// checks that survive are the weakest ones.
+let support = ProcessInfo.processInfo.environment["VOICE_DISPATCH_SUPPORT_DIR"]
+    .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+    ?? FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/VoiceDispatch", isDirectory: true)
+let dir = support.appendingPathComponent("test-targets", isDirectory: true)
 try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
 let sessionId = CommandLine.arguments.count > 1
