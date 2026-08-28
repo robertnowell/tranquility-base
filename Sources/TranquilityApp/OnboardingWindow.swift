@@ -652,7 +652,10 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
                 case .active: return StateLegend.Palette.ready
                 case .pendingRestart: return StateLegend.Palette.working
                 case .restricted: return StateLegend.Palette.faint
-                case .denied, .notAsked: return StateLegend.Palette.fault
+                // `stale` is amber, not blue. Blue means underway with nothing
+                // for you to do, and a restart that already failed is the exact
+                // opposite of that.
+                case .denied, .notAsked, .stale: return StateLegend.Palette.fault
                 }
             }()
             details[kind]?.textColor = state == .active
@@ -660,7 +663,10 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
             details[kind]?.stringValue = Self.detail(kind, state)
             grantButtons[kind]?.isHidden = (state == .active || state == .pendingRestart)
             if let button = grantButtons[kind] as? ConsoleButton {
-                let title = state == .denied ? "Open Settings" : "Grant"
+                // `stale` sends them to the pane too: the remedy is the minus
+                // and plus buttons there, and a door labelled Grant would be
+                // offering the thing that already did not work.
+                let title = (state == .denied || state == .stale) ? "Open Settings" : "Grant"
                 let font = ChromeType.mono(ofSize: 11, weight: .medium)
                 button.reink = { [weak button] color in
                     button?.attributedTitle = ChromeType.line(
@@ -685,16 +691,32 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         // "finish the rest first" while a default-styled blue button says "press
         // me now", and the button wins. So before that point the note explains
         // the orange row and nothing invites a premature restart.
+        // A row that already survived a restart is never offered another one.
+        let staleRows = Permissions.stale
         let pending = Permissions.pendingRestart
         let everythingElseDone = states.allSatisfy { $0.1 == .active || $0.1 == .pendingRestart }
         let readyToRestart = !pending.isEmpty && everythingElseDone
-        restartNote?.isHidden = pending.isEmpty
+        restartNote?.isHidden = pending.isEmpty && staleRows.isEmpty
         restartButton?.isHidden = !readyToRestart
-        if !pending.isEmpty {
+        if !staleRows.isEmpty {
+            // The sentence that ends the loop. macOS is reporting this app as
+            // allowed while refusing to act on it, which is what a TCC entry
+            // looks like once it no longer matches the app asking. Removing the
+            // row and adding it back is the remedy that actually clears it, and
+            // it is a thing the user can do, unlike restarting again.
+            let names = staleRows.map(\.title).joined(separator: " and ")
+            restartNote?.stringValue =
+                "\(names) still is not working after a restart. macOS is listing "
+                + "Tranquility Base as allowed but not acting on it. In the pane, "
+                + "select Tranquility Base, remove it with the minus button, then "
+                + "add it back with plus."
+            restartNote?.textColor = StateLegend.Palette.fault
+        } else if !pending.isEmpty {
             let names = pending.map(\.title).joined(separator: " and ")
             restartNote?.stringValue = readyToRestart
                 ? "Last step: restart, and \(names) comes with you."
                 : "\(names) needs a restart. Finish the list first, then restart once."
+            restartNote?.textColor = StateLegend.Palette.hint
         }
 
         // The required set completes the checklist; the optional row never holds
@@ -728,6 +750,9 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         case .denied: return "denied earlier"
         case .restricted: return "restricted by policy"
         case .notAsked: return "needs action"
+        // Never "restart to finish" a second time. The restart is the thing
+        // that just failed, and repeating it is what made this a loop.
+        case .stale: return "restarted, still not working"
         }
     }
 

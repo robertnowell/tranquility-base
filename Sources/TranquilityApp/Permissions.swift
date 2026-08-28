@@ -253,6 +253,11 @@ struct Permissions {
         case denied          // macOS will not ask again; Settings is the only route
         case restricted      // policy; nothing the user can do
         case pendingRestart  // granted, but this process cannot use it yet
+        /// We asked for a restart, the restart happened, and it still is not
+        /// working. A different situation from `pendingRestart` and it needs a
+        /// different sentence, because telling someone to restart a second time
+        /// is telling them to do the thing that just failed.
+        case stale
         case active          // granted AND working right now
     }
 
@@ -292,8 +297,8 @@ struct Permissions {
     /// nobody can run is the path nobody checks.
     @MainActor static var previewStates: [Kind: State]?
 
-    static func state(_ kind: Kind) -> State {
-        if let forced = previewStates?[kind] { return forced }
+    /// The live answer, before memory is applied. `state(_:)` is the one to call.
+    private static func rawState(_ kind: Kind) -> State {
         switch kind {
         case .microphone:
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -387,6 +392,78 @@ struct Permissions {
     /// this is that promise plus room for a slow machine, not a number chosen
     /// to feel patient.
     private static let liveGrantGrace: TimeInterval = 8
+
+    /// The live answer, plus the one thing the live answer cannot know: whether
+    /// we already asked this user to restart and they already did it.
+    ///
+    /// Without that, both restart-needing rows loop, and they loop differently.
+    /// Input Monitoring sits at `pendingRestart` forever, repeating "restart to
+    /// use it" to someone who just did. Accessibility and Automation are worse:
+    /// their clock was an in-memory `static var`, so the restart we asked for
+    /// destroyed the evidence that we asked, and the row fell back to "needs
+    /// action" on the next launch. The same unchanged reality read as two
+    /// different instructions, alternating, forever.
+    ///
+    /// Ruled 28 Aug, and the ruling is the important part: "a quit in order to
+    /// escape an infinite retry is not a solution, the solution is to resolve
+    /// the infinite retry." So the ask is written to disk, and a restart that
+    /// did not take is a THIRD state with its own sentence, rather than a
+    /// second helping of the first one.
+    static func state(_ kind: Kind) -> State {
+        if let forced = previewStates?[kind] { return forced }
+        let raw = rawState(kind)
+        let askedBeforeThisProcess = (restartAskedAt(kind).map { $0 < launchedAt }) ?? false
+
+        switch raw {
+        case .active:
+            // Recovered. Forget the ask so a future problem is not read through
+            // the lens of an old one.
+            clearRestartAsked(kind)
+            return .active
+        case .pendingRestart:
+            if askedBeforeThisProcess { return .stale }
+            noteRestartAsked(kind)
+            return .pendingRestart
+        case .notAsked:
+            // The oscillation. `accessibility` and `automation` fall back here
+            // after a restart because their in-process clock is gone, so a row
+            // we told to restart reads as untouched. If we asked in an earlier
+            // process and it is still not active, that is stale, not new.
+            return askedBeforeThisProcess ? .stale : .notAsked
+        case .denied, .restricted, .stale:
+            return raw
+        }
+    }
+
+    /// The restart we asked for, remembered ACROSS the restart.
+    ///
+    /// On disk rather than in memory, which is the whole point: the event we
+    /// need to remember is the one that ends the process holding the memory.
+    private static func restartKey(_ kind: Kind) -> String {
+        "permissions.restartAskedAt.\(kind)"
+    }
+    private static func restartAskedAt(_ kind: Kind) -> Date? {
+        UserDefaults.standard.object(forKey: restartKey(kind)) as? Date
+    }
+    private static func noteRestartAsked(_ kind: Kind) {
+        guard restartAskedAt(kind) == nil else { return }
+        UserDefaults.standard.set(Date(), forKey: restartKey(kind))
+        log("permissions: noted a restart is needed for \(kind)")
+    }
+    private static func clearRestartAsked(_ kind: Kind) {
+        guard restartAskedAt(kind) != nil else { return }
+        UserDefaults.standard.removeObject(forKey: restartKey(kind))
+        log("permissions: \(kind) is active, clearing the restart note")
+    }
+
+    /// Stamped when this process first asks about permissions. An ask recorded
+    /// before this is an ask from a previous launch, which is exactly the
+    /// question "have they restarted since we asked" reduces to.
+    nonisolated static let launchedAt = Date()
+
+    /// Rows where the restart happened and changed nothing. These are the ones
+    /// that must NOT be offered another restart.
+    static var stale: [Kind] { Kind.allCases.filter { state($0) == .stale } }
 
     /// The gate: every REQUIRED permission granted AND usable in this process.
     /// Stronger than `allGranted`, which cannot see the restart gap.
