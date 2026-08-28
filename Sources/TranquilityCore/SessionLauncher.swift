@@ -291,7 +291,8 @@ public enum SessionLauncher {
         sessionId: String,
         directory: String,
         launch: HarnessLaunch,
-        acceptTrustPrompt: Bool = true
+        acceptTrustPrompt: Bool = true,
+        exemptFromGuard: Set<Int> = []
     ) -> Result<String, ScriptError> {
         let adapter = launch.adapter
         let command = launch.command
@@ -302,6 +303,32 @@ public enum SessionLauncher {
                 + "nothing to resume")
             return .failure(ScriptError(message: "\(adapter.id) adapter: empty resume arguments"))
         }
+        // Nothing has been spawned yet, and past this line something will be.
+        // Every resume in the app funnels through here — GO TO AGENT, revive,
+        // `tbase revive`, the ownership transfer — so this is the one place a
+        // duplicate can be stopped once rather than at each door separately.
+        // See `ResumeGuard` for what a second writer costs (a forked
+        // transcript, one branch permanently unreachable), why the process
+        // table answers it where the registry does not, and why the claim is
+        // atomic rather than a bare scan.
+        //
+        // Held until this function returns: by then the watcher below has
+        // blocked long enough that the new process is visible to any other
+        // caller's scan, so releasing cannot reopen the race.
+        let claim: ResumeGuard.Claim
+        switch ResumeGuard.claim(sessionId: sessionId, exempt: exemptFromGuard) {
+        case .success(let c):
+            claim = c
+        case .failure(let verdict):
+            let why = ResumeGuard.refusal(sessionId: sessionId, holders: verdict.holders)
+            Self.trace?("resumeTmux: \(why)")
+            // Not worth retrying: the conflict is a live process, and pressing
+            // the button again will find it again. The caller's job is to
+            // navigate the reader to the session that already exists, not to
+            // offer a loop.
+            return .failure(ScriptError(message: why, worthRetrying: false))
+        }
+        defer { claim.release() }
         // Quoted individually, same discipline as `directory` a few lines
         // into `launchTmux`: a resume argument reaches here from data (a
         // session id read out of a filename, or — for Codex — out of a
@@ -531,6 +558,12 @@ public enum SessionLauncher {
             // requirement — a session already gone (no `live`) needs no
             // ending, it is simply the first-ever resume for this id.
             var ended = false
+            // The pid this transfer ends, exempted from the resume guard
+            // below: `ps` can still list it for a moment after
+            // `SessionTermination.end` has confirmed it gone, and without
+            // the exemption the guard would refuse to restart the very
+            // session this call just closed.
+            var endedPid: Set<Int> = []
             if let live {
                 let outcome = SessionTermination.end(
                     pid: live.pid, named: sessionId, expectedTty: ProcessProbe.tty(of: live.pid))
@@ -541,6 +574,7 @@ public enum SessionLauncher {
                     return .refused(why)
                 }
                 ended = true
+                endedPid.insert(live.pid)
             }
             // Past this line the old process is gone, so every remaining
             // failure is `endedButNotRestarted` — the caller must not be
@@ -557,7 +591,7 @@ public enum SessionLauncher {
                         sessionId: sessionId, directory: resolvedDirectory, launch: launch))
             }
             let resumed = resumeTmux(sessionId: sessionId, directory: resolvedDirectory,
-                                     launch: launch)
+                                     launch: launch, exemptFromGuard: endedPid)
             guard case .success(let tty) = resumed else {
                 guard case .failure(let error) = resumed else {
                     return failed("could not start a tmux pane to resume into")
