@@ -663,10 +663,13 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
             details[kind]?.stringValue = Self.detail(kind, state)
             grantButtons[kind]?.isHidden = (state == .active || state == .pendingRestart)
             if let button = grantButtons[kind] as? ConsoleButton {
-                // `stale` sends them to the pane too: the remedy is the minus
-                // and plus buttons there, and a door labelled Grant would be
-                // offering the thing that already did not work.
-                let title = (state == .denied || state == .stale) ? "Open Settings" : "Grant"
+                // `stale` keeps the Grant label, and the note tells you to press
+                // it by name. Briefly this said Open Settings on the reasoning
+                // that Grant was the thing that had just failed. The note is
+                // what carries the meaning here, and a note that says "click
+                // Grant" beside a door that says something else is worse than a
+                // door whose label is merely imprecise.
+                let title = state == .denied ? "Open Settings" : "Grant"
                 let font = ChromeType.mono(ofSize: 11, weight: .medium)
                 button.reink = { [weak button] color in
                     button?.attributedTitle = ChromeType.line(
@@ -699,17 +702,20 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         restartNote?.isHidden = pending.isEmpty && staleRows.isEmpty
         restartButton?.isHidden = !readyToRestart
         if !staleRows.isEmpty {
-            // The sentence that ends the loop. macOS is reporting this app as
-            // allowed while refusing to act on it, which is what a TCC entry
-            // looks like once it no longer matches the app asking. Removing the
-            // row and adding it back is the remedy that actually clears it, and
-            // it is a thing the user can do, unlike restarting again.
+            // The sentence that ends the loop: what is wrong, then what to
+            // press, in that order and nothing else.
+            //
+            // It used to carry a middle sentence explaining that macOS was
+            // listing the app as allowed while not acting on it. True, and
+            // ruled out on 28 Aug: "that doesn't make any sense." It described
+            // the mechanism to someone who wants the fix, and the fix is three
+            // clicks that the last sentence now names outright.
             let names = staleRows.map(\.title).joined(separator: " and ")
+            let verb = staleRows.count == 1 ? "is" : "are"
             restartNote?.stringValue =
-                "\(names) still is not working after a restart. macOS is listing "
-                + "Tranquility Base as allowed but not acting on it. In the pane, "
-                + "select Tranquility Base, remove it with the minus button, then "
-                + "add it back with plus."
+                "\(names) still \(verb) not working after a restart. Click Grant, "
+                + "remove Tranquility Base with the minus button, and then add it "
+                + "back with plus."
             restartNote?.textColor = StateLegend.Palette.fault
         } else if !pending.isEmpty {
             let names = pending.map(\.title).joined(separator: " and ")
