@@ -204,7 +204,16 @@ struct Permissions {
 
     static func logEnvironment() {
         let bundle = Bundle.main
-        log("bundleID=\(bundle.bundleIdentifier ?? "nil") path=\(bundle.bundlePath)")
+        // The build, in the log, at every launch. Crash reports carry it too
+        // now (scripts/bundle.sh), but the log is what an investigation reads
+        // first, and on 27 Aug it could say only WHEN a build died, never
+        // WHICH — attribution came from timestamps matched against the deploy
+        // ledger, for a fact the bundle was already carrying.
+        let info = bundle.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        log("bundleID=\(bundle.bundleIdentifier ?? "nil") path=\(bundle.bundlePath) "
+            + "version=\(short) build=\(build)")
         log("micUsageDescription=\(bundle.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") != nil)")
         // Speech status is logged but is NOT a gate — measured 10 Aug: the
         // recogniser transcribes with the status still at notDetermined, so

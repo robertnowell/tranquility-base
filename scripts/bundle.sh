@@ -28,7 +28,29 @@ CONFIG="${1:-debug}"
 # CFBundleVersion must increase for every build macOS is asked to distinguish;
 # the marketing version is what a human reads.
 APP_VERSION="${TB_VERSION:-0.1.0}"
-APP_BUILD="${TB_BUILD:-1}"
+# The line above this one has said "CFBundleVersion must increase for every
+# build macOS is asked to distinguish" since the day it was written, and the
+# line below it defaulted to the constant 1. So every build ever made carried
+# the same version, and every crash report said `ver: 1`.
+#
+# That cost real time on 27 Aug. Five crashes in one day across five unrelated
+# subsystems, and the first question — WHICH BUILD DIED — had no answer in the
+# report. Attribution had to be reconstructed from log timestamps against the
+# deploy ledger, for a fact the bundle could simply have carried.
+#
+# Two keys, because they answer different questions and a crash report prints
+# both. CFBundleVersion is the commit COUNT: monotonic and numeric, which is
+# what "must increase" actually requires and what LaunchServices caches on. The
+# short version carries the SHA, which is the part a human greps the deploy
+# ledger for. A tree without git (a tarball, a sandbox) falls back to the old
+# constants rather than failing a build over provenance.
+if _tb_sha=$(git rev-parse --short HEAD 2>/dev/null) \
+   && _tb_count=$(git rev-list --count HEAD 2>/dev/null); then
+  APP_VERSION="${TB_VERSION:-0.1.0+$_tb_sha}"
+  APP_BUILD="${TB_BUILD:-$_tb_count}"
+else
+  APP_BUILD="${TB_BUILD:-1}"
+fi
 APP_NAME="${VD_APP_NAME:-Tranquility Base}"
 BUNDLE_ID="${VD_BUNDLE_ID:-com.robertnowell.voice-dispatch}"
 BUILD_DIR=".build/$CONFIG"
