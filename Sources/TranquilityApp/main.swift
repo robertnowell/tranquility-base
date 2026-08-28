@@ -1048,6 +1048,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                  .speechRecognition: .notAsked,
                                                  .inputMonitoring: .pendingRestart,
                                                  .accessibility: .denied]
+                case "stuck":
+                    // The state this whole change exists for: a restart was
+                    // asked for, the user did it, and nothing changed.
+                    Permissions.previewStates = [.microphone: .active,
+                                                 .speechRecognition: .active,
+                                                 .inputMonitoring: .stale,
+                                                 .accessibility: .active,
+                                                 .automation: .active]
                 default: break
                 }
             }
