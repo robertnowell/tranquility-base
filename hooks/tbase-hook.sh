@@ -1,6 +1,15 @@
 #!/bin/bash
 #
-# voice-dispatch hook — runs on Claude Code Stop / Notification.
+# voice-dispatch hook. Runs on Claude Code Stop / Notification, and on the
+# Codex events that mean the same things (Stop / PermissionRequest).
+#
+# ONE script, both harnesses, because the payloads are near-identical: Codex's
+# hooks system was modelled on Claude Code's and ships session_id,
+# transcript_path, cwd, hook_event_name, permission_mode and
+# last_assistant_message under those exact names. The whole semantic gap is one
+# field rename and one event rename, and both are normalised below rather than
+# taught to every reader downstream. Measured live against codex-cli 0.150.1 on
+# 28 Aug, in a real TUI pane launched the way SessionLauncher launches one.
 #
 # Contract, in order of importance:
 #   1. NEVER block. This runs inside a real Claude Code turn.
@@ -60,7 +69,20 @@ except Exception:
     sys.exit(0)
 
 event = p.get("hook_event_name")
-# Only these two drive the loop. SubagentStop shares a prompt_id with its parent
+
+# Codex's name for "this session is asking you for permission" is its own
+# PermissionRequest EVENT; Claude Code's is a Notification whose matcher is
+# permission_prompt. Same fact, two vocabularies, so it is renamed HERE and
+# nowhere else. Everything downstream (HookEventKind, waitingSessions, the
+# announcer, the ladder) keeps one vocabulary and never learns there was a
+# second harness. Doing it in the Swift models instead would mean a new
+# HookEventKind case, and SpoolRecord.toEvent maps an unknown kind to .stop,
+# which would announce a permission request as a finished turn.
+if event == "PermissionRequest":
+    event = "Notification"
+    p["matcher"] = "permission_prompt"
+
+# Only these drive the loop. SubagentStop shares a prompt_id with its parent
 # Stop and would double-announce a single turn, so it is dropped at the source.
 # UserPromptSubmit is not announced. It is recorded because it is the signal
 # that you answered that session yourself, which retires whatever was waiting
@@ -87,7 +109,11 @@ record = {
     "createdAtMs": int(time.time() * 1000),
     "hookEvent": event,
     "sessionId": p.get("session_id") or "",
-    "promptId": p.get("prompt_id"),
+    # Claude Code calls it prompt_id, Codex calls it turn_id, and both mean
+    # "which turn is this". The dedupe index is (sessionId, promptId), so the
+    # alias is what makes a Codex turn dedupe at all rather than every event
+    # looking like a new one.
+    "promptId": p.get("prompt_id") or p.get("turn_id"),
     "cwd": p.get("cwd"),
     "transcriptPath": p.get("transcript_path"),
     "lastAssistantMessage": msg,
