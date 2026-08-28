@@ -425,10 +425,22 @@ struct Permissions {
             noteRestartAsked(kind)
             return .pendingRestart
         case .notAsked:
-            // The oscillation. `accessibility` and `automation` fall back here
-            // after a restart because their in-process clock is gone, so a row
-            // we told to restart reads as untouched. If we asked in an earlier
-            // process and it is still not active, that is stale, not new.
+            // The oscillation, and ONLY for the two rows that have it.
+            //
+            // `accessibility` and `automation` fall back to notAsked after a
+            // restart because their in-process clock is gone, so a row we told
+            // to restart reads as untouched. That is the case worth promoting.
+            //
+            // `inputMonitoring` is deliberately excluded, and the reason landed
+            // on main the same day: macOS disables a tap whose callback is too
+            // slow (`HotkeyMonitor.deafWindows`), so this row can read
+            // pendingRestart for a second through no fault of the permission,
+            // which writes a restart note. `.active` clears that note as soon as
+            // the tap returns, so the transient heals itself. But its notAsked
+            // means preflight said no, which is a real revocation, and calling
+            // that "restarted, still not working" would send someone to the
+            // minus button over a permission they simply need to grant.
+            guard kind == .accessibility || kind == .automation else { return .notAsked }
             return askedBeforeThisProcess ? .stale : .notAsked
         case .denied, .restricted, .stale:
             return raw
