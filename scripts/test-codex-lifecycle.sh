@@ -22,7 +22,27 @@ BIN="$PWD/.build/debug"
 command -v codex >/dev/null 2>&1 || { echo "SKIP: no codex on this machine"; exit 0; }
 swift build >/dev/null 2>&1 || { echo "build failed"; exit 1; }
 
-OWNERSHIP="$HOME/Library/Application Support/VoiceDispatch/session-ownership.json"
+
+# YOUR DATA IS NOT A TEST FIXTURE.
+#
+# Everything this drill touches through the app's own code — the queue
+# database, session-ownership.json, the audio directory, the tmux socket — is
+# resolved from `QueueStore.supportDirectory`, which without this line is the
+# REAL one. So a drill run is a writer on the live database and on the file the
+# panel uses to decide which sessions it owns, and it ran that way on every
+# preflight anybody has ever done.
+#
+# The mechanism to prevent it already existed and had exactly one caller
+# (`bundle-test.sh`). It is one line, and this is that line.
+#
+# It does not weaken the drill. `Tmux.socketDirectory` is
+# `supportDirectory/tmux`, so the override moves the pane and the lookup
+# TOGETHER — the transport under test still finds the session, in the same code
+# path, at a different address. Overriding one and not the other is what would
+# make the drill test nothing.
+export VOICE_DISPATCH_SUPPORT_DIR="/private/tmp/tb-drill-support-$$"
+mkdir -p "$VOICE_DISPATCH_SUPPORT_DIR"
+OWNERSHIP="$VOICE_DISPATCH_SUPPORT_DIR/session-ownership.json"
 
 PASS=0; FAIL=0
 check() { # check <name> <0-if-ok>

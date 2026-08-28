@@ -17,16 +17,38 @@ cd "$(dirname "$0")/.."
 # place TmuxOwnership looks — a private socket would be invisible to the
 # transport under test, which would make this drill test nothing. Only this
 # session is created and only this session is killed.
+
+# YOUR DATA IS NOT A TEST FIXTURE.
+#
+# Everything this drill touches through the app's own code — the queue
+# database, session-ownership.json, the audio directory, the tmux socket — is
+# resolved from `QueueStore.supportDirectory`, which without this line is the
+# REAL one. So a drill run is a writer on the live database and on the file the
+# panel uses to decide which sessions it owns, and it ran that way on every
+# preflight anybody has ever done.
+#
+# The mechanism to prevent it already existed and had exactly one caller
+# (`bundle-test.sh`). It is one line, and this is that line.
+#
+# It does not weaken the drill. `Tmux.socketDirectory` is
+# `supportDirectory/tmux`, so the override moves the pane and the lookup
+# TOGETHER — the transport under test still finds the session, in the same code
+# path, at a different address. Overriding one and not the other is what would
+# make the drill test nothing.
+export VOICE_DISPATCH_SUPPORT_DIR="/private/tmp/tb-drill-support-$$"
+mkdir -p "$VOICE_DISPATCH_SUPPORT_DIR"
 SOCKET="tb"
 SESSION="tb-livedrill$$"
 DIR="/private/tmp/tb-live-tui-$$"
-export TMUX_TMPDIR="$HOME/Library/Application Support/VoiceDispatch/tmux"
+export TMUX_TMPDIR="$VOICE_DISPATCH_SUPPORT_DIR/tmux"
+mkdir -p "$TMUX_TMPDIR"
 mkdir -p "$DIR"
 TMUX=$(command -v tmux || echo /usr/local/bin/tmux)
 PASS=0; FAIL=0
 
 cleanup() {
   "$TMUX" -L "$SOCKET" kill-session -t "$SESSION" 2>/dev/null
+  rm -rf "$VOICE_DISPATCH_SUPPORT_DIR"
   rm -rf "$DIR"
   # And the transcript the session wrote. Killing the pane and deleting the
   # cwd does NOT remove it: Claude Code's record lives under ~/.claude/projects
