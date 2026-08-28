@@ -349,7 +349,35 @@ found dead at its tick, so a sub-5s silent gap is invisible today. This is
 the "render throttle" item from Robert's own 12 Aug morning note, now with a
 reproduction shape: gestures during speech.
 
-**Fix shape (not started):** two independent halves. (a) Throttle the
+**Half (b) SHIPPED (28 Aug).** The window leaves a record now. The
+`tapDisabledByTimeout` / `tapDisabledByUserInput` branch in `HotkeyMonitor.handle`
+re-enabled the tap and logged NOTHING, which is why this issue sat unproven for
+sixteen days: the evidence was an absence, and an absence cannot be debugged. It
+now logs the reason, whether the re-enable was accepted, a running count, and the
+gap since the last one — `hotkey: tap went DEAF (timeout) — re-enabled; gestures
+in this window were not seen. deaf window #4 (0.3s since the last)`. The count is
+`HotkeyMonitor.deafWindows`, public so a drill can assert it. One deaf window in a
+day is macOS being macOS; four in a minute is the run loop saturated, and the
+frequency is the diagnosis.
+
+**The logging hypothesis is REFUTED — measured, 28 Aug, do not re-chase it.**
+`Permissions.log` looked like the obvious culprit: every call allocates an
+`ISO8601DateFormatter`, calls `createDirectory`, then open/write/lseek/close —
+five syscalls and an allocation per line, synchronously on the caller's thread,
+and speech emits roughly three lines per spoken word at ~15 words/sec. Benchmarked
+against a cached-formatter, held-fd version: **0.063 ms/call vs 0.002 ms/call, 31x
+slower — but only 2.8 ms per SECOND of main-thread time at 45 calls/sec.** That is
+0.3% of the run loop and cannot explain a one-second tap timeout. Making logging
+cheap is a real 31x and a safe change; it is not this bug, and shipping it as this
+bug's fix would have closed the issue while leaving it live.
+
+Note also that `paintInk` — the per-word painter — does NOT call `render()` or
+`resizeToFit`; it sets one attributed string. The `HUD chrome:` / `HUD layout:` /
+`HUD frame=` lines that DO appear interleaved with `highlight` lines during
+playback come from somewhere else in the announce pipeline, and finding that
+caller is where half (a) should start. It has not been measured.
+
+**Fix shape for the remaining half (a), not started; (b) is done above.** (a) Throttle the
 highlight: coalesce word updates to ~10Hz and skip the full resizeToFit
 per word — the label repaint needs none of it; today's per-word HUD layout
 is the audit's item 1 wearing its quietest costume. (b) Make the silent
