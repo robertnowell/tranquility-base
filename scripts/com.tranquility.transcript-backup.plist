@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.tranquility.transcript-backup</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>REPLACE_WITH_REPO_PATH/scripts/transcript-backup.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>15</integer></dict>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+</dict>
+</plist>
