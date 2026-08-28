@@ -579,8 +579,48 @@ public enum SessionLauncher {
             // Past this line the old process is gone, so every remaining
             // failure is `endedButNotRestarted` — the caller must not be
             // told nothing happened.
+            //
+            // `spawnedTty` is the rollback. Every failure below this point
+            // happens AFTER `resumeTmux` has already started a harness, and
+            // until 27 Aug each of them returned without ending it — so the
+            // card said "that session was closed and couldn't be reopened
+            // here" while the process it had just created went on running and
+            // writing to the transcript, owned by nobody.
+            //
+            // That is the whole duplicate mechanism, in the app's own log:
+            //
+            //     goTo: e73e8975 is hand-started - transferring to tmux
+            //     transfer: the resumed pane (/dev/ttys042) is not on any
+            //               live tmux server
+            //     goTo: transfer ended but did not restart e73e8975
+            //
+            // The spawn SUCCEEDED; recognising the pane it had just made is
+            // what failed (the 27 Aug locale bug made every pane lookup
+            // miss). The reader, told it had failed, pressed the button
+            // again — and each press left another live writer behind. Three
+            // accumulated on one session id in twenty-four seconds.
+            //
+            // So a transfer that cannot verify its own pane now takes back
+            // what it started. A failure has to be a rollback, or it is a
+            // leak wearing a failure's message.
+            var spawnedTty: String?
             func failed(_ why: String, worthRetrying: Bool = true) -> Outcome {
                 SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(why)")
+                if let tty = spawnedTty {
+                    // Addressed by the session id, not a binary name, for the
+                    // same reason the guard is: it is the one token certain
+                    // to be in a resume argv, whichever harness this is.
+                    if let stray = ProcessProbe.pid(onTty: tty, containing: sessionId) {
+                        let outcome = SessionTermination.end(
+                            pid: stray, named: "\(sessionId) (orphaned by a failed transfer)",
+                            expectedTty: tty)
+                        SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) rolled back the "
+                            + "process it had started on \(tty) (pid \(stray)): \(outcome)")
+                    } else {
+                        SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) found nothing "
+                            + "left to roll back on \(tty)")
+                    }
+                }
                 guard ended else { return .refused(why) }
                 // The process is gone and this app could not bring it back, so
                 // the only recovery worth offering is the one that does not run
@@ -599,6 +639,7 @@ public enum SessionLauncher {
                 return failed("could not start a tmux pane to resume into — \(error.message)",
                               worthRetrying: error.worthRetrying)
             }
+            spawnedTty = tty
             guard let pane = TmuxOwnership.pane(forTty: tty)
             else { return failed("the resumed pane (\(tty)) is not on any live tmux server") }
             guard let pid = (agents.sessions() ?? []).first(where: { $0.sessionId == sessionId })?.pid
