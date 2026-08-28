@@ -479,6 +479,53 @@ extension StatusHUD {
     /// the panel is addressing, and whether a drag resizes the window are
     /// facts about views. The tray's LOGIC is unit-tested in Core
     /// (AttachmentTrayTests); this asserts the half that draws.
+    /// The tray is emptied and refilled on every render, and that teardown has
+    /// crashed the app three times — most recently 28 Aug, SIGBUS on the main
+    /// thread six minutes into a run, inside AppKit's dependency walk under
+    /// `removeFromSuperview()`.
+    ///
+    /// A drill cannot assert "did not corrupt memory"; what it can do is run the
+    /// teardown path hard, on every deploy, and assert the arrangement is still
+    /// exactly what was asked for afterwards. Churn with CHANGING sets, because
+    /// `apply` returns early when the paths are unchanged — a drill that applied
+    /// the same list twice would exercise nothing.
+    func trayTeardownChurnDrill() {
+        let priorTarget = replyTargetForDrop
+        let priorStaged = stagedFiles
+        defer { replyTargetForDrop = priorTarget; stagedFiles = priorStaged }
+
+        let sets: [[String]] = [
+            ["/tmp/a.png"],
+            ["/tmp/a.png", "/tmp/b.pdf", "/tmp/c.txt"],
+            [],
+            ["/tmp/d.png", "/tmp/e.png"],
+            ["/tmp/a.png"],
+        ]
+        var everyApplyLandedExactly = true
+        var neverLeftAnOrphanRow = true
+        for _ in 0..<8 {
+            for set in sets {
+                trayRow.apply(set)
+                let expected = set.map { ($0 as NSString).lastPathComponent }
+                if trayRow.displayedNamesForTesting != expected {
+                    everyApplyLandedExactly = false
+                }
+                // The half `removeFromSuperview()` alone did not do: a view that
+                // left the tree but not the arrangement would show up here as a
+                // row the stack still counts and nobody can see.
+                if trayRow.arrangedSubviewCountForTesting != set.count {
+                    neverLeftAnOrphanRow = false
+                }
+            }
+        }
+        trayRow.apply([])
+
+        SelfTest.report("tray-teardown-churn", [
+            ("every apply landed exactly", everyApplyLandedExactly),
+            ("never left an orphan row", neverLeftAnOrphanRow),
+        ])
+    }
+
     func dropTrayDrill() {
         let priorTarget = replyTargetForDrop
         let priorStaged = stagedFiles

@@ -1645,6 +1645,7 @@ extension StatusHUD {
         pastAgentsDrill()
         launchSettingsDrill()
         dropTrayDrill()
+        trayTeardownChurnDrill()
         elasticGridDrill()
         goToSessionDrill()
         speechCallbackDrill()
