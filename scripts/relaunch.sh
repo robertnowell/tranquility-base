@@ -252,7 +252,25 @@ open "$APP_PATH" --args --selftest-hud
 sleep 4
 
 if app_running; then
-  echo "✓ running $TARGET"
+  # "Running" was a pid check, and a pid proves a process, not a BUILD. Every
+  # claim this script made about which ref was live was an inference from what
+  # it had just installed — true in the ordinary case, and silent in exactly
+  # the case worth catching (an install that did not replace the bundle, a
+  # second copy launched from elsewhere, a stale app the restore trap brought
+  # back). On 27 Aug that inference had to be re-derived by hand more than once.
+  #
+  # The bundle names its own commit now, so ask it.
+  INSTALLED_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
+    "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "")
+  SHORT_TARGET=$(git -C "$CLEAN_WORKTREE" rev-parse --short "$TARGET" 2>/dev/null || echo "")
+  if [ -n "$SHORT_TARGET" ] && [ -n "$INSTALLED_VERSION" ] \
+     && [ "${INSTALLED_VERSION#*+}" != "$SHORT_TARGET" ]; then
+    echo "✗ the app that is running is not the build this script made:" >&2
+    echo "    installed bundle says $INSTALLED_VERSION, target is $SHORT_TARGET" >&2
+    echo "  Something else replaced or launched it. Do not trust this deploy." >&2
+    exit 1
+  fi
+  echo "✓ running $TARGET${INSTALLED_VERSION:+ (bundle $INSTALLED_VERSION)}"
 else
   echo "✗ did not stay up — check ~/Library/Application Support/VoiceDispatch/app.log" >&2
   exit 1
