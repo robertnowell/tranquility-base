@@ -34,10 +34,43 @@ public enum AgentDefaults {
     /// stops to ask is an agent you have to go back to the terminal for.
     public static let fallback = "claude --dangerously-skip-permissions"
 
-    /// Codex's equivalent — `--dangerously-bypass-approvals-and-sandbox` is
+    /// Codex's equivalent. `--dangerously-bypass-approvals-and-sandbox` is
     /// the real flag (`codex --help`), not a guess; "YOLO" in conversation,
     /// the same shape as Claude's own skip-permissions default.
-    public static let codexFallback = "codex --dangerously-bypass-approvals-and-sandbox"
+    ///
+    /// `--dangerously-bypass-hook-trust` rides with it, and is the price of
+    /// the needs-you signal on this harness. Codex will not run a hook whose
+    /// config it has not had reviewed, and it does not complain when it
+    /// declines: measured 28 Aug against codex-cli 0.150.1, an untrusted
+    /// `hooks.json` produces no hook, no warning and no log line, which is
+    /// exactly the silent-death failure `HookManifest` exists to catch on the
+    /// Claude Code side. Trust is granted by a "Hooks need review" menu in the
+    /// TUI, persisted to `~/.codex/config.toml` as
+    /// `[hooks.state."<path>:<event>:<group>:<index>"] trusted_hash`, and
+    /// invalidated whenever the hooks file changes, so every `install-hooks`
+    /// would put that menu in front of every pane's next launch. TB's own
+    /// launcher refuses to auto-accept it (`neverAutoAcceptNeedles`), and
+    /// rightly: pressing a security prompt on the user's behalf is not a thing
+    /// a launcher should learn to do.
+    ///
+    /// So the flag, whose own help text names this exact situation: "Intended
+    /// only for automation that already vets hook sources." TB wrote the hooks
+    /// file itself, from `HookManifest`, which is as vetted as a hook source
+    /// gets here.
+    ///
+    /// It stays a plain part of the COMMAND STRING rather than a separate
+    /// setting, because the command is already a per-harness field the user
+    /// edits (Settings, and `agent-command.json` on disk). Anyone who wants
+    /// the review gate back deletes eleven words and approves the menu once by
+    /// hand; nothing in the app needs a second switch to express that.
+    public static let codexFallback =
+        "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
+
+    /// What `codexFallback` was before hooks needed trusting. A machine that
+    /// stored this verbatim never CHOSE it, it just inherited the old default,
+    /// so `normalized()` upgrades it in place. Anything else the user typed is
+    /// left exactly as typed.
+    static let codexFallbackBeforeHookTrust = "codex --dangerously-bypass-approvals-and-sandbox"
 
     /// The fallback for a given harness, falling back itself to Claude
     /// Code's for any id this hasn't heard of — better than crashing on a
@@ -103,13 +136,48 @@ public enum AgentDefaults {
         let claude = ClaudeCodeAdapter().id
         guard let raw = stored() else { return ([:], claude) }
         if let byHarness = raw.byHarness {
-            return (byHarness, raw.defaultHarness ?? claude)
+            return (upgradedCodexHookTrust(byHarness), raw.defaultHarness ?? claude)
         }
         var map: [String: HarnessEntry] = [:]
         if raw.command != nil || raw.directory != nil {
             map[claude] = HarnessEntry(command: raw.command ?? fallback, directory: raw.directory)
         }
         return (map, claude)
+    }
+
+    /// A stored Codex command that is VERBATIM the old default gains
+    /// `--dangerously-bypass-hook-trust`; anything else is untouched.
+    ///
+    /// Read-time and value-scoped on purpose. Changing a default does nothing
+    /// for the machines already carrying the old one, and this app's own
+    /// setting file is exactly such a machine: `agent-command.json` has held
+    /// `codex --dangerously-bypass-approvals-and-sandbox` since 25 Aug, so
+    /// shipping the new fallback alone would have left every existing install
+    /// with hooks that silently never fire. That is the whole bug class this
+    /// guards.
+    ///
+    /// Equality against the OLD default, not a substring check or an append,
+    /// is what keeps this from overwriting a decision. A user who deleted the
+    /// flag on purpose, pinned a path, or added flags of their own typed
+    /// something that is not this string, and gets to keep it. The upgrade is
+    /// therefore idempotent and applies at most once per machine, since the
+    /// result no longer equals the old default.
+    ///
+    /// It does not WRITE. Rewriting the file from a read path would mean a
+    /// launch mutating settings behind the user's back, and `save` already
+    /// persists the upgraded value the next time anything sets a command.
+    private static func upgradedCodexHookTrust(
+        _ byHarness: [String: HarnessEntry]
+    ) -> [String: HarnessEntry] {
+        let codex = CodexAdapter().id
+        guard var entry = byHarness[codex],
+              entry.command.trimmingCharacters(in: .whitespaces)
+                  == codexFallbackBeforeHookTrust
+        else { return byHarness }
+        entry.command = codexFallback
+        var upgraded = byHarness
+        upgraded[codex] = entry
+        return upgraded
     }
 
     /// The configured command for a harness, or its fallback when nothing
