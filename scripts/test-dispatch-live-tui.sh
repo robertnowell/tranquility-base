@@ -65,7 +65,24 @@ echo "→ starting a real Claude Code session"
   -e "PATH=$HOME/.local/bin:/usr/bin:/bin" \
   /bin/zsh -c "cd '$DIR' && claude --dangerously-skip-permissions" >/dev/null 2>&1
 sleep 14
-"$TMUX" -L "$SOCKET" send-keys -t "$SESSION" Enter 2>/dev/null   # clear any trust prompt
+# Answer the trust prompt the way SessionLauncher does — by landing on the
+# ACCEPTING row, not by confirming whatever is selected. Claude Code's current
+# screen puts "No, exit" under the cursor, so the bare Return this used to send
+# exited the session and the lookup below then failed as "could not find the
+# session; is claude logged in?" — a red drill on every run of preflight, for a
+# reason that had nothing to do with being logged in. See
+# TrustPromptSpec.acceptOptionNeedles.
+SCREEN=$("$TMUX" -L "$SOCKET" capture-pane -p -t "$SESSION" 2>/dev/null || true)
+CURSOR_ROW=$(printf '%s\n' "$SCREEN" | grep -n '❯' | head -1 | cut -d: -f1)
+ACCEPT_ROW=$(printf '%s\n' "$SCREEN" | grep -n 'Yes, I trust this folder' | head -1 | cut -d: -f1)
+if [ -n "$CURSOR_ROW" ] && [ -n "$ACCEPT_ROW" ]; then
+  STEPS=$(( ACCEPT_ROW - CURSOR_ROW ))
+  while [ "$STEPS" -gt 0 ]; do
+    "$TMUX" -L "$SOCKET" send-keys -t "$SESSION" Down 2>/dev/null
+    STEPS=$(( STEPS - 1 ))
+  done
+fi
+"$TMUX" -L "$SOCKET" send-keys -t "$SESSION" Enter 2>/dev/null   # answer the trust prompt
 sleep 5
 
 SID=$(claude agents --json 2>/dev/null | python3 -c "
