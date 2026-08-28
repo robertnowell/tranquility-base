@@ -64,8 +64,13 @@ final class TranscriptForksTests: XCTestCase {
             rec("side", "b", sidechain: true),
         ].joined(separator: "\n")
         let s = TranscriptForks.survey(text: text, sessionId: "sess")!
-        // Tip is b; the sidechain record hangs off it and is still linked.
-        XCTAssertEqual(s.reachable, 2)
+        // Expectation changed 28 Aug with the metric, deliberately. `reachable`
+        // used to mean "walked back from the tip", so the sidechain record was
+        // outside it and this read 2. The survey now counts what was ABANDONED
+        // at a branch point, and a sidechain hanging off `b` is not a branch —
+        // nothing here diverged, so nothing is stranded.
+        XCTAssertEqual(s.unreachable, 0, "a sidechain tail is not a fork")
+        XCTAssertEqual(s.reachable, 3)
     }
 
     /// Bookkeeping rows link to nothing. Counting them as unreachable reports

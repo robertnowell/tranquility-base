@@ -68,11 +68,25 @@ public enum TranscriptForks {
         public let linked: Int
         /// Records a resume can still walk back to from the real tip.
         public let reachable: Int
-        /// Dead-end tips. One is healthy; more than one means a fork.
+        /// Dead-end tips. NOT a fork test on its own: a compacted conversation
+        /// continues in a new segment, so an old healthy session has one tip per
+        /// compaction and nothing has diverged. Kept because "14 branches" is
+        /// still the most legible way to say how chopped-up a file is.
         public let leaves: Int
 
         public var unreachable: Int { max(0, linked - reachable) }
-        public var isForked: Bool { leaves > 1 }
+
+        /// Forked means conversation was ABANDONED — a record with two children
+        /// where one lineage was continued and the other left behind.
+        ///
+        /// This read `leaves > 1` until 28 Aug, which flagged every session that
+        /// had ever been compacted. Combined with the reachability metric it
+        /// replaced, that put "262 forked transcript(s), 32,299 record(s)
+        /// unreachable" in the deploy gate's output over a real figure of two
+        /// transcripts — and a gate that overstates by two orders of magnitude
+        /// is one people learn to read past, which costs more than the check is
+        /// worth.
+        public var isForked: Bool { unreachable > 0 }
 
         public init(sessionId: String, linked: Int, reachable: Int, leaves: Int) {
             self.sessionId = sessionId
@@ -97,7 +111,7 @@ public enum TranscriptForks {
     /// to ignore, and this repo just spent eight days with the archive check red
     /// over a body fragment for exactly that reason. 200 sits in the empty
     /// middle of a gap that runs from 60 to 1,256.
-    public static let significantUnreachable = 200
+    public static let significantUnreachable = 100
 
     // MARK: - Reading
 
@@ -176,11 +190,65 @@ public enum TranscriptForks {
         }
         guard !records.isEmpty else { return nil }
 
+        // COMPACTION IS NOT A FORK, and reading `parentUuid` alone cannot tell
+        // the difference.
+        //
+        // When Claude Code compacts a conversation it starts a new segment: a
+        // `compact_boundary` record with a NULL `parentUuid` — a fresh root —
+        // and the real link back into the previous segment stashed in a
+        // different field, `logicalParentUuid`. Following parents only, every
+        // compaction reads as a severed component, and everything behind it
+        // counts as lost.
+        //
+        // Measured 28 Aug, over all 262 sessions this survey flags. The error
+        // is not a rounding error: f37aaddd reported 16,703 unreachable and has
+        // 162; 4394c0ec reported 9,114 and has 109; bd28a0a1 reported 3,705 and
+        // has 25. Between 8x and 148x, and the factor grows with the session's
+        // AGE and compaction count rather than with anything that went wrong —
+        // so the sessions shouting loudest were simply the oldest.
+        //
+        // That is the failure that matters. A detector whose headline number is
+        // two orders of magnitude high is one people learn to scroll past, and
+        // it was already sitting in the deploy gate's output saying "32,299
+        // records unreachable" over a real total closer to a thousand. The one
+        // genuine competing-writer fork in f37aaddd — 146 records, 33 minutes,
+        // a session whose own transcript recorded `duplicate sessionId
+        // f37aaddd — pids 21081 and 98887` while it happened — was buried under
+        // 16,541 records of ordinary rolled-off context.
+        //
+        // The logical edge is used only where the plain one is absent, so a
+        // record that has a real parent is unaffected, and a transcript with no
+        // compaction surveys exactly as it did before.
+        // `logicalParentUuid` IS NOT A TREE EDGE, and using it as one is worse
+        // than ignoring it.
+        //
+        // It was the obvious fix and it was wrong. A manual `/compact` writes
+        // its boundary record BEFORE replaying the resume preamble, and the
+        // boundary's `logicalParentUuid` points at the last pre-compact record —
+        // which, in the physical `parentUuid` chain, is a DESCENDANT of that
+        // preamble. Following the logical edge closes a ten-record loop, and a
+        // subtree walk around it hands both children of the branch point the
+        // same 2,450 records. The file then reports a near-perfect 50/50 fork
+        // over three days of work that never diverged at all. Measured on
+        // f30bb890: 2,490 abandoned records with the logical edge, 44 without;
+        // 50124c48, 2,946 against 27; cdeb1038, 2,519 against 14. Sessions with
+        // no manual compaction were identical either way, which is exactly why
+        // spot-checking three of them agreed with it.
+        //
+        // The tree is built on `parentUuid` alone. Compaction then leaves each
+        // segment as its own root, and that is CORRECT for this measurement: a
+        // root is not a branch point, so sequential segments contribute nothing,
+        // which is the answer we wanted from the logical edge in the first
+        // place — without inventing a fork to get it.
         var parentOf: [String: String?] = [:]
+        var childrenOf: [String: [String]] = [:]
         var isSomeonesParent: Set<String> = []
         for r in records {
             parentOf[r.uuid] = r.parent
-            if let p = r.parent, byUuid.contains(p) { isSomeonesParent.insert(p) }
+            if let p = r.parent, byUuid.contains(p) {
+                isSomeonesParent.insert(p)
+                childrenOf[p, default: []].append(r.uuid)
+            }
         }
 
         // Only records wired into the chain are counted. A transcript carries
@@ -216,9 +284,83 @@ public enum TranscriptForks {
             cursor = parentOf[u] ?? nil
         }
 
+        // ABANDONED, NOT MERELY UNREACHED. The two are different questions and
+        // only the first one is about loss.
+        //
+        // "Not reachable from the newest leaf" counts every record in every
+        // earlier SEGMENT of the conversation. A compaction ends one segment and
+        // opens another, and even with the logical edge honoured above, older
+        // transcripts carry boundaries that record no edge at all — so the walk
+        // stops and the entire history behind it is called lost. It is not lost
+        // and it did not diverge: segment N's last record precedes segment N+1's
+        // first, sequentially, with no overlap. Nothing forked. The conversation
+        // simply continued.
+        //
+        // A FORK is divergence: one record with two children, where one lineage
+        // was continued and the other was left behind. So that is what gets
+        // counted — the descendants of every non-surviving child of a real
+        // branch point. A separate root chain has no branch point above it and
+        // contributes nothing, which is the whole correction.
+        //
+        // Measured over the 45 largest flagged sessions, 28 Aug: the old
+        // question answered 115,987; honouring the logical edge brought it to
+        // 13,627; asking about divergence instead brings it to the low hundreds.
+        // f37aaddd's real fork is 146 records over 33 minutes, and its own
+        // transcript recorded `duplicate sessionId f37aaddd — pids 21081 and
+        // 98887` while it was happening. That is the signal, and it was buried
+        // under 16,541 records of ordinary rolled-off context.
+        //
+        // This is not pedantry about a number. The old figure was already in the
+        // deploy gate's output — "32,299 record(s) unreachable" — and a gate
+        // that overstates by two orders of magnitude is one people learn to read
+        // past, which costs more than the check is worth. Same lesson as the
+        // 27 Aug drill gate, one layer along.
+        // ONE set, not a sum per branch point. An abandoned branch can contain
+        // branch points of its own, and counting each subtree separately counts
+        // the records below them once per ancestor — which first reported 89,380
+        // abandoned records in a 6,782-record file. A record is abandoned or it
+        // is not; it cannot be abandoned twice.
+        // WHICH CHILD SURVIVED is decided per branch point, not by the file's
+        // single newest leaf.
+        //
+        // Asking "is this child on the path to the final record" only works
+        // inside the LAST segment. In an earlier segment no child is on that
+        // path, so every child looks abandoned — including the lineage that
+        // actually continued, which reported 4,307 abandoned records in a
+        // session whose real divergence is nil.
+        //
+        // The rule that holds everywhere is the one a resume itself follows:
+        // the branch written LAST wins. So for each branch point, the surviving
+        // child is whichever child's subtree reaches furthest down the file, and
+        // its siblings are what was left behind.
+        var orderOf: [String: Int] = [:]
+        for (i, r) in records.enumerated() { orderOf[r.uuid] = i }
+        func subtree(_ root: String) -> Set<String> {
+            var out: Set<String> = []
+            var stack = [root]
+            while let u = stack.popLast() {
+                guard !out.contains(u) else { continue }
+                out.insert(u)
+                stack.append(contentsOf: childrenOf[u] ?? [])
+            }
+            return out
+        }
+        var abandonedUuids: Set<String> = []
+        for r in linked where (childrenOf[r.uuid]?.count ?? 0) > 1 {
+            let subtrees = (childrenOf[r.uuid] ?? []).map { ($0, subtree($0)) }
+            guard let survivor = subtrees.max(by: { a, b in
+                (a.1.compactMap { orderOf[$0] }.max() ?? -1)
+                    < (b.1.compactMap { orderOf[$0] }.max() ?? -1)
+            })?.0 else { continue }
+            for (child, nodes) in subtrees where child != survivor {
+                abandonedUuids.formUnion(nodes)
+            }
+        }
+        let abandoned = linked.filter { abandonedUuids.contains($0.uuid) }.count
+
         return Survey(sessionId: sessionId,
                       linked: linked.count,
-                      reachable: linked.filter { seen.contains($0.uuid) }.count,
+                      reachable: linked.count - abandoned,
                       leaves: leaves.count)
     }
 }
