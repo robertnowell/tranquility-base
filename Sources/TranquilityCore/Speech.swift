@@ -538,13 +538,46 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         throw SpeechError.truncated(playedSeconds: played, ofSeconds: duration)
     }
 
+    /// Audio teardown, off the caller's thread.
+    ///
+    /// `AVAudioPlayer.stop()` is not the cheap local call it looks like: it reaches
+    /// into AudioToolbox, which takes the audio queue's dispatch queue, which can
+    /// be held by a `play()` that is itself blocked in an IPC to `coreaudiod`.
+    /// Every `stop()` call site in the app is on the main actor, so when that
+    /// happens the main thread stops forever.
+    ///
+    /// Measured 28 Aug, from a live `sample` of a wedged instance — not a crash,
+    /// a deadlock, and the reason the microphone appeared dead (the push-to-talk
+    /// handler could not run):
+    ///
+    ///     main thread  AppDelegate.handle -> SpeechChain.stop -> AVAudioPlayer.stop
+    ///                  -> AudioQueueGetCurrentTime -> dispatch_sync -> kevent_id
+    ///     AQServer     announceNext -> play -> AVAudioPlayer.play -> AudioQueueStart
+    ///                  -> HAL_defaultDeviceOutputType -> mach_msg   (waiting on
+    ///                     coreaudiod for the default output device)
+    ///     AQClient     AudioPlayerAQOutputCallback -> psynch_mutexwait
+    ///
+    /// All three at 2547/2547 samples. `play()` held the queue while waiting on a
+    /// default-device lookup, and `stop()` waited on the queue behind it.
+    private static let teardownQueue = DispatchQueue(label: "elevenlabs.teardown")
+
     public func stop() {
+        // The LOGICAL cancel stays synchronous and ordered: bumping the generation
+        // is what actually abandons in-flight synthesis, and it must have happened
+        // by the time this returns or a response landing a moment later would play
+        // over whatever started next. It touches only our own queue and cannot
+        // block on CoreAudio.
         bumpGeneration()
-        player?.stop()
+        let dying = player
         player = nil
         // A stop ends the pause too, or the next playback would start "paused" and
         // its loop would spin on a flag nobody set.
         generationQueue.sync { pausedByUser = false }
+        // Only the AUDIO teardown moves off the caller. Serial, so stops stay
+        // ordered among themselves. In the healthy case this costs microseconds
+        // and nothing is audible; in the wedged case the app survives instead of
+        // freezing, which is the whole trade.
+        if let dying { Self.teardownQueue.async { dying.stop() } }
     }
 
     /// Recorded, not inferred.
