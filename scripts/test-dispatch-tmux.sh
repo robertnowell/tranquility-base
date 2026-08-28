@@ -22,13 +22,35 @@ command -v tmux >/dev/null 2>&1 || TMUX_BIN=""
 TMUX_BIN=$(command -v tmux || echo /usr/local/bin/tmux)
 [ -x "$TMUX_BIN" ] || { echo "SKIP: no tmux on this machine"; exit 0; }
 
+
+# YOUR DATA IS NOT A TEST FIXTURE.
+#
+# Everything this drill touches through the app's own code — the queue
+# database, session-ownership.json, the audio directory, the tmux socket — is
+# resolved from `QueueStore.supportDirectory`, which without this line is the
+# REAL one. So a drill run is a writer on the live database and on the file the
+# panel uses to decide which sessions it owns, and it ran that way on every
+# preflight anybody has ever done.
+#
+# The mechanism to prevent it already existed and had exactly one caller
+# (`bundle-test.sh`). It is one line, and this is that line.
+#
+# It does not weaken the drill. `Tmux.socketDirectory` is
+# `supportDirectory/tmux`, so the override moves the pane and the lookup
+# TOGETHER — the transport under test still finds the session, in the same code
+# path, at a different address. Overriding one and not the other is what would
+# make the drill test nothing.
+export VOICE_DISPATCH_SUPPORT_DIR="/private/tmp/tb-drill-support-$$"
+mkdir -p "$VOICE_DISPATCH_SUPPORT_DIR"
 export TB_TMUX_SOCKET="tbdrill-$$"
 SID="dispatch-tmux-$$"
-TRANSCRIPT="$HOME/Library/Application Support/VoiceDispatch/test-targets/$SID.jsonl"
+TRANSCRIPT="$VOICE_DISPATCH_SUPPORT_DIR/test-targets/$SID.jsonl"
+mkdir -p "$(dirname "$TRANSCRIPT")"
 T() { "$TMUX_BIN" -L "$TB_TMUX_SOCKET" "$@"; }
 
 cleanup() {
   rm -f "$PWD/.tmux-drill-adversary" 2>/dev/null
+  rm -rf "$VOICE_DISPATCH_SUPPORT_DIR"
   T kill-server 2>/dev/null
   pkill -f "tbase-test-target $SID" 2>/dev/null
   rm -f "$TRANSCRIPT"
