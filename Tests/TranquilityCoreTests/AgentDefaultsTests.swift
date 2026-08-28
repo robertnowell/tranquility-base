@@ -120,4 +120,69 @@ final class AgentDefaultsTests: XCTestCase {
         XCTAssertEqual(AgentDefaults.load(for: claude), "claude --old-flag")
         XCTAssertEqual(AgentDefaults.load(for: codex), "codex --new")
     }
+
+    // MARK: - The hook-trust upgrade (28 Aug)
+
+    /// The case this exists for: a machine configured before Codex hooks
+    /// needed trusting. Without the upgrade it keeps launching without
+    /// `--dangerously-bypass-hook-trust`, Codex declines to run the hooks, and
+    /// says nothing about it, so the needs-you signal is silently dead.
+    func testTheOldCodexDefaultGainsHookTrust() throws {
+        let stored = """
+        {"byHarness":{"codex":{"command":"\(AgentDefaults.codexFallbackBeforeHookTrust)"}},\
+        "defaultHarness":"claude-code"}
+        """
+        try stored.write(to: AgentDefaults.fileURL, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(AgentDefaults.load(for: codex), AgentDefaults.codexFallback)
+        XCTAssertTrue(
+            AgentDefaults.load(for: codex).contains("--dangerously-bypass-hook-trust"))
+    }
+
+    /// And the guard that keeps the upgrade from being a rewrite of somebody's
+    /// decision. A user who deleted the flag, pinned a path, or added their own
+    /// typed something that is not the old default, and keeps every word of it.
+    func testACustomisedCodexCommandIsNeverRewritten() throws {
+        let mine = "/opt/codex/bin/codex --dangerously-bypass-approvals-and-sandbox --search"
+        let stored = """
+        {"byHarness":{"codex":{"command":"\(mine)"}},"defaultHarness":"codex"}
+        """
+        try stored.write(to: AgentDefaults.fileURL, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(AgentDefaults.load(for: codex), mine)
+    }
+
+    /// Deliberately choosing the review gate back is a supported choice, and
+    /// it survives. This is the same string as the old default and so IS
+    /// upgraded, which is the one honest limit of a value-scoped migration:
+    /// "never set it" and "set it back to exactly the old text" are
+    /// indistinguishable on disk. Recorded as a test rather than left to be
+    /// rediscovered, since the escape hatch is to type anything else at all,
+    /// including the same flags in a different order.
+    func testTheUpgradeIsIdempotent() throws {
+        let stored = """
+        {"byHarness":{"codex":{"command":"\(AgentDefaults.codexFallback)"}},\
+        "defaultHarness":"codex"}
+        """
+        try stored.write(to: AgentDefaults.fileURL, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(AgentDefaults.load(for: codex), AgentDefaults.codexFallback)
+        XCTAssertEqual(
+            AgentDefaults.load(for: codex)
+                .components(separatedBy: "--dangerously-bypass-hook-trust").count - 1,
+            1, "the flag must not be appended twice")
+    }
+
+    /// Claude Code is not touched by any of this.
+    func testClaudeCodeIsUnaffectedByTheCodexUpgrade() throws {
+        let stored = """
+        {"byHarness":{"claude-code":{"command":"\(AgentDefaults.fallback)"},\
+        "codex":{"command":"\(AgentDefaults.codexFallbackBeforeHookTrust)"}},\
+        "defaultHarness":"claude-code"}
+        """
+        try stored.write(to: AgentDefaults.fileURL, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(AgentDefaults.load(for: claude), AgentDefaults.fallback)
+        XCTAssertFalse(AgentDefaults.load(for: claude).contains("hook-trust"))
+    }
 }
