@@ -107,7 +107,7 @@ extension StatusHUD {
         // diagnosing is worse than no diagnostic.
         func span(_ r: CGRect) -> String {
             r.isNull || !r.minX.isFinite || !r.maxX.isFinite
-                ? "—" : "\(Int(r.minX))..\(Int(r.maxX))"
+                ? "—" : "\(Int(r.minX))..\(Int(r.maxX))"  // house-copy:exempt — a null marker in a log
         }
         Permissions.log("selftest topBand: collapse=\(span(collapse))"
             + " placard=\(span(placard)) receipt=\(span(chip))"

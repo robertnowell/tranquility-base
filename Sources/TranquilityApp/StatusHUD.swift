@@ -710,7 +710,7 @@ final class StatusHUD: NSObject {
         face = Face(title: label,
                     body: "It's asking you something before it starts:\n\n\(question)\n\n"
                         + (windowOpened
-                           ? "Its window is open — answer there and it'll come up here."
+                           ? "Its window is open. Answer there and it'll come up here."
                            : "I couldn't open its window; Go to Agent will."),
                     placardOverride: StateLegend.needsAnswerPlacard)
         render()

@@ -150,7 +150,7 @@ final class VoiceRowView: NSControl {
     /// names a voice; the sales copy stays in the catalog.
     static func concise(_ name: String) -> String {
         let head = name
-            .components(separatedBy: CharacterSet(charactersIn: "-–—™"))
+            .components(separatedBy: CharacterSet(charactersIn: "-–—™"))  // house-copy:exempt — dashes to strip, not to print
             .first?.trimmingCharacters(in: .whitespaces) ?? name
         return head.isEmpty ? name : head
     }
