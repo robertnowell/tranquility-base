@@ -211,3 +211,32 @@ final class NSCounter: @unchecked Sendable {
     var value: Int { lock.lock(); defer { lock.unlock() }; return n }
     func increment() { lock.lock(); n += 1; lock.unlock() }
 }
+
+/// Ordering: a refusal must arrive while there is still something to refuse.
+extension ResumeGuardTests {
+
+    /// The regression this ordering exists to prevent. `OwnershipTransfer`
+    /// ends the live process and then resumes it; if the guard only ran at
+    /// the resume, a competing orphan would mean the session was killed and
+    /// then refused a restart — the 24 Aug failure, reintroduced by its own
+    /// fix. The preflight exempts the pid it is about to end and refuses on
+    /// anything else, BEFORE ending anything.
+    func testPreflightExemptsTheSessionButNotACompetingWriter() {
+        let sid = "e73e8975-9f7a-429a-aa0a-976791d1d841"
+        let livePid = 14460
+        let orphanPid = 14769
+        let ps = """
+        \(livePid) claude --dangerously-skip-permissions --resume \(sid)
+        \(orphanPid) claude --dangerously-skip-permissions --resume \(sid)
+        """
+        // The session's own pid is not a competing writer.
+        let onlyItself = ResumeGuard.classify(
+            psOutput: "\(livePid) claude --resume \(sid)", sessionId: sid, exempt: [livePid])
+        XCTAssertEqual(onlyItself, .clear,
+                       "a transfer must not refuse to move the very session it is transferring")
+        // Anything else is, and must be caught before termination.
+        let withOrphan = ResumeGuard.classify(psOutput: ps, sessionId: sid, exempt: [livePid])
+        XCTAssertEqual(withOrphan.holders.map(\.pid), [orphanPid],
+                       "a competing writer must be seen while the session is still alive")
+    }
+}

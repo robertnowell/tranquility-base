@@ -229,6 +229,26 @@ public enum ResumeGuard {
         return false
     }
 
+    /// Where the reader should actually be sent.
+    ///
+    /// A refusal that only names a pid is correct and useless: the whole
+    /// reason the button was pressed is that somebody wants to look at their
+    /// session, and "it is already running as pid 14460" does not open
+    /// anything. Every holder is a live process, so most of them are sitting
+    /// in a pane that can simply be raised.
+    ///
+    /// Returns the first holder that resolves to a real pane. `nil` means
+    /// every holder is an orphan with no pane — genuinely nowhere to go, and
+    /// the caller has to say so rather than pretending otherwise.
+    public static func routablePane(among holders: [Holder]) -> TmuxPaneAddress? {
+        for h in holders {
+            guard let tty = ProcessProbe.tty(of: h.pid),
+                  let pane = TmuxOwnership.pane(forTty: tty) else { continue }
+            return pane
+        }
+        return nil
+    }
+
     /// What the refusal says out loud. One sentence of consequence, then the
     /// pids, because "already running" without an address is a dead end for
     /// anyone trying to get to their session.

@@ -554,6 +554,30 @@ public enum SessionLauncher {
                 SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(why)")
                 return .refused(why)
             }
+            // Ask the guard BEFORE ending anything.
+            //
+            // `resumeTmux` runs it too, but by then this function has already
+            // killed the live process — and a guard that refuses at that
+            // point leaves the reader with a session that was ended and not
+            // restarted, which is precisely the 24 Aug failure `Outcome`
+            // exists to describe. The order matters more than the check: a
+            // refusal has to arrive while there is still something to refuse.
+            //
+            // The pid about to be ended is exempted, because it is the
+            // session being transferred, not a competing writer. Anything
+            // ELSE holding this id is a second writer that this transfer
+            // cannot resolve — most likely an orphan from before the rollback
+            // below existed — and ending a live session to hand its id to a
+            // process we would then refuse to start is strictly worse than
+            // doing nothing.
+            let preflightExempt = Set([live?.pid].compactMap { $0 })
+            if case .alreadyResuming(let holders) = ResumeGuard.check(
+                sessionId: sessionId, exempt: preflightExempt) {
+                let why = ResumeGuard.refusal(sessionId: sessionId, holders: holders)
+                SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(why) — "
+                    + "nothing was ended")
+                return .refused(why)
+            }
             // Positive evidence of death before resuming, per `resume`'s own
             // requirement — a session already gone (no `live`) needs no
             // ending, it is simply the first-ever resume for this id.
