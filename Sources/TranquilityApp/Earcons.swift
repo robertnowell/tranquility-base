@@ -64,6 +64,10 @@ import UserNotifications
 enum Earcons {
 
     private static let lock = NSLock()
+
+    /// Where earcon audio is actually played. See `emit` for why it is not the
+    /// main actor, and why serial.
+    private static let audioQueue = DispatchQueue(label: "earcons.audio")
     nonisolated(unsafe) private static var cache: [EarconGate.Cue: NSSound] = [:]
 
     /// A cue that NOTIFIES. The gate is evaluated by the caller, on the main
@@ -117,19 +121,43 @@ enum Earcons {
             Permissions.log("earcon: no audio for \(cue.rawValue)")
             return
         }
-        // Stopped first, or a second cue inside the first's decay is swallowed
-        // rather than retriggered — which reads as the sound being unreliable
-        // rather than as two events landing close together. Inherited from
-        // ArrivalChime, where it was found the hard way.
-        sound.stop()
-        // Logged on SUCCESS as well as failure, which the first cut did not do.
-        // A cue that fires when nothing actionable happened is the failure mode
-        // this whole set is designed against, and diagnosing one meant inferring
-        // it from neighbouring `ambient:` lines. The cue now says so itself.
-        if sound.play() {
-            Permissions.log("earcon: \(cue.rawValue)")
-        } else {
-            Permissions.log("earcon: \(cue.rawValue) play refused")
+        // The audio leaves the main actor here, and the cue is not worth a
+        // frozen app.
+        //
+        // `NSSound.play()` is an AVAudioPlayer underneath, and priming an audio
+        // queue asks CoreAudio which device is the default output. That question
+        // goes to `coreaudiod` and does not always come back: on 28 Aug it wedged
+        // while AirPods Pro flapped their route 199 times in two hours, and a
+        // live `sample` caught this exact line — `Earcons.emit` -> `NSSound play`
+        // -> `AQMEIO_HAL::Init` -> `GetDefaultDeviceIDFromServer` — holding the
+        // main thread at 1697 of 1697 samples. The panel froze and the microphone
+        // went dead, because the push-to-talk handler runs on the same actor.
+        //
+        // Ruled the same day, on the operator's own framing: better to flicker
+        // than to beach. A cue that arrives late, or not at all, costs a sound.
+        // A cue that blocks the main actor costs the whole app.
+        //
+        // Serial, so cues cannot overlap each other, and the queue is the only
+        // place these NSSound objects are ever played or stopped — the cache
+        // above is guarded by `lock` and hands out a reference, nothing more.
+        let voice = sound
+        audioQueue.async {
+            // Stopped first, or a second cue inside the first's decay is
+            // swallowed rather than retriggered — which reads as the sound being
+            // unreliable rather than as two events landing close together.
+            // Inherited from ArrivalChime, where it was found the hard way.
+            voice.stop()
+            // Logged on SUCCESS as well as failure, which the first cut did not
+            // do. A cue that fires when nothing actionable happened is the
+            // failure mode this whole set is designed against, and diagnosing one
+            // meant inferring it from neighbouring `ambient:` lines. The cue now
+            // says so itself. `Permissions.log` is `nonisolated` and appends to a
+            // file, so it is safe from here.
+            if voice.play() {
+                Permissions.log("earcon: \(cue.rawValue)")
+            } else {
+                Permissions.log("earcon: \(cue.rawValue) play refused")
+            }
         }
     }
 
