@@ -258,6 +258,17 @@ public final class HotkeyMonitor: @unchecked Sendable {
 
     deinit { stop() }
 
+    /// How many times the system has disabled this tap since launch, and when
+    /// it last did.
+    ///
+    /// A count, not a flag, because the failure is intermittent and its
+    /// frequency is the diagnosis: one deaf window in a day is macOS being
+    /// macOS, and four in a minute is the main run loop saturated. Public so a
+    /// drill can assert it stays at zero through a render storm — the
+    /// before/after measurement open issue #15 asks for.
+    public private(set) var deafWindows = 0
+    private var lastDeafAt: Date?
+
     public var isRunning: Bool { tap != nil }
 
     /// Whether the tap is actually DELIVERING — not merely whether one exists.
@@ -337,11 +348,48 @@ public final class HotkeyMonitor: @unchecked Sendable {
     }
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        // The system disables a tap that times out or is interrupted by user input.
-        // Silently re-enabling is the difference between "works" and "worked until
-        // the machine got busy once".
+        // The system disables a tap that times out or is interrupted by user
+        // input. Re-enabling is the difference between "works" and "worked until
+        // the machine got busy once" — but doing it SILENTLY is why open issue
+        // #15 sat unproven since 12 Aug.
+        //
+        // Robert pressed ⌃⌃ during an announcement and the log has zero trace of
+        // it: no acknowledgement, no refusal, nothing. A press the classifier
+        // REFUSES still logs; a press that leaves nothing was never seen at all.
+        // His next press, one second after the speech ended, worked normally.
+        //
+        // This is the window it fell into. macOS disables a tap whose callback
+        // is too slow — the timeout is around a second and is undocumented —
+        // and during playback the main run loop is doing a full HUD render per
+        // spoken word, roughly fifteen times a second, on the same run loop the
+        // tap delivers on. The tap comes back, so nothing is broken afterwards,
+        // and every gesture lost in between is uncounted and unattributable.
+        // The 5s watchdog only catches a tap still dead at its tick, so a
+        // sub-5s gap is invisible to it by construction.
+        //
+        // So the window leaves a record. Not a fix for the saturation — that is
+        // the throttle half of #15 and it lives in the render path — but the
+        // difference between "a gesture went missing" and "a gesture went
+        // missing HERE, at 21:12:38, in the 340ms this tap was deaf, for the
+        // fourth time today." An absence cannot be debugged; a timestamped
+        // absence can.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            let reason = type == .tapDisabledByTimeout ? "timeout" : "user input"
+            deafWindows += 1
+            let since = lastDeafAt.map { String(format: " (%.1fs since the last)",
+                                                Date().timeIntervalSince($0)) } ?? ""
+            lastDeafAt = Date()
+            if let tap {
+                CGEvent.tapEnable(tap: tap, enable: true)
+                let back = CGEvent.tapIsEnabled(tap: tap)
+                Permissions.log("hotkey: tap went DEAF (\(reason)) — "
+                    + (back ? "re-enabled" : "re-enable REFUSED")
+                    + "; gestures in this window were not seen. "
+                    + "deaf window #\(deafWindows)\(since)")
+            } else {
+                Permissions.log("hotkey: tap went DEAF (\(reason)) with no tap to revive. "
+                    + "deaf window #\(deafWindows)\(since)")
+            }
             return Unmanaged.passUnretained(event)
         }
 
