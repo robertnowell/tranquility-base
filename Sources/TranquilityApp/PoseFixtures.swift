@@ -64,7 +64,7 @@ extension StatusHUD {
         // through it, and not still behind it. Verbatim prose before the names
         // is character-identical in both forms, so the cursor there is exact.
         case "redacted":
-            let findings = SpokenTextSanitizer().sanitize(
+            let findings = SpokenTextSanitizer().sanitize(  // house-copy:exempt — a fixture, fed to the sanitizer
                 "Transcription succeeded; dispatch was queued behind the running "
                 + "turn and never landed. The utterances table already carries "
                 + "audioPath, audioBytes, transcriptText and dispatchAttempts "
