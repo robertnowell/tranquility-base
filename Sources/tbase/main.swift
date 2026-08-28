@@ -19,6 +19,7 @@ func usage() -> Never {
       tbase hook-config         print the settings.json snippet to install the hook
       tbase paths               show where everything lives
       tbase hooks               which hooks are wired, broken, or missing
+      tbase forks               transcripts whose history a resume can no longer reach
       tbase voices              installed free voices, and what is a download away
       tbase secrets             which credentials are readable, and from where
       tbase check-keys          ask each provider whether its stored key works
@@ -478,6 +479,8 @@ do {
         // The seam check. Unit tests cover each piece; this asks whether the
         // pieces still add up on real data, which is where every hub failure
         // this month actually lived.
+        var failures = 0
+
         let problems = HubIntegrity.check()
         if problems.isEmpty {
             print("hub integrity: every recorded page is on its hub, "
@@ -489,6 +492,64 @@ do {
             print("")
             print("\(problems.count) problem(s) — `tbase homebase <id>` rewrites a hub; "
                   + "a missing page means the record never happened")
+            failures += problems.count
+        }
+
+        // Transcript forks. Read-only, and DELIBERATELY NOT A GATE.
+        //
+        // relaunch.sh runs this command on every deploy. The forked transcripts
+        // on this machine are historical damage that will never be repaired,
+        // because re-linking a parent uuid is the one thing the detector must
+        // not do — so failing here would block every future deploy over
+        // something nobody can fix. That is the archive check that sat red for
+        // eight days, rebuilt on purpose. `tbase forks` is the command that
+        // judges; this one just says the number.
+        //
+        // Scoped to the last week for the same reason it does not fail: a full
+        // sweep parses ~150MB and costs ~22s, and old damage does not change.
+        let recent = TranscriptForks.surveyAll(modifiedWithin: 7 * 24 * 3600)
+        let forked = recent.filter(\.isForked)
+        if forked.isEmpty {
+            print("transcript integrity: no forked transcripts this week")
+        } else {
+            let serious = forked.filter { $0.unreachable >= TranscriptForks.significantUnreachable }
+            let stranded = forked.reduce(0) { $0 + $1.unreachable }
+            print("transcript integrity: \(forked.count) forked transcript(s) this week, "
+                  + "\(stranded) record(s) unreachable"
+                  + (serious.isEmpty
+                     ? " (all minor — parallel-agent branching, which no writer guard prevents)"
+                     : " — \(serious.count) SIGNIFICANT; run `tbase forks`"))
+        }
+
+        if failures > 0 { exit(1) }
+
+    case "forks":
+        // The judging half of the fork check. Separate from `doctor` because
+        // doctor runs on the deploy path and must not fail over damage that
+        // cannot be repaired; this is the command you run deliberately.
+        let all = TranscriptForks.surveyAll().filter(\.isForked)
+        if all.isEmpty {
+            print("no forked transcripts — every session resumes its whole history")
+            break
+        }
+        let significant = all.filter { $0.unreachable >= TranscriptForks.significantUnreachable }
+        let minor = all.filter { $0.unreachable < TranscriptForks.significantUnreachable }
+        for s in significant {
+            print("\(s.sessionId.prefix(8))  \(s.leaves) branches  "
+                  + "\(s.unreachable) of \(s.linked) records unreachable")
+        }
+        if !minor.isEmpty {
+            let n = minor.reduce(0) { $0 + $1.unreachable }
+            print("")
+            print("plus \(minor.count) transcript(s) with \(n) stranded record(s) below the "
+                  + "\(TranscriptForks.significantUnreachable) threshold — parallel-agent "
+                  + "branching from a single process, which no writer guard can prevent")
+        }
+        if !significant.isEmpty {
+            print("")
+            print("\(significant.count) transcript(s) lost conversation to a second writer. "
+                  + "Nothing is deleted and every branch is still on disk; a resume follows "
+                  + "the branch written LAST, so export before resuming.")
             exit(1)
         }
 
