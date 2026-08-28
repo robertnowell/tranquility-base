@@ -1039,8 +1039,40 @@ extension AppDelegate {
                             + "Paste it in a terminal."
                     case .refused(let why):
                         Permissions.log("goTo: transfer refused \(sessionId.prefix(8)) — \(why)")
-                        message = "Couldn't move that session under tmux. It is still running "
-                            + "in its own terminal, and nothing was closed."
+                        // A refusal because ANOTHER process already holds this
+                        // id is not a dead end: that process is the session
+                        // the reader was asking for. Naming its pid and
+                        // stopping there is correct and useless — the button
+                        // was pressed to look at something, so raise the pane
+                        // it is sitting in rather than reporting a conflict
+                        // and leaving them nowhere.
+                        //
+                        // Only when every holder is an orphan with no pane is
+                        // there genuinely nowhere to go, and then the card has
+                        // to say so plainly instead of pretending otherwise.
+                        let holders = ResumeGuard.check(sessionId: sessionId).holders
+                        if !holders.isEmpty,
+                           let pane = ResumeGuard.routablePane(among: holders) {
+                            Permissions.log("goTo: routing to the process already holding "
+                                + "\(sessionId.prefix(8)) at \(pane.paneTty)")
+                            let outcome = await TerminalTabFocus.focus(
+                                tty: pane.paneTty, sessionId: sessionId)
+                            if case .focused = outcome {
+                                await MainActor.run { [weak self] in
+                                    self?.hud.finishGoToSession(nil)
+                                }
+                                return
+                            }
+                            Permissions.log("goTo: could not raise \(pane.paneTty) — \(outcome)")
+                        }
+                        // Copy per the house rule: no em dashes on a card
+                        // (`scripts/check-house-copy.sh`, landed with the
+                        // locale fix). The no-holders wording is main's.
+                        message = holders.isEmpty
+                            ? "Couldn't move that session under tmux. It is still running "
+                                + "in its own terminal, and nothing was closed."
+                            : "That session is already running elsewhere and its window "
+                                + "could not be raised. Nothing was closed."
                     case .moved:
                         message = ""
                     }

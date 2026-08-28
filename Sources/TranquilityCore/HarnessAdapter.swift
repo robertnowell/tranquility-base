@@ -75,15 +75,39 @@ public struct HarnessCapabilities: Sendable {
     /// Whether this harness tolerates a SECOND process resuming a
     /// conversation the first is still holding open. Named 21 Aug
     /// (2026-08-21-tb-dual-live-harness-parity, 2026-08-21-tb-codex-tmux-
-    /// prior-art), measured live on both harnesses: Claude Code allows it
-    /// (and arbitrates it with its own "Remote Control" feature) — true.
+    /// prior-art), measured live on both harnesses.
+    ///
+    /// READ THE 27 AUG CORRECTION BELOW BEFORE ACTING ON THIS FLAG.
+    ///
     /// Codex's app-server enforces a hard single-writer-per-thread lock; a
     /// second `resume` fails immediately and cleanly with JSON-RPC `-32600`
     /// ("already has an active writer"), and OpenAI was asked for a first-
     /// party way around it (`codex inject`, issue #11415) and closed it "not
-    /// planned" — false. `Coordinator`'s adoption logic branches on this:
-    /// true means launch a tmux twin and leave the original process alone;
-    /// false means graceful end, then resume, with the user's approval.
+    /// planned" — false. That half still holds.
+    ///
+    /// The Claude Code half — "allows it, and arbitrates it with its own
+    /// Remote Control feature" — was WRONG, and `true` here records what the
+    /// process does, not what is safe. Claude Code does not refuse a second
+    /// resume, which is all 21 Aug measured; it also does not arbitrate one.
+    /// A transcript is a singly-linked chain of parent uuids and `--resume`
+    /// rebuilds it by walking back from one leaf, so two live processes both
+    /// append from the parent each of them remembers and the file becomes a
+    /// tree. Nothing errors and nothing is deleted — one branch simply stops
+    /// being reachable, forever.
+    ///
+    /// Measured 27 Aug across 64 transcripts on one machine: 8,443 records
+    /// stranded on unreachable branches, 3,982 of them in a single session
+    /// (60% of its history), from nothing more exotic than GO TO AGENT
+    /// pressed twice. "Tolerates" means the process survives, not the
+    /// history.
+    ///
+    /// So no caller may read `true` as licence to run two writers. The
+    /// enforcement does not live here — `ResumeGuard`, at `resumeTmux`,
+    /// refuses a second resume for EITHER harness — and this flag is left
+    /// as the measurement it always was. `Coordinator`'s adoption logic
+    /// stopped branching on it on 23 Aug, when the dual-live premise was
+    /// first reversed on the operator's correction; it now transfers
+    /// ownership for every harness. Nothing in Sources/ reads it today.
     public var allowsConcurrentResume: Bool
     /// The chip a TUI draws INSTEAD of pasted text once the paste crosses
     /// its own inline-render limit — the prefix, since the chip carries a
