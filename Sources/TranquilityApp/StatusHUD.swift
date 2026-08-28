@@ -2518,7 +2518,7 @@ final class StatusHUD: NSObject {
     }
 
     private func rebuildSessionRows() {
-        waitingRows.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        waitingRows.removeAllArrangedSubviews()
         waitingRows.spacing = 0
 
         func hairline(_ color: NSColor) -> NSView {
@@ -2699,7 +2699,7 @@ final class StatusHUD: NSObject {
     /// interleaved rule views), so an arranged index IS a row index — the ≡
     /// drag's arithmetic depends on that.
     private func rebuildVoiceRows() {
-        voiceStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        voiceStack.removeAllArrangedSubviews()
         // Same hazard as the agents probe in sessionRowsNow: `uniqueKeysWithValues:`
         // traps on a duplicate key, and `voices` is decoded from voices.json — data
         // from the account, not a literal we control. A repeated voice id would kill
@@ -2749,7 +2749,7 @@ final class StatusHUD: NSObject {
     /// — one list slot, whichever pane owns the face. Rows draw their own
     /// hairline, same as the roster's.
     private func rebuildAudioRows(_ events: [AudioEventRow]) {
-        voiceStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        voiceStack.removeAllArrangedSubviews()
         for event in events {
             let row = AudioEventRowView(
                 event: event,
