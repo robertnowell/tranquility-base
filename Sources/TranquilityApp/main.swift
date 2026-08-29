@@ -1324,6 +1324,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         intakeTimer?.invalidate()
         hotkey?.stop()
         if recorder.isRecording { recorder.abandon() }
+        // Last, and after everything above has had its say: log writes are
+        // asynchronous now, so the lines explaining a shutdown are exactly the
+        // ones a process can exit out from under. relaunch.sh stops the old
+        // instance on every deploy, which makes this the most-travelled exit in
+        // the app.
+        Permissions.flushLog()
     }
 
     // MARK: - Properties relocated from elsewhere in the file (App-lane P7,
