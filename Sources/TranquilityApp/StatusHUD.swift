@@ -3084,11 +3084,24 @@ final class StatusHUD: NSObject {
         // ordinary prose and atomic across a name — the whole of
         // `dispatchAttempts` lights the moment "a variable" starts.
         let cursor = currentSpoken?.displayIndex(forSpoken: index) ?? index
-        Permissions.log("highlight upTo=\(index)→\(cursor) of \(body.count) "
-                        + "thread=\(Thread.isMainThread)")
         // The mapped cursor rides the face from here on. Stored BEFORE the
         // paint, so a face read mid-paint is never behind its own pixels.
         face.spokenUpTo = cursor
+        // Painted SYNCHRONOUSLY, and that is a contract rather than an
+        // oversight: callers read the ink pixels straight after calling, the
+        // launch drills among them. A 10Hz coalescer was tried here (issue 15,
+        // PR #25) and the drills killed it in minutes, because reads landing
+        // between the call and the trailing paint saw stale ink.
+        //
+        // The measured costs in this path were never the paint. They were the
+        // TWO log lines per spoken word: a formatter allocation plus syscalls
+        // on the main thread (now off it, Permissions.log), and the
+        // attribute-run enumeration that composed the second one (now gone,
+        // below). One attributed rebuild per word at ~7Hz is cheap.
+        //
+        // If a later measurement disagrees, whatever replaces this must keep
+        // read-your-writes. The drills encode it; they are why the first
+        // attempt did not ship.
         paintInk(displayCursor: cursor)
     }
 
@@ -3117,7 +3130,13 @@ final class StatusHUD: NSObject {
             .font, value: StateLegend.Face.message(12), range: full)
         bodyLabel.attributedStringValue = attributed
 
-        Permissions.log("highlight rendered bright=\(inkBrightLength)/\(full.length)")
+        // The cursor just painted, NOT `inkBrightLength`. That property walks
+        // every attribute run of the whole string, and composing this one line
+        // paid for that walk ten times a second through every announcement
+        // (issue 15). The drills still read `inkBrightLength`, off the pixels,
+        // which is the entire point of it — this line simply stops being the
+        // thing that keeps calling it.
+        Permissions.log("highlight painted upTo=\(clamped)/\(full.length)")
     }
 
     /// `paintInk` under a name that says why a drill is calling it: to repaint

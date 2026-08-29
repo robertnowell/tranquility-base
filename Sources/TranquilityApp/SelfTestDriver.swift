@@ -275,6 +275,52 @@ extension StatusHUD {
     /// panel is already built, which is precisely why the crash reached
     /// production twice and never a test. So the drill builds a fresh, unbuilt
     /// HUD and speaks to it: the launch condition reproduced, not simulated.
+    /// A log line survives the trip to disk, and the barrier is a real barrier.
+    ///
+    /// `Permissions.log` does its IO on a serial queue now, which took two
+    /// syscalls and a formatter allocation off the main thread per spoken word
+    /// (issue 15). Asynchrony bought that, and asynchrony is exactly what turns
+    /// "the drill reported" into "the file does not say so" — the failure mode
+    /// where a verdict is indistinguishable from a drill that never ran.
+    ///
+    /// So this asserts the whole path end to end against the real file: a line
+    /// nobody else writes, then `flushLog()`, then read the bytes back. Written
+    /// as a drill rather than a unit test because `Permissions` lives in
+    /// TranquilityApp, which has none (rule 7).
+    private func selfTestLogReachesDisk() {
+        let marker = "logdrill-\(UUID().uuidString)"
+        let url = QueueStore.supportDirectory.appendingPathComponent("app.log")
+
+        Permissions.log(marker)
+        // The barrier is the claim under test. If `flushLog` returned early,
+        // this read would race and the drill would flake rather than fail,
+        // which is why the read happens IMMEDIATELY after it and never on a
+        // timer.
+        Permissions.flushLog()
+        let afterFlush = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        let onDisk = afterFlush.contains(marker)
+
+        // The line carries a timestamp the gesture forensics can actually use.
+        // Whole seconds could bound a ⌃⌃ gap but never state it, and the pairing
+        // window is 450ms.
+        let stamped = afterFlush
+            .split(separator: "\n")
+            .last(where: { $0.contains(marker) })
+            .map { line -> Bool in
+                let head = line.prefix(while: { $0 != " " })
+                // 2026-08-29T17:33:58.123Z — a dot before the zone is the test,
+                // rather than a fixed length, so the zone's own format is free
+                // to change without silently disarming this.
+                return head.contains(".")
+            } ?? false
+
+        SelfTest.report("logReachesDisk", [
+            ("a logged line reaches the file", onDisk),
+            ("flushLog is a barrier, not a hint", onDisk),
+            ("the timestamp resolves below a second", stamped),
+        ])
+    }
+
     private func selfTestNoteBeforePanel() {
         let fresh = StatusHUD()
         fresh.note("hooks were repaired")   // trapped here before the fix
@@ -292,6 +338,7 @@ extension StatusHUD {
     }
 
     func selfTest() {
+        selfTestLogReachesDisk()
         selfTestNoteBeforePanel()
         beginDrills()
         let long = String(repeating: "Product image binding is fixed across the stack. ", count: 8)
