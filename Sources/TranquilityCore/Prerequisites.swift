@@ -37,7 +37,7 @@ public enum Prerequisites {
         public var title: String {
             switch self {
             case .tmux: return "tmux"
-            case .hooks: return "Claude Code hooks"
+            case .hooks: return "Agent hooks"
             case .anthropicKey: return "Anthropic"
             case .elevenLabsKey: return "ElevenLabs"
             case .assemblyAIKey: return "AssemblyAI"
@@ -49,7 +49,7 @@ public enum Prerequisites {
         public var why: String {
             switch self {
             case .tmux: return "the only way a reply reaches a session"
-            case .hooks: return "how a finished turn reaches this app"
+            case .hooks: return "finished turns, and results as pages you can open"
             case .anthropicKey: return "spoken summaries, about $0.001 each"
             case .elevenLabsKey: return "the voice; without it, the system one"
             case .assemblyAIKey: return "the live transcript while you speak"
@@ -150,7 +150,12 @@ public enum Prerequisites {
                 Tmux.forgetBinary()
                 return fresh
             },
-            hooksProblem: { HookManifest.problemSummary() },
+            // EVERY harness this machine has, not just Claude Code.
+            // `problemSummary()` audits one hardcoded file, which is how a
+            // green checklist coexisted with Codex sessions that had no
+            // hooks at all: the row was telling the truth about the only
+            // harness it knew to ask about.
+            hooksProblem: { HookManifest.machineSummary() },
             hasSecret: { Secrets.read($0) != nil })
     }
 

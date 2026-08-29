@@ -883,7 +883,8 @@ case "reconcile":
     // basename, printed "already installed; nothing changed", and preserved
     // the dead command — issue 09).
     let hooksDir = FileManager.default.currentDirectoryPath + "/hooks"
-    let allPresent = HookManifest.expected.map(\.script).allSatisfy {
+    // The union across harnesses, since they share one scripts directory.
+    let allPresent = HookManifest.allScripts().allSatisfy {
         FileManager.default.isExecutableFile(atPath: hooksDir + "/" + $0)
     }
     guard allPresent else {
@@ -891,16 +892,25 @@ case "reconcile":
     }
     try? hooksDir.write(to: HookManifest.recordedDirectoryURL,
                         atomically: true, encoding: .utf8)
-    switch HookManifest.repair() {
-    case .healthy:
-        print("already installed and reachable; nothing changed")
-    case .repaired(let rewired, let added):
-        print("repaired: \(rewired) rewired, \(added) added; "
-              + "backup at settings.json.tbase-backup")
-        print("restart Claude Code sessions (or open /hooks once) to load them")
-    case .unavailable(let reason):
-        print("could not repair: \(reason)"); exit(1)
+    let outcomes = HookManifest.repairAll()
+    guard !outcomes.isEmpty else {
+        print("no agent directories found (~/.claude, ~/.codex); nothing to wire")
+        exit(1)
     }
+    var failed = false
+    for (harness, outcome) in outcomes {
+        switch outcome {
+        case .healthy:
+            print("\(harness.label): already installed and reachable")
+        case .repaired(let rewired, let added):
+            print("\(harness.label): \(rewired) rewired, \(added) added; "
+                  + "backup at \(harness.settingsURL.lastPathComponent).tbase-backup")
+        case .unavailable(let reason):
+            print("\(harness.label): could not repair — \(reason)"); failed = true
+        }
+    }
+    print("restart your agent sessions to load them")
+    if failed { exit(1) }
 
     case "hook-config":
         let hookPath = FileManager.default.currentDirectoryPath + "/hooks/tbase-hook.sh"

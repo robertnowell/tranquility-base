@@ -58,6 +58,100 @@ public enum HookManifest {
               purpose: "collect artifacts a session writes", matcher: "Write|Edit|Bash"),
     ]
 
+    // MARK: - Harnesses
+
+    /// One harness's hook wiring: where its config lives, what belongs in it,
+    /// and how to tell whether this machine has that harness at all.
+    ///
+    /// The manifest had no harness dimension until 28 Aug, and that absence
+    /// was invisible for the usual reason: everything it described was true,
+    /// it just described half the machine. `expected` was one flat list and
+    /// `settingsURL` a single hardcoded path, so the launch-time repair, the
+    /// onboarding row and `tbase install-hooks` were all wired, all working,
+    /// and all Claude Code. A Codex session therefore never received the
+    /// SessionStart instruction that turns a visual into an HTML file you can
+    /// open, never announced a finished turn, and never had a page it wrote
+    /// collected into the hub. Robert noticed it as "Codex agents don't make
+    /// HTML reports", which is the symptom furthest downstream of the cause.
+    ///
+    /// The row in the onboarding checklist said "Claude Code hooks" the whole
+    /// time. The app was telling us; nobody read it as a limit.
+    public struct Harness: Sendable, Equatable {
+        /// Matches `HarnessAdapter.id`, so this never becomes a second
+        /// vocabulary for the same thing.
+        public let id: String
+        /// For the checklist row and the repair note. User-facing.
+        public let label: String
+        /// The file this harness reads its hooks from. Claude Code's is a
+        /// SHARED settings file that happens to hold hooks among much else;
+        /// Codex's is dedicated. Both are merged into rather than rewritten,
+        /// so the distinction costs nothing here.
+        public let settingsURL: URL
+        /// Whether this harness is installed. Its config directory existing is
+        /// the test, deliberately: a machine that has never run Codex should
+        /// not be told its Codex hooks are broken, and writing a hooks file
+        /// into a directory the user has not created would be installing
+        /// ourselves somewhere we were not invited.
+        public let homeURL: URL
+        public let expected: [Hook]
+
+        public var isPresent: Bool {
+            FileManager.default.fileExists(atPath: homeURL.path)
+        }
+    }
+
+    private static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
+
+    public static var claudeCode: Harness {
+        Harness(id: ClaudeCodeAdapter().id, label: "Claude Code",
+                settingsURL: home.appendingPathComponent(".claude/settings.json"),
+                homeURL: home.appendingPathComponent(".claude"),
+                expected: expected)
+    }
+
+    /// Codex's half, and the events are its own names for the same facts.
+    ///
+    /// `PermissionRequest` rather than a `Notification` matcher: Codex has no
+    /// Notification event, and its PermissionRequest is the thing that means
+    /// "this session is asking you". `hooks/tbase-hook.sh` renames it on the
+    /// way in so nothing downstream learns a second vocabulary.
+    ///
+    /// SessionStart and PostToolUse carry the same two scripts as Claude
+    /// Code's, unchanged. Measured 28 Aug against codex-cli 0.150.1: Codex
+    /// honours `hookSpecificOutput.additionalContext` exactly as Claude Code
+    /// does (a `systemMessage` in the same payload did NOT reach the model),
+    /// so `visual-output-hook.sh` installs verbatim rather than needing a
+    /// per-harness output shape.
+    public static var codex: Harness {
+        Harness(id: CodexAdapter().id, label: "Codex",
+                settingsURL: home.appendingPathComponent(".codex/hooks.json"),
+                homeURL: home.appendingPathComponent(".codex"),
+                expected: [
+                    .init(event: "Stop", marker: "tbase-hook", script: "tbase-hook.sh",
+                          purpose: "hear a turn when it lands", matcher: nil),
+                    .init(event: "PermissionRequest", marker: "tbase-hook",
+                          script: "tbase-hook.sh",
+                          purpose: "hear a session asking for you", matcher: nil),
+                    .init(event: "UserPromptSubmit", marker: "tbase-hook",
+                          script: "tbase-hook.sh",
+                          purpose: "retire a turn you answered yourself", matcher: nil),
+                    .init(event: "SessionStart", marker: "visual-output-hook",
+                          script: "visual-output-hook.sh",
+                          purpose: "show visual output in a browser, not the tab",
+                          matcher: nil),
+                    .init(event: "PostToolUse", marker: "artifact-hook",
+                          script: "artifact-hook.sh",
+                          purpose: "collect artifacts a session writes",
+                          matcher: "Write|Edit|Bash"),
+                ])
+    }
+
+    public static var harnesses: [Harness] { [claudeCode, codex] }
+
+    /// The harnesses this machine actually has. Order is stable so a repair
+    /// note reads the same way twice.
+    public static func detected() -> [Harness] { harnesses.filter(\.isPresent) }
+
     public enum State: Sendable, Equatable {
         case installed
         /// Wired, but the command it names is not on disk — the silent-death case.
@@ -84,7 +178,8 @@ public enum HookManifest {
     /// Returns `nil` rather than an empty result when settings cannot be read at all:
     /// "no hooks installed" and "I could not tell" are different answers, and only one
     /// of them should make an app shout at you.
-    public static func audit(settings url: URL = settingsURL) -> [Status]? {
+    public static func audit(settings url: URL = settingsURL,
+                             expecting wanted: [Hook] = expected) -> [Status]? {
         // ABSENT is not UNREADABLE, and conflating them cost a whole install
         // path. A user whose Claude Code has never written settings.json got
         // `nil` here, which `repair` turned into "settings unreadable" and
@@ -93,14 +188,14 @@ public enum HookManifest {
         // have one yet, and that we are about to write it. A missing file is
         // the clearest possible statement that nothing is installed.
         if !FileManager.default.fileExists(atPath: url.path) {
-            return expected.map { Status(hook: $0, state: .missing) }
+            return wanted.map { Status(hook: $0, state: .missing) }
         }
         guard let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         let hooks = root["hooks"] as? [String: Any] ?? [:]
 
-        return expected.map { hook in
+        return wanted.map { hook in
             let entries = hooks[hook.event] as? [[String: Any]] ?? []
             let commands = entries.flatMap { ($0["hooks"] as? [[String: Any]]) ?? [] }
                 .compactMap { $0["command"] as? String }
@@ -128,8 +223,10 @@ public enum HookManifest {
     }
 
     /// One line for a menu or a log: nil when everything is wired and reachable.
-    public static func problemSummary(settings url: URL = settingsURL) -> String? {
-        guard let statuses = audit(settings: url) else { return "hooks: settings unreadable" }
+    public static func problemSummary(settings url: URL = settingsURL,
+                                      expecting wanted: [Hook] = expected) -> String? {
+        guard let statuses = audit(settings: url, expecting: wanted)
+        else { return "hooks: settings unreadable" }
         let broken = statuses.filter { if case .brokenPath = $0.state { return true } else { return false } }
         let missing = statuses.filter { $0.state == .missing }
         let stale = statuses.filter {
@@ -206,8 +303,9 @@ public enum HookManifest {
     /// nothing — repairing hooks to paths that do not exist is how the silent
     /// death this manifest exists to catch would be REINSTALLED.
     public static func repair(settings url: URL = settingsURL,
-                              record recordURL: URL = recordedDirectoryURL) -> RepairOutcome {
-        guard let statuses = audit(settings: url) else {
+                              record recordURL: URL = recordedDirectoryURL,
+                              expecting wanted: [Hook] = expected) -> RepairOutcome {
+        guard let statuses = audit(settings: url, expecting: wanted) else {
             return .unavailable("settings unreadable")
         }
         if statuses.allSatisfy({ $0.state == .installed }) { return .healthy }
@@ -243,7 +341,7 @@ public enum HookManifest {
         }
 
         var rewired = 0, added = 0
-        for hook in expected {
+        for hook in wanted {
             let path = directory + "/" + hook.script
             var entries = hooks[hook.event] as? [[String: Any]] ?? []
             var matched = false
@@ -302,11 +400,49 @@ public enum HookManifest {
         try? directory.write(to: recordURL, atomically: true, encoding: .utf8)
 
         // The receipt is a re-audit, not the absence of a throw.
-        guard problemSummary(settings: url) == nil else {
+        guard problemSummary(settings: url, expecting: wanted) == nil else {
             return .unavailable("rewrote settings and the audit still fails — "
                 + "backup at settings.json.tbase-backup")
         }
         return .repaired(rewired: rewired, added: added)
+    }
+
+    // MARK: - Every harness on this machine
+
+    /// Audit every harness this machine has, and repair what is wrong.
+    ///
+    /// This is what the launch path and the onboarding row call. Per-harness
+    /// outcomes rather than one verdict, because "Claude Code fine, Codex
+    /// rewired 5" is the true answer and a single line cannot say it without
+    /// lying about one of them.
+    ///
+    /// A harness that is not installed is not in the list at all, so nobody is
+    /// told their Codex hooks are broken on a machine that has never run
+    /// Codex.
+    public static func repairAll(
+        record recordURL: URL = recordedDirectoryURL
+    ) -> [(harness: Harness, outcome: RepairOutcome)] {
+        detected().map { harness in
+            (harness, repair(settings: harness.settingsURL, record: recordURL,
+                             expecting: harness.expected))
+        }
+    }
+
+    /// One line for the launch log and the HUD, across every detected harness,
+    /// or nil when the whole machine is wired.
+    ///
+    /// Names the harness. The old single-harness note said "New Claude Code
+    /// sessions pick them up automatically", which was accurate and, on a
+    /// two-harness machine, was the app quietly telling us what it had not
+    /// done. A summary that cannot name which harness is broken reproduces
+    /// exactly that.
+    public static func machineSummary() -> String? {
+        let problems = detected().compactMap { harness -> String? in
+            problemSummary(settings: harness.settingsURL,
+                           expecting: harness.expected)
+                .map { "\(harness.label): \($0.replacingOccurrences(of: "hooks: ", with: ""))" }
+        }
+        return problems.isEmpty ? nil : "hooks: " + problems.joined(separator: "; ")
     }
 
     private static func installedCommand(for hook: Hook, in hooks: [String: Any]) -> String? {
@@ -316,8 +452,15 @@ public enum HookManifest {
             .first { $0.contains(hook.marker) }
     }
 
+    /// EVERY harness's scripts, not just the one being repaired. They all
+    /// live in one directory, and a directory holding only half of them is
+    /// a checkout mid-move, not a hooks directory.
+    public static func allScripts() -> Set<String> {
+        Set(harnesses.flatMap { $0.expected.map(\.script) })
+    }
+
     private static func directoryHoldsEveryScript(_ directory: String) -> Bool {
-        !directory.isEmpty && Set(expected.map(\.script)).allSatisfy {
+        !directory.isEmpty && allScripts().allSatisfy {
             FileManager.default.isExecutableFile(atPath: directory + "/" + $0)
         }
     }
