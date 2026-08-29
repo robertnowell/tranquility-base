@@ -810,12 +810,16 @@ extension AppDelegate {
         // One line. This was four sentences of explanation — a wall of prose where a
         // control belonged. The "Free · Get" rows below ARE the instruction now, so
         // the note only has to say what the list is.
+        // Two rosters, so the note says what the pair IS rather than counting a
+        // total across both. Every agent draws one voice from each list;
+        // ElevenLabs is what speaks whenever it is available.
         let note = paid.isEmpty
-            ? "Free macOS voices. Pick one to hear it."
-            : "Checked voices are the cast; agents draw one in roster order."
+            ? "No ElevenLabs key, so agents speak in their system voice."
+            : "Every agent gets a voice from each list. ElevenLabs speaks; "
+              + "the system voice is its fallback."
 
         hud.showSettings(voices: paid + free + getMore,
-                         roster: VoiceRoster.load(), note: note, tab: tab)
+                         roster: AppDelegate.checkedVoices(), note: note, tab: tab)
     }
 
     /// The settings state's second pane (ruled 13 Aug): every capture over a

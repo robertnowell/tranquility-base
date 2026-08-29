@@ -926,7 +926,42 @@ final class StatusHUD: NSObject {
     // pause indication. No pill switch, no hint.
 
     /// Append a line to the current panel without disturbing what it is showing.
+    /// Notes that arrived before there was a panel to put them in.
+    ///
+    /// `note()` wrote straight into `hintLabel`, an IUO created inside `build()`,
+    /// while the guard one line below covered `panel` and not the label — the
+    /// same condition, one line apart. So the one note that fires before any
+    /// panel exists, the hook-repair receipt from
+    /// `applicationDidFinishLaunching`, trapped the process instead of printing.
+    ///
+    /// Buffered rather than nil-guarded, deliberately. A bare guard trades the
+    /// crash for silence about hooks having been repaired, and the reason that
+    /// receipt exists at all is that a hook's own contract — exit 0 whatever
+    /// happens — means nothing else will ever mention it.
+    var deferredNotes: [String] = []
+
+    /// Replay anything said before the label existed. Called once `build()` has
+    /// somewhere for the text to land.
+    func flushDeferredNotes() {
+        guard !deferredNotes.isEmpty else { return }
+        let queued = deferredNotes
+        deferredNotes = []
+        for message in queued { note(message) }
+    }
+
+    /// Drill seam: attach a label without building a panel, so the flush can be
+    /// exercised without opening a stray window.
+    func attachLabelForDrill() {
+        hintLabel = NSTextField(labelWithString: "")
+        flushDeferredNotes()
+    }
+
+    /// Append a line to the current panel without disturbing what it is showing.
     func note(_ message: String) {
+        guard hintLabel != nil else {
+            deferredNotes.append(message)
+            return
+        }
         hintLabel.stringValue = [message, hintLabel.stringValue]
             .filter { !$0.isEmpty }.joined(separator: "\n")
         syncHintVisibility()
@@ -2123,8 +2158,10 @@ final class StatusHUD: NSObject {
 
             case .voices:
                 voiceList.isHidden = false
-                bodyLabel.stringValue =
-                    "\(face.roster.count) of \(face.voices.count) on roster. \(face.body)"
+                // The per-section legends carry the counts now, so the masthead
+                // stops reporting a total across two rosters — "26 of 56" was a
+                // sum of two things and described neither.
+                bodyLabel.stringValue = face.body
                 setHint("check = on roster · ▶ preview · drag ≡ to reorder")
                 rebuildVoiceRows()
 
@@ -2723,16 +2760,60 @@ final class StatusHUD: NSObject {
         let (offers, owned) = bench.reduce(into: ([Voice](), [Voice]())) { acc, v in
             if SystemVoiceCatalog.isDownloadRow(v.id) { acc.0.append(v) } else { acc.1.append(v) }
         }
-        for voice in cast + owned + offers {
-            let onRoster = face.roster.contains(voice.id)
-            let row = VoiceRowView(
-                voice: voice, onRoster: onRoster,
-                onPlay: { [weak self] in self?.onPreviewVoice?(voice.id) },
-                onToggle: { [weak self] in self?.onToggleVoice?(voice.id, !onRoster) },
-                onDragStep: { [weak self] row, step in self?.dragRosterRow(row, by: step) },
-                onDragEnd: { [weak self] in self?.commitRosterOrder() })
-            voiceStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+
+        // TWO lists, because there are two rosters.
+        //
+        // One flat list was not a presentation choice, it was the bug's habitat:
+        // the pane listed both families and its toggle appended whatever was
+        // checked to the single ElevenLabs roster, so checking a system voice put
+        // an Apple identifier into the cloud rotation and ElevenLabs answered
+        // HTTP 400 `invalid_uid` every five seconds. Storage is two files now, and
+        // this is the pane finally saying so.
+        //
+        // Order inside a section is unchanged — cast in roster order, then the
+        // bench in catalogue order, then rows you do not own — so nothing about
+        // reading a section is new. Only the boundary is.
+        func isSystem(_ v: Voice) -> Bool {
+            SystemVoiceCatalog.isSystemVoice(v.id) || SystemVoiceCatalog.isDownloadRow(v.id)
+        }
+        var headerAir: CGFloat = 0
+        let sections: [(title: String, note: String?, voices: [Voice], available: Int)] = [
+            ("ElevenLabs",
+             "spoken when available",
+             cast.filter { !isSystem($0) } + owned.filter { !isSystem($0) },
+             face.voices.filter { !isSystem($0) }.count),
+            ("System",
+             "the fallback, per agent",
+             cast.filter(isSystem) + owned.filter(isSystem) + offers,
+             face.voices.filter(isSystem).count),
+        ]
+
+        for section in sections {
+            // A section with nothing in it is not drawn. A machine with no
+            // ElevenLabs key has no paid rows at all, and an empty legend over
+            // empty space would be the pane describing something absent.
+            guard !section.voices.isEmpty else { continue }
+            let onRoster = section.voices.filter { face.roster.contains($0.id) }.count
+            let followingRows = !voiceStack.arrangedSubviews.isEmpty
+            headerAir += VoiceSectionHeaderView.height(followingRows: followingRows)
+            voiceStack.addArrangedSubview(VoiceSectionHeaderView(
+                title: section.title, onRoster: onRoster,
+                available: section.available, note: section.note,
+                followingRows: followingRows))
+            voiceStack.arrangedSubviews.last?
+                .widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+
+            for voice in section.voices {
+                let onRoster = face.roster.contains(voice.id)
+                let row = VoiceRowView(
+                    voice: voice, onRoster: onRoster,
+                    onPlay: { [weak self] in self?.onPreviewVoice?(voice.id) },
+                    onToggle: { [weak self] in self?.onToggleVoice?(voice.id, !onRoster) },
+                    onDragStep: { [weak self] row, step in self?.dragRosterRow(row, by: step) },
+                    onDragEnd: { [weak self] in self?.commitRosterOrder() })
+                voiceStack.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+            }
         }
         // The door to the settings state's other pane, as a last row rather
         // than masthead chrome: the placard band's lanes are drilled and
@@ -2740,9 +2821,15 @@ final class StatusHUD: NSObject {
         // The "Recent audio ▸" link row is gone: it is a TAB now, so the voices
         // list stops carrying a door to somewhere else in the middle of itself.
         // That row was the whole reason this pane read as one long column.
+        // Height counts BOTH kinds of view, or the list clips by one header per
+        // section — the rows are a fixed height and so is a legend, so this stays
+        // arithmetic rather than a layout pass.
+        let rowCount = voiceStack.arrangedSubviews.compactMap { $0 as? VoiceRowView }.count
+        let headerCount = voiceStack.arrangedSubviews.count - rowCount
         voiceListHeight.constant = min(
-            CGFloat(voiceStack.arrangedSubviews.count) * VoiceRowView.height, 340)
-        Permissions.log("roster pane: \(cast.count) cast + \(bench.count) bench rows")
+            CGFloat(rowCount) * VoiceRowView.height + headerAir, 340)
+        Permissions.log("roster pane: \(cast.count) cast + \(bench.count) bench rows"
+                        + " across \(headerCount) section(s)")
     }
 
     /// The recent-audio pane's rows, into the same stack the roster pane uses
@@ -2772,14 +2859,32 @@ final class StatusHUD: NSObject {
     /// Move a roster row by whole-row steps during a ≡ drag, clamped inside
     /// the roster segment (the bench below is sorted, not ordered — nothing
     /// can be dragged into it).
+    /// A drag reorders a voice within ITS OWN roster.
+    ///
+    /// Two things changed with the pane's two sections. The stack now holds
+    /// section legends as well as rows, so a filtered row index is no longer a
+    /// stack index — the old code used one as the other, which was correct only
+    /// while the two lists were one. And a voice cannot be dragged into the other
+    /// roster, because which roster it belongs to is a fact about the voice, not
+    /// a position in a list.
     private func dragRosterRow(_ row: VoiceRowView, by steps: Int) {
-        let rows = voiceStack.arrangedSubviews.compactMap { $0 as? VoiceRowView }
-        guard steps != 0, let current = rows.firstIndex(where: { $0 === row }) else { return }
-        let rosterCount = rows.filter(\.isOnRoster).count
-        let target = max(0, min(rosterCount - 1, current + steps))
-        guard target != current else { return }
+        guard steps != 0 else { return }
+        let views = voiceStack.arrangedSubviews
+        let system = SystemVoiceCatalog.isSystemVoice(row.voiceId)
+            || SystemVoiceCatalog.isDownloadRow(row.voiceId)
+        // The cast rows of this row's own section, as STACK indices.
+        let peers = views.indices.filter { index in
+            guard let peer = views[index] as? VoiceRowView, peer.isOnRoster else { return false }
+            let peerIsSystem = SystemVoiceCatalog.isSystemVoice(peer.voiceId)
+                || SystemVoiceCatalog.isDownloadRow(peer.voiceId)
+            return peerIsSystem == system
+        }
+        guard let from = views.firstIndex(of: row), let slot = peers.firstIndex(of: from)
+        else { return }
+        let targetSlot = max(0, min(peers.count - 1, slot + steps))
+        guard targetSlot != slot else { return }
         voiceStack.removeArrangedSubview(row)
-        voiceStack.insertArrangedSubview(row, at: target)
+        voiceStack.insertArrangedSubview(row, at: peers[targetSlot])
     }
 
     private func commitRosterOrder() {
