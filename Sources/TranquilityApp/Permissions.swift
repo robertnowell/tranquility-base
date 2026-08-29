@@ -127,15 +127,28 @@ struct Permissions {
             case .speechRecognition: return base + "Privacy_SpeechRecognition"
             case .inputMonitoring: return base + "Privacy_ListenEvent"
             case .accessibility: return base + "Privacy_Accessibility"
-            // No anchor, deliberately. `Privacy_Automation` appears in the
-            // community tables but is unverified on current macOS, a batch of
-            // these anchors broke outright in the Ventura System Settings
-            // rewrite, and Automation's pane is a dynamically built list of
-            // app-to-app pairs that users report finding empty. The general
-            // Privacy & Security pane always opens, and the row's own text
-            // says where to go next. A door that always works beats a shortcut
-            // that sometimes does.
-            case .automation: return "x-apple.systempreferences:com.apple.preference.security"
+            // Anchored, and MEASURED rather than assumed — which is the point
+            // of this comment, because the version it replaces was not.
+            //
+            // `Privacy_Automation` was left off on the reasoning that it was
+            // "unverified on current macOS", so this row opened the anchorless
+            // URL instead. That URL does not open a Privacy & Security front
+            // page. It opens whatever privacy pane was visited last. Reported
+            // 29 Aug from the receiving end: Grant was pressed on the Automation
+            // row, System Settings came up somewhere else entirely, and the
+            // checklist went on saying to go to Automation.
+            //
+            // Measured on macOS 26.5.1 (25F80) — four opens, reading the window
+            // title back each time:
+            //     ?Privacy_Accessibility -> "Accessibility"
+            //     ?Privacy_Automation    -> "Automation"
+            //     ?Privacy_Microphone    -> "Microphone"
+            //     (no anchor)            -> "Microphone"   ← the last pane
+            // The shortcut works. The fallback was the thing that sometimes did.
+            //
+            // Re-measure before removing this again. An anchor that is merely
+            // doubted is not an anchor that was tested.
+            case .automation: return base + "Privacy_Automation"
             }
         }
     }
@@ -331,6 +344,20 @@ struct Permissions {
         /// different sentence, because telling someone to restart a second time
         /// is telling them to do the thing that just failed.
         case stale
+        /// No reading was possible. NOT a refusal, and the distinction is the
+        /// whole reason this case exists.
+        ///
+        /// `AEDeterminePermissionToAutomateTarget` answers about a LIVE target
+        /// process: with Terminal.app closed it returns `procNotFound` whatever
+        /// TCC actually holds. Folded in with the denials, that made a closed
+        /// terminal window indistinguishable from a revoked permission — and on
+        /// 29 Aug it shut the gate on a machine whose Automation toggle was
+        /// visibly on, then told the user their restart had failed.
+        ///
+        /// So it never blocks (`opensTheGate`), never writes a restart note,
+        /// and never escalates to `stale`. An app that could not take a
+        /// measurement has not earned the right to accuse anyone.
+        case unknowable
         case active          // granted AND working right now
     }
 
@@ -425,7 +452,16 @@ struct Permissions {
             // relaunch. That is the same restart gap the checklist already ends
             // on, which is why `.pendingRestart` is the honest answer once the
             // grace period has passed rather than a wrong `.denied`.
-            if automationStatus() == noErr { return .active }
+            let status = automationStatus()
+            if status == noErr { return .active }
+            // `procNotFound` is "ask me when Terminal is open", and spending it
+            // as "denied" cost an evening on 29 Aug. The log holds the proof in
+            // a single second: five reads said missing, Terminal.app launched at
+            // 23:09:39, and the row went active at 23:09:39.965 with nothing
+            // granted and no restart in between. `automationStatus()` below
+            // already called this "genuinely cannot tell" — it just had nowhere
+            // to say it, because every non-`noErr` return landed in one bucket.
+            if status == OSStatus(procNotFound) { return .unknowable }
             guard let asked = automationAskedAt else { return .notAsked }
             return Date().timeIntervalSince(asked) > liveGrantGrace
                 ? .pendingRestart : .notAsked
@@ -515,7 +551,12 @@ struct Permissions {
             // minus button over a permission they simply need to grant.
             guard kind == .accessibility || kind == .automation else { return .notAsked }
             return askedBeforeThisProcess ? .stale : .notAsked
-        case .denied, .restricted, .stale:
+        // `unknowable` rides through untouched, and the untouched part matters
+        // as much as the value: it must not write a restart note, because the
+        // note is what promotes the NEXT bad reading to `stale` — which is how
+        // "cannot check" became "restarted, still not working" for a permission
+        // that was granted the whole time.
+        case .denied, .restricted, .stale, .unknowable:
             return raw
         }
     }
@@ -550,10 +591,20 @@ struct Permissions {
     /// that must NOT be offered another restart.
     static var stale: [Kind] { Kind.allCases.filter { state($0) == .stale } }
 
-    /// The gate: every REQUIRED permission granted AND usable in this process.
-    /// Stronger than `allGranted`, which cannot see the restart gap.
+    /// Whether a state is allowed to let the app through.
+    ///
+    /// `active` obviously. `unknowable` too, and that is the 29 Aug repair: a
+    /// permission the app could not take a reading on must not be scored as a
+    /// refusal, or a closed Terminal window becomes "you cannot start".
+    static func opensTheGate(_ state: State) -> Bool {
+        state == .active || state == .unknowable
+    }
+
+    /// The gate: every REQUIRED permission granted AND usable in this process,
+    /// or honestly unmeasurable. Stronger than `allGranted`, which cannot see
+    /// the restart gap.
     static var allActive: Bool {
-        Kind.allCases.filter(\.isRequired).allSatisfy { state($0) == .active }
+        Kind.allCases.filter(\.isRequired).allSatisfy { opensTheGate(state($0)) }
     }
 
     /// Anything granted that this process still cannot use. One restart clears
@@ -570,7 +621,11 @@ struct Permissions {
     /// remembers the grants, so a relaunched app opens already knowing how far
     /// the user got. There is nothing to persist and nothing to get out of sync.
     static var progress: (done: Int, total: Int) {
-        (Kind.allCases.filter { state($0) == .active }.count, Kind.allCases.count)
+        // `opensTheGate`, not `== .active`, so the count agrees with the button
+        // beside it. "4 OF 5 DONE" over an enabled Start is the checklist
+        // contradicting itself, and the row's own detail text is where the
+        // nuance belongs — it says the reading could not be taken.
+        (Kind.allCases.filter { opensTheGate(state($0)) }.count, Kind.allCases.count)
     }
 
     static func isGranted(_ kind: Kind) -> Bool {
@@ -584,6 +639,10 @@ struct Permissions {
         case .accessibility:
             return AXIsProcessTrusted()
         case .automation:
+            // Deliberately strict, and deliberately not the gate: this is the
+            // raw "is it granted right now" answer, so a closed Terminal reads
+            // false here. `state(_:)` is what the checklist and `allActive` ask,
+            // because only it can say `unknowable`.
             return automationStatus() == noErr
         }
     }
@@ -622,6 +681,8 @@ struct Permissions {
             switch state(.automation) {
             case .active: return "granted"
             case .pendingRestart: return "granted, restart to use it"
+            case .unknowable:
+                return "can't be checked while Terminal is closed — open Terminal"
             // macOS returns one code for never-asked and denied, so this row
             // does not pretend to know which. Both are answered the same way:
             // press Grant, which prompts if it can and opens Settings if it

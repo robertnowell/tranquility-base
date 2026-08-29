@@ -1582,6 +1582,47 @@ extension AppDelegate {
             .filter { $0.representedObject is Permissions.Kind }
             .allSatisfy { $0.isEnabled ? $0.target != nil : true }
         let automationIsModelled = Permissions.Kind.allCases.contains(.automation)
+
+        // THE 29 AUG REGRESSION, pinned three ways.
+        //
+        // Automation read as ungranted for the whole time Terminal.app was
+        // closed, because `AEDeterminePermissionToAutomateTarget` answers about
+        // a live target and returns `procNotFound` when there is not one. The
+        // gate shut, the checklist told a user with a visibly-granted toggle
+        // that their restart had failed, and pointed at a minus button that the
+        // Automation pane does not have. Every one of those is asserted below.
+        //
+        // `previewStates` is what makes this testable at all: the failing state
+        // is unreachable on a machine whose permissions are all granted, which
+        // is every machine this drill has ever run on. That is exactly the
+        // "path nobody can run is the path nobody checks" trap `previewStates`
+        // was built for, so this uses it rather than adding a second mechanism.
+        let realStates = Permissions.previewStates
+        Permissions.previewStates = Dictionary(
+            uniqueKeysWithValues: Permissions.Kind.allCases.map {
+                ($0, $0 == .automation ? Permissions.State.unknowable : .active)
+            })
+        // A reading the app could not take must not hold the app shut. This is
+        // the launch blocker itself.
+        let unmeasurableDoesNotBlock = Permissions.allActive
+        // ...and must not be counted as unfinished either, or the checklist
+        // says "4 OF 5 DONE" over a Start button it has already enabled.
+        let unmeasurableCountsAsDone = Permissions.progress.done == Permissions.progress.total
+        // ...and must never be dressed as a failed restart. `stale` is the
+        // state whose entire meaning is "you restarted and it did not take",
+        // which was a false accusation here.
+        let unmeasurableIsNotStale = Permissions.stale.isEmpty
+        Permissions.previewStates = realStates
+
+        // The Automation pane is a generated list of app-to-app pairs. It has
+        // no + and no −, so an instruction naming them is an instruction that
+        // cannot be followed.
+        let automationRemedyIsPossible = !OnboardingWindow
+            .staleRemedy([.automation]).contains("minus button")
+        // The anchorless URL opens the last privacy pane visited, not a front
+        // page — measured on 26.5.1. Every route must name its destination.
+        let automationRouteIsAnchored = Permissions.Kind.automation.settingsURL
+            .contains("Privacy_Automation")
         // No third tier. Every permission this app models either blocks or is
         // not modelled at all — ruled 26 Aug, after "(optional)" and then
         // "(fallback)" both turned out to mean "the row nobody maintains".
@@ -1591,6 +1632,11 @@ extension AppDelegate {
             ("checklistIsReachable", checklistIsReachable),
             ("everyKindHasARoute", everyKindHasARoute),
             ("automationIsModelled", automationIsModelled),
+            ("unmeasurableDoesNotBlock", unmeasurableDoesNotBlock),
+            ("unmeasurableCountsAsDone", unmeasurableCountsAsDone),
+            ("unmeasurableIsNotStale", unmeasurableIsNotStale),
+            ("automationRemedyIsPossible", automationRemedyIsPossible),
+            ("automationRouteIsAnchored", automationRouteIsAnchored),
             ("nothingIsOptional", nothingIsOptional),
             ("everyMissingRowCanBeActedOn", everyMissingRowCanBeActedOn),
         ])
