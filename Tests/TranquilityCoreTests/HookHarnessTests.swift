@@ -177,3 +177,58 @@ final class HookHarnessTests: XCTestCase {
         XCTAssertTrue(real.isPresent)
     }
 }
+
+/// The installer must not record a directory that dies with its branch.
+///
+/// Found by doing it: `tbase install-hooks` run from `.claude/worktrees/
+/// codex-hooks` recorded that path as THE hooks directory (28 Aug). It is
+/// repair's fallback when nothing healthy is left to learn from, so a stale
+/// one takes both harnesses down at once, and it is failure mode 3 from
+/// HookManifest's own header arriving by way of the tool meant to prevent it.
+final class CheckoutKindTests: XCTestCase {
+
+    func testAGitDirectoryIsTheMainCheckout() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("main-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        XCTAssertEqual(HookManifest.checkoutKind(at: root.path), .mainCheckout)
+    }
+
+    func testAGitFileIsALinkedWorktreeAndNamesItsMainCheckout() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("wt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "gitdir: /Users/x/Projects/repo/.git/worktrees/slug\n"
+            .write(to: root.appendingPathComponent(".git"),
+                   atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(HookManifest.checkoutKind(at: root.path),
+                       .linkedWorktree(mainCheckout: "/Users/x/Projects/repo"))
+    }
+
+    func testSomewhereThatIsNotARepository() {
+        XCTAssertEqual(HookManifest.checkoutKind(at: NSTemporaryDirectory()),
+                       .notARepository)
+    }
+
+    /// The exact pointer this repo writes, verified against the real file.
+    func testTheRealPointerShapeParses() {
+        XCTAssertEqual(
+            HookManifest.mainCheckout(fromGitFile:
+                "gitdir: /Users/robertnowell/Projects/tranquility-base/.git/worktrees/codex-hooks"),
+            "/Users/robertnowell/Projects/tranquility-base")
+    }
+
+    /// An unfamiliar pointer refuses to guess. The caller still declines to
+    /// record; it just cannot say where to go instead, which is the honest
+    /// outcome rather than a plausible wrong path.
+    func testAnUnfamiliarPointerYieldsNoMainCheckout() {
+        XCTAssertNil(HookManifest.mainCheckout(fromGitFile: "gitdir: /somewhere/else"))
+        XCTAssertNil(HookManifest.mainCheckout(fromGitFile: ""))
+        XCTAssertNil(HookManifest.mainCheckout(fromGitFile: "not a pointer at all"))
+    }
+}
