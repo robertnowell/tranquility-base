@@ -644,9 +644,21 @@ extension StatusHUD {
                      row("f1", .fault), row("w2", .working)]
         let sorted = SessionRow.quietRowsLast(mixed).map(\.id)
 
+        // The 29 Aug reversal, on the shape that showed it: a row the user
+        // switched off is alive (`switchedOffCopy` gives it `.running`), so it
+        // belongs above the dead and below the merely quiet. It sat below both
+        // until tonight, which put a session Robert had just filed at the very
+        // bottom of Past Agents under eight dead ones. The filed row is seeded
+        // FIRST here so passing means the partition moved it, not the input.
+        let withFiled = SessionRow.quietRowsLast(
+            [SessionRow(id: "filed", name: "filed", aux: "filed",
+                        lamp: .running, switchedOff: true),
+             row("d1", .unlit), row("i1", .running), row("w1", .working)]).map(\.id)
+
         SelfTest.report("quietRows", [
             ("closedLast", sorted.suffix(2) == ["d1", "d2"]),
             ("quietAboveClosed", Array(sorted[4...5]) == ["i1", "i2"]),
+            ("filedOutranksTheDead", withFiled == ["w1", "i1", "filed", "d1"]),
             ("activeKeepsArrivalOrder", Array(sorted.prefix(4)) == ["w1", "r1", "f1", "w2"]),
             ("nothingLost", sorted.count == mixed.count),
             ("allQuietIsStillAllQuiet",
