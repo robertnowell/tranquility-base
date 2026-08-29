@@ -43,5 +43,11 @@ enum SelfTest {
 
     static func slateComplete() {
         Permissions.log(slateCompleteMarker)
+        // Every verdict on disk before the marker is answered for. Writes are
+        // asynchronous now (Permissions.logQueue), and check-selftests.sh reads
+        // the FILE — so an unflushed verdict is indistinguishable from a drill
+        // that never ran, which is the exact failure this whole slate exists to
+        // make impossible.
+        Permissions.flushLog()
     }
 }
