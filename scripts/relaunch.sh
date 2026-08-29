@@ -120,6 +120,43 @@ echo "→ target: $TARGET  $(git log -1 --format=%s "$REF")"
 # Second ledger line, same pid: what the run above actually resolved to.
 printf '%s pid=%s ref=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$TARGET" >> "$LEDGER"
 
+# The script that deploys must BE the script being deployed.
+#
+# 29 Aug: this was run from the shared main checkout while that checkout sat 89
+# commits and two days behind, so the copy that executed was the pre-00d31cf
+# one, which deletes the app bundle BEFORE stopping the running instance. macOS
+# does not keep a deleted binary's unfaulted pages alive, so the live app died
+# with SIGBUS at whatever it next needed to page in: four crashes across two
+# relaunches, in four unrelated symbols (NSAppleEventDescriptor dealloc,
+# AGGraphGetCounter), which reads as memory corruption right up until you line
+# them against the ledger. The fix had shipped two days earlier. Nothing
+# checked that the fix was the thing running.
+#
+# Everything else here is already immune: the BUILD comes from $REF in a clean
+# worktree, so it cannot be stale. Only the driver can be, and the driver is
+# the half that deletes a bundle out from under a running process.
+#
+# Compares the file on disk, not the checkout's HEAD blob, so an uncommitted
+# edit to this script is caught too rather than passing because the commit it
+# came from happens to match.
+SELF_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+SELF_HASH=$(git hash-object "$SELF_PATH" 2>/dev/null || echo "")
+REF_HASH=$(git rev-parse "$REF:scripts/relaunch.sh" 2>/dev/null || echo "")
+if [ -n "$SELF_HASH" ] && [ -n "$REF_HASH" ] && [ "$SELF_HASH" != "$REF_HASH" ]; then
+  if [ "${TB_ALLOW_STALE_SCRIPT:-0}" = "1" ]; then
+    echo "⚠ this relaunch.sh differs from $REF; continuing because TB_ALLOW_STALE_SCRIPT=1" >&2
+  else
+    echo "✗ this relaunch.sh is not the one you are deploying." >&2
+    echo "    running:   $SELF_PATH" >&2
+    echo "    deploying: $REF ($TARGET)" >&2
+    echo "  A stale driver has deleted the app bundle out from under a running" >&2
+    echo "  instance before (29 Aug, four crashes). Update the checkout first:" >&2
+    echo "    git -C $(git rev-parse --show-toplevel) pull --ff-only" >&2
+    echo "  (TB_ALLOW_STALE_SCRIPT=1 overrides, for editing this script itself)" >&2
+    exit 1
+  fi
+fi
+
 # Creating and validating the clean worktree now lives in scripts/build-clean.sh,
 # so install.sh can do it too — it could not before, which is why a fresh clone
 # hit an installer that refused and pointed back here. One copy, one behaviour.
