@@ -75,16 +75,38 @@ public enum ArtifactStore {
                                    FileManager.default.fileExists(atPath: $0)
                                }) -> [Page] {
         guard isPlausibleSession(session) else { return [] }
-        let target = (directory(root: root) as NSString)
-            .appendingPathComponent(session)
-        guard let text = try? String(contentsOfFile: target, encoding: .utf8)
-        else { return [] }
+        // TWO record files, merged: the full session id, and the SLUG.
+        //
+        // A report at agents/<slug>/<name>.html carries only the slug — that is
+        // all a path has room for — so the hook keys those records by slug while
+        // everything else is keyed by the full id. Reading both is what lets a
+        // page name its own author in its own path and still be found by the hub
+        // that owns it. The slug is derived from the id, never stored, so the two
+        // cannot drift.
+        let dir = directory(root: root) as NSString
+        let slug = HomeBase.slug(forSessionId: session)
+        var targets = [dir.appendingPathComponent(session)]
+        let slugTarget = dir.appendingPathComponent(slug)
+        if slugTarget != targets[0] { targets.append(slugTarget) }
+        let text = targets
+            .compactMap { try? String(contentsOfFile: $0, encoding: .utf8) }
+            .joined(separator: "\n")
+        guard !text.isEmpty else { return [] }
         var seen: [String: Date] = [:]
         var order: [String] = []
         for raw in text.split(separator: "\n") {
             let parts = raw.split(separator: "\t", maxSplits: 1)
-            let path = String(parts.count == 2 ? parts[1] : parts[0])
-            guard path.hasPrefix("/"), !excluded(path) else { continue }
+            let recorded = String(parts.count == 2 ? parts[1] : parts[0])
+            guard recorded.hasPrefix("/"), !excluded(recorded) else { continue }
+            // Resolved to what renders, not to what was written. A recorded
+            // fragment becomes the finished page beside it; one with no finished
+            // page yet is still mid-build and has nothing faithful to show.
+            //
+            // Resolution BEFORE dedup on purpose: a project whose body and
+            // index.html were both recorded collapses to one entry, which is
+            // right — they are one report, and listing both is how the same work
+            // came to appear twice with one copy unstyled.
+            guard let path = faithfulRendering(of: recorded) else { continue }
             let ms = parts.count == 2 ? Double(parts[0]) ?? 0 : 0
             // A line with no stamp (the hook wrote path-only lines for a
             // while) is not "31 Dec 1969" — epoch zero rendered as a date is
@@ -216,7 +238,83 @@ public extension ArtifactStore {
             // hub of some OTHER agent — which is what the card's OPEN REPORT
             // opened on 15 Aug. Hubs are reached by the door and the footer,
             // never by the list.
-            || path.contains("/Documents/agents/")
+            // The HUB is not an artifact -- it is the index over them, rewritten
+            // every turn, and recording one made the newest "report" of any
+            // session that regenerated a page the hub of some OTHER agent
+            // (15 Aug). But that was written as "everything under agents/", and
+            // the tree is now where reports LIVE: a report at
+            // agents/<slug>/<name>.html names its own author in its own path, so
+            // excluding the whole directory excluded exactly the pages that need
+            // no attribution guess at all. Only index.html is the hub.
+            || (path.contains("/Documents/agents/")
+                && (path as NSString).lastPathComponent == "index.html")
+    }
+
+    /// The agent a page belongs to, read off its own path.
+    ///
+    /// `agents/<slug>/<report>.html` needs no heuristic: the directory IS the
+    /// session. That is the whole reason to put reports there. Everything else
+    /// -- globbing likely directories, reading a transcript tail to see who
+    /// named the file, hoping two simultaneous sessions do not both claim it --
+    /// exists only because nothing was ever agreed about where pages go, and it
+    /// is what put one page on four hubs (16 Aug).
+    ///
+    /// Returns nil for a path outside the tree, and for the hub itself.
+    public static func agentSlug(forPageAt path: String) -> String? {
+        let parts = (path as NSString).pathComponents
+        guard let i = parts.lastIndex(of: "agents"), i + 2 < parts.count,
+              parts[i - 1] == "Documents",
+              parts[i + 2] != "index.html" || i + 3 < parts.count
+        else { return nil }
+        let slug = parts[i + 1]
+        guard (path as NSString).lastPathComponent != "index.html" else { return nil }
+        return slug.isEmpty ? nil : slug
+    }
+
+    // MARK: - The faithful rendering
+    //
+    // EVERY HTML A SESSION WRITES IS A REPORT, AND EVERY REPORT BELONGS ON THE
+    // HUB. What the hub may not do is link something that renders unstyled.
+    //
+    // Those two facts together rule out the obvious fix. Excluding fragments
+    // was tried first and is wrong: it answers "this would render badly" by
+    // deleting the report, so the work disappears from the page instead of
+    // appearing properly. The rule is not "which files do we skip" — there is
+    // no list — it is one question asked of every recorded file: what is the
+    // faithful rendering of this?
+    //
+    // A complete document renders as itself. A fragment renders as the finished
+    // document it became, which is the `index.html` beside it: share-as-page
+    // writes the bare <body> and the built page into the same project folder.
+    // Measured over every fragment on this machine — all 16 under Projects/
+    // resolve, and the 7 that do not are ClaudeWork build intermediates whose
+    // finished form lives in its own folder and is recorded separately.
+    //
+    // Nothing here keys on a NAME, which is the point: the pipeline produced
+    // four naming shapes in two days (body.html, body.snippet.html,
+    // x.body.html, x-page-body.html) and a pattern written for one of them
+    // shipped hours before the next two appeared.
+    static func faithfulRendering(of path: String) -> String? {
+        guard isBodyFragment(path) else { return path }
+        let sibling = ((path as NSString).deletingLastPathComponent as NSString)
+            .appendingPathComponent("index.html")
+        return FileManager.default.fileExists(atPath: sibling) ? sibling : nil
+    }
+
+    /// Is this file a build INPUT rather than something to show?
+    ///
+    /// Kept as a classifier, no longer as grounds for exclusion. A body fragment
+    /// carries no doctype — that is the property a rename cannot change — but
+    /// this side runs over records whose file may already be gone, so it reads
+    /// the path. The hook tests the bytes; a name is the fallback, never the
+    /// authority.
+    static func isBodyFragment(_ path: String) -> Bool {
+        let name = (path as NSString).lastPathComponent
+        return name == "body.html"
+            || name.hasSuffix(".body.html")
+            || name.hasSuffix("-body.html")
+            || name.hasSuffix(".snippet.html")
+            || path.contains("-page-sources/")
     }
 
     /// Does this shell command WRITE a file, or merely mention one?

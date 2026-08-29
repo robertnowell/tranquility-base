@@ -240,3 +240,78 @@ private final class CheckView: NSControl {
         onToggle()
     }
 }
+
+/// A section legend in the voices pane.
+///
+/// There are two rosters — ElevenLabs and system — and one flat list could not
+/// say so. Set in capitals because that is what this panel's legends do (ruled
+/// 18 Aug), and carrying its own count because "26 of 56" across both told you
+/// nothing about either.
+final class VoiceSectionHeaderView: NSView {
+    static let height: CGFloat = 28
+
+    /// Extra air above a legend that follows ROWS rather than the tab rule.
+    ///
+    /// The eye compares optical air, not painted margins, and that depends on
+    /// what sits above: the first legend sits under a hairline and reads settled
+    /// at 0, while the second sits under a row of names and reads cramped at the
+    /// same number. Measured by rendering the pane and looking at it.
+    static let airAboveFollowingSection: CGFloat = 9
+
+    static func height(followingRows: Bool) -> CGFloat {
+        height + (followingRows ? airAboveFollowingSection : 0)
+    }
+
+    init(title: String, onRoster: Int, available: Int, note: String?,
+         followingRows: Bool = false) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        let legend = NSTextField(labelWithString: title.uppercased())
+        legend.font = ChromeType.mono(ofSize: 9.5, weight: .regular)
+        legend.textColor = StateLegend.Palette.hint
+        legend.translatesAutoresizingMaskIntoConstraints = false
+
+        let count = NSTextField(labelWithString: "\(onRoster) of \(available)")
+        count.font = ChromeType.mono(ofSize: 9.5, weight: .regular)
+        count.textColor = StateLegend.Palette.faint
+        count.translatesAutoresizingMaskIntoConstraints = false
+
+        // The rule sits under the legend, not between the rows, so the two lists
+        // read as two lists rather than as one list with a caption in it.
+        let rule = NSView()
+        rule.wantsLayer = true
+        rule.layer?.backgroundColor = StateLegend.Palette.hairline.cgColor
+        rule.translatesAutoresizingMaskIntoConstraints = false
+
+        for v in [legend, count, rule] { addSubview(v) }
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(
+                equalToConstant: Self.height(followingRows: followingRows)),
+            legend.leadingAnchor.constraint(equalTo: leadingAnchor),
+            legend.bottomAnchor.constraint(equalTo: rule.topAnchor, constant: -5),
+            count.trailingAnchor.constraint(equalTo: trailingAnchor),
+            count.lastBaselineAnchor.constraint(equalTo: legend.lastBaselineAnchor),
+            rule.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rule.trailingAnchor.constraint(equalTo: trailingAnchor),
+            rule.bottomAnchor.constraint(equalTo: bottomAnchor),
+            rule.heightAnchor.constraint(equalToConstant: 1),
+        ])
+
+        if let note {
+            let sub = NSTextField(labelWithString: note)
+            sub.font = ChromeType.mono(ofSize: 9, weight: .regular)
+            sub.textColor = StateLegend.Palette.faint
+            sub.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(sub)
+            NSLayoutConstraint.activate([
+                sub.leadingAnchor.constraint(equalTo: legend.trailingAnchor, constant: 8),
+                sub.lastBaselineAnchor.constraint(equalTo: legend.lastBaselineAnchor),
+                sub.trailingAnchor.constraint(lessThanOrEqualTo: count.leadingAnchor,
+                                              constant: -8),
+            ])
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
