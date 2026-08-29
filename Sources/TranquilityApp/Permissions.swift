@@ -162,21 +162,89 @@ struct Permissions {
     /// Stamped once — the pid never changes and the formatter is not free.
     private nonisolated static let pidTag = "[\(ProcessInfo.processInfo.processIdentifier)]"
 
+    /// One formatter, built once. Allocating a fresh `ISO8601DateFormatter` per
+    /// line was the single biggest cost of a `log()` call, and `log()` rides hot
+    /// paths: through an announcement it ran twice per spoken word, on the main
+    /// thread, at roughly 14 lines a second (issue 15).
+    ///
+    /// It is only ever touched on `logQueue`, which is serial, so no
+    /// thread-safety claim about the class is needed or made — the timestamp is
+    /// captured on the CALLER's thread and only the formatting happens here.
+    private nonisolated(unsafe) static let iso: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        // Milliseconds, because whole seconds hid a bug for a day: six ⌃ taps
+        // logged at 21:48:44–49 could not show that the intended pairs were
+        // ~1s apart against a 450ms pairing window — the log could bound the
+        // gap, never state it. Gesture forensics live below one second.
+        // (check-selftests.sh compares by whole-second string prefix, so
+        // fractional digits only order lines inside the second they belong to.)
+        f.formatOptions.insert(.withFractionalSeconds)
+        return f
+    }()
+
+    /// Every write to app.log, in order, off whichever thread called `log`.
+    ///
+    /// Serial, so lines cannot interleave and the file descriptor is only ever
+    /// opened from one thread. `.utility` because a log line is never what the
+    /// user is waiting for.
+    private nonisolated static let logQueue =
+        DispatchQueue(label: "base.tranquility.permissions.log", qos: .utility)
+
+    /// True once the support directory has been created. Only read and written
+    /// on `logQueue`, which is what makes a bare `var` correct here: the
+    /// `createDirectory` call was a syscall on every single line.
+    private nonisolated(unsafe) static var logDirectoryReady = false
+
+    /// Append one line to app.log.
+    ///
+    /// The caller pays a `Date()`, a string interpolation and an enqueue. It
+    /// never pays a syscall. That is the whole point: this ran on the main
+    /// thread twice per spoken word, and a main-run-loop block past ~1s trips
+    /// the event-tap watchdog and silently swallows a keystroke (issue 15 — ⌃⌃
+    /// pressed mid-announcement, no acknowledgement, no refusal, no trace).
+    ///
+    /// The COST of going asynchronous, stated rather than discovered later: a
+    /// hard crash loses whatever is still queued. The queue drains continuously
+    /// and the window is milliseconds, but it is not zero, and the log's other
+    /// job is explaining crashes. `flushLog()` is the barrier for the paths that
+    /// can afford to wait — termination, and the end of the self-test slate.
     nonisolated static func log(_ message: String) {
+        // Stamped HERE, so the timestamp says when the thing HAPPENED rather
+        // than when the writer got round to it. Everything after this point is
+        // bookkeeping and belongs off the caller's thread.
+        let stamp = Date()
+        logQueue.async { writeLine(stamp: stamp, message: message) }
+    }
+
+    /// Block until everything queued so far is on disk.
+    ///
+    /// `sync` on a serial queue is a barrier: it cannot return until the work
+    /// already enqueued has run. For termination and for the self-test slate,
+    /// where a line that never reaches the file reads exactly like a drill that
+    /// never ran.
+    nonisolated static func flushLog() {
+        logQueue.sync {}
+    }
+
+    /// The write half, always on `logQueue`.
+    private nonisolated static func writeLine(stamp: Date, message: String) {
         // The pid rides every line: thirteen launches wrote to this one file
         // on 12 Aug (relaunches + worktree drill builds), and every
         // log-derived statistic silently mixed instances. With the tag, one
         // grep separates them — and the mic acceptance run can measure
         // exactly the process it deployed.
-        let line = "\(ISO8601DateFormatter().string(from: Date())) \(Self.pidTag)  \(message)\n"
+        let line = "\(iso.string(from: stamp)) \(pidTag)  \(message)\n"
         // `QueueStore.supportDirectory`, not a second hardcoded copy of the
         // same path: the isolated test build (`VOICE_DISPATCH_SUPPORT_DIR`,
         // scripts/bundle-test.sh) needs its own log file too, or its
         // activity keeps landing in the real app's app.log regardless of
         // how isolated everything else is (found live, 26 Aug).
         let url = QueueStore.supportDirectory.appendingPathComponent("app.log")
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !logDirectoryReady {
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            logDirectoryReady = true
+        }
         let fd = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
         guard fd >= 0 else { return }
         _ = line.withCString { write(fd, $0, strlen($0)) }
@@ -184,7 +252,12 @@ struct Permissions {
         // comes free — no stat on the hot path.
         let size = lseek(fd, 0, SEEK_CUR)
         close(fd)
-        if size > logSizeLimit { roll(url) }
+        if size > logSizeLimit {
+            roll(url)
+            // The directory survives a roll, but re-asserting it is free on the
+            // next line and costs nothing to be sure of.
+            logDirectoryReady = false
+        }
     }
 
     /// Rename the log aside and let the next write create a fresh one. Rename is
