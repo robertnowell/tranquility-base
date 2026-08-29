@@ -810,10 +810,12 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         }
         switch kind {
         case .automation:
+            // No minus button is named, because that pane has none. The
+            // toggle it does have comes first; `tccutil` is the real reset.
             return "Click Grant, then switch Terminal off and back on under "
                 + "Tranquility Base. If that changes nothing, run "
                 + "`tccutil reset AppleEvents com.robertnowell.voice-dispatch` "
-                + "and grant it again — that pane has no minus button."
+                + "in a terminal and grant it again."
         case .accessibility, .inputMonitoring:
             return "Click Grant, remove Tranquility Base with the minus button, "
                 + "and then add it back with plus."

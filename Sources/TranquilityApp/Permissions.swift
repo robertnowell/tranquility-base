@@ -682,7 +682,7 @@ struct Permissions {
             case .active: return "granted"
             case .pendingRestart: return "granted, restart to use it"
             case .unknowable:
-                return "can't be checked while Terminal is closed — open Terminal"
+                return "can't be checked while Terminal is closed. Open Terminal"
             // macOS returns one code for never-asked and denied, so this row
             // does not pretend to know which. Both are answered the same way:
             // press Grant, which prompts if it can and opens Settings if it
