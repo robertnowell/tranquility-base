@@ -407,6 +407,63 @@ public enum HookManifest {
         return .repaired(rewired: rewired, added: added)
     }
 
+    // MARK: - Where the recorded directory comes from
+
+    /// Whether the checkout `install-hooks` is being run from will outlive the
+    /// hooks it records.
+    ///
+    /// `recordedDirectoryURL` is repair's fallback when no healthy entry is
+    /// left to learn a directory from, so a path written there has to be one
+    /// that still exists next month. A linked git worktree is not: this repo's
+    /// own protocol is to make one per branch and `git worktree remove` it on
+    /// merge, at which point every hook path recorded from it dies at once and
+    /// takes BOTH harnesses down, since they share one directory.
+    ///
+    /// That is failure mode 3 in this file's own header ("paths are absolute
+    /// and derived from the working directory at install time"), reintroduced
+    /// by the installer. Found the way the header's failures always are: by
+    /// running it, from a worktree, and watching it record
+    /// `.claude/worktrees/codex-hooks/hooks` (28 Aug).
+    public enum CheckoutKind: Sendable, Equatable {
+        case mainCheckout
+        /// The main checkout this worktree belongs to, when its pointer file
+        /// names one in the ordinary layout.
+        case linkedWorktree(mainCheckout: String?)
+        case notARepository
+    }
+
+    /// A linked worktree's `.git` is a FILE reading `gitdir: <path>`; a main
+    /// checkout's is a directory. That is the whole test, and it is git's own
+    /// documented layout rather than a guess about this repo's conventions.
+    public static func checkoutKind(at repoRoot: String,
+                                    _ fm: FileManager = .default) -> CheckoutKind {
+        let dotGit = (repoRoot as NSString).appendingPathComponent(".git")
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: dotGit, isDirectory: &isDirectory) else {
+            return .notARepository
+        }
+        if isDirectory.boolValue { return .mainCheckout }
+        let contents = (try? String(contentsOfFile: dotGit, encoding: .utf8)) ?? ""
+        return .linkedWorktree(mainCheckout: mainCheckout(fromGitFile: contents))
+    }
+
+    /// `gitdir: /repo/.git/worktrees/<name>` yields `/repo`. Pure, so the
+    /// parsing is testable without building a worktree in a test.
+    ///
+    /// nil rather than a guess when the pointer is not in that layout: a
+    /// separate git-dir, a relative pointer, or a future format. The caller
+    /// still refuses; it just cannot name where to go instead.
+    public static func mainCheckout(fromGitFile contents: String) -> String? {
+        let line = contents.split(separator: "\n")
+            .first { $0.hasPrefix("gitdir:") }
+        guard let line else { return nil }
+        let path = line.dropFirst("gitdir:".count)
+            .trimmingCharacters(in: .whitespaces)
+        guard let range = path.range(of: "/.git/worktrees/") else { return nil }
+        let root = String(path[path.startIndex..<range.lowerBound])
+        return root.isEmpty ? nil : root
+    }
+
     // MARK: - Every harness on this machine
 
     /// Audit every harness this machine has, and repair what is wrong.

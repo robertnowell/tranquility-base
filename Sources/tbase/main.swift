@@ -890,6 +890,26 @@ case "reconcile":
     guard allPresent else {
         print("run from the repo root: hooks/*.sh not found or not executable"); exit(1)
     }
+    // A worktree's hooks directory does not outlive its branch, and the
+    // recorded path is exactly what repair falls back to when nothing healthy
+    // is left to learn from. Recording one is failure mode 3 from
+    // HookManifest's own header, reintroduced by the installer. Refuse, and
+    // say where to go instead.
+    let cwd = FileManager.default.currentDirectoryPath
+    if case .linkedWorktree(let mainCheckout) = HookManifest.checkoutKind(at: cwd) {
+        if !CommandLine.arguments.contains("--from-worktree") {
+            print("refusing: this is a git worktree, and hooks recorded from one "
+                  + "break when the branch is removed.")
+            if let mainCheckout {
+                print("run it from the main checkout instead:")
+                print("  cd \(mainCheckout) && tbase install-hooks")
+            }
+            print("(--from-worktree overrides, for testing only)")
+            exit(1)
+        }
+        print("warning: recording a worktree hooks directory; "
+              + "it dies when the branch is removed")
+    }
     try? hooksDir.write(to: HookManifest.recordedDirectoryURL,
                         atomically: true, encoding: .utf8)
     let outcomes = HookManifest.repairAll()
