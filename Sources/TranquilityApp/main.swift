@@ -11,6 +11,16 @@ import TranquilityCore
 /// `tbase` without any of this.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+
+    /// Every voice with a checkmark, across BOTH rosters.
+    ///
+    /// The settings pane draws its ticks from a single array, so it needs the
+    /// union — while the STORAGE stays two files, which is what stops a system id
+    /// being dialled up as a cloud voice.
+    static func checkedVoices() -> [String] {
+        VoiceRoster.load() + VoiceRoster.loadSystem()
+    }
+
     var statusItem: NSStatusItem!
     var hotkey: HotkeyMonitor!
     let recorder = Recorder()
@@ -867,19 +877,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // A checked voice goes to the roster it BELONGS to. This one function is
+        // where the 400 loop came from: the pane lists both families, and this
+        // appended whatever was checked to the single ElevenLabs roster, so
+        // checking a system voice put an Apple identifier into the cloud
+        // rotation. Routing by id family is the whole fix, and it makes the bug
+        // unreachable rather than merely unlikely.
         hud.onToggleVoice = { [weak self] id, nowOn in
             guard let self else { return }
-            var roster = VoiceRoster.load().filter { $0 != id }
+            let system = SystemVoiceCatalog.isSystemVoice(id)
+            var roster = (system ? VoiceRoster.loadSystem() : VoiceRoster.load())
+                .filter { $0 != id }
             if nowOn { roster.append(id) }
-            VoiceRoster.save(roster)
-            self.hud.updateSettings(roster: roster)
-            Permissions.log("roster: \(nowOn ? "added" : "dropped") \(id) "
-                            + "(\(roster.count) on roster)")
+            if system { VoiceRoster.saveSystem(roster) } else { VoiceRoster.save(roster) }
+            self.hud.updateSettings(roster: Self.checkedVoices())
+            Permissions.log("roster: \(nowOn ? "added" : "dropped") \(id) to the "
+                            + "\(system ? "system" : "ElevenLabs") roster "
+                            + "(\(roster.count) on it)")
         }
 
         hud.onRosterReordered = { ids in
-            VoiceRoster.save(ids)
-            Permissions.log("roster: reordered to \(ids.count) entries")
+            // One drag reorders one family; the other roster's order is untouched.
+            VoiceRoster.save(ids.filter { !SystemVoiceCatalog.isSystemVoice($0) })
+            VoiceRoster.saveSystem(ids.filter(SystemVoiceCatalog.isSystemVoice))
+            Permissions.log("roster: reordered to \(ids.count) entries across both rosters")
         }
 
         hud.onShowRecentAudio = { [weak self] in self?.showRecentAudio() }
@@ -1003,6 +1024,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // is how events stopped for 37 minutes during active use with no symptom but
         // lamps that would not turn green, and how `artifact-hook` shipped and sat
         // uninstalled without ever being mentioned.
+        // One roster became two (20 Aug). Runs before anything reads either, and
+        // is a no-op on every launch after the first.
+        if let split = VoiceRoster.splitMixedRoster() {
+            Permissions.log("roster: split one mixed roster into "
+                            + "\(split.cloud) ElevenLabs + \(split.system) system voices")
+        }
+
         if let problem = HookManifest.machineSummary() {
             // Repair, not just report (Robert, 12 Aug: "nobody ever wants to
             // run a command — we either keep it up to date or give them one

@@ -131,6 +131,14 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
         if let chosen, let voice = AVSpeechSynthesisVoice(identifier: chosen) {
             utterance.voice = voice
         }
+        // WHICH voice, on the record. The fallback exists so that a degraded read
+        // still says who is talking, and nothing anywhere recorded whether it
+        // used the session's assigned voice or the machine default — so the one
+        // claim this path makes was the one thing unobservable in it. `assigned`
+        // vs `default` is the whole distinction, so the line names which.
+        ElevenLabsSpeechProvider.trace?(
+            "system: speaking as \(chosen ?? "the synthesiser's own default")"
+                + " (\(voiceIdentifier == nil ? "default" : "assigned"))")
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             lock.lock()
@@ -538,13 +546,46 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         throw SpeechError.truncated(playedSeconds: played, ofSeconds: duration)
     }
 
+    /// Audio teardown, off the caller's thread.
+    ///
+    /// `AVAudioPlayer.stop()` is not the cheap local call it looks like: it reaches
+    /// into AudioToolbox, which takes the audio queue's dispatch queue, which can
+    /// be held by a `play()` that is itself blocked in an IPC to `coreaudiod`.
+    /// Every `stop()` call site in the app is on the main actor, so when that
+    /// happens the main thread stops forever.
+    ///
+    /// Measured 28 Aug, from a live `sample` of a wedged instance — not a crash,
+    /// a deadlock, and the reason the microphone appeared dead (the push-to-talk
+    /// handler could not run):
+    ///
+    ///     main thread  AppDelegate.handle -> SpeechChain.stop -> AVAudioPlayer.stop
+    ///                  -> AudioQueueGetCurrentTime -> dispatch_sync -> kevent_id
+    ///     AQServer     announceNext -> play -> AVAudioPlayer.play -> AudioQueueStart
+    ///                  -> HAL_defaultDeviceOutputType -> mach_msg   (waiting on
+    ///                     coreaudiod for the default output device)
+    ///     AQClient     AudioPlayerAQOutputCallback -> psynch_mutexwait
+    ///
+    /// All three at 2547/2547 samples. `play()` held the queue while waiting on a
+    /// default-device lookup, and `stop()` waited on the queue behind it.
+    private static let teardownQueue = DispatchQueue(label: "elevenlabs.teardown")
+
     public func stop() {
+        // The LOGICAL cancel stays synchronous and ordered: bumping the generation
+        // is what actually abandons in-flight synthesis, and it must have happened
+        // by the time this returns or a response landing a moment later would play
+        // over whatever started next. It touches only our own queue and cannot
+        // block on CoreAudio.
         bumpGeneration()
-        player?.stop()
+        let dying = player
         player = nil
         // A stop ends the pause too, or the next playback would start "paused" and
         // its loop would spin on a flag nobody set.
         generationQueue.sync { pausedByUser = false }
+        // Only the AUDIO teardown moves off the caller. Serial, so stops stay
+        // ordered among themselves. In the healthy case this costs microseconds
+        // and nothing is audible; in the wedged case the app survives instead of
+        // freezing, which is the whole trade.
+        if let dying { Self.teardownQueue.async { dying.stop() } }
     }
 
     /// Recorded, not inferred.
@@ -650,6 +691,12 @@ public struct SpeechChain: Sendable {
         guard let eleven = preferred as? ElevenLabsSpeechProvider, eleven.isConfigured else {
             return false
         }
+        // Same guard as `speak`, and it belongs here independently: the 400 that
+        // exposed this arrived from a PREWARM, not from a live announcement, so the
+        // speculative path reaches ElevenLabs before any gesture does. Paying a
+        // network round trip to render a voice this session will not use would be
+        // wrong even if the id were valid.
+        if voice.map(SystemVoiceCatalog.isSystemVoice) ?? false { return false }
         let key = ClipCache.key(
             text: text.text, voice: voice ?? VoiceCatalog.selectedVoiceId, model: eleven.model)
         if await clips.hasClip(for: key) { return true }
@@ -714,13 +761,43 @@ public struct SpeechChain: Sendable {
     @discardableResult
     public func speak(
         _ text: SanitizedSpokenText, voice: String? = nil,
+        systemVoice: String? = nil,
         onWord: (@Sendable (Range<Int>) -> Void)? = nil
     ) async -> Spoken {
-        // Set every call, never conditionally: staleness is impossible when the
-        // override's whole lifetime is one utterance. The system fallback has one
-        // voice and ignores this — a degraded read loses the session's voice
-        // along with the nice one, which is honest.
-        (preferred as? ElevenLabsSpeechProvider)?.voiceOverride = voice
+        // Every session has TWO voices: the ElevenLabs voice it speaks in, and the
+        // system voice it falls back to. ElevenLabs is used whenever it is
+        // available; the system voice is a redundancy, not a preference, so this
+        // is not a mode switch and there is no state to get wrong.
+        //
+        // The one hard rule is that a system identifier is never handed to
+        // ElevenLabs as a voice id. That is what a single mixed roster did — the
+        // settings pane listed both families and its toggle appended any checked
+        // id to the one roster — and it cost an HTTP 400 `invalid_uid` on
+        // `com.apple.ttsbundle.siri_Nicky_en-US_premium` every five seconds,
+        // indefinitely, per prewarm.
+        //
+        // A system id arriving in `voice` is legacy data from that era. It is read
+        // as the FALLBACK voice rather than discarded: the id is a real voice the
+        // user checked, it just is not a cloud one.
+        let cloudVoice = voice.flatMap { SystemVoiceCatalog.isSystemVoice($0) ? nil : $0 }
+        let ownSystemVoice = systemVoice
+            ?? voice.flatMap { SystemVoiceCatalog.isSystemVoice($0) ? $0 : nil }
+        // Both set every call, never conditionally: staleness is impossible when
+        // the override's whole lifetime is one utterance.
+        (preferred as? ElevenLabsSpeechProvider)?.voiceOverride = cloudVoice
+        // The session's OWN fallback voice, so a degraded read still says who is
+        // talking. Before this the fallback used one machine-wide default, and
+        // every session that fell back became the same person.
+        (fallback as? SystemSpeechProvider)?.voiceIdentifier = ownSystemVoice
+        // The narrow case where the cloud is skipped even though it is available:
+        // this session has NO cloud voice but does have a system one. That is a
+        // legacy row from the single-roster era, and reaching for ElevenLabs here
+        // would render in the provider's default voice — a stranger, rather than
+        // the agent you have been listening to. Identity beats fidelity.
+        //
+        // Not a preference and not sticky: once the migration re-mints the pair,
+        // `cloudVoice` is present and the cloud is used like everywhere else.
+        let sessionHasNoCloudVoice = cloudVoice == nil && ownSystemVoice != nil
         var degraded: String?
         var heardAny = false
         // Anything that happens after a stop belongs to an announcement the user
@@ -730,7 +807,7 @@ public struct SpeechChain: Sendable {
         guard mine == generation.current else {
             return Spoken(provider: "none", completed: false)
         }
-        if let preferred, preferred.isConfigured {
+        if let preferred, preferred.isConfigured, !sessionHasNoCloudVoice {
             do {
                 ElevenLabsSpeechProvider.trace?("chain: trying \(preferred.name)")
                 if let eleven = preferred as? ElevenLabsSpeechProvider {

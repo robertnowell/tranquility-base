@@ -342,9 +342,15 @@ extension AppDelegate {
                 // completely under the rung already playing.
                 let nextRung = ladderIndex
                 let warmToken = "\(key):rung\(ladderIndex)"
+                // The pair, not just the cloud id: a pull must sound like the
+                // announcement it deepens even when the cloud render fails, and
+                // that is exactly the moment a machine-wide default voice would
+                // make it a stranger.
+                let rungVoices = coordinator.voices(for: announcement.event.sessionId)
                 let spoken = await coordinator.speech.speak(
                     rung.spoken,
-                    voice: coordinator.voiceId(for: announcement.event.sessionId),
+                    voice: rungVoices.cloud,
+                    systemVoice: rungVoices.system,
                     onWord: { [weak self] range in
                         Task { @MainActor in
                             guard let self else { return }

@@ -646,6 +646,9 @@ extension StatusHUD {
         ]
         self.strip = column
         self.panel = panel
+        // Anything said before there was a label to say it in. Last, so every
+        // view the flush repaints through already exists.
+        flushDeferredNotes()
         return panel
     }
 }
