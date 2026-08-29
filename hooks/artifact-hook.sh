@@ -103,13 +103,36 @@ PY
 
 read -r SESSION FILE <<EOF
 $(python3 - "$PAYLOAD" <<'PY' 2>/dev/null || true
-import json, sys
+import json, os, sys
 try:
     p = json.loads(sys.argv[1])
 except Exception:
     sys.exit(0)
 session = p.get("session_id") or ""
 path = (p.get("tool_input") or {}).get("file_path") or ""
+
+# THE PATH ANSWERS FIRST.
+#
+# A page at ~/Documents/agents/<slug>/<name>.html states its own author, so
+# there is nothing to infer: no glob over likely directories, no transcript tail,
+# no hoping that two simultaneous sessions do not both claim it. That guessing
+# machinery exists only because nothing was ever agreed about where pages go, and
+# it is what put one page on four hubs (16 Aug). Sessions are told the location
+# by visual-output-hook now, so this is the common case, not the exception.
+#
+# The session in the payload still wins if they disagree -- it is the more direct
+# fact -- but a page filed under another agent's slug is recorded for THAT agent,
+# because the path is a deliberate act and the payload is just whoever ran the
+# tool.
+# The record is keyed by the SLUG here, not the full session id, because the slug
+# is all a path carries. ArtifactStore.history reads both files for a session, so
+# a slug-keyed record is found by the hub that owns it.
+if path and "/Documents/agents/" in path and os.path.basename(path) != "index.html":
+    parts = path.split(os.sep)
+    if "agents" in parts:
+        _i = parts.index("agents")
+        if _i + 1 < len(parts) and parts[_i + 1]:
+            session = parts[_i + 1]
 
 # THE ARCHIVE ANSWERS, NOT THE TOOL.
 #
@@ -126,9 +149,40 @@ path = (p.get("tool_input") or {}).get("file_path") or ""
 # the failure it replaces was total silence.
 if not path:
     import glob, os, time
-    hq = os.path.expanduser("~/Documents/deep-research")
-    recent = [f for f in glob.glob(os.path.join(hq, "*", "*.html"))
-              if time.time() - os.path.getmtime(f) < 180]
+    # WHERE PAGES ACTUALLY GET BUILT, not just the HQ.
+    #
+    # This scanned ~/Documents/deep-research alone, so a page built by a script
+    # anywhere else was invisible to BOTH attribution paths: no file_path because
+    # it was not a Write, and not in the HQ so the fallback never saw it either.
+    # Measured 21 Aug: ~/Projects/contract-proof/brief-coframe.html (168KB, full
+    # document) and ~/Projects/coframe-issues/index.html (164KB) were recorded
+    # NOWHERE, so their sessions' hubs listed no report at all -- which is the
+    # whole point of a hub.
+    #
+    # The cwd first, because the session's own directory is the strongest signal
+    # of its own work, then the two trees this house builds pages in. Depth is
+    # capped at the project dir and one level under it: pages live at
+    # <project>/index.html or <project>/<name>.html, and an unbounded walk of
+    # ~/Projects would stat thousands of node_modules files on every Bash call.
+    roots = []
+    cwd = p.get("cwd") or ""
+    if cwd.startswith("/"):
+        roots += [os.path.join(cwd, "*.html"), os.path.join(cwd, "*", "*.html")]
+    for tree in ("~/Documents/deep-research", "~/Projects", "~/ClaudeWork"):
+        base = os.path.expanduser(tree)
+        roots += [os.path.join(base, "*", "*.html"), os.path.join(base, "*.html")]
+    seen_paths = set()
+    recent = []
+    for pattern in roots:
+        for f in glob.glob(pattern):
+            if f in seen_paths or "/node_modules/" in f or "/.git/" in f:
+                continue
+            seen_paths.add(f)
+            try:
+                if time.time() - os.path.getmtime(f) < 180:
+                    recent.append(f)
+            except OSError:
+                pass
 
     # Recency alone is not authorship. With several sessions running, every
     # one of them runs a shell command inside any three-minute window, so a
@@ -189,8 +243,41 @@ EOF
 # the blank template on a hub as "page.html" (15 Aug).
 case "$FILE" in
   */scratchpad/*|/tmp/*|/private/tmp/*|/var/folders/*|*/.claude/*) exit 0;;
-  */Documents/agents/*) exit 0;;   # a hub is the index over artifacts, not one
+  # The HUB is not an artifact. But the agents tree is now where reports LIVE
+  # -- agents/<slug>/<name>.html names its own author in its own path -- so only
+  # index.html is excluded, not the whole directory. Mirrors
+  # ArtifactStore.excluded.
+  */Documents/agents/*/index.html) exit 0;;
 esac
+
+# RESOLVE TO WHAT RENDERS.
+#
+# Every HTML a session writes is a report and belongs on the hub. What the hub
+# may not do is link something that renders unstyled -- share-as-page writes a
+# bare <body> (no doctype, no stylesheet, no footer) and the built page into the
+# same folder, and on 21 Aug a hub served the fragment: default Times with the
+# stat block collapsed into running prose.
+#
+# Excluding fragments was the first answer and it is wrong -- it deletes the
+# report rather than showing it properly. So there is no skip list. One question
+# is asked of every file: what is the faithful rendering of this? A complete
+# document renders as itself; a fragment renders as the index.html beside it.
+#
+# A doctype is the test, because a name is not: the pipeline produced four
+# shapes in two days (body.html, body.snippet.html, x.body.html,
+# x-page-body.html) and the pattern written for the first shipped hours before
+# the next two appeared. Bytes cannot be renamed.
+if [ -r "$FILE" ] && ! head -c 512 "$FILE" 2>/dev/null | grep -qiE '<!doctype|<html'; then
+  SIBLING="$(dirname "$FILE")/index.html"
+  if [ -r "$SIBLING" ] && head -c 512 "$SIBLING" 2>/dev/null \
+       | grep -qiE '<!doctype|<html'; then
+    FILE="$SIBLING"
+  else
+    # Mid-build: nothing faithful to show yet. The finished page records itself
+    # when it is written, so nothing is lost by waiting for it.
+    exit 0
+  fi
+fi
 
 # 1. RECORD. Append `ms<TAB>path`, the same line ArtifactStore.record writes —
 #    the file stopped being "the latest page" the day the hub grew a page LIST,
