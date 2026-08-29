@@ -96,6 +96,15 @@ final class HomeBaseTests: XCTestCase {
 
     /// The theme reaches the page: tokens, and the masthead the App Store
     /// brief established as the house shape (adopted 16 Aug).
+    /// The favicon is a data URI in <head> and carries its own media query. Tests
+    /// about the PAGE's styling have to look past it.
+    static func strippingFavicon(_ html: String) -> String {
+        guard let start = html.range(of: "<link rel=\"icon\""),
+              let end = html.range(of: ">", range: start.upperBound..<html.endIndex)
+        else { return html }
+        return html.replacingCharacters(in: start.lowerBound..<end.upperBound, with: "")
+    }
+
     func testTheThemeAndMastheadReachThePage() {
         let kopi = HomeBase.render(HomeBase.Model(
             sessionId: "489b4804-x", title: "A send", callsign: "promotions rebuild",
@@ -104,7 +113,13 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertTrue(kopi.contains("#ff6b4a"))        // Ink 1 punctuates
         XCTAssertTrue(kopi.contains("#1e3a52"))        // navy carries structure
         XCTAssertTrue(kopi.contains("Kopi · promotions"))
-        XCTAssertFalse(kopi.contains("prefers-color-scheme:dark"))
+        // Scoped to the PAGE's own CSS. A light-only brand theme must not emit a
+        // dark page variant -- which is what this asserts and still does -- but
+        // the favicon carries its own `prefers-color-scheme` inside its data URI
+        // to follow the TAB BAR, which is a different surface and not this
+        // theme's business. A document-wide substring search conflated the two.
+        XCTAssertFalse(HomeBaseTests.strippingFavicon(kopi).contains("prefers-color-scheme:dark"),
+                       "a light-only theme must not style the page for dark mode")
         XCTAssertTrue(kopi.contains("class=\"plate\""))
         XCTAssertTrue(kopi.contains("class=\"kicker\""))
 
@@ -405,5 +420,54 @@ final class HomeBaseTests: XCTestCase {
     func testAnAgentWithNoPagesGetsNoPagesSection() {
         XCTAssertFalse(HomeBase.render(model(turns: [turn(1)]))
             .contains("Pages this agent made"))
+    }
+}
+
+/// The tab strip is where you actually choose between fifteen hubs, and it showed
+/// fifteen identical blanks because a hub emitted no icon at all.
+///
+/// The colour took three wrong answers, all the same mistake: reaching outside
+/// this app for an accent it has not got. The editorial red reads as an error;
+/// `#27926a` and the rest of Darwin's eight are COFRAME's per-client deck inks
+/// (Figma, Netflix, Shopify, Stripe), so wearing one says "this is a Coframe
+/// deck". `Palette.accent` is documented as advisory and receding, and
+/// ready/working/fault are the lamp's reserved status vocabulary. What is left
+/// is the app's real look -- putty ink on a dark console -- so the mark is
+/// monochrome and follows the ground, exactly as the menu bar's template does.
+extension HomeBaseTests {
+
+    func testTheMarkUsesThisAppsOwnInkAndNobodyElses() {
+        let icon = HomeBase.favicon()
+        XCTAssertTrue(icon.contains("%232A2C28"), "the console ground, for light tab bars")
+        XCTAssertTrue(icon.contains("%23C9C8BF"), "the panel's own ink, for dark ones")
+        for foreign in ["27926a", "30b487", "a32c28", "db2777", "4f46e5", "0d9488"] {
+            XCTAssertFalse(icon.lowercased().contains(foreign),
+                           "\(foreign) belongs to Coframe or to an error state, not to this app")
+        }
+    }
+
+    /// The fallback is the whole reason a light/dark pair is safe here: a browser
+    /// that ignores the media query must still paint something. The DEFAULT fill
+    /// has to be the dark ink, or the icon vanishes on the common light bar.
+    func testTheFallbackFillIsVisibleOnALightTabBar() {
+        let icon = HomeBase.favicon()
+        let firstFill = icon.range(of: "%232A2C28")!.lowerBound
+        let mediaQuery = icon.range(of: "prefers-color-scheme")!.lowerBound
+        XCTAssertLessThan(firstFill, mediaQuery,
+                          "the unconditional fill must come first, so an ignored query degrades")
+    }
+
+    /// One mark for the whole app. An earlier version tinted it per agent, which
+    /// made a favicon answer "which agent" -- a question it was never asked. The
+    /// question a favicon answers is "is this ours".
+    func testEveryHubCarriesTheSameMark() {
+        XCTAssertEqual(HomeBase.favicon(), HomeBase.favicon())
+    }
+
+    /// A raw '#' terminates a data URI and yields no icon at all, which looks
+    /// exactly like emitting none.
+    func testTheDataURIIsEscaped() {
+        XCTAssertFalse(HomeBase.favicon().contains("fill:#"),
+                       "an unescaped # silently produces no icon")
     }
 }

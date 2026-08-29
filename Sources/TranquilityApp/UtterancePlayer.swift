@@ -17,6 +17,18 @@ import Foundation
 final class UtterancePlayer: NSObject {
     private var player: AVAudioPlayer?
     private var generation = 0
+
+    /// Where `play()` and `stop()` actually happen.
+    ///
+    /// This type's own header already invokes rule 9 for the FILE LOAD, and
+    /// stopped there — but `AVAudioPlayer.play()` and `.stop()` are CoreAudio
+    /// calls too, and priming an audio queue asks `coreaudiod` which device is
+    /// the default output. That question hung for the whole of 28 Aug while
+    /// AirPods Pro flapped their route, and a live `sample` caught the identical
+    /// shape in `Earcons` freezing the main thread at 1697 of 1697 samples.
+    /// Loading off-actor and then playing on it leaves the same hazard, one line
+    /// further down. Serial, so a stop cannot overtake the play it follows.
+    private static let audioQueue = DispatchQueue(label: "utterance.audio")
     private(set) var playingId: String?
     var onStateChange: (() -> Void)?
 
@@ -26,8 +38,9 @@ final class UtterancePlayer: NSObject {
             stop()
             return
         }
-        player?.stop()
+        let previous = player
         player = nil
+        if let previous { Self.audioQueue.async { previous.stop() } }
         playingId = id
         generation += 1
         let mine = generation
@@ -45,7 +58,7 @@ final class UtterancePlayer: NSObject {
                 }
                 loaded.delegate = self
                 self.player = loaded
-                loaded.play()
+                Self.audioQueue.async { loaded.play() }
                 Permissions.log(String(format: "recent-audio: playing %@ (%.1fs)",
                                        String(id.prefix(8)), loaded.duration))
             }
@@ -54,10 +67,12 @@ final class UtterancePlayer: NSObject {
 
     func stop() {
         generation += 1
-        player?.stop()
+        let dying = player
         player = nil
         playingId = nil
+        // The UI settles immediately; only the audio teardown waits on CoreAudio.
         onStateChange?()
+        if let dying { Self.audioQueue.async { dying.stop() } }
     }
 }
 

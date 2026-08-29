@@ -603,8 +603,16 @@ final class SessionDiscoveryTests: XCTestCase {
     /// behind it; the rows arrive on a later tick.
     @MainActor
     func testTheNonBlockingPathReturnsNothingUntilAScanExists() throws {
+        // A NON-temporary cwd, unlike the rest of this file's throwaway
+        // fixtures, and that is load-bearing here rather than incidental.
+        // This test caches twice: once from the detached scan the cold call
+        // starts (which uses the default temporary-roots filter) and once from
+        // the prime below. A `/tmp` cwd makes those two disagree about whether
+        // `s3` exists at all, so whichever lands last decides, and the
+        // assertions read whichever answer won the race.
         let root = try makeArchive([
-            ("-tmp-c", "s3", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#, assistant()]),
+            ("-Users-x-Projects-c", "s3",
+             [#"{"type":"user","entrypoint":"cli","cwd":"/Users/x/Projects/c"}"#, assistant()]),
         ])
         defer {
             SessionDiscovery.settleForTesting()
@@ -616,8 +624,21 @@ final class SessionDiscoveryTests: XCTestCase {
             live: StubAgents([]), projects: root, titles: titles),
             "a cold cache must not block the caller")
 
-        // Prime it the way the background refresh would.
-        _ = SessionDiscovery.discover(live: StubAgents([]), projects: root, titles: titles, temporaryRoots: [])
+        // That cold call started a DETACHED scan, and it uses the default
+        // temporary-roots filter, which excludes this fixture (its cwd is
+        // `/tmp`). The prime below disables that filter and caches `s3`. If the
+        // detached scan lands after the prime, it overwrites that entry with
+        // its own empty result and the assertions below read `[]`.
+        //
+        // A race the suite lost for the first time on 28 Aug, when two
+        // unrelated test classes were added ahead of this one and moved the
+        // timing. It was always there: the detached scan simply happened to
+        // finish first, every run, until it did not.
+        SessionDiscovery.settleForTesting()
+
+        // Prime it the way the background refresh would. Default roots now,
+        // matching the detached scan above, so the two cannot disagree.
+        _ = SessionDiscovery.discover(live: StubAgents([]), projects: root, titles: titles)
 
         let warm = SessionDiscovery.discoverIfScanned(
             live: StubAgents([]), projects: root, titles: titles)

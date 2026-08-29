@@ -466,6 +466,45 @@ public final class QueueStore: Sendable {
             }
         }
 
+        // Every session gets TWO voices, not one: an ElevenLabs voice and a system
+        // voice, each assigned round-robin from its own roster. ElevenLabs is used
+        // whenever it is available; when it is not — no key, or the render fails —
+        // the session falls back to ITS OWN system voice, the same one every time.
+        //
+        // A redundancy rather than a mode switch, which is what makes it work
+        // identically with or without a key: the only difference is which of the
+        // session's two voices you hear. It also keeps "the voice says who" true
+        // through a fallback. Before this, a degraded read used one machine-wide
+        // default, so every session that fell back became the same person.
+        //
+        // Nullable, and backfilled on next ask rather than here: the system seed
+        // reads the installed voices, which is not something a migration should
+        // reach for.
+        m.registerMigration("v17_session_system_voice") { db in
+            try db.alter(table: "session_voice") { t in
+                t.add(column: "systemVoiceId", .text)
+            }
+        }
+
+        // Rows minted from the single mixed roster carry an APPLE id in the cloud
+        // column. Left alone they would never use ElevenLabs again — the chain
+        // reads "no cloud voice" and skips it — which is the opposite of the rule
+        // that ElevenLabs is used whenever it is available.
+        //
+        // So the Apple id becomes the session's SYSTEM voice, which is what it
+        // has actually been for weeks, and the cloud column is emptied so the
+        // next ask mints a real one. Moved rather than dropped, and the same
+        // shape as v12_vowelless_callsigns: make the row re-mint instead of
+        // rewriting it into a guess.
+        m.registerMigration("v18_apple_ids_out_of_the_cloud_column") { db in
+            try db.execute(sql: """
+                UPDATE session_voice
+                   SET systemVoiceId = COALESCE(systemVoiceId, voiceId),
+                       voiceId = ''
+                 WHERE voiceId LIKE 'com.apple.%'
+                """)
+        }
+
         return m
     }
 
@@ -992,6 +1031,84 @@ public final class QueueStore: Sendable {
                             Int64(Date().timeIntervalSince1970 * 1000)])
             Self.trace?("voice: assigned \(assigned) to \(sessionId.prefix(8)) (assignment #\(count + 1))")
             return assigned
+        }
+    }
+
+    /// The session's pair: the cloud voice it speaks in, and the system voice it
+    /// falls back to. Both durable, both assigned on first ask.
+    ///
+    /// The system half is backfilled for sessions that predate it, so an agent
+    /// assigned a voice last week gains a consistent fallback rather than
+    /// inheriting the machine default.
+    ///
+    /// Deliberately ONE call rather than two: the two ids are established
+    /// together or not at all, and a caller that could ask for the cloud voice
+    /// without the fallback is a caller that will.
+    public func voices(for sessionId: String, roster: [String],
+                       systemRoster: [String]) throws -> (cloud: String?, system: String?) {
+        try dbQueue.write { db in
+            let row = try Row.fetchOne(
+                db, sql: "SELECT voiceId, systemVoiceId FROM session_voice WHERE sessionId = ?",
+                arguments: [sessionId])
+
+            // The rotation counter is the row count, exactly as the single-voice
+            // path defines it, so the two rosters advance in step and "next"
+            // stays one definition.
+            let count = try Int.fetchOne(db, sql: "SELECT count(*) FROM session_voice") ?? 0
+
+            guard let row else {
+                let cloud = roster.isEmpty ? nil : roster[count % roster.count]
+                let system = systemRoster.isEmpty
+                    ? nil : systemRoster[count % systemRoster.count]
+                guard cloud != nil || system != nil else { return (nil, nil) }
+                try db.execute(
+                    sql: """
+                        INSERT INTO session_voice (sessionId, voiceId, systemVoiceId, assignedAtMs)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                    arguments: [sessionId, cloud ?? "", system,
+                                Int64(Date().timeIntervalSince1970 * 1000)])
+                Self.trace?("voice: assigned \(cloud ?? "none") + system"
+                            + " \(system ?? "none") to \(sessionId.prefix(8))"
+                            + " (assignment #\(count + 1))")
+                return (cloud, system)
+            }
+
+            var cloud: String? = (row["voiceId"] as String?).flatMap { $0.isEmpty ? nil : $0 }
+            var system: String? = row["systemVoiceId"] as String?
+            // Defended on READ, not only by v18. An Apple id in the cloud column
+            // is the session's system pick — what it has actually been read in —
+            // so it moves, and the cloud half is re-minted below. The migration
+            // handles the rows that exist today; this handles the invariant, the
+            // same way the rosters filter on the way out rather than trusting
+            // what is on disk.
+            if let stored = cloud, SystemVoiceCatalog.isSystemVoice(stored) {
+                system = system ?? stored
+                cloud = nil
+            }
+            if cloud != nil, system != nil { return (cloud, system) }
+
+            // Backfill whichever half is missing — the system one for a session
+            // that predates there being two, the cloud one for a session whose
+            // cloud column v18 emptied because it held an Apple id.
+            //
+            // Keyed on the session's own assignment SLOT rather than the live row
+            // count, so a session's voice does not depend on how many others
+            // happened to exist when it was first heard.
+            let slot = try Int.fetchOne(
+                db, sql: """
+                    SELECT count(*) FROM session_voice
+                    WHERE assignedAtMs < (SELECT assignedAtMs FROM session_voice WHERE sessionId = ?)
+                    """,
+                arguments: [sessionId]) ?? 0
+            if cloud == nil, !roster.isEmpty { cloud = roster[slot % roster.count] }
+            if system == nil, !systemRoster.isEmpty { system = systemRoster[slot % systemRoster.count] }
+            try db.execute(
+                sql: "UPDATE session_voice SET voiceId = ?, systemVoiceId = ? WHERE sessionId = ?",
+                arguments: [cloud ?? "", system, sessionId])
+            Self.trace?("voice: completed the pair for \(sessionId.prefix(8)) —"
+                        + " \(cloud ?? "none") + system \(system ?? "none")")
+            return (cloud, system)
         }
     }
 

@@ -130,7 +130,7 @@ final class TrayRowView: NSStackView {
     func apply(_ next: [String]) {
         guard next != paths else { return }
         paths = next
-        arrangedSubviews.forEach { $0.removeFromSuperview() }
+        removeAllArrangedSubviews()
         for path in next {
             let row = ChipRow(path: path)
             row.onRemove = { [weak self] in self?.onRemove?(path) }
@@ -143,6 +143,11 @@ final class TrayRowView: NSStackView {
     var displayedNamesForTesting: [String] {
         arrangedSubviews.compactMap { ($0 as? ChipRow)?.displayName }
     }
+
+    /// The stack's own count, not the rows'. A view removed from the tree but
+    /// left in the arrangement is invisible to `displayedNamesForTesting` and
+    /// visible here, which is the difference the teardown fix is about.
+    var arrangedSubviewCountForTesting: Int { arrangedSubviews.count }
 
     var removeButtonsForTesting: [ConsoleButton] {
         arrangedSubviews.compactMap { ($0 as? ChipRow)?.removeButton }
