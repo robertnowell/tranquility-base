@@ -556,24 +556,48 @@ do {
     case "hooks":
         // The audit that did not exist: what is wired, what points at a file that is
         // gone, and what was never installed at all.
-        guard let statuses = HookManifest.audit() else {
-            print("cannot read \(HookManifest.settingsURL.path)"); exit(1)
+        //
+        // EVERY harness on this machine. This command was the last single-harness
+        // reader after the 28 Aug pass made repair, the launch path, onboarding and
+        // install-hooks multi-harness, and it printed Claude Code's five events
+        // followed by "all hooks installed and reachable" on a machine whose Codex
+        // sessions had no hooks at all. A status command that cannot see half the
+        // machine is the same defect the whole pass was about, one screen further
+        // out.
+        let harnesses = HookManifest.detected()
+        guard !harnesses.isEmpty else {
+            print("no agent directories found (~/.claude, ~/.codex)"); exit(1)
         }
-        print("\(pad("EVENT", 18))  \(pad("HOOK", 20))  STATE")
-        for s in statuses {
-            let state: String
-            switch s.state {
-            case .installed: state = "ok"
-            case .brokenPath(let p): state = "BROKEN — \(p) does not exist"
-            case .staleMatcher(let found):
-                state = "STALE MATCHER — fires on \(found ?? "everything"), "
-                    + "should be \(s.hook.matcher ?? "everything")"
-            case .missing: state = "NOT INSTALLED — \(s.hook.purpose)"
+        var unreadable = false
+        for harness in harnesses {
+            print("\(harness.label)  \(harness.settingsURL.path)")
+            guard let statuses = HookManifest.audit(settings: harness.settingsURL,
+                                                    expecting: harness.expected) else {
+                print("  cannot read \(harness.settingsURL.path)")
+                unreadable = true
+                continue
             }
-            print("\(pad(s.hook.event, 18))  \(pad(s.hook.script, 20))  \(state)")
+            print("  \(pad("EVENT", 18))  \(pad("HOOK", 20))  STATE")
+            for s in statuses {
+                let state: String
+                switch s.state {
+                case .installed: state = "ok"
+                case .brokenPath(let p): state = "BROKEN — \(p) does not exist"
+                case .staleMatcher(let found):
+                    state = "STALE MATCHER — fires on \(found ?? "everything"), "
+                        + "should be \(s.hook.matcher ?? "everything")"
+                case .missing: state = "NOT INSTALLED — \(s.hook.purpose)"
+                }
+                print("  \(pad(s.hook.event, 18))  \(pad(s.hook.script, 20))  \(state)")
+            }
+            print("")
         }
-        if let problem = HookManifest.problemSummary() { print(""); print(problem) }
-        else { print(""); print("all hooks installed and reachable") }
+        if let problem = HookManifest.machineSummary() { print(problem) }
+        else if unreadable { print("some settings could not be read") }
+        else {
+            print("all hooks installed and reachable ("
+                  + harnesses.map(\.label).joined(separator: ", ") + ")")
+        }
 
     case "voices":
         // Free voices, their quality, and what is one download away. Exists because
