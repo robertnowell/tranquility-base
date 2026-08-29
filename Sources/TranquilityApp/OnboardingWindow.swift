@@ -657,7 +657,11 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         // The one step to do NOW is the first that is not finished. Everything
         // after it is dimmed: a checklist that shouts every line at once is the
         // thing the user said was unclear.
-        let current = states.first { $0.1 != .active }?.0
+        // `opensTheGate`, so a row the app merely could not READ is never
+        // presented as the step you are on. It stays undimmed below — `live`
+        // is true for anything that is not `active` — but it does not claim
+        // to be what the checklist is waiting for, because it is not.
+        let current = states.first { !Permissions.opensTheGate($0.1) }?.0
 
         for (kind, state) in states {
             // The panel's own lamp vocabulary, and one meaning per colour.
@@ -684,6 +688,12 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
                 // for you to do, and a restart that already failed is the exact
                 // opposite of that.
                 case .denied, .notAsked, .stale: return StateLegend.Palette.fault
+                // Faint, with `restricted`, and specifically NOT amber. Amber
+                // is this window's word for "needs action", and there is no
+                // action — nothing the user does to a toggle changes whether
+                // the app can take the reading. Painting it amber is what put
+                // an alarm colour on a permission that was already granted.
+                case .unknowable: return StateLegend.Palette.faint
                 }
             }()
             details[kind]?.textColor = state == .active
@@ -725,7 +735,9 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         // A row that already survived a restart is never offered another one.
         let staleRows = Permissions.stale
         let pending = Permissions.pendingRestart
-        let everythingElseDone = states.allSatisfy { $0.1 == .active || $0.1 == .pendingRestart }
+        let everythingElseDone = states.allSatisfy {
+            Permissions.opensTheGate($0.1) || $0.1 == .pendingRestart
+        }
         let readyToRestart = !pending.isEmpty && everythingElseDone
         restartNote?.isHidden = pending.isEmpty && staleRows.isEmpty
         restartButton?.isHidden = !readyToRestart
@@ -741,9 +753,8 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
             let names = staleRows.map(\.title).joined(separator: " and ")
             let verb = staleRows.count == 1 ? "is" : "are"
             restartNote?.stringValue =
-                "\(names) still \(verb) not working after a restart. Click Grant, "
-                + "remove Tranquility Base with the minus button, and then add it "
-                + "back with plus."
+                "\(names) still \(verb) not working after a restart. "
+                + Self.staleRemedy(staleRows)
             restartNote?.textColor = StateLegend.Palette.fault
         } else if !pending.isEmpty {
             let names = pending.map(\.title).joined(separator: " and ")
@@ -776,6 +787,42 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         // mid-grant. The Next door lights up; they press it.
     }
 
+    /// What to actually DO about a row that survived a restart — which is not
+    /// the same sentence for every row, and used to be.
+    ///
+    /// One string served all of them: "Click Grant, remove Tranquility Base
+    /// with the minus button, and then add it back with plus." True for
+    /// Accessibility and Input Monitoring, whose panes are hand-edited lists
+    /// with a + and a − under them. False for Automation, reported 29 Aug:
+    /// "there is no minus button here." There is not. That pane is a generated
+    /// list of app-to-app pairs — nothing can be added to it by hand, and the
+    /// only real reset is `tccutil`. An instruction naming a control that does
+    /// not exist is worse than no instruction: it reads as the user's failure
+    /// to find it.
+    /// Not private: `permissionSurfacesDrill` pins the Automation sentence,
+    /// because the thing that went wrong here was the WORDS, and words with no
+    /// test are the part of a fix that quietly comes undone.
+    static func staleRemedy(_ kinds: [Permissions.Kind]) -> String {
+        // Mixed sets get the general door rather than a merged instruction that
+        // is half wrong for each row. Grant is the one action every row has.
+        guard kinds.count == 1, let kind = kinds.first else {
+            return "Click Grant on each and follow what Settings shows."
+        }
+        switch kind {
+        case .automation:
+            return "Click Grant, then switch Terminal off and back on under "
+                + "Tranquility Base. If that changes nothing, run "
+                + "`tccutil reset AppleEvents com.robertnowell.voice-dispatch` "
+                + "and grant it again — that pane has no minus button."
+        case .accessibility, .inputMonitoring:
+            return "Click Grant, remove Tranquility Base with the minus button, "
+                + "and then add it back with plus."
+        case .microphone, .speechRecognition:
+            return "Click Grant, then switch Tranquility Base off and back on "
+                + "in Settings."
+        }
+    }
+
     /// The live state text, in the user's terms rather than the API's.
     private static func detail(_ kind: Permissions.Kind, _ state: Permissions.State) -> String {
         switch state {
@@ -787,6 +834,10 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         // Never "restart to finish" a second time. The restart is the thing
         // that just failed, and repeating it is what made this a loop.
         case .stale: return "restarted, still not working"
+        // Says what is true and what would fix it, and blames neither the user
+        // nor the permission. The app cannot see this one from here; opening a
+        // terminal is what lets it look.
+        case .unknowable: return "can't check while Terminal is closed"
         }
     }
 
