@@ -328,16 +328,30 @@ extension StatusHUD {
             // is NOT installed. The old pose was four ElevenLabs voices, so it could
             // not have shown any of the faults in the free-voice work — a pose that
             // cannot fail is not evidence.
+            //
+            // The ids are REAL SHAPES, not placeholders. The sections are split on
+            // `com.apple.` — the same test the routing uses — so a fixture with
+            // "sys1" in it would draw every voice under the ElevenLabs legend and
+            // still look fine. That is the pose-that-cannot-fail this comment
+            // already warns about, one layer down: the fault moved from the
+            // right-hand column to the id.
             showSettings(
-                voices: [Voice(id: "a", name: "Archer", category: "professional"),
-                         Voice(id: "sys1", name: "Ava (Premium)", category: "479 MB"),
-                         Voice(id: "sys2", name: "Alex", category: "885 MB"),
-                         Voice(id: "b", name: "My Clone", category: "cloned"),
-                         Voice(id: "sys3", name: "Allison (Enhanced)", category: "99 MB"),
+                voices: [Voice(id: "XrExE9yKIg1WjnnlVkGX", name: "Archer",
+                               category: "professional"),
+                         Voice(id: "com.apple.voice.premium.en-US.Ava",
+                               name: "Ava (Premium)", category: "479 MB"),
+                         Voice(id: "com.apple.speech.synthesis.voice.Alex",
+                               name: "Alex", category: "885 MB"),
+                         Voice(id: "EGxJIQ5TF187oclOp8aT", name: "My Clone",
+                               category: "cloned"),
+                         Voice(id: "com.apple.voice.enhanced.en-US.Allison",
+                               name: "Allison (Enhanced)", category: "99 MB"),
                          Voice(id: SystemVoiceCatalog.downloadPrefix + "Susan",
                                name: "Susan", category: "132 MB")],
-                roster: ["sys1", "a"],
-                note: "Pick one to hear it.")
+                roster: ["XrExE9yKIg1WjnnlVkGX", "com.apple.voice.premium.en-US.Ava"],
+                note: "Every agent gets a voice from each list. ElevenLabs speaks; "
+                    + "the system voice is its fallback.",
+                tab: .voices)
 
         case "agents-settings":
             // The default-launcher work (25 Aug): the harness picker above

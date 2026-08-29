@@ -269,7 +269,30 @@ extension StatusHUD {
 
     /// Render every state with worst-case text and confirm nothing is clipped.
     /// Run with `--selftest-hud`.
+    /// A note arriving before the panel exists must not trap.
+    ///
+    /// This cannot be drilled on the live HUD — by the time self-tests run the
+    /// panel is already built, which is precisely why the crash reached
+    /// production twice and never a test. So the drill builds a fresh, unbuilt
+    /// HUD and speaks to it: the launch condition reproduced, not simulated.
+    private func selfTestNoteBeforePanel() {
+        let fresh = StatusHUD()
+        fresh.note("hooks were repaired")   // trapped here before the fix
+        let buffered = fresh.deferredNotes == ["hooks were repaired"]
+        // Flushing is what makes buffering honest rather than a quieter drop.
+        fresh.attachLabelForDrill()
+        let flushed = fresh.hintLabel?.stringValue.contains("hooks were repaired") ?? false
+        let drained = fresh.deferredNotes.isEmpty
+        SelfTest.report("noteBeforePanel", [
+            ("a note before build does not trap", true),
+            ("it is buffered, not dropped", buffered),
+            ("it reaches the label once one exists", flushed),
+            ("the buffer drains, so it prints once", drained),
+        ])
+    }
+
     func selfTest() {
+        selfTestNoteBeforePanel()
         beginDrills()
         let long = String(repeating: "Product image binding is fixed across the stack. ", count: 8)
         currentTarget = ("selftest", 1, "promotions")

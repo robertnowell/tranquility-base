@@ -337,6 +337,95 @@ public enum HomeBase {
         }
     }
 
+    /// THE SITE MARK, as the favicon. One icon, the brand's own.
+    ///
+    /// Not a coloured square, which is what shipped first: a swatch is not an
+    /// identity, and "which agent" was never the question a favicon answers —
+    /// "is this ours" is. `SiteMark` already exists and was already designed for
+    /// exactly this size ("drawn into a 16x16 box because that is the menu bar's
+    /// real working size"), so the tab and the menu bar are now the same mark at
+    /// the same size, which is the whole point of having one.
+    ///
+    /// Geometry restated from `SiteMark`, flipped: that file draws y-UP in
+    /// AppKit's direction and SVG is y-DOWN, so every y here is `16 - y`. Ring
+    /// centre 9.8 becomes 6.2; the bar's 1.6 becomes 12.8.
+    ///
+    /// Stroked rather than an even-odd annulus, which is the one place this
+    /// departs from SiteMark's reasoning. Its comment rules out strokes because
+    /// Apple's symbol guidance does and because a stroke's width scales with an
+    /// AppKit transform; neither applies to an SVG at a fixed 16-unit viewBox,
+    /// and a stroke expresses "ring of wall 1.6" in one element instead of two
+    /// subpaths and a winding rule. Same shape, less to get wrong.
+    ///
+    /// HOLLOW, always. On the panel, filled means unread and hollow means heard
+    /// — a favicon carries identity, not status, and a permanently-filled lamp
+    /// in the tab strip would be the one lamp in the system that lies.
+    /// The mark's ink: THIS app's own, and monochrome, because it has no accent.
+    ///
+    /// Three wrong answers preceded this and all three had the same shape --
+    /// reaching outside the app for a colour it never had.
+    ///
+    ///   `#a32c28`  the hub's editorial accent. Red. As a brand mark that just
+    ///             reads as an ERROR, and this app does not even use red for
+    ///             faults (`Palette.fault` is amber).
+    ///   `#27926a`  Darwin's `--dw-accent-on`. Darwin is COFRAME's design
+    ///             system; its eight accents are per-client deck inks -- Figma,
+    ///             Netflix, Shopify, Stripe. Painting Tranquility Base in one of
+    ///             them says "this is a Coframe deck", and green specifically is
+    ///             the Coframe product accent, so the mark collided with the
+    ///             Coframe tab sitting right above it.
+    ///   any of     the rest of those eight. Same error, different hue.
+    ///
+    /// What this app actually has is `StateLegend.Palette`, and the honest
+    /// reading of it is that there is no brand colour to use. `accent`
+    /// (`#6E7F8C`) is documented as advisory and deliberately RECEDING;
+    /// `ready`/`working`/`fault` are the lamp's reserved status vocabulary and
+    /// mean something already. The identity is the pair: warm putty ink on the
+    /// dark console.
+    ///
+    /// So the mark is MONOCHROME and follows the ground, which is what the menu
+    /// bar has always done -- `SiteMark.templateImage` is a template precisely
+    /// so macOS can tint it for light bars, dark bars and selection. Measured,
+    /// neither half works alone:
+    ///
+    ///     #C9C8BF  ink       1.51:1 on a light tab bar   7.18:1 on dark
+    ///     #2A2C28  surface  12.67:1 on light             1.17:1 on dark
+    ///
+    /// The default fill is the DARK ink, so a browser that ignores the media
+    /// query still shows a visible mark on the common light tab bar rather than
+    /// nothing. That is the whole reason the pair is safe here where it was not
+    /// safe as a colour choice: the fallback degrades, it does not vanish.
+    static let markInk = "#2A2C28"        // on light grounds
+    static let markInkOnDark = "#C9C8BF"  // the panel's own ink
+
+    static func favicon() -> String {
+        // The media query lives INSIDE the SVG: a favicon has no page to inherit
+        // a scheme from, so this is the only place it can be asked.
+        let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>"
+            + "<style>"
+            + "*{fill:\(markInk);stroke:\(markInk)}"
+            + "@media(prefers-color-scheme:dark){"
+            + "*{fill:\(markInkOnDark);stroke:\(markInkOnDark)}}"
+            + "</style>"
+            + "<circle cx='8' cy='6.2' r='4.1' fill='none' stroke-width='1.6'/>"
+            + "<rect x='1.5' y='12.8' width='13' height='1.6'/>"
+            + "</svg>"
+        // `<` and `>` are percent-encoded too, not just `#`.
+        //
+        // Left raw they sit inside an HTML attribute value, where a `<` is not
+        // legal and every naive "find the end of this tag" scan stops at the
+        // first `>` -- which is the one closing `<svg ...>`, INSIDE the URI. That
+        // is not hypothetical: it silently broke a test that strips the icon
+        // before asserting on the page's own CSS, by leaving half the data URI
+        // (media query included) in the document.
+        let encoded = svg
+            .replacingOccurrences(of: "#", with: "%23")
+            .replacingOccurrences(of: "<", with: "%3C")
+            .replacingOccurrences(of: ">", with: "%3E")
+            .replacingOccurrences(of: "\"", with: "%22")
+        return "<link rel=\"icon\" href=\"data:image/svg+xml,\(encoded)\">"
+    }
+
     /// "Kopi · promotions", but never "Tranquility Base · tranquility-base".
     /// A nameplate that says the same thing twice reads as a template that
     /// forgot to fill itself in.
@@ -739,6 +828,7 @@ public enum HomeBase {
         <title>\(e(name)) — agent</title>
         <meta name="intranet:type" content="agent">
         <meta name="intranet:visibility" content="local">
+        \(favicon())
         \(theme.fontSheet.map {
             // The brand's faces, from one shared file on disk. A hub is local
             // by ruling, so a file:// stylesheet is the honest way to set in a
