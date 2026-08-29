@@ -476,12 +476,17 @@ struct Permissions {
     /// than denied: an app that has never been able to check must not accuse
     /// the user of refusing something.
     private static func automationStatus() -> OSStatus {
-        guard var target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.Terminal")
-            .aeDesc?.pointee
-        else { return OSStatus(procNotFound) }
-        defer { AEDisposeDesc(&target) }
-        return AEDeterminePermissionToAutomateTarget(
-            &target, typeWildCard, typeWildCard, /* askUserIfNeeded: */ false)
+        // The descriptor owns its AEDesc and disposes it in its own dealloc, so
+        // we borrow the pointer and never copy or dispose it ourselves. Copying
+        // the struct out and disposing the copy frees the same storage the
+        // wrapper later frees, which corrupts the heap and kills the process
+        // somewhere else entirely, often minutes later.
+        let terminal = NSAppleEventDescriptor(bundleIdentifier: "com.apple.Terminal")
+        guard let target = terminal.aeDesc else { return OSStatus(procNotFound) }
+        return withExtendedLifetime(terminal) {
+            AEDeterminePermissionToAutomateTarget(
+                target, typeWildCard, typeWildCard, /* askUserIfNeeded: */ false)
+        }
     }
 
     /// When `request(.automation)` last put the system dialog up. Same reason
@@ -774,12 +779,13 @@ struct Permissions {
             // is up.
             automationAskedAt = Date()
             return await Task.detached { () -> Bool in
-                guard var target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.Terminal")
-                    .aeDesc?.pointee
-                else { return false }
-                defer { AEDisposeDesc(&target) }
-                return AEDeterminePermissionToAutomateTarget(
-                    &target, typeWildCard, typeWildCard, /* askUserIfNeeded: */ true) == noErr
+                // Borrowed, never disposed. See automationStatus() for why.
+                let terminal = NSAppleEventDescriptor(bundleIdentifier: "com.apple.Terminal")
+                guard let target = terminal.aeDesc else { return false }
+                return withExtendedLifetime(terminal) {
+                    AEDeterminePermissionToAutomateTarget(
+                        target, typeWildCard, typeWildCard, /* askUserIfNeeded: */ true) == noErr
+                }
             }.value
         }
     }

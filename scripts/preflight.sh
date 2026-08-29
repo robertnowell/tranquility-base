@@ -79,6 +79,14 @@ python3 scripts/check-key-names.sh
 echo "→ house copy"
 python3 scripts/check-house-copy.sh
 
+# Same shape again, but this one guards memory rather than prose. An AEDesc
+# borrowed from NSAppleEventDescriptor that we copy and dispose ourselves is a
+# double free, and a double free does not crash where it is written: the Aug 26
+# to Aug 29 crash corpus blamed GRDB, SQLite, Swift metadata and SwiftUI in
+# turn before the real line was found. Cheap to check, expensive to miss.
+echo "→ borrowed descriptors"
+python3 scripts/check-borrowed-descriptors.sh
+
 echo "→ building"
 swift build 2>&1 | grep -E "error:|warning: .*never used" || true
 swift build >/dev/null
