@@ -1003,7 +1003,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // is how events stopped for 37 minutes during active use with no symptom but
         // lamps that would not turn green, and how `artifact-hook` shipped and sat
         // uninstalled without ever being mentioned.
-        if let problem = HookManifest.problemSummary() {
+        if let problem = HookManifest.machineSummary() {
             // Repair, not just report (Robert, 12 Aug: "nobody ever wants to
             // run a command — we either keep it up to date or give them one
             // click"). The repair is bounded to entries carrying our markers,
@@ -1013,17 +1013,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // a hook's own contract (exit 0 whatever happens) means nothing
             // else ever will.
             Permissions.log("startup: \(problem)")
-            switch HookManifest.repair() {
-            case .healthy:
-                Permissions.log("startup: hooks healthy on re-audit")
-            case .repaired(let rewired, let added):
-                Permissions.log("startup: hooks repaired — "
-                    + "\(rewired) rewired, \(added) added")
-                hud.note("Hooks were out of date, fixed. "
-                    + "New Claude Code sessions pick them up automatically.")
-            case .unavailable(let reason):
-                Permissions.log("startup: hooks NOT repaired — \(reason)")
-                hud.note("Hooks need attention: \(reason)")
+            // EVERY harness this machine has. The old call repaired one
+            // hardcoded file and its note said "New Claude Code sessions pick
+            // them up automatically" — accurate, and on a two-harness machine
+            // that sentence was the app quietly reporting what it had not done.
+            var repairedHarnesses: [String] = []
+            for (harness, outcome) in HookManifest.repairAll() {
+                switch outcome {
+                case .healthy:
+                    Permissions.log("startup: \(harness.id) hooks healthy on re-audit")
+                case .repaired(let rewired, let added):
+                    Permissions.log("startup: \(harness.id) hooks repaired — "
+                        + "\(rewired) rewired, \(added) added")
+                    repairedHarnesses.append(harness.label)
+                case .unavailable(let reason):
+                    Permissions.log("startup: \(harness.id) hooks NOT repaired — \(reason)")
+                    hud.note("\(harness.label) hooks need attention: \(reason)")
+                }
+            }
+            if !repairedHarnesses.isEmpty {
+                hud.note("Hooks were out of date, fixed for "
+                    + repairedHarnesses.joined(separator: " and ")
+                    + ". New sessions pick them up automatically.")
             }
         } else {
             Permissions.log("startup: hooks installed and reachable")

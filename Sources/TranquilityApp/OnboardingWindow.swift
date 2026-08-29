@@ -440,16 +440,17 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
             prereqNote[item] = "wiring..."
             renderPrerequisites()
             Task.detached {
-                let outcome = HookManifest.repair()
+                // Every harness on this machine, so one press wires Claude Code
+                // and Codex alike. Before 28 Aug this repaired one hardcoded
+                // file and the row read "already wired" on a machine whose
+                // Codex sessions had never had a hook.
+                let outcomes = HookManifest.repairAll()
                 await MainActor.run {
-                    switch outcome {
-                    case .healthy: self.prereqNote[item] = "already wired"
-                    case .repaired(let rewired, let added):
-                        self.prereqNote[item] =
-                            "wired \(rewired + added). Restart your sessions"
-                    case .unavailable(let reason): self.prereqNote[item] = reason
+                    self.prereqNote[item] = Self.hookRepairNote(outcomes)
+                    for (harness, outcome) in outcomes {
+                        Permissions.log(
+                            "onboarding: hook repair \(harness.id) -- \(outcome)")
                     }
-                    Permissions.log("onboarding: hook repair -- \(outcome)")
                     self.renderPrerequisites()
                 }
             }
@@ -457,6 +458,33 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         case .anthropicKey, .elevenLabsKey, .assemblyAIKey:
             promptForKey(item)
         }
+    }
+
+
+    /// One line for the checklist row, naming the harnesses it actually
+    /// touched. "wired 5" on a two-harness machine cannot say which half moved,
+    /// and the half that did not is exactly the failure this pass exists to
+    /// close.
+    static func hookRepairNote(
+        _ outcomes: [(harness: HookManifest.Harness, outcome: HookManifest.RepairOutcome)]
+    ) -> String {
+        guard !outcomes.isEmpty else { return "no agent directories found" }
+        var wired: [String] = [], failed: [String] = []
+        for (harness, outcome) in outcomes {
+            switch outcome {
+            case .healthy: continue
+            case .repaired(let rewired, let added):
+                wired.append("\(harness.label) \(rewired + added)")
+            case .unavailable(let reason):
+                failed.append("\(harness.label): \(reason)")
+            }
+        }
+        if !failed.isEmpty { return failed.joined(separator: "; ") }
+        if wired.isEmpty {
+            return "already wired (" 
+                + outcomes.map(\.harness.label).joined(separator: ", ") + ")"
+        }
+        return "wired " + wired.joined(separator: ", ") + ". Restart your sessions"
     }
 
     /// The shared sheet. Onboarding and the menu must offer the same thing:
