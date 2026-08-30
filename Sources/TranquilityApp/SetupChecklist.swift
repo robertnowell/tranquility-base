@@ -60,6 +60,14 @@ final class SetupChecklistView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    /// The lamp glyph, composed. Colour changes go through here rather than
+    /// `textColor`, which an attributed string ignores.
+    private static func paint(_ field: NSTextField, _ color: NSColor) {
+        field.attributedStringValue = ChromeType.line(
+            StateLegend.Glyph.dot,
+            font: ChromeType.mono(ofSize: 11, weight: .regular), color: color)
+    }
+
     /// How many prerequisite rows exist, for the launch drill. Counting the
     /// rows rather than exposing the dictionaries: the drill's question is
     /// "is the shared checklist really what this pane is showing", and a count
@@ -84,9 +92,16 @@ final class SetupChecklistView: NSView {
         row.spacing = 10
         row.alignment = .firstBaseline
 
+        // Composed, not just coloured. This view used to live in its own
+        // window, where nothing checked; inside the panel the `chrome` drill
+        // walks the tree and requires every MARK to carry a baseline offset,
+        // because an uncomposed glyph sits a hair off the line that every
+        // other mark in the app sits on. It caught this the first time the
+        // pane rendered.
         let dot = NSTextField(labelWithString: StateLegend.Glyph.dot)
         dot.font = ChromeType.mono(ofSize: 11, weight: .regular)
         dot.drawsBackground = false
+        Self.paint(dot, StateLegend.Palette.faint)
         prereqDots[item] = dot
         row.addArrangedSubview(dot)
 
@@ -303,9 +318,12 @@ final class SetupChecklistView: NSView {
             // "needs action", so an unmet REQUIRED row is amber. An unmet key is
             // not amber: it is not waiting on anybody, and colouring it the same
             // as a blocker is how "optional" stops meaning anything.
-            prereqDots[item]?.textColor = state.satisfied
-                ? StateLegend.Palette.ready
-                : (item.isRequired ? StateLegend.Palette.fault : StateLegend.Palette.faint)
+            if let dot = prereqDots[item] {
+                Self.paint(dot, state.satisfied
+                    ? StateLegend.Palette.ready
+                    : (item.isRequired ? StateLegend.Palette.fault
+                                       : StateLegend.Palette.faint))
+            }
             prereqDetails[item]?.textColor = state.satisfied
                 ? StateLegend.Palette.hint : StateLegend.Palette.secondary
             prereqDetails[item]?.stringValue = prereqNote[item] ?? state.detail
