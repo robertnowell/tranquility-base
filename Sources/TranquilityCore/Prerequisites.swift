@@ -50,7 +50,14 @@ public enum Prerequisites {
             switch self {
             case .tmux: return "the only way a reply reaches a session"
             case .hooks: return "finished turns, and results as pages you can open"
-            case .anthropicKey: return "spoken summaries, about $0.001 each"
+            // "a tenth of a cent", not "$0.001". Same number, and it is the
+            // phrasing the onboarding body already uses two paragraphs down.
+            // The currency sign is also a MARK by `ChromeType.isMark`, and this
+            // row renders inside the panel now that Settings hosts the same
+            // checklist, where the `chrome` drill requires every mark to be
+            // composed. Composing a symbol inside a prose sentence would be the
+            // wrong fix: chrome composition is for chrome.
+            case .anthropicKey: return "spoken summaries, about a tenth of a cent each"
             case .elevenLabsKey: return "the voice; without it, the system one"
             case .assemblyAIKey: return "the live transcript while you speak"
             }
