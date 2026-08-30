@@ -186,3 +186,71 @@ final class AgentDefaultsTests: XCTestCase {
         XCTAssertFalse(AgentDefaults.load(for: claude).contains("hook-trust"))
     }
 }
+
+/// A revived agent is launched under the same parameters as a fresh one.
+///
+/// Robert's ruling, 12 Aug: "any new or revived session gets launched under the
+/// same parameters." It held on Claude Code and did not hold on Codex, where
+/// `attemptCodexResume` passed a bare `codex` binary on purpose. That was
+/// harmless for two days and then stopped being harmless, the moment
+/// `--dangerously-bypass-hook-trust` landed in the fresh path's command: a
+/// resumed agent hit "Hooks need review", sat on the menu, and reported only
+/// that it never settled within 20s.
+///
+/// These assert the seam rather than a launch, because the failure is invisible
+/// from outside the process: the bare binary resumes correctly in every case
+/// where no flag matters, which is every case until one does.
+final class ResumeUsesTheConfiguredCommandTests: XCTestCase {
+
+    private var savedURL: URL!
+    private let codex = CodexAdapter().id
+    private let claude = ClaudeCodeAdapter().id
+
+    override func setUp() {
+        super.setUp()
+        savedURL = AgentDefaults.fileURL
+        AgentDefaults.fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("resume-launch-\(UUID().uuidString).json")
+    }
+
+    override func tearDown() {
+        AgentDefaults.fileURL = savedURL
+        super.tearDown()
+    }
+
+    func testACodexResumeCarriesTheConfiguredFlags() {
+        AgentDefaults.save("codex --dangerously-bypass-hook-trust --custom", for: codex)
+        XCTAssertEqual(SessionLauncher.resumeLaunch(for: CodexAdapter()).command,
+                       "codex --dangerously-bypass-hook-trust --custom",
+                       "a resume must launch the command the user configured")
+    }
+
+    /// The specific regression: never a bare binary.
+    func testACodexResumeIsNotABareBinary() {
+        XCTAssertNotEqual(SessionLauncher.resumeLaunch(for: CodexAdapter()).command, "codex",
+                          "resume dropped the settings' flags, which is the 28 Aug hooks-review hang")
+    }
+
+    /// The default a machine that has configured nothing gets, which is the
+    /// case this actually broke in.
+    func testTheUnconfiguredDefaultStillCarriesHookTrust() {
+        XCTAssertTrue(
+            SessionLauncher.resumeLaunch(for: CodexAdapter()).command
+                .contains("--dangerously-bypass-hook-trust"),
+            "Codex will not run TB's hooks without this, and says nothing when it declines")
+    }
+
+    /// Same rule, other harness: the seam is per-harness, not a Codex special case.
+    func testAClaudeCodeResumeAlsoTakesItsConfiguredCommand() {
+        AgentDefaults.save("claude --dangerously-skip-permissions --custom", for: claude)
+        XCTAssertEqual(SessionLauncher.resumeLaunch(for: ClaudeCodeAdapter()).command,
+                       "claude --dangerously-skip-permissions --custom")
+    }
+
+    /// And the launch still names the right binary, so this cannot be "fixed"
+    /// by handing one harness another's command.
+    func testTheAdapterAndTheCommandStillAgree() {
+        XCTAssertEqual(SessionLauncher.resumeLaunch(for: CodexAdapter()).adapter.id, codex)
+        XCTAssertTrue(SessionLauncher.resumeLaunch(for: CodexAdapter()).command.hasPrefix("codex"))
+    }
+}
