@@ -445,6 +445,31 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
                 // file and the row read "already wired" on a machine whose
                 // Codex sessions had never had a hook.
                 let outcomes = HookManifest.repairAll()
+                // Wiring is half the job on a harness with a review gate, and
+                // the half the user cannot see. Codex declines unreviewed
+                // hooks in silence, so a button that stops at "wired" leaves
+                // someone believing setup is done while nothing fires.
+                //
+                // Pressing that menu here is allowed for one reason and it is
+                // worth stating: the user asked. `neverAutoAcceptNeedles`
+                // still keeps the LAUNCH watcher off this screen, and that
+                // rule is untouched. A launcher pressing a security prompt on
+                // its own and a person clicking Approve in a setup window are
+                // different acts; only the second carries consent.
+                for (harness, _) in outcomes
+                where HookManifest.approval(for: harness) == .pending {
+                    await MainActor.run {
+                        self.prereqNote[item] = "approving \(harness.label)..."
+                        self.renderPrerequisites()
+                    }
+                    let outcome = CodexHookApproval.grantByDrivingCodex(
+                        harness: harness,
+                        command: AgentDefaults.load(for: harness.id),
+                        directory: AgentDefaults.directory(for: harness.id),
+                        trace: { Permissions.log($0) })
+                    Permissions.log(
+                        "onboarding: hook approval \(harness.id) -- \(outcome)")
+                }
                 await MainActor.run {
                     self.prereqNote[item] = Self.hookRepairNote(outcomes)
                     for (harness, outcome) in outcomes {
