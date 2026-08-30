@@ -550,7 +550,7 @@ extension HarnessAdapterTests {
 
     func testCodexNeverAutoAcceptsTheUpdateChooser() {
         let needles = CodexAdapter().trustPrompt!.neverAutoAcceptNeedles
-        XCTAssertTrue(needles.contains("Update available!"),
+        XCTAssertTrue(needles.contains("1. Update now"),
                       "pressing Return here runs a curl-pipe-sh installer")
     }
 
