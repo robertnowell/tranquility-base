@@ -139,11 +139,18 @@ final class SetupChecklistView: NSView {
         name.textColor = StateLegend.Palette.ink
         name.drawsBackground = false
         name.translatesAutoresizingMaskIntoConstraints = false
-        // 215 clipped "2. Anthropic  (recommended)" mid-word into the
-        // detail column (screenshot, 30 Aug). The suffix is part of the
-        // name, so the column is sized for the longest name that carries
-        // one rather than for the bare titles.
-        name.widthAnchor.constraint(equalToConstant: 268).isActive = true
+        // The onboarding window is 640pt wide and the panel is 352. One row
+        // cannot use one set of fixed widths in both, and trying shipped a
+        // SETUP tab whose doors were simply off the right edge, twice: 268 +
+        // 205 + a button is about 500pt of content in a 352pt panel, and a
+        // leading-aligned stack puts the overflow where nobody can see it.
+        //
+        // So the narrow host gets a taller row instead of a clipped one: the
+        // name and its door on the first line, the detail wrapping underneath.
+        // Nothing is hidden and nothing is truncated, which is the property
+        // that matters on a screen whose whole job is telling you the state.
+        name.widthAnchor.constraint(
+            equalToConstant: mode == .reference ? 150 : 268).isActive = true
         prereqNames[item] = name
         row.addArrangedSubview(name)
         prereqRows[item] = row
@@ -153,17 +160,28 @@ final class SetupChecklistView: NSView {
         detail.textColor = StateLegend.Palette.secondary
         detail.drawsBackground = false
         detail.translatesAutoresizingMaskIntoConstraints = false
-        detail.widthAnchor.constraint(equalToConstant: 205).isActive = true
+        detail.widthAnchor.constraint(
+            equalToConstant: mode == .reference ? 300 : 205).isActive = true
         prereqDetails[item] = detail
-        row.addArrangedSubview(detail)
 
         let button = ConsoleButton.door(item.fixLabel, ink: StateLegend.Palette.fault,
                                         target: self, action: #selector(fixTapped(_:)))
         button.identifier = NSUserInterfaceItemIdentifier("prereq." + item.rawValue)
         prereqButtons[item] = button
-        row.addArrangedSubview(button)
 
-        return row
+        guard mode == .reference else {
+            row.addArrangedSubview(detail)
+            row.addArrangedSubview(button)
+            return row
+        }
+        // Narrow host: name and door on the line, detail beneath it.
+        row.addArrangedSubview(button)
+        let stacked = NSStackView(views: [row, detail])
+        stacked.orientation = .vertical
+        stacked.alignment = .leading
+        stacked.spacing = 2
+        prereqRows[item] = stacked
+        return stacked
     }
 
     /// Every row carries its own fix. None of them points at a document.

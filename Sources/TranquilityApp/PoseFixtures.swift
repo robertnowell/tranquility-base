@@ -108,6 +108,14 @@ extension StatusHUD {
                     + SpokenComposition.RungKind.findings.rawValue)
             highlight(upTo: long.text.count)
 
+        case "setup":
+            // The settings pane a human actually looks at, so `--pose-shot`
+            // can look at it too. Added 30 Aug after shipping a SETUP tab
+            // whose doors were off the right edge of a 352pt panel, twice.
+            // The photographer already existed; this pane was simply not
+            // posable, so nobody could have caught it without opening the app.
+            showSetupSettings()
+
         case "grid":
             showIdle(rows: [
                 .init(id: "s1", name: "Validate hero image binding",
