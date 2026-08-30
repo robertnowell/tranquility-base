@@ -67,7 +67,10 @@ final class SetupChecklistView: NSView {
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
+            // EQUAL, not lessThanOrEqual. With an inequality this view has no
+            // intrinsic height to give the panel, which then sized itself to a
+            // single row and clipped the rest (seen 30 Aug, first pose-shot).
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
         // Built from the item list, not from a scan: the scan is off-main and
         // has not landed yet on the frame this runs in. `hooks` is in the list
@@ -176,7 +179,14 @@ final class SetupChecklistView: NSView {
         }
         // Narrow host: name and door on the line, detail beneath it.
         row.addArrangedSubview(button)
-        let stacked = NSStackView(views: [row, detail])
+        // Indented to sit under the NAME, not under the lamp: the detail
+        // belongs to the row above it, and a second line starting at the panel
+        // edge reads as a new item.
+        let indent = NSStackView(views: [detail])
+        indent.orientation = .horizontal
+        indent.edgeInsets = NSEdgeInsets(top: 0, left: 22, bottom: 0, right: 0)
+
+        let stacked = NSStackView(views: [row, indent])
         stacked.orientation = .vertical
         stacked.alignment = .leading
         stacked.spacing = 2
