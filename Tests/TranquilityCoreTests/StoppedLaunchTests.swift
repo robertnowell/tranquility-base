@@ -70,6 +70,13 @@ final class StoppedLaunchTests: XCTestCase {
     /// window. The screen nobody had a needle for got neither the "never press
     /// it" promise nor the "let someone see it" one, because a needle list can
     /// only speak about prompts somebody already knew to name.
+    ///
+    /// This fixture is a KNOWN screen now (29 Aug: the update chooser is a
+    /// never-accept needle, because its default row runs a curl-pipe-sh
+    /// installer). The property under test did not change and is worth as much
+    /// on either path: whichever branch gives up, the line it leaves must carry
+    /// the pane rather than the category. The genuinely-unknown path keeps its
+    /// own coverage in HarnessAdapterTests' `unknownStuckScreen`.
     func testGivingUpOpensAWindowAndSaysWhatItSaw() {
         let box = Box()
         TrustPromptWatcher.watch(

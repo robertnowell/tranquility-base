@@ -546,8 +546,14 @@ public enum TrustPromptWatcher {
             // rather than about which branch happened to look at it.
             if text == lastScreen { unchanged += 1 } else { unchanged = 1 }
             lastScreen = text
-            if spec.neverAutoAcceptNeedles.contains(where: { text.contains($0) }) {
-                trace?("newSession: \(label) needs a human choice, never auto-accepted; leaving it be")
+            if let blocking = spec.neverAutoAcceptNeedles.first(where: { text.contains($0) }) {
+                // The line NAMES the screen, exactly as the give-up line does
+                // for a screen no needle knew. Recognising a prompt should tell
+                // the log more than not recognising it, and until 29 Aug it told
+                // it less: "needs a human choice" named a category while the
+                // unknown-screen path carried the pane's own words.
+                trace?("newSession: \(label) is waiting on \"\(blocking)\" — "
+                    + "never auto-accepted; leaving it be")
                 onNeedsHuman(Self.questionOnScreen(text) ?? "It is asking you something.")
                 return
             }
