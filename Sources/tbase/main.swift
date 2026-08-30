@@ -590,6 +590,15 @@ do {
                 }
                 print("  \(pad(s.hook.event, 18))  \(pad(s.hook.script, 20))  \(state)")
             }
+            switch HookManifest.approval(for: harness) {
+            case .notRequired: break
+            case .granted:     print("  approval        granted")
+            case .pending:     print("  approval        NOT GRANTED — these hooks will not run")
+            case .unknown:     print("  approval        unknown — could not read its config")
+            }
+            if let step = HookManifest.nextStep(for: harness) {
+                print("  next            \(step)")
+            }
             print("")
         }
         if let problem = HookManifest.machineSummary() { print(problem) }
