@@ -903,11 +903,18 @@ public enum SessionLauncher {
                         + "settle-wait — already live elsewhere")
                     return .success(.alreadyLive)
                 }
-                if let spec, spec.neverAutoAcceptNeedles.contains(where: { text.contains($0) }) {
-                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) needs a human "
-                        + "choice (hook review or similar); standing down")
+                // NAME THE SCREEN, not the category. "needs a human choice"
+                // told you a class; the pane in front of you is a fact, and the
+                // difference is an hour of diagnosis. The 29 Aug hang reported
+                // only that it never settled, which sent the first reading of it
+                // to a load hypothesis that was wrong twice over.
+                if let spec, let blocking = spec.neverAutoAcceptNeedles
+                    .first(where: { text.contains($0) }) {
+                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) is waiting on "
+                        + "\"\(blocking)\" and only you can answer it; standing down")
                     return .failure(ScriptError(
-                        message: "attemptCodexResume: \(sessionId.prefix(8)) needs a human choice"))
+                        message: "attemptCodexResume: \(sessionId.prefix(8)) is waiting on "
+                            + "\"\(blocking)\" — answer it in the pane, or in Codex once"))
                 }
                 switch Self.classifyCodexResumeScreen(text, settledNeedle: spec?.settledBannerNeedle) {
                 case .alreadyLive:
