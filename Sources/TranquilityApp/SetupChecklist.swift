@@ -19,7 +19,7 @@ import TranquilityCore
 /// The two hosts differ in exactly one way, and it is a callback rather than a
 /// branch: onboarding gates its "Start using Tranquility Base" button on
 /// whether every required row is satisfied. Settings has nothing to gate.
-final class SetupChecklistView: NSView {
+final class SetupChecklistView: NSStackView {
 
     /// What this host wants from the same rows.
     ///
@@ -36,12 +36,6 @@ final class SetupChecklistView: NSView {
 
     private let mode: Mode
 
-    init(frame: NSRect, mode: Mode = .onboarding) {
-        self.mode = mode
-        super.init(frame: frame)
-        setUpRows()
-    }
-
     /// Fired on every render with whether every REQUIRED row is satisfied.
     /// Onboarding enables its start button from this; Settings ignores it.
     var onReadiness: ((Bool) -> Void)?
@@ -55,28 +49,28 @@ final class SetupChecklistView: NSView {
     private var prereqScanInFlight = false
     private var prereqNote: [Prerequisites.Item: String] = [:]
 
-    private let stack = NSStackView()
+    init(frame: NSRect, mode: Mode = .onboarding) {
+        self.mode = mode
+        super.init(frame: frame)
+        setUpRows()
+    }
 
+    /// IS the stack rather than containing one.
+    ///
+    /// It held a stack pinned to its own edges, and reported no usable height
+    /// to the panel, which sized itself to a single row and clipped the rest
+    /// (30 Aug, first two pose-shots). A container that must be told its own
+    /// height is a constraint problem waiting to be solved twice; a stack knows
+    /// how tall its arranged subviews make it.
     private func setUpRows() {
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 14
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            // EQUAL, not lessThanOrEqual. With an inequality this view has no
-            // intrinsic height to give the panel, which then sized itself to a
-            // single row and clipped the rest (seen 30 Aug, first pose-shot).
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
+        orientation = .vertical
+        alignment = .leading
+        spacing = mode == .reference ? 10 : 14
+        translatesAutoresizingMaskIntoConstraints = false
         // Built from the item list, not from a scan: the scan is off-main and
-        // has not landed yet on the frame this runs in. `hooks` is in the list
-        // and hidden below whenever it is healthy.
+        // has not landed yet on the frame this runs in.
         for (index, item) in Prerequisites.Item.allCases.enumerated() {
-            stack.addArrangedSubview(prerequisiteRow(item, step: index + 1))
+            addArrangedSubview(prerequisiteRow(item, step: index + 1))
         }
     }
 
@@ -344,6 +338,17 @@ final class SetupChecklistView: NSView {
     }
 
     func renderPrerequisites() {
+        // Before the first scan lands there are no states, and hiding every
+        // row on that frame is why the pane photographed as a single line:
+        // the scan is off-main by design, so the first paint always happens
+        // without it. An empty list is not "nothing to show", it is "not
+        // measured yet", and the rows can carry their own static text until
+        // it is. Same distinction the rest of this app makes between `gone`
+        // and `unknown`.
+        guard !prereqStates.isEmpty else {
+            for (_, row) in prereqRows { row.isHidden = false }
+            return
+        }
         let shownStates = mode == .reference
             ? prereqStates : Prerequisites.visible(prereqStates)
         let visible = Set(shownStates.map(\.item))
@@ -360,7 +365,14 @@ final class SetupChecklistView: NSView {
 
         for state in shownStates {
             let item = state.item
-            let suffix = item.isRecommended ? "  (recommended)" : ""
+            // The suffix rides the NAME in the wide window and the DETAIL in
+            // the panel. "2. Anthropic  (recommended)" needs about 250pt and
+            // the panel's name column is 150, so on the narrow host it
+            // truncated to "(recomm" against a door, twice. Moving it costs
+            // nothing: the detail line is right underneath, has the room, and
+            // is where the rest of the row's qualifying text already lives.
+            let wideSuffix = mode == .reference ? "" : "  (recommended)"
+            let suffix = item.isRecommended ? wideSuffix : ""
             prereqNames[item]?.stringValue =
                 "\(position[item] ?? 1). " + item.title + suffix
             // A satisfied tmux or hooks row has nothing left to do; a key row
@@ -380,7 +392,11 @@ final class SetupChecklistView: NSView {
             }
             prereqDetails[item]?.textColor = state.satisfied
                 ? StateLegend.Palette.hint : StateLegend.Palette.secondary
-            prereqDetails[item]?.stringValue = prereqNote[item] ?? state.detail
+            let base = prereqNote[item] ?? state.detail
+            prereqDetails[item]?.stringValue =
+                mode == .reference && item.isRecommended && prereqNote[item] == nil
+                    ? "recommended · " + base
+                    : base
         }
         onReadiness?(!prereqStates.isEmpty
             && Prerequisites.allRequiredSatisfied(prereqStates))
