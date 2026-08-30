@@ -48,10 +48,17 @@ public struct HarnessLaunch: Sendable {
         self.command = AgentDefaults.load(for: harness)
     }
 
-    /// An explicit pair, for the one caller that runs a bare binary rather
-    /// than the configured launch command (`attemptCodexResume`, which needs
-    /// `codex` without the settings' flags). Still built from an adapter, so
-    /// the flags and the binary still come from the same harness.
+    /// An explicit pair, for a caller that genuinely needs a command the
+    /// settings do not hold. Still built from an adapter, so the flags and the
+    /// binary still come from the same harness.
+    ///
+    /// It used to name `attemptCodexResume` as that caller, "which needs
+    /// `codex` without the settings' flags". That is no longer true and was
+    /// the bug: a resumed Codex agent launched WITHOUT the flags a fresh one
+    /// gets, so `--dangerously-bypass-hook-trust` never reached it and every
+    /// resume stopped on a hooks-review menu. Resume takes the configured
+    /// command now, like everything else. Nothing in the app uses this
+    /// initializer today; it stays for a caller that can justify itself.
     public init(adapter: any HarnessAdapter, command: String) {
         self.adapter = adapter
         self.command = command
@@ -815,6 +822,18 @@ public enum SessionLauncher {
     /// Blocks up to `(deathCheckInterval * deathCheckCount) +
     /// (settlePollInterval * settleMaxPolls)` seconds (~23s by default);
     /// call off-main, same contract `resume` already carries.
+    /// The launch a RESUME uses: the configured command for that harness,
+    /// which is exactly what a fresh launch of it gets.
+    ///
+    /// Named rather than inlined so a test can hold it. The regression it
+    /// guards is invisible from outside the process, which is why it survived
+    /// two days unnoticed: a bare `codex` resumes perfectly well right up
+    /// until a flag the fresh path carries starts mattering, and then it stops
+    /// on a menu nobody is watching and reports only that it never settled.
+    public static func resumeLaunch(for adapter: any HarnessAdapter) -> HarnessLaunch {
+        HarnessLaunch(harness: adapter.id)
+    }
+
     @discardableResult
     public static func attemptCodexResume(
         sessionId: String,
@@ -826,8 +845,26 @@ public enum SessionLauncher {
         settleMaxPolls: Int = 20,
         ownership: any SessionOwnershipStore = FileSessionOwnershipStore.shared
     ) -> Result<CodexResumeOutcome, ScriptError> {
+        // The CONFIGURED command, not a bare binary. Robert's 12 Aug ruling is
+        // that "any new or revived session gets launched under the same
+        // parameters", and AgentDefaults says the same in its own words:
+        // resume is not a second setting. This line was the one place that
+        // ruling did not hold, and on 28 Aug it started costing something.
+        //
+        // `--dangerously-bypass-hook-trust` landed in `codexFallback` that day,
+        // because Codex will not run a hook whose config it has not had
+        // reviewed and does not say so when it declines. A FRESH launch got the
+        // flag. A resume got `codex resume <id>`, hit "Hooks need review", and
+        // sat on a menu nobody was watching until the settle poll gave up.
+        //
+        // The bare binary came from 26 Aug (a7c390b), where the failing command
+        // was `codex --dangerously-bypass-approvals-and-sandbox --resume <id>`.
+        // That was the ARGUMENT FORM, not the flags: Codex wants a `resume`
+        // subcommand and was handed Claude Code's `--resume`. The adapter's
+        // `resumeArguments` fixes that at the source now, so the caution this
+        // line encoded is spent, while its cost is not.
         switch resumeTmux(sessionId: sessionId, directory: directory,
-                          launch: HarnessLaunch(adapter: adapter, command: "codex"),
+                          launch: resumeLaunch(for: adapter),
                           acceptTrustPrompt: false) {
         case .failure(let error):
             return .failure(error)
@@ -866,11 +903,18 @@ public enum SessionLauncher {
                         + "settle-wait — already live elsewhere")
                     return .success(.alreadyLive)
                 }
-                if let spec, spec.neverAutoAcceptNeedles.contains(where: { text.contains($0) }) {
-                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) needs a human "
-                        + "choice (hook review or similar); standing down")
+                // NAME THE SCREEN, not the category. "needs a human choice"
+                // told you a class; the pane in front of you is a fact, and the
+                // difference is an hour of diagnosis. The 29 Aug hang reported
+                // only that it never settled, which sent the first reading of it
+                // to a load hypothesis that was wrong twice over.
+                if let spec, let blocking = spec.neverAutoAcceptNeedles
+                    .first(where: { text.contains($0) }) {
+                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) is waiting on "
+                        + "\"\(blocking)\" and only you can answer it; standing down")
                     return .failure(ScriptError(
-                        message: "attemptCodexResume: \(sessionId.prefix(8)) needs a human choice"))
+                        message: "attemptCodexResume: \(sessionId.prefix(8)) is waiting on "
+                            + "\"\(blocking)\" — answer it in the pane, or in Codex once"))
                 }
                 switch Self.classifyCodexResumeScreen(text, settledNeedle: spec?.settledBannerNeedle) {
                 case .alreadyLive:

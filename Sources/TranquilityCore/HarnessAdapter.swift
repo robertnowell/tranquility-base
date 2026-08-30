@@ -409,7 +409,39 @@ public struct CodexAdapter: HarnessAdapter {
             // pane, not scrollable history, confirmed 10/10 across repeated
             // polls of a resumed (already-trusted) session.
             settledBannerNeedle: "Ask Codex to do anything",
-            neverAutoAcceptNeedles: ["Hooks need review"])
+            // "Hooks need review" is a consent TB has no authority to give.
+            //
+            // "Update available!" is here for a sharper reason: its default row
+            // is "1. Update now", and choosing it runs
+            // `curl -fsSL …/install.sh | sh`. This watcher dismisses a
+            // recognised prompt by pressing Return where the selection stands,
+            // which is correct for Codex's yes-defaulting trust prompt and would
+            // INSTALL SOFTWARE on this one. Listing it here makes that
+            // unreachable rather than merely unlikely, before anyone reaches for
+            // Return as a way to fix the hang it causes.
+            //
+            // Measured 29 Aug against codex-cli 0.150.1 with 0.151.0 released:
+            // every `codex resume` stopped on this chooser, and the launcher
+            // could only report that the session never settled. Skipping is
+            // persisted by Codex itself in ~/.codex/version.json
+            // (`dismissed_version`), so a machine that has answered it once
+            // stays quiet until the next release, which is exactly why this went
+            // unnoticed for weeks and then broke everything at once.
+            //
+            // THE NEEDLE IS THE MENU ROW, NOT THE HEADLINE, and the difference
+            // is the whole entry. "Update available!" was the obvious choice and
+            // was wrong: once the version IS dismissed, Codex still prints
+            //
+            //   ✨ Update available! 0.150.1 -> 0.151.0
+            //   Run sh -c 'curl ... | sh' to update.
+            //
+            // as a passive banner in a perfectly healthy session, which resumes
+            // and settles normally. Matching the headline stood down every good
+            // resume — measured, the drill went 6/6 to 2/6 on that one string.
+            // "1. Update now" is a row that exists only while the chooser is
+            // waiting for a keypress, and it is also the exact row whose
+            // selection runs the installer.
+            neverAutoAcceptNeedles: ["Hooks need review", "1. Update now"])
     }
 
     /// Codex's own single-writer-lock refusal — measured live, 22 Aug,
@@ -528,8 +560,20 @@ public enum TrustPromptWatcher {
             // rather than about which branch happened to look at it.
             if text == lastScreen { unchanged += 1 } else { unchanged = 1 }
             lastScreen = text
-            if spec.neverAutoAcceptNeedles.contains(where: { text.contains($0) }) {
-                trace?("newSession: \(label) needs a human choice, never auto-accepted; leaving it be")
+            if let blocking = spec.neverAutoAcceptNeedles.first(where: { text.contains($0) }) {
+                // The line NAMES the screen, exactly as the give-up line does
+                // for a screen no needle knew. Recognising a prompt should tell
+                // the log more than not recognising it, and until 29 Aug it told
+                // it less: "needs a human choice" named a category while the
+                // unknown-screen path carried the pane's own words.
+                // The QUESTION the pane is asking, not the needle that matched
+                // it. The needle is an implementation detail ("1. Update now");
+                // the headline above it is what a person needs in order to go
+                // and answer the thing. Falls back to the needle when the screen
+                // has no question this can lift.
+                let asking = Self.questionOnScreen(text) ?? blocking
+                trace?("newSession: \(label) is waiting on \"\(asking)\" — "
+                    + "never auto-accepted; leaving it be")
                 onNeedsHuman(Self.questionOnScreen(text) ?? "It is asking you something.")
                 return
             }

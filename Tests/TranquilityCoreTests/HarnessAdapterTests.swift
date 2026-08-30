@@ -234,8 +234,23 @@ final class HarnessAdapterTests: XCTestCase {
 
     // MARK: The screen that stopped changing (27 Aug)
 
-    /// codex-cli 0.150.0's update menu, transcribed off a real stuck pane. No
-    /// needle in this app knows it, and none needs to: it stops changing.
+    /// codex-cli 0.150.0's update menu, transcribed off a real stuck pane.
+    ///
+    /// It IS known now, as a `neverAutoAcceptNeedles` entry (29 Aug), so it no
+    /// longer exercises the unknown-screen path and
+    /// `testAnUnknownScreenThatStopsChangingIsReportedEarly` uses
+    /// `unknownStuckScreen` below instead. Kept because the never-accept tests
+    /// want the real thing.
+    ///
+    /// The comment here used to read "No needle in this app knows it, and none
+    /// needs to: it stops changing." That was right about THIS watcher and
+    /// wrong about the other loop. `SessionLauncher.attemptCodexResume` runs
+    /// its own settle poll with no stuck detection at all — it checks the
+    /// never-accept needles, classifies, and otherwise waits out its twenty
+    /// seconds. So on 29 Aug, when 0.151.0 shipped and this screen appeared on
+    /// every resume, the launcher could only report that the session never
+    /// settled. The heuristic that made a needle unnecessary does not run
+    /// there.
     private static let codexUpdateScreen = [
         "",
         "  \u{2728} Update available! 0.149.0 -> 0.150.0",
@@ -245,6 +260,22 @@ final class HarnessAdapterTests: XCTestCase {
         "\u{203A} 1. Update now",
         "  2. Skip",
         "  3. Skip until next version",
+        "",
+        "  Press enter to continue",
+    ].joined(separator: "\n")
+
+    /// A screen nothing in this app recognises, which stops changing.
+    ///
+    /// Deliberately not any real prompt: the point of the stuck heuristic is
+    /// screens nobody predicted, so a fixture that some needle might one day
+    /// match would quietly stop testing it. That is what happened to the
+    /// update menu.
+    private static let unknownStuckScreen = [
+        "",
+        "  Workspace configuration changed",
+        "",
+        "\u{203A} 1. Reload it",
+        "  2. Keep the current one",
         "",
         "  Press enter to continue",
     ].joined(separator: "\n")
@@ -269,7 +300,7 @@ final class HarnessAdapterTests: XCTestCase {
         var pressed = false
         var asked: String?
         let traced = Traced()
-        var reads = Array(repeating: Self.codexUpdateScreen, count: 9)
+        var reads = Array(repeating: Self.unknownStuckScreen, count: 9)
         TrustPromptWatcher.watch(spec: spec,
                                  read: { reads.isEmpty ? nil : reads.removeFirst() },
                                  press: { _ in pressed = true },
@@ -277,7 +308,7 @@ final class HarnessAdapterTests: XCTestCase {
                                  pollInterval: 0.001, maxPolls: 9,
                                  onNeedsHuman: { asked = $0 })
         XCTAssertFalse(pressed, "an unrecognized screen is never pressed through")
-        XCTAssertEqual(asked, "Update available! 0.149.0 -> 0.150.0",
+        XCTAssertEqual(asked, "Workspace configuration changed",
                        "the panel is told what the pane is actually asking")
         XCTAssertTrue(traced.sawStoppedEarly)
         XCTAssertEqual(reads.count, 6,
@@ -505,5 +536,37 @@ final class HarnessAdapterTests: XCTestCase {
             liveness: .gone, revivable: true)
         XCTAssertEqual(session.reviveCommand?.arguments, ["--resume", "sess-1"])
         XCTAssertEqual(session.reviveCommand?.cwd, home)
+    }
+}
+
+/// Screens TB must never press through on Codex.
+///
+/// One is a consent (hook trust). The other is an INSTALL: the update chooser's
+/// default row runs `curl -fsSL …/install.sh | sh`, and this watcher's way of
+/// dismissing a recognised prompt is to press Return where the selection
+/// stands. Correct for Codex's yes-defaulting trust prompt; software
+/// installation on the update chooser.
+extension HarnessAdapterTests {
+
+    func testCodexNeverAutoAcceptsTheUpdateChooser() {
+        let needles = CodexAdapter().trustPrompt!.neverAutoAcceptNeedles
+        XCTAssertTrue(needles.contains("1. Update now"),
+                      "pressing Return here runs a curl-pipe-sh installer")
+    }
+
+    func testCodexNeverAutoAcceptsHookReview() {
+        XCTAssertTrue(CodexAdapter().trustPrompt!
+            .neverAutoAcceptNeedles.contains("Hooks need review"))
+    }
+
+    /// The never-accept list must win over the press list, for every needle in
+    /// it. Asserted against the real spec rather than a fixture, because the
+    /// guarantee is only worth anything on the object the launcher uses.
+    func testNoNeverAcceptNeedleIsAlsoAPressableOne() {
+        let spec = CodexAdapter().trustPrompt!
+        for needle in spec.neverAutoAcceptNeedles {
+            XCTAssertFalse(spec.promptNeedles.contains(needle),
+                           "\(needle) is on both lists; the safe one must be the only one")
+        }
     }
 }
