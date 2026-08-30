@@ -357,14 +357,40 @@ who = ("Created by <b>{title}</b> &middot; session {short} &middot; {today}"
 
 # data-tb-agent marks it as ours: the stamp replaces its own previous block
 # and never touches a footer somebody else wrote.
+# COLOURS THE PAGE CHOOSES, NOT COLOURS WE GUESS.
+#
+# This block hard-coded a light palette -- #8f8a7c text, #ddd8cc rules, a
+# #5d5a51 "Open hub" link. On a light page that reads fine, which is why it
+# shipped and why nobody noticed. On a DARK page it is close to invisible:
+# measured on 2026-08-29 against a page on this app's own console surface
+# (#2A2C28), "Open hub" came out around 2:1, under half the 4.5:1 floor.
+#
+# Two rules, and between them the footer stops guessing what it is sitting on:
+#
+#   TEXT inherits. `color:inherit` takes whatever the page set as its own ink,
+#   which is BY DEFINITION legible against that page's own background. Size,
+#   not colour, is what makes it read as a footer -- 12.5px against the page's
+#   body copy. No hue is ever chosen here, so no page can be dark or light
+#   enough to break it.
+#
+#   RULES are neutral and translucent. Mid-grey at 42% shows against both a
+#   near-white and a near-black ground without going garish on either, which a
+#   fixed #ddd8cc could not do in one direction or a fixed #333 in the other.
+#
+# Deliberately NOT opacity on the footer element. Opacity composites the whole
+# subtree and a child cannot opt out -- `opacity:1` on the button inside an
+# `opacity:.78` parent still renders at .78 -- so dimming the meta line that
+# way would have quietly washed out the one control that carries its own
+# contrast. "Discuss with agent" keeps its solid background and white ink:
+# 8.6:1 wherever it lands, owing the page nothing.
 snippet = (
     '<footer data-tb-agent="{short}" style="margin-top:64px;padding-top:20px;'
-    'border-top:1px solid #ddd8cc;'
-    'font:13px/1.5 ui-monospace,Menlo,monospace;color:#8f8a7c;'
+    'border-top:1px solid rgba(128,128,128,.42);'
+    'font:12.5px/1.5 ui-monospace,Menlo,monospace;color:inherit;'
     'display:flex;flex-wrap:wrap;gap:10px;align-items:center">\n'
     '  <div style="flex:1;min-width:220px">{who}</div>\n'
     '  <a href="file://{hub}" '
-    'style="text-decoration:none;color:#5d5a51;border:1px solid #ddd8cc;'
+    'style="text-decoration:none;color:inherit;border:1px solid rgba(128,128,128,.5);'
     'padding:7px 13px;border-radius:7px;font-weight:640">Open hub</a>\n'
     '  <a href="tranquilitybase://discuss?session={session}&amp;ref={path}" '
     'style="text-decoration:none;background:#1f4f8f;color:#fbfaf8;padding:8px 14px;'
