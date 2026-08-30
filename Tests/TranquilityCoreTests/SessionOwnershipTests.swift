@@ -146,3 +146,76 @@ final class SessionOwnershipTests: XCTestCase {
         XCTAssertTrue(store.liveNonRegistrySessions().isEmpty)
     }
 }
+
+/// A live Codex session carries a name and a busy state, or it sits grey and
+/// anonymous beside Claude Code rows that do not.
+///
+/// Both were hard-coded from the day `liveNonRegistrySessions` was written,
+/// honestly: Codex told us nothing then. It does now, and 30 Aug was the day
+/// that stopped being an acceptable default, with two sessions visibly
+/// "Working (24s)" showing as idle rows both called "Projects".
+final class LiveNonRegistryDecorationTests: XCTestCase {
+
+    private final class Store: SessionOwnershipStore, @unchecked Sendable {
+        var records: [SessionOwnershipRecord] = []
+        func record(_ r: SessionOwnershipRecord) { records.append(r) }
+        func current(sessionId: String) -> SessionOwnershipRecord? {
+            records.first { $0.sessionId == sessionId }
+        }
+        func remove(sessionId: String) { records.removeAll { $0.sessionId == sessionId } }
+        func all() -> [SessionOwnershipRecord] { records }
+    }
+
+    /// A live pid is required, so the fixture uses this process: it is the one
+    /// pid a test can be certain is alive.
+    private func store(_ ids: [String]) -> Store {
+        let s = Store()
+        for id in ids {
+            s.record(SessionOwnershipRecord(
+                sessionId: id, harness: CodexAdapter().id,
+                pid: Int(ProcessInfo.processInfo.processIdentifier),
+                paneId: "%1", socketName: "tb", sessionName: "tb-x",
+                paneTty: "/dev/ttys0", cwd: "/Users/x/Projects",
+                attachedAt: Date()))
+        }
+        return s
+    }
+
+    func testAPromptWithNoStopYetReadsBusy() {
+        let live = store(["01a05369"]).liveNonRegistrySessions(
+            status: { _ in "busy" }, name: { _ in nil })
+        XCTAssertEqual(live.first?.status, "busy")
+    }
+
+    /// Anything else, including a session that has never said a word, stays
+    /// idle. Guessing "busy" from the absence of evidence is how a lamp starts
+    /// lying, which is the failure this app cares most about.
+    func testNoAnswerStaysIdle() {
+        let live = store(["01a05369"]).liveNonRegistrySessions(
+            status: { _ in nil }, name: { _ in nil })
+        XCTAssertEqual(live.first?.status, "idle")
+    }
+
+    func testTheNameIsCarried() {
+        let live = store(["01a05338"]).liveNonRegistrySessions(
+            status: { _ in nil }, name: { _ in "Audit Kopi fixes in codebase" })
+        XCTAssertEqual(live.first?.name, "Audit Kopi fixes in codebase")
+    }
+
+    /// No name is nil, never a placeholder: `SessionRow.displayName` already
+    /// owns the fallback, and a second one here would make two rules for one
+    /// question.
+    func testAnUnnamedSessionCarriesNoName() {
+        let live = store(["01a05001"]).liveNonRegistrySessions(
+            status: { _ in nil }, name: { _ in nil })
+        XCTAssertNil(live.first?.name)
+    }
+
+    /// The defaults keep every pre-existing call site honest: unchanged
+    /// behaviour, no name, idle.
+    func testTheDefaultsAreTheOldBehaviour() {
+        let live = store(["01a05001"]).liveNonRegistrySessions()
+        XCTAssertEqual(live.first?.status, "idle")
+        XCTAssertNil(live.first?.name)
+    }
+}

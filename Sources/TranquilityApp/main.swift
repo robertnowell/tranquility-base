@@ -1103,7 +1103,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
-        if CommandLine.arguments.contains("--show-onboarding")
+        // The grid as it really is, from live data, photographed and gone.
+        //   TranquilityApp --allow-second-instance --live-grid-shot /tmp/g.png
+        //
+        // `--pose-shot grid` draws FIXTURES, which is right for chrome and
+        // useless for "does a Codex row have a name today". Added 30 Aug after
+        // shipping a name fix that could only be checked by asking Robert to
+        // look at his own screen.
+        if let i = CommandLine.arguments.firstIndex(of: "--live-grid-shot"),
+           i + 1 < CommandLine.arguments.count {
+            showIdleGrid()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            if let png = hud.poseSnapshot() {
+                try? png.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
+                Permissions.log("live-grid-shot: wrote \(CommandLine.arguments[i + 1])")
+            } else {
+                Permissions.log("live-grid-shot: nothing rendered")
+            }
+            NSApp.terminate(nil)
+            return
+        }
+                if CommandLine.arguments.contains("--show-onboarding")
             || CommandLine.arguments.contains("--show-prerequisites") {
             onboarding.show { }
         }

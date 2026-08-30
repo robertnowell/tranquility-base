@@ -51,9 +51,23 @@ extension AppDelegate {
         // skipped from the grid, or read blockedOnYou wrong, because Codex
         // has no registry of its own to appear in here. `liveNonRegistrySessions()`
         // adds ownership's own answer for a harness with no registry.
+        // Moved ABOVE the live map, which now reads it: for a harness with no
+        // registry, the latest of UserPromptSubmit/Stop IS the busy signal,
+        // and this is already loaded for the waiting band below.
+        let boundaries = (try? store?.latestTurnBoundaries()) ?? [:]
+        // Codex's own thread names, one read per repaint. The disk band has
+        // used these since 30 Aug; a LIVE Codex session never reaches that
+        // band, which is why two working sessions both showed as "Projects".
+        let codexNames = CodexThreadNames.all()
+
         var liveById: [String: LiveSession] = [:]
         for session in (ClaudeAgentsCLI().sessions() ?? [])
-            + FileSessionOwnershipStore.shared.liveNonRegistrySessions() {
+            + FileSessionOwnershipStore.shared.liveNonRegistrySessions(
+                // A prompt went in and no Stop has come back: it is chewing.
+                // Anything else, including no events at all, stays idle, which
+                // is the honest answer for a session that has never spoken.
+                status: { boundaries[$0]?.kind == .userPromptSubmit ? "busy" : nil },
+                name: { codexNames[$0.lowercased()] }) {
             if let existing = liveById[session.sessionId] {
                 Permissions.log("agents: duplicate sessionId \(session.sessionId.prefix(8)) "
                     + "— pids \(existing.pid) and \(session.pid); keeping \(existing.pid)")
@@ -83,7 +97,6 @@ extension AppDelegate {
         // unanswered session in this band, and if the user answered it IN THE
         // TERMINAL the agent is already chewing — green ("you have not
         // answered this") would be a lie, so the transcript's verdict wins.
-        let boundaries = (try? store?.latestTurnBoundaries()) ?? [:]
         // The user's own half of the switch, read once for the whole repaint.
         // The OFF half is applied at the bottom of this function, after every
         // band; ON has to travel INTO the lamp rule, because it changes what

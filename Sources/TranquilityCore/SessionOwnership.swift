@@ -100,10 +100,32 @@ extension SessionOwnershipStore {
     /// is already authoritative for that harness, and a Claude Code row
     /// from BOTH sources would double the same session in a `+`-combined
     /// list.
-    public func liveNonRegistrySessions() -> [LiveSession] {
+    /// `status` and `name` are INJECTED rather than looked up here, because
+    /// both answers live somewhere this type cannot reach and neither is worth
+    /// a second source of truth.
+    ///
+    /// Status was hard-coded `"idle"` from the day this was written, which was
+    /// honest while Codex told us nothing: `GridAssembler` reads
+    /// `live.status == "busy"` for its blue lamp, so a Codex session that was
+    /// visibly working sat grey next to a Claude one that did not (Robert,
+    /// 30 Aug, with a screenshot of a pane reading "Working (24s)"). The
+    /// answer now exists and costs nothing: the hooks installed on 29 Aug put
+    /// a UserPromptSubmit and a Stop in the event store for every Codex turn,
+    /// so the latest of the two IS the busy signal, and the grid already loads
+    /// it for other reasons.
+    ///
+    /// Name is the same shape of problem. `discoverCodex` learned to read
+    /// Codex's own thread name, but that is the DISK band; a live session
+    /// never reaches it, so the rows he was looking at fell back to their
+    /// directory and both said "Projects".
+    public func liveNonRegistrySessions(
+        status: (String) -> String? = { _ in nil },
+        name: (String) -> String? = { _ in nil }
+    ) -> [LiveSession] {
         all().filter { $0.harness != ClaudeCodeAdapter().id && ProcessProbe.isAlive($0.pid) }
             .map { LiveSession(pid: $0.pid, sessionId: $0.sessionId, cwd: $0.cwd,
-                               status: "idle", name: nil, waitingFor: nil) }
+                               status: status($0.sessionId) ?? "idle",
+                               name: name($0.sessionId), waitingFor: nil) }
     }
 }
 
