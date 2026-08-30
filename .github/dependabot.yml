@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # Action references stay full-SHA pinned. Dependabot proposes the reviewed
+  # replacement SHA while retaining the human-readable release comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

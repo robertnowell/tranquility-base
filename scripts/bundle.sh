@@ -48,8 +48,10 @@ if _tb_sha=$(git rev-parse --short HEAD 2>/dev/null) \
    && _tb_count=$(git rev-list --count HEAD 2>/dev/null); then
   APP_VERSION="${TB_VERSION:-0.1.0+$_tb_sha}"
   APP_BUILD="${TB_BUILD:-$_tb_count}"
+  SOURCE_COMMIT="${TB_SOURCE_COMMIT:-$(git rev-parse HEAD)}"
 else
   APP_BUILD="${TB_BUILD:-1}"
+  SOURCE_COMMIT="${TB_SOURCE_COMMIT:-unknown}"
 fi
 APP_NAME="${VD_APP_NAME:-Tranquility Base}"
 BUNDLE_ID="${VD_BUNDLE_ID:-com.robertnowell.voice-dispatch}"
@@ -173,6 +175,10 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
   <key>CFBundleVersion</key><string>$APP_BUILD</string>
+  <!-- The release number tells people which build they have; this binds those
+       bytes to the exact source commit the automated release built. Unlike the
+       marketing version it is never chosen or rewritten by a release job. -->
+  <key>TBSourceCommit</key><string>$SOURCE_COMMIT</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <!-- tranquilitybase:// deep links, so any local HTML page can carry buttons
        that open the agent that made it. The browser confirms before launching

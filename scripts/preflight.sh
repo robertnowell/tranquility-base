@@ -163,7 +163,9 @@ scripts/test-dispatch-tmux.sh
 # server, so it can be affected by what else is running. It is loud when it
 # fails and that is what it is for.
 echo "→ live TUI dispatch drill (informational — needs a logged-in claude)"
-if scripts/test-dispatch-live-tui.sh; then
+if [ "${TB_SKIP_LIVE_HARNESS_DRILLS:-0}" = "1" ]; then
+  echo "→ skipped in hosted CI (no authenticated third-party harness)"
+elif scripts/test-dispatch-live-tui.sh; then
   echo "✓ live TUI dispatch drill passed"
 else
   echo "⚠ live TUI dispatch drill failed — read it before landing composer changes"
@@ -182,7 +184,9 @@ fi
 # disabled, not fixed. So: run it, report it, never block on it, until it
 # gets the same self-contained isolation test-dispatch-tmux.sh already has.
 echo "→ codex lifecycle drill (informational — see comment above)"
-if scripts/test-codex-lifecycle.sh; then
+if [ "${TB_SKIP_LIVE_HARNESS_DRILLS:-0}" = "1" ]; then
+  echo "→ skipped in hosted CI (no authenticated third-party harness)"
+elif scripts/test-codex-lifecycle.sh; then
   echo "✓ codex lifecycle drill passed"
 else
   echo "⚠ codex lifecycle drill failed — not blocking (see preflight.sh's own comment on why)" >&2

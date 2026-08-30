@@ -1,172 +1,225 @@
 #!/bin/bash
 #
-# Build, sign, notarize, staple and publish a release DMG.
+# Build, audit, sign, notarize, upload, re-download, and publish one release
+# for one commit on main.
 #
-# WHY THIS EXISTS
+# With no version argument, identity is deterministic:
+#   version  0.3.<git ancestry count>
+#   tag      v<version>-<short source SHA>
 #
-# Until now the only way to get this app was to clone the repo and build it. That
-# put a Swift 6 toolchain, Xcode Command Line Tools 16+ (macOS 14.5+), git, network
-# access to the Swift package registry, and a code-signing certificate the user had
-# to MANUFACTURE ON THEIR OWN MACHINE between a person and a running app — five
-# things that can fail, four of them silently. Measured 24 Aug: the certificate
-# script itself was broken on any Mac with Homebrew's openssl ahead of /usr/bin,
-# and the failure was swallowed, so the build fell through to ad-hoc signing and
-# every macOS permission died on the user's next rebuild while the Privacy pane
-# kept showing them as granted.
+# That makes a merge its own release without a version-bump commit or a human
+# choosing a number. A rerun finds the same tag. Published releases are audited
+# in place and left untouched; failed drafts can be rebuilt and replaced.
 #
-# None of that is a thing a user should ever meet. This script makes the artifact
-# once, here, correctly, and hands over a DMG.
-#
-# WHAT NOTARIZATION BUYS
-#
-# Two separate gates, often conflated:
-#   * Gatekeeper decides whether the app may LAUNCH. It only inspects code that
-#     arrived carrying com.apple.quarantine — i.e. a download. macOS 15 removed the
-#     Control-click bypass, so an unnotarized download now costs the user a trip to
-#     System Settings > Privacy & Security > Open Anyway. Notarizing removes it.
-#   * TCC decides whether the app may use the microphone, the event tap, and so on.
-#     It matches the DESIGNATED REQUIREMENT stored when the grant was made.
-#
-# The second is why Developer ID matters beyond the launch dialog. Signed with an
-# Apple Development certificate the requirement is
-#     identifier "…" and certificate leaf = H"<that exact certificate>"
-# which breaks for every existing user the day the certificate is reissued. With
-# Developer ID it is
-#     identifier "…" and anchor apple generic and certificate leaf[subject.OU] = FKE587SZ6H
-# anchored to the TEAM, so grants survive certificate renewal. Verified 25 Aug.
-#
-# Usage: scripts/release.sh <version>        e.g. scripts/release.sh 0.2.0
-#        scripts/release.sh <version> --dry-run    build + notarize, publish nothing
+# Usage: scripts/release.sh [version] [--dry-run]
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-}"
 DRY_RUN=0
-for a in "$@"; do [ "$a" = "--dry-run" ] && DRY_RUN=1; done
-
-if [ -z "$VERSION" ] || [ "$VERSION" = "--dry-run" ]; then
-  echo "usage: scripts/release.sh <version> [--dry-run]" >&2
-  echo "       e.g. scripts/release.sh 0.2.0" >&2
-  exit 1
-fi
+VERSION=""
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=1 ;;
+    -h|--help)
+      echo "usage: scripts/release.sh [version] [--dry-run]"
+      exit 0 ;;
+    -*) echo "unknown option: $arg" >&2; exit 2 ;;
+    *)
+      [ -z "$VERSION" ] || { echo "only one version may be given" >&2; exit 2; }
+      VERSION="$arg" ;;
+  esac
+done
 
 APP_NAME="Tranquility Base"
 BUNDLE_ID="com.robertnowell.voice-dispatch"
 TEAM_ID="FKE587SZ6H"
+REPO="robertnowell/tranquility-base"
 NOTARY_PROFILE="${TB_NOTARY_PROFILE:-AC_PASSWORD}"
+NOTARY_KEYCHAIN="${TB_NOTARY_KEYCHAIN:-}"
+RELEASE_SERIES="${TB_RELEASE_SERIES:-0.3}"
 STAGE=".build/release-stage"
 APP_SRC=".build/release/$APP_NAME.app"
+
+step() { echo; echo "── $* ─────────────────────────────────────────"; }
+fail() { echo "✗ $*" >&2; exit 1; }
+
+TARGET=$(git rev-parse HEAD)
+SHORT_TARGET=$(git rev-parse --short=9 "$TARGET")
+BUILD_NUMBER=$(git rev-list --count "$TARGET")
+VERSION="${VERSION:-$RELEASE_SERIES.$BUILD_NUMBER}"
+TAG="${TB_RELEASE_TAG:-v$VERSION-$SHORT_TARGET}"
 DMG_PATH=".build/TranquilityBase-$VERSION.dmg"
-TAG="v$VERSION"
+CHECKSUM_PATH=".build/TranquilityBase-$VERSION.sha256"
+APP_NOTARY_ARCHIVE=".build/TranquilityBase-$VERSION-app.zip"
+APP_NOTARY_RESULT_PATH=".build/TranquilityBase-$VERSION-app-notary-submission.json"
+APP_NOTARY_LOG_PATH=".build/TranquilityBase-$VERSION-app-notarization.json"
+DMG_NOTARY_RESULT_PATH=".build/TranquilityBase-$VERSION-dmg-notary-submission.json"
+DMG_NOTARY_LOG_PATH=".build/TranquilityBase-$VERSION-dmg-notarization.json"
 
-step() { echo; echo "── $* ─────────────────────────────────────────" ; }
+case "$VERSION" in
+  *[!0-9.]*|.*|*..*|*.) fail "version must contain only dot-separated numbers: $VERSION" ;;
+esac
 
-# --- preflight ---------------------------------------------------------------
-#
-# Every one of these is a thing that fails LATE and expensively otherwise:
-# notarization rejects the upload after a two-minute wait, or worse, succeeds
-# against the wrong identity and ships a build whose grants die on renewal.
+step "release identity"
+echo "→ source:  $TARGET"
+echo "→ version: $VERSION (build $BUILD_NUMBER)"
+echo "→ tag:     $TAG"
 
-step "preflight"
-
-# Rule 3 of this repo, and it applies hardest here: a dirty-tree binary once
-# shipped a half-built feature that silently killed all audio. A release is the
-# one build nobody can quietly replace afterwards.
-if [ -n "$(git status --porcelain)" ]; then
-  echo "✗ working tree is dirty — refusing to cut a release from it." >&2
+# A clean old merge is releasable after a newer merge has landed: every merge
+# gets an artifact, not only the newest one. A feature-branch commit is not.
+git fetch -q origin
+git merge-base --is-ancestor "$TARGET" origin/main \
+  || fail "$TARGET is not contained in origin/main — refusing a branch release"
+[ -z "$(git status --porcelain)" ] || {
   git status --short >&2
-  exit 1
-fi
-echo "→ tree clean at $(git rev-parse --short HEAD)"
+  fail "working tree is dirty — refusing to release bytes not named by $TARGET"
+}
 
-IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
-  | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/' || true)
-if [ -z "$IDENTITY" ]; then
-  echo "✗ no Developer ID Application identity in the keychain." >&2
-  echo "  An Apple Development certificate is NOT a substitute: notarization" >&2
-  echo "  rejects it, and its designated requirement pins one certificate, so" >&2
-  echo "  every user's permissions would break the day it is reissued." >&2
-  echo "  Create one: Xcode > Settings > Accounts > Manage Certificates > +" >&2
-  echo "              > Developer ID Application" >&2
-  exit 1
-fi
-echo "→ identity: $IDENTITY"
+if [ "$DRY_RUN" -eq 0 ]; then
+  gh auth status >/dev/null 2>&1 || fail "gh is not authenticated"
+  IMMUTABLE_RELEASES=$(gh api "repos/$REPO/immutable-releases" --jq .enabled 2>/dev/null || true)
+  [ "$IMMUTABLE_RELEASES" = "true" ] \
+    || fail "GitHub immutable releases are not enabled for $REPO"
 
-if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
-  echo "✗ no usable notarization profile '$NOTARY_PROFILE'." >&2
-  echo "  Create one with an app-specific password from appleid.apple.com:" >&2
-  echo "    xcrun notarytool store-credentials \"$NOTARY_PROFILE\" \\" >&2
-  echo "      --apple-id <your-apple-id> --team-id $TEAM_ID" >&2
-  exit 1
+  # Rerunning a completed release must be read-only. Secure timestamps make a
+  # rebuild byte-different even at the same source commit; replacing a public
+  # asset would destroy the artifact the release originally named.
+  if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+    IS_DRAFT=$(gh api "repos/$REPO/releases/tags/$TAG" --jq .draft)
+    if [ "$IS_DRAFT" = "false" ]; then
+      IS_IMMUTABLE=$(gh api "repos/$REPO/releases/tags/$TAG" --jq .immutable)
+      [ "$IS_IMMUTABLE" = "true" ] \
+        || fail "published release $TAG is not immutable"
+      TAG_TARGET=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha)
+      [ "$TAG_TARGET" = "$TARGET" ] \
+        || fail "existing tag $TAG points to $TAG_TARGET, not $TARGET"
+      step "auditing already-published release"
+      EXISTING_DIR=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/tb-existing-release.XXXXXX")
+      trap 'rm -rf "$EXISTING_DIR"' EXIT INT TERM
+      gh release download "$TAG" --repo "$REPO" --dir "$EXISTING_DIR" \
+        --pattern "TranquilityBase-$VERSION.dmg"
+      gh release download "$TAG" --repo "$REPO" --dir "$EXISTING_DIR" \
+        --pattern "TranquilityBase-$VERSION.sha256"
+      (cd "$EXISTING_DIR" && shasum -a 256 -c "TranquilityBase-$VERSION.sha256")
+      scripts/audit-release.sh "$EXISTING_DIR/TranquilityBase-$VERSION.dmg" \
+        "$VERSION" "$BUILD_NUMBER" "$TARGET"
+      echo "✓ $TAG was already public and still passes its artifact audit"
+      exit 0
+    fi
+    DRAFT_TARGET=$(gh api "repos/$REPO/releases/tags/$TAG" --jq .target_commitish)
+    [ "$DRAFT_TARGET" = "$TARGET" ] \
+      || fail "existing draft $TAG targets $DRAFT_TARGET, not $TARGET"
+    echo "→ an unpublished draft exists; its asset will be replaced after a clean rebuild"
+  fi
 fi
-echo "→ notary profile: $NOTARY_PROFILE"
 
-if [ "$DRY_RUN" -eq 0 ] && ! gh auth status >/dev/null 2>&1; then
-  echo "✗ gh is not authenticated — run: gh auth login" >&2
-  exit 1
+# This is the source gate again, on the exact merge commit—not an assumption
+# that the pull request's synthetic merge ref was identical. Live third-party
+# harness drills need authenticated Claude/Codex installations and remain local
+# deploy evidence; the hermetic tmux drill remains a hard gate here.
+if [ "${TB_SKIP_SOURCE_AUDIT:-0}" = "1" ]; then
+  echo "→ exact-source audit completed in the credential-free build job"
+else
+  step "source audit"
+  TB_SKIP_LIVE_HARNESS_DRILLS=1 scripts/preflight.sh "$TARGET^"
 fi
-
-# --- build -------------------------------------------------------------------
 
 step "building $VERSION (release, arm64)"
+EXPECTED_IDENTITY="Developer ID Application: Robert Nowell ($TEAM_ID)"
+IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+  | grep -F "\"$EXPECTED_IDENTITY\"" | head -1 | sed -E 's/.*"(.*)"/\1/' || true)
+[ "$IDENTITY" = "$EXPECTED_IDENTITY" ] \
+  || fail "expected signing identity is unavailable: $EXPECTED_IDENTITY"
+echo "→ identity: $IDENTITY"
 
-# CFBundleVersion counts commits, so it increases monotonically without anyone
-# maintaining a counter, and two releases can never collide on it.
-BUILD_NUMBER=$(git rev-list --count HEAD)
-echo "→ marketing version $VERSION, build $BUILD_NUMBER"
+NOTARY_ARGS=(--keychain-profile "$NOTARY_PROFILE")
+[ -z "$NOTARY_KEYCHAIN" ] || NOTARY_ARGS+=(--keychain "$NOTARY_KEYCHAIN")
+xcrun notarytool history "${NOTARY_ARGS[@]}" >/dev/null 2>&1 \
+  || fail "no usable notarization profile '$NOTARY_PROFILE'"
 
-# bundle.sh assembles and signs; the identity is forced here so it cannot pick
-# the Apple Development certificate that also sits in this keychain.
-TB_VERSION="$VERSION" TB_BUILD="$BUILD_NUMBER" \
-  VOICE_DISPATCH_SIGN_IDENTITY="$IDENTITY" \
-  ./scripts/bundle.sh release >/dev/null
-[ -d "$APP_SRC" ] || { echo "✗ bundle.sh produced no app at $APP_SRC" >&2; exit 1; }
+notarize_and_capture() {
+  local artifact="$1" result_path="$2" log_path="$3" label="$4"
+  local status_path="$result_path.status"
+  rm -f "$result_path" "$status_path" "$log_path"
+  if ! xcrun notarytool submit "$artifact" \
+    "${NOTARY_ARGS[@]}" --output-format json >"$result_path"; then
+    [ ! -s "$result_path" ] || cat "$result_path"
+    fail "could not submit the $label to Apple's notary service"
+  fi
+  cat "$result_path"
+  local submission_id submission_status notary_issues
+  submission_id=$(/usr/bin/plutil -extract id raw "$result_path" 2>/dev/null || true)
+  [ -n "$submission_id" ] || fail "notarytool returned no submission id for the $label"
 
-# --- re-sign with a SECURE TIMESTAMP -----------------------------------------
-#
-# bundle.sh signs with --timestamp=none, which is right for development (the
-# timestamp server is a network round trip on every incremental build) and fatal
-# here: notarization REQUIRES a secure timestamp and rejects the submission
-# without one. Signing inside-out — nested code first, bundle last — because
-# codesign seals what it finds, and a later inner change invalidates the outer
-# seal.
+  # Poll with independent short requests instead of one long --wait HTTP
+  # connection. Apple keeps processing through a client deadline; retaining
+  # the submission id makes transient network failures resumable and legible.
+  submission_status="In Progress"
+  for _ in $(seq 1 90); do
+    if xcrun notarytool info "$submission_id" \
+      "${NOTARY_ARGS[@]}" --output-format json >"$status_path" 2>/dev/null; then
+      submission_status=$(/usr/bin/plutil -extract status raw "$status_path" 2>/dev/null || true)
+      case "$submission_status" in
+        Accepted|Invalid|Rejected) break ;;
+      esac
+    fi
+    sleep 20
+  done
+  [ ! -s "$status_path" ] || cp "$status_path" "$result_path"
+  rm -f "$status_path"
+  [ "$submission_status" = "Accepted" ] \
+    || fail "Apple notarization status for the $label is $submission_status, not Accepted"
+  xcrun notarytool log "$submission_id" "${NOTARY_ARGS[@]}" "$log_path" \
+    || fail "could not retrieve Apple's $label notarization log"
+  notary_issues=$(/usr/bin/plutil -extract issues json -o - "$log_path" 2>/dev/null || true)
+  [ "$notary_issues" = "[]" ] || [ "$notary_issues" = "null" ] || {
+    cat "$log_path"
+    fail "Apple accepted the $label but its notarization log contains issues"
+  }
+  echo "→ clean $label notarization log: $log_path"
+}
+
+if [ "${TB_PREBUILT_APP:-0}" = "1" ]; then
+  [ -d "$APP_SRC" ] || fail "signing job received no app at $APP_SRC"
+  PREBUILT_INFO="$APP_SRC/Contents/Info.plist"
+  read_prebuilt() { /usr/libexec/PlistBuddy -c "Print :$1" "$PREBUILT_INFO" 2>/dev/null || true; }
+  [ "$(read_prebuilt CFBundleShortVersionString)" = "$VERSION" ] \
+    || fail "prebuilt app has the wrong version"
+  [ "$(read_prebuilt CFBundleVersion)" = "$BUILD_NUMBER" ] \
+    || fail "prebuilt app has the wrong build number"
+  [ "$(read_prebuilt TBSourceCommit)" = "$TARGET" ] \
+    || fail "prebuilt app was not assembled from $TARGET"
+  codesign --verify --deep --strict --verbose=2 "$APP_SRC" \
+    || fail "prebuilt app's transfer signature is invalid"
+  echo "→ verified source-stamped app from credential-free build job"
+else
+  TB_VERSION="$VERSION" TB_BUILD="$BUILD_NUMBER" TB_SOURCE_COMMIT="$TARGET" \
+    VOICE_DISPATCH_SIGN_IDENTITY="$IDENTITY" \
+    ./scripts/bundle.sh release >/dev/null
+  [ -d "$APP_SRC" ] || fail "bundle.sh produced no app at $APP_SRC"
+fi
+
 step "signing with a secure timestamp"
 codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
   --entitlements TranquilityBase.entitlements \
-  --options runtime --timestamp \
-  "$APP_SRC"
-
+  --options runtime --timestamp "$APP_SRC"
 codesign --verify --deep --strict --verbose=2 "$APP_SRC"
-
-# Captured ONCE into a variable, then tested without a pipeline.
-#
-# The obvious spelling of this check is a lie under `set -o pipefail`:
-#
-#     if ! codesign -dv --verbose=4 "$APP" 2>&1 | grep -q "^Timestamp="
-#
-# `grep -q` exits the instant it matches, which closes the pipe; codesign then
-# dies of SIGPIPE and the pipeline reports 141. pipefail propagates that, `!`
-# inverts it, and the guard fires ON SUCCESS -- it rejects exactly the correctly
-# timestamped signature it exists to require. Measured 25 Aug on this script's
-# own first dry run, against a signature whose Timestamp= line was printed two
-# lines above the error saying it had none.
 SIGN_INFO=$(codesign -dv --verbose=4 "$APP_SRC" 2>&1)
+case "$SIGN_INFO" in *"Timestamp="*) ;; *) fail "app signature has no secure timestamp" ;; esac
 echo "$SIGN_INFO" | grep -E "^(Authority|TeamIdentifier|Timestamp)=" || true
 
-# A signature with no secure timestamp is rejected by the notary service minutes
-# from now; catching it here costs nothing.
-case "$SIGN_INFO" in
-  *"Timestamp="*) ;;
-  *)  echo "✗ no secure timestamp on the signature — notarization would reject this." >&2
-      exit 1 ;;
-esac
+step "notarizing and stapling the installable app"
+rm -f "$APP_NOTARY_ARCHIVE"
+/usr/bin/ditto -c -k --keepParent "$APP_SRC" "$APP_NOTARY_ARCHIVE"
+notarize_and_capture "$APP_NOTARY_ARCHIVE" \
+  "$APP_NOTARY_RESULT_PATH" "$APP_NOTARY_LOG_PATH" "app"
+xcrun stapler staple "$APP_SRC"
+xcrun stapler validate "$APP_SRC"
+/usr/bin/syspolicy_check distribution "$APP_SRC" >/dev/null \
+  || fail "stapled app does not pass syspolicy_check distribution"
+rm -f "$APP_NOTARY_ARCHIVE"
 
-# --- DMG ---------------------------------------------------------------------
-#
-# hdiutil rather than create-dmg: it is part of macOS, so this script has no
-# Homebrew dependency and works on a machine that has never installed anything.
-# The Applications symlink is what makes the window a drag-to-install.
 step "building the disk image"
 rm -rf "$STAGE" "$DMG_PATH"
 mkdir -p "$STAGE"
@@ -175,68 +228,89 @@ ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO \
   "$DMG_PATH" >/dev/null
 rm -rf "$STAGE"
+codesign --force --sign "$IDENTITY" --timestamp "$DMG_PATH"
 echo "→ $DMG_PATH ($(du -h "$DMG_PATH" | cut -f1))"
 
-# The DMG is signed too. Not strictly required — the notarized, stapled ticket is
-# what Gatekeeper reads — but an unsigned container is one more thing for a
-# security-conscious user to squint at.
-codesign --force --sign "$IDENTITY" --timestamp "$DMG_PATH"
-
-# --- notarize ----------------------------------------------------------------
-
-step "notarizing (this takes a few minutes)"
-if ! xcrun notarytool submit "$DMG_PATH" \
-      --keychain-profile "$NOTARY_PROFILE" --wait; then
-  echo "✗ notarization failed. For the reasons:" >&2
-  echo "    xcrun notarytool history --keychain-profile $NOTARY_PROFILE" >&2
-  echo "    xcrun notarytool log <submission-id> --keychain-profile $NOTARY_PROFILE" >&2
-  exit 1
-fi
-
-# Stapling attaches the ticket to the DMG so it validates OFFLINE. Without it a
-# first launch on a machine with no network falls back to an online check that
-# cannot complete, and the user gets the dialog notarization was meant to remove.
-step "stapling"
+step "notarizing"
+rm -f "$CHECKSUM_PATH"
+notarize_and_capture "$DMG_PATH" \
+  "$DMG_NOTARY_RESULT_PATH" "$DMG_NOTARY_LOG_PATH" "DMG"
 xcrun stapler staple "$DMG_PATH"
-xcrun stapler validate "$DMG_PATH"
 
-# The honest end-to-end check: ask the same subsystem Gatekeeper asks, and
-# REFUSE to publish if it does not say "accepted". Everything above can succeed
-# while the artifact is still one a user's Mac will not open.
-#
-# /usr/sbin/spctl by absolute path. It is not on every PATH -- this script's own
-# first successful run died here with `spctl: command not found`, AFTER notarizing,
-# because the invoking environment had no /usr/sbin. Third instance of one class
-# on this branch (openssl, then codesign-under-pipefail, now this): a tool
-# resolved through the environment is a tool that works until someone else runs it.
-step "verifying as Gatekeeper sees it"
-ASSESS=$(/usr/sbin/spctl --assess --type open \
-  --context context:primary-signature -vv "$DMG_PATH" 2>&1) || true
-echo "$ASSESS" | sed 's/^/   /'
-case "$ASSESS" in
-  *": accepted"*) ;;
-  *)  echo "✗ Gatekeeper does not accept this DMG — not publishing it." >&2
-      exit 1 ;;
-esac
-
-# --- publish -----------------------------------------------------------------
+step "local artifact audit"
+scripts/audit-release.sh "$DMG_PATH" "$VERSION" "$BUILD_NUMBER" "$TARGET"
+DMG_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
+printf '%s  %s\n' "$DMG_SHA256" "$(basename "$DMG_PATH")" >"$CHECKSUM_PATH"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo
-  echo "✓ dry run complete — notarized and stapled, nothing published."
+  echo "✓ dry run complete — audited, notarized and stapled; nothing published"
   echo "  $DMG_PATH"
   exit 0
 fi
 
-step "publishing $TAG"
-gh release create "$TAG" "$DMG_PATH" \
-  --repo robertnowell/tranquility-base \
-  --title "Tranquility Base $VERSION" \
-  --notes "Signed and notarized. Download the DMG, drag the app to Applications, open it.
+step "uploading an unpublished draft"
+SUBJECT=$(git log -1 --format=%s "$TARGET")
+NOTES="Automated release of main at $TARGET.
 
-First launch opens a checklist: grant Microphone, Input Monitoring and Accessibility, and the dots go green as you do. Requires macOS 14 or later on Apple silicon, the \`claude\` CLI, and \`tmux\`." \
-  --latest
+$SUBJECT
+
+Requires macOS 14 or later on Apple silicon, plus a supported coding-agent CLI and tmux. Download the DMG, drag Tranquility Base to Applications, eject the disk image, and open the installed app."
+
+if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+  gh release upload "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" \
+    "$APP_NOTARY_LOG_PATH" "$DMG_NOTARY_LOG_PATH" \
+    --repo "$REPO" --clobber
+  gh release edit "$TAG" --repo "$REPO" --title "Tranquility Base $VERSION" \
+    --notes "$NOTES" --target "$TARGET"
+else
+  gh release create "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" \
+    "$APP_NOTARY_LOG_PATH" "$DMG_NOTARY_LOG_PATH" --repo "$REPO" \
+    --target "$TARGET" --title "Tranquility Base $VERSION" \
+    --notes "$NOTES" --draft --latest=false
+fi
+
+# The public object, not the upload command, gets the final word. The draft
+# stays private on any failure below and can be safely replaced by a rerun.
+step "re-downloading the uploaded bytes"
+DOWNLOAD_DIR=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/tb-published-audit.XXXXXX")
+trap 'rm -rf "$DOWNLOAD_DIR"' EXIT INT TERM
+gh release download "$TAG" --repo "$REPO" --dir "$DOWNLOAD_DIR" \
+  --pattern "$(basename "$DMG_PATH")"
+gh release download "$TAG" --repo "$REPO" --dir "$DOWNLOAD_DIR" \
+  --pattern "$(basename "$CHECKSUM_PATH")"
+gh release download "$TAG" --repo "$REPO" --dir "$DOWNLOAD_DIR" \
+  --pattern "$(basename "$APP_NOTARY_LOG_PATH")"
+gh release download "$TAG" --repo "$REPO" --dir "$DOWNLOAD_DIR" \
+  --pattern "$(basename "$DMG_NOTARY_LOG_PATH")"
+DOWNLOADED="$DOWNLOAD_DIR/$(basename "$DMG_PATH")"
+cmp -s "$DMG_PATH" "$DOWNLOADED" || fail "downloaded asset differs from the audited upload"
+cmp -s "$CHECKSUM_PATH" "$DOWNLOAD_DIR/$(basename "$CHECKSUM_PATH")" \
+  || fail "downloaded checksum differs from the uploaded checksum"
+cmp -s "$APP_NOTARY_LOG_PATH" "$DOWNLOAD_DIR/$(basename "$APP_NOTARY_LOG_PATH")" \
+  || fail "downloaded app notarization log differs from Apple's retrieved log"
+cmp -s "$DMG_NOTARY_LOG_PATH" "$DOWNLOAD_DIR/$(basename "$DMG_NOTARY_LOG_PATH")" \
+  || fail "downloaded DMG notarization log differs from Apple's retrieved log"
+(cd "$DOWNLOAD_DIR" && shasum -a 256 -c "$(basename "$CHECKSUM_PATH")")
+REMOTE_DIGEST=$(gh api "repos/$REPO/releases/tags/$TAG" \
+  --jq ".assets[] | select(.name == \"$(basename "$DMG_PATH")\") | .digest")
+[ "$REMOTE_DIGEST" = "sha256:$DMG_SHA256" ] \
+  || fail "GitHub asset digest $REMOTE_DIGEST differs from sha256:$DMG_SHA256"
+scripts/audit-release.sh "$DOWNLOADED" "$VERSION" "$BUILD_NUMBER" "$TARGET"
+
+step "publishing"
+git fetch -q origin main
+if [ "$(git rev-parse origin/main)" = "$TARGET" ]; then
+  gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+else
+  # An older merge can finish after a newer one. Publish it, but never let it
+  # steal the Latest badge from the actual tip of main.
+  gh release edit "$TAG" --repo "$REPO" --draft=false --latest=false
+fi
+IS_IMMUTABLE=$(gh api "repos/$REPO/releases/tags/$TAG" --jq .immutable)
+[ "$IS_IMMUTABLE" = "true" ] \
+  || fail "GitHub published $TAG without making it immutable"
 
 echo
-echo "✓ released $TAG"
-echo "  https://github.com/robertnowell/tranquility-base/releases/latest"
+echo "✓ released $TAG from $TARGET"
+echo "  https://github.com/$REPO/releases/tag/$TAG"

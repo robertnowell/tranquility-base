@@ -1,0 +1,106 @@
+name: Release every merge
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full main-branch commit SHA to recover or re-audit
+        required: true
+        type: string
+
+# GitHub's queue:max preserves up to 100 pending runs instead of replacing the
+# previous pending run. Serializing avoids parallel notarizations and Latest
+# races without sacrificing the one-release-per-merge contract.
+concurrency:
+  group: release-main
+  queue: max
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Audit and assemble unsigned app
+    if: github.repository == 'robertnowell/tranquility-base'
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - name: Check out the exact merged commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.commit || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the hermetic transport dependency
+        run: |
+          if ! command -v tmux >/dev/null 2>&1; then
+            brew install tmux
+          fi
+
+      - name: Re-audit and assemble without release credentials
+        env:
+          TARGET_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.commit || github.sha }}
+        run: |
+          [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "commit must be a full lowercase 40-character SHA" >&2
+            exit 1
+          }
+          test "$(git rev-parse HEAD)" = "$TARGET_COMMIT"
+          git checkout -B ci-release "$TARGET_COMMIT"
+          TB_SKIP_LIVE_HARNESS_DRILLS=1 scripts/preflight.sh "$TARGET_COMMIT^"
+          scripts/prepare-release-app.sh
+          tar -czf .build/unsigned-tranquility-base.tgz \
+            -C .build/release "Tranquility Base.app"
+
+      - name: Transfer the source-stamped app to the signing job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-tranquility-base
+          path: .build/unsigned-tranquility-base.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Sign, notarize, audit, and publish
+    needs: build
+    runs-on: macos-14
+    timeout-minutes: 90
+    environment:
+      name: release
+    permissions:
+      contents: write
+    steps:
+      - name: Check out trusted release tooling
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.commit || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the prebuilt app
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: unsigned-tranquility-base
+          path: .build/ci-artifact
+
+      - name: Restore the app without running product build code
+        run: |
+          mkdir -p .build/release
+          tar -xzf .build/ci-artifact/unsigned-tranquility-base.tgz -C .build/release
+
+      - name: Sign, notarize, audit, and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.commit || github.sha }}
+          TB_DEVELOPER_ID_P12_BASE64: ${{ secrets.TB_DEVELOPER_ID_P12_BASE64 }}
+          TB_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.TB_DEVELOPER_ID_P12_PASSWORD }}
+          TB_NOTARY_APPLE_ID: ${{ secrets.TB_NOTARY_APPLE_ID }}
+          TB_NOTARY_APP_PASSWORD: ${{ secrets.TB_NOTARY_APP_PASSWORD }}
+        run: |
+          [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$TARGET_COMMIT"
+          git checkout -B ci-release "$TARGET_COMMIT"
+          TB_PREBUILT_APP=1 TB_SKIP_SOURCE_AUDIT=1 scripts/ci-release.sh
