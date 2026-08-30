@@ -410,7 +410,19 @@ extension AppDelegate {
                 // lamp gets stuck on; a defer keyed to the single hand-off
                 // cannot miss one.
                 var handedToCountdown = false
-                defer { if !handedToCountdown { delivering.finished(sessionId: spokenTo) } }
+                // The SECOND hand-off, same discipline as the first and for the
+                // same reason: the window does not end here, it changes hands.
+                // A dispatch that landed gives the lamp to the agent's own first
+                // word — `lampAndReason` takes it the moment the transcript or
+                // the process says anything — so clearing here would put the row
+                // back to quiet for the seconds in between, which is exactly the
+                // gap that evicted it from the grid (29 Aug).
+                var landedOnTheSession = false
+                defer {
+                    if !handedToCountdown, !landedOnTheSession {
+                        delivering.finished(sessionId: spokenTo)
+                    }
+                }
                 let streamed = await liveStream?.finish()
                 let outcome = try await coordinator.submitReply(
                     pcm16: pcm, to: spokenTo, streamed: streamed,
@@ -432,6 +444,7 @@ extension AppDelegate {
                 // Success says nothing on the panel (ruled — the Sent face is
                 // dead): status line + log, straight back to the grid.
                 case .dispatched(let text, let ms, let dispatchedSessionId, let dispatchedPid):
+                    landedOnTheSession = true
                     lastStatusLine = "\(StateLegend.Glyph.sent) sent (\(ms)ms): \(text.prefix(48))"
                     if let dispatchedPid {
                         hud.attachLivePid(dispatchedPid, sessionId: dispatchedSessionId)
@@ -439,6 +452,10 @@ extension AppDelegate {
                     hud.endCapture(because: "sent")
                     showIdleGrid()
                 case .queued(let text, let dispatchedSessionId, let dispatchedPid):
+                    // Queued counts: the words are the session's now, they are
+                    // simply behind a turn that has not finished. The row is
+                    // honestly working until the agent's own output says so.
+                    landedOnTheSession = true
                     lastStatusLine = "\(StateLegend.Glyph.sent) queued: \(text.prefix(48))"
                     if let dispatchedPid {
                         hud.attachLivePid(dispatchedPid, sessionId: dispatchedSessionId)

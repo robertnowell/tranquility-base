@@ -1,7 +1,25 @@
 import Foundation
 
 /// Words on their way to a session: from the moment a capture closes on a
-/// target to the moment the dispatch resolves.
+/// target to the moment the SESSION CAN SPEAK FOR ITSELF.
+///
+/// That end used to be "the moment the dispatch resolves", and the difference
+/// between the two is a few seconds in which nothing can say anything true
+/// about the row. The keystroke has landed, so this window closed; the agent
+/// has not started talking, so the transcript still reads quiet. Reported
+/// 29 Aug, from the far end of it: "after I send the message, the row
+/// disappears while it's like processing or whatever, and then it reappears."
+/// It did — going quiet costs a lit row its grid slot outright (see
+/// `SessionRow.gridRows`), so the row was evicted and the panel resized under
+/// him for as long as the gap lasted.
+///
+/// Nothing was added to close it. The precedence rule that makes this safe was
+/// already written, in `GridAssembler.lampAndReason`: this overlay is consulted
+/// ONLY over a lamp that was going out anyway, so the instant the transcript or
+/// the process has anything to say, the observation wins and this is not asked.
+/// The hand-off is therefore automatic and cannot pin a lamp over a real state.
+/// All that changed is that a successful dispatch stopped dropping the claim
+/// before there was anything to hand it to.
 ///
 /// The grid's lamp is otherwise read from the target's transcript
 /// (`SessionActivity`), which deliberately infers nothing it cannot see. A
@@ -58,9 +76,14 @@ public struct DeliveryInFlight: Sendable, Equatable {
         started[sessionId] = Delivery(at: at, answering: answering)
     }
 
-    /// The dispatch resolved — any way it resolved. A failure clears too: the
-    /// lamp goes back to whatever the transcript honestly says, which for a
-    /// send that never landed is the truth.
+    /// Nothing is on its way any more, and nothing is going to arrive.
+    ///
+    /// Called for every outcome in which the words did NOT reach the session —
+    /// a cancel, a refusal, a failure, an unconfirmed read-back — because then
+    /// the transcript's quiet is the truth and this has no better one. It is
+    /// NOT called when the dispatch succeeds: there the claim is handed to the
+    /// agent's own first word, which `lampAndReason` picks up the moment it
+    /// exists, and to the ceiling if it never does.
     public mutating func finished(sessionId: String) {
         started.removeValue(forKey: sessionId)
     }

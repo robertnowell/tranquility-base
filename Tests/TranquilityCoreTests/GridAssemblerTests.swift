@@ -95,6 +95,28 @@ final class GridAssemblerTests: XCTestCase {
         XCTAssertEqual(inFlight.lamp, .working)
     }
 
+    /// The property the whole delivery overlay rests on, and the reason the
+    /// window may safely stay open past a successful dispatch (29 Aug): a
+    /// delivery in flight is consulted ONLY over a lamp that was going out
+    /// anyway. The moment the transcript or the process has anything to say,
+    /// the observation wins — so the hand-off from "we sent it" to "the agent
+    /// is working" needs no event, and a stale entry cannot paint over a real
+    /// state.
+    func testInFlightNeverOutranksALampThatHasSomethingToSay() {
+        func lamp(_ activity: SessionActivity, _ status: String) -> Lamp {
+            GridAssembler.lampAndReason(
+                for: SessionActivity.Evidence(activity: activity, observedAt: nil,
+                                              modifiedAt: nil),
+                sessionId: "s", live: live(status: status), isInFlight: true).lamp
+        }
+        // The agent started talking: blue, but on the transcript's authority.
+        XCTAssertEqual(lamp(SessionActivity.working, "busy"), Lamp.working)
+        // The process says it is chewing and the file has not caught up.
+        XCTAssertEqual(lamp(SessionActivity.idle, "busy"), Lamp.working)
+        // A real error outranks it outright — the overlay must not hide amber.
+        XCTAssertEqual(lamp(SessionActivity.blocked(reason: "usage limit"), "idle"), Lamp.fault)
+    }
+
     func testPickedUpOnlyAppliesToARowThatWasGoingToBeQuiet() {
         let evidence = SessionActivity.Evidence(activity: .idle, observedAt: nil, modifiedAt: nil)
         let pickedUp = GridAssembler.lampAndReason(for: evidence, sessionId: "s",
