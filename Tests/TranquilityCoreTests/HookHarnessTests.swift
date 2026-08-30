@@ -163,6 +163,7 @@ final class HookHarnessTests: XCTestCase {
             id: "ghost", label: "Ghost",
             settingsURL: tmpDir.appendingPathComponent("nope/hooks.json"),
             homeURL: tmpDir.appendingPathComponent("definitely-not-here"),
+            approvalConfigURL: nil,
             expected: HookManifest.codex.expected)
         XCTAssertFalse(ghost.isPresent)
     }
@@ -173,7 +174,8 @@ final class HookHarnessTests: XCTestCase {
         let real = HookManifest.Harness(
             id: "real", label: "Real",
             settingsURL: homeDir.appendingPathComponent("hooks.json"),
-            homeURL: homeDir, expected: HookManifest.codex.expected)
+            homeURL: homeDir, approvalConfigURL: nil,
+            expected: HookManifest.codex.expected)
         XCTAssertTrue(real.isPresent)
     }
 }
@@ -230,5 +232,89 @@ final class CheckoutKindTests: XCTestCase {
         XCTAssertNil(HookManifest.mainCheckout(fromGitFile: "gitdir: /somewhere/else"))
         XCTAssertNil(HookManifest.mainCheckout(fromGitFile: ""))
         XCTAssertNil(HookManifest.mainCheckout(fromGitFile: "not a pointer at all"))
+    }
+}
+
+/// Installed is not the same as running, and only one of those is visible in
+/// the file we wrote.
+///
+/// Codex will not run a hooks file it has not had reviewed, and says nothing
+/// when it declines: measured 28 Aug against codex-cli 0.150.1, an untrusted
+/// hooks.json produces no hook, no warning, no log line. On 29 Aug that state
+/// was live on this machine for hours while `tbase hooks` printed five green
+/// ok's and the onboarding row said "wired 5". Both were true about the file
+/// and wrong about the machine.
+final class HookApprovalTests: XCTestCase {
+
+    private let hooksPath = "/Users/x/.codex/hooks.json"
+
+    private func config(_ entries: [String]) -> String {
+        var out = ["model = \"gpt-5.6-sol\"", "", "[hooks.state]"]
+        for e in entries {
+            out.append("")
+            out.append("[hooks.state.\"\(e)\"]")
+            out.append("trusted_hash = \"sha256:deadbeef\"")
+        }
+        return out.joined(separator: "\n")
+    }
+
+    func testAnEntryForOurFileReadsAsGranted() {
+        let text = config(["\(hooksPath):stop:0:0"])
+        XCTAssertTrue(HookManifest.approvalGranted(inConfig: text, hooksPath: hooksPath))
+    }
+
+    /// The state this shipped in: a config carrying plugin approvals and none
+    /// for ours. Reading "there is a hooks.state table" as approval would have
+    /// called this granted, which is exactly the wrong answer.
+    func testOtherPeoplesApprovalsAreNotOurs() {
+        let text = config([
+            "posthog@claude-plugins-official:hooks/hooks.json:pre_tool_use:0:0",
+            "skill-tree-ai@skill-tree-marketplace:hooks/hooks.json:session_start:0:0",
+        ])
+        XCTAssertFalse(HookManifest.approvalGranted(inConfig: text, hooksPath: hooksPath))
+    }
+
+    func testNoHooksStateAtAllIsNotGranted() {
+        XCTAssertFalse(HookManifest.approvalGranted(
+            inConfig: "model = \"gpt-5.6-sol\"\n", hooksPath: hooksPath))
+    }
+
+    /// A path that merely CONTAINS ours must not count: a sibling file one
+    /// directory deeper would otherwise vouch for us.
+    func testASimilarButDifferentPathIsNotOurs() {
+        let text = config(["/Users/x/.codex/other/hooks.json:stop:0:0"])
+        XCTAssertFalse(HookManifest.approvalGranted(inConfig: text, hooksPath: hooksPath))
+    }
+
+    /// Any one entry is enough. The hash is an internal canonicalisation this
+    /// repo could not reproduce, so per-event verification would mean guessing;
+    /// a partial approval reading as granted is the safe direction, since Codex
+    /// itself enforces the rest.
+    func testOneEntryIsEnough() {
+        let text = config(["\(hooksPath):post_tool_use:0:0"])
+        XCTAssertTrue(HookManifest.approvalGranted(inConfig: text, hooksPath: hooksPath))
+    }
+
+    /// Claude Code has no gate at all, and must never be reported as owing one.
+    func testClaudeCodeNeedsNoApproval() {
+        XCTAssertEqual(HookManifest.approval(for: HookManifest.claudeCode), .notRequired)
+        XCTAssertNil(HookManifest.claudeCode.approvalConfigURL)
+    }
+
+    func testCodexDeclaresWhereItsApprovalLives() {
+        XCTAssertEqual(HookManifest.codex.approvalConfigURL?.lastPathComponent,
+                       "config.toml")
+    }
+
+    /// An unreadable config is not a denial. Same discipline as `audit`
+    /// returning nil rather than "nothing installed".
+    func testAnAbsentConfigIsUnknownRatherThanPending() {
+        let ghost = HookManifest.Harness(
+            id: "ghost", label: "Ghost",
+            settingsURL: URL(fileURLWithPath: "/nope/hooks.json"),
+            homeURL: URL(fileURLWithPath: "/nope"),
+            approvalConfigURL: URL(fileURLWithPath: "/nope/config.toml"),
+            expected: HookManifest.codex.expected)
+        XCTAssertEqual(HookManifest.approval(for: ghost), .unknown)
     }
 }

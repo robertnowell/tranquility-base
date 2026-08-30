@@ -480,8 +480,14 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
             }
         }
         if !failed.isEmpty { return failed.joined(separator: "; ") }
+        // Writing the file is not the same as the harness agreeing to run it.
+        // Codex asks once and fails silent until it is answered, so a row that
+        // says "wired" and stops there sends someone away believing the setup
+        // is done. Whatever is still owed is said here, in Core's words.
+        let owed = outcomes.compactMap { HookManifest.nextStep(for: $0.harness) }
+        if !owed.isEmpty { return owed.joined(separator: " Also: ") }
         if wired.isEmpty {
-            return "already wired (" 
+            return "already wired ("
                 + outcomes.map(\.harness.label).joined(separator: ", ") + ")"
         }
         return "wired " + wired.joined(separator: ", ") + ". Restart your sessions"
