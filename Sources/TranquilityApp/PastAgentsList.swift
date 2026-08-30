@@ -1052,6 +1052,11 @@ final class SettingRowView: NSView, NSTextFieldDelegate {
 /// an empty pane is worse than a tab that is not there yet.
 enum SettingsTab: String, CaseIterable {
     case agents = "AGENTS"
+    /// Permissions and prerequisites, the same rows the onboarding window
+    /// shows, drawn by the same view. Onboarding interrupts you when something
+    /// breaks; this is where you go back when nothing has, after rotating a key
+    /// or reinstalling a harness (Robert, 29 Aug).
+    case setup = "SETUP"
     case voices = "VOICES"
     case recent = "RECENT"
 }
