@@ -18,7 +18,7 @@ func usage() -> Never {
       tbase install-hooks       merge the hooks into ~/.claude/settings.json (backup kept)
       tbase hook-config         print the settings.json snippet to install the hook
       tbase paths               show where everything lives
-      tbase hooks               which hooks are wired, broken, or missing
+      tbase hooks               which hooks are wired, broken, or missing\n  tbase approve-hooks       answer a hooks-review prompt, once
       tbase forks               transcripts whose history a resume can no longer reach
       tbase voices              installed free voices, and what is a download away
       tbase secrets             which credentials are readable, and from where
@@ -551,6 +551,35 @@ do {
                   + "Nothing is deleted and every branch is still on disk; a resume follows "
                   + "the branch written LAST, so export before resuming.")
             exit(1)
+        }
+
+    case "approve-hooks":
+        // The CLI half of the panel's Approve button, same Core call, so a
+        // headless machine is not stuck with the one step that needs a TUI.
+        let pending = HookManifest.detected().filter {
+            HookManifest.approval(for: $0) == .pending
+        }
+        guard !pending.isEmpty else {
+            print("nothing to approve; every detected harness is already granted "
+                  + "or has no review gate")
+            break
+        }
+        for harness in pending {
+            print("\(harness.label): opening a session to answer its hooks review...")
+            let outcome = CodexHookApproval.grantByDrivingCodex(
+                harness: harness,
+                command: AgentDefaults.load(for: harness.id),
+                directory: AgentDefaults.directory(for: harness.id),
+                trace: { print("  \($0)") })
+            switch outcome {
+            case .alreadyGranted: print("  already granted")
+            case .granted:        print("  granted")
+            case .promptNeverAppeared:
+                print("  it never asked. Nothing was pressed, and the record still says no.")
+            case .notRecorded:
+                print("  answered, but the record did not appear. Nothing to trust yet.")
+            case .failed(let why): print("  failed: \(why)")
+            }
         }
 
     case "hooks":
