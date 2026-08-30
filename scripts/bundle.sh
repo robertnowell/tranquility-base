@@ -128,11 +128,35 @@ rm -rf "$(dirname "$ICONSET")"
 # (measured live, 26 Aug: it didn't). QueueStore.swift reads this as
 # VOICE_DISPATCH_SUPPORT_DIR. Empty for the real app, so its Info.plist is
 # byte-identical to before.
+#
+# MALLOC DIAGNOSTICS, ON DELIBERATELY AND TEMPORARILY. Added 29 Aug 2026,
+# alongside the AEDesc double-free fix (fdb9edb). The Aug 27 session proposed
+# exactly this and it was never actually switched on, so when the next crash
+# came the stack still only named the victim. It is ON BY DEFAULT rather than
+# behind an env var on purpose: deploys here come from whichever session merges
+# next, and an opt-in flag none of them set is an opt-in flag that is off. The
+# cost is a slower malloc and some memory; the return is that the next crash
+# names who freed the memory instead of who touched it afterwards.
+#
+# Deliberately NOT MallocScribble or MallocErrorAbort: both make latent
+# corruption crash sooner, which would corrupt the very measurement this
+# window exists to take (is the crash rate now zero?). Add them only if a
+# crash actually appears and we need it to fail faster.
+#
+# REMOVE AFTER 1 SEP 2026 if the soak is clean. Delete this block and the
+# MallocStackLogging entry below.
+MALLOC_DIAG_XML="
+    <key>MallocStackLogging</key><string>1</string>"
+
 LS_ENV_XML=""
 if [ -n "${VD_DATA_DIR:-}" ]; then
   LS_ENV_XML="  <key>LSEnvironment</key>
   <dict>
-    <key>VOICE_DISPATCH_SUPPORT_DIR</key><string>$VD_DATA_DIR</string>
+    <key>VOICE_DISPATCH_SUPPORT_DIR</key><string>$VD_DATA_DIR</string>$MALLOC_DIAG_XML
+  </dict>"
+else
+  LS_ENV_XML="  <key>LSEnvironment</key>
+  <dict>$MALLOC_DIAG_XML
   </dict>"
 fi
 
