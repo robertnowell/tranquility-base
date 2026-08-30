@@ -363,6 +363,12 @@ extension StatusHUD {
         // values for the whole machine ("a global setting for now and see if
         // we need more granular later"); read by every path that starts an
         // agent: the menu item, the grid's + row, and revival.
+        setupChecklist = SetupChecklistView(frame: .zero)
+        setupChecklist.isHidden = true
+        setupChecklist.translatesAutoresizingMaskIntoConstraints = false
+        setupChecklist.widthAnchor.constraint(
+            equalToConstant: Self.gridWidth).isActive = true
+
         settingsTabs = SettingsTabBar(width: Self.gridWidth)
         settingsTabs.isHidden = true
         settingsTabs.onSelect = { [weak self] tab in self?.showSettingsTab(tab) }
@@ -476,7 +482,7 @@ extension StatusHUD {
                                         stripRule, stripLabel, trayRow, gridFooter,
                                         countdownBar, meter,
                                         settingsTabs, harnessPicker, launchRow, directoryRow,
-                                        voiceList, hintLabel, buttons])
+                                        voiceList, setupChecklist, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6

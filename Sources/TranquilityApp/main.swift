@@ -910,6 +910,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             switch tab {
             case .agents: hud.showAgentSettings()
+            case .setup: hud.showSetupSettings()
             case .voices: openSettings(tab: .voices)
             case .recent: showRecentAudio()
             }

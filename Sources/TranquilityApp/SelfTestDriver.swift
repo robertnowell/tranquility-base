@@ -398,6 +398,28 @@ extension StatusHUD {
                                 + "back=\(!self.backButtonHidden) gear=\(!self.gearHidden) "
                                 + "actions=\(!self.actionRowHidden)")
             }),
+            // The setup pane, added 29 Aug when the onboarding checklist became
+            // a view two screens host. What must hold is not how a row looks
+            // (onboarding already proved that) but that THIS pane is showing
+            // the shared one: every prerequisite present, the agent fields
+            // gone, and the tab bar pointed here. A pane that quietly rendered
+            // its own copy would pass a screenshot and drift within a
+            // fortnight, which is the whole reason the view was extracted.
+            ("setupTab", {
+                self.showSetupSettings()
+                self.panel?.contentView?.layoutSubtreeIfNeeded()
+                let visible = self.setupChecklist?.isHidden == false
+                let rows = self.setupChecklist?.rowCountForSelfTest ?? 0
+                SelfTest.report("setupTab", [
+                    ("checklistShown", visible),
+                    ("everyPrerequisiteHasARow",
+                     rows == Prerequisites.Item.allCases.count),
+                    ("agentFieldsAreGone",
+                     self.launchRow?.isHidden == true
+                        && self.harnessPicker?.isHidden == true),
+                    ("tabBarPointsAtSetup", self.face.settingsTab == .setup),
+                ])
+            }),
             // The settings state's second pane. What must hold: a
             // transcriptless row still offers its retry (that row IS the
             // pane's reason to exist) but not a copy of nothing; play carries

@@ -191,6 +191,7 @@ final class StatusHUD: NSObject {
     var countdownBar: CountdownBarView!
     var meter: LevelMeterView!
     var voiceList: NSScrollView!
+    var setupChecklist: SetupChecklistView!
     var pastList: PastAgentsList!
     var settingsTabs: SettingsTabBar!
     var harnessPicker: HarnessPickerRow!
@@ -1080,6 +1081,20 @@ final class StatusHUD: NSObject {
         onOpenSettingsTab?(tab)
     }
 
+    /// The setup pane: permissions and prerequisites, live, with their doors.
+    ///
+    /// Deliberately thin. Everything on it belongs to `SetupChecklistView`,
+    /// which the onboarding window hosts too, so this function knows nothing
+    /// about rows and cannot drift from the screen that first showed them.
+    func showSetupSettings() {
+        guard transition(to: .settings, because: "setup opened") else { return }
+        currentTarget = nil
+        face = Face(title: "Setup",
+                    body: "What Tranquility Base runs on, and what is still owed.")
+        face.settingsTab = .setup
+        render()
+    }
+
     /// The settings state's second pane (ruled 13 Aug): the log of recent
     /// captures over a second, transcript or its absence, per-row retry.
     /// Reached from the voices pane; back exits to the grid, as settings
@@ -1930,6 +1945,7 @@ final class StatusHUD: NSObject {
         gridFooter.isHidden = true; controlsSticky.isHidden = true
         stripLabel.stringValue = ""
         voiceList.isHidden = true; waitingRows.isHidden = true
+        setupChecklist?.isHidden = true
         pastList?.isHidden = true
         pastBackButton?.isHidden = true
         settingsTabs?.isHidden = true
@@ -2155,6 +2171,16 @@ final class StatusHUD: NSObject {
                     panel.acceptsKey = true
                     panel.makeKeyAndOrderFront(nil)
                 }
+
+            case .setup:
+                // The same view onboarding hosts. Nothing here re-derives a
+                // row, a lamp or a label: two renderers of one checklist
+                // disagree inside a fortnight and the one you are not looking
+                // at is the wrong one.
+                setupChecklist.isHidden = false
+                setupChecklist.refresh()
+                bodyLabel.stringValue = face.body
+                setHint("every row carries its own fix")
 
             case .voices:
                 voiceList.isHidden = false

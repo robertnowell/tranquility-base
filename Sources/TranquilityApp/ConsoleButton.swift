@@ -149,3 +149,27 @@ final class ConsoleButton: NSButton {
         return contentTintColor
     }
 }
+
+extension ConsoleButton {
+    /// The panel's one door: a bordered-less inline button that reinks itself
+    /// and wears a trailing chevron.
+    ///
+    /// Lifted out of OnboardingWindow when the setup checklist moved into its
+    /// own view (29 Aug) and both the onboarding window and the settings tab
+    /// needed to build the same control. Copying it would have been three lines
+    /// and the beginning of two doors that drift.
+    static func door(_ title: String, ink: NSColor,
+                     target: AnyObject?, action: Selector) -> ConsoleButton {
+        let button = ConsoleButton(title: title, target: target, action: action)
+        button.isBordered = false
+        button.bezelStyle = .inline
+        let font = ChromeType.mono(ofSize: 11, weight: .medium)
+        button.font = font
+        button.reink = { [weak button] color in
+            button?.attributedTitle = ChromeType.line(
+                title + " \u{203A}", font: font, color: color)
+        }
+        button.restingInk = ink
+        return button
+    }
+}
