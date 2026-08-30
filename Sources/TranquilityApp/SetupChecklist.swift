@@ -21,6 +21,27 @@ import TranquilityCore
 /// whether every required row is satisfied. Settings has nothing to gate.
 final class SetupChecklistView: NSView {
 
+    /// What this host wants from the same rows.
+    ///
+    /// Onboarding is a list of things to DO: it hides a healthy hooks row,
+    /// because a line reporting that nothing happened is furniture on a screen
+    /// someone is trying to finish. Settings is a list of what IS: it shows
+    /// every row and keeps every door, for the same reason a satisfied key row
+    /// always kept its own — a thing that is fine today is a thing you may
+    /// still want to re-run.
+    ///
+    /// The second difference between the hosts, and like the first it is a
+    /// value rather than a branch inside the render.
+    enum Mode { case onboarding, reference }
+
+    private let mode: Mode
+
+    init(frame: NSRect, mode: Mode = .onboarding) {
+        self.mode = mode
+        super.init(frame: frame)
+        setUpRows()
+    }
+
     /// Fired on every render with whether every REQUIRED row is satisfied.
     /// Onboarding enables its start button from this; Settings ignores it.
     var onReadiness: ((Bool) -> Void)?
@@ -36,8 +57,7 @@ final class SetupChecklistView: NSView {
 
     private let stack = NSStackView()
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
+    private func setUpRows() {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
@@ -119,7 +139,11 @@ final class SetupChecklistView: NSView {
         name.textColor = StateLegend.Palette.ink
         name.drawsBackground = false
         name.translatesAutoresizingMaskIntoConstraints = false
-        name.widthAnchor.constraint(equalToConstant: 215).isActive = true
+        // 215 clipped "2. Anthropic  (recommended)" mid-word into the
+        // detail column (screenshot, 30 Aug). The suffix is part of the
+        // name, so the column is sized for the longest name that carries
+        // one rather than for the bare titles.
+        name.widthAnchor.constraint(equalToConstant: 268).isActive = true
         prereqNames[item] = name
         row.addArrangedSubview(name)
         prereqRows[item] = row
@@ -292,7 +316,8 @@ final class SetupChecklistView: NSView {
     }
 
     func renderPrerequisites() {
-        let shownStates = Prerequisites.visible(prereqStates)
+        let shownStates = mode == .reference
+            ? prereqStates : Prerequisites.visible(prereqStates)
         let visible = Set(shownStates.map(\.item))
         // Hiding the ROW, not its contents. Hiding the labels individually left
         // the row in the stack at zero height but still carrying the stack's
@@ -312,7 +337,8 @@ final class SetupChecklistView: NSView {
                 "\(position[item] ?? 1). " + item.title + suffix
             // A satisfied tmux or hooks row has nothing left to do; a key row
             // keeps its door, because a key is a thing you rotate.
-            prereqButtons[item]?.isHidden = state.satisfied && item.secret == nil
+            prereqButtons[item]?.isHidden =
+                mode != .reference && state.satisfied && item.secret == nil
 
             // The panel's lamp vocabulary, same meanings as stage one. Amber is
             // "needs action", so an unmet REQUIRED row is amber. An unmet key is

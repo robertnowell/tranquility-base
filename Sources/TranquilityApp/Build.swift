@@ -363,7 +363,7 @@ extension StatusHUD {
         // values for the whole machine ("a global setting for now and see if
         // we need more granular later"); read by every path that starts an
         // agent: the menu item, the grid's + row, and revival.
-        setupChecklist = SetupChecklistView(frame: .zero)
+        setupChecklist = SetupChecklistView(frame: .zero, mode: .reference)
         setupChecklist.isHidden = true
         setupChecklist.translatesAutoresizingMaskIntoConstraints = false
         setupChecklist.widthAnchor.constraint(
