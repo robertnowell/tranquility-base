@@ -93,6 +93,18 @@ public enum HookManifest {
         /// into a directory the user has not created would be installing
         /// ourselves somewhere we were not invited.
         public let homeURL: URL
+        /// Where this harness records that it has REVIEWED a hooks file and
+        /// will therefore actually run it. nil when the harness has no such
+        /// gate: Claude Code loads what is in settings.json at the next
+        /// session start and asks nobody.
+        ///
+        /// Codex does have one, and it fails silent. Measured 28 Aug against
+        /// codex-cli 0.150.1: an untrusted hooks.json produces no hook, no
+        /// warning and no log line, so "installed" and "running" are two
+        /// different states and only one of them is visible in the file we
+        /// wrote. An audit that cannot tell them apart reports a healthy
+        /// install on a machine where nothing fires.
+        public let approvalConfigURL: URL?
         public let expected: [Hook]
 
         public var isPresent: Bool {
@@ -106,6 +118,7 @@ public enum HookManifest {
         Harness(id: ClaudeCodeAdapter().id, label: "Claude Code",
                 settingsURL: home.appendingPathComponent(".claude/settings.json"),
                 homeURL: home.appendingPathComponent(".claude"),
+                approvalConfigURL: nil,
                 expected: expected)
     }
 
@@ -126,6 +139,7 @@ public enum HookManifest {
         Harness(id: CodexAdapter().id, label: "Codex",
                 settingsURL: home.appendingPathComponent(".codex/hooks.json"),
                 homeURL: home.appendingPathComponent(".codex"),
+                approvalConfigURL: home.appendingPathComponent(".codex/config.toml"),
                 expected: [
                     .init(event: "Stop", marker: "tbase-hook", script: "tbase-hook.sh",
                           purpose: "hear a turn when it lands", matcher: nil),
@@ -144,6 +158,55 @@ public enum HookManifest {
                           purpose: "collect artifacts a session writes",
                           matcher: "Write|Edit|Bash"),
                 ])
+    }
+
+    /// Whether a harness will actually RUN the hooks we installed.
+    ///
+    /// The distinction this type existed to make was "wired versus not"; on a
+    /// two-harness machine it needs a third: wired, and permitted to run. The
+    /// onboarding row said "wired 5" for Codex while every one of those five
+    /// sat inert behind an unreviewed-hooks prompt, which is the same shape as
+    /// the renamed script that stopped events for 37 minutes: a true statement
+    /// about the file, and the wrong answer about the machine.
+    public enum Approval: Sendable, Equatable {
+        /// This harness has no review gate. Claude Code: the hooks load at the
+        /// next session start.
+        case notRequired
+        case granted
+        /// Installed and inert. The user has to approve them once.
+        case pending
+        /// The config could not be read, which is not the same as "no".
+        case unknown
+    }
+
+    public static func approval(for harness: Harness) -> Approval {
+        guard let configURL = harness.approvalConfigURL else { return .notRequired }
+        guard let text = try? String(contentsOf: configURL, encoding: .utf8)
+        else { return .unknown }
+        return approvalGranted(inConfig: text, hooksPath: harness.settingsURL.path)
+            ? .granted : .pending
+    }
+
+    /// Codex writes one table per hook, keyed by the hooks file's absolute
+    /// path, the event, and the hook's position:
+    ///
+    ///     [hooks.state."/Users/x/.codex/hooks.json:session_start:0:0"]
+    ///     trusted_hash = "sha256:..."
+    ///
+    /// Presence of ANY entry for our file is the test, deliberately, rather
+    /// than checking each event or verifying the hash. The hash is an internal
+    /// canonicalisation this repo could not reproduce (tried, 28 Aug: neither
+    /// the command string nor the entry JSON in several encodings matches), and
+    /// guessing at it would turn a clear "not approved yet" into a wrong
+    /// "approved". A partial approval reads as granted here, which is the safe
+    /// direction: the user has seen the prompt, and Codex itself is the thing
+    /// enforcing the rest.
+    ///
+    /// Pure so the parsing is tested without a real Codex install.
+    static func approvalGranted(inConfig text: String, hooksPath: String) -> Bool {
+        text.split(separator: "\n").contains { line in
+            line.hasPrefix("[hooks.state.\"\(hooksPath):")
+        }
     }
 
     public static var harnesses: [Harness] { [claudeCode, codex] }
@@ -495,11 +558,48 @@ public enum HookManifest {
     /// exactly that.
     public static func machineSummary() -> String? {
         let problems = detected().compactMap { harness -> String? in
-            problemSummary(settings: harness.settingsURL,
-                           expecting: harness.expected)
-                .map { "\(harness.label): \($0.replacingOccurrences(of: "hooks: ", with: ""))" }
+            if let wiring = problemSummary(settings: harness.settingsURL,
+                                           expecting: harness.expected) {
+                return "\(harness.label): "
+                    + wiring.replacingOccurrences(of: "hooks: ", with: "")
+            }
+            // Wired, and still not running. Reported as a problem rather than
+            // a footnote, because from the user's side it is indistinguishable
+            // from not being installed: no lamps, no announcements, nothing.
+            switch approval(for: harness) {
+            case .notRequired, .granted: return nil
+            case .pending: return "\(harness.label): installed, awaiting approval"
+            case .unknown: return "\(harness.label): cannot read \(harness.approvalConfigURL?.lastPathComponent ?? "config")"
+            }
         }
         return problems.isEmpty ? nil : "hooks: " + problems.joined(separator: "; ")
+    }
+
+    /// What the user has to DO next for this harness, in one sentence, or nil
+    /// when nothing is owed. Core owns the words so the onboarding row, the
+    /// CLI and any future surface cannot each invent their own.
+    ///
+    /// This is the sentence the checklist was missing. "Wired 5" told someone
+    /// the install had worked and left them to discover on their own, later and
+    /// by absence, that Codex had quietly declined to run any of it.
+    public static func nextStep(for harness: Harness) -> String? {
+        if problemSummary(settings: harness.settingsURL,
+                          expecting: harness.expected) != nil {
+            return "install the hooks"
+        }
+        switch approval(for: harness) {
+        case .notRequired:
+            return nil
+        case .granted:
+            return nil
+        case .pending:
+            return "open a \(harness.label) session and choose "
+                + "\u{201C}Trust all and continue\u{201D} when it asks about hooks. "
+                + "Once, and it covers every session after it."
+        case .unknown:
+            return "could not read \(harness.label)'s config to see whether "
+                + "the hooks are approved"
+        }
     }
 
     private static func installedCommand(for hook: Hook, in hooks: [String: Any]) -> String? {
