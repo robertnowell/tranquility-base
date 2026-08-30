@@ -815,6 +815,11 @@ public enum SessionDiscovery {
             options: [.skipsHiddenFiles])
         else { return result }
 
+        // One read for the whole walk. Codex keeps its own short summary per
+        // thread (see `CodexThreadNames`), which is what makes a Codex row wear
+        // a name instead of its directory.
+        let names = CodexThreadNames.all()
+
         var kept: [Session] = []
         for case let url as URL in walker where url.pathExtension == "jsonl" {
             let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
@@ -840,7 +845,7 @@ public enum SessionDiscovery {
                 sessionId: sessionId,
                 cwd: parsed.meta?.cwd,
                 transcriptPath: url.path,
-                title: nil,          // no title mechanism measured for Codex yet
+                title: names[sessionId.lowercased()],
                 lastActivityAt: modified,
                 answered: parsed.messages.last?.role == "user",
                 activity: nil,       // no SessionActivity-equivalent classifier for Codex yet
