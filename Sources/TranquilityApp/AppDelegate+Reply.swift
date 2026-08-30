@@ -17,9 +17,12 @@ extension AppDelegate {
         Task { @MainActor in
             // The second half of the delivery window (see DeliveryInFlight):
             // the capture handed it to the countdown, the countdown handed it
-            // here, and it closes on the outcome however that outcome reads.
+            // here, and it closes on the outcome — EXCEPT where the outcome is
+            // that the words landed, in which case the window changes hands
+            // again rather than closing, to the agent's own first word.
             // Same discipline as the first half — one defer, not seven cases.
-            defer { delivering.finished(sessionId: sessionId) }
+            var landedOnTheSession = false
+            defer { if !landedOnTheSession { delivering.finished(sessionId: sessionId) } }
             guard mine == replyGeneration else {
                 // Superseded between the timer firing and this running.
                 try? coordinator.cancelSend(utteranceId: utteranceId)
@@ -71,6 +74,7 @@ extension AppDelegate {
                 // thing that went right was indistinguishable noise (user report,
                 // 05 Aug — "two further states, all saying different things").
                 case .queued(_, _, let dispatchedPid):
+                    landedOnTheSession = true
                     hud.showReceipt(.queued)
                     lastStatusLine = "queued in \(label), sends when its turn finishes"
                     Permissions.log("send: queued in \(label)")
@@ -87,6 +91,7 @@ extension AppDelegate {
                         hud.rebindLivePid(dispatchedPid, sessionId: sessionId)
                     }
                 case .dispatched(_, _, _, let dispatchedPid):
+                    landedOnTheSession = true
                     hud.showReceipt(.sent)
                     lastStatusLine = "sent to \(label)"
                     Permissions.log("send: confirmed to \(label)")
