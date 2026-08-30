@@ -120,7 +120,7 @@ final class SessionRowTests: XCTestCase {
 
     // MARK: - quietRowsLast: the three (four) bands
 
-    func testQuietRowsLastOrdersLitThenRunningThenUnlitThenSwitchedOff() {
+    func testQuietRowsLastOrdersLitThenRunningThenSwitchedOffThenUnlit() {
         let ready = row(id: "ready1", lamp: .ready)
         let running = row(id: "running1", lamp: .running)
         let unlit = row(id: "unlit1", lamp: .unlit)
@@ -128,8 +128,22 @@ final class SessionRowTests: XCTestCase {
         // Deliberately scrambled input — the function must do the sorting,
         // not merely preserve an already-correct order.
         let ordered = SessionRow.quietRowsLast([off, unlit, running, ready])
-        XCTAssertEqual(ordered.map(\.id), ["ready1", "running1", "unlit1", "off1"],
-                       "switched-off sinks below even dead rows")
+        XCTAssertEqual(ordered.map(\.id), ["ready1", "running1", "off1", "unlit1"],
+                       "a switched-off row is alive, so it outranks a dead one")
+    }
+
+    /// The 29 Aug reversal, stated as the thing the user could see: a session
+    /// he had just switched off was at the BOTTOM of Past Agents, under every
+    /// dead row on the list. Both bands are quiet and neither is on the grid,
+    /// so this ordering is the entire difference between the two on screen.
+    func testASwitchedOffRowOutranksEveryDeadRow() {
+        let dead = (1...3).map { row(id: "dead\($0)", lamp: .unlit, revivable: true) }
+        let off = row(id: "filed", lamp: .running, switchedOff: true)
+        let ordered = SessionRow.quietRowsLast(dead + [off])
+        XCTAssertEqual(ordered.first?.id, "filed",
+                       "switched off by hand is still a session you can speak to")
+        XCTAssertEqual(ordered.map(\.id), ["filed", "dead1", "dead2", "dead3"],
+                       "and the dead keep their own order behind it")
     }
 
     func testQuietRowsLastIsAStablePartitionWithinABand() {

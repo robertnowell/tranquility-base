@@ -321,26 +321,43 @@ public struct SessionRow: Equatable, Sendable {
         }
     }
 
-    /// Three bands now, not two. Sessions doing something, then sessions
-    /// merely alive, then sessions that have exited — which sink below
-    /// both, because a row you cannot speak to must never sit between two
-    /// you can.
+    /// Four bands: sessions doing something, then sessions merely alive,
+    /// then sessions the user switched off by hand, then sessions that
+    /// have exited — which sink below all of them, because a row you
+    /// cannot speak to must never sit between two you can.
     ///
     /// Order WITHIN each band is untouched: the caller has already
     /// established recency, and a stable partition keeps it.
     public static func quietRowsLast(_ rows: [SessionRow]) -> [SessionRow] {
         func band(_ row: SessionRow) -> Int {
-            // A session the user switched off sinks below even the dead
-            // ones, and the ORDER is load-bearing rather than cosmetic:
-            // the grid is a prefix of this array, so "last" is what makes
-            // `gridRowsShown` able to exclude filed rows by a count
-            // instead of a predicate, and keeps the floor free to pad with
-            // rows that are merely quiet.
-            if row.switchedOff { return 3 }
+            // A row the user switched off is ALIVE — `switchedOffCopy()`
+            // hands it `lamp: .running`, and `AppDelegate+Grid` refuses to
+            // file a `.unlit` row at all, so this band and the dead one are
+            // disjoint by construction. It therefore sits ABOVE the dead,
+            // under the same sentence the doc comment opens with: you can
+            // still speak to it, and `.unlit` you cannot.
+            //
+            // REVERSED 29 Aug, on Robert's screenshot of a session he had
+            // just switched off sitting at the very bottom of Past Agents,
+            // under eight dead ones: "idle sessions should show at the top,
+            // turned-off sessions should be below the idle sessions."
+            //
+            // The rule it replaces was not cosmetic when it was written —
+            // it said so: "the grid is a prefix of this array, so 'last' is
+            // what makes `gridRowsShown` able to exclude filed rows by a
+            // count instead of a predicate." That constraint is gone.
+            // `gridRows` and `shownCount` both filter on `!switchedOff`
+            // now, and `StatusHUD.pastAgents` is a set difference rather
+            // than a `dropFirst` — the same migration from length to
+            // predicate its own comment records. Nothing downstream reads a
+            // prefix of this array any more, so the only thing the old rank
+            // still did was rank a live session below a dead one on the one
+            // face built to show it.
+            if row.switchedOff { return 2 }
             switch row.lamp {
             case .ready, .working, .fault: return 0
             case .running: return 1
-            case .unlit: return 2
+            case .unlit: return 3
             }
         }
         return (0...3).flatMap { rank in rows.filter { band($0) == rank } }
