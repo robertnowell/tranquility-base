@@ -208,7 +208,17 @@ public enum Prerequisites {
                         ? String(problem.dropFirst("hooks: ".count)) : problem
                     return State(item: item, satisfied: false, detail: trimmed)
                 }
-                return State(item: item, satisfied: true, detail: "wired into Claude Code")
+                // Name every harness it is wired into, not the first one we
+                // happened to support. On a machine running both, "wired into
+                // Claude Code" is a true sentence that answers the wrong
+                // question: the reason this row exists on a two-harness machine
+                // is to say whether CODEX is covered too (Robert, 30 Aug,
+                // looking at exactly that line).
+                let harnesses = HookManifest.detected().map(\.label)
+                return State(item: item, satisfied: true,
+                             detail: harnesses.isEmpty
+                                ? "wired"
+                                : "wired into " + harnesses.joined(separator: " + "))
             default:
                 return State(item: item, satisfied: true, detail: "")
             }
