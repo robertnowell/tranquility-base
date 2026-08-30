@@ -286,7 +286,15 @@ extension StatusHUD {
 
         SelfTest.report("settingsTabs", [
             ("tabBarIsShown", tabsShown),
-            ("everyTabHasAPane", SettingsTab.allCases.count == 3),
+            // Was `allCases.count == 3`, which named one property and checked
+            // a different, weaker one: it went red when SETUP was added on
+            // 29 Aug without any pane being missing. A count is not a pane.
+            // Now every tab is actually opened and asked to prove it landed
+            // somewhere with a title of its own.
+            ("everyTabHasAPane", SettingsTab.allCases.allSatisfy { tab in
+                self.showSettingsTab(tab)
+                return self.face.settingsTab == tab && !self.face.title.isEmpty
+            }),
             ("switchingLeavesTheOtherPaneBehind", voicesPane),
             // The keyboard belongs to one tab, not to the pane.
             ("leavingAgentsHandsTheKeyboardBack", keyboardHandedBack),
