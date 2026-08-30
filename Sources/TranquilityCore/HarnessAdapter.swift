@@ -409,7 +409,25 @@ public struct CodexAdapter: HarnessAdapter {
             // pane, not scrollable history, confirmed 10/10 across repeated
             // polls of a resumed (already-trusted) session.
             settledBannerNeedle: "Ask Codex to do anything",
-            neverAutoAcceptNeedles: ["Hooks need review"])
+            // "Hooks need review" is a consent TB has no authority to give.
+            //
+            // "Update available!" is here for a sharper reason: its default row
+            // is "1. Update now", and choosing it runs
+            // `curl -fsSL …/install.sh | sh`. This watcher dismisses a
+            // recognised prompt by pressing Return where the selection stands,
+            // which is correct for Codex's yes-defaulting trust prompt and would
+            // INSTALL SOFTWARE on this one. Listing it here makes that
+            // unreachable rather than merely unlikely, before anyone reaches for
+            // Return as a way to fix the hang it causes.
+            //
+            // Measured 29 Aug against codex-cli 0.150.1 with 0.151.0 released:
+            // every `codex resume` stopped on this chooser, and the launcher
+            // could only report that the session never settled. Skipping is
+            // persisted by Codex itself in ~/.codex/version.json
+            // (`dismissed_version`), so a machine that has answered it once
+            // stays quiet until the next release, which is exactly why this went
+            // unnoticed for weeks and then broke everything at once.
+            neverAutoAcceptNeedles: ["Hooks need review", "Update available!"])
     }
 
     /// Codex's own single-writer-lock refusal — measured live, 22 Aug,
