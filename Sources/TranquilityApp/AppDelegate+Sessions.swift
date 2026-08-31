@@ -960,6 +960,9 @@ extension AppDelegate {
                                        haystack: haystack,
                                        aux: when, tooltip: hover)
         }
+        // Tell the list whether the archive has actually been read, so an
+        // empty one can say "reading" rather than "0 sessions".
+        hud.pastList?.archiveRead = SessionDiscovery.hasScanned()
         hud.showPastAgents(items: items)
 
         // The list is on screen and usable before a single transcript is read.

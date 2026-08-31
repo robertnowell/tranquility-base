@@ -1008,4 +1008,54 @@ final class SessionDiscoveryTests: XCTestCase {
                       "and it IS a temp path — rung 1 is what saves it, not a gap in the guard")
     }
 
+    // MARK: - "nothing here" versus "not looked yet"
+
+    /// `discoverIfScanned` returns nothing on a cold cache by design and the
+    /// warm runs off-main, so for the first seconds after a launch Past Agents
+    /// could not tell an empty archive from an unread one and reported the
+    /// first: "0 sessions · 7 days", photographed one second after launch on
+    /// 31 Aug. This app relaunches on every merge, so that beat is not rare.
+    func testAnUnreadArchiveReportsUnscanned() throws {
+        let root = try makeArchive([
+            ("-Users-x-Projects-a", "s1",
+             [#"{"type":"user","entrypoint":"cli","cwd":"/Users/x/Projects/a"}"#,
+              assistant()]),
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        XCTAssertFalse(SessionDiscovery.hasScanned(projects: root))
+    }
+
+    func testOnceReadItReportsScanned() throws {
+        let root = try makeArchive([
+            ("-Users-x-Projects-a", "s1",
+             [#"{"type":"user","entrypoint":"cli","cwd":"/Users/x/Projects/a"}"#,
+              assistant()]),
+        ])
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
+        _ = SessionDiscovery.discover(live: StubAgents([]), projects: root,
+                                      titles: TranscriptTitles())
+        XCTAssertTrue(SessionDiscovery.hasScanned(projects: root))
+    }
+
+    /// Age is not the question. A scan from an hour ago still means the
+    /// archive HAS been read, and saying "reading…" over rows already on
+    /// screen would be lying in the other direction.
+    func testAStaleScanStillCountsAsRead() throws {
+        let root = try makeArchive([
+            ("-Users-x-Projects-a", "s1",
+             [#"{"type":"user","entrypoint":"cli","cwd":"/Users/x/Projects/a"}"#,
+              assistant()]),
+        ])
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
+        _ = SessionDiscovery.discover(now: Date().addingTimeInterval(-3600),
+                                      live: StubAgents([]), projects: root,
+                                      titles: TranscriptTitles())
+        XCTAssertTrue(SessionDiscovery.hasScanned(projects: root))
+    }
 }

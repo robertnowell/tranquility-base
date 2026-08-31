@@ -156,6 +156,11 @@ final class PastAgentsList: NSView {
 
     /// Called ONCE per opening. See the type's note: this face does not
     /// refresh under the reader.
+    /// False while the archive walk has not landed. An empty list then means
+    /// "not measured yet", and saying "0 sessions" would be answering a
+    /// question nobody has asked yet.
+    var archiveRead = true
+
     func apply(items: [Item]) {
         self.items = items
         filterField.reset()
@@ -202,7 +207,9 @@ final class PastAgentsList: NSView {
         namedCount = named.count
         contentCount = 0
         summary = needle.isEmpty
-            ? "\(items.count) session\(items.count == 1 ? "" : "s") · 7 days"
+            ? (items.isEmpty && !archiveRead
+                ? "reading the archive…"
+                : "\(items.count) session\(items.count == 1 ? "" : "s") · 7 days")
             : "\(shown.count) of \(items.count)"
         rebuild()
         setHovered(nil)

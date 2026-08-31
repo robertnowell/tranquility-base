@@ -1110,7 +1110,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // useless for "does a Codex row have a name today". Added 30 Aug after
         // shipping a name fix that could only be checked by asking Robert to
         // look at his own screen.
-        if let i = CommandLine.arguments.firstIndex(of: "--live-grid-shot"),
+        // Past Agents from live data, same reason as --live-grid-shot: the
+        // question "is a given Codex session in this list today" cannot be
+        // answered by a fixture.
+        if let i = CommandLine.arguments.firstIndex(of: "--past-agents-shot"),
+           i + 1 < CommandLine.arguments.count {
+            // The grid first, which is what builds the panel. Going straight
+            // to Past Agents crashes on an unbuilt `pastList`, and it is also
+            // not a path a person can take: you are always on the grid before
+            // you press PAST AGENTS.
+            showIdleGrid()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            // Long enough for the archive walk to land. `discoverIfScanned`
+            // returns nothing on a cold cache by design, and a fresh instance
+            // photographed a second in shows "0 sessions" for that reason
+            // alone, which would read as a bug in the list.
+            if !CommandLine.arguments.contains("--cold") {
+                SessionDiscovery.warm()
+                SessionDiscovery.warmCodex()
+            }
+            openPastAgents()
+            RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+            openPastAgents()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+            if let png = hud.poseSnapshot() {
+                try? png.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
+                Permissions.log("past-agents-shot: wrote \(CommandLine.arguments[i + 1])")
+            } else {
+                Permissions.log("past-agents-shot: nothing rendered")
+            }
+            NSApp.terminate(nil)
+            return
+        }
+                if let i = CommandLine.arguments.firstIndex(of: "--live-grid-shot"),
            i + 1 < CommandLine.arguments.count {
             showIdleGrid()
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
