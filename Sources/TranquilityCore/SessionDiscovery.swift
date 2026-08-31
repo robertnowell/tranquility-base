@@ -288,6 +288,38 @@ public enum SessionDiscovery {
                   now: Date(), ttl: .greatestFiniteMagnitude) != nil
     }
 
+    /// The Codex archive's own answer, and it is a SEPARATE question.
+    ///
+    /// The two walks have separate caches and separate background warms, and
+    /// they land at different times because they are wildly different sizes:
+    /// hundreds of Claude Code transcripts against a few dozen rollouts. So
+    /// there is a window, every launch, where one archive is read and the
+    /// other is not.
+    ///
+    /// Measured 31 Aug, one second apart in the same process:
+    ///
+    ///     past agents: 33 rows (0 codex, 33 claude-code)
+    ///     past agents: 48 rows (15 codex, 33 claude-code)
+    ///
+    /// The first is a complete-looking list with every Codex agent silently
+    /// absent, which is what Robert kept reporting and what asking only about
+    /// Claude Code's cache could never detect. A per-harness question needs a
+    /// per-harness answer.
+    public static func hasScannedCodex(
+        window: TimeInterval = defaultWindow,
+        limit: Int = defaultLimit,
+        sessions: URL = CodexRollout.sessionsDirectory
+    ) -> Bool {
+        codexScans.get(key: ScanCache.key(window, limit, sessions),
+                       now: Date(), ttl: .greatestFiniteMagnitude) != nil
+    }
+
+    /// Every archive this app reads. The only honest answer to "is the list
+    /// complete", and the one the UI should ask.
+    public static func hasScannedEveryArchive() -> Bool {
+        hasScanned() && hasScannedCodex()
+    }
+
     /// Wait for any background scan to finish. For tests only.
     ///
     /// A detached scan that outlives its test keeps doing disk I/O while the

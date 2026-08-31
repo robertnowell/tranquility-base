@@ -1058,4 +1058,24 @@ final class SessionDiscoveryTests: XCTestCase {
                                       titles: TranscriptTitles())
         XCTAssertTrue(SessionDiscovery.hasScanned(projects: root))
     }
+    /// The two archives are separate questions, and asking only one is how a
+    /// complete-looking list loses a whole harness.
+    ///
+    /// Measured 31 Aug, one second apart in one process: 33 rows with 0 Codex
+    /// under `hasScanned() == true`, then 48 rows with 15 Codex. Claude Code's
+    /// cache had landed and Codex's had not, and nothing could tell.
+    func testCodexHasItsOwnScannedAnswer() throws {
+        let sessions = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("codex-scan-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        defer {
+            SessionDiscovery.settleCodexForTesting()
+            try? FileManager.default.removeItem(at: sessions)
+        }
+        XCTAssertFalse(SessionDiscovery.hasScannedCodex(sessions: sessions))
+        // `discoverCodex` is the UNCACHED walk; `warmCodex` is what fills the
+        // cache this question reads, which is the same split Claude Code has.
+        SessionDiscovery.warmCodex(sessions: sessions)
+        XCTAssertTrue(SessionDiscovery.hasScannedCodex(sessions: sessions))
+    }
 }

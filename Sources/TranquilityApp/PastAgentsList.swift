@@ -206,10 +206,17 @@ final class PastAgentsList: NSView {
         shown = named
         namedCount = named.count
         contentCount = 0
+        // A PARTIAL list is the dangerous state, not an empty one. The two
+        // archives warm independently and land at different times, so the list
+        // spends a beat every launch looking complete while one harness is
+        // entirely missing from it: 33 rows, none of them Codex, under a
+        // confident "33 sessions". Empty is obvious; this is not.
         summary = needle.isEmpty
-            ? (items.isEmpty && !archiveRead
-                ? "reading the archive…"
-                : "\(items.count) session\(items.count == 1 ? "" : "s") · 7 days")
+            ? (archiveRead
+                ? "\(items.count) session\(items.count == 1 ? "" : "s") · 7 days"
+                : (items.isEmpty
+                    ? "reading the archive…"
+                    : "\(items.count) so far · still reading"))
             : "\(shown.count) of \(items.count)"
         rebuild()
         setHovered(nil)
