@@ -153,10 +153,24 @@ public enum HookManifest {
                           script: "visual-output-hook.sh",
                           purpose: "show visual output in a browser, not the tab",
                           matcher: nil),
+                    // `exec`, not `Write|Edit|Bash`. A MATCHER IS A TOOL
+                    // NAME, and tool names are the harness's own vocabulary:
+                    // Claude Code writes files through three tools, Codex
+                    // through one. Measured across every August rollout on
+                    // this machine, Codex called `exec` 564 times and nothing
+                    // else that touches a file.
+                    //
+                    // Copying Claude Code's matcher meant this hook has never
+                    // once fired for Codex. Found 31 Aug from the far end: a
+                    // page a Codex session wrote carried no agent footer and
+                    // never reached its hub, so there was no way back from the
+                    // page to the agent that made it. The hook was installed,
+                    // trusted, and listening for a tool that does not exist
+                    // here.
                     .init(event: "PostToolUse", marker: "artifact-hook",
                           script: "artifact-hook.sh",
                           purpose: "collect artifacts a session writes",
-                          matcher: "Write|Edit|Bash"),
+                          matcher: "exec"),
                 ])
     }
 
