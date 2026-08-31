@@ -240,16 +240,17 @@ do {
         // settled design, 2026-08-22-tb-codex-hand-started-adoption) — every
         // row prints `idle`, whether it is actually running somewhere or
         // genuinely gone, on purpose. `tbase revive` is how you find out.
-        let codexFound = SessionDiscovery.discoverCodex(window: days * 86_400, limit: limit)
-        if codexFound.scanned > 0 {
+        // One walk covers both archives now, so the Codex table is a filter
+        // over the same Result rather than a second scan of its own.
+        let everything = SessionDiscovery.discover(window: days * 86_400, limit: limit)
+        let codexSessions = everything.sessions.filter { $0.harness == CodexAdapter().id }
+        if !codexSessions.isEmpty {
             print("")
-            print("codex: \(codexFound.sessions.count) of \(codexFound.scanned) rollouts "
-                + "(\(codexFound.unclassifiable) unclassifiable)"
-                + (codexFound.beyondLimit > 0 ? " · \(codexFound.beyondLimit) past the cap" : ""))
+            print("codex: \(codexSessions.count) session(s)")
             print("")
             print("\(pad("STATE", 9))\(pad("ANSWERED", 10))\(pad("AGE", 8))"
                 + "\(pad("SESSION", 10))CWD")
-            for s in codexFound.sessions {
+            for s in codexSessions {
                 let age = Date().timeIntervalSince(s.lastActivityAt)
                 let ageText = age < 3600 ? "\(Int(age / 60))m"
                             : age < 86_400 ? "\(Int(age / 3600))h" : "\(Int(age / 86_400))d"
@@ -383,7 +384,7 @@ do {
         // different mechanism — attemptCodexResume, not SessionLauncher.
         // resume — because Codex's own single-writer lock is what answers
         // "already live", not a probe run beforehand.
-        let codexFound = SessionDiscovery.discoverCodex().sessions
+        let codexFound = SessionDiscovery.discover().sessions
         guard let codexSession = codexFound.first(where: { $0.sessionId.hasPrefix(needle) }) else {
             print("no session in the window starts with \(needle)")
             print("(tbase discover 7 lists them)")

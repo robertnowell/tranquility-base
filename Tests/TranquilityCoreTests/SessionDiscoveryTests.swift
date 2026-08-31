@@ -17,6 +17,19 @@ final class SessionDiscoveryTests: XCTestCase {
 
     private let now = Date(timeIntervalSince1970: 1_000_000)
 
+    /// An empty Codex archive, so a fixture test measures its fixture.
+    ///
+    /// The walk covers every archive now, which means a test that only builds
+    /// a Claude Code fixture would otherwise pick up this machine's real
+    /// rollouts: 16 tests went red that way, all correctly. The same shape as
+    /// `temporaryRoots: []` elsewhere in this file, and for the same reason.
+    private lazy var emptyCodex: URL = {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("no-codex-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
     private func assistant(_ text: String = "here is the thing") -> String {
         """
         {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"\(text)"}]}}
@@ -271,7 +284,7 @@ final class SessionDiscoveryTests: XCTestCase {
         }
 
         let result = SessionDiscovery.discover(
-            live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
+            live: StubAgents([]), projects: root, sessions: emptyCodex, titles: TranscriptTitles(), temporaryRoots: [])
 
         // The entrypoint-less transcript is KEPT, and counted so the drop is
         // never silent either way.
@@ -294,7 +307,7 @@ final class SessionDiscoveryTests: XCTestCase {
         }
 
         let result = SessionDiscovery.discover(
-            live: StubAgents(nil), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
+            live: StubAgents(nil), projects: root, sessions: emptyCodex, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertTrue(result.livenessUnavailable)
         XCTAssertEqual(result.sessions.first?.liveness, .unknown)
@@ -314,7 +327,7 @@ final class SessionDiscoveryTests: XCTestCase {
         let live = LiveSession(pid: 42, sessionId: "awake", cwd: "/tmp",
                                status: nil, name: nil, waitingFor: nil)
         let result = SessionDiscovery.discover(
-            live: StubAgents([live]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
+            live: StubAgents([live]), projects: root, sessions: emptyCodex, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.sessions.first?.liveness, .live)
         XCTAssertFalse(result.sessions.first?.revivable ?? true)
@@ -331,7 +344,7 @@ final class SessionDiscoveryTests: XCTestCase {
         }
 
         let result = SessionDiscovery.discover(
-            live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
+            live: StubAgents([]), projects: root, sessions: emptyCodex, titles: TranscriptTitles(), temporaryRoots: [])
 
         let session = try XCTUnwrap(result.sessions.first)
         XCTAssertEqual(session.liveness, .gone)
@@ -352,7 +365,7 @@ final class SessionDiscoveryTests: XCTestCase {
 
         let result = SessionDiscovery.discover(
             window: 60, now: Date().addingTimeInterval(3600),
-            live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
+            live: StubAgents([]), projects: root, sessions: emptyCodex, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.scanned, 0)
         XCTAssertTrue(result.sessions.isEmpty)
@@ -369,7 +382,7 @@ final class SessionDiscoveryTests: XCTestCase {
         }
 
         let result = SessionDiscovery.discover(
-            limit: 2, live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
+            limit: 2, live: StubAgents([]), projects: root, sessions: emptyCodex, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.sessions.count, 2)
         XCTAssertEqual(result.beyondLimit, 2)
@@ -413,7 +426,7 @@ final class SessionDiscoveryTests: XCTestCase {
         try setMtime(root, "-tmp-a", "fresh", to: now.addingTimeInterval(-600))
 
         let result = SessionDiscovery.discover(
-            now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
+            now: now, live: StubAgents([]), projects: root, sessions: emptyCodex, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.sessions.map(\.sessionId), ["fresh", "stale"])
         let stale = try XCTUnwrap(result.sessions.last)
@@ -435,7 +448,7 @@ final class SessionDiscoveryTests: XCTestCase {
         try setMtime(root, "-tmp-a", "ancient", to: now)
 
         let result = SessionDiscovery.discover(
-            now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
+            now: now, live: StubAgents([]), projects: root, sessions: emptyCodex, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.scanned, 1)
         XCTAssertTrue(result.sessions.isEmpty)
@@ -455,7 +468,7 @@ final class SessionDiscoveryTests: XCTestCase {
         try setMtime(root, "-tmp-a", "undated", to: now.addingTimeInterval(-120))
 
         let result = SessionDiscovery.discover(
-            now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
+            now: now, live: StubAgents([]), projects: root, sessions: emptyCodex, titles: TranscriptTitles(), temporaryRoots: [])
 
         let session = try XCTUnwrap(result.sessions.first)
         XCTAssertEqual(session.lastActivityAt.timeIntervalSince(now), -120, accuracy: 1)
@@ -480,7 +493,7 @@ final class SessionDiscoveryTests: XCTestCase {
         }
 
         let result = SessionDiscovery.discover(
-            limit: 2, now: now, live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
+            limit: 2, now: now, live: StubAgents([]), projects: root, sessions: emptyCodex, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.sessions.map(\.sessionId), ["s0", "s1"])
         XCTAssertEqual(result.beyondLimit, 2)
@@ -500,7 +513,7 @@ final class SessionDiscoveryTests: XCTestCase {
         }
 
         let result = SessionDiscovery.discover(
-            live: StubAgents([]), projects: root, titles: TranscriptTitles(), temporaryRoots: [])
+            live: StubAgents([]), projects: root, sessions: emptyCodex, titles: TranscriptTitles(), temporaryRoots: [])
 
         XCTAssertEqual(result.sessions.map(\.sessionId), ["parent"])
     }
@@ -524,7 +537,7 @@ final class SessionDiscoveryTests: XCTestCase {
         let live = LiveSession(pid: 7, sessionId: "s1", cwd: "/tmp",
                                status: nil, name: nil, waitingFor: nil)
         let first = SessionDiscovery.discover(
-            live: StubAgents([live]), projects: root, titles: titles, temporaryRoots: [])
+            live: StubAgents([live]), projects: root, sessions: emptyCodex, titles: titles, temporaryRoots: [])
         XCTAssertEqual(first.sessions.first?.liveness, .live)
         XCTAssertFalse(first.sessions.first?.revivable ?? true)
 
@@ -535,7 +548,7 @@ final class SessionDiscoveryTests: XCTestCase {
             at: root.appendingPathComponent("-tmp-a/s1.jsonl"))
 
         let second = SessionDiscovery.discover(
-            live: StubAgents([]), projects: root, titles: titles, temporaryRoots: [])
+            live: StubAgents([]), projects: root, sessions: emptyCodex, titles: titles, temporaryRoots: [])
         XCTAssertEqual(second.sessions.first?.sessionId, "s1", "the scan should be cached")
         XCTAssertEqual(second.sessions.first?.liveness, .gone, "liveness must not be cached")
         XCTAssertTrue(second.sessions.first?.revivable ?? false)
@@ -560,14 +573,14 @@ final class SessionDiscoveryTests: XCTestCase {
         let titles = TranscriptTitles()
 
         let first = SessionDiscovery.discover(
-            live: StubAgents([]), projects: root, titles: titles, temporaryRoots: [])
+            live: StubAgents([]), projects: root, sessions: emptyCodex, titles: titles, temporaryRoots: [])
         XCTAssertTrue(first.sessions.first?.revivable ?? false)
         XCTAssertNotNil(first.sessions.first?.reviveCommand)
 
         try FileManager.default.removeItem(at: cwd)
 
         let second = SessionDiscovery.discover(
-            live: StubAgents([]), projects: root, titles: titles, temporaryRoots: [])
+            live: StubAgents([]), projects: root, sessions: emptyCodex, titles: titles, temporaryRoots: [])
         XCTAssertEqual(second.sessions.first?.liveness, .gone)
         XCTAssertFalse(second.sessions.first?.revivable ?? true,
                        "a directory that vanished must withdraw the offer")
@@ -591,10 +604,10 @@ final class SessionDiscoveryTests: XCTestCase {
         }
         let titles = TranscriptTitles()
         XCTAssertEqual(SessionDiscovery.discover(
-            live: StubAgents([]), projects: a, titles: titles, temporaryRoots: []).sessions.map(\.sessionId),
+            live: StubAgents([]), projects: a, sessions: emptyCodex, titles: titles, temporaryRoots: []).sessions.map(\.sessionId),
             ["from-a"])
         XCTAssertEqual(SessionDiscovery.discover(
-            live: StubAgents([]), projects: b, titles: titles, temporaryRoots: []).sessions.map(\.sessionId),
+            live: StubAgents([]), projects: b, sessions: emptyCodex, titles: titles, temporaryRoots: []).sessions.map(\.sessionId),
             ["from-b"])
     }
 
@@ -621,7 +634,7 @@ final class SessionDiscoveryTests: XCTestCase {
         let titles = TranscriptTitles()
 
         XCTAssertNil(SessionDiscovery.discoverIfScanned(
-            live: StubAgents([]), projects: root, titles: titles),
+            live: StubAgents([]), projects: root, sessions: emptyCodex, titles: titles),
             "a cold cache must not block the caller")
 
         // That cold call started a DETACHED scan, and it uses the default
@@ -638,10 +651,10 @@ final class SessionDiscoveryTests: XCTestCase {
 
         // Prime it the way the background refresh would. Default roots now,
         // matching the detached scan above, so the two cannot disagree.
-        _ = SessionDiscovery.discover(live: StubAgents([]), projects: root, titles: titles)
+        _ = SessionDiscovery.discover(live: StubAgents([]), projects: root, sessions: emptyCodex, titles: titles)
 
         let warm = SessionDiscovery.discoverIfScanned(
-            live: StubAgents([]), projects: root, titles: titles)
+            live: StubAgents([]), projects: root, sessions: emptyCodex, titles: titles)
         XCTAssertEqual(warm?.sessions.map(\.sessionId), ["s3"])
         XCTAssertEqual(warm?.sessions.first?.liveness, .gone)
     }
@@ -667,12 +680,12 @@ final class SessionDiscoveryTests: XCTestCase {
         let t0 = Date(timeIntervalSince1970: 2_000_000)
 
         _ = SessionDiscovery.discover(
-            now: t0, live: StubAgents([]), projects: root, titles: titles, temporaryRoots: [])
+            now: t0, live: StubAgents([]), projects: root, sessions: emptyCodex, titles: titles, temporaryRoots: [])
 
         // Well past the TTL, which is exactly when the band used to empty.
         let later = t0.addingTimeInterval(SessionDiscovery.scanTTL * 10)
         let served = SessionDiscovery.discoverIfScanned(
-            now: later, live: StubAgents([]), projects: root, titles: titles)
+            now: later, live: StubAgents([]), projects: root, sessions: emptyCodex, titles: titles)
 
         XCTAssertEqual(served?.sessions.map(\.sessionId), ["s4"],
                        "an expired scan must still be served, never blanked")
@@ -774,7 +787,7 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertEqual(AgentDefaults.load(), AgentDefaults.fallback)
     }
 
-    // MARK: - discoverCodex
+    // MARK: - the Codex half of the walk
 
     private func makeCodexSessions(_ files: [(id: String, lines: [String])]) throws -> URL {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -799,7 +812,7 @@ final class SessionDiscoveryTests: XCTestCase {
         ])
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let result = SessionDiscovery.discoverCodex(sessions: root)
+        let result = SessionDiscovery.codexWalk(sessions: root)
 
         XCTAssertEqual(result.scanned, 1)
         XCTAssertEqual(result.sessions.count, 1)
@@ -810,8 +823,12 @@ final class SessionDiscoveryTests: XCTestCase {
         // The agent spoke last: not yet answered, same semantic Claude
         // Code's own isAnswered uses.
         XCTAssertFalse(row.answered)
+        // `unknown` PER ROW, which is the durable claim. The old separate walk
+        // also set `livenessUnavailable` on its whole Result; that flag belongs
+        // to the merged Result now and means "the process probe could not
+        // answer", which is a fact about Claude Code's registry rather than
+        // about this row.
         XCTAssertEqual(row.liveness, .unknown)
-        XCTAssertTrue(result.livenessUnavailable)
     }
 
     func testDiscoverCodexMarksAnsweredWhenTheUserSpokeLast() throws {
@@ -823,7 +840,7 @@ final class SessionDiscoveryTests: XCTestCase {
             ]),
         ])
         defer { try? FileManager.default.removeItem(at: root) }
-        XCTAssertTrue(SessionDiscovery.discoverCodex(sessions: root).sessions.first?.answered ?? false)
+        XCTAssertTrue(SessionDiscovery.codexWalk(sessions: root).sessions.first?.answered ?? false)
     }
 
     /// A rollout with no `session_meta` at all (never taken a turn, or
@@ -834,7 +851,7 @@ final class SessionDiscoveryTests: XCTestCase {
             ("s1", [#"{"type":"response_item","payload":{"type":"message","role":"user","content":[]}}"#]),
         ])
         defer { try? FileManager.default.removeItem(at: root) }
-        let result = SessionDiscovery.discoverCodex(sessions: root)
+        let result = SessionDiscovery.codexWalk(sessions: root)
         XCTAssertEqual(result.sessions.count, 0)
         XCTAssertEqual(result.unclassifiable, 1)
     }
@@ -855,7 +872,7 @@ final class SessionDiscoveryTests: XCTestCase {
             ("fake", [#"{"type":"session_meta","payload":{"id":"fake","cwd":"/private/tmp/tb-goto-test"}}"#]),
         ])
         defer { try? FileManager.default.removeItem(at: root) }
-        let rows = SessionDiscovery.discoverCodex(sessions: root).sessions
+        let rows = SessionDiscovery.codexWalk(sessions: root).sessions
         XCTAssertTrue(rows.first { $0.sessionId == "real" }?.revivable ?? false)
         XCTAssertFalse(rows.first { $0.sessionId == "fake" }?.revivable ?? true)
         // Both read .unknown regardless — revivability never implies a
@@ -868,67 +885,9 @@ final class SessionDiscoveryTests: XCTestCase {
             ("s1", [#"{"type":"session_meta","payload":{"id":"s1","cwd":"/tmp"}}"#]),
         ])
         defer { try? FileManager.default.removeItem(at: root) }
-        let result = SessionDiscovery.discoverCodex(
+        let result = SessionDiscovery.codexWalk(
             window: 0, now: Date().addingTimeInterval(3600), sessions: root)
         XCTAssertEqual(result.sessions.count, 0)
-    }
-
-    // MARK: discoverCodexIfScanned — the cache twin (rule 9: never walk the
-    // archive on the caller's thread)
-
-    @MainActor
-    func testDiscoverCodexIfScannedReturnsNothingUntilAScanExists() throws {
-        let root = try makeCodexSessions([
-            ("s1", [#"{"type":"session_meta","payload":{"id":"s1","cwd":"/tmp"}}"#]),
-        ])
-        defer {
-            SessionDiscovery.settleCodexForTesting()
-            try? FileManager.default.removeItem(at: root)
-        }
-
-        XCTAssertNil(SessionDiscovery.discoverCodexIfScanned(sessions: root),
-                     "a cold cache must not block the caller")
-
-        // The cold call above already started a background refresh; wait
-        // for it rather than calling the raw, cache-blind `discoverCodex`
-        // (that IS the uncached walk `discoverCodexIfScanned` wraps, the
-        // same relationship `scan` has to `discover` — calling it directly
-        // never touches the cache).
-        SessionDiscovery.settleCodexForTesting()
-
-        let warm = SessionDiscovery.discoverCodexIfScanned(sessions: root)
-        XCTAssertEqual(warm?.sessions.map(\.sessionId), ["s1"])
-    }
-
-    func testDiscoverCodexCacheIsKeyedByDirectory() throws {
-        let a = try makeCodexSessions([
-            ("from-a", [#"{"type":"session_meta","payload":{"id":"from-a","cwd":"/tmp"}}"#]),
-        ])
-        let b = try makeCodexSessions([
-            ("from-b", [#"{"type":"session_meta","payload":{"id":"from-b","cwd":"/tmp"}}"#]),
-        ])
-        defer {
-            try? FileManager.default.removeItem(at: a)
-            try? FileManager.default.removeItem(at: b)
-        }
-        XCTAssertEqual(SessionDiscovery.discoverCodex(sessions: a).sessions.map(\.sessionId),
-                       ["from-a"])
-        XCTAssertEqual(SessionDiscovery.discoverCodex(sessions: b).sessions.map(\.sessionId),
-                       ["from-b"])
-    }
-
-    func testWarmCodexFillsTheCacheOffMain() throws {
-        let root = try makeCodexSessions([
-            ("s1", [#"{"type":"session_meta","payload":{"id":"s1","cwd":"/tmp"}}"#]),
-        ])
-        defer {
-            SessionDiscovery.settleCodexForTesting()
-            try? FileManager.default.removeItem(at: root)
-        }
-        SessionDiscovery.warmCodex(sessions: root)
-        SessionDiscovery.settleCodexForTesting()
-        XCTAssertEqual(SessionDiscovery.discoverCodexIfScanned(sessions: root)?.sessions
-            .map(\.sessionId), ["s1"])
     }
 
     // MARK: - Where a revive lands (ruled 24 Aug)
@@ -1022,7 +981,7 @@ final class SessionDiscoveryTests: XCTestCase {
               assistant()]),
         ])
         defer { try? FileManager.default.removeItem(at: root) }
-        XCTAssertFalse(SessionDiscovery.hasScanned(projects: root))
+        XCTAssertFalse(SessionDiscovery.hasScanned(projects: root, sessions: emptyCodex))
     }
 
     func testOnceReadItReportsScanned() throws {
@@ -1035,9 +994,9 @@ final class SessionDiscoveryTests: XCTestCase {
             SessionDiscovery.settleForTesting()
             try? FileManager.default.removeItem(at: root)
         }
-        _ = SessionDiscovery.discover(live: StubAgents([]), projects: root,
+        _ = SessionDiscovery.discover(live: StubAgents([]), projects: root, sessions: emptyCodex,
                                       titles: TranscriptTitles())
-        XCTAssertTrue(SessionDiscovery.hasScanned(projects: root))
+        XCTAssertTrue(SessionDiscovery.hasScanned(projects: root, sessions: emptyCodex))
     }
 
     /// Age is not the question. A scan from an hour ago still means the
@@ -1054,28 +1013,66 @@ final class SessionDiscoveryTests: XCTestCase {
             try? FileManager.default.removeItem(at: root)
         }
         _ = SessionDiscovery.discover(now: Date().addingTimeInterval(-3600),
-                                      live: StubAgents([]), projects: root,
+                                      live: StubAgents([]), projects: root, sessions: emptyCodex,
                                       titles: TranscriptTitles())
-        XCTAssertTrue(SessionDiscovery.hasScanned(projects: root))
+        XCTAssertTrue(SessionDiscovery.hasScanned(projects: root, sessions: emptyCodex))
     }
-    /// The two archives are separate questions, and asking only one is how a
-    /// complete-looking list loses a whole harness.
+    // MARK: - One walk, both archives
+
+    /// The property the unification exists for: ONE scan returns both
+    /// harnesses, so there is no second cache to land late and no window where
+    /// a complete-looking list is missing a harness.
     ///
-    /// Measured 31 Aug, one second apart in one process: 33 rows with 0 Codex
-    /// under `hasScanned() == true`, then 48 rows with 15 Codex. Claude Code's
-    /// cache had landed and Codex's had not, and nothing could tell.
-    func testCodexHasItsOwnScannedAnswer() throws {
-        let sessions = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("codex-scan-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    /// That window was real and shipped: 33 rows with 0 Codex under a
+    /// confident "33 sessions", then 48 with 15, one second apart (31 Aug).
+    /// Two caches was the cause; two extra functions to reconcile them was the
+    /// patch; this is the fix.
+    func testOneScanCarriesBothHarnesses() throws {
+        let projects = try makeArchive([
+            ("-Users-x-Projects-a", "claude-1",
+             [#"{"type":"user","entrypoint":"cli","cwd":"/Users/x/Projects/a"}"#,
+              assistant()]),
+        ])
+        let codexHome = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("codex-both-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
         defer {
-            SessionDiscovery.settleCodexForTesting()
-            try? FileManager.default.removeItem(at: sessions)
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: projects)
+            try? FileManager.default.removeItem(at: codexHome)
         }
-        XCTAssertFalse(SessionDiscovery.hasScannedCodex(sessions: sessions))
-        // `discoverCodex` is the UNCACHED walk; `warmCodex` is what fills the
-        // cache this question reads, which is the same split Claude Code has.
-        SessionDiscovery.warmCodex(sessions: sessions)
-        XCTAssertTrue(SessionDiscovery.hasScannedCodex(sessions: sessions))
+        let meta = #"{"timestamp":"2026-08-30T09:00:00.000Z","type":"session_meta","payload":"#
+            + #"{"id":"01a05338-1306-7f40-9dc4-6e3b8e69c9dc","cwd":"/Users/x/Projects/a"}}"#
+        try meta.write(to: codexHome.appendingPathComponent("rollout-x-01a05338.jsonl"),
+                       atomically: true, encoding: .utf8)
+
+        let result = SessionDiscovery.scan(
+            window: defaultWindowForTest, limit: 60, now: Date(),
+            projects: projects, titles: TranscriptTitles(),
+            sessions: codexHome, temporaryRoots: [])
+
+        let harnesses = Set(result.sessions.map(\.harness))
+        XCTAssertTrue(harnesses.contains(ClaudeCodeAdapter().id), "no Claude Code row")
+        XCTAssertTrue(harnesses.contains(CodexAdapter().id), "no Codex row")
+    }
+
+    private var defaultWindowForTest: TimeInterval { 7 * 24 * 60 * 60 }
+
+    /// A Codex row keeps `unknown` liveness and its revive offer through the
+    /// merged join, where `agents --json` would otherwise call every one of
+    /// them gone. That rule used to be implied by calling a different
+    /// function; now it has to be stated, so it is worth asserting.
+    func testTheJoinDoesNotCallCodexSessionsGone() {
+        let codex = SessionDiscovery.Session(
+            sessionId: "01a05338", cwd: NSHomeDirectory(),
+            transcriptPath: "/x.jsonl", title: "Audit",
+            lastActivityAt: Date(), answered: false, activity: nil,
+            liveness: .unknown, revivable: false, harness: CodexAdapter().id)
+        var scanned = SessionDiscovery.Result()
+        scanned.sessions = [codex]
+
+        let joined = SessionDiscovery.join(scanned, live: StubAgents([]))
+        XCTAssertEqual(joined.sessions.first?.liveness, .unknown)
+        XCTAssertTrue(joined.sessions.first?.revivable ?? false)
     }
 }

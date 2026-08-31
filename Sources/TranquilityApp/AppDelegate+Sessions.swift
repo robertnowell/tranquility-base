@@ -962,14 +962,14 @@ extension AppDelegate {
         }
         // Tell the list whether the archive has actually been read, so an
         // empty one can say "reading" rather than "0 sessions".
-        hud.pastList?.archiveRead = SessionDiscovery.hasScannedEveryArchive()
+        hud.pastList?.archiveRead = SessionDiscovery.hasScanned()
         // A text census of the same list, for answering "is this harness in
         // here at all" without squinting at a screenshot of the first ten
         // rows. Logged, not printed: this runs inside a live app.
         let codex = items.filter { $0.row.id.hasPrefix("01a0") }.count
         Permissions.log("past agents: \(items.count) rows "
             + "(\(codex) codex, \(items.count - codex) claude-code), "
-            + "claude=\(SessionDiscovery.hasScanned()) codex=\(SessionDiscovery.hasScannedCodex())")
+            + "archiveRead=\(SessionDiscovery.hasScanned())")
         hud.showPastAgents(items: items)
 
         // The list is on screen and usable before a single transcript is read.
@@ -1153,7 +1153,8 @@ extension AppDelegate {
                 // design, 2026-08-22-tb-codex-hand-started-adoption — the
                 // same branch `tbase revive` already has and already
                 // proved live).
-                let codexFound = SessionDiscovery.discoverCodex().sessions
+                let codexFound = SessionDiscovery.discover().sessions
+                    .filter { $0.harness == CodexAdapter().id }
                     .first { $0.sessionId == sessionId }
                 guard let codexFound, codexFound.revivable, let cwd = codexFound.cwd else {
                     Permissions.log("revive: refused \(sessionId.prefix(8)) — "

@@ -183,8 +183,9 @@ public enum SessionDiscovery {
         /// The directory is part of the key, not just the window and the cap.
         /// Without it a test archive answers for the real one, which is a bug
         /// waiting to be blamed on the classifier.
-        static func key(_ window: TimeInterval, _ limit: Int, _ projects: URL) -> String {
-            "\(window)|\(limit)|\(projects.path)"
+        static func key(_ window: TimeInterval, _ limit: Int,
+                        _ projects: URL, _ sessions: URL) -> String {
+            "\(window)|\(limit)|\(projects.path)|\(sessions.path)"
         }
         /// The last scan for this archive at ANY age, plus whether it is old
         /// enough to be worth redoing. Serving is not the same question as
@@ -242,10 +243,11 @@ public enum SessionDiscovery {
         now: Date = Date(),
         live: ClaudeAgentsReading = ClaudeAgentsCLI(),
         projects: URL = TranscriptArchive.projectsDirectory,
+        sessions: URL = CodexRollout.sessionsDirectory,
         titles: TranscriptTitles = TranscriptTitles.shared,
         ttl: TimeInterval = scanTTL
     ) -> Result? {
-        let key = ScanCache.key(window, limit, projects)
+        let key = ScanCache.key(window, limit, projects, sessions)
         let held = scans.get(key: key, now: now, ttl: ttl)
 
         // Refresh whenever there is nothing or the answer has aged out — but
@@ -253,7 +255,8 @@ public enum SessionDiscovery {
         if held == nil || held?.stale == true, scans.beginRefresh(key: key) {
             Task.detached(priority: .utility) {
                 let fresh = scan(window: window, limit: limit, now: Date(),
-                                 projects: projects, titles: titles)
+                                 projects: projects, titles: titles,
+                                 sessions: sessions)
                 scans.put(key: key, now: Date(), result: fresh)
                 scans.endRefresh(key: key)
             }
@@ -282,43 +285,13 @@ public enum SessionDiscovery {
     public static func hasScanned(
         window: TimeInterval = defaultWindow,
         limit: Int = defaultLimit,
-        projects: URL = TranscriptArchive.projectsDirectory
+        projects: URL = TranscriptArchive.projectsDirectory,
+        sessions: URL = CodexRollout.sessionsDirectory
     ) -> Bool {
-        scans.get(key: ScanCache.key(window, limit, projects),
+        scans.get(key: ScanCache.key(window, limit, projects, sessions),
                   now: Date(), ttl: .greatestFiniteMagnitude) != nil
     }
 
-    /// The Codex archive's own answer, and it is a SEPARATE question.
-    ///
-    /// The two walks have separate caches and separate background warms, and
-    /// they land at different times because they are wildly different sizes:
-    /// hundreds of Claude Code transcripts against a few dozen rollouts. So
-    /// there is a window, every launch, where one archive is read and the
-    /// other is not.
-    ///
-    /// Measured 31 Aug, one second apart in the same process:
-    ///
-    ///     past agents: 33 rows (0 codex, 33 claude-code)
-    ///     past agents: 48 rows (15 codex, 33 claude-code)
-    ///
-    /// The first is a complete-looking list with every Codex agent silently
-    /// absent, which is what Robert kept reporting and what asking only about
-    /// Claude Code's cache could never detect. A per-harness question needs a
-    /// per-harness answer.
-    public static func hasScannedCodex(
-        window: TimeInterval = defaultWindow,
-        limit: Int = defaultLimit,
-        sessions: URL = CodexRollout.sessionsDirectory
-    ) -> Bool {
-        codexScans.get(key: ScanCache.key(window, limit, sessions),
-                       now: Date(), ttl: .greatestFiniteMagnitude) != nil
-    }
-
-    /// Every archive this app reads. The only honest answer to "is the list
-    /// complete", and the one the UI should ask.
-    public static func hasScannedEveryArchive() -> Bool {
-        hasScanned() && hasScannedCodex()
-    }
 
     /// Wait for any background scan to finish. For tests only.
     ///
@@ -341,13 +314,14 @@ public enum SessionDiscovery {
         window: TimeInterval = defaultWindow,
         limit: Int = defaultLimit,
         projects: URL = TranscriptArchive.projectsDirectory,
+        sessions: URL = CodexRollout.sessionsDirectory,
         titles: TranscriptTitles = TranscriptTitles.shared
     ) {
-        let key = ScanCache.key(window, limit, projects)
+        let key = ScanCache.key(window, limit, projects, sessions)
         guard scans.get(key: key, now: Date(), ttl: scanTTL) == nil,
               scans.beginRefresh(key: key) else { return }
         let result = scan(window: window, limit: limit, now: Date(),
-                          projects: projects, titles: titles)
+                          projects: projects, titles: titles, sessions: sessions)
         scans.put(key: key, now: Date(), result: result)
         scans.endRefresh(key: key)
     }
@@ -358,19 +332,20 @@ public enum SessionDiscovery {
         now: Date = Date(),
         live: ClaudeAgentsReading = ClaudeAgentsCLI(),
         projects: URL = TranscriptArchive.projectsDirectory,
+        sessions: URL = CodexRollout.sessionsDirectory,
         titles: TranscriptTitles = TranscriptTitles.shared,
         ttl: TimeInterval = scanTTL,
         /// See `scan`. A fixture-based caller passes `[]` so its own temp
         /// directory is not mistaken for a drill's.
         temporaryRoots: [String] = defaultTemporaryRoots
     ) -> Result {
-        let key = ScanCache.key(window, limit, projects)
+        let key = ScanCache.key(window, limit, projects, sessions)
         let held = scans.get(key: key, now: now, ttl: ttl)
         let result: Result = {
             if let held, !held.stale { return held.result }
             let scanned = scan(window: window, limit: limit, now: now,
                                projects: projects, titles: titles,
-                               temporaryRoots: temporaryRoots)
+                               sessions: sessions, temporaryRoots: temporaryRoots)
             scans.put(key: key, now: now, result: scanned)
             return scanned
         }()
@@ -388,6 +363,18 @@ public enum SessionDiscovery {
         result.livenessUnavailable = liveIds == nil
         let fm = FileManager.default
         result.sessions = result.sessions.map { session in
+            let landableNow = landingDirectory(for: session.cwd, fm) != nil
+            // A harness with no registry has nothing to join against, and
+            // `agents --json` would call every one of its sessions `gone`.
+            // Its liveness stays UNKNOWN and its revive offer is not gated on
+            // being gone, because attempting a Codex resume is always safe to
+            // try: `attemptCodexResume` reads Codex's own answer. That rule
+            // used to live in a separate walk; merging the walks is what makes
+            // stating it here necessary, and it is better stated once than
+            // implied by which function you happened to call.
+            guard session.harness != CodexAdapter().id else {
+                return session.with(liveness: .unknown, revivable: landableNow)
+            }
             let liveness: Liveness = {
                 guard let liveIds else { return .unknown }
                 return liveIds.contains(session.sessionId) ? .live : .gone
@@ -397,21 +384,33 @@ public enum SessionDiscovery {
             // failure with their filenames). Resolve first, offer second, and
             // resolve it HERE rather than in the scan: a directory can vanish
             // between two ticks and an offer must never outlive its target.
-            let landable = landingDirectory(for: session.cwd, fm) != nil
             return session.with(liveness: liveness,
-                                revivable: liveness == .gone && landable)
+                                revivable: liveness == .gone && landableNow)
         }
         return result
     }
 
     /// The disk walk. Everything here is a fact about what was written, so it
     /// is safe to cache; nothing here consults a process.
+    /// ONE walk over every archive this machine has.
+    ///
+    /// Codex discovery arrived as a parallel path on 22 Aug: its own walk, its
+    /// own cache, its own warm. Everything about it was correct in isolation
+    /// and the parallelism was the defect. Two caches warm independently and
+    /// land at different times, so "has the archive been read" became two
+    /// questions that could disagree, and for a beat after every launch Past
+    /// Agents showed a confident, complete-looking list with an entire harness
+    /// missing from it (31 Aug: 33 rows, 0 Codex, then 48 rows, 15 Codex).
+    ///
+    /// That was patched twice at the UI before being fixed here. There is no
+    /// window now because there is no second cache to land late.
     static func scan(
         window: TimeInterval,
         limit: Int,
         now: Date,
         projects: URL,
         titles: TranscriptTitles,
+        sessions: URL = CodexRollout.sessionsDirectory,
         /// Injectable so a test can build fixtures where tests build things —
         /// in a temp directory — without being filtered out by the very rule
         /// it is checking. Empty means "exclude nothing", which is what every
@@ -508,6 +507,15 @@ public enum SessionDiscovery {
         // read for every interactive candidate in the window (~44 on this
         // machine) instead of the first `limit` — bounded by the window, and
         // the walk is cached (see ScanCache), so it is paid once per TTL.
+        // Every other archive, merged BEFORE the rank and the cap so the cut
+        // is made over the whole population. Capping each harness separately
+        // would quietly reserve half the list for whichever one this machine
+        // happens to use less.
+        let codex = codexWalk(window: window, limit: limit, now: now, sessions: sessions)
+        kept.append(contentsOf: codex.sessions)
+        result.scanned += codex.scanned
+        result.unclassifiable += codex.unclassifiable
+
         kept.sort { $0.lastActivityAt > $1.lastActivityAt }
         if kept.count > limit {
             result.beyondLimit = kept.count - limit
@@ -854,7 +862,10 @@ public enum SessionDiscovery {
     /// measured close to a second against 19 real rollouts on this machine
     /// — a number that only grows, the same shape `ScanCache` already exists
     /// to solve for Claude Code's own hundreds of transcripts.
-    public static func discoverCodex(
+    /// Codex's half of the walk. No longer a public entry point and no longer
+    /// cached on its own: `scan` calls it, and the one cache above holds the
+    /// merged answer.
+    static func codexWalk(
         window: TimeInterval = defaultWindow,
         limit: Int = defaultLimit,
         now: Date = Date(),
@@ -912,67 +923,9 @@ public enum SessionDiscovery {
             kept.removeLast(kept.count - limit)
         }
         result.sessions = kept
-        result.livenessUnavailable = true   // by design here, not a probe failure
+        // The merged Result carries Claude Code's liveness verdict, so this
+        // walk must not claim the whole thing is unknowable. Codex rows say so
+        // for themselves, per row, in `join`.
         return result
-    }
-
-    /// A second `ScanCache` instance, not shared with Claude Code's own —
-    /// the class itself is already generic (a TTL cache of `Result` keyed by
-    /// a string; nothing in its body is Claude-Code-specific), so a second
-    /// instance is the whole change, not a second implementation.
-    private static let codexScans = ScanCache()
-
-    /// The Codex twin of `discoverIfScanned`: non-blocking, returns nothing
-    /// on a genuinely cold cache (the first tick after launch) rather than
-    /// pay a synchronous walk on the caller's thread. No `join` step here,
-    /// unlike Claude Code's — `discoverCodex` already IS the whole, final
-    /// answer for every row (see its own doc comment on why liveness is
-    /// never guessed), so there is nothing left to attach after the cache
-    /// hit.
-    public static func discoverCodexIfScanned(
-        window: TimeInterval = defaultWindow,
-        limit: Int = defaultLimit,
-        now: Date = Date(),
-        sessions: URL = CodexRollout.sessionsDirectory,
-        ttl: TimeInterval = scanTTL
-    ) -> Result? {
-        let key = ScanCache.key(window, limit, sessions)
-        let held = codexScans.get(key: key, now: now, ttl: ttl)
-        if held == nil || held?.stale == true, codexScans.beginRefresh(key: key) {
-            Task.detached(priority: .utility) {
-                let fresh = discoverCodex(window: window, limit: limit, now: Date(),
-                                          sessions: sessions)
-                codexScans.put(key: key, now: Date(), result: fresh)
-                codexScans.endRefresh(key: key)
-            }
-        }
-        guard let held else { return nil }
-        return held.result
-    }
-
-    /// Fill the Codex cache off-main at launch, the same reason `warm` does
-    /// for Claude Code — without this the grid's Codex rows arrive a tick
-    /// late instead of being there on the first paint.
-    public static func warmCodex(
-        window: TimeInterval = defaultWindow,
-        limit: Int = defaultLimit,
-        sessions: URL = CodexRollout.sessionsDirectory
-    ) {
-        let key = ScanCache.key(window, limit, sessions)
-        guard codexScans.get(key: key, now: Date(), ttl: scanTTL) == nil,
-              codexScans.beginRefresh(key: key) else { return }
-        let result = discoverCodex(window: window, limit: limit, now: Date(), sessions: sessions)
-        codexScans.put(key: key, now: Date(), result: result)
-        codexScans.endRefresh(key: key)
-    }
-
-    /// The Codex twin of `settleForTesting` — waits for any background
-    /// Codex scan to finish, same reason: a detached scan that outlives its
-    /// test keeps doing disk I/O into whatever suite runs next.
-    static func settleCodexForTesting(timeout: TimeInterval = 5) {
-        let deadline = Date().addingTimeInterval(timeout)
-        while codexScans.isRefreshing, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
     }
 }
