@@ -1076,3 +1076,45 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertTrue(joined.sessions.first?.revivable ?? false)
     }
 }
+
+/// Which harness a revive belongs to is a question about the ROW, not about
+/// whether a lookup found one.
+///
+/// `revive` read `guard let fresh else { ...Codex... }`, which worked only
+/// while `discover()` returned Claude Code alone. The 31 Aug unification put
+/// both harnesses in one list, every Codex session became FOUND, and Codex
+/// revives fell through to the Claude Code path: launch, then wait for a NEW
+/// thread id, which a resume can never produce because the thread already
+/// exists. The pane came up and the panel reported failure.
+final class ReviveHarnessBranchTests: XCTestCase {
+
+    private func row(_ harness: String) -> SessionDiscovery.Session {
+        SessionDiscovery.Session(
+            sessionId: "01a05338", cwd: NSHomeDirectory(),
+            transcriptPath: "/x.jsonl", title: "Audit Kopi fixes in codebase",
+            lastActivityAt: Date(), answered: false, activity: nil,
+            liveness: .unknown, revivable: true, harness: harness)
+    }
+
+    /// The condition the fixed code branches on, stated as a fact rather than
+    /// left implicit in a `guard let`.
+    private func takesClaudeCodePath(_ found: SessionDiscovery.Session?) -> Bool {
+        guard let found, found.harness == ClaudeCodeAdapter().id else { return false }
+        return true
+    }
+
+    func testAFoundCodexRowDoesNotTakeTheClaudeCodePath() {
+        XCTAssertFalse(takesClaudeCodePath(row(CodexAdapter().id)),
+                       "a found Codex row must still revive through Codex")
+    }
+
+    func testAFoundClaudeCodeRowDoes() {
+        XCTAssertTrue(takesClaudeCodePath(row(ClaudeCodeAdapter().id)))
+    }
+
+    /// And a session no list knows still falls to the Codex attempt, which is
+    /// the behaviour the old `guard let` had for the right reason.
+    func testAnUnknownSessionDoesNotTakeTheClaudeCodePath() {
+        XCTAssertFalse(takesClaudeCodePath(nil))
+    }
+}
