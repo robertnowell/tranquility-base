@@ -318,3 +318,37 @@ final class HookApprovalTests: XCTestCase {
         XCTAssertEqual(HookManifest.approval(for: ghost), .unknown)
     }
 }
+
+/// A matcher is a TOOL NAME, and tool names belong to the harness.
+///
+/// The Codex manifest shipped with Claude Code's `Write|Edit|Bash`, so its
+/// artifact hook listened for tools that do not exist there and never fired.
+/// The symptom arrived from the far end on 31 Aug: a page a Codex session
+/// wrote had no agent footer and never reached a hub, leaving no way back from
+/// the page to the agent.
+final class HookMatcherVocabularyTests: XCTestCase {
+
+    private func matcher(_ harness: HookManifest.Harness, _ event: String) -> String? {
+        harness.expected.first { $0.event == event }?.matcher
+    }
+
+    /// Measured across every August rollout on this machine: Codex writes
+    /// files through `exec` and nothing else.
+    func testCodexMatchesItsOwnToolName() {
+        XCTAssertEqual(matcher(HookManifest.codex, "PostToolUse"), "exec")
+    }
+
+    func testClaudeCodeKeepsItsThree() {
+        XCTAssertEqual(matcher(HookManifest.claudeCode, "PostToolUse"), "Write|Edit|Bash")
+    }
+
+    /// The assertion that would have caught it: the two harnesses must not be
+    /// assumed to share a tool vocabulary. If a future harness is added by
+    /// copying this manifest, this fails until someone measures.
+    func testNoTwoHarnessesShareAToolMatcher() {
+        let matchers = HookManifest.harnesses.compactMap { matcher($0, "PostToolUse") }
+        XCTAssertEqual(Set(matchers).count, matchers.count,
+                       "two harnesses claim the same PostToolUse tool names; "
+                       + "one of them was copied rather than measured")
+    }
+}
