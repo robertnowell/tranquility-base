@@ -44,7 +44,7 @@ final class CodexThreadNamesTests: XCTestCase {
     func testAnAbsentCodexHomeYieldsNoNamesRatherThanFailing() {
         let ghost = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("no-codex-\(UUID().uuidString)")
-        XCTAssertTrue(CodexThreadNames.all(in: ghost).isEmpty)
+        XCTAssertTrue(CodexThreadNames.read(in: ghost).isEmpty)
     }
 
     func testADirectoryWithNoStateFileYieldsNoNames() throws {
@@ -54,6 +54,6 @@ final class CodexThreadNamesTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         try Data("not a database".utf8)
             .write(to: dir.appendingPathComponent("config.toml"))
-        XCTAssertTrue(CodexThreadNames.all(in: dir).isEmpty)
+        XCTAssertTrue(CodexThreadNames.read(in: dir).isEmpty)
     }
 }

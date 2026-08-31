@@ -180,26 +180,59 @@ public enum GridAssembler {
     /// the grid rows, the speaking card, the depth-1 why card, the reply
     /// target — so no surface can drift back to the derived slug on its
     /// own.
-    /// `harnessName` is the name the HARNESS itself gave this session, for a
-    /// harness that keeps one. Codex does, in its own thread table.
-    ///
-    /// It is a parameter rather than a lookup because Core does not read
-    /// Codex's database, and it sits ahead of `projectLabel` because a
-    /// directory is the answer of last resort.
+    /// The harness's OWN name for a session is looked up in here rather than
+    /// handed in. It used to be a parameter, and a parameter is a thing a call
+    /// site can forget: `fb13436` added it, taught one of the four bands that
+    /// build a row, and said "every band" in its commit message. Robert saw
+    /// "Projects" again the same afternoon. There is no version of this that
+    /// survives being remembered at nine call sites, so it is not asked for
+    /// any more.
     ///
     /// Needed because `tabTitle` cannot find a Codex name on its own: it reads
     /// a CLAUDE CODE title out of `transcriptPath`, and for a Codex session
     /// that path is a rollout with no such record, so it falls through to
-    /// `live?.name`. That works for a row built from the live map and not for
-    /// one built from a stored event, which is how a session with a perfectly
-    /// good name ("Analyze Mirai's September calendar") showed as "Projects"
-    /// on 31 Aug. One name reached a row by three different routes and only
-    /// two of them had been taught about Codex.
-    public static func tabDisplayName(for event: WaitingSession, live: LiveSession?,
-                                      harnessName: String? = nil) -> String {
+    /// `live?.name` — which only exists if the row came from the live map.
+    ///
+    /// Ahead of the callsign because for Claude Code `liveName` already IS the
+    /// harness's own tab title and Codex's thread name is the same kind of
+    /// thing; ahead of `projectLabel` because a directory is the answer of
+    /// last resort, and it is the answer Robert kept being shown.
+    public static func tabDisplayName(for event: WaitingSession, live: LiveSession?) -> String {
         SessionRow.displayName(
             liveName: tabTitle(transcriptPath: event.transcriptPath, live: live)
-                ?? harnessName,
+                ?? harnessName(event.sessionId),
             callsign: event.callsign, fallback: event.projectLabel)
+    }
+
+    /// The same name, for a row built from a LIVE session with no stored event
+    /// behind it — the band that used to fall back to the literal "session".
+    public static func tabDisplayName(live: LiveSession, callsign: String?) -> String {
+        SessionRow.displayName(
+            liveName: tabTitle(transcriptPath: nil, live: live)
+                ?? harnessName(live.sessionId),
+            callsign: callsign, fallback: "session")
+    }
+
+    /// And for a row built from DISK, where the title comes from discovery.
+    public static func tabDisplayName(discovered title: String?, sessionId: String,
+                                      callsign: String?, cwd: String?) -> String {
+        SessionRow.displayName(
+            liveName: title ?? harnessName(sessionId),
+            callsign: callsign,
+            fallback: cwd.map { ($0 as NSString).lastPathComponent } ?? "session")
+    }
+
+    /// What the harness itself calls this session, for a harness that keeps a
+    /// name of its own. Codex does, in its thread table; Claude Code's
+    /// equivalent is the transcript title `tabTitle` already reads.
+    public static func harnessName(_ sessionId: String) -> String? {
+        harnessNames()[sessionId.lowercased()]
+    }
+
+    /// The seam, for tests and for nothing else. Production never sets it: the
+    /// whole point of looking the name up in here is that no caller has to
+    /// remember to supply one.
+    public nonisolated(unsafe) static var harnessNames: @Sendable () -> [String: String] = {
+        CodexThreadNames.all()
     }
 }

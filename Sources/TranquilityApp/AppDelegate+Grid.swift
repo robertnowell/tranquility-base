@@ -59,6 +59,11 @@ extension AppDelegate {
         // used these since 30 Aug; a LIVE Codex session never reaches that
         // band, which is why two working sessions both showed as "Projects".
         let codexNames = CodexThreadNames.all()
+        if codexNames.count != lastCodexNameCount {
+            let before = lastCodexNameCount == -1 ? "none yet" : String(lastCodexNameCount)
+            Permissions.log("codex names: \(codexNames.count) known (was \(before))")
+            lastCodexNameCount = codexNames.count
+        }
 
         var liveById: [String: LiveSession] = [:]
         for session in (ClaudeAgentsCLI().sessions() ?? [])
@@ -130,8 +135,7 @@ extension AppDelegate {
             let blocked = GridAssembler.blockedOnYou(liveById[event.sessionId], resumed: resumed)
             return SessionRow(
                 id: event.sessionId,
-                name: tabDisplayName(for: event, live: liveById[event.sessionId],
-                                     harnessName: codexNames[event.sessionId.lowercased()]),
+                name: tabDisplayName(for: event, live: liveById[event.sessionId]),
                 // The id, not the callsign — ruled 12 Aug, and the same in
                 // every band so a row means the same thing wherever it sits.
                 // A blocked row spends the column on its reason, like every
@@ -216,9 +220,7 @@ extension AppDelegate {
                                          pickedUp: switchedOn.contains(live.sessionId))
             rows.append(SessionRow(
                 id: live.sessionId,
-                name: SessionRow.displayName(
-                    liveName: GridAssembler.tabTitle(transcriptPath: nil, live: live),
-                    callsign: nil, fallback: "session"),
+                name: GridAssembler.tabDisplayName(live: live, callsign: nil),
                 aux: liveLamp.reason ?? SessionRow.shortId(live.sessionId),
                 lamp: liveLamp.lamp, detail: liveLamp.detail))
         }
@@ -237,10 +239,9 @@ extension AppDelegate {
             placed.insert(found.sessionId)
             rows.append(SessionRow(
                 id: found.sessionId,
-                name: SessionRow.displayName(
-                    liveName: found.title,
-                    callsign: closedCallsigns[found.sessionId],
-                    fallback: found.cwd.map { ($0 as NSString).lastPathComponent } ?? "session"),
+                name: GridAssembler.tabDisplayName(
+                    discovered: found.title, sessionId: found.sessionId,
+                    callsign: closedCallsigns[found.sessionId], cwd: found.cwd),
                 // Same precedence as the live band above: a session that died
                 // mid-error says why, and otherwise the column carries the id.
                 // For a closed row that id is the whole point — it is the
@@ -308,9 +309,8 @@ extension AppDelegate {
     /// See `GridAssembler.tabDisplayName` — this is the thin AppDelegate-side
     /// name for the same call, kept so the many call sites elsewhere in the
     /// app don't all need to say `GridAssembler.` themselves.
-    func tabDisplayName(for event: WaitingSession, live: LiveSession?,
-                        harnessName: String? = nil) -> String {
-        GridAssembler.tabDisplayName(for: event, live: live, harnessName: harnessName)
+    func tabDisplayName(for event: WaitingSession, live: LiveSession?) -> String {
+        GridAssembler.tabDisplayName(for: event, live: live)
     }
 
     /// The one route to the idle face: assemble the grid and show it.

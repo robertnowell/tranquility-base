@@ -146,13 +146,29 @@ final class GridAssemblerTests: XCTestCase {
 
 /// One name, whichever band builds the row.
 ///
-/// A Codex session with a perfectly good name showed as "Projects" on 31 Aug.
-/// `tabTitle` reads a CLAUDE CODE title out of `transcriptPath`, and for a
-/// Codex session that path is a rollout with no such record, so it falls
-/// through to `live?.name`. That works for a row built from the live map and
-/// not for one built from a stored event. The name reached a row by three
-/// routes and only two knew about Codex.
-final class HarnessNameOnAWaitingRowTests: XCTestCase {
+/// A Codex session with a perfectly good name showed as "Projects" on 31 Aug,
+/// twice, hours apart, with a fix in between. `tabTitle` reads a CLAUDE CODE
+/// title out of `transcriptPath`, and for a Codex session that path is a
+/// rollout with no such record, so it falls through to `live?.name` — which
+/// only exists if the row came from the live map.
+///
+/// The first fix passed the harness's name in as a parameter and taught ONE
+/// of the four bands that build a row. These cases cover all four, and the
+/// parameter is gone: the lookup lives inside `tabDisplayName`, so there is
+/// nothing left for a fifth band to forget.
+final class HarnessNameOnEveryBandTests: XCTestCase {
+
+    private static let known = ["01a05885": "Analyze Mirai's September calendar"]
+
+    override func setUp() {
+        super.setUp()
+        GridAssembler.harnessNames = { Self.known }
+    }
+
+    override func tearDown() {
+        GridAssembler.harnessNames = { CodexThreadNames.all() }
+        super.tearDown()
+    }
 
     private func event(_ id: String) -> WaitingSession {
         // `projectLabel` is derived from cwd, so "Projects" is what this row
@@ -164,19 +180,23 @@ final class HarnessNameOnAWaitingRowTests: XCTestCase {
         return e
     }
 
+    private func live(_ id: String) -> LiveSession {
+        LiveSession(harness: CodexAdapter().id, pid: 1, sessionId: id,
+                    cwd: "/Users/x/Projects", status: "idle", name: nil,
+                    waitingFor: nil)
+    }
+
+    // MARK: - the waiting band
+
     func testTheHarnessNameBeatsTheDirectory() {
-        let name = GridAssembler.tabDisplayName(
-            for: event("01a05885"), live: nil,
-            harnessName: "Analyze Mirai's September calendar")
-        XCTAssertEqual(name, "Analyze Mirai's September calendar")
+        XCTAssertEqual(GridAssembler.tabDisplayName(for: event("01a05885"), live: nil),
+                       "Analyze Mirai's September calendar")
     }
 
     /// Without one, the directory is still the honest last answer.
     func testNoHarnessNameFallsBackToTheProject() {
-        XCTAssertEqual(
-            GridAssembler.tabDisplayName(for: event("01a05003"), live: nil,
-                                         harnessName: nil),
-            "Projects")
+        XCTAssertEqual(GridAssembler.tabDisplayName(for: event("01a05003"), live: nil),
+                       "Projects")
     }
 
     /// The harness's own name outranks a callsign, and that is the EXISTING
@@ -188,17 +208,64 @@ final class HarnessNameOnAWaitingRowTests: XCTestCase {
     func testTheHarnessNameOutranksACallsign() {
         var e = event("01a05885")
         e.callsign = "promotions copy"
-        XCTAssertEqual(
-            GridAssembler.tabDisplayName(for: e, live: nil, harnessName: "Analyze Mirai"),
-            "Analyze Mirai")
+        XCTAssertEqual(GridAssembler.tabDisplayName(for: e, live: nil),
+                       "Analyze Mirai's September calendar")
     }
 
     /// And a callsign still beats the directory when there is no name at all.
     func testACallsignBeatsTheDirectory() {
         var e = event("01a05003")
         e.callsign = "promotions copy"
+        XCTAssertEqual(GridAssembler.tabDisplayName(for: e, live: nil),
+                       "promotions copy")
+    }
+
+    // MARK: - the stored band (a stored event WITH a live process)
+
+    /// The band that was still showing "Projects" after the first fix: it
+    /// reached the name only through `live.name`, so a live session whose
+    /// name had not been injected fell all the way to the directory.
+    func testAStoredRowWithALiveProcessIsNamed() {
         XCTAssertEqual(
-            GridAssembler.tabDisplayName(for: e, live: nil, harnessName: nil),
-            "promotions copy")
+            GridAssembler.tabDisplayName(for: event("01a05885"), live: live("01a05885")),
+            "Analyze Mirai's September calendar")
+    }
+
+    // MARK: - the live-only band
+
+    /// This one used to answer the literal string "session".
+    func testALiveRowWithNoStoredEventIsNamed() {
+        XCTAssertEqual(GridAssembler.tabDisplayName(live: live("01a05885"), callsign: nil),
+                       "Analyze Mirai's September calendar")
+    }
+
+    func testALiveRowWithNoNameAnywhereSaysSession() {
+        XCTAssertEqual(GridAssembler.tabDisplayName(live: live("01a05003"), callsign: nil),
+                       "session")
+    }
+
+    // MARK: - the disk band
+
+    func testADiskRowFallsBackToTheHarnessName() {
+        XCTAssertEqual(
+            GridAssembler.tabDisplayName(discovered: nil, sessionId: "01a05885",
+                                         callsign: nil, cwd: "/Users/x/Projects"),
+            "Analyze Mirai's September calendar")
+    }
+
+    /// Discovery's own title still wins when it has one — it is the same
+    /// name, read by the route that band already had.
+    func testADiskRowPrefersDiscoverysTitle() {
+        XCTAssertEqual(
+            GridAssembler.tabDisplayName(discovered: "Audit Kopi fixes", sessionId: "01a05885",
+                                         callsign: nil, cwd: "/Users/x/Projects"),
+            "Audit Kopi fixes")
+    }
+
+    func testADiskRowWithNothingFallsBackToTheDirectory() {
+        XCTAssertEqual(
+            GridAssembler.tabDisplayName(discovered: nil, sessionId: "01a05003",
+                                         callsign: nil, cwd: "/Users/x/Projects"),
+            "Projects")
     }
 }

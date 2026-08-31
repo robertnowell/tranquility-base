@@ -219,3 +219,39 @@ final class LiveNonRegistryDecorationTests: XCTestCase {
         XCTAssertNil(live.first?.name)
     }
 }
+
+/// A `LiveSession` built from an ownership record keeps the harness the record
+/// names. It used to drop it, and every downstream caller then had to guess —
+/// which each one did by omission, as Claude. That is why the grid's
+/// right-click could not end a Codex session: the ladder's identity guard was
+/// told to expect `claude` and correctly refused a pid running `codex`.
+final class LiveSessionCarriesItsHarnessTests: XCTestCase {
+
+    func testANonRegistryRowKnowsItIsCodex() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = FileSessionOwnershipStore(
+            fileURL: dir.appendingPathComponent("session-ownership.json"))
+        // This process: alive by construction, so the row survives the filter.
+        store.record(SessionOwnershipRecord(
+            sessionId: "01a05338", harness: CodexAdapter().id,
+            pid: Int(ProcessInfo.processInfo.processIdentifier)))
+
+        let rows = store.liveNonRegistrySessions()
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.harness, CodexAdapter().id)
+        // And the fragment the termination ladder will be handed.
+        XCTAssertEqual(
+            KnownHarnesses.adapter(for: rows[0].harness).processCommandFragment, "codex")
+    }
+
+    /// The default is still right for everything `agents --json` returns.
+    func testARegistryRowIsClaudeCode() throws {
+        let json = Data("""
+        [{"pid": 1, "sessionId": "abc", "cwd": "/tmp"}]
+        """.utf8)
+        let rows = try JSONDecoder().decode([LiveSession].self, from: json)
+        XCTAssertEqual(rows.first?.harness, ClaudeCodeAdapter().id)
+    }
+}

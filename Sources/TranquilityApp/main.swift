@@ -166,6 +166,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// entirely inside `sessionRowsNow()`.
     static let liveGrace: TimeInterval = 8
     var lastSeenLive: [String: (session: LiveSession, at: Date)] = [:]
+    /// How many Codex names the last repaint had. Logged only when it moves,
+    /// because the number going to zero is the one thing that renames every
+    /// Codex row to its directory at once, and until 31 Aug there was nothing
+    /// in the log to see it by — three separate investigations reasoned about
+    /// bands while the input was never checked.
+    var lastCodexNameCount = -1
     /// Hands-free listening: started by a double-tap of ⌥, ended by a single tap.
     /// Distinct from the push-to-talk flag because releasing a key you are not
     /// holding must not end anything.
@@ -407,6 +413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AssemblyAIStreaming.trace = { Permissions.log("assemblyai: \($0)") }
         AssemblyAIFileRecovery.trace = { Permissions.log("assemblyai-file: \($0)") }
         StreamedUtterance.trace = { Permissions.log("stream: \($0)") }
+        CodexThreadNames.trace = { Permissions.log($0) }
 
         do {
             let store = try QueueStore()
@@ -679,7 +686,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // second half of its identity guard.
                 let outcome = SessionTermination.end(
                     pid: live.pid, named: name,
-                    expectedTty: ProcessProbe.tty(of: live.pid))
+                    expectedTty: ProcessProbe.tty(of: live.pid),
+                    // The harness comes off the session, not off a default.
+                    // With a default it took Claude's, and the guard refused
+                    // every Codex row: "pid 46356 is `codex`, not a claude
+                    // session", logged and invisible, three times in thirty
+                    // seconds while Robert clicked End (31 Aug).
+                    expectedCommand: KnownHarnesses.adapter(for: live.harness)
+                        .processCommandFragment)
                 switch outcome {
                 case .refused(let why):
                     Permissions.log("terminate: \(name) NOT ended — \(why)")

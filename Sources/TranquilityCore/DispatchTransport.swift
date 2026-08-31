@@ -526,6 +526,19 @@ public enum ProcessProbe {
 // MARK: - claude agents --json
 
 public struct LiveSession: Sendable, Decodable {
+    /// WHICH HARNESS this process is. Carried on the object rather than
+    /// re-derived at each use, because re-deriving it is what keeps breaking:
+    /// a `LiveSession` built from an ownership record knew its harness and
+    /// dropped it, so every downstream caller had to guess, and each one
+    /// guessed "claude" by omission. That is how the grid's right-click could
+    /// not end a Codex session at all — the ladder's identity guard refused
+    /// the pid three times on 31 Aug ("pid 46356 is `codex`, not a claude
+    /// session") — and it is the same shape as the Codex rows that keep
+    /// coming back nameless.
+    ///
+    /// `agents --json` does not emit it, and the default is right there:
+    /// everything that CLI returns is Claude Code by construction.
+    public var harness: String = ClaudeCodeAdapter().id
     public var pid: Int
     public var sessionId: String
     public var cwd: String?
@@ -551,6 +564,15 @@ public struct LiveSession: Sendable, Decodable {
 
     public var startedAtDate: Date? {
         startedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
+    }
+
+    /// `harness` is deliberately absent: it is OURS, not the CLI's, and a
+    /// synthesized `Decodable` demands a key for every stored property even
+    /// when it has a default. Leaving it out of the keys is what lets the
+    /// default stand — and the default is the truth here, since every row
+    /// `agents --json` returns is Claude Code.
+    private enum CodingKeys: String, CodingKey {
+        case pid, sessionId, cwd, status, name, waitingFor, kind, startedAt
     }
 
     /// Positive evidence of a tab-less first-party background session. Only
