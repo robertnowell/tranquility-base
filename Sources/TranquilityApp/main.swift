@@ -481,7 +481,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // refused. The deploy check reads that refusal as a panel stuck
                 // holding the stage.
                 Task.detached(priority: .utility) { SessionDiscovery.warm() }
-                Task.detached(priority: .utility) { SessionDiscovery.warmCodex() }
 
                 // Write the summary before it is asked for. Doing it on demand meant
                 // every use opened with a model call you had to sit through.
@@ -1127,7 +1126,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // alone, which would read as a bug in the list.
             if !CommandLine.arguments.contains("--cold") {
                 SessionDiscovery.warm()
-                SessionDiscovery.warmCodex()
             }
             openPastAgents()
             RunLoop.current.run(until: Date().addingTimeInterval(1.5))

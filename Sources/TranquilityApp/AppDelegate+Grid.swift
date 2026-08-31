@@ -248,35 +248,12 @@ extension AppDelegate {
                     ?? SessionRow.shortId(found.sessionId),
                 lamp: .unlit,
                 revivable: found.revivable,
-                detail: found.activity?.fullReason))
-        }
-        // Codex's own history, the same additive shape as the band just
-        // above — disk-enumerated, never guessed live (the settled design,
-        // 2026-08-21-tb-codex-hand-started-adoption): every row is
-        // `.unlit`, exactly what that lamp already means ("no lamp at all —
-        // the session exited, or the liveness probe could not say",
-        // StateLegend.swift) and precisely what a Codex row's never-guessed
-        // liveness is. A separate loop rather than merged into the one
-        // above: `discoverCodexIfScanned` never joins a live-process result
-        // the way `discoverIfScanned` does (nothing to join — see its own
-        // doc comment), so there is no liveness value here to filter
-        // `!= .live` against; every row this produces already belongs.
-        // `detail` names the harness in the hover rather than the row
-        // itself, matching this app's own rule that explanatory text lives
-        // in a tooltip, not inline.
-        for found in (SessionDiscovery.discoverCodexIfScanned()?.sessions ?? [])
-        where !placed.contains(found.sessionId) {
-            placed.insert(found.sessionId)
-            rows.append(SessionRow(
-                id: found.sessionId,
-                name: SessionRow.displayName(
-                    liveName: found.title,
-                    callsign: closedCallsigns[found.sessionId],
-                    fallback: found.cwd.map { ($0 as NSString).lastPathComponent } ?? "session"),
-                aux: SessionRow.shortId(found.sessionId),
-                lamp: .unlit,
-                revivable: found.revivable,
-                detail: "Codex session"))
+                // The harness names itself in the hover when it is not the
+                // default one, matching this app's rule that explanatory text
+                // lives in a tooltip rather than inline. Codex used to get a
+                // whole second band for this line.
+                detail: found.activity?.fullReason
+                    ?? (found.harness == CodexAdapter().id ? "Codex session" : nil)))
         }
         // The user's own switch, applied last and to every band at once.
         //
