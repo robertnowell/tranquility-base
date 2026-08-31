@@ -268,6 +268,26 @@ public enum SessionDiscovery {
         return join(held.result, live: live)
     }
 
+    /// Whether the archive has been read at all yet, at any age.
+    ///
+    /// `discoverIfScanned` returns nothing on a cold cache by design, and the
+    /// warm runs off-main, so for the first seconds after a launch there is a
+    /// real difference between "no closed sessions" and "not measured yet".
+    /// Past Agents could not tell them apart and reported the first: it said
+    /// "0 sessions · 7 days" for a beat after every relaunch, and this app
+    /// relaunches on every merge (31 Aug, found by photographing the list a
+    /// second after launch). An empty answer presented as a finished one is
+    /// the same `gone` versus `unknown` confusion this file already refuses
+    /// everywhere else.
+    public static func hasScanned(
+        window: TimeInterval = defaultWindow,
+        limit: Int = defaultLimit,
+        projects: URL = TranscriptArchive.projectsDirectory
+    ) -> Bool {
+        scans.get(key: ScanCache.key(window, limit, projects),
+                  now: Date(), ttl: .greatestFiniteMagnitude) != nil
+    }
+
     /// Wait for any background scan to finish. For tests only.
     ///
     /// A detached scan that outlives its test keeps doing disk I/O while the
