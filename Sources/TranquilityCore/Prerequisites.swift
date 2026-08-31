@@ -218,7 +218,14 @@ public enum Prerequisites {
                 return State(item: item, satisfied: true,
                              detail: harnesses.isEmpty
                                 ? "wired"
-                                : "wired into " + harnesses.joined(separator: " + "))
+                                // "and", not "+". A plus sign is a SYMBOL, so
+                                // `ChromeType.isMark` counts it, and this
+                                // string renders inside the panel where the
+                                // chrome drill requires every mark to be
+                                // composed. Same trap as the currency sign on
+                                // 30 Aug; composing a connective inside a
+                                // prose sentence is still the wrong fix.
+                                : "wired into " + harnesses.joined(separator: " and "))
             default:
                 return State(item: item, satisfied: true, detail: "")
             }
