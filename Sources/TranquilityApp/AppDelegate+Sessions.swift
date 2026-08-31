@@ -962,7 +962,14 @@ extension AppDelegate {
         }
         // Tell the list whether the archive has actually been read, so an
         // empty one can say "reading" rather than "0 sessions".
-        hud.pastList?.archiveRead = SessionDiscovery.hasScanned()
+        hud.pastList?.archiveRead = SessionDiscovery.hasScannedEveryArchive()
+        // A text census of the same list, for answering "is this harness in
+        // here at all" without squinting at a screenshot of the first ten
+        // rows. Logged, not printed: this runs inside a live app.
+        let codex = items.filter { $0.row.id.hasPrefix("01a0") }.count
+        Permissions.log("past agents: \(items.count) rows "
+            + "(\(codex) codex, \(items.count - codex) claude-code), "
+            + "claude=\(SessionDiscovery.hasScanned()) codex=\(SessionDiscovery.hasScannedCodex())")
         hud.showPastAgents(items: items)
 
         // The list is on screen and usable before a single transcript is read.

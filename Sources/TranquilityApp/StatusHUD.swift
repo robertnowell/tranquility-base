@@ -2671,6 +2671,13 @@ final class StatusHUD: NSObject {
         let singleLine = shown.allSatisfy {
             !$0.name.contains("\n") && !$0.aux.contains("\n")
         }
+        // Per harness, because "is Codex represented here" is a question the
+        // totals cannot answer and one that came up repeatedly (31 Aug).
+        let codexShown = shown.filter { $0.id.hasPrefix("01a0") }.count
+        let codexAll = face.sessionRows.filter { $0.id.hasPrefix("01a0") }.count
+        Permissions.log("grid harness: codex \(codexShown)/\(codexAll) shown, "
+            + "claude-code \(shown.count - codexShown)/"
+            + "\(face.sessionRows.count - codexAll) shown")
         Permissions.log("grid: \(shown.count) of \(face.sessionRows.count) rows "
             + "(\(ready) ready, \(closed) closed, \(revivable) revivable) "
             + "rowH=\(Int(GridRowView.height)) "
