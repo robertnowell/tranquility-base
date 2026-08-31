@@ -1188,10 +1188,28 @@ extension AppDelegate {
                     return
                 }
                 await MainActor.run { [weak self] in self?.announceNext(only: sessionId) }
-                switch SessionLauncher.attemptCodexResume(sessionId: sessionId, directory: cwd) {
-                case .success(.attached):
+                let outcome = SessionLauncher.attemptCodexResume(
+                    sessionId: sessionId, directory: cwd)
+                if case .success(.attached) = outcome {
                     Permissions.log("revive: attached codex \(sessionId.prefix(8))")
                     await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
+                    return
+                }
+                // Both remaining answers mean "already running", and BOTH of
+                // them used to end here in a receipt that told Robert to go
+                // find a terminal. He had already done the only thing that
+                // could have worked: the process was alive the whole time, TB
+                // had simply never recorded where. Adopt it. (31 Aug: pid
+                // 46356 running for thirteen minutes behind a "COULDN'T
+                // ATTACH", the record still naming yesterday's dead pid.)
+                if let pane = SessionLauncher.adoptRunningCodex(
+                    sessionId: sessionId, cwd: cwd) {
+                    Permissions.log("revive: adopted running codex "
+                                    + "\(sessionId.prefix(8)) at \(pane.paneId)")
+                    await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
+                    return
+                }
+                switch outcome {
                 case .success(.alreadyLive):
                     Permissions.log("revive: refused \(sessionId.prefix(8)) — already live elsewhere")
                     await MainActor.run { [weak self] in
@@ -1203,6 +1221,8 @@ extension AppDelegate {
                     await MainActor.run { [weak self] in
                         self?.hud.showReceipt(.notRevived("couldn't attach"))
                     }
+                default:
+                    break
                 }
                 return
             }
