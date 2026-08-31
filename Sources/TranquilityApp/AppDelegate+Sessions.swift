@@ -1143,9 +1143,30 @@ extension AppDelegate {
         Task.detached {
             let fresh = SessionDiscovery.discover(ttl: 0).sessions
                 .first { $0.sessionId == sessionId }
-            guard let fresh else {
-                // Not a Claude Code session — check Codex history before
-                // refusing outright. A genuinely different mechanism below,
+            // BRANCH ON THE HARNESS, never on absence.
+            //
+            // This read `guard let fresh else { ...Codex... }`, which worked
+            // only while `discover()` returned Claude Code alone: a Codex id
+            // was missing from that list, and missing meant "try Codex". The
+            // 31 Aug unification put both harnesses in one list, so every
+            // Codex session is now FOUND, the guard stopped firing, and Codex
+            // revives fell through to the Claude Code path.
+            //
+            // That path launches the command and then waits for a NEW thread
+            // id to appear (`awaitCodexRegistration`), which is right for a
+            // fresh launch and impossible for a resume: the thread already
+            // exists, its lock file is already there, and only its mtime
+            // moves. So the pane came up correctly, Codex ran, and the panel
+            // said "started but hasn't come back yet" and handed over a manual
+            // command. Measured: the lock for 01a05338 is stamped 15:03,
+            // exactly the moment of the revive that reported failure.
+            //
+            // A nil that meant "not Claude Code" quietly became a nil that
+            // means "not found at all". Asking the row what harness it is
+            // cannot rot that way.
+            guard let fresh, fresh.harness == ClaudeCodeAdapter().id else {
+                // Codex, or a session no list knows: check Codex history
+                // before refusing outright. A genuinely different mechanism below,
                 // not a reimplementation: Codex attach goes through
                 // `attemptCodexResume`, never `SessionLauncher.resume`,
                 // because Codex's own single-writer lock is what answers
@@ -1153,7 +1174,7 @@ extension AppDelegate {
                 // design, 2026-08-22-tb-codex-hand-started-adoption — the
                 // same branch `tbase revive` already has and already
                 // proved live).
-                let codexFound = SessionDiscovery.discover().sessions
+                let codexFound = fresh ?? SessionDiscovery.discover().sessions
                     .filter { $0.harness == CodexAdapter().id }
                     .first { $0.sessionId == sessionId }
                 guard let codexFound, codexFound.revivable, let cwd = codexFound.cwd else {
