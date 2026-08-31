@@ -145,15 +145,23 @@ public enum SessionTermination {
     /// to be on the same terminal to be signalled.
     ///
     /// `expectedCommand` names the harness whose process this is meant to be —
-    /// `"claude"` (the default, every pre-existing caller) or `"codex"`, and
-    /// any future harness the same way. It is the identity guard itself, not a
-    /// weakening of it: the ladder still refuses to signal a pid whose command
-    /// doesn't match, it just no longer assumes that command is always Claude.
+    /// `"claude"` or `"codex"`, and any future harness the same way. It is the
+    /// identity guard itself, not a weakening of it: the ladder still refuses
+    /// to signal a pid whose command doesn't match, it just no longer assumes
+    /// that command is always Claude.
+    ///
+    /// NOT DEFAULTED, since 31 Aug. It used to default to `"claude"`, and the
+    /// grid's right-click took the default — so ending a Codex session was
+    /// refused by the guard every time, silently, three clicks in thirty
+    /// seconds with only a log line to show for it. A default that is right
+    /// for one harness is a trap for every other, and the compiler is the
+    /// only reviewer that reads every call site. Callers say
+    /// `KnownHarnesses.adapter(for: harness).processCommandFragment`.
     public static func end(
         pid: Int,
         named name: String,
         expectedTty: String? = nil,
-        expectedCommand: String = "claude",
+        expectedCommand: String,
         control: some ProcessControlling = LiveProcessControl(),
         policy: Policy = .default
     ) -> Outcome {

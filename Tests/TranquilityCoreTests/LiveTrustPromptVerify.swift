@@ -55,7 +55,9 @@ final class LiveTrustPromptVerify: XCTestCase {
         // Never leave a live agent behind, on either verdict.
         if let sid,
            let row = ClaudeAgentsCLI().sessions()?.first(where: { $0.sessionId == sid }) {
-            _ = SessionTermination.end(pid: row.pid, named: "tb-verify")
+            _ = SessionTermination.end(pid: row.pid, named: "tb-verify",
+                                       expectedCommand: ClaudeCodeAdapter()
+                                           .processCommandFragment)
         }
     }
 }

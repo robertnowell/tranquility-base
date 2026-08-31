@@ -1,6 +1,22 @@
 import XCTest
 @testable import TranquilityCore
 
+/// Every case below that does not say otherwise is about the LADDER — which
+/// signal, in what order, and what it refuses — not about which harness it is
+/// pointed at. `expectedCommand` stopped having a default on 31 Aug (a default
+/// that is right for one harness is a trap for every other; see the note on
+/// `SessionTermination.end`), so they say Claude Code here, once.
+private func endClaude(
+    pid: Int, named name: String, expectedTty: String? = nil,
+    control: some SessionTermination.ProcessControlling,
+    policy: SessionTermination.Policy = .default
+) -> SessionTermination.Outcome {
+    SessionTermination.end(pid: pid, named: name, expectedTty: expectedTty,
+                           expectedCommand: ClaudeCodeAdapter().processCommandFragment,
+                           control: control, policy: policy)
+}
+
+
 /// A process that exists on paper, so the ladder's decisions can be asserted
 /// without killing anything. Scripted by rung: what `ps` says at each look, and
 /// what the process does when signalled.
@@ -60,7 +76,7 @@ final class SessionTerminationTests: XCTestCase {
         let control = FakeControl(identities: [claude()])
         control.onSignal[SIGTERM] = .some(nil)
 
-        let outcome = SessionTermination.end(
+        let outcome = endClaude(
             pid: 4242, named: "promotions-31", control: control)
 
         XCTAssertEqual(outcome, .died(rung: .term, afterMs: 250,
@@ -78,7 +94,7 @@ final class SessionTerminationTests: XCTestCase {
         let control = FakeControl(identities: [claude(pid: 4242, pgid: 99)])
         control.onSignal[SIGTERM] = .some(nil)
 
-        let outcome = SessionTermination.end(pid: 4242, named: "odd", control: control)
+        let outcome = endClaude(pid: 4242, named: "odd", control: control)
 
         XCTAssertEqual(control.sent.first?.target, .process(pid: 4242))
         if case .died(_, _, let target) = outcome {
@@ -94,7 +110,7 @@ final class SessionTerminationTests: XCTestCase {
         let control = FakeControl(identities: [claude()])
         control.onSignal[SIGKILL] = .some(nil)   // only KILL lands
 
-        let outcome = SessionTermination.end(
+        let outcome = endClaude(
             pid: 4242, named: "wedged", control: control,
             policy: .init(termWindow: 1, killWindow: 1, poll: 0.25))
 
@@ -109,7 +125,7 @@ final class SessionTerminationTests: XCTestCase {
     func testReportsSurvivalWhenNeitherSignalLands() {
         let control = FakeControl(identities: [claude()])   // never dies
 
-        let outcome = SessionTermination.end(
+        let outcome = endClaude(
             pid: 4242, named: "immortal", control: control,
             policy: .init(termWindow: 1, killWindow: 1, poll: 0.5))
 
@@ -125,7 +141,7 @@ final class SessionTerminationTests: XCTestCase {
         looks.append(nil)                    // dead by the pre-SIGKILL look
         let control = FakeControl(identities: looks)
 
-        let outcome = SessionTermination.end(
+        let outcome = endClaude(
             pid: 4242, named: "slow", control: control,
             policy: .init(termWindow: 1, killWindow: 1, poll: 0.25))
 
@@ -144,7 +160,7 @@ final class SessionTerminationTests: XCTestCase {
         let control = FakeControl(identities: [
             SessionTermination.Identity(command: "Xcode", pgid: 4242, tty: "/dev/ttys012")])
 
-        let outcome = SessionTermination.end(pid: 4242, named: "stale row", control: control)
+        let outcome = endClaude(pid: 4242, named: "stale row", control: control)
 
         guard case .refused(let why) = outcome else {
             return XCTFail("expected a refusal, got \(outcome)")
@@ -156,7 +172,7 @@ final class SessionTerminationTests: XCTestCase {
     func testRefusesAClaudeOnADifferentTerminalThanTheRowWasSeenOn() {
         let control = FakeControl(identities: [claude(tty: "/dev/ttys999")])
 
-        let outcome = SessionTermination.end(
+        let outcome = endClaude(
             pid: 4242, named: "recycled", expectedTty: "/dev/ttys012", control: control)
 
         guard case .refused = outcome else {
@@ -175,7 +191,7 @@ final class SessionTerminationTests: XCTestCase {
             SessionTermination.Identity(command: "node", pgid: 4242, tty: "/dev/ttys012"),
         ])
 
-        let outcome = SessionTermination.end(
+        let outcome = endClaude(
             pid: 4242, named: "recycled", control: control,
             policy: .init(termWindow: 1, killWindow: 1, poll: 0.25))
 
@@ -191,7 +207,7 @@ final class SessionTerminationTests: XCTestCase {
     func testAnAlreadyDeadSessionIsSuccessNotFailure() {
         let control = FakeControl(identities: [nil])
 
-        let outcome = SessionTermination.end(pid: 4242, named: "ghost", control: control)
+        let outcome = endClaude(pid: 4242, named: "ghost", control: control)
 
         XCTAssertEqual(outcome, .alreadyGone)
         XCTAssertTrue(outcome.isGone)
@@ -201,7 +217,7 @@ final class SessionTerminationTests: XCTestCase {
     func testUndeliverableSignalWithTheProcessStillThereIsARefusal() {
         let control = FakeControl(identities: [claude()], deliverable: [])
 
-        let outcome = SessionTermination.end(pid: 4242, named: "not ours", control: control)
+        let outcome = endClaude(pid: 4242, named: "not ours", control: control)
 
         guard case .refused(let why) = outcome else {
             return XCTFail("expected a refusal, got \(outcome)")
@@ -233,7 +249,7 @@ final class SessionTerminationTests: XCTestCase {
         // to be told about.
         let control = FakeControl(identities: [codex()])
 
-        let outcome = SessionTermination.end(pid: 71800, named: "01a02b5f", control: control)
+        let outcome = endClaude(pid: 71800, named: "01a02b5f", control: control)
 
         guard case .refused(let why) = outcome else {
             return XCTFail("expected a refusal, got \(outcome)")

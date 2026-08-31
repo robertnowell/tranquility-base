@@ -123,7 +123,8 @@ extension SessionOwnershipStore {
         name: (String) -> String? = { _ in nil }
     ) -> [LiveSession] {
         all().filter { $0.harness != ClaudeCodeAdapter().id && ProcessProbe.isAlive($0.pid) }
-            .map { LiveSession(pid: $0.pid, sessionId: $0.sessionId, cwd: $0.cwd,
+            .map { LiveSession(harness: $0.harness,
+                               pid: $0.pid, sessionId: $0.sessionId, cwd: $0.cwd,
                                status: status($0.sessionId) ?? "idle",
                                name: name($0.sessionId), waitingFor: nil) }
     }

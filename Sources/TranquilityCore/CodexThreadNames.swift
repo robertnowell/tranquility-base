@@ -51,13 +51,67 @@ public enum CodexThreadNames {
         .max { $0.1 < $1.1 }?.0
     }
 
+    /// The last map a read actually produced, and the clock that says when.
+    ///
+    /// A name is a decoration on a row that exists either way, so `read`
+    /// answers every failure with an empty map rather than throwing. That is
+    /// still right, and it had one consequence nobody had looked at: an empty
+    /// map does not leave a row alone, it RENAMES it, to its directory. Three
+    /// Codex rows read "Projects" at once on 31 Aug while every name sat in
+    /// the database and every code path resolved it correctly a few minutes
+    /// later — the signature of one read that came back empty, and of a
+    /// failure mode with nothing to grep for.
+    ///
+    /// So the last good answer is kept and a short read failure costs nothing.
+    /// A name that is genuinely gone comes back on the next successful read
+    /// that omits it; only "the read told us nothing at all" is ignored, and
+    /// it says so in the log rather than silently.
+    private final class Memory: @unchecked Sendable {
+        private let lock = NSLock()
+        private var names: [String: String] = [:]
+        private var readAt = Date.distantPast
+
+        func value(ttl: TimeInterval, read: () -> [String: String]) -> [String: String] {
+            lock.lock(); defer { lock.unlock() }
+            if Date().timeIntervalSince(readAt) < ttl, !names.isEmpty { return names }
+            let fresh = read()
+            readAt = Date()
+            guard !fresh.isEmpty else {
+                if !names.isEmpty {
+                    trace?("codex names: a read returned nothing; keeping the "
+                           + "\(names.count) name(s) already known")
+                }
+                return names
+            }
+            names = fresh
+            return fresh
+        }
+    }
+
+    private static let memory = Memory()
+
+    /// Said out loud when a read comes back empty on a map that had names.
+    /// Silent by default; the app points it at its log.
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+
+    /// How long one read serves. The grid repaints several times a second and
+    /// a name changes at conversational speed, so this is about not opening
+    /// SQLite sixty times a minute, not about freshness.
+    public static let ttl: TimeInterval = 2
+
+    /// Every thread id that has a name — cached, and never blanked by a
+    /// failed read. This is what every caller should use.
+    public static func all() -> [String: String] {
+        memory.value(ttl: ttl) { read(in: defaultHome) }
+    }
+
     /// Every thread id that has a name, lowercased ids to match the rollout's.
     ///
     /// READ-ONLY, and every failure returns an empty map rather than throwing:
     /// this is a decoration on a row that already exists. Codex writing to the
     /// database while this reads is ordinary SQLite, and the worst outcome is
     /// a name a few seconds stale.
-    public static func all(in home: URL = defaultHome) -> [String: String] {
+    public static func read(in home: URL = defaultHome) -> [String: String] {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: home.path),
               let newest = newestState(among: names) else { return [:] }

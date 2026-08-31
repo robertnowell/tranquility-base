@@ -641,7 +641,8 @@ public enum SessionLauncher {
             var endedPid: Set<Int> = []
             if let live {
                 let outcome = SessionTermination.end(
-                    pid: live.pid, named: sessionId, expectedTty: ProcessProbe.tty(of: live.pid))
+                    pid: live.pid, named: sessionId, expectedTty: ProcessProbe.tty(of: live.pid),
+                    expectedCommand: launch.adapter.processCommandFragment)
                 guard outcome.isGone else {
                     let why = "refused to end its hand-started process (\(outcome))"
                     SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(why) — "
@@ -688,7 +689,8 @@ public enum SessionLauncher {
                     if let stray = ProcessProbe.pid(onTty: tty, containing: sessionId) {
                         let outcome = SessionTermination.end(
                             pid: stray, named: "\(sessionId) (orphaned by a failed transfer)",
-                            expectedTty: tty)
+                            expectedTty: tty,
+                            expectedCommand: launch.adapter.processCommandFragment)
                         SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) rolled back the "
                             + "process it had started on \(tty) (pid \(stray)): \(outcome)")
                     } else {

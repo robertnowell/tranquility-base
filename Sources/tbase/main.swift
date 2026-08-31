@@ -888,7 +888,14 @@ case "reconcile":
             let label = String(record.sessionId.prefix(8))
             switch SessionTermination.end(pid: record.pid, named: label,
                                           expectedTty: ProcessProbe.tty(of: record.pid),
-                                          expectedCommand: CodexAdapter().processCommandFragment) {
+                                          // The record's own harness, by the
+                                          // same rule the grid's right-click
+                                          // uses, so the CLI and the panel
+                                          // cannot disagree about what a pid
+                                          // is allowed to be.
+                                          expectedCommand: KnownHarnesses
+                                              .adapter(for: record.harness)
+                                              .processCommandFragment) {
             case .alreadyGone:
                 print("\(label) was already gone")
                 FileSessionOwnershipStore.shared.remove(sessionId: record.sessionId)
@@ -908,7 +915,9 @@ case "reconcile":
         }
         let label = live.name ?? String(live.sessionId.prefix(8))
         switch SessionTermination.end(pid: live.pid, named: label,
-                                      expectedTty: ProcessProbe.tty(of: live.pid)) {
+                                      expectedTty: ProcessProbe.tty(of: live.pid),
+                                      expectedCommand: KnownHarnesses
+                                          .adapter(for: live.harness).processCommandFragment) {
         case .alreadyGone:      print("\(label) was already gone")
         case .died(let rung, let ms, let target):
             print("\(label) died on \(rung.rawValue) after \(ms)ms "
