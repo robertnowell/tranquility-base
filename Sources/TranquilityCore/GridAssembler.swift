@@ -180,9 +180,26 @@ public enum GridAssembler {
     /// the grid rows, the speaking card, the depth-1 why card, the reply
     /// target — so no surface can drift back to the derived slug on its
     /// own.
-    public static func tabDisplayName(for event: WaitingSession, live: LiveSession?) -> String {
+    /// `harnessName` is the name the HARNESS itself gave this session, for a
+    /// harness that keeps one. Codex does, in its own thread table.
+    ///
+    /// It is a parameter rather than a lookup because Core does not read
+    /// Codex's database, and it sits ahead of `projectLabel` because a
+    /// directory is the answer of last resort.
+    ///
+    /// Needed because `tabTitle` cannot find a Codex name on its own: it reads
+    /// a CLAUDE CODE title out of `transcriptPath`, and for a Codex session
+    /// that path is a rollout with no such record, so it falls through to
+    /// `live?.name`. That works for a row built from the live map and not for
+    /// one built from a stored event, which is how a session with a perfectly
+    /// good name ("Analyze Mirai's September calendar") showed as "Projects"
+    /// on 31 Aug. One name reached a row by three different routes and only
+    /// two of them had been taught about Codex.
+    public static func tabDisplayName(for event: WaitingSession, live: LiveSession?,
+                                      harnessName: String? = nil) -> String {
         SessionRow.displayName(
-            liveName: tabTitle(transcriptPath: event.transcriptPath, live: live),
+            liveName: tabTitle(transcriptPath: event.transcriptPath, live: live)
+                ?? harnessName,
             callsign: event.callsign, fallback: event.projectLabel)
     }
 }
