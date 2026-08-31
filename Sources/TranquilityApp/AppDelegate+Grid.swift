@@ -130,7 +130,8 @@ extension AppDelegate {
             let blocked = GridAssembler.blockedOnYou(liveById[event.sessionId], resumed: resumed)
             return SessionRow(
                 id: event.sessionId,
-                name: tabDisplayName(for: event, live: liveById[event.sessionId]),
+                name: tabDisplayName(for: event, live: liveById[event.sessionId],
+                                     harnessName: codexNames[event.sessionId.lowercased()]),
                 // The id, not the callsign — ruled 12 Aug, and the same in
                 // every band so a row means the same thing wherever it sits.
                 // A blocked row spends the column on its reason, like every
@@ -307,8 +308,9 @@ extension AppDelegate {
     /// See `GridAssembler.tabDisplayName` — this is the thin AppDelegate-side
     /// name for the same call, kept so the many call sites elsewhere in the
     /// app don't all need to say `GridAssembler.` themselves.
-    func tabDisplayName(for event: WaitingSession, live: LiveSession?) -> String {
-        GridAssembler.tabDisplayName(for: event, live: live)
+    func tabDisplayName(for event: WaitingSession, live: LiveSession?,
+                        harnessName: String? = nil) -> String {
+        GridAssembler.tabDisplayName(for: event, live: live, harnessName: harnessName)
     }
 
     /// The one route to the idle face: assemble the grid and show it.

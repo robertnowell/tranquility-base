@@ -143,3 +143,62 @@ final class GridAssemblerTests: XCTestCase {
         XCTAssertNil(GridAssembler.tabTitle(transcriptPath: nil, live: nil))
     }
 }
+
+/// One name, whichever band builds the row.
+///
+/// A Codex session with a perfectly good name showed as "Projects" on 31 Aug.
+/// `tabTitle` reads a CLAUDE CODE title out of `transcriptPath`, and for a
+/// Codex session that path is a rollout with no such record, so it falls
+/// through to `live?.name`. That works for a row built from the live map and
+/// not for one built from a stored event. The name reached a row by three
+/// routes and only two knew about Codex.
+final class HarnessNameOnAWaitingRowTests: XCTestCase {
+
+    private func event(_ id: String) -> WaitingSession {
+        // `projectLabel` is derived from cwd, so "Projects" is what this row
+        // falls back to, which is exactly the string that showed on the grid.
+        var e = WaitingSession(sessionId: id, latestId: 1, createdAtMs: 0,
+                               hookEvent: .stop)
+        e.cwd = "/Users/x/Projects"
+        e.transcriptPath = "/Users/x/.codex/sessions/rollout-\(id).jsonl"
+        return e
+    }
+
+    func testTheHarnessNameBeatsTheDirectory() {
+        let name = GridAssembler.tabDisplayName(
+            for: event("01a05885"), live: nil,
+            harnessName: "Analyze Mirai's September calendar")
+        XCTAssertEqual(name, "Analyze Mirai's September calendar")
+    }
+
+    /// Without one, the directory is still the honest last answer.
+    func testNoHarnessNameFallsBackToTheProject() {
+        XCTAssertEqual(
+            GridAssembler.tabDisplayName(for: event("01a05003"), live: nil,
+                                         harnessName: nil),
+            "Projects")
+    }
+
+    /// The harness's own name outranks a callsign, and that is the EXISTING
+    /// precedence rather than a new one: `displayName` checks `liveName`
+    /// first, and for Claude Code `liveName` is already the harness's own tab
+    /// title. Codex's thread name is the same kind of thing, so it sits in the
+    /// same slot. I wrote this test the other way round first and the code was
+    /// right.
+    func testTheHarnessNameOutranksACallsign() {
+        var e = event("01a05885")
+        e.callsign = "promotions copy"
+        XCTAssertEqual(
+            GridAssembler.tabDisplayName(for: e, live: nil, harnessName: "Analyze Mirai"),
+            "Analyze Mirai")
+    }
+
+    /// And a callsign still beats the directory when there is no name at all.
+    func testACallsignBeatsTheDirectory() {
+        var e = event("01a05003")
+        e.callsign = "promotions copy"
+        XCTAssertEqual(
+            GridAssembler.tabDisplayName(for: e, live: nil, harnessName: nil),
+            "promotions copy")
+    }
+}
