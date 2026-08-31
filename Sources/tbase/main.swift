@@ -347,7 +347,15 @@ do {
         }
         let needle = args[1]
         let found = SessionDiscovery.discover(ttl: 0).sessions
-        if let session = found.first(where: { $0.sessionId.hasPrefix(needle) }) {
+        // Harness, not "did the lookup find anything". `discover` used to
+        // answer for Claude Code alone, so a hit here meant a Claude session
+        // and the Codex branch below was the else. Since discovery unified
+        // (f4d3cd6) a hit means EITHER harness, and a Codex session was
+        // walking into `SessionLauncher.resume` — the wrong mechanism, which
+        // then refused it in Claude's words. Same shape as 8b8cdb9 in the app.
+        if let session = found.first(where: {
+            $0.sessionId.hasPrefix(needle) && $0.harness == ClaudeCodeAdapter().id
+        }) {
         print("session    \(session.sessionId)")
         print("title      \(truncate(session.title, 60))")
         print("cwd        \(session.cwd ?? "—")")
@@ -407,10 +415,22 @@ do {
         }
         print("")
         print("attempting codex resume \(codexSession.sessionId.prefix(8)) …")
-        switch SessionLauncher.attemptCodexResume(sessionId: codexSession.sessionId, directory: cwd) {
-        case .success(.attached(let tty)):
+        let codexOutcome = SessionLauncher.attemptCodexResume(
+            sessionId: codexSession.sessionId, directory: cwd)
+        if case .success(.attached(let tty)) = codexOutcome {
             print("attached — tmux pane is live on tty \(tty)")
             print("  tmux attach to continue the conversation directly")
+            break
+        }
+        // Refused because it is already running? Then it does not need
+        // starting, it needs finding. See `adoptRunningCodex`.
+        if let pane = SessionLauncher.adoptRunningCodex(
+            sessionId: codexSession.sessionId, cwd: cwd) {
+            print("adopted — it was already running; TB now has its address")
+            print("  pane \(pane.paneId) on tty \(pane.paneTty)")
+            break
+        }
+        switch codexOutcome {
         case .success(.alreadyLive):
             print("REFUSED — it is already running somewhere TB does not control.")
             print("  End it in that terminal, then run this again.")
@@ -418,6 +438,8 @@ do {
         case .failure(let error):
             print("failed — \(error.message)")
             exit(3)
+        default:
+            break
         }
 
     case "agent-command":

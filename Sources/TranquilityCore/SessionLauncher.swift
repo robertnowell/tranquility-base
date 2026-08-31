@@ -834,6 +834,42 @@ public enum SessionLauncher {
         HarnessLaunch(harness: adapter.id)
     }
 
+    /// A session that is ALREADY RUNNING is not a failed revive. It is one we
+    /// lost track of, and the fix is to take it back rather than report a
+    /// dead end.
+    ///
+    /// How TB loses one: a revive launches the pane, something downstream
+    /// fails to confirm registration, and no ownership record is written. The
+    /// process is fine and running; TB simply has no address for it. The row
+    /// then still offers "revive", and the next click is refused by the
+    /// guard that exists to stop a second writer forking the transcript. Both
+    /// halves are behaving correctly and the user is stuck (31 Aug: pid 46356
+    /// alive for thirteen minutes while the record still named a pid that
+    /// died the day before).
+    ///
+    /// Everything needed is already known at the point of refusal: the guard
+    /// found the live pid, and `Tmux.pane(forPid:)` turns it into an address.
+    /// Returns the pane it adopted, or nil when there is nothing to adopt.
+    @discardableResult
+    public static func adoptRunningCodex(
+        sessionId: String,
+        cwd: String?,
+        ownership: any SessionOwnershipStore = FileSessionOwnershipStore.shared
+    ) -> TmuxPaneAddress? {
+        let holders = ResumeGuard.check(sessionId: sessionId).holders
+        guard let holder = holders.first else { return nil }
+        // By pid first, because that is the process the guard actually saw;
+        // by session id second, for a holder whose pane runs it under a shell.
+        guard let pane = TmuxOwnership.pane(forPid: holder.pid)
+                ?? TmuxOwnership.pane(forSessionId: sessionId, pid: holder.pid)
+        else { return nil }
+        ownership.record(SessionOwnershipRecord(
+            sessionId: sessionId, harness: CodexAdapter().id, pid: holder.pid,
+            paneId: pane.paneId, socketName: pane.socketName,
+            sessionName: pane.sessionName, paneTty: pane.paneTty, cwd: cwd))
+        return pane
+    }
+
     @discardableResult
     public static func attemptCodexResume(
         sessionId: String,
