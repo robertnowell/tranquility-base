@@ -57,8 +57,12 @@ final class HookHarnessTests: XCTestCase {
         XCTAssertEqual(hook("visual-output-hook")?.script, "visual-output-hook.sh")
 
         XCTAssertEqual(hook("artifact-hook")?.event, "PostToolUse")
-        XCTAssertEqual(hook("artifact-hook")?.matcher, "Write|Edit|Bash",
-                       "the same matcher Claude Code carries, for the same reason")
+        // `exec`, Codex's own tool name. This assertion used to read
+        // "Write|Edit|Bash — the same matcher Claude Code carries, for the
+        // same reason", which was the copied bug written down as an
+        // expectation: a test can only protect a mistake it has been taught.
+        XCTAssertEqual(hook("artifact-hook")?.matcher, "exec",
+                       "the tool Codex actually writes files through")
     }
 
     /// Codex has no Notification event. Its name for "this session is asking
