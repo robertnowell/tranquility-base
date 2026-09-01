@@ -243,12 +243,21 @@ EOF
 # the blank template on a hub as "page.html" (15 Aug).
 case "$FILE" in
   */scratchpad/*|/tmp/*|/private/tmp/*|/var/folders/*|*/.claude/*) exit 0;;
-  # The HUB is not an artifact. But the agents tree is now where reports LIVE
-  # -- agents/<slug>/<name>.html names its own author in its own path -- so only
-  # index.html is excluded, not the whole directory. Mirrors
-  # ArtifactStore.excluded.
-  */Documents/agents/*/index.html) exit 0;;
 esac
+
+# The HUB is not an artifact. But the agents tree is where reports LIVE --
+# agents/<slug>/<name>.html names its own author in its own path -- so only the
+# hub is excluded, not the whole directory. Mirrors ArtifactStore.excluded.
+#
+# EXACT, not a glob. `case` patterns match across slashes, so the obvious
+# */Documents/agents/*/index.html also names agents/<slug>/<date-slug>/index.html
+# -- a research brief, and very much an artifact. The comment above this rule
+# already said "only index.html is excluded"; the pattern quietly said something
+# wider, and would drop every report filed under an agent.
+if [ "$(basename "$FILE")" = "index.html" ] \
+   && [ "$(dirname "$(dirname "$FILE")")" = "$HOME/Documents/agents" ]; then
+  exit 0
+fi
 
 # RESOLVE TO WHAT RENDERS.
 #
@@ -333,12 +342,32 @@ case "$FILE" in
   "$HOME"/Documents/deep-research/*.html) STAMP=1;;
 esac
 
-python3 - "$FILE" "$SESSION" "$SHORT" "$TODAY" "$STAMP" "$TITLE" <<'PY' 2>/dev/null || true
+# The META stamp is WIDER than the footer, on purpose.
+#
+# A footer is a courtesy to a human who found the page later. The session meta
+# is the archive's author column, and it has to live IN the file because the
+# file travels: into the index, into a static site, onto a public domain. A
+# path can be read here and nowhere else, so a page that leaves this Mac
+# without the stamp can never be attributed again.
+#
+# Both of Robert's own trees get it. The hub itself does not: the app writes
+# that file every turn and owns its head. The comparison is exact rather than a
+# glob, because `case` patterns match across slashes, so any pattern loose
+# enough to name the hub also names every report brief filed under an agent.
+META=0
+case "$FILE" in
+  "$HOME"/Documents/deep-research/*.html) META=1;;
+  "$HOME"/Documents/agents/*.html)        META=1;;
+esac
+[ "$FILE" = "$HOME/Documents/agents/$SHORT/index.html" ] && META=0
+
+python3 - "$FILE" "$SESSION" "$SHORT" "$TODAY" "$STAMP" "$TITLE" "$META" <<'PY' 2>/dev/null || true
 import html as htmllib
 import json, re, sys
 
 path, session, short, today, stamp = sys.argv[1:6]
 title = sys.argv[6] if len(sys.argv) > 6 else ""
+meta = sys.argv[7] if len(sys.argv) > 7 else "0"
 
 # The way UP: every artifact links its agent's hub — the page that lists
 # everything this agent made — so the correlation runs both directions even
@@ -419,6 +448,40 @@ context = (
     "rendered video frame, or any file that is not intended to be viewed by a "
     "human as a report."
 ).format(path=path, snippet=snippet)
+
+if meta == "1":
+    # The author column, written by the only thing that knows it.
+    #
+    # Declared beats inferred, always: if the page already names a session the
+    # hook leaves it alone, exactly like the indexer's precedence chain. Only
+    # `session` is stamped. `updated` is deliberately NOT, because the footer
+    # path below preserves the file's mtime on purpose and the indexer derives
+    # `updated` from that mtime, so a stamped copy would be a second source of
+    # truth for a fact already kept correctly. `turn` is not stamped either:
+    # this hook does not know the turn ordinal, and three earlier mechanisms in
+    # this codebase failed by working a fact out of something adjacent. The app
+    # knows turns; the stamp can wait for the thing that does.
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            page = fh.read()
+        if not re.search(r'<meta\s+name="intranet:session"', page):
+            tag = '<meta name="intranet:session" content="{}">'.format(short)
+            if "</head>" in page:
+                h, _, t = page.partition("</head>")
+                out = h + "  " + tag + "\n</head>" + t
+            elif re.search(r"<body\b", page):
+                out = re.sub(r"(<body\b)", tag + "\n\\1", page, count=1)
+            else:
+                out = tag + "\n" + page
+            import os as _os
+            before = _os.stat(path)
+            tmp = path + ".tb-meta"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(out)
+            _os.replace(tmp, path)
+            _os.utime(path, (before.st_atime, before.st_mtime))
+    except Exception:
+        pass
 
 if stamp == "1":
     # Write it in, once, idempotently. Never fail: a footer is worth less than

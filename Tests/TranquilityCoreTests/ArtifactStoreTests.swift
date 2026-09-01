@@ -82,6 +82,25 @@ final class ArtifactStoreTests: XCTestCase {
             session: session, root: root))
     }
 
+    /// The hub is one file, not every file called index.html.
+    ///
+    /// A research report is a DIRECTORY holding report.md beside index.html, and
+    /// when reports are filed under their agent that brief is
+    /// agents/<slug>/<date-slug>/index.html. Excluding on the filename alone
+    /// swallowed it along with the hub: the comment on the rule said "only
+    /// index.html is the hub" while the rule said "any index.html under agents",
+    /// and the difference is invisible until the day reports move.
+    func testAReportBriefUnderAnAgentIsStillAnArtifact() {
+        XCTAssertTrue(ArtifactStore.record(
+            "/Users/x/Documents/agents/da5d6fff/2026-09-01-some-report/index.html",
+            session: session, root: root))
+        // And the hub one level up is still excluded, so the fix did not simply
+        // let everything through.
+        XCTAssertFalse(ArtifactStore.record(
+            "/Users/x/Documents/agents/da5d6fff/index.html",
+            session: session, root: root))
+    }
+
     /// Reading a page is not writing one. The first Bash miner filed every
     /// path a grep mentioned, including other agents' work.
     func testOnlyWritingCommandsCount() {

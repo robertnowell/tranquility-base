@@ -246,8 +246,14 @@ public extension ArtifactStore {
             // agents/<slug>/<name>.html names its own author in its own path, so
             // excluding the whole directory excluded exactly the pages that need
             // no attribution guess at all. Only index.html is the hub.
+            //
+            // And only at the TOP of an agent: agents/<slug>/index.html. A brief
+            // at agents/<slug>/<date-slug>/index.html is a research report, and
+            // matching on the filename alone excluded it along with the hub.
             || (path.contains("/Documents/agents/")
-                && (path as NSString).lastPathComponent == "index.html")
+                && (path as NSString).lastPathComponent == "index.html"
+                && ((path as NSString).deletingLastPathComponent as NSString)
+                    .deletingLastPathComponent.hasSuffix("/Documents/agents"))
     }
 
     /// The agent a page belongs to, read off its own path.
