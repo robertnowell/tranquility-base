@@ -60,6 +60,9 @@ extension Coordinator {
         case readyToSend(utteranceId: String, text: String, label: String, sessionId: String)
         case sessionNotReady(Readiness)
         case dispatchFailed(DispatchFailure, utteranceId: String)
+        /// A stale timer or repeated callback reached the delivery door after
+        /// another caller had already claimed this utterance. Nothing was sent.
+        case duplicateSuppressed(utteranceId: String)
     }
 
     /// Persist the audio, transcribe it, and route the result to whichever session
@@ -162,24 +165,66 @@ extension Coordinator {
             return .noTarget
         }
 
+        // Cheap idempotent fast path. The decisive check is the atomic claim
+        // below, before dispatch preflight; this avoids needless work on the
+        // ordinary stale-callback case without pretending a read is a lock.
+        guard utterance.status == .ready else {
+            return .duplicateSuppressed(utteranceId: utteranceId)
+        }
+
         try enrolment.enrol(sessionId: target.sessionId)
         // Same composition as readyToSend showed, from the same riding set —
         // the user confirms exactly the text that dispatches.
         let outgoing = AttachmentTray.compose(
             transcript: text, paths: attachments.riding(utteranceId: utteranceId))
+
+        // Own the utterance before dispatch does any process probing or session
+        // adoption. Those are preflight from the transport's perspective, but
+        // ownership transfer is already a real side effect and a duplicate
+        // callback must not perform it twice. One SQLite statement is the only
+        // door from reversible `.ready` to irreversible delivery work.
+        let claimedAt = Int64(Date().timeIntervalSince1970 * 1000)
+        guard try store.claimForDispatch(
+            utteranceId: utterance.id, targetKind: .tmux,
+            sessionId: target.sessionId, pid: nil, tty: nil, atMs: claimedAt)
+        else {
+            Coordinator.trace?("dispatch: duplicate callback suppressed for "
+                + utterance.id.prefix(8))
+            return .duplicateSuppressed(utteranceId: utterance.id)
+        }
+        utterance.status = .dispatching
+        utterance.targetKind = .tmux
+        utterance.dispatchAttempts += 1
+        utterance.lastDispatchAtMs = claimedAt
         return try await dispatch(utterance: &utterance, text: outgoing, target: target)
     }
 
     /// The user said no. Keep the audio and transcript — they are evidence of what
     /// was heard — but take it out of the sendable set so nothing resends it later.
     public func cancelSend(utteranceId: String) throws {
-        // The message definitely did not land, so its files return to the
-        // chips untouched (ruled 15 Aug: not sending never clobbers).
+        // Claim cancellation with the same status predicate as dispatch. If a
+        // send already crossed the boundary, Don't Send is late and must not
+        // rewrite its durable state or put its attachments back in the tray.
+        guard try store.discardIfReady(utteranceId: utteranceId) else { return }
         attachments.resolve(utteranceId: utteranceId, landed: false)
-        guard var utterance = try store.utterances(limit: 500).first(where: { $0.id == utteranceId })
-        else { return }
-        utterance.status = .discarded
-        try store.update(utterance: utterance)
+    }
+
+    /// Bind files dropped during the undo window to its already-prepared
+    /// utterance and return the exact message the countdown will dispatch.
+    /// The caller uses this to refresh the readback, so visible disclosure and
+    /// transport payload remain one value rather than two promises that drift.
+    public func refreshPendingSend(
+        utteranceId: String, sessionId: String
+    ) throws -> String? {
+        guard let utterance = try store.utterances(limit: 500)
+                .first(where: { $0.id == utteranceId }),
+              utterance.status == .ready,
+              utterance.targetSessionId == sessionId,
+              let transcript = utterance.transcriptText
+        else { return nil }
+        let paths = attachments.absorbStaged(
+            session: sessionId, utteranceId: utteranceId)
+        return AttachmentTray.compose(transcript: transcript, paths: paths)
     }
 
     /// `dispatch`'s Codex twin for `preferringTmuxOwned` — same question
@@ -414,13 +459,13 @@ extension Coordinator {
             idlePlaceholder: isCodex ? CodexAdapter().trustPrompt?.settledBannerNeedle : nil,
             pasteChip: isCodex ? CodexAdapter().capabilities.pasteChipPrefix : "[Pasted text #")
 
-        utterance.status = .dispatching
         utterance.targetKind = dispatchTarget.kind
         utterance.targetSessionId = target.sessionId
         utterance.targetPid = live.pid
         utterance.targetTty = dispatchTarget.tty
-        utterance.dispatchAttempts += 1
-        utterance.lastDispatchAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        // The atomic claim was taken before entering dispatch. Record the
+        // resolved endpoint while still dispatching; this update cannot grant
+        // ownership and no other callback can reach it.
         try store.update(utterance: utterance)
 
         // The tray's fate rides the same exhaustive switch as the utterance's

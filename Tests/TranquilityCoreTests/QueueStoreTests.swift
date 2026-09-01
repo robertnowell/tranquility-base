@@ -53,6 +53,46 @@ final class QueueStoreTests: XCTestCase {
         XCTAssertEqual(try store.unsentReplyCount(), 1, "counted, but as its own thing")
     }
 
+    // MARK: - Exactly-once dispatch ownership
+
+    func testOnlyOneDispatchClaimCanWinForAnUtterance() throws {
+        var utterance = Utterance(status: .ready, transcriptText: "ship it")
+        utterance.targetSessionId = "session-a"
+        try store.update(utterance: utterance)
+
+        XCTAssertTrue(try store.claimForDispatch(
+            utteranceId: utterance.id, targetKind: .tmux, sessionId: "session-a",
+            pid: 41, tty: "/dev/ttys041", atMs: 1_234))
+        let competingProcess = try QueueStore(url: tmpDir.appendingPathComponent("queue.sqlite"))
+        XCTAssertFalse(try competingProcess.claimForDispatch(
+            utteranceId: utterance.id, targetKind: .tmux, sessionId: "session-a",
+            pid: 42, tty: "/dev/ttys042", atMs: 1_235),
+            "a second database connection loses the same atomic status claim")
+
+        let claimed = try XCTUnwrap(store.utterances().first { $0.id == utterance.id })
+        XCTAssertEqual(claimed.status, .dispatching)
+        XCTAssertEqual(claimed.dispatchAttempts, 1)
+        XCTAssertEqual(claimed.targetPid, 41, "the losing claim changed nothing")
+        XCTAssertEqual(claimed.lastDispatchAtMs, 1_234)
+    }
+
+    func testCancelAndDispatchUseTheSameReadyBoundary() throws {
+        let cancelled = Utterance(status: .ready, transcriptText: "do not send")
+        try store.update(utterance: cancelled)
+        XCTAssertTrue(try store.discardIfReady(utteranceId: cancelled.id))
+        XCTAssertFalse(try store.claimForDispatch(
+            utteranceId: cancelled.id, targetKind: .tmux, sessionId: "s",
+            pid: nil, tty: nil, atMs: 1), "cancel won; dispatch cannot follow")
+
+        let dispatching = Utterance(status: .ready, transcriptText: "send")
+        try store.update(utterance: dispatching)
+        XCTAssertTrue(try store.claimForDispatch(
+            utteranceId: dispatching.id, targetKind: .tmux, sessionId: "s",
+            pid: nil, tty: nil, atMs: 2))
+        XCTAssertFalse(try store.discardIfReady(utteranceId: dispatching.id),
+                       "dispatch won; a late cancel cannot overwrite it")
+    }
+
     var tmpDir: URL!
     var store: QueueStore!
 

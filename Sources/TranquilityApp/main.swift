@@ -799,6 +799,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             lastStatusLine = "\(staged) file\(staged == 1 ? "" : "s") attached to \(target.label)"
             Permissions.log("drop: staged \(staged) for "
                             + "\(target.sessionId.prefix(8)) (\(total) total)")
+            // A drop during the undo window changes THIS message, not a
+            // mysterious future one. Core binds the newly staged paths to the
+            // pending utterance; the HUD refreshes the exact text that will be
+            // sent without replacing or restarting its one countdown.
+            if let utteranceId = hud.pendingSendUtteranceId,
+               let text = try? coordinator.refreshPendingSend(
+                    utteranceId: utteranceId, sessionId: target.sessionId) {
+                hud.updatePendingSendText(text, utteranceId: utteranceId)
+            }
             rebuildMenu()
             return true
         }

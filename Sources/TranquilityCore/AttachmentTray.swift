@@ -84,6 +84,24 @@ public struct AttachmentTray: Equatable, Sendable {
         return paths
     }
 
+    /// Move files dropped during the undo window onto the utterance that is
+    /// already waiting to send. Unlike `snapshot`, this deliberately absorbs
+    /// newly staged paths on a later call: the user can still see and change
+    /// the pending message until its countdown closes.
+    public mutating func absorbStaged(session: String, utteranceId: String) -> [String] {
+        let additions = staged[session] ?? []
+        let existing = riding[utteranceId]
+        guard existing == nil || existing?.session == session else {
+            return existing?.paths ?? []
+        }
+        guard !additions.isEmpty else { return existing?.paths ?? [] }
+        let before = existing?.paths ?? []
+        let combined = before + additions.filter { !before.contains($0) }
+        staged[session] = nil
+        riding[utteranceId] = (session, combined)
+        return combined
+    }
+
     /// What one utterance is carrying (compose-time read, no mutation).
     public func riding(utteranceId: String) -> [String] {
         riding[utteranceId]?.paths ?? []
@@ -166,6 +184,11 @@ public final class AttachmentStore: @unchecked Sendable {
     public func riding(utteranceId: String) -> [String] {
         lock.lock(); defer { lock.unlock() }
         return tray.riding(utteranceId: utteranceId)
+    }
+
+    public func absorbStaged(session: String, utteranceId: String) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return tray.absorbStaged(session: session, utteranceId: utteranceId)
     }
 
     public func resolve(utteranceId: String, landed: Bool) {

@@ -626,6 +626,51 @@ public final class QueueStore: Sendable {
         try dbQueue.write { db in try utterance.save(db) }
     }
 
+    /// Cross the irreversible delivery boundary exactly once.
+    ///
+    /// A read followed by `update(utterance:)` is not a claim: two countdown
+    /// callbacks can both read `.ready` before either writes `.dispatching`,
+    /// and both will then type the same words. The status predicate and the
+    /// transition live in ONE SQLite statement, so the database serializes the
+    /// decision across tasks and processes. Only its winner may call a
+    /// transport.
+    @discardableResult
+    public func claimForDispatch(
+        utteranceId: String, targetKind: TransportKind, sessionId: String,
+        pid: Int?, tty: String?, atMs: Int64
+    ) throws -> Bool {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE utterances
+                    SET status = ?, targetKind = ?, targetSessionId = ?,
+                        targetPid = ?, targetTty = ?,
+                        dispatchAttempts = dispatchAttempts + 1,
+                        lastDispatchAtMs = ?
+                    WHERE id = ? AND status = ?
+                    """,
+                arguments: [
+                    UtteranceStatus.dispatching.rawValue, targetKind.rawValue, sessionId,
+                    pid, tty, atMs, utteranceId, UtteranceStatus.ready.rawValue,
+                ])
+            return db.changesCount == 1
+        }
+    }
+
+    /// Cancel only while the utterance is still on the reversible side of the
+    /// same boundary. A late Don't Send must never overwrite `.dispatching`
+    /// after the transport has already won the claim.
+    @discardableResult
+    public func discardIfReady(utteranceId: String) throws -> Bool {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE utterances SET status = ? WHERE id = ? AND status = ?",
+                arguments: [UtteranceStatus.discarded.rawValue, utteranceId,
+                            UtteranceStatus.ready.rawValue])
+            return db.changesCount == 1
+        }
+    }
+
     // MARK: - Reads
 
     public func events(status: EventStatus? = nil, limit: Int = 50) throws -> [QueuedEvent] {

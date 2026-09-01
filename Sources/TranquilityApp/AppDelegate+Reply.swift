@@ -143,6 +143,13 @@ extension AppDelegate {
                     hud.showResult("That reply lost its agent. "
                                    + wordsKept(utteranceId: utteranceId),
                                    about: (sessionId: sessionId, pid: pid, label: label))
+                case .duplicateSuppressed(let duplicateId):
+                    // A stale timer is already a completed interaction. Its
+                    // losing callback is audit information, not a new problem
+                    // for the user to solve and therefore not a result card.
+                    lastStatusLine = "duplicate send suppressed"
+                    Permissions.log("send: duplicate callback suppressed for "
+                                    + duplicateId.prefix(8))
                 default:
                     Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult("Unexpected result: \(outcome). "

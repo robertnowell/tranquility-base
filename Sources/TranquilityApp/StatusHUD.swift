@@ -174,6 +174,10 @@ final class StatusHUD: NSObject {
     /// Dismiss all invalidate it). The countdown itself may keep running across a
     /// state change — that is open issue #8's undecided behavior, preserved as-is.
     var awaitingConfirm: Bool { countdownTimer != nil && state.isPendingSend }
+    var pendingSendUtteranceId: String? {
+        guard case .pendingSend(let utteranceId) = state else { return nil }
+        return utteranceId
+    }
     var meterTimer: Timer?
     private var levelSource: (() -> Float)?
     /// Where dictation will land ("→ Terminal", "→ clipboard"), probed at mic-open
@@ -186,6 +190,7 @@ final class StatusHUD: NSObject {
     /// asks this value to translate rather than assuming the two line up.
     private var currentSpoken: SanitizedSpokenText?
     var countdownTimer: Timer?
+    var pendingSendTimerToken: UUID?
     private var onCancelSend: ((_ restartListening: Bool) -> Void)?
     private var onCommitSend: (() -> Void)?
     var countdownBar: CountdownBarView!
@@ -777,7 +782,7 @@ final class StatusHUD: NSObject {
     /// doing nothing is doing the right thing, and stopping it costs one click on
     /// the rare occasion you need to.
     func showPendingSend(
-        text: String, label: String, seconds: TimeInterval,
+        utteranceId: String = "preview", text: String, label: String, seconds: TimeInterval,
         send: @escaping () -> Void, cancel: @escaping (_ restartListening: Bool) -> Void
     ) {
         // Nil'd, not merely invalidated: `awaitingConfirm` reads the handle, so
@@ -785,11 +790,12 @@ final class StatusHUD: NSObject {
         // already over — the shape that once left every gesture dead-ending on
         // the read-back (12 Aug).
         countdownTimer?.invalidate(); countdownTimer = nil
+        pendingSendTimerToken = nil
         // Transition first so a refused stage never arms the countdown. Safe for
         // `awaitingConfirm` (the old reason for the reversed order): it derives
         // from the countdown timer, which is invalidated above, so render() still
         // paints without the countdown chrome either way.
-        guard transition(to: .pendingSend(utteranceId: ""), because: "undo window open")
+        guard transition(to: .pendingSend(utteranceId: utteranceId), because: "undo window open")
         else { return }
         onCancelSend = cancel
         onCommitSend = send
@@ -807,6 +813,64 @@ final class StatusHUD: NSObject {
                         countdownSeconds: seconds)
         }
         render()
+        armPendingSendCountdown(utteranceId: utteranceId, seconds: seconds)
+    }
+
+    /// Repaint the disclosure after a file is dropped into the still-open
+    /// undo window. The timer is deliberately untouched: changing the message
+    /// changes pixels, not ownership of the one countdown already in flight.
+    func updatePendingSendText(_ text: String, utteranceId: String) {
+        guard pendingSendUtteranceId == utteranceId, awaitingConfirm else { return }
+        if face.readback != nil {
+            face.readback = text
+        } else {
+            face.body = "\u{201C}\(text)\u{201D}"
+        }
+        render()
+    }
+
+    /// The sole constructor of a pending-send timer. `render()` is a pure
+    /// projection and cannot call this, so a drop, resize, or any other repaint
+    /// cannot create another sender. The identity and utterance checks make a
+    /// stale timer harmless even if a future call site forgets to invalidate it.
+    private func armPendingSendCountdown(
+        utteranceId: String, seconds: TimeInterval
+    ) {
+        guard countdownTimer == nil else {
+            Permissions.log("pendingSend: refused a second timer for \(utteranceId.prefix(8))")
+            return
+        }
+        countdownBar.begin(seconds: seconds)
+        let token = UUID()
+        pendingSendTimerToken = token
+        let timer = Timer(timeInterval: seconds, repeats: false) { [weak self] _ in
+            // Installed below on the main run loop; state the scheduler fact
+            // synchronously. The Sendable token crosses isolation; Timer does not.
+            MainActor.assumeIsolated {
+                self?.pendingSendTimerFired(token, utteranceId: utteranceId)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        countdownTimer = timer
+    }
+
+    private func pendingSendTimerFired(_ token: UUID, utteranceId: String) {
+        guard pendingSendTimerToken == token,
+              countdownTimer != nil,
+              pendingSendUtteranceId == utteranceId else {
+            Permissions.log("pendingSend: stale timer ignored for \(utteranceId.prefix(8))")
+            return
+        }
+        countdownTimer = nil
+        pendingSendTimerToken = nil
+        countdownBar.isHidden = true
+        let send = onCommitSend
+        onCommitSend = nil
+        onCancelSend = nil
+        // The bar running out IS the confirmation — the contract completed
+        // exactly as displayed, so the stage is yielded before dispatch.
+        forceTransition(to: .idle(waiting: 0), because: "countdown completed")
+        send?()
     }
 
     /// Fast-forward the undo window: fire the send NOW instead of at the bar's
@@ -816,6 +880,7 @@ final class StatusHUD: NSObject {
     func commitPendingSendNow() -> Bool {
         guard awaitingConfirm else { return false }
         countdownTimer?.invalidate(); countdownTimer = nil
+        pendingSendTimerToken = nil
         countdownBar.isHidden = true
         let send = onCommitSend
         onCommitSend = nil; onCancelSend = nil
@@ -844,6 +909,7 @@ final class StatusHUD: NSObject {
     func cancelPendingSend(restartListening: Bool = true) -> Bool {
         guard awaitingConfirm else { return false }
         countdownTimer?.invalidate(); countdownTimer = nil
+        pendingSendTimerToken = nil
         countdownBar.isHidden = true
         let cancel = onCancelSend
         onCancelSend = nil
@@ -1543,11 +1609,10 @@ final class StatusHUD: NSObject {
     /// Do what `PanelState.releasesPendingSend` decides: leaving the read-back
     /// cancels the send it was offering. Ruled 18 Aug.
     ///
-    /// The countdown IS the send: `render()` hands the send closure to a one-shot
-    /// `Timer` BY VALUE, so clearing `onCommitSend` afterwards stops nothing and
-    /// only invalidating the timer does. That is why this is not a repaint
-    /// concern — a read-back that leaves the screen with its timer alive still
-    /// sends, and it sends silently.
+    /// The countdown owns the send: `armPendingSendCountdown` gives one token to
+    /// one timer, and the token plus utterance id must still match when it fires.
+    /// That is why this is not a repaint concern — leaving the read-back must
+    /// invalidate ownership, not merely change what is drawn.
     ///
     /// The incident (app.log 18 Aug 22:39): ⌥⌥ from the read-back opened a new
     /// capture through `showListening`, the countdown kept running underneath it,
@@ -1594,6 +1659,7 @@ final class StatusHUD: NSObject {
             cancelPendingSend(restartListening: false)
         } else {
             countdownTimer?.invalidate(); countdownTimer = nil
+            pendingSendTimerToken = nil
             onCommitSend = nil; onCancelSend = nil
         }
         meterTimer?.invalidate(); meterTimer = nil
@@ -2293,28 +2359,6 @@ final class StatusHUD: NSObject {
                 Permissions.log("transcribing: slow (\(seconds)s), surfaced cancel/retry")
             }
             RunLoop.main.add(timer, forMode: .common); transcribingTimer = timer
-
-        case .pendingSend:
-            // The bar animates CONTINUOUSLY across the window (ruled — tick
-            // steps read as a stutter), filling go-green; one one-shot timer
-            // fires the send when the window closes. Layout has already run, so
-            // the bar's bounds are real when the animation starts.
-            countdownBar.begin(seconds: face.countdownSeconds)
-            let send = onCommitSend
-            let timer = Timer(timeInterval: face.countdownSeconds, repeats: false) {
-                [weak self] timer in
-                guard let self else { return timer.invalidate() }
-                self.countdownTimer = nil
-                self.countdownBar.isHidden = true
-                // The bar running out IS the confirmation — the contract completed
-                // exactly as displayed, so the stage is yielded before the dispatch
-                // work begins. The caller repaints ready; only a failure comes back.
-                self.forceTransition(to: .idle(waiting: 0), because: "countdown completed")
-                send?()
-            }
-            // .common so the countdown keeps running while a menu or drag is
-            // tracking — otherwise it silently stalls and the reply never goes.
-            RunLoop.main.add(timer, forMode: .common); countdownTimer = timer
 
         default:
             break
