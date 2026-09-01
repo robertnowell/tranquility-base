@@ -225,7 +225,10 @@ final class SessionDiscoveryTests: XCTestCase {
         let command = session(.gone, revivable: true,
                               cwd: "/definitely/not/a/real/path/xyz").reviveCommand
         XCTAssertNotNil(command, "a deleted worktree must not retire the session")
-        XCTAssertEqual(command?.cwd, SessionDiscovery.projectsHome)
+        let projects = SessionDiscovery.projectsHome
+        let expected = FileManager.default.fileExists(atPath: projects)
+            ? projects : FileManager.default.homeDirectoryForCurrentUser.path
+        XCTAssertEqual(command?.cwd, expected)
     }
 
     /// And the one refusal that survives: nothing reopens under a reaped temp
@@ -940,7 +943,20 @@ final class SessionDiscoveryTests: XCTestCase {
         let home = root.appendingPathComponent("stand-here")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         XCTAssertEqual(SessionDiscovery.landingDirectory(
-            for: orphan, .default, temporaryRoots: [], home: home.path), home.path)
+            for: orphan, .default, temporaryRoots: [], projectsHome: home.path), home.path)
+    }
+
+    func testNewMachineWithoutProjectsFallsBackToHome() throws {
+        let root = try makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let orphan = root.appendingPathComponent("no-repo-here/deep/deeper").path
+        let existingHome = root.appendingPathComponent("new-user-home")
+        try FileManager.default.createDirectory(at: existingHome, withIntermediateDirectories: true)
+        XCTAssertEqual(SessionDiscovery.landingDirectory(
+            for: orphan, .default, temporaryRoots: [],
+            projectsHome: root.appendingPathComponent("missing-projects").path,
+            userHome: existingHome.path),
+            existingHome.path)
     }
 
     func testAReapedTempDirectoryLandsNowhere() {

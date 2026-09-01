@@ -110,6 +110,11 @@ public enum GitHubPullRequests {
         /// that never had one, on every render.
         private var entries: [String: (pr: PR?, at: Date)] = [:]
         private var inFlight: Set<String> = []
+        /// A slower, older lookup must never overwrite a newer explicit
+        /// refresh. Revisions are monotonic across resets so work already
+        /// dispatched before a reset cannot become current again by accident.
+        private var revisions: [String: UInt64] = [:]
+        private var nextRevision: UInt64 = 0
         var fetch: @Sendable (String, String) -> PR? = { repo, key in
             repo.isEmpty ? GitHubPullRequests.view(url: key)
                          : GitHubPullRequests.run(repo: repo, branch: key)
@@ -123,13 +128,22 @@ public enum GitHubPullRequests {
             let entry = entries[key]
             let fresh = entry.map { Date().timeIntervalSince($0.at) <= maxAge } ?? false
             let claimed = !fresh && !inFlight.contains(key)
-            if claimed { inFlight.insert(key) }
-            lock.unlock()
+            var revision: UInt64?
             if claimed {
+                inFlight.insert(key)
+                nextRevision &+= 1
+                revisions[key] = nextRevision
+                revision = nextRevision
+            }
+            lock.unlock()
+            if let revision {
                 DispatchQueue.global(qos: .utility).async { [self] in
                     let found = fetch(repo, branch)
                     lock.lock()
-                    entries[key] = (found, Date()); inFlight.remove(key)
+                    if revisions[key] == revision {
+                        entries[key] = (found, Date())
+                    }
+                    inFlight.remove(key)
                     lock.unlock()
                 }
             }
@@ -138,15 +152,28 @@ public enum GitHubPullRequests {
 
         @discardableResult
         func refreshNow(repo: String, branch: String) -> PR? {
+            let key = "\(repo)\t\(branch)"
+            lock.lock()
+            nextRevision &+= 1
+            let revision = nextRevision
+            revisions[key] = revision
+            lock.unlock()
             let found = fetch(repo, branch)
             lock.lock()
-            entries["\(repo)\t\(branch)"] = (found, Date())
+            if revisions[key] == revision {
+                entries[key] = (found, Date())
+            }
             lock.unlock()
             return found
         }
 
         func reset() {
-            lock.lock(); entries = [:]; inFlight = []; lock.unlock()
+            lock.lock()
+            entries = [:]
+            inFlight = []
+            revisions = [:]
+            nextRevision &+= 1
+            lock.unlock()
         }
     }
 

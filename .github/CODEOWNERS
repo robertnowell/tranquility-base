@@ -1,0 +1,11 @@
+# Release trust boundary: changes that can build code or access publication
+# credentials require an explicit owner review once branch protection is on.
+/.github/CODEOWNERS @robertnowell
+/.github/dependabot.yml @robertnowell
+/.github/workflows/ @robertnowell
+/scripts/bundle.sh @robertnowell
+/scripts/prepare-release-app.sh @robertnowell
+/scripts/release.sh @robertnowell
+/scripts/ci-release.sh @robertnowell
+/scripts/audit-release.sh @robertnowell
+/TranquilityBase.entitlements @robertnowell

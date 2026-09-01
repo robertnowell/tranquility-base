@@ -100,6 +100,33 @@ final class PullRequestInTheHubTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(t0), 0.5, "the cold read waited on the network")
     }
 
+    /// A cold lookup can still be running when an announcement explicitly
+    /// primes fresher state. Completion order is not authority: the newer
+    /// request must remain the snapshot even when the older one finishes last.
+    func testAnOlderColdLookupCannotOverwriteANewerPrime() {
+        let calls = Counter()
+        let started = DispatchSemaphore(value: 0)
+        let releaseOld = DispatchSemaphore(value: 0)
+        let old = pr(117, state: "OPEN", approvals: 0)
+        let fresh = pr(117, state: "OPEN", approvals: 2)
+        GitHubPullRequests.cache.fetch = { _, _ in
+            calls.bump()
+            if calls.count == 1 {
+                started.signal()
+                releaseOld.wait()
+                return old
+            }
+            return fresh
+        }
+
+        XCTAssertNil(GitHubPullRequests.cached(repo: repo, branch: "ui/grid"))
+        XCTAssertEqual(started.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(GitHubPullRequests.prime(repo: repo, branch: "ui/grid")?.approvals, 2)
+        releaseOld.signal()
+        Thread.sleep(forTimeInterval: 0.05)
+        XCTAssertEqual(GitHubPullRequests.cached(repo: repo, branch: "ui/grid")?.approvals, 2)
+    }
+
     /// Once warm, the row is there — and one branch is asked about once, not
     /// once per turn that shares it.
     func testAWarmSnapshotAnswersAndAsksOnce() {

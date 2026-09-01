@@ -764,6 +764,8 @@ public enum SessionDiscovery {
     ///    `.claude/worktrees/`, a bookkeeping folder with no code in it. 56 of
     ///    69 real cases resolve here.
     /// 3. `~/Projects`, so a session with no repo above it is still reachable.
+    ///    A genuinely new machine may not have created that folder yet; in
+    ///    that case the user's home directory is the final real landing spot.
     ///    Refusing here protects nothing — the transcript exists either way —
     ///    and only removes the ability to talk to it.
     ///
@@ -779,7 +781,8 @@ public enum SessionDiscovery {
     /// `rev-parse --show-toplevel`: this runs inside the scan that repaints the
     /// grid, and rule 9 keeps subprocess spawns off that path. Checks for
     /// EXISTENCE, not directory-ness, because a worktree's `.git` is a file.
-    /// `temporaryRoots` and `home` are injected rather than read, for one
+    /// `temporaryRoots`, `projectsHome`, and `userHome` are injected rather
+    /// than read, for one
     /// reason: the tests build a REAL directory tree, because the ancestor walk
     /// is filesystem behaviour and a stubbed `fileExists` would pass while the
     /// walk was wrong. `NSTemporaryDirectory()` is itself under `/var/folders`,
@@ -788,7 +791,8 @@ public enum SessionDiscovery {
     public static func landingDirectory(for cwd: String?,
                                         _ fm: FileManager = .default,
                                         temporaryRoots: [String] = defaultTemporaryRoots,
-                                        home: String? = nil) -> String? {
+                                        projectsHome: String? = nil,
+                                        userHome: String? = nil) -> String? {
         guard let cwd, !cwd.isEmpty else { return nil }
         // Rung 1 answers before the guard, deliberately: the refusal below is
         // about REAPED paths, and a temp directory still standing was never
@@ -804,8 +808,10 @@ public enum SessionDiscovery {
             }
             dir = (dir as NSString).deletingLastPathComponent
         }
-        let fallback = home ?? projectsHome
-        return isDirectory(fallback, fm) ? fallback : nil
+        let projectFallback = projectsHome ?? Self.projectsHome
+        if isDirectory(projectFallback, fm) { return projectFallback }
+        let homeFallback = userHome ?? FileManager.default.homeDirectoryForCurrentUser.path
+        return isDirectory(homeFallback, fm) ? homeFallback : nil
     }
 
     /// The first ancestor of `dir` (inclusive) holding a `.git` entry.
