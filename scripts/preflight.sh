@@ -87,6 +87,9 @@ python3 scripts/check-house-copy.sh
 echo "→ borrowed descriptors"
 python3 scripts/check-borrowed-descriptors.sh
 
+echo "→ notarization log parser"
+scripts/test-notary-log-parser.sh
+
 echo "→ building"
 swift build 2>&1 | grep -E "error:|warning: .*never used" || true
 swift build >/dev/null
