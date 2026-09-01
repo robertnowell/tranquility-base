@@ -224,10 +224,13 @@ final class TruncationTests: XCTestCase {
     /// between saw neither playing nor paused, exited, and reported a clip you
     /// were still listening to as truncated at the pause point. This resumes
     /// and immediately hammers the observable state, which is where the race
-    /// lived; the clip must still finish clean.
+    /// lived; playback must advance again before an intentional stop.
     func testResumeDoesNotBrieflyLookStopped() async throws {
         let provider = ElevenLabsSpeechProvider()
-        let c = clip(seconds: 2.0), t = text(6)
+        // A long clip removes completion as a competing transition. The test
+        // stops it explicitly after proving resumed playback made progress, so
+        // this adds headroom without adding 30 seconds to the suite.
+        let c = clip(seconds: 30.0), t = text(6)
         let playing = Task { try await provider.play(c, text: t, onWord: nil) }
         try await awaitPlayback(provider, reaches: 0.4)
         provider.pause()
@@ -241,7 +244,20 @@ final class TruncationTests: XCTestCase {
                           "the latch must hold until the player is observed running")
             try await Task.sleep(nanoseconds: 2_000_000)
         }
-        try await playing.value
+        XCTAssertTrue(provider.player?.isPlaying == true,
+                      "resume must restart the player")
+        try await awaitPlayback(provider, reaches: 0.8)
+        XCTAssertFalse(provider.isPaused,
+                       "the playback loop clears the latch after observing resumed audio")
+        provider.stop()
+        do {
+            try await playing.value
+            XCTFail("an intentional stop must interrupt the playback task")
+        } catch SpeechError.interrupted {
+            // Expected: proves the resume window did not exit early as truncated.
+        } catch {
+            XCTFail("expected .interrupted after the intentional stop, got \(error)")
+        }
     }
 
     /// A deliberate stop is `.interrupted` — the caller asked, so nothing about
