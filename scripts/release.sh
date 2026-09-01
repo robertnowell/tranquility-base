@@ -49,6 +49,25 @@ release_database_id() {
   gh release view "$TAG" --repo "$REPO" --json databaseId --jq .databaseId
 }
 
+verify_release_tag() {
+  local tag_type tag_target
+  tag_type=$(github_api "repos/$REPO/git/ref/tags/$TAG" --jq .object.type) \
+    || fail "release tag $TAG does not exist"
+  tag_target=$(github_api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha)
+  [ "$tag_type" = "commit" ] \
+    || fail "release tag $TAG is a $tag_type object, expected a commit"
+  [ "$tag_target" = "$TARGET" ] \
+    || fail "release tag $TAG points to $tag_target, not $TARGET"
+}
+
+ensure_release_tag() {
+  if ! github_api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+    github_api --method POST "repos/$REPO/git/refs" \
+      -f ref="refs/tags/$TAG" -f sha="$TARGET" >/dev/null
+  fi
+  verify_release_tag
+}
+
 NOTARY_PROFILE="${TB_NOTARY_PROFILE:-AC_PASSWORD}"
 NOTARY_KEYCHAIN="${TB_NOTARY_KEYCHAIN:-}"
 RELEASE_SERIES="${TB_RELEASE_SERIES:-0.3}"
@@ -116,9 +135,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
       IS_IMMUTABLE=$(github_api "repos/$REPO/releases/$RELEASE_ID" --jq .immutable)
       [ "$IS_IMMUTABLE" = "true" ] \
         || fail "published release $TAG is not immutable"
-      TAG_TARGET=$(github_api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha)
-      [ "$TAG_TARGET" = "$TARGET" ] \
-        || fail "existing tag $TAG points to $TAG_TARGET, not $TARGET"
+      verify_release_tag
       step "auditing already-published release"
       EXISTING_DIR=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/tb-existing-release.XXXXXX")
       trap 'rm -rf "$EXISTING_DIR"' EXIT INT TERM
@@ -281,20 +298,27 @@ $SUBJECT
 
 Requires macOS 14 or later on Apple silicon, plus a supported coding-agent CLI and tmux. Download the DMG, drag Tranquility Base to Applications, eject the disk image, and open the installed app."
 
+# GitHub refuses to create a release directly against an older commit when
+# that commit differs in .github/workflows: GITHUB_TOKEN can never receive the
+# separate workflows permission. Creating and verifying the ordinary Git ref
+# first lets the release name an existing tag using only contents:write.
+ensure_release_tag
+
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
   gh release upload "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" \
     "$APP_NOTARY_LOG_PATH" "$DMG_NOTARY_LOG_PATH" \
     --repo "$REPO" --clobber
   gh release edit "$TAG" --repo "$REPO" --title "Tranquility Base $VERSION" \
-    --notes "$NOTES" --target "$TARGET"
+    --notes "$NOTES"
 else
   gh release create "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" \
     "$APP_NOTARY_LOG_PATH" "$DMG_NOTARY_LOG_PATH" --repo "$REPO" \
-    --target "$TARGET" --title "Tranquility Base $VERSION" \
+    --verify-tag --title "Tranquility Base $VERSION" \
     --notes "$NOTES" --draft --latest=false
 fi
 [ -n "$RELEASE_ID" ] || RELEASE_ID=$(release_database_id)
 [ -n "$RELEASE_ID" ] || fail "draft release $TAG has no database id"
+verify_release_tag
 
 # The public object, not the upload command, gets the final word. The draft
 # stays private on any failure below and can be safely replaced by a rerun.
