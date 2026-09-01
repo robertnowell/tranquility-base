@@ -183,13 +183,23 @@ extension StatusHUD {
         var sent = false
         var cancelled = false
         currentTarget = ("selftest", 1, "promotions")
-        showPendingSend(text: "words that should never be sent", label: "promotions",
+        showPendingSend(utteranceId: "selftest-pending",
+                        text: "words that should never be sent", label: "promotions",
                         seconds: 4, send: { sent = true }, cancel: { _ in cancelled = true })
+
+        // A file drop updates the disclosure and renders again. That repaint
+        // was the live duplicate: render armed a second timer while the first
+        // remained scheduled. Timer identity must now survive the repaint.
+        let timerBeforeRepaint = countdownTimer
+        updatePendingSendText("words plus screenshot", utteranceId: "selftest-pending")
+        let repaintKeptOneTimer = timerBeforeRepaint != nil
+            && countdownTimer === timerBeforeRepaint
 
         let cancellable = cancelPendingSend(restartListening: false)
         // `notSent`, not `sent`: the whole point of the drill is that nothing was
         // sent, so the expectation is written here where it is known.
         SelfTest.report("pendingSend", [
+            ("repaintKeptOneTimer", repaintKeptOneTimer),
             ("cancellable", cancellable), ("cancelled", cancelled), ("notSent", !sent),
         ])
 

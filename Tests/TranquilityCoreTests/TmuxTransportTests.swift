@@ -133,6 +133,17 @@ final class TmuxTransportTests: XCTestCase {
         XCTAssertEqual(TmuxTransport.decide(line: .unreadable), .paste)
     }
 
+    /// Attempt two can reclassify the screen any way it likes; once attempt
+    /// one pasted, none of those observations can authorize another paste.
+    func testACompletedPasteClosesThePasteDoorForEveryLaterClassification() {
+        for floor: TmuxTransport.FloorAction in [.paste, .joinExisting, .returnOnly] {
+            XCTAssertFalse(TmuxTransport.shouldPaste(floor: floor, hasPasted: true))
+        }
+        XCTAssertTrue(TmuxTransport.shouldPaste(floor: .paste, hasPasted: false))
+        XCTAssertTrue(TmuxTransport.shouldPaste(floor: .joinExisting, hasPasted: false))
+        XCTAssertFalse(TmuxTransport.shouldPaste(floor: .returnOnly, hasPasted: false))
+    }
+
     func testEmptyPromptLine() {
         let screen = "some scrollback\n────\n❯ \n────\n  ⏵⏵ auto mode on"
         XCTAssertEqual(TmuxTransport.classifyPromptLine(screen: screen, payload: "hello"),

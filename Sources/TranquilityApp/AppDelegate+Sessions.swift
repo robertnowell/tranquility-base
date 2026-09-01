@@ -370,6 +370,20 @@ extension AppDelegate {
                     Permissions.log("launch: reply waited \(waited)s for \(launch.label) — "
                         + (arrived.map { "went to \($0.prefix(8))" } ?? "never came up"))
                     guard let arrived else {
+                        // A newer launch can win while an answer to the old
+                        // greeting is still closing. The old promise correctly
+                        // answers nil, but that is supersession, not evidence
+                        // that the newly opened chat failed. Keep the recording
+                        // and the log; never paint the loser's error over the
+                        // winner's live card (the 9:22 false failure).
+                        guard self.pendingLaunch === launch else {
+                            recordingDestination = nil
+                            lastStatusLine = "older launch reply superseded"
+                            Permissions.log("send: obsolete launch failure suppressed for "
+                                            + launch.label)
+                            rebuildMenu()
+                            return
+                        }
                         // The agent is genuinely absent — the one failure this
                         // path exists for. The words go where you can still get
                         // at them rather than into somebody else's tab.
@@ -481,7 +495,7 @@ extension AppDelegate {
                     // The countdown and the send own the window from here.
                     handedToCountdown = true
                     hud.showPendingSend(
-                        text: text, label: label, seconds: 4,
+                        utteranceId: utteranceId, text: text, label: label, seconds: 4,
                         send: { [weak self] in
                             self?.send(utteranceId: utteranceId, label: label,
                                        sessionId: sessionId)
@@ -528,6 +542,10 @@ extension AppDelegate {
                     hud.showResult(StateLegend.tabGoneRescueMessage(label: nil, copied: copied))
                 case .dispatchFailed(let failure, _):
                     lastStatusLine = "send failed: \(failure), audio kept"
+                case .duplicateSuppressed(let utteranceId):
+                    lastStatusLine = "duplicate send suppressed"
+                    Permissions.log("send: duplicate callback suppressed for "
+                                    + utteranceId.prefix(8))
                 }
             } catch {
                 lastStatusLine = "reply failed: \(error)"
@@ -1492,7 +1510,15 @@ extension AppDelegate {
         let conversationAtLaunch = activeConversation?.sessionId
         let launch = greet ? PendingLaunch(label: label, directory: dir,
                                            conversationAtLaunch: conversationAtLaunch) : nil
-        if let launch { pendingLaunch = launch }
+        if let launch {
+            // Newest launch wins immediately, not when registration eventually
+            // finishes. Releasing the old promise wakes any answer already
+            // waiting on it; the failure path above recognizes the replacement
+            // as supersession and stays silent.
+            let superseded = pendingLaunch
+            pendingLaunch = launch
+            superseded?.abandon()
+        }
         if greet, hud.showGreeting(line: line, label: label) {
             // Through the greeting cache, which is what it is for: one fixed
             // sentence per voice, synthesized once and replayed from disk

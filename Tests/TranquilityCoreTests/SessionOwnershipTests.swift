@@ -188,12 +188,17 @@ final class LiveNonRegistryDecorationTests: XCTestCase {
     }
 
     /// Anything else, including a session that has never said a word, stays
-    /// idle. Guessing "busy" from the absence of evidence is how a lamp starts
-    /// lying, which is the failure this app cares most about.
-    func testNoAnswerStaysIdle() {
+    /// UNKNOWN. This case used to assert "idle", and the reasoning it carried
+    /// was right about the wrong word: guessing "busy" from the absence of
+    /// evidence is indeed how a lamp starts lying — but so is guessing "idle",
+    /// and that is the guess this line was making. `GridAssembler` treats a
+    /// process status as a witness that outranks the file, so "idle" here does
+    /// not decline to answer, it testifies. Codex has no process-level status
+    /// to testify with. Nil is the only honest value.
+    func testNoAnswerStaysUnknown() {
         let live = store(["01a05369"]).liveNonRegistrySessions(
             status: { _ in nil }, name: { _ in nil })
-        XCTAssertEqual(live.first?.status, "idle")
+        XCTAssertNil(live.first?.status)
     }
 
     func testTheNameIsCarried() {
@@ -211,11 +216,11 @@ final class LiveNonRegistryDecorationTests: XCTestCase {
         XCTAssertNil(live.first?.name)
     }
 
-    /// The defaults keep every pre-existing call site honest: unchanged
-    /// behaviour, no name, idle.
-    func testTheDefaultsAreTheOldBehaviour() {
+    /// A call site that supplies neither closure asserts nothing about the
+    /// session: no name, and no claim about what the process is doing.
+    func testTheDefaultsClaimNothing() {
         let live = store(["01a05001"]).liveNonRegistrySessions()
-        XCTAssertEqual(live.first?.status, "idle")
+        XCTAssertNil(live.first?.status)
         XCTAssertNil(live.first?.name)
     }
 }
@@ -253,5 +258,66 @@ final class LiveSessionCarriesItsHarnessTests: XCTestCase {
         """.utf8)
         let rows = try JSONDecoder().decode([LiveSession].self, from: json)
         XCTAssertEqual(rows.first?.harness, ClaudeCodeAdapter().id)
+    }
+}
+
+/// "I don't know" must not be spelled "idle".
+///
+/// `GridAssembler` reads a process status as a WITNESS: a session whose file
+/// looks busy goes grey if the process says idle, because a real process
+/// reporting idle outranks a file that has not caught up. Codex has no
+/// process-level status at all (`registersWithLiveness == false`), so an
+/// invented "idle" is not a default — it is false testimony, and it silences
+/// the only witness there is.
+///
+/// This cost Robert the same screenshot twice: a pane reading "Working (24s)"
+/// beside a grey row, on 30 Aug and again on 01 Sep.
+final class OwnershipDoesNotInventAStatusTests: XCTestCase {
+
+    private func store() throws -> FileSessionOwnershipStore {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = FileSessionOwnershipStore(
+            fileURL: dir.appendingPathComponent("session-ownership.json"))
+        store.record(SessionOwnershipRecord(
+            sessionId: "01a05dc7", harness: CodexAdapter().id,
+            pid: Int(ProcessInfo.processInfo.processIdentifier)))
+        return store
+    }
+
+    func testAnUninjectedStatusIsNil() throws {
+        XCTAssertNil(try store().liveNonRegistrySessions().first?.status)
+    }
+
+    /// The whole point of the nil: a file that says working now reaches the lamp.
+    func testAWorkingFileLightsBlueWhenNobodyClaimsIdle() throws {
+        let live = try store().liveNonRegistrySessions().first
+        let evidence = SessionActivity.Evidence(
+            activity: .working, observedAt: Date(), modifiedAt: Date())
+        let lamp = GridAssembler.lampAndReason(
+            for: evidence, sessionId: "01a05dc7", live: live)
+        XCTAssertEqual(lamp.lamp, .working)
+    }
+
+    /// And a silent one still reaches amber rather than going quietly grey.
+    func testAStalledFileGoesAmberWhenNobodyClaimsIdle() throws {
+        let live = try store().liveNonRegistrySessions().first
+        let evidence = SessionActivity.Evidence(
+            activity: .stalled(reason: "silent for 3h"), observedAt: Date(), modifiedAt: Date())
+        let lamp = GridAssembler.lampAndReason(
+            for: evidence, sessionId: "01a05dc7", live: live)
+        XCTAssertEqual(lamp.lamp, .fault)
+    }
+
+    /// A caller with a REAL source can still say idle, and it still wins —
+    /// this removes an invention, not the rule.
+    func testAnInjectedIdleStillOutranksTheFile() throws {
+        let live = try store().liveNonRegistrySessions(status: { _ in "idle" }).first
+        let evidence = SessionActivity.Evidence(
+            activity: .working, observedAt: Date(), modifiedAt: Date())
+        let lamp = GridAssembler.lampAndReason(
+            for: evidence, sessionId: "01a05dc7", live: live)
+        XCTAssertEqual(lamp.lamp, .running)
     }
 }

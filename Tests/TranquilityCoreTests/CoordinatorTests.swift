@@ -372,6 +372,26 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(transport.sent, [text])
     }
 
+    func testRepeatedConfirmationDispatchesTheUtteranceOnlyOnce() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
+        try append()
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("the first confirmation should dispatch") }
+        guard case .duplicateSuppressed(let duplicateId) =
+            try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("the repeated confirmation should be suppressed") }
+
+        XCTAssertEqual(duplicateId, utteranceId)
+        XCTAssertEqual(transport.sent.count, 1)
+    }
+
     // MARK: - The bugs this model makes unrepresentable
 
     /// THE bug. You type, the agent works, the agent finishes — and that finished
