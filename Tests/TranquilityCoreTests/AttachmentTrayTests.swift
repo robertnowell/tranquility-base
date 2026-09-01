@@ -65,6 +65,30 @@ final class AttachmentTrayTests: XCTestCase {
         XCTAssertEqual(tray.staged(for: "A"), ["/a/late.png"])
     }
 
+    func testDropDuringUndoWindowJoinsThePendingUtterance() {
+        var tray = AttachmentTray()
+        tray.stage("/a/first.png", session: "A")
+        _ = tray.snapshot(session: "A", utteranceId: "u1")
+        tray.stage("/a/late.png", session: "A")
+
+        XCTAssertEqual(tray.absorbStaged(session: "A", utteranceId: "u1"),
+                       ["/a/first.png", "/a/late.png"])
+        XCTAssertEqual(tray.staged(for: "A"), [])
+        XCTAssertEqual(tray.riding(utteranceId: "u1"),
+                       ["/a/first.png", "/a/late.png"])
+    }
+
+    func testLateDropCannotCrossIntoAnotherSessionsPendingUtterance() {
+        var tray = AttachmentTray()
+        tray.stage("/a/first.png", session: "A")
+        _ = tray.snapshot(session: "A", utteranceId: "u1")
+        tray.stage("/b/private.png", session: "B")
+
+        XCTAssertEqual(tray.absorbStaged(session: "B", utteranceId: "u1"),
+                       ["/a/first.png"])
+        XCTAssertEqual(tray.staged(for: "B"), ["/b/private.png"])
+    }
+
     func testLandedClearsAndNotLandedRestores() {
         var tray = AttachmentTray()
         tray.stage("/a/one.png", session: "A")

@@ -657,8 +657,11 @@ public struct TmuxTransport: DispatchTransport {
 
         // Set once any attempt has seen its own words in the composer.
         var accepted = false
+        // Lifetime is the whole send, not one attempt. Verification may retry
+        // Return, but it can never authorize another paste.
+        var pasted = false
 
-        for attempt in 0..<2 {
+        attempts: for attempt in 0..<2 {
             if attempt == 1 {
                 // The retry gate. Both conditions, and both are positive
                 // evidence rather than the absence of good news: the
@@ -683,7 +686,6 @@ public struct TmuxTransport: DispatchTransport {
             // ── The one screen read. Its only question is what a human left
             // in the box, and its only power is to preserve it.
             var expectedInBox = payload
-            var pasted = false
             // Whether we SAW our words in the box. Advisory for the paste (a
             // slow repaint must never cause a second one), but decisive at the
             // end: our text seen in the box, and the box empty after Return,
@@ -710,6 +712,12 @@ public struct TmuxTransport: DispatchTransport {
                 // two of them; Return makes one message.
                 break
             case .joinExisting:
+                // On a later attempt, somebody can type after the empty-box
+                // retry gate. We have already spent this send's one paste, so
+                // neither splice into nor submit their new text.
+                guard Self.shouldPaste(floor: floor, hasPasted: pasted) else {
+                    break attempts
+                }
                 // Keep what is there and put ours after it, so the two things
                 // the user meant as one message arrive as one message. Read
                 // first: this is the only moment they are still separable.
@@ -724,7 +732,7 @@ public struct TmuxTransport: DispatchTransport {
                 break
             }
 
-            if floor != .returnOnly {
+            if Self.shouldPaste(floor: floor, hasPasted: pasted) {
                 // load-buffer over stdin: no shell, no argv, no per-key
                 // interpretation, byte-exact (measured at 1,587 chars with
                 // quotes and dollar signs intact). The ONLY paste in this
@@ -734,8 +742,10 @@ public struct TmuxTransport: DispatchTransport {
                     socket: pane.socketName,
                     stdin: Data((joining ? "\n" + payload : payload).utf8))
                 else { continue }
-                Tmux.run(["paste-buffer", "-b", "tb-dispatch", "-d", "-p", "-t", pane.paneId],
-                         socket: pane.socketName)
+                guard case .success = Tmux.run(
+                    ["paste-buffer", "-b", "tb-dispatch", "-d", "-p", "-t", pane.paneId],
+                    socket: pane.socketName)
+                else { continue }
                 pasted = true
 
                 // Advisory, never a gate. A TUI takes a moment to draw a
@@ -757,7 +767,6 @@ public struct TmuxTransport: DispatchTransport {
             // `.returnOnly` means the box already held our words when this
             // send started, which is the same evidence a fresh echo gives.
             if floor == .returnOnly { echoSeen = true }
-            _ = pasted
             accepted = accepted || echoSeen
 
             // ── Submit and prove it. Return is idempotent; the transcript is
@@ -1076,6 +1085,12 @@ public struct TmuxTransport: DispatchTransport {
         case .holds(ours: true): return .returnOnly
         case .holds(ours: false): return .joinExisting
         }
+    }
+
+    /// The structural at-most-once paste gate. Kept pure so tests assert the
+    /// invariant across every screen classification without driving tmux.
+    static func shouldPaste(floor: FloorAction, hasPasted: Bool) -> Bool {
+        !hasPasted && floor != .returnOnly
     }
 
 

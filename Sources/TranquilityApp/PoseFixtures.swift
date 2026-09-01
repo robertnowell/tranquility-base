@@ -376,6 +376,7 @@ extension StatusHUD {
         meterTimer?.invalidate(); meterTimer = nil
         transcribingTimer?.invalidate(); transcribingTimer = nil
         countdownTimer?.invalidate(); countdownTimer = nil
+        pendingSendTimerToken = nil
 
         // The capture harness reads this one line: the panel frame in AppKit's
         // bottom-left origin, the full screen frame to convert with, and the
