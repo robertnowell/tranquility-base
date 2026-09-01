@@ -104,15 +104,28 @@ extension SessionOwnershipStore {
     /// both answers live somewhere this type cannot reach and neither is worth
     /// a second source of truth.
     ///
-    /// Status was hard-coded `"idle"` from the day this was written, which was
-    /// honest while Codex told us nothing: `GridAssembler` reads
-    /// `live.status == "busy"` for its blue lamp, so a Codex session that was
-    /// visibly working sat grey next to a Claude one that did not (Robert,
-    /// 30 Aug, with a screenshot of a pane reading "Working (24s)"). The
-    /// answer now exists and costs nothing: the hooks installed on 29 Aug put
-    /// a UserPromptSubmit and a Stop in the event store for every Codex turn,
-    /// so the latest of the two IS the busy signal, and the grid already loads
-    /// it for other reasons.
+    /// Status is NIL when nobody supplies one, and that is load-bearing.
+    ///
+    /// It was hard-coded `"idle"` from the day this was written, which was
+    /// honest while Codex told us nothing. It is not honest now, because
+    /// "idle" is not the absence of an answer — it is an ANSWER, and
+    /// `GridAssembler` treats it as one: a session the file says is working
+    /// goes grey when its status claims idle, on the rule that a process
+    /// which says it is idle outranks a file that looks busy. Sound for a
+    /// harness that genuinely reports, and a lie for one that never did.
+    ///
+    /// That cost the same bug twice. On 30 Aug a Codex session sat grey while
+    /// its pane read "Working (24s)", and the fix was to INJECT a status from
+    /// the hook boundary — which papered over the default rather than
+    /// removing it. On 01 Sep the injection was retired (the classifier can
+    /// read a rollout now and no longer needs a proxy), the `?? "idle"`
+    /// underneath was still there, and Robert sent the same screenshot of the
+    /// same pane reading "Working (24s)".
+    ///
+    /// So: no invented status. Codex has no `agents --json`
+    /// (`registersWithLiveness == false`) and therefore no process-level
+    /// answer at all; nil says exactly that, and the file — which does know —
+    /// decides. Callers may still inject one when they have a real source.
     ///
     /// Name is the same shape of problem. `discoverCodex` learned to read
     /// Codex's own thread name, but that is the DISK band; a live session
@@ -125,7 +138,7 @@ extension SessionOwnershipStore {
         all().filter { $0.harness != ClaudeCodeAdapter().id && ProcessProbe.isAlive($0.pid) }
             .map { LiveSession(harness: $0.harness,
                                pid: $0.pid, sessionId: $0.sessionId, cwd: $0.cwd,
-                               status: status($0.sessionId) ?? "idle",
+                               status: status($0.sessionId),
                                name: name($0.sessionId), waitingFor: nil) }
     }
 }
