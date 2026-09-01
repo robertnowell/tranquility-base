@@ -68,27 +68,32 @@ extension AppDelegate {
         var liveById: [String: LiveSession] = [:]
         for session in (ClaudeAgentsCLI().sessions() ?? [])
             + FileSessionOwnershipStore.shared.liveNonRegistrySessions(
-                // A prompt went in and no Stop has come back: it is chewing.
-                // Anything else, including no events at all, stays idle, which
-                // is the honest answer for a session that has never spoken.
+                // NO STATUS FOR CODEX, since 01 Sep. This used to say
+                // "busy" whenever a prompt had gone in with no Stop after it,
+                // which was a compensation for one thing: `SessionActivity`
+                // could not read a rollout, so without a hook to lean on the
+                // file had nothing to say. It can read one now.
                 //
-                // WITH A CEILING, since 01 Sep. "No Stop has come back" is a
-                // proxy, and it fails OPEN: a Codex turn that dies mid-stream
-                // fires no Stop at all, so the boundary stays at the prompt
-                // forever and this said "busy" forever — and `busy` outranks
-                // the file, so the row was blue for fourteen hours over a turn
-                // that had been dead since the night before. The same hour the
-                // rest of the panel already uses to stop believing silence
-                // (`SessionActivity.stalled`): past it, this stops asserting
-                // anything and the transcript, which can see the error, gets
-                // to speak. It only ever withdraws a claim; it never makes one.
-                status: {
-                    guard let boundary = boundaries[$0],
-                          boundary.kind == .userPromptSubmit,
-                          Date().timeIntervalSince(boundary.at) < SessionActivity.stalled
-                    else { return nil }
-                    return "busy"
-                },
+                // The compensation was never sound. "No Stop has come back"
+                // fails OPEN — a turn that dies fires no Stop at all — and a
+                // `busy` status OUTRANKS the file, so the proxy did not just
+                // guess wrong, it silenced the one witness that knew. That is
+                // how a turn which died at 01:51 held a blue lamp until the
+                // next afternoon. Yesterday's ceiling bounded the damage at an
+                // hour; this removes the cause.
+                //
+                // Nothing is lost by staying quiet. The hooks exist because
+                // Claude Code's transcript reads idle 9.8% of the time an
+                // agent is working — a finished turn and a mid-turn pause are
+                // the same shape in that file. They are NOT the same shape in
+                // a rollout: Codex writes `task_started` and `task_complete`
+                // itself, so its own file answers the question the hooks were
+                // introduced to answer, first-hand.
+                //
+                // `boundaries` still reaches the classifier as `boundary:`,
+                // where it can only resolve a genuine ambiguity. What it can
+                // no longer do is overrule a file that has stated the answer.
+                status: { _ in nil },
                 name: { codexNames[$0.lowercased()] }) {
             if let existing = liveById[session.sessionId] {
                 Permissions.log("agents: duplicate sessionId \(session.sessionId.prefix(8)) "

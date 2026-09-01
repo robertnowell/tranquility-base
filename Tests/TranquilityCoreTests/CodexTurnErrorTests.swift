@@ -32,12 +32,35 @@ final class CodexTurnErrorTests: XCTestCase {
     "turn_id":"01a05a61","last_agent_message":"Done."}}
     """
 
+    // Real shapes, with the fields the format actually carries. The first
+    // version of these fixtures omitted `turn_id` and the message `content`,
+    // and passed — because the lamp had its own looser JSON walk. Routing
+    // through `CodexRollout.record` failed them at once, which is the whole
+    // argument for one decoder: the fixtures were wrong and only the second
+    // reader believed them.
     private let started = """
-    {"timestamp":"2026-09-01T01:51:18.919Z","type":"event_msg","payload":{"type":"task_started"}}
+    {"timestamp":"2026-09-01T01:51:18.919Z","type":"event_msg","payload":{"type":"task_started",\
+    "turn_id":"01a05a61","started_at":1788222712,"model_context_window":258400}}
     """
 
+    private let aborted = """
+    {"timestamp":"2026-09-01T01:51:18.919Z","type":"event_msg","payload":{"type":"turn_aborted",\
+    "turn_id":"01a05a61","reason":"interrupted"}}
+    """
+
+    /// Built rather than pasted: the message field is itself a JSON document,
+    /// so writing it as a literal means escaping quotes twice and getting a
+    /// fixture that tests the escaping instead of the code.
+    private var wrappedError: String {
+        let body = #"{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."}}"#
+        let quoted = body.replacingOccurrences(of: "\"", with: "\\\"")
+        let head = #"{"timestamp":"2026-09-01T01:51:18.919Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"01a05a61","last_agent_message":null,"error":{"codex_error_info":"other","message":""#
+        return head + quoted + #""}}}"#
+    }
+
     private let wrote = """
-    {"timestamp":"2026-09-01T01:51:18.919Z","type":"response_item","payload":{"type":"message"}}
+    {"timestamp":"2026-09-01T01:51:18.919Z","type":"response_item","payload":{"type":"message",\
+    "role":"assistant","content":[{"type":"output_text","text":"ok"}]}}
     """
 
     private var errorAt: Date { ISO8601DateFormatter().date(from: "2026-09-01T01:51:18Z")! }
@@ -134,5 +157,78 @@ final class CodexTurnErrorTests: XCTestCase {
             SessionActivity.classify(tail: [died, started], modified: errorAt,
                                      now: errorAt.addingTimeInterval(5)),
             .working)
+    }
+
+    /// The gap the consolidation closed on its own: 30 aborts on this
+    /// machine, and the lamp's own walk had never heard of them, so pressing
+    /// Esc left a session reading as working. The parser had handled it since
+    /// August.
+    func testAnAbortedTurnIsOverToo() {
+        let boundary = SessionActivity.TurnBoundary(
+            kind: .userPromptSubmit, at: errorAt.addingTimeInterval(-4766))
+        XCTAssertEqual(
+            SessionActivity.classify(tail: [aborted], modified: errorAt, boundary: boundary,
+                                     now: errorAt.addingTimeInterval(600)),
+            .idle)
+    }
+
+    /// An abort is not a failure. Nobody needs telling about a key they
+    /// pressed themselves.
+    func testAnAbortIsNotAnError() {
+        let verdict = SessionActivity.classify(tail: [aborted], modified: errorAt, now: errorAt)
+        if case .blocked = verdict { XCTFail("an abort must not light amber") }
+    }
+
+    /// A quarter of the real failures arrive as the API's whole JSON body,
+    /// which put `{"type"` on the row. The sentence is two levels in.
+    func testAWrappedApiErrorIsUnwrapped() {
+        guard case .blocked(let reason) = SessionActivity.classify(
+            tail: [wrappedError], modified: errorAt, now: errorAt) else {
+            return XCTFail("expected blocked")
+        }
+        XCTAssertEqual(
+            reason,
+            "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.")
+    }
+
+    /// The category claim, tested rather than asserted.
+    ///
+    /// Not one line of this code mentions rate limits, disconnects or
+    /// unsupported models. It matches the SHAPE of a failed turn — a
+    /// `task_complete` carrying an `error` — so every failure kind in the
+    /// archive arrives correctly, including the ones nobody looked at. These
+    /// four are every distinct shape across all 222 rollouts on this machine
+    /// on 01 Sep, and the fifth kind next month needs no code.
+    func testEveryFailureShapeInTheArchiveLandsTheSameWay() {
+        let shapes = [
+            ("stream disconnected before completion: error sending request for url "
+             + "(https://api.openai.com/v1/responses)", "stream disconnected before completion"),
+            ("rate limit exceeded: Rate limit reached for gpt-5.6-sol in organization "
+             + "org-ZjGq9KL28dUkDQ", "rate limit exceeded"),
+            ("You've hit your usage limit. To continue using Codex, wait for it to reset.",
+             "hit your usage limit"),
+            ("Error running remote compact task", "Error running remote compact task"),
+        ]
+        for (message, expected) in shapes {
+            let line = completionLine(error: message)
+            guard case .blocked(let reason) = SessionActivity.classify(
+                tail: [line], modified: errorAt, now: errorAt) else {
+                XCTFail("\(message) did not read as blocked"); continue
+            }
+            XCTAssertEqual(reason, message, "the full sentence is kept for the hover")
+            XCTAssertEqual(SessionActivity.blocked(reason: reason).shortReason, expected,
+                           "the row needs a clause a person can read")
+        }
+    }
+
+    private func completionLine(error: String) -> String {
+        let payload: [String: Any] = [
+            "type": "task_complete", "turn_id": "01a05a61",
+            "error": ["message": error, "codex_error_info": "other"],
+        ]
+        let row: [String: Any] = [
+            "timestamp": "2026-09-01T01:51:18.919Z", "type": "event_msg", "payload": payload,
+        ]
+        return String(data: try! JSONSerialization.data(withJSONObject: row), encoding: .utf8)!
     }
 }
