@@ -223,6 +223,57 @@ public enum SessionActivity: Equatable, Sendable {
                 continue
             }
 
+            // Codex says all of this in its own words, in the same file, and
+            // until now this walk did not speak them: a rollout is JSONL of
+            // `event_msg`/`response_item`, and every line of one fell through
+            // to `default: continue`. So the verdict came from the boundary
+            // alone, and the boundary is exactly what a dead turn cannot
+            // update.
+            //
+            // Measured on 01a059da, 01 Sep: the turn died at 01:51:18Z with
+            // `stream disconnected before completion`, Codex wrote it down,
+            // NO Stop hook fired, and the row was still blue fourteen hours
+            // later — "it has shown Working since last night". Rule 1 of this
+            // function's own precedence note already covers it, in the words
+            // it was written for Claude Code with: "a transcript error wins
+            // outright. The hooks are measurably blind to it."
+            if type == "event_msg",
+               let payload = entry["payload"] as? [String: Any],
+               payload["type"] as? String == "task_complete" {
+                // Codex puts a structured error ON the completion record, so
+                // "the turn ended" and "it ended badly" are one line, not two.
+                // No transient grace, unlike Claude's mid-stream error lines:
+                // this record IS the turn ending, so there is no retry coming
+                // that could move the tail past it.
+                if let error = payload["error"] as? [String: Any],
+                   let message = error["message"] as? String, !message.isEmpty {
+                    return (.blocked(reason: message), observed)
+                }
+                // A clean completion is Codex's `turn_duration`: a first-hand
+                // statement that the turn is over, which is what a missing
+                // Stop hook otherwise leaves nobody to make.
+                endedAt = endedAt ?? observed
+                if turnIsOver(endedAt: endedAt, boundary: boundary) {
+                    return (.idle, observed)
+                }
+                continue
+            }
+            // A turn began and no completion has been passed on the way back:
+            // the agent is mid-turn, said by the harness rather than inferred
+            // from a hook that may never fire again.
+            if type == "event_msg",
+               let payload = entry["payload"] as? [String: Any],
+               ["task_started", "turn_started"].contains(payload["type"] as? String ?? "") {
+                return (working(since: observed, now: now), observed)
+            }
+            // Anything the model or its tools actually wrote. Same meaning as
+            // Claude Code's assistant/user entries: work happened at this
+            // timestamp, and `working` decides from its age whether that is
+            // still true.
+            if type == "response_item" {
+                return (working(since: observed, now: now), observed)
+            }
+
             if entry["isApiErrorMessage"] as? Bool == true {
                 let reason = text(of: entry)
                 // Not every error needs you. Measured on this machine's
@@ -439,10 +490,26 @@ extension SessionActivity {
         case .blocked(let r), .stalled(let r): reason = r
         case .working, .idle: return nil
         }
-        let firstSentence = reason.split(separator: ".").first.map(String.init) ?? reason
-        return firstSentence
+        // ". " and not ".", because a bare period is not a sentence boundary
+        // in the strings this actually receives. Codex's first error to reach
+        // this row was `stream disconnected before completion: error sending
+        // request for url (https://api.openai.com/v1/responses)`, and cutting
+        // at the first period left the row reading "...url (https://api".
+        let firstSentence = reason.components(separatedBy: ". ").first ?? reason
+        let stripped = firstSentence
             .replacingOccurrences(of: "You've ", with: "")
             .replacingOccurrences(of: "API Error: ", with: "")
             .trimmingCharacters(in: .whitespaces)
+        // A long "<what went wrong>: <where>" keeps the half that says what
+        // went wrong. The row has one line and the first clause is the half a
+        // person reads; the rest is still one hover away in `fullReason`.
+        // Only when it is long enough to be truncated anyway, and only when
+        // the label that survives is worth having — so "429 rate limit
+        // exceeded" is left exactly as it is.
+        guard stripped.count > 60,
+              let colon = stripped.range(of: ": "),
+              stripped.distance(from: stripped.startIndex, to: colon.lowerBound) >= 12
+        else { return stripped }
+        return String(stripped[stripped.startIndex..<colon.lowerBound])
     }
 }
