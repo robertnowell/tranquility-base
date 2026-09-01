@@ -1192,6 +1192,13 @@ extension AppDelegate {
                     sessionId: sessionId, directory: cwd)
                 if case .success(.attached) = outcome {
                     Permissions.log("revive: attached codex \(sessionId.prefix(8))")
+                    // The same finish as Claude's branch, by the same call: the
+                    // card that says RESUMED needs the pid to grow its door.
+                    if await self.confirmRevivedPid(sessionId: sessionId) == nil {
+                        Permissions.log("revive: codex \(sessionId.prefix(8)) attached but "
+                            + "never showed up as a live process — the card keeps its "
+                            + "receipt and loses its door")
+                    }
                     await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
                     return
                 }
@@ -1206,6 +1213,11 @@ extension AppDelegate {
                     sessionId: sessionId, cwd: cwd) {
                     Permissions.log("revive: adopted running codex "
                                     + "\(sessionId.prefix(8)) at \(pane.paneId)")
+                    // Adoption has just written the ownership record, so this
+                    // finds the pid on its first look — but it is the same call
+                    // either way, because two ways to finish a revive is how
+                    // one of them ends up missing a door.
+                    await self.confirmRevivedPid(sessionId: sessionId)
                     await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
                     return
                 }
@@ -1301,21 +1313,7 @@ extension AppDelegate {
                 // record on a successful attach, so liveNonRegistrySessions()
                 // has it from the first iteration, no retries needed for that
                 // harness, but the loop still costs nothing to share.
-                var registered = false
-                // Twenty tries, not five. Two seconds was a deadline chosen
-                // when nothing depended on it; now the receipt does.
-                for _ in 0..<20 {
-                    if let pid = ((ClaudeAgentsCLI().sessions() ?? [])
-                        + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
-                        .first(where: { $0.sessionId == sessionId })?.pid {
-                        registered = true
-                        await MainActor.run { [weak self] in
-                            self?.hud.attachLivePid(pid, sessionId: sessionId)
-                        }
-                        break
-                    }
-                    try? await Task.sleep(nanoseconds: 400_000_000)
-                }
+                let registered = await self.confirmRevivedPid(sessionId: sessionId) != nil
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     if registered {
@@ -1379,6 +1377,43 @@ extension AppDelegate {
                 }
             }
         }
+    }
+
+    /// Wait for a just-resumed session to become visible as a live process,
+    /// and hand its pid to the card on stage so GO TO AGENT appears.
+    ///
+    /// `revive()` announces the session's stored brief BEFORE resuming it
+    /// (ruled 18 Aug: a recap has nothing worth waiting on), so the live-pid
+    /// lookup inside that announce runs against a session that has not been
+    /// relaunched yet and the card paints without its door. Something has to
+    /// come back afterwards and finish the job.
+    ///
+    /// The Claude branch had this loop inline and its own comment said it
+    /// served both harnesses — "attemptCodexResume already writes an
+    /// ownership record on a successful attach, so liveNonRegistrySessions()
+    /// has it from the first iteration". True, and unreachable: the Codex
+    /// branch returns several hundred lines earlier and never arrived here.
+    /// Robert, 31 Aug, on a card reading "01A05338 · RESUMED": "go to agent
+    /// never appeared". So it is one function that both branches call, rather
+    /// than one branch's loop that the other is documented to share.
+    ///
+    /// Twenty tries at 400ms. Registration is another process's timing, not
+    /// this call's, and two seconds was a deadline chosen when nothing
+    /// depended on it.
+    @discardableResult
+    func confirmRevivedPid(sessionId: String, tries: Int = 20) async -> Int? {
+        for _ in 0..<tries {
+            if let pid = ((ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
+                .first(where: { $0.sessionId == sessionId })?.pid {
+                await MainActor.run { [weak self] in
+                    self?.hud.attachLivePid(pid, sessionId: sessionId)
+                }
+                return pid
+            }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+        return nil
     }
 
     /// The invitation's other half: a fresh agent in the artifact's own

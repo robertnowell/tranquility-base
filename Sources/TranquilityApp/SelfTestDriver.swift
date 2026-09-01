@@ -1721,6 +1721,7 @@ extension StatusHUD {
         contrastDrill()
         copyDrill()
         titleDoorDrill()
+        revivedDoorDrill()
         selectionDrill()
         hoverDrill()
         quietRowsDrill()

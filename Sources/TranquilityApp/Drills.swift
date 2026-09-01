@@ -1222,6 +1222,52 @@ extension StatusHUD {
         SelfTest.report("titleDoor", checks)
     }
 
+    /// A revived card grows its door when the pid lands.
+    ///
+    /// `revive()` announces the session's stored brief BEFORE it resumes
+    /// anything, so the card paints with no pid and GO TO AGENT is hidden —
+    /// correctly, since at that instant there is no process to go to. The
+    /// resume finishes a second or two later and something has to come back
+    /// and say so. `confirmRevivedPid` is that something, and it calls
+    /// `attachLivePid`.
+    ///
+    /// It existed and only Claude Code's branch reached it. Robert, 31 Aug,
+    /// photographing a card that read "01A05338 · RESUMED" with no door: "it
+    /// says it was resumed, but go to agent never appeared". So the button is
+    /// asserted here, on both sides of the pid arriving, for a session of
+    /// either harness — the drill cannot tell them apart, which is the point:
+    /// the card cannot either, and that is the whole ruling.
+    func revivedDoorDrill() {
+        var checks: [(String, Bool)] = []
+
+        // The card as revive() paints it: named, and with nothing running yet.
+        currentTarget = nil
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("Close KOPI-003 as P2 or defer it?"),
+            sessionId: "01a05338", pid: nil,
+            project: "Audit Kopi fixes in codebase", cwd: "/tmp")
+        checks.append(("aCardWithNoPidHasNoDoor", goButton.isHidden))
+        checks.append(("butItStillNamesTheAgent",
+                       titleLabel.stringValue.contains("Audit Kopi fixes")))
+
+        // The resume lands.
+        attachLivePid(77633, sessionId: "01a05338")
+        checks.append(("thePidArrivesAndTheDoorOpens", !goButton.isHidden))
+        checks.append(("theDoorIsAboutThisSession", currentTarget?.sessionId == "01a05338"))
+        checks.append(("andItCarriesThePid", currentTarget?.pid == 77633))
+
+        // A pid for somebody else never opens this card's door — the 18 Aug
+        // rule that a door to the wrong agent is worse than no door.
+        currentTarget = nil
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("Another agent entirely."),
+            sessionId: "01a05885", pid: nil, project: "Analyze Mirai", cwd: "/tmp")
+        attachLivePid(77633, sessionId: "01a05338")
+        checks.append(("aStrangersPidIsIgnored", goButton.isHidden))
+
+        SelfTest.report("revivedDoor", checks)
+    }
+
     /// A card's prose is selectable, and selects itself never.
     ///
     /// The 16 Aug screenshot: a card came back from a turn with its whole body
