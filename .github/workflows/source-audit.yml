@@ -12,7 +12,9 @@ permissions:
 jobs:
   audit:
     name: Source audit
-    runs-on: macos-14
+    # The deployment target remains macOS 14. SDK 26 supplies the concurrency
+    # annotations used by this AppKit/Dispatch implementation.
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - name: Check out the proposed merge

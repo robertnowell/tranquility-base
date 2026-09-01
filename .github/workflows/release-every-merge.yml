@@ -24,7 +24,9 @@ jobs:
   build:
     name: Audit and assemble unsigned app
     if: github.repository == 'robertnowell/tranquility-base'
-    runs-on: macos-14
+    # The app targets macOS 14; SDK 26 carries the AppKit/Dispatch concurrency
+    # annotations this Swift 6 code is compiled against locally.
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - name: Check out the exact merged commit
@@ -66,7 +68,7 @@ jobs:
   release:
     name: Sign, notarize, audit, and publish
     needs: build
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 90
     environment:
       name: release
