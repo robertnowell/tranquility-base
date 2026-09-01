@@ -27,6 +27,181 @@ public enum CodexRollout {
     public struct TurnCompletion: Sendable, Equatable {
         public var turnId: String
         public var lastAgentMessage: String?
+        /// The human sentence when the turn DIED rather than finished.
+        ///
+        /// Codex puts a structured `error` on the completion record, so "the
+        /// turn ended" and "it ended badly" are one line and not two. Nothing
+        /// retries past this record: it IS the turn ending, which is why an
+        /// error here needs none of the transient grace Claude Code's
+        /// mid-stream error lines get.
+        ///
+        /// Measured across the 222 rollouts on this machine: 20 failed turns
+        /// in 12 sessions, and Codex classifies them itself in
+        /// `codex_error_info` (15 `other`, 5 `usage_limit_exceeded`). We read
+        /// the SHAPE, never the words, so a failure kind nobody has seen yet
+        /// arrives correctly with no code change.
+        public var error: String?
+        /// The user pressed Esc. The turn is as over as a completion, and
+        /// carries no `last_agent_message` to record.
+        public var aborted: Bool
+
+        public init(turnId: String, lastAgentMessage: String? = nil,
+                    error: String? = nil, aborted: Bool = false) {
+            self.turnId = turnId
+            self.lastAgentMessage = lastAgentMessage
+            self.error = error
+            self.aborted = aborted
+        }
+
+        /// Whether this turn ended in a state a person has to do something
+        /// about. `aborted` is not one: the person who pressed Esc knows.
+        public var failed: Bool { error != nil }
+    }
+
+    /// What ONE line of a rollout says, which is the only thing that knows
+    /// this format.
+    ///
+    /// Split out on 01 Sep, after the lamp logic grew its own hand-rolled
+    /// copy of the same JSON walk. Robert: *"is our architecture defensible,
+    /// simple, and can we extend it to other errors in the future?"* Two
+    /// readers of one undocumented, actively-migrating format is how they
+    /// drift apart, and the second reader had already missed `turn_aborted` —
+    /// 30 of them on this machine — which this one had handled since August.
+    ///
+    /// So there is one decoder now, with two shapes of consumer: `parse`
+    /// folds it forward over a whole file, and `SessionActivity` walks it
+    /// backwards from the tail until a line says something.
+    public enum Record: Sendable, Equatable {
+        case meta(SessionMeta)
+        /// A turn began and has not been closed on this line.
+        case turnStarted(turnId: String)
+        /// A turn ended — completed, failed, or aborted. `TurnCompletion`
+        /// says which.
+        case turnEnded(TurnCompletion)
+        /// Real conversation content: a human or the model actually wrote
+        /// this, at this line's timestamp.
+        case content(Message)
+        /// The session MOVED here, but wrote nothing a person would read:
+        /// a tool call, its output, a reasoning item, an item completing.
+        ///
+        /// Two consumers want opposite things from these, which is why they
+        /// are their own case rather than folded into either neighbour. A
+        /// summary or a delivery check wants only `content` — a tool call is
+        /// not something anybody said. A LAMP wants exactly this: it is proof
+        /// the agent is working, and on a real rollout it is most of the
+        /// file. Counted as `ignored`, a session in a twenty-minute tool loop
+        /// dated its evidence from the last sentence it spoke and went amber
+        /// while it was busy — the mirror of the bug we started from.
+        ///
+        /// Claude Code's side has always had this: `hasToolUse` on an
+        /// assistant entry means the turn is still running.
+        case activity
+        /// A record type this format has and this type models nothing for —
+        /// `compacted`, `world_state`, `turn_context`, `session_meta` without
+        /// an id. Recognised and passed over, which is different from
+        /// unreadable.
+        case ignored
+        /// Not JSON, or JSON without the two fields every record has. The
+        /// one failure worth counting: a schema change that silently empties
+        /// every field must not look like a quiet session.
+        case undecodable
+    }
+
+    /// Decode one line. Pure, total, and the only place that knows what a
+    /// rollout record looks like.
+    public static func record(_ line: some StringProtocol) -> Record {
+        guard let data = String(line).data(using: .utf8),
+              let row = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = row["type"] as? String,
+              let payload = row["payload"] as? [String: Any]
+        else { return .undecodable }
+
+        switch type {
+        case "session_meta":
+            guard let id = payload["id"] as? String else { return .ignored }
+            return .meta(SessionMeta(sessionId: id, cwd: payload["cwd"] as? String,
+                                     cliVersion: payload["cli_version"] as? String))
+
+        case "event_msg":
+            guard let kind = payload["type"] as? String else { return .ignored }
+            guard let turnId = payload["turn_id"] as? String else {
+                // Real events that carry no turn id — `token_count`,
+                // `item_completed` on some versions. Movement, not nothing.
+                return ["token_count", "item_completed"].contains(kind) ? .activity : .ignored
+            }
+            switch kind {
+            case "task_started", "turn_started":
+                return .turnStarted(turnId: turnId)
+            case "item_completed", "token_count":
+                return .activity
+            case "task_complete":
+                return .turnEnded(TurnCompletion(
+                    turnId: turnId,
+                    lastAgentMessage: payload["last_agent_message"] as? String,
+                    error: humanMessage(in: payload["error"])))
+            case "turn_aborted", "task_aborted":
+                return .turnEnded(TurnCompletion(turnId: turnId, aborted: true))
+            default:
+                return .ignored
+            }
+
+        case "response_item":
+            guard payload["type"] as? String == "message",
+                  let role = payload["role"] as? String,
+                  let content = payload["content"] as? [[String: Any]]
+            else {
+                // `reasoning`, `custom_tool_call`, `custom_tool_call_output`:
+                // nothing to read, but the session plainly moved. On the
+                // rollout this was measured against, 1,198 of 2,485 lines.
+                return .activity
+            }
+            guard role == "user" || role == "assistant" else { return .activity }
+            // Both `input_text` (user) and `output_text` (assistant)
+            // carry the field under the same key.
+            let text = content.compactMap { $0["text"] as? String }.joined()
+            guard !text.isEmpty else { return .ignored }
+            // Codex's own injected `<environment_context>` (cwd, shell,
+            // permission profile as XML) — not anything a human or TB
+            // ever typed. Found at the first user-message position of a
+            // turn in a live probe, but that is not where it always
+            // sits: measured across 192 real rollouts, the SAME wrapper
+            // recurs at later positions too (one file only at message
+            // #22; several appear it more than once) — every occurrence
+            // is filtered, not just a first-of-turn heuristic (gate
+            // finding, 21 Aug — the earlier doc comment claimed
+            // "first" and was wrong). The closing-tag check guards
+            // against the one real risk: someone pasting a snippet of
+            // rollout debugging output that happens to START with the
+            // same literal string as genuine content.
+            if role == "user", text.hasPrefix("<environment_context>"),
+               text.contains("</environment_context>") {
+                return .ignored
+            }
+            return .content(Message(role: role, text: text))
+
+        default:
+            return .ignored
+        }
+    }
+
+    /// The sentence a person should read, out of whatever Codex put in
+    /// `error`.
+    ///
+    /// A quarter of the failures on this machine carry the API's entire JSON
+    /// body as the message, so the row read `{"type"` — the useful sentence
+    /// ("The 'gpt-5.6-sol' model is not supported when using Codex with a
+    /// ChatGPT account.") was nested two levels inside it. Unwrapped here,
+    /// once, rather than by every surface that displays an error.
+    static func humanMessage(in error: Any?) -> String? {
+        guard let error = error as? [String: Any],
+              let raw = error["message"] as? String, !raw.isEmpty else { return nil }
+        guard raw.hasPrefix("{"), let data = raw.data(using: .utf8),
+              let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return raw }
+        if let inner = body["error"] as? [String: Any],
+           let message = inner["message"] as? String, !message.isEmpty { return message }
+        if let message = body["message"] as? String, !message.isEmpty { return message }
+        return raw
     }
 
     /// One `response_item` carrying real conversation content — a message
@@ -104,71 +279,26 @@ public enum CodexRollout {
         var skipped = 0
 
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard let data = line.data(using: .utf8),
-                  let row = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let type = row["type"] as? String,
-                  let payload = row["payload"] as? [String: Any]
-            else { skipped += 1; continue }
-
-            switch type {
-            case "session_meta":
+            switch record(line) {
+            case .meta(let found):
                 // First one only: a forked/sub-agent rollout can carry a
                 // second `session_meta` for the child thread (observed on
                 // this machine, `forked_from_id`/`parent_thread_id` present)
                 // — the file's own identity is the first record, always.
-                guard meta == nil, let id = payload["id"] as? String else { continue }
-                meta = SessionMeta(sessionId: id, cwd: payload["cwd"] as? String,
-                                  cliVersion: payload["cli_version"] as? String)
-
-            case "event_msg":
-                guard let kind = payload["type"] as? String,
-                      let turnId = payload["turn_id"] as? String else { continue }
-                if kind == "task_started" {
-                    openTurns.insert(turnId)
-                } else if kind == "task_complete" {
-                    openTurns.remove(turnId)
-                    completions.append(TurnCompletion(
-                        turnId: turnId, lastAgentMessage: payload["last_agent_message"] as? String))
-                } else if kind == "turn_aborted" {
-                    // The user hit Esc. No completion to record (there is no
-                    // `last_agent_message` on this event), but the turn is
-                    // just as over as a `task_complete` — `openTurns.remove`
-                    // on an absent element is a documented no-op, so this is
-                    // safe even if `task_started` was never seen either.
-                    openTurns.remove(turnId)
-                }
-
-            case "response_item":
-                guard payload["type"] as? String == "message",
-                      let role = payload["role"] as? String,
-                      let content = payload["content"] as? [[String: Any]]
-                else { continue }
-                guard role == "user" || role == "assistant" else { continue }
-                // Both `input_text` (user) and `output_text` (assistant)
-                // carry the field under the same key.
-                let text = content.compactMap { $0["text"] as? String }.joined()
-                guard !text.isEmpty else { continue }
-                // Codex's own injected `<environment_context>` (cwd, shell,
-                // permission profile as XML) — not anything a human or TB
-                // ever typed. Found at the first user-message position of a
-                // turn in a live probe, but that is not where it always
-                // sits: measured across 192 real rollouts, the SAME wrapper
-                // recurs at later positions too (one file only at message
-                // #22; several appear it more than once) — every occurrence
-                // is filtered, not just a first-of-turn heuristic (gate
-                // finding, 21 Aug — the earlier doc comment claimed
-                // "first" and was wrong). The closing-tag check guards
-                // against the one real risk: someone pasting a snippet of
-                // rollout debugging output that happens to START with the
-                // same literal string as genuine content.
-                if role == "user", text.hasPrefix("<environment_context>"),
-                   text.contains("</environment_context>") {
-                    continue
-                }
-                messages.append(Message(role: role, text: text))
-
-            default:
+                if meta == nil { meta = found }
+            case .turnStarted(let turnId):
+                openTurns.insert(turnId)
+            case .turnEnded(let completion):
+                // `remove` on an absent element is a documented no-op, so a
+                // turn whose start was never seen closes safely too.
+                openTurns.remove(completion.turnId)
+                completions.append(completion)
+            case .content(let message):
+                messages.append(message)
+            case .activity, .ignored:
                 continue
+            case .undecodable:
+                skipped += 1
             }
         }
         return Parsed(meta: meta, completions: completions, messages: messages,

@@ -223,55 +223,53 @@ public enum SessionActivity: Equatable, Sendable {
                 continue
             }
 
-            // Codex says all of this in its own words, in the same file, and
-            // until now this walk did not speak them: a rollout is JSONL of
-            // `event_msg`/`response_item`, and every line of one fell through
-            // to `default: continue`. So the verdict came from the boundary
-            // alone, and the boundary is exactly what a dead turn cannot
-            // update.
+            // Codex, asked in its own language. `CodexRollout.record` is the
+            // only thing in this repo that knows what a rollout line looks
+            // like — it decodes `task_complete`, `turn_aborted` and the rest,
+            // and unwraps the API bodies some errors arrive wrapped in.
             //
-            // Measured on 01a059da, 01 Sep: the turn died at 01:51:18Z with
-            // `stream disconnected before completion`, Codex wrote it down,
-            // NO Stop hook fired, and the row was still blue fourteen hours
-            // later — "it has shown Working since last night". Rule 1 of this
-            // function's own precedence note already covers it, in the words
-            // it was written for Claude Code with: "a transcript error wins
-            // outright. The hooks are measurably blind to it."
-            if type == "event_msg",
-               let payload = entry["payload"] as? [String: Any],
-               payload["type"] as? String == "task_complete" {
-                // Codex puts a structured error ON the completion record, so
-                // "the turn ended" and "it ended badly" are one line, not two.
-                // No transient grace, unlike Claude's mid-stream error lines:
-                // this record IS the turn ending, so there is no retry coming
-                // that could move the tail past it.
-                if let error = payload["error"] as? [String: Any],
-                   let message = error["message"] as? String, !message.isEmpty {
-                    return (.blocked(reason: message), observed)
+            // This block used to be a second hand-rolled walk over the same
+            // JSON, written here because this is where the lamp lived. It had
+            // already fallen behind the real parser: no `turn_aborted`, of
+            // which there are 30 on this machine, so an Esc'd turn read as
+            // working — the same shape as the fourteen-hour blue lamp it was
+            // written to fix. Robert, 01 Sep: "is our architecture defensible,
+            // simple, and can we extend it to other errors in the future?"
+            //
+            // The division that answers that: the ADAPTER's format knows what
+            // was said, and this function decides what it means. Everything
+            // below — precedence, staleness, the transient grace — is the same
+            // for every harness, and none of it needs to know about JSON.
+            switch CodexRollout.record(line) {
+            case .turnEnded(let turn):
+                // Rule 1 of the precedence note above, reached by a harness
+                // that had no way to state it. No transient grace: this record
+                // IS the turn ending, so no retry is coming that could move
+                // the tail past it.
+                if let error = turn.error {
+                    return (.blocked(reason: error), observed)
                 }
-                // A clean completion is Codex's `turn_duration`: a first-hand
-                // statement that the turn is over, which is what a missing
-                // Stop hook otherwise leaves nobody to make.
+                // Completed, or aborted by the user. Either way the turn is
+                // over — Codex's own `turn_duration`, which is what a Stop
+                // hook that never fires leaves nobody to say.
                 endedAt = endedAt ?? observed
                 if turnIsOver(endedAt: endedAt, boundary: boundary) {
                     return (.idle, observed)
                 }
                 continue
-            }
-            // A turn began and no completion has been passed on the way back:
-            // the agent is mid-turn, said by the harness rather than inferred
-            // from a hook that may never fire again.
-            if type == "event_msg",
-               let payload = entry["payload"] as? [String: Any],
-               ["task_started", "turn_started"].contains(payload["type"] as? String ?? "") {
+            case .turnStarted:
+                // Working, said by the harness rather than inferred from a
+                // hook. `working` still decides from its age whether that is
+                // still true.
                 return (working(since: observed, now: now), observed)
-            }
-            // Anything the model or its tools actually wrote. Same meaning as
-            // Claude Code's assistant/user entries: work happened at this
-            // timestamp, and `working` decides from its age whether that is
-            // still true.
-            if type == "response_item" {
+            case .content, .activity:
+                // Somebody wrote something, or the agent ran a tool. Both are
+                // movement at this timestamp — the same meaning as an
+                // assistant entry with a tool use in Claude Code's file — and
+                // `working` decides from its age whether it is still true.
                 return (working(since: observed, now: now), observed)
+            case .meta, .ignored, .undecodable:
+                break   // not a Codex line, or nothing this decides on
             }
 
             if entry["isApiErrorMessage"] as? Bool == true {

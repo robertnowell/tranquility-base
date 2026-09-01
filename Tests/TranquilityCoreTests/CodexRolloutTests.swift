@@ -95,7 +95,18 @@ final class CodexRolloutTests: XCTestCase {
         """#
         let parsed = CodexRollout.parse(text)
         XCTAssertFalse(parsed.isBusy)
-        XCTAssertEqual(parsed.completions, [], "an abort is not a completion — no last_agent_message exists")
+        // `completions` means "turns that ENDED", each saying how, since
+        // 01 Sep. It used to mean "turns that produced a last_agent_message",
+        // which left an abort visible only as the absence of busy — nothing a
+        // caller could read a reason out of, and the lamp logic went and
+        // hand-rolled its own rollout walk partly for want of it. An abort is
+        // still not a completion, and now it can say so in its own words.
+        XCTAssertEqual(parsed.completions.count, 1)
+        XCTAssertEqual(parsed.completions.first?.aborted, true)
+        XCTAssertNil(parsed.completions.first?.lastAgentMessage,
+                     "no last_agent_message exists on an abort")
+        XCTAssertEqual(parsed.completions.first?.failed, false,
+                       "the person who pressed Esc does not need telling")
     }
 
     func testTaskCompleteWithNoMatchingTaskStartedIsNotFatal() {
