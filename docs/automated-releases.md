@@ -63,9 +63,11 @@ keychain, unsets the raw environment variables, restores the runner's original
 keychain search list, and deletes the keychain on every exit path.
 
 Enable **release immutability** under repository Settings → General → Releases
-before the first publication. The release script refuses to publish while it
-is disabled and asserts the resulting release is immutable. GitHub then locks
-the tag and assets and automatically creates a release attestation.
+before the first publication. GitHub's scoped workflow token cannot read that
+admin-only setting, so setup verifies it separately. The release script asserts
+the published release itself is immutable; if it is not, the script immediately
+returns the still-mutable release to draft and fails. GitHub then locks the tag
+and assets and automatically creates a release attestation.
 
 After the `Source audit` job has appeared on one pull request, protect `main`:
 

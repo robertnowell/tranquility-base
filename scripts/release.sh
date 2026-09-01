@@ -99,9 +99,6 @@ git merge-base --is-ancestor "$TARGET" origin/main \
 
 if [ "$DRY_RUN" -eq 0 ]; then
   gh auth status >/dev/null 2>&1 || fail "gh is not authenticated"
-  IMMUTABLE_RELEASES=$(github_api "repos/$REPO/immutable-releases" --jq .enabled 2>/dev/null || true)
-  [ "$IMMUTABLE_RELEASES" = "true" ] \
-    || fail "GitHub immutable releases are not enabled for $REPO"
 
   # Rerunning a completed release must be read-only. Secure timestamps make a
   # rebuild byte-different even at the same source commit; replacing a public
@@ -328,9 +325,21 @@ else
   # steal the Latest badge from the actual tip of main.
   gh release edit "$TAG" --repo "$REPO" --draft=false --latest=false
 fi
-IS_IMMUTABLE=$(github_api "repos/$REPO/releases/tags/$TAG" --jq .immutable)
-[ "$IS_IMMUTABLE" = "true" ] \
-  || fail "GitHub published $TAG without making it immutable"
+IS_IMMUTABLE=""
+for _ in 1 2 3 4 5; do
+  IS_IMMUTABLE=$(github_api "repos/$REPO/releases/tags/$TAG" \
+    --jq .immutable 2>/dev/null || true)
+  [ "$IS_IMMUTABLE" != "true" ] || break
+  sleep 2
+done
+if [ "$IS_IMMUTABLE" != "true" ]; then
+  # GITHUB_TOKEN deliberately has no repository-administration scope, so it
+  # cannot read the setting before publication. If an administrator disabled
+  # immutability after setup, retract the still-mutable release immediately.
+  gh release edit "$TAG" --repo "$REPO" --draft --latest=false \
+    >/dev/null 2>&1 || true
+  fail "GitHub published $TAG without making it immutable; returned it to draft"
+fi
 
 echo
 echo "✓ released $TAG from $TARGET"
