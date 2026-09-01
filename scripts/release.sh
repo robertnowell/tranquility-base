@@ -45,6 +45,10 @@ github_api() {
   gh api -H "X-GitHub-Api-Version: $GITHUB_API_VERSION" "$@"
 }
 
+release_database_id() {
+  gh release view "$TAG" --repo "$REPO" --json databaseId --jq .databaseId
+}
+
 NOTARY_PROFILE="${TB_NOTARY_PROFILE:-AC_PASSWORD}"
 NOTARY_KEYCHAIN="${TB_NOTARY_KEYCHAIN:-}"
 RELEASE_SERIES="${TB_RELEASE_SERIES:-0.3}"
@@ -68,6 +72,7 @@ SHORT_TARGET=$(git rev-parse --short=9 "$TARGET")
 BUILD_NUMBER=$(git rev-list --count "$TARGET")
 VERSION="${VERSION:-$RELEASE_SERIES.$BUILD_NUMBER}"
 TAG="${TB_RELEASE_TAG:-v$VERSION-$SHORT_TARGET}"
+RELEASE_ID=""
 DMG_PATH=".build/TranquilityBase-$VERSION.dmg"
 CHECKSUM_PATH=".build/TranquilityBase-$VERSION.sha256"
 APP_NOTARY_ARCHIVE=".build/TranquilityBase-$VERSION-app.zip"
@@ -104,9 +109,11 @@ if [ "$DRY_RUN" -eq 0 ]; then
   # rebuild byte-different even at the same source commit; replacing a public
   # asset would destroy the artifact the release originally named.
   if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-    IS_DRAFT=$(github_api "repos/$REPO/releases/tags/$TAG" --jq .draft)
+    RELEASE_ID=$(release_database_id)
+    [ -n "$RELEASE_ID" ] || fail "existing release $TAG has no database id"
+    IS_DRAFT=$(github_api "repos/$REPO/releases/$RELEASE_ID" --jq .draft)
     if [ "$IS_DRAFT" = "false" ]; then
-      IS_IMMUTABLE=$(github_api "repos/$REPO/releases/tags/$TAG" --jq .immutable)
+      IS_IMMUTABLE=$(github_api "repos/$REPO/releases/$RELEASE_ID" --jq .immutable)
       [ "$IS_IMMUTABLE" = "true" ] \
         || fail "published release $TAG is not immutable"
       TAG_TARGET=$(github_api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha)
@@ -125,7 +132,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
       echo "✓ $TAG was already public and still passes its artifact audit"
       exit 0
     fi
-    DRAFT_TARGET=$(github_api "repos/$REPO/releases/tags/$TAG" --jq .target_commitish)
+    DRAFT_TARGET=$(github_api "repos/$REPO/releases/$RELEASE_ID" --jq .target_commitish)
     [ "$DRAFT_TARGET" = "$TARGET" ] \
       || fail "existing draft $TAG targets $DRAFT_TARGET, not $TARGET"
     echo "→ an unpublished draft exists; its asset will be replaced after a clean rebuild"
@@ -286,6 +293,8 @@ else
     --target "$TARGET" --title "Tranquility Base $VERSION" \
     --notes "$NOTES" --draft --latest=false
 fi
+[ -n "$RELEASE_ID" ] || RELEASE_ID=$(release_database_id)
+[ -n "$RELEASE_ID" ] || fail "draft release $TAG has no database id"
 
 # The public object, not the upload command, gets the final word. The draft
 # stays private on any failure below and can be safely replaced by a rerun.
@@ -309,7 +318,7 @@ cmp -s "$APP_NOTARY_LOG_PATH" "$DOWNLOAD_DIR/$(basename "$APP_NOTARY_LOG_PATH")"
 cmp -s "$DMG_NOTARY_LOG_PATH" "$DOWNLOAD_DIR/$(basename "$DMG_NOTARY_LOG_PATH")" \
   || fail "downloaded DMG notarization log differs from Apple's retrieved log"
 (cd "$DOWNLOAD_DIR" && shasum -a 256 -c "$(basename "$CHECKSUM_PATH")")
-REMOTE_DIGEST=$(github_api "repos/$REPO/releases/tags/$TAG" \
+REMOTE_DIGEST=$(github_api "repos/$REPO/releases/$RELEASE_ID" \
   --jq ".assets[] | select(.name == \"$(basename "$DMG_PATH")\") | .digest")
 [ "$REMOTE_DIGEST" = "sha256:$DMG_SHA256" ] \
   || fail "GitHub asset digest $REMOTE_DIGEST differs from sha256:$DMG_SHA256"
@@ -326,7 +335,7 @@ else
 fi
 IS_IMMUTABLE=""
 for _ in 1 2 3 4 5; do
-  IS_IMMUTABLE=$(github_api "repos/$REPO/releases/tags/$TAG" \
+  IS_IMMUTABLE=$(github_api "repos/$REPO/releases/$RELEASE_ID" \
     --jq .immutable 2>/dev/null || true)
   [ "$IS_IMMUTABLE" != "true" ] || break
   sleep 2
