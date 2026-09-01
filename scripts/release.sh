@@ -35,6 +35,16 @@ APP_NAME="Tranquility Base"
 BUNDLE_ID="com.robertnowell.voice-dispatch"
 TEAM_ID="FKE587SZ6H"
 REPO="robertnowell/tranquility-base"
+GITHUB_API_VERSION="2026-03-10"
+
+# Immutable-release endpoints and response fields are versioned additions to
+# GitHub's REST API. gh still defaults to an older API version, which makes an
+# enabled repository look like a 404 and turns a healthy release into a false
+# failure. Keep every release API read on the same explicit schema.
+github_api() {
+  gh api -H "X-GitHub-Api-Version: $GITHUB_API_VERSION" "$@"
+}
+
 NOTARY_PROFILE="${TB_NOTARY_PROFILE:-AC_PASSWORD}"
 NOTARY_KEYCHAIN="${TB_NOTARY_KEYCHAIN:-}"
 RELEASE_SERIES="${TB_RELEASE_SERIES:-0.3}"
@@ -78,7 +88,7 @@ git merge-base --is-ancestor "$TARGET" origin/main \
 
 if [ "$DRY_RUN" -eq 0 ]; then
   gh auth status >/dev/null 2>&1 || fail "gh is not authenticated"
-  IMMUTABLE_RELEASES=$(gh api "repos/$REPO/immutable-releases" --jq .enabled 2>/dev/null || true)
+  IMMUTABLE_RELEASES=$(github_api "repos/$REPO/immutable-releases" --jq .enabled 2>/dev/null || true)
   [ "$IMMUTABLE_RELEASES" = "true" ] \
     || fail "GitHub immutable releases are not enabled for $REPO"
 
@@ -86,12 +96,12 @@ if [ "$DRY_RUN" -eq 0 ]; then
   # rebuild byte-different even at the same source commit; replacing a public
   # asset would destroy the artifact the release originally named.
   if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-    IS_DRAFT=$(gh api "repos/$REPO/releases/tags/$TAG" --jq .draft)
+    IS_DRAFT=$(github_api "repos/$REPO/releases/tags/$TAG" --jq .draft)
     if [ "$IS_DRAFT" = "false" ]; then
-      IS_IMMUTABLE=$(gh api "repos/$REPO/releases/tags/$TAG" --jq .immutable)
+      IS_IMMUTABLE=$(github_api "repos/$REPO/releases/tags/$TAG" --jq .immutable)
       [ "$IS_IMMUTABLE" = "true" ] \
         || fail "published release $TAG is not immutable"
-      TAG_TARGET=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha)
+      TAG_TARGET=$(github_api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha)
       [ "$TAG_TARGET" = "$TARGET" ] \
         || fail "existing tag $TAG points to $TAG_TARGET, not $TARGET"
       step "auditing already-published release"
@@ -107,7 +117,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
       echo "✓ $TAG was already public and still passes its artifact audit"
       exit 0
     fi
-    DRAFT_TARGET=$(gh api "repos/$REPO/releases/tags/$TAG" --jq .target_commitish)
+    DRAFT_TARGET=$(github_api "repos/$REPO/releases/tags/$TAG" --jq .target_commitish)
     [ "$DRAFT_TARGET" = "$TARGET" ] \
       || fail "existing draft $TAG targets $DRAFT_TARGET, not $TARGET"
     echo "→ an unpublished draft exists; its asset will be replaced after a clean rebuild"
@@ -292,7 +302,7 @@ cmp -s "$APP_NOTARY_LOG_PATH" "$DOWNLOAD_DIR/$(basename "$APP_NOTARY_LOG_PATH")"
 cmp -s "$DMG_NOTARY_LOG_PATH" "$DOWNLOAD_DIR/$(basename "$DMG_NOTARY_LOG_PATH")" \
   || fail "downloaded DMG notarization log differs from Apple's retrieved log"
 (cd "$DOWNLOAD_DIR" && shasum -a 256 -c "$(basename "$CHECKSUM_PATH")")
-REMOTE_DIGEST=$(gh api "repos/$REPO/releases/tags/$TAG" \
+REMOTE_DIGEST=$(github_api "repos/$REPO/releases/tags/$TAG" \
   --jq ".assets[] | select(.name == \"$(basename "$DMG_PATH")\") | .digest")
 [ "$REMOTE_DIGEST" = "sha256:$DMG_SHA256" ] \
   || fail "GitHub asset digest $REMOTE_DIGEST differs from sha256:$DMG_SHA256"
@@ -307,7 +317,7 @@ else
   # steal the Latest badge from the actual tip of main.
   gh release edit "$TAG" --repo "$REPO" --draft=false --latest=false
 fi
-IS_IMMUTABLE=$(gh api "repos/$REPO/releases/tags/$TAG" --jq .immutable)
+IS_IMMUTABLE=$(github_api "repos/$REPO/releases/tags/$TAG" --jq .immutable)
 [ "$IS_IMMUTABLE" = "true" ] \
   || fail "GitHub published $TAG without making it immutable"
 
