@@ -87,79 +87,28 @@ public enum GridAssembler {
     public static func lampAndReason(
         for evidence: SessionActivity.Evidence?, sessionId: String,
         live: LiveSession?, boundary: SessionActivity.TurnBoundary? = nil,
-        pickedUp: Bool = false, isInFlight: Bool = false
+        pickedUp: Bool = false, isInFlight: Bool = false, harness: String? = nil
     ) -> (lamp: Lamp, reason: String?, detail: String?) {
-        let activity = evidence?.activity
+        // The rules moved to `SessionVerdict.resolve` on 01 Sep and did not
+        // change: `VerdictAgreesWithTheOldLampTests` drives both this and a copy
+        // of the previous body across 540 combinations of every witness, every
+        // file state, every boundary and both user flags, and asserts they agree
+        // on lamp, reason and detail.
+        //
+        // What the move buys is not different behaviour. It is that the verdict
+        // now NAMES ITS WITNESS, so a wrong lamp is a log line rather than a
+        // screenshot; that a witness which never spoke can no longer be mistaken
+        // for one that did (see `Testimony`); and that the rules are testable as
+        // properties rather than only as examples.
         let resumed = AgentRestart.resumed(
             startedAt: live?.startedAtDate,
             lastWord: AgentRestart.lastWord(observedAt: evidence?.observedAt,
                                             boundary: boundary))
-        // Blocked on you, said by the process itself, and it outranks
-        // everything else here — see `blockedOnYou`.
-        if let blocked = blockedOnYou(live, resumed: resumed) { return blocked }
-        // Resumed, and told nothing since: whatever the file describes was
-        // written by a process that has since been killed. Ruled 19 Aug — a
-        // session you restart is no longer idle and belongs on the grid — so
-        // this sits above the two downgrades below, which read a resumed
-        // process's brand-new idleness as "nothing here" and filed the row.
-        //
-        // It supplies the colour ONLY where nothing else does. `busy` first,
-        // because a resumed session that is already chewing has simply not
-        // written its first line yet, and blue is the true state; `blocked`
-        // keeps its own words inside `reason`. See `AgentRestart`.
-        if live?.status != "busy", resumed,
-           let said = AgentRestart.reason(for: activity) {
-            return (.fault, said.short, said.full)
-        }
-        let observed: (Lamp, String?, String?) = {
-            switch activity {
-            case .working:
-                // The file says a turn is in flight. If the process says it is
-                // idle, the turn ended in a shape the file cannot express — an
-                // unanswered prompt with no turn-end marker, the 17:19 case.
-                // The process is right and it costs nothing to believe it.
-                return live?.status == "idle" ? (.running, nil, nil) : (.working, nil, nil)
-            // An ERROR is a fact the transcript states outright, and no process
-            // status contradicts it: a session sitting on a usage limit is idle
-            // by every measure the API has.
-            case .blocked: return (.fault, activity?.shortReason, activity?.fullReason)
-            // A STALL is an inference from silence, and silence is exactly what
-            // a running process can speak to. Measured 18 Aug: `59181c6d` and
-            // `b18ebb61` both had a real typed prompt as their last entry and
-            // nothing for four hours — a textbook stall by the file — and both
-            // reported `idle`. Robert, looking at the same two rows: "in both
-            // of these cases, the agent did return."
-            case .stalled:
-                switch live?.status {
-                case "idle": return (.running, nil, nil)
-                case "busy": return (.working, nil, nil)
-                // No process at all, or a status we do not recognise: the file
-                // is the only witness left and it says silence. Amber stands.
-                default: return (.fault, activity?.shortReason, activity?.fullReason)
-                }
-            case .idle, nil:
-                // And the mirror: the file has nothing to say, the process says
-                // it is chewing. Blue rather than quiet.
-                return live?.status == "busy" ? (.working, nil, nil) : (.running, nil, nil)
-            }
-        }()
-        guard observed.0 == .running else { return observed }
-        if isInFlight { return (.working, nil, nil) }
-        // Last, and only over a lamp that was going out anyway: the user picked
-        // this session up. Ruled 19 Aug — *"because it's alive, clicking on it
-        // obviously means I want it to be alive. Now it's in the grid."*
-        //
-        // Deliberately the LOWEST precedence of anything here. Every rule above
-        // is a fact about the agent, and none of them may be overwritten by a
-        // fact about the user; this speaks for exactly the rows that have
-        // nothing of their own to say, which is the only kind the switch was
-        // ever pressed on. Amber rather than a lit-but-colourless row, because
-        // amber is what this panel calls "your move", and a session standing by
-        // with nothing in flight is waiting on precisely one thing.
-        guard pickedUp else { return observed }
-        return (.fault, "standing by",
-                "You switched this session on. It is alive with nothing in flight, "
-                + "waiting for what you tell it next.")
+        let verdict = SessionVerdict.resolve(
+            process: SessionVerdict.testimony(of: live, harness: harness, resumed: resumed),
+            file: evidence.map { Testimony.says($0.activity) } ?? .silent,
+            resumed: resumed, pickedUp: pickedUp, isInFlight: isInFlight)
+        return (verdict.lamp, verdict.because, verdict.detail)
     }
 
     /// The tab's string for a session, or nil while it has none: the
