@@ -166,7 +166,7 @@ notarize_and_capture() {
     fail "could not submit the $label to Apple's notary service"
   fi
   cat "$result_path"
-  local submission_id submission_status notary_issues
+  local submission_id submission_status
   submission_id=$(/usr/bin/plutil -extract id raw "$result_path" 2>/dev/null || true)
   [ -n "$submission_id" ] || fail "notarytool returned no submission id for the $label"
 
@@ -190,8 +190,7 @@ notarize_and_capture() {
     || fail "Apple notarization status for the $label is $submission_status, not Accepted"
   xcrun notarytool log "$submission_id" "${NOTARY_ARGS[@]}" "$log_path" \
     || fail "could not retrieve Apple's $label notarization log"
-  notary_issues=$(/usr/bin/plutil -extract issues json -o - "$log_path" 2>/dev/null || true)
-  [ "$notary_issues" = "[]" ] || [ "$notary_issues" = "null" ] || {
+  scripts/notary-log-is-clean.sh "$log_path" || {
     cat "$log_path"
     fail "Apple accepted the $label but its notarization log contains issues"
   }
