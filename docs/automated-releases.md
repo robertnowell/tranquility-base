@@ -104,9 +104,11 @@ into a flaky product verdict.
   changing it.
 - Older merge jobs may finish after newer ones. They still publish, but only a
   job whose source SHA is the current `origin/main` receives the Latest badge.
-- For a missed trigger, choose **Release every merge → Run workflow** and enter
-  the full 40-character SHA. The script independently requires that SHA to be
-  contained in `origin/main`.
+- For a missed trigger or repaired release-tooling failure, choose **Release
+  every merge → Run workflow** and enter the full 40-character SHA. The build
+  job checks out and audits that source SHA; the signing job keeps the current
+  default-branch tooling and accepts only the source-stamped prebuilt app. The
+  script independently requires both commits to be contained in `origin/main`.
 - `queue: max` retains 100 pending releases. More than 100 is an explicit
   reconciliation event, not a silently supported backlog.
 

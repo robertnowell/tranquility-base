@@ -78,7 +78,10 @@ jobs:
       - name: Check out trusted release tooling
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.commit || github.sha }}
+          # workflow_dispatch runs at the current default-branch SHA. Keep that
+          # repaired tooling while the build job supplies the requested old
+          # source commit as a prebuilt, source-stamped app.
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -103,6 +106,6 @@ jobs:
           TB_NOTARY_APP_PASSWORD: ${{ secrets.TB_NOTARY_APP_PASSWORD }}
         run: |
           [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$TARGET_COMMIT"
-          git checkout -B ci-release "$TARGET_COMMIT"
-          TB_PREBUILT_APP=1 TB_SKIP_SOURCE_AUDIT=1 scripts/ci-release.sh
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          TB_RELEASE_SOURCE_COMMIT="$TARGET_COMMIT" \
+            TB_PREBUILT_APP=1 TB_SKIP_SOURCE_AUDIT=1 scripts/ci-release.sh
