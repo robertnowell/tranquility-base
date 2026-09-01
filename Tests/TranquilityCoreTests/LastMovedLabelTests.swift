@@ -12,6 +12,13 @@ final class LastMovedLabelTests: XCTestCase {
         SessionActivity.lastMovedLabel(now.addingTimeInterval(-s), now: now)
     }
 
+    private func localDate(minusSeconds s: TimeInterval) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMM d"
+        return formatter.string(from: now.addingTimeInterval(-s))
+    }
+
     func testFreshReadsAsNow() {
         XCTAssertEqual(label(minusSeconds: 0), "now")
         XCTAssertEqual(label(minusSeconds: 59), "now")
@@ -29,8 +36,10 @@ final class LastMovedLabelTests: XCTestCase {
     /// date, so the column stops offering a duration to do arithmetic on.
     func testTwoDaysIsTheCutoff() {
         XCTAssertEqual(label(minusSeconds: 47 * 3600), "47h ago")
-        XCTAssertEqual(label(minusSeconds: 48 * 3600), "Aug 17")
-        XCTAssertEqual(label(minusSeconds: 5 * 86_400), "Aug 14")
+        XCTAssertEqual(label(minusSeconds: 48 * 3600),
+                       localDate(minusSeconds: 48 * 3600))
+        XCTAssertEqual(label(minusSeconds: 5 * 86_400),
+                       localDate(minusSeconds: 5 * 86_400))
     }
 
     /// A "d" would mean the cutoff leaked: `spoken` produces days past 48h and

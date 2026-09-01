@@ -72,7 +72,8 @@ After the `Source audit` job has appeared on one pull request, protect `main`:
 - require a pull request before merging;
 - require the `Source audit` status check;
 - require branches to be up to date before merging;
-- require code-owner review for release-boundary files;
+- when a second trusted reviewer exists, require code-owner review for
+  release-boundary files (a solo author cannot approve their own pull request);
 - require conversation resolution and apply the rules to administrators;
 - block force pushes and deletion.
 
