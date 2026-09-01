@@ -50,10 +50,15 @@ release_database_id() {
 }
 
 verify_release_tag() {
-  local tag_type tag_target
-  tag_type=$(github_api "repos/$REPO/git/ref/tags/$TAG" --jq .object.type) \
-    || fail "release tag $TAG does not exist"
-  tag_target=$(github_api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha)
+  local tag_details="" tag_type tag_target
+  for _ in 1 2 3 4 5; do
+    tag_details=$(github_api "repos/$REPO/git/ref/tags/$TAG" \
+      --jq '.object.type + "\t" + .object.sha' 2>/dev/null || true)
+    [ -z "$tag_details" ] || break
+    sleep 2
+  done
+  [ -n "$tag_details" ] || fail "release tag $TAG does not exist"
+  IFS=$'\t' read -r tag_type tag_target <<<"$tag_details"
   [ "$tag_type" = "commit" ] \
     || fail "release tag $TAG is a $tag_type object, expected a commit"
   [ "$tag_target" = "$TARGET" ] \
