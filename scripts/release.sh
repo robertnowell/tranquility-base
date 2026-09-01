@@ -54,7 +54,16 @@ APP_SRC=".build/release/$APP_NAME.app"
 step() { echo; echo "── $* ─────────────────────────────────────────"; }
 fail() { echo "✗ $*" >&2; exit 1; }
 
-TARGET=$(git rev-parse HEAD)
+TOOLING_COMMIT=$(git rev-parse HEAD)
+TARGET="${TB_RELEASE_SOURCE_COMMIT:-$TOOLING_COMMIT}"
+[[ "$TARGET" =~ ^[0-9a-f]{40}$ ]] \
+  || fail "release source must be a full lowercase 40-character SHA"
+if [ "$TARGET" != "$TOOLING_COMMIT" ]; then
+  [ "${TB_PREBUILT_APP:-0}" = "1" ] \
+    || fail "a recovered source commit requires a prebuilt source-stamped app"
+  [ "${TB_SKIP_SOURCE_AUDIT:-0}" = "1" ] \
+    || fail "a recovered source commit requires the credential-free source audit"
+fi
 SHORT_TARGET=$(git rev-parse --short=9 "$TARGET")
 BUILD_NUMBER=$(git rev-list --count "$TARGET")
 VERSION="${VERSION:-$RELEASE_SERIES.$BUILD_NUMBER}"
@@ -79,6 +88,8 @@ echo "→ tag:     $TAG"
 # A clean old merge is releasable after a newer merge has landed: every merge
 # gets an artifact, not only the newest one. A feature-branch commit is not.
 git fetch -q origin
+git merge-base --is-ancestor "$TOOLING_COMMIT" origin/main \
+  || fail "$TOOLING_COMMIT contains release tooling outside origin/main"
 git merge-base --is-ancestor "$TARGET" origin/main \
   || fail "$TARGET is not contained in origin/main — refusing a branch release"
 [ -z "$(git status --porcelain)" ] || {
