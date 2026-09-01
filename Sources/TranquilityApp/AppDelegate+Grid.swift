@@ -71,7 +71,24 @@ extension AppDelegate {
                 // A prompt went in and no Stop has come back: it is chewing.
                 // Anything else, including no events at all, stays idle, which
                 // is the honest answer for a session that has never spoken.
-                status: { boundaries[$0]?.kind == .userPromptSubmit ? "busy" : nil },
+                //
+                // WITH A CEILING, since 01 Sep. "No Stop has come back" is a
+                // proxy, and it fails OPEN: a Codex turn that dies mid-stream
+                // fires no Stop at all, so the boundary stays at the prompt
+                // forever and this said "busy" forever — and `busy` outranks
+                // the file, so the row was blue for fourteen hours over a turn
+                // that had been dead since the night before. The same hour the
+                // rest of the panel already uses to stop believing silence
+                // (`SessionActivity.stalled`): past it, this stops asserting
+                // anything and the transcript, which can see the error, gets
+                // to speak. It only ever withdraws a claim; it never makes one.
+                status: {
+                    guard let boundary = boundaries[$0],
+                          boundary.kind == .userPromptSubmit,
+                          Date().timeIntervalSince(boundary.at) < SessionActivity.stalled
+                    else { return nil }
+                    return "busy"
+                },
                 name: { codexNames[$0.lowercased()] }) {
             if let existing = liveById[session.sessionId] {
                 Permissions.log("agents: duplicate sessionId \(session.sessionId.prefix(8)) "
