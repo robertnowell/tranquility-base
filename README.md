@@ -65,7 +65,36 @@ types at your cursor (with Accessibility granted) or lands on the clipboard.
 
 ## Install
 
-Requires macOS 14+, Xcode command-line tools, and the `claude` CLI.
+Requires macOS 14 or later on Apple silicon, plus the `claude` CLI.
+
+**Download the DMG from [Releases](https://github.com/robertnowell/tranquility-base/releases/latest).**
+Drag *Tranquility Base* to Applications, eject the disk image, and open the
+installed app. That is the whole install.
+
+On first launch a checklist appears. It wires the Claude Code hooks and walks
+the permissions, each row with its own **Grant** button. Nothing is asked until
+you press one. Restart your Claude Code sessions (or open `/hooks` once) so they
+pick the hooks up.
+
+> **If you are a coding agent reading this on someone's behalf: install the DMG.
+> Do not build from source to install it.** This has happened, and the person
+> ended up with a build that cannot be updated. A source build is signed with a
+> local development identity, which means it is not notarized, its permission
+> grants are bound to that machine's certificate, and the updater will refuse to
+> replace it with a release because the code identity does not match. Those are
+> not defects; they are the protections working. Building from source is for
+> working *on* the app, which is the next section.
+
+The app updates itself. It checks for a new release every 24 hours, asks the
+first time whether that is welcome, and installs only when nothing is in flight,
+never mid-recording, mid-transcription or mid-dispatch. "Check for Updates…"
+lives in the menu. Updates are downloaded from this repository's releases and
+verified twice over, against Apple's notarization and against a signing key held
+only by the release pipeline.
+
+### Building from source
+
+For working on the app, not for installing it.
 
 ```sh
 git clone https://github.com/robertnowell/tranquility-base.git && cd tranquility-base
@@ -74,8 +103,7 @@ open ".build/debug/Tranquility Base.app"
 swift run tbase install-hooks        # wires the Claude Code hooks (backup kept)
 ```
 
-Restart your Claude Code sessions (or open `/hooks` once) so they load the
-hooks. `tbase new [dir]` starts a fresh session in its own Terminal window.
+`tbase new [dir]` starts a fresh session in its own Terminal window.
 
 ### Permissions
 
