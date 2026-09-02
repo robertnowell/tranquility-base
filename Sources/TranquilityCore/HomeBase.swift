@@ -102,14 +102,26 @@ public enum HomeBase {
         /// The pull requests this agent OPENED, from the receipt `gh pr create`
         /// printed. Filed under the turn that ran the command, like a page.
         public let receipts: [PullRequestStore.Receipt]
+        /// What was actually said, newest last, straight from the transcript.
+        ///
+        /// NOT paired to the turn blocks above it, deliberately. A brief and a
+        /// conversation turn look like they should line up and there is no key
+        /// that says they do: a session can produce briefs for some turns and
+        /// not others, and aligning two lists by position is the guess that has
+        /// gone wrong in this codebase more than once. So this is its own
+        /// section, honestly labelled, until a page carries the turn it was
+        /// written in and the join is a fact rather than an assumption.
+        public let transcript: [TurnText.Turn]
 
         public init(sessionId: String, title: String?, callsign: String?,
                     cwd: String?, goal: String?, turns: [Turn],
                     pages: [ArtifactStore.Page], lastActive: Date? = nil,
-                    receipts: [PullRequestStore.Receipt] = []) {
+                    receipts: [PullRequestStore.Receipt] = [],
+                    transcript: [TurnText.Turn] = []) {
             self.sessionId = sessionId; self.title = title; self.callsign = callsign
             self.cwd = cwd; self.goal = goal; self.turns = turns
             self.pages = pages; self.receipts = receipts
+            self.transcript = transcript
             self.lastActive = lastActive ?? turns.first?.at
         }
     }
@@ -666,8 +678,38 @@ public enum HomeBase {
         let f = DateFormatter(); f.dateFormat = "d MMM"; return f
     }()
 
+    /// The conversation, collapsed.
+    ///
+    /// A brief is a summary and the transcript is the evidence, so this sits
+    /// closed until somebody wants it. It is the whole reason the ladder above
+    /// can lose resolution without losing the record: what fell off the end of
+    /// a digest is one disclosure triangle away, on the same page, instead of
+    /// in a 139 MB file nobody opens.
+    ///
+    /// Prompt and prose only. Tool calls are how the work happened and they are
+    /// what makes a transcript unreadable; `TurnText` never emits them.
+    static func saidBlock(_ turns: [TurnText.Turn], e: (String) -> String) -> String {
+        guard !turns.isEmpty else { return "" }
+        let items = turns.reversed().map { t -> String in
+            let ask = t.prompt.isEmpty ? "" :
+                "<p class=\"ask\">\(e(t.prompt))</p>"
+            let said = t.prose.isEmpty ? "" :
+                "<p class=\"said\">\(e(t.prose))</p>"
+            return "<li>\(ask)\(said)</li>"
+        }.joined()
+        return """
+        <details class="transcript">
+        <summary>What was said &middot; last \(turns.count) turn\(turns.count == 1 ? "" : "s")</summary>
+        <p class="sub">Straight from the transcript, newest first. Not lined up
+        with the blocks below: a brief and a turn have no key that joins them yet.</p>
+        <ol class="said">\(items)</ol>
+        </details>
+        """
+    }
+
     public static func render(_ model: Model, now: Date = Date()) -> String {
         let e = escape
+        let said = saidBlock(model.transcript, e: escape)
         let name = model.title ?? "Agent \(model.sessionId.prefix(8))"
         let newest = model.turns.first          // turns arrive newest-first
         let ordered = model.turns
@@ -930,6 +972,24 @@ public enum HomeBase {
                 --accent:\(theme.accent);--brand:\(theme.brand);
                 --serif:\(theme.serif);--sans:\(theme.sans)}
           \(theme.hasDark ? """
+          /* The transcript. Closed by default: it is evidence under a
+             summary, not the summary. Type is the sans, because this is a
+             record of facts rather than the page's own prose. */
+          details.transcript{margin:1.6rem 0 0;border-top:1px solid var(--line);
+            padding-top:.9rem}
+          details.transcript>summary{font-family:var(--sans);font-size:.78rem;
+            letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+            cursor:pointer;list-style:none}
+          details.transcript>summary::-webkit-details-marker{display:none}
+          details.transcript>summary::before{content:"\\25B8 ";color:var(--faint)}
+          details.transcript[open]>summary::before{content:"\\25BE "}
+          details.transcript>summary:hover{color:var(--accent)}
+          ol.said{list-style:none;padding:0;margin:.7rem 0 0}
+          ol.said>li{padding:.7rem 0;border-bottom:1px solid var(--line)}
+          p.ask{font-family:var(--sans);font-size:.9rem;color:var(--heading);
+            font-weight:600;margin:0 0 .35rem;white-space:pre-wrap}
+          p.said{font-family:var(--sans);font-size:.88rem;color:var(--muted);
+            margin:0;white-space:pre-wrap}
           @media(prefers-color-scheme:dark){:root{--bg:#131310;--fg:#eceae2;--dim:#a5a196;
                 --faint:#6a6558;--rule:#2e2c26;--amber:#d9a441;--card:#1e1d19;
                 --accent:#e0645f;--brand:#eceae2}}
@@ -1052,6 +1112,7 @@ public enum HomeBase {
           @media(hover:none),(pointer:coarse){#card{display:none}}
         </style></head><body><div class="wrap">
         \(head)
+        \(said)
         <h2>What it has done</h2>
         <p class="sub">Newest first. Older turns lose resolution, never their links.</p>
         <ol>\(rows)</ol>
@@ -1168,7 +1229,12 @@ public extension HomeBase {
             pages: ArtifactStore.history(for: sessionId,
                                          root: QueueStore.supportDirectory.path),
             receipts: PullRequestStore.history(for: sessionId,
-                                               root: QueueStore.supportDirectory.path))
+                                               root: QueueStore.supportDirectory.path),
+            // Read here rather than in `render`, which stays pure over the
+            // model. Bounded to the turns the page shows in full, so this is a
+            // 2 MB tail and a JSON parse per line of it, not a walk of a 139 MB
+            // log to print three paragraphs.
+            transcript: TurnText.forSession(sessionId, limit: fullTurns))
         if priming {
             for receipt in model.receipts {
                 GitHubPullRequests.primeByURL(receipt.url)
