@@ -102,8 +102,14 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 step "fetching the current feed"
 if git ls-remote --exit-code --heads origin "$FEED_BRANCH" >/dev/null 2>&1; then
   git fetch -q origin "$FEED_BRANCH"
-  git --work-tree="$WORK" checkout "origin/$FEED_BRANCH" -- . 2>/dev/null \
-    || git archive "origin/$FEED_BRANCH" | tar -x -C "$WORK"
+  # `git archive`, never `git checkout --work-tree`. That form writes the files
+  # into $WORK but ALSO stages them in THIS repository's index, so the release
+  # checkout is left dirty with three feed files it has no business tracking.
+  # It happened: a local run left CNAME, appcast.xml and index.html staged as
+  # deletions after the temp directory was cleaned up, and preflight refused the
+  # tree. In CI the runner is ephemeral so it would have gone unnoticed, right
+  # up until something committed with `git add -A`. Archive touches no index.
+  git archive "origin/$FEED_BRANCH" | tar -x -C "$WORK"
   EXISTING=$(grep -c '<item>' "$WORK/appcast.xml" 2>/dev/null || true)
   echo "→ existing feed with ${EXISTING:-0} item(s)"
 else
