@@ -76,6 +76,29 @@ final class ArtifactStoreTests: XCTestCase {
 
     /// A hub is the index over artifacts, not one of them. Recording one made
     /// the card's OPEN REPORT open a stranger's hub (15 Aug).
+    /// A hub renders the recorded path, so recording the name a file was
+    /// reached by pins the hub to an address that may be retired. The corpus
+    /// moved and every old location became a symlink; a repair pass fixed the
+    /// records and `backfill` promptly re-mined the transcripts and undid it.
+    func testAPathIsRecordedWhereTheFileActuallyIs() {
+        let old = "/Users/x/Documents/deep-research/2026-09-01-a-report/index.html"
+        let real = "/Users/x/Documents/agents/da5d6fff/2026-09-01-a-report/index.html"
+        XCTAssertTrue(ArtifactStore.record(old, session: session, root: root,
+                                           resolve: { $0 == old ? real : $0 }))
+        XCTAssertEqual(ArtifactStore.history(for: session, root: root,
+                                             exists: { _ in true }).map(\.path), [real])
+    }
+
+    /// A page that is not there is recorded as it was named, so the miss stays
+    /// visible. `canonical` is the real resolver, and this is its contract.
+    func testAMissingPathIsRecordedVerbatim() {
+        let ghost = "/Users/x/Documents/agents/da5d6fff/gone.html"
+        XCTAssertEqual(ArtifactStore.canonical(ghost), ghost)
+        XCTAssertTrue(ArtifactStore.record(ghost, session: session, root: root))
+        XCTAssertEqual(ArtifactStore.history(for: session, root: root,
+                                             exists: { _ in true }).map(\.path), [ghost])
+    }
+
     func testAHubIsNeverAnArtifact() {
         XCTAssertFalse(ArtifactStore.record(
             "/Users/x/Documents/agents/da5d6fff/index.html",

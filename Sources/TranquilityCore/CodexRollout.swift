@@ -393,6 +393,27 @@ public enum CodexRollout {
     /// choice but to walk Claude Code's cwd-named directories. A thread id
     /// is unique, so a suffix match is unambiguous and never needs to open
     /// a single file to find the right one.
+    /// Every session that has left a rollout on disk.
+    ///
+    /// Codex registers nothing and writes no briefs, so the only record that a
+    /// session existed is its own file. A sweep that wants "every agent" has to
+    /// ask the filesystem for this harness, because there is no table to ask.
+    public static func knownSessionIds(sessions: URL = sessionsDirectory) -> Set<String> {
+        guard let walker = FileManager.default.enumerator(
+            at: sessions, includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]) else { return [] }
+        var ids = Set<String>()
+        for case let url as URL in walker where url.pathExtension == "jsonl" {
+            let name = url.deletingPathExtension().lastPathComponent
+            // rollout-<timestamp>-<uuid>: the id is the last five dash groups.
+            let parts = name.split(separator: "-")
+            guard parts.count >= 5 else { continue }
+            let id = parts.suffix(5).joined(separator: "-")
+            if id.count == 36 { ids.insert(id) }
+        }
+        return ids
+    }
+
     public static func rolloutPath(
         forSessionId id: String, sessions: URL = sessionsDirectory
     ) -> String? {
