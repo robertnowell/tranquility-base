@@ -216,30 +216,37 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 step "publishing the feed"
-git -C "$WORK" init -q
-git -C "$WORK" checkout -q -b "$FEED_BRANCH"
-git -C "$WORK" add appcast.xml CNAME
-git -C "$WORK" -c user.name="tranquility-base release" \
-  -c user.email="release@$FEED_DOMAIN" \
-  commit -q -m "Advertise $VERSION (build $BUILD)"
-# Push from THIS checkout, not from the temp repository.
+# Published through the GitHub contents API, not `git push`.
 #
-# actions/checkout authenticates by writing an http.extraheader into the
-# checkout's own git config. A repository created with `git init` in a temp
-# directory inherits none of that, so pushing from there asked for a password
-# on a machine with no terminal: "could not read Username for
-# 'https://github.com': Device not configured", which is how 0.3.1065 got all
-# the way to a signed feed and then failed to publish it.
+# The signing job checks out with `persist-credentials: false`, deliberately, so
+# there are NO git credentials anywhere in it. Two attempts assumed otherwise and
+# both died on "could not read Username for 'https://github.com'": once pushing
+# from a `git init` temp repo, once pushing from the checkout itself. The token
+# this job does have is GH_TOKEN, which is exactly what `gh` uses, and which the
+# rest of release.sh already depends on for every release operation.
 #
-# Fetching the temp branch into this checkout and pushing the fetched ref reuses
-# the credentials that are already here. It also keeps the token off every
-# command line, which rewriting the remote URL to embed one would not.
-# `git fetch` touches neither the index nor the working tree.
-git fetch -q "$WORK" "$FEED_BRANCH:refs/tb-feed" --force
-# Force-push a single-commit branch: the feed is generated state, not history,
-# and its history is the release list on main.
-git push -q --force origin "refs/tb-feed:refs/heads/$FEED_BRANCH"
-git update-ref -d refs/tb-feed
+# So the feed is written the same way everything else here talks to GitHub. No
+# credential plumbing, no token on a command line, and one auth path that is
+# already proven by the steps above it.
+CONTENT=$(base64 < "$WORK/appcast.xml" | tr -d '\n')
+EXISTING_SHA=$(gh api "repos/$REPO/contents/appcast.xml?ref=$FEED_BRANCH" \
+  --jq .sha 2>/dev/null || true)
+
+publish_args=(-X PUT "repos/$REPO/contents/appcast.xml"
+  -f "message=Advertise $VERSION (build $BUILD)"
+  -f "content=$CONTENT"
+  -f "branch=$FEED_BRANCH")
+# Updating an existing file requires its current blob sha; creating one must not
+# send it at all.
+[ -z "$EXISTING_SHA" ] || publish_args+=(-f "sha=$EXISTING_SHA")
+gh api "${publish_args[@]}" >/dev/null \
+  || fail "could not publish the feed to $FEED_BRANCH"
+
+# CNAME is what tells Pages to answer on our domain. It is written once and then
+# asserted, rather than rewritten every release: a missing one is worth failing
+# loudly over, and rewriting it every time would churn the branch for nothing.
+gh api "repos/$REPO/contents/CNAME?ref=$FEED_BRANCH" --jq .sha >/dev/null 2>&1 \
+  || fail "no CNAME on $FEED_BRANCH; Pages will stop answering on $FEED_DOMAIN"
 
 echo
 echo "✓ advertised $VERSION at https://$FEED_DOMAIN/appcast.xml"
