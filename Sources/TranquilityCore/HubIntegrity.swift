@@ -105,7 +105,16 @@ public enum HubIntegrity {
         for directory in pages {
             let page = directory.appendingPathComponent("index.html")
             guard let html = try? String(contentsOf: page, encoding: .utf8) else { continue }
-            let stamped = html.components(separatedBy: "data-tb-agent").count - 1
+            // Count FOOTERS, not mentions of the marker.
+            //
+            // The string test flagged four pages on 02 Sep and every one of
+            // them was clean: they are pages ABOUT the footer, so they quote
+            // `data-tb-agent` in their prose and carry exactly one real footer.
+            // A checker that fires on a page for describing the thing it checks
+            // teaches the reader to ignore it, which costs more than the check
+            // is worth. Same shape as the hook's own cleanup regex, which has
+            // always matched the element rather than the attribute name.
+            let stamped = Self.stampedFooters(in: html)
             if stamped > 1 {
                 problems.append(Problem(
                     session: directory.lastPathComponent,
@@ -114,4 +123,22 @@ public enum HubIntegrity {
         }
         return problems
     }
+
+    /// A `<footer>` whose OPENING TAG carries the stamp.
+    ///
+    /// Narrower than the hook's cleanup regex on purpose, and the difference is
+    /// the whole point of this check. The hook also matches a footer carrying a
+    /// discuss link, because when it is about to write a fresh stamp it wants to
+    /// clear anything footer-shaped. This is asking a different question — how
+    /// many agents claim to own this page — and only `data-tb-agent` answers it.
+    /// The wider pattern flagged the hub-replay prototype, which renders twenty
+    /// sample hubs with twenty discuss links and is owned by exactly one agent.
+    /// How many agents claim to own this page. Exposed so the rule can be
+    /// tested against a page rather than only against a directory of them.
+    public static func stampedFooters(in html: String) -> Int {
+        agentFooter.numberOfMatches(in: html, range: NSRange(html.startIndex..., in: html))
+    }
+
+    private static let agentFooter = try! NSRegularExpression(
+        pattern: "<footer\\b[^>]*\\bdata-tb-agent=", options: [])
 }
