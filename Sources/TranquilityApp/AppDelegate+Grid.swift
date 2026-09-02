@@ -128,6 +128,9 @@ extension AppDelegate {
         // The OFF half is applied at the bottom of this function, after every
         // band; ON has to travel INTO the lamp rule, because it changes what
         // colour a row is rather than which face draws it.
+        // Recorded before the bands run so the card can ask the same question
+        // the rows answered, and get the same answer.
+        harnessById = liveById.reduce(into: [:]) { $0[$1.key] = $1.value.harness }
         let switchedOn = LampSwitch.loadOn()
         var rows = waiting.map { (event: WaitingSession) -> SessionRow in
             let evidence = event.transcriptPath.flatMap {
@@ -176,7 +179,8 @@ extension AppDelegate {
                 read: event.heard ? .opened : .unread,
                 // And the hover carries the whole sentence, as it does on every
                 // other amber row — the column can only hold a clause.
-                detail: blocked?.detail)
+                detail: blocked?.detail,
+                harness: liveById[event.sessionId]?.harness)
         }
         // Live sessions with nothing waiting: quiet rows, so a skipped or heard
         // session stays findable. Walked via `known` — already latestId DESC —
@@ -218,7 +222,8 @@ extension AppDelegate {
                 id: stored.sessionId,
                 name: tabDisplayName(for: stored, live: live),
                 aux: storedLamp.reason ?? SessionRow.shortId(stored.sessionId),
-                lamp: storedLamp.lamp, detail: storedLamp.detail))
+                lamp: storedLamp.lamp, detail: storedLamp.detail,
+                harness: live.harness))
         }
         // Live sessions with no stored events yet: nothing to rank them by,
         // so they close the live half of the grid.
@@ -244,7 +249,8 @@ extension AppDelegate {
                 id: live.sessionId,
                 name: GridAssembler.tabDisplayName(live: live, callsign: nil),
                 aux: liveLamp.reason ?? SessionRow.shortId(live.sessionId),
-                lamp: liveLamp.lamp, detail: liveLamp.detail))
+                lamp: liveLamp.lamp, detail: liveLamp.detail,
+                harness: live.harness))
         }
         // And the sessions that are not awake (ruled 11 Aug). Everything above
         // this line is enumerated from PROCESSES, which is why a machine
@@ -277,7 +283,8 @@ extension AppDelegate {
                 // lives in a tooltip rather than inline. Codex used to get a
                 // whole second band for this line.
                 detail: found.activity?.fullReason
-                    ?? (found.harness == CodexAdapter().id ? "Codex session" : nil)))
+                    ?? (found.harness == CodexAdapter().id ? "Codex session" : nil),
+                harness: found.harness))
         }
         // The user's own switch, applied last and to every band at once.
         //

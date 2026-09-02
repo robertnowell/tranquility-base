@@ -145,9 +145,23 @@ public struct SessionRow: Equatable, Sendable {
     /// the log. Nil where there is nothing more to say than the row says.
     public let detail: String?
 
+    /// Which harness runs this session, when it is known.
+    ///
+    /// Carried on the row rather than looked up by the view, for the reason
+    /// every other field here is: a view that resolves its own facts is a
+    /// second reader, and two readers of one question start disagreeing. The
+    /// grid learned that expensively between 30 Aug and 01 Sep, when the same
+    /// session's harness was decided in four places and three of them were
+    /// wrong at least once.
+    ///
+    /// Optional because it genuinely can be unknown: a row rebuilt from disk
+    /// for a session with no ownership record has no way to say.
+    public let harness: String?
+
     public init(id: String, name: String, aux: String, lamp: Lamp,
                revivable: Bool = false, read: ReadState = .none,
-               switchedOff: Bool = false, detail: String? = nil) {
+               switchedOff: Bool = false, detail: String? = nil,
+               harness: String? = nil) {
         self.id = id
         self.name = name
         self.aux = aux
@@ -156,6 +170,7 @@ public struct SessionRow: Equatable, Sendable {
         self.read = read
         self.switchedOff = switchedOff
         self.detail = detail
+        self.harness = harness
     }
 
     /// The same row with its lamp out, as a session the user has filed.
@@ -168,7 +183,7 @@ public struct SessionRow: Equatable, Sendable {
     public func switchedOffCopy() -> SessionRow {
         SessionRow(id: id, name: name, aux: aux, lamp: .running,
                    revivable: revivable, read: read, switchedOff: true,
-                   detail: detail)
+                   detail: detail, harness: harness)
     }
 
     /// What the pointer gets when it rests on a row: the full name, and

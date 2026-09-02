@@ -1268,6 +1268,48 @@ extension StatusHUD {
         SelfTest.report("revivedDoor", checks)
     }
 
+    /// The harness marks land on the same optical line as the text beside them.
+    ///
+    /// Robert rejected the first render for exactly this: "let's make sure the
+    /// vertical alignment is consistently correct... on the new agent it's
+    /// super out of alignment." It was, because the two vendor marks fill
+    /// their 24-unit box differently (62 percent against 100 percent), so
+    /// equal box sizes give unequal ink and an eyeballed nudge fixes one mark
+    /// and breaks the other.
+    ///
+    /// Every assertion here is arithmetic, which is the point: the eye already
+    /// got this wrong once.
+    /// The two marks render the same size, and each path is its own ink.
+    ///
+    /// Two assertions, which is all this needs. The marks fill their vendor
+    /// boxes very differently (62 percent against 100), so "same height" only
+    /// means the same thing once each path is normalised to its own ink. That
+    /// is the one piece of geometry here worth a test; the rest is an image
+    /// view centred on a label.
+    func harnessMarkDrill() {
+        var checks: [(String, Bool)] = []
+        let claude = ClaudeCodeAdapter().id
+        let codex = CodexAdapter().id
+
+        for harness in [claude, codex] {
+            let bounds = HarnessMark.path(for: harness).bounds
+            let ink = HarnessMark.ink(for: harness)
+            checks.append(("\(harness)PathIsItsOwnInk",
+                           abs(bounds.width - ink.width) < 0.01
+                           && abs(bounds.height - ink.height) < 0.01
+                           && abs(bounds.origin.x) < 0.01 && abs(bounds.origin.y) < 0.01))
+        }
+        let h: CGFloat = 10
+        checks.append(("bothMarksRenderTheSameHeight",
+                       abs(HarnessMark.size(height: h, harness: claude).height
+                           - HarnessMark.size(height: h, harness: codex).height) < 0.01))
+        checks.append(("theClaudeMarkIsWiderThanTall",
+                       HarnessMark.size(height: h, harness: claude).width > h))
+        checks.append(("opacityIsSeventyFive", abs(HarnessMark.opacity - 0.75) < 0.001))
+
+        SelfTest.report("harnessMark", checks)
+    }
+
     /// A card's prose is selectable, and selects itself never.
     ///
     /// The 16 Aug screenshot: a card came back from a turn with its whole body

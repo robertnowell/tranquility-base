@@ -816,6 +816,7 @@ final class SplitPlacardRowView: NSView {
     static let height: CGFloat = 32
 
     init(width: CGFloat, target: AnyObject,
+         leadingHarness: String? = nil,
          leading: (String, String, Selector),
          trailing: (String, String, Selector)) {
         super.init(frame: .zero)
@@ -826,7 +827,8 @@ final class SplitPlacardRowView: NSView {
         // both put PAST AGENTS in the middle of the row with a hole beside it,
         // which reads as a mistake rather than as a column.
         let left = PlacardHalf(title: leading.0, glyph: leading.1, alignment: .leading,
-                               target: target, action: leading.2)
+                               target: target, action: leading.2,
+                               harness: leadingHarness)
         let right = PlacardHalf(title: trailing.0, glyph: trailing.1, alignment: .trailing,
                                 target: target, action: trailing.2)
         addSubview(left); addSubview(right)
@@ -849,6 +851,11 @@ final class SplitPlacardRowView: NSView {
 
 private final class PlacardHalf: NSControl {
     private let mark = NSTextField(labelWithString: "")
+    private let harnessMark = NSImageView()
+    /// Ink height for the mark beside a 9.5pt placard label. A number, chosen
+    /// by eye against the caps and then checked in a pose shot, which is the
+    /// right amount of ceremony for aligning an icon to some text.
+    private static let markHeight: CGFloat = 6
     private let label = NSTextField(labelWithString: "")
     private var resting: [NSAttributedString] = []
 
@@ -871,7 +878,7 @@ private final class PlacardHalf: NSControl {
     }
 
     init(title: String, glyph: String, alignment: NSLayoutConstraint.Attribute,
-         target: AnyObject, action: Selector) {
+         target: AnyObject, action: Selector, harness: String? = nil) {
         super.init(frame: .zero)
         self.target = target
         self.action = action
@@ -888,6 +895,21 @@ private final class PlacardHalf: NSControl {
         label.translatesAutoresizingMaskIntoConstraints = false
         resting = [mark.attributedStringValue, label.attributedStringValue]
 
+        // NEW AGENT wears the mark of the harness the "+" will create. It is
+        // the one placement that is never redundant: this row is a button whose
+        // effect depends on a setting you cannot see from here.
+        //
+        // An image view centred on the label. That is all this ever needed to
+        // be: a text attachment was tried first and got scaled by the line
+        // fragment, which cost an afternoon of measuring pose shots to notice.
+        if let harness {
+            harnessMark.image = HarnessMark.image(height: Self.markHeight, harness: harness)
+            harnessMark.contentTintColor = StateLegend.Palette.hint
+                .withAlphaComponent(HarnessMark.opacity)
+            harnessMark.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(harnessMark)
+        }
+
         addSubview(mark); addSubview(label)
         NSLayoutConstraint.activate([
             // Not a plain centerY: that centres two FRAMES, and a mark's ink
@@ -903,6 +925,17 @@ private final class PlacardHalf: NSControl {
                     textFont: ChromeType.mono(ofSize: 9.5, weight: .regular))),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+        if harnessMark.image != nil {
+            let size = HarnessMark.size(height: Self.markHeight,
+                                        harness: harness ?? "")
+            NSLayoutConstraint.activate([
+                harnessMark.widthAnchor.constraint(equalToConstant: size.width),
+                harnessMark.heightAnchor.constraint(equalToConstant: size.height),
+                harnessMark.leadingAnchor.constraint(equalTo: label.trailingAnchor,
+                                                     constant: 6),
+                harnessMark.centerYAnchor.constraint(equalTo: label.centerYAnchor),
+            ])
+        }
         // The glyph keeps the lamp column's 20pt offset from the label either
         // way, so both halves read as the same control mirrored rather than as
         // two controls that happen to share a row.

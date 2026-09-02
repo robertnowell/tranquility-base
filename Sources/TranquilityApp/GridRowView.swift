@@ -151,6 +151,7 @@ final class GridRowView: NSControl {
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let callsign = NSTextField(labelWithString: item.aux)
+        callsignLabel = callsign
         callsign.font = Self.auxFont
         callsign.textColor = (ready ? StateLegend.Palette.secondary : StateLegend.Palette.muted)
             .withAlphaComponent(ink)
@@ -167,6 +168,32 @@ final class GridRowView: NSControl {
         highlight.layer?.cornerRadius = 6
         addSubview(highlight)
         addSubview(lamp); addSubview(name); addSubview(callsign)
+        // The harness mark, in the id's own slot. Ruled 01 Sep: the id
+        // crossfades to it on hover rather than the mark living on every row
+        // permanently, because the grid's job is state and the harness is not
+        // state. Robert, comparing the two: "always on is too busy."
+        //
+        // Same slot on purpose. The id was ruled the least load-bearing thing
+        // on the row on 19 Aug when it moved to the tooltip, which makes it the
+        // honest thing to borrow, and borrowing rather than adding means
+        // nothing on the row moves when the pointer arrives.
+        addSubview(harnessMark)
+        harnessMark.translatesAutoresizingMaskIntoConstraints = false
+        harnessMark.imageScaling = .scaleProportionallyUpOrDown
+        harnessMark.alphaValue = 0
+        harnessMark.contentTintColor = StateLegend.Palette.secondary
+        if let harness = item.harness {
+            // As tall as the id beside it, centred on it. Nothing cleverer.
+            let height = Self.auxFont.capHeight
+            harnessMark.image = HarnessMark.image(height: height, harness: harness)
+            let size = HarnessMark.size(height: height, harness: harness)
+            NSLayoutConstraint.activate([
+                harnessMark.widthAnchor.constraint(equalToConstant: size.width),
+                harnessMark.heightAnchor.constraint(equalToConstant: size.height),
+                harnessMark.trailingAnchor.constraint(equalTo: callsign.trailingAnchor),
+                harnessMark.centerYAnchor.constraint(equalTo: callsign.centerYAnchor),
+            ])
+        }
         // A grid with no minted callsigns collapses the column entirely —
         // no phantom 12pt gutter on the right.
         let gutter: CGFloat = auxWidth > 0 ? 12 : 0
@@ -220,6 +247,12 @@ final class GridRowView: NSControl {
     /// and a drill that cannot see it would be asserting a sort order about
     /// pixels it never checks.
     let nameLabel: NSTextField
+    /// The id column, kept so the hover can trade it for the harness mark.
+    /// Assigned after `super.init` like the rest of the row's chrome, hence
+    /// the implicit unwrap rather than a `let`.
+    private var callsignLabel: NSTextField!
+    /// The harness mark, resting invisible in the id's slot.
+    let harnessMark = NSImageView()
     /// The name's ink at rest, so the hover step has something to return to.
     /// Read once at build: a row is rebuilt whenever its state changes, so a
     /// stale value cannot outlive the ink it describes.
@@ -260,6 +293,15 @@ final class GridRowView: NSControl {
     /// the card title already does at the top of the ramp.
     func setHovered(_ on: Bool) {
         nameLabel.textColor = on ? StateLegend.hovered(restingName) : restingName
+        // Nothing to trade if this row does not know its harness, and a row
+        // that swapped its id for nothing would just look broken.
+        guard harnessMark.image != nil else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            context.allowsImplicitAnimation = true
+            callsignLabel.animator().alphaValue = on ? 0 : 1
+            harnessMark.animator().alphaValue = on ? HarnessMark.opacity : 0
+        }
     }
 
     /// Rule 1 of the hover standard: the wash says WHICH row the pointer is on,

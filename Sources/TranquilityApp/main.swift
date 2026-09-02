@@ -172,6 +172,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// in the log to see it by — three separate investigations reasoned about
     /// bands while the input was never checked.
     var lastCodexNameCount = -1
+    /// Which harness each session runs, rebuilt every repaint from the live
+    /// map and the rows. One map, so the card and the grid cannot disagree.
+    var harnessById: [String: String] = [:]
     /// Hands-free listening: started by a double-tap of ⌥, ended by a single tap.
     /// Distinct from the push-to-talk flag because releasing a key you are not
     /// holding must not end anything.
@@ -720,6 +723,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // follows the destination (ruled 15 Aug, refining the hub-door ruling
         // of the same day); the hub stays one click away either way, via the
         // report's own "Open hub" footer button.
+        // The card asks, the app answers from what the grid already knows.
+        hud.harnessForSession = { [weak self] id in self?.harnessById[id] }
         hud.doorForSession = { [weak self] session in
             if let report = self?.freshReport(session: session) {
                 return .report(report)
