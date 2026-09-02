@@ -178,6 +178,64 @@ final class HubTranscriptTests: XCTestCase {
         }
     }
 
+    // MARK: - The join
+
+    private func joined(briefs: [Date], turns: [(String, Date?)]) -> String {
+        HomeBase.render(HomeBase.Model(
+            sessionId: "0d04e845-65ff-488f-983c-58f371d661ed",
+            title: "A session", callsign: nil, cwd: "/tmp", goal: "do a thing",
+            turns: briefs.map { HomeBase.Turn(at: $0, topic: "t", happened: "it happened") },
+            pages: [],
+            transcript: turns.map { .init(prompt: $0.0, prose: "prose", at: $0.1) }))
+    }
+
+    /// The words print INSIDE the turn they belong to, not in a section under it.
+    func testAStampedTurnIsFiledUnderTheBriefItPrecedes() {
+        let brief = Date()
+        let html = joined(briefs: [brief],
+                          turns: [("the ask", brief.addingTimeInterval(-120))])
+        XCTAssertTrue(html.contains("details class=\"transcript inline\""))
+        XCTAssertFalse(html.contains("not filed above"),
+                       "nothing is left over, so the remainder section is absent")
+        XCTAssertEqual(html.components(separatedBy: "the ask").count - 1, 1,
+                       "the words print once, under their turn")
+    }
+
+    /// The failure positional alignment would produce silently.
+    func testTwoBriefsCannotClaimTheSameTurn() {
+        let late = Date(), early = late.addingTimeInterval(-600)
+        let html = joined(briefs: [late, early],
+                          turns: [("only ask", early.addingTimeInterval(-60))])
+        XCTAssertEqual(html.components(separatedBy: "only ask").count - 1, 1)
+    }
+
+    /// A turn AFTER the newest brief has no brief to sit under, and is not lost.
+    func testATurnNoBriefAccountsForKeepsItsOwnSection() {
+        let brief = Date()
+        let html = joined(briefs: [brief],
+                          turns: [("later ask", brief.addingTimeInterval(600))])
+        XCTAssertTrue(html.contains("not filed above"))
+        XCTAssertTrue(html.contains("later ask"))
+    }
+
+    /// Without the stamp there is no join, and the words still have to appear.
+    func testAnUnstampedTurnStillPrints() {
+        let html = joined(briefs: [Date()], turns: [("unstamped ask", nil)])
+        XCTAssertTrue(html.contains("unstamped ask"))
+        XCTAssertTrue(html.contains("not filed above"))
+    }
+
+    /// The stamp itself, read off a real transcript row.
+    func testClaudeCodeCarriesTheTurnStamp() throws {
+        let jsonl = """
+        {"type":"user","timestamp":"2026-09-02T18:04:05.123Z","message":{"content":"hello"}}
+        {"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}
+        """
+        let turn = try XCTUnwrap(TurnText.claudeCode(jsonl: jsonl, limit: 3).first)
+        let at = try XCTUnwrap(turn.at)
+        XCTAssertEqual(at.timeIntervalSince1970, 1788372245.123, accuracy: 0.01)
+    }
+
     /// A page is HTML and a prompt is whatever somebody typed.
     func testAPromptCannotInjectMarkup() {
         let html = HomeBase.render(model([

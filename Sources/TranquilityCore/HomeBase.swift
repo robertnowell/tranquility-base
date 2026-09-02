@@ -104,13 +104,15 @@ public enum HomeBase {
         public let receipts: [PullRequestStore.Receipt]
         /// What was actually said, newest last, straight from the transcript.
         ///
-        /// NOT paired to the turn blocks above it, deliberately. A brief and a
-        /// conversation turn look like they should line up and there is no key
-        /// that says they do: a session can produce briefs for some turns and
-        /// not others, and aligning two lists by position is the guess that has
-        /// gone wrong in this codebase more than once. So this is its own
-        /// section, honestly labelled, until a page carries the turn it was
-        /// written in and the join is a fact rather than an assumption.
+        /// Paired to the turn blocks above it since 02 Sep, on the one key that
+        /// is a fact rather than a guess: TIME. Both sides are stamped — a
+        /// brief is written when a turn ends, a transcript turn when the person
+        /// asked — so a brief belongs to the last turn that opened before it.
+        /// This was held back until the stamps existed, because the earlier
+        /// version of this comment was right: aligning two lists BY POSITION is
+        /// the guess that has gone wrong in this codebase more than once. A
+        /// turn nothing claims still prints, in its own section, rather than
+        /// being dropped to make the join look total.
         public let transcript: [TurnText.Turn]
 
         public init(sessionId: String, title: String?, callsign: String?,
@@ -688,6 +690,18 @@ public enum HomeBase {
     ///
     /// Prompt and prose only. Tool calls are how the work happened and they are
     /// what makes a transcript unreadable; `TurnText` never emits them.
+    /// One turn's words, under the turn they belong to.
+    static func saidTurn(_ turn: TurnText.Turn, e: (String) -> String) -> String {
+        let ask = turn.prompt.isEmpty ? "" : "<p class=\"ask\">\(e(turn.prompt))</p>"
+        let said = turn.prose.isEmpty ? "" : "<p class=\"said\">\(e(turn.prose))</p>"
+        guard !ask.isEmpty || !said.isEmpty else { return "" }
+        return """
+        <details class="transcript inline">
+        <summary>What was said</summary>\(ask)\(said)
+        </details>
+        """
+    }
+
     static func saidBlock(_ turns: [TurnText.Turn], e: (String) -> String) -> String {
         guard !turns.isEmpty else { return "" }
         let items = turns.reversed().map { t -> String in
@@ -699,7 +713,7 @@ public enum HomeBase {
         }.joined()
         return """
         <details class="transcript">
-        <summary>What was said &middot; last \(turns.count) turn\(turns.count == 1 ? "" : "s")</summary>
+        <summary>What was said &middot; \(turns.count) turn\(turns.count == 1 ? "" : "s") not filed above</summary>
         <p class="sub">Straight from the transcript. Newest first.</p>
         <ol class="said">\(items)</ol>
         </details>
@@ -708,7 +722,9 @@ public enum HomeBase {
 
     public static func render(_ model: Model, now: Date = Date()) -> String {
         let e = escape
-        let said = saidBlock(model.transcript, e: escape)
+        // Filled after the join below, from whatever no turn claimed. A turn
+        // whose words already print under it must not print again down here.
+        var said = ""
         let name = model.title ?? "Agent \(model.sessionId.prefix(8))"
         let newest = model.turns.first          // turns arrive newest-first
         let ordered = model.turns
@@ -792,6 +808,33 @@ public enum HomeBase {
         // 16 Aug: "what it has made shows first, and that's not the most
         // recent turn"). Anything that lands under no shown turn falls to the
         // shelf at the bottom of the page.
+        // What was SAID during each turn, on the same key the pages use.
+        //
+        // A brief is written when a turn ends; the transcript turn it summarises
+        // is the last one that opened before that. Claimed newest-first and only
+        // once, so two briefs cannot both point at the same words — the failure
+        // that positional alignment would produce silently.
+        // An UNSTAMPED turn stays unclaimed rather than disappearing: it comes
+        // from a transcript written before either harness recorded a time, and
+        // filtering it out here silently emptied the whole section (caught by
+        // the hub tests, which build turns without stamps).
+        var saidByTurn: [Int: TurnText.Turn] = [:]
+        var unclaimed = model.transcript
+        for (i, turn) in ordered.enumerated() where i < fullTurns + lineTurns {
+            guard let match = unclaimed.enumerated()
+                .filter({ ($0.element.at).map { $0 <= turn.at } == true })
+                .max(by: { $0.element.at! < $1.element.at! })
+            else { continue }
+            saidByTurn[i] = match.element
+            unclaimed.remove(at: match.offset)
+        }
+
+        // Anything the turns did not account for keeps its own section: a
+        // session with no briefs at all (every Codex hub before 02 Sep) has
+        // nothing to attach to, and dropping its words would leave the page
+        // blank rather than honest.
+        said = saidBlock(unclaimed, e: e)
+
         var pagesByTurn: [Int: [ArtifactStore.Page]] = [:]
         var shelved: [ArtifactStore.Page] = []
         for page in model.pages {
@@ -899,6 +942,10 @@ public enum HomeBase {
             if !made.isEmpty {
                 body += "<ul class=\"made\">" + pageItems(made, e: e) + "</ul>"
             }
+            // The words that caused all of the above, folded shut. The brief is
+            // the summary; this is the source, one click away and in the same
+            // place as the work rather than in a section at the bottom.
+            if let said = saidByTurn[i] { body += saidTurn(said, e: e) }
             rows += """
                 <li class="\(cls)"><div class="when">\(e(stamp.string(from: turn.at)))</div>
                 <div class="what"><h3>\(e(turn.headline ?? turn.topic))</h3>\(body)</div></li>
@@ -983,6 +1030,13 @@ public enum HomeBase {
           details.transcript>summary::before{content:"\\25B8 ";color:var(--faint)}
           details.transcript[open]>summary::before{content:"\\25BE "}
           details.transcript>summary:hover{color:var(--accent)}
+          /* The same disclosure, sitting INSIDE a turn: no rule above it (the
+             turn already has one), tighter, and quieter than the brief it
+             belongs to — the brief is the finding, this is the source. */
+          details.transcript.inline{margin:.85rem 0 0;border-top:0;padding-top:0}
+          details.transcript.inline>summary{font-size:.68rem;color:var(--faint)}
+          details.transcript.inline p.ask{font-size:.85rem;margin:.6rem 0 .3rem}
+          details.transcript.inline p.said{font-size:.83rem}
           ol.said{list-style:none;padding:0;margin:.7rem 0 0}
           ol.said>li{padding:.7rem 0;border-bottom:1px solid var(--line)}
           p.ask{font-family:var(--sans);font-size:.9rem;color:var(--heading);
@@ -1208,7 +1262,9 @@ public extension HomeBase {
         let briefs = try store.briefs(for: sessionId)
         // Read once and reuse: the model needs it and the guard needs it, and
         // this is a bounded file read, not a free property.
-        let transcript = TurnText.forSession(sessionId, limit: fullTurns)
+        // Enough to cover every turn the page prints, not just the full ones:
+        // a line-tier turn that produced a report still wants its words under it.
+        let transcript = TurnText.forSession(sessionId, limit: fullTurns + lineTurns)
         guard !briefs.isEmpty || !transcript.isEmpty else { return nil }
         let latest = try store.latestStop(for: sessionId)
         // Agents that ran before the hook existed have pages the store never
