@@ -129,6 +129,23 @@ path = (p.get("tool_input") or {}).get("file_path") or ""
 # is all a path carries. ArtifactStore.history reads both files for a session, so
 # a slug-keyed record is found by the hub that owns it.
 _agents = os.path.expanduser("~/Documents/agents")
+
+# The INDEXER's own pages are not artifacts.
+#
+# `publish.py` writes the private index and the hub of hubs into a configurable
+# root, so no path rule can name them; they announce themselves instead, with a
+# marker in the first line. Without this, every session that rebuilds the index
+# has that file recorded as a page it made, and `tbase doctor` reports it as
+# missing from a hub that will never list it — which is true, and useless. Seen
+# twice on 02 Sep, under two different sessions, within an hour.
+def _is_generated_index(f):
+    try:
+        with open(f, "r", encoding="utf-8", errors="replace") as fh:
+            return "research-hq-generated: index" in fh.read(2048)
+    except OSError:
+        return False
+
+
 def _is_hub(f):
     # The hub is ONE file per agent: agents/<slug>/index.html. Matching on the
     # filename alone also names agents/<slug>/<date-slug>/index.html, which is a
@@ -136,6 +153,9 @@ def _is_hub(f):
     # it here meant a brief was never claimed by its own path.
     return (os.path.basename(f) == "index.html"
             and os.path.dirname(os.path.dirname(f)) == _agents)
+
+if path and _is_generated_index(path):
+    path = ""
 
 if path and "/Documents/agents/" in path and not _is_hub(path):
     parts = path.split(os.sep)
@@ -204,7 +224,8 @@ if not path:
     recent = []
     for pattern in roots:
         for f in glob.glob(pattern):
-            if f in seen_paths or "/node_modules/" in f or "/.git/" in f:
+            if f in seen_paths or "/node_modules/" in f or "/.git/" in f \
+                    or _is_generated_index(f):
                 continue
             seen_paths.add(f)
             try:
