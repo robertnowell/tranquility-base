@@ -222,10 +222,24 @@ git -C "$WORK" add appcast.xml CNAME
 git -C "$WORK" -c user.name="tranquility-base release" \
   -c user.email="release@$FEED_DOMAIN" \
   commit -q -m "Advertise $VERSION (build $BUILD)"
+# Push from THIS checkout, not from the temp repository.
+#
+# actions/checkout authenticates by writing an http.extraheader into the
+# checkout's own git config. A repository created with `git init` in a temp
+# directory inherits none of that, so pushing from there asked for a password
+# on a machine with no terminal: "could not read Username for
+# 'https://github.com': Device not configured", which is how 0.3.1065 got all
+# the way to a signed feed and then failed to publish it.
+#
+# Fetching the temp branch into this checkout and pushing the fetched ref reuses
+# the credentials that are already here. It also keeps the token off every
+# command line, which rewriting the remote URL to embed one would not.
+# `git fetch` touches neither the index nor the working tree.
+git fetch -q "$WORK" "$FEED_BRANCH:refs/tb-feed" --force
 # Force-push a single-commit branch: the feed is generated state, not history,
 # and its history is the release list on main.
-git -C "$WORK" push -q --force \
-  "$(git remote get-url origin)" "$FEED_BRANCH:$FEED_BRANCH"
+git push -q --force origin "refs/tb-feed:refs/heads/$FEED_BRANCH"
+git update-ref -d refs/tb-feed
 
 echo
 echo "✓ advertised $VERSION at https://$FEED_DOMAIN/appcast.xml"
