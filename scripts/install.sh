@@ -30,8 +30,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . "$(dirname "$0")/lib/app-process.sh"
+. "$(dirname "$0")/lib/paths.sh"
 
-DEFAULT_SRC="/private/tmp/tb-clean/.build/debug/Tranquility Base.app"
+DEFAULT_SRC="$(tb_bundle_dir debug /private/tmp/tb-clean)/Tranquility Base.app"
 SRC="${1:-$DEFAULT_SRC}"
 [ "${1:-}" = "--no-login-item" ] && SRC="$DEFAULT_SRC"
 DEST="/Applications/Tranquility Base.app"

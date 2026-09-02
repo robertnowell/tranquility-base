@@ -23,6 +23,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# shellcheck source=lib/paths.sh
+. "$(dirname "$0")/lib/paths.sh"
+
 CONFIG="${1:-debug}"
 # Overridable so release.sh can stamp a real version without editing this file.
 # CFBundleVersion must increase for every build macOS is asked to distinguish;
@@ -55,7 +58,23 @@ else
 fi
 APP_NAME="${VD_APP_NAME:-Tranquility Base}"
 BUNDLE_ID="${VD_BUNDLE_ID:-com.robertnowell.voice-dispatch}"
-BUILD_DIR=".build/$CONFIG"
+
+# Architectures. Universal by default so Intel Macs are covered; a single arch
+# stays available for fast local iteration (TB_ARCHS=arm64 scripts/bundle.sh).
+#
+# The output path is ASKED FOR, never assumed. A multi-arch `swift build` does
+# not write to .build/<config>: it redirects to .build/apple/Products/<Config>,
+# with the configuration capitalised. Hardcoding either layout is how a bundle
+# silently ships the previous single-arch binary, and `--show-bin-path` reports
+# both correctly for the cost of one extra invocation.
+read -r -a TB_ARCH_LIST <<< "${TB_ARCHS:-arm64 x86_64}"
+ARCH_ARGS=()
+for _tb_arch in "${TB_ARCH_LIST[@]}"; do ARCH_ARGS+=(--arch "$_tb_arch"); done
+PRODUCTS_DIR=$(swift build --configuration "$CONFIG" "${ARCH_ARGS[@]}" --show-bin-path)
+
+# NOT .build/$CONFIG. See lib/paths.sh for the two ways SwiftPM destroys a
+# bundle left in its own tree.
+BUILD_DIR=$(tb_bundle_dir "$CONFIG")
 
 # shellcheck source=lib/sparkle.sh
 . "$(dirname "$0")/lib/sparkle.sh"
@@ -75,11 +94,12 @@ TB_FEED_URL="${TB_FEED_URL:-https://updates.tranquilitybase.to/appcast.xml}"
 TB_PUBLIC_ED_KEY="${TB_PUBLIC_ED_KEY:-C/+0I+AP9TrlyA3hLSLgXdJT1kDekOXqGGnwB9bClCE=}"
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 
-swift build --configuration "$CONFIG" --product TranquilityApp
+swift build --configuration "$CONFIG" "${ARCH_ARGS[@]}" --product TranquilityApp
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
-cp "$BUILD_DIR/TranquilityApp" "$APP_DIR/Contents/MacOS/TranquilityApp"
+mkdir -p "$BUILD_DIR"
+cp "$PRODUCTS_DIR/TranquilityApp" "$APP_DIR/Contents/MacOS/TranquilityApp"
 
 # The earcon set. Four short files, ~160KB total, loaded by name through
 # Bundle.main in Earcons.swift. Flat in Resources/ rather than in a SwiftPM
@@ -118,7 +138,7 @@ chmod +x "$APP_DIR/Contents/Resources/hooks/"*.sh
 # the first hosted release got all the way through notarizing the app AND the
 # DMG before audit-release.sh refused it for a missing icon. The audit did its
 # job; the warning did not, because a warning nobody reads is not a signal.
-sparkle_embed "$APP_DIR" "$BUILD_DIR"
+sparkle_embed "$APP_DIR" "$PRODUCTS_DIR"
 
 # The app icon, drawn by the app itself.
 #

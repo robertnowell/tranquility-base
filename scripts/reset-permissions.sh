@@ -19,6 +19,9 @@
 
 set -uo pipefail
 
+# shellcheck source=lib/paths.sh
+. "$(dirname "$0")/lib/paths.sh"
+
 # Deliberately still `voice-dispatch` after the rename to Tranquility Base. TCC keys
 # grants to the bundle identifier, so changing this string would not rename anything —
 # it would make macOS treat the app as one it has never seen and silently void every
@@ -53,7 +56,7 @@ done
 
 echo
 echo "All grants cleared. Now:"
-echo "  1. open \".build/debug/Tranquility Base.app\""
+echo "  1. open \"$(tb_bundle_dir debug)/Tranquility Base.app\""
 echo "  2. click Grant on each row in the checklist — Grant is what makes macOS ASK,"
 echo "     and an app that has never asked is not listed in the Privacy pane at all,"
 echo "     so there is nothing to switch on until you do."

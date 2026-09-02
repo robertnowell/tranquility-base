@@ -35,3 +35,49 @@ jobs:
         run: |
           git checkout -B ci-source-audit "$GITHUB_SHA"
           TB_SKIP_LIVE_HARNESS_DRILLS=1 scripts/preflight.sh "origin/$BASE_REF"
+
+  intel:
+    name: Intel slice (native x86_64)
+    # Real Intel hardware, which is the whole point of this job.
+    #
+    # Rosetta on our own Macs proves the x86_64 slice COMPILES and that its
+    # tests PASS: measured 02 Sep 2026, 1285 tests, 0 failures. What it cannot
+    # prove is behaviour on the CPU an Intel user actually has. Rosetta runs on
+    # Apple Silicon, and in a published real-time-audio benchmark it beat native
+    # Intel outright, so a green Rosetta run is evidence about correctness and
+    # no evidence at all about timing. For a latency-sensitive voice app that
+    # distinction is the entire risk, and this runner is the only place we
+    # close it.
+    #
+    # macos-15-intel is the LAST x86_64 image GitHub offers, available until
+    # August 2027. macos-13 shut down 04 Dec 2025, which is why Intel CI looks
+    # like it no longer exists. When this label goes away the honest options
+    # are a rented Intel box or dropping the slice; silently falling back to an
+    # Apple Silicon runner would leave a green check that tests nothing.
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - name: Check out the proposed merge
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the hermetic transport dependency
+        run: |
+          if ! command -v tmux >/dev/null 2>&1; then
+            brew install tmux
+          fi
+
+      - name: Prove the runner is genuinely Intel
+        run: |
+          test "$(uname -m)" = "x86_64" || {
+            echo "expected an x86_64 runner, got $(uname -m)" >&2
+            exit 1
+          }
+          echo "runner: $(uname -m), $(sw_vers -productVersion), $(swift --version | head -1)"
+
+      - name: Build and test natively on Intel
+        run: |
+          swift build --product TranquilityApp
+          swift test --enable-xctest --disable-swift-testing

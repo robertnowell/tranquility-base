@@ -14,7 +14,7 @@
 # never contain, and which matches both the installed copy and a worktree build:
 #
 #   /Applications/Tranquility Base.app/Contents/MacOS/TranquilityApp
-#   /private/tmp/tb-clean/.build/debug/Tranquility Base.app/Contents/MacOS/TranquilityApp
+#   /private/tmp/tb-clean/.build/bundle/debug/Tranquility Base.app/Contents/MacOS/TranquilityApp
 #
 # Defined once and sourced, rather than pasted into both scripts: the pose
 # fixture in StatusHUD.swift is currently living proof of what happens when the
