@@ -101,14 +101,15 @@ with open(os.path.join(root, session), "a") as fh:
         fh.write("%d\t%s\n" % (stamp, url))
 PY
 
-read -r SESSION FILE <<EOF
+read -r OWNER SESSION FILE <<EOF
 $(python3 - "$PAYLOAD" <<'PY' 2>/dev/null || true
 import json, os, sys
 try:
     p = json.loads(sys.argv[1])
 except Exception:
     sys.exit(0)
-session = p.get("session_id") or ""
+session = p.get("session_id") or ""      # who ran the tool: the full id
+owner = session                          # who the page belongs to
 path = (p.get("tool_input") or {}).get("file_path") or ""
 
 # THE PATH ANSWERS FIRST.
@@ -127,12 +128,21 @@ path = (p.get("tool_input") or {}).get("file_path") or ""
 # The record is keyed by the SLUG here, not the full session id, because the slug
 # is all a path carries. ArtifactStore.history reads both files for a session, so
 # a slug-keyed record is found by the hub that owns it.
-if path and "/Documents/agents/" in path and os.path.basename(path) != "index.html":
+_agents = os.path.expanduser("~/Documents/agents")
+def _is_hub(f):
+    # The hub is ONE file per agent: agents/<slug>/index.html. Matching on the
+    # filename alone also names agents/<slug>/<date-slug>/index.html, which is a
+    # research brief and the single most common shape a report takes. Excluding
+    # it here meant a brief was never claimed by its own path.
+    return (os.path.basename(f) == "index.html"
+            and os.path.dirname(os.path.dirname(f)) == _agents)
+
+if path and "/Documents/agents/" in path and not _is_hub(path):
     parts = path.split(os.sep)
     if "agents" in parts:
         _i = parts.index("agents")
         if _i + 1 < len(parts) and parts[_i + 1]:
-            session = parts[_i + 1]
+            owner = parts[_i + 1]
 
 # THE ARCHIVE ANSWERS, NOT THE TOOL.
 #
@@ -182,7 +192,14 @@ if not path:
     # rather than the Write tool, which is why some Claude hubs had footers on
     # Monday and some did not, hours apart, with no pattern anyone could see.
     own_hub = os.path.expanduser("~/Documents/agents/{}".format(session.split("-")[0]))
+    # BOTH LEVELS. A page sits at agents/<slug>/<name>.html, and a research
+    # report sits at agents/<slug>/<date-slug>/index.html -- a dated directory
+    # holding report.md beside index.html, which is the canonical layout and
+    # where 452 of them live. Globbing only the flat level meant every research
+    # brief written by a heredoc or by Codex was invisible to this branch: not
+    # found, so not recorded, so not stamped, so not on any hub.
     roots.append(os.path.join(own_hub, "*.html"))
+    roots.append(os.path.join(own_hub, "*", "*.html"))
     seen_paths = set()
     recent = []
     for pattern in roots:
@@ -230,7 +247,9 @@ if not path:
         # stronger evidence than the transcript scan below, and it is the only
         # evidence available to a harness whose payload carries no transcript
         # at all, which is the second half of why Codex never qualified.
-        mine = [f for f in recent if os.path.dirname(f) == own_hub]
+        mine = [f for f in recent
+                if os.path.dirname(f) == own_hub
+                or os.path.dirname(os.path.dirname(f)) == own_hub]
         mine += [f for f in recent
                  if f not in mine and authored(os.path.basename(os.path.dirname(f)))]
         path = max(mine, key=os.path.getmtime) if mine else ""
@@ -241,17 +260,28 @@ if not path:
 # that write is the one that matters.
 if not path.lower().endswith((".html", ".htm")):
     sys.exit(0)
-if not session or not path.startswith("/"):
+if not owner or not session or not path.startswith("/"):
     sys.exit(0)
 # A session id lands in a filename below; anything but hex and dashes could
 # leave the directory.
-if not all(c in "0123456789abcdefABCDEF-" for c in session) or len(session) > 64:
+if not all(c in "0123456789abcdefABCDEF-" for c in owner + session) or len(owner) > 64:
     sys.exit(0)
-print(session, path)
+# TWO FACTS, NOT ONE.
+#
+# `owner` is who the page belongs to, and the path decides it: a page under
+# agents/<slug>/ is that agent's, however it was written. That is the record key.
+#
+# `session` is who ran the tool, from the payload, and it is the only full
+# session id in play. The deep link needs it: the app resolves `discuss` with an
+# exact lookup keyed on the full id, so a footer carrying the 8-character slug
+# says "no agent" for a session that is running in the foreground. Collapsing
+# both facts into one variable is what broke the button on 107 pages.
+print(owner, session, path)
 PY
 )
 EOF
 
+[ -z "${OWNER:-}" ] && exit 0
 [ -z "${SESSION:-}" ] && exit 0
 [ -z "${FILE:-}" ] && exit 0
 
@@ -314,7 +344,12 @@ fi
 #    An O_APPEND write of one short line is atomic; duplicates are fine — the
 #    reader dedupes by path and keeps the first stamp.
 mkdir -p "$ARTIFACTS" 2>/dev/null || exit 0
-printf '%s\t%s\n' "$(($(date +%s) * 1000))" "$FILE" >> "$ARTIFACTS/$SESSION" 2>/dev/null
+#    Keyed by the OWNER, which for a page under agents/<slug>/ is the slug the
+#    path names. That is deliberate and predates this change: the slug is all a
+#    path carries, and ArtifactStore.history reads both the slug file and the
+#    full-id file for a session, so a slug-keyed record is found by the hub that
+#    owns it. Only the deep link needs the full id, and it gets it separately.
+printf '%s\t%s\n' "$(($(date +%s) * 1000))" "$FILE" >> "$ARTIFACTS/$OWNER" 2>/dev/null
 
 # 2. OFFER. The footer's name is the session TITLE alone — the string Claude
 #    Code puts in the terminal tab, the identity the grid shows, the one the
@@ -350,7 +385,13 @@ print(title.replace("\n", " ").strip()[:120])
 PY
 )
 
-SHORT="${SESSION%%-*}"
+SHORT="${OWNER%%-*}"
+# The link carries the FULL id when the writer is the owner, which is the common
+# case and the one the app can resolve today. When a session writes into another
+# agent's directory the owner's full id is not knowable from a path, so the link
+# names the slug and the app resolves the prefix (issue #251).
+LINK_SESSION="$SESSION"
+[ "${SESSION%%-*}" = "$SHORT" ] || LINK_SESSION="$SHORT"
 TODAY=$(date "+%d %b %Y")
 
 # The HQ is Robert's own archive: everything under it is a page he reads, so
@@ -396,7 +437,7 @@ case "$FILE" in
 esac
 [ "$FILE" = "$HOME/Documents/agents/$SHORT/index.html" ] && META=0
 
-python3 - "$FILE" "$SESSION" "$SHORT" "$TODAY" "$STAMP" "$TITLE" "$META" <<'PY' 2>/dev/null || true
+python3 - "$FILE" "$LINK_SESSION" "$SHORT" "$TODAY" "$STAMP" "$TITLE" "$META" <<'PY' 2>/dev/null || true
 import html as htmllib
 import json, re, sys
 
