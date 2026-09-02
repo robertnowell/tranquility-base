@@ -41,9 +41,40 @@ step() { echo; echo "── $*"; }
 [ -n "$BUILD" ] || fail "build number is required"
 [ -n "$TAG" ] || fail "tag is required"
 
-SIGN_UPDATE=$(find .build/artifacts -name sign_update -type f -perm +111 2>/dev/null | head -1)
-[ -n "$SIGN_UPDATE" ] \
-  || fail "no sign_update tool; run 'swift build' so the Sparkle artifact is fetched"
+# Sparkle's signing tool, which this job may or may not already have.
+#
+# Locally, and in the build job, `swift build` has fetched the Sparkle SPM
+# artifact and the tool sits under .build/artifacts. The SIGNING job has neither:
+# it checks out release tooling, downloads the prebuilt app from the build job,
+# and never compiles anything. So the tool is fetched on demand, pinned by
+# version AND by the same SHA-256 that SwiftPM verifies the binary target
+# against, from Sparkle's own release.
+#
+# `|| true` on the find is load-bearing. Without it, `find` on a .build/artifacts
+# that does not exist returns non-zero, pipefail propagates it through the
+# assignment, and `set -e` kills the script BEFORE the `fail` below can say why.
+# That is exactly how 0.3.1064 published its DMG and then died here in 0.1s with
+# no output at all, which cost more time to diagnose than the bug was worth.
+SPARKLE_VERSION="2.9.6"
+SPARKLE_SHA256="8d5fb41d960b43f4a68aa14126bf62b098544ec8d191cdcc73eb14e63a8e7606"
+
+SIGN_UPDATE=$(find .build/artifacts -name sign_update -type f -perm +111 2>/dev/null | head -1 || true)
+if [ -z "$SIGN_UPDATE" ]; then
+  echo "→ no local Sparkle tooling; fetching $SPARKLE_VERSION"
+  TOOLS=$(mktemp -d)
+  ZIP="$TOOLS/sparkle.zip"
+  curl -fsSL -o "$ZIP" \
+    "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-for-Swift-Package-Manager.zip" \
+    || fail "could not download Sparkle $SPARKLE_VERSION"
+  ACTUAL=$(shasum -a 256 "$ZIP" | awk '{print $1}')
+  [ "$ACTUAL" = "$SPARKLE_SHA256" ] \
+    || fail "Sparkle $SPARKLE_VERSION checksum is $ACTUAL, expected $SPARKLE_SHA256"
+  unzip -q -o "$ZIP" -d "$TOOLS"
+  SIGN_UPDATE="$TOOLS/bin/sign_update"
+  chmod +x "$SIGN_UPDATE"
+  echo "→ verified Sparkle $SPARKLE_VERSION against its pinned checksum"
+fi
+[ -x "$SIGN_UPDATE" ] || fail "no usable sign_update tool"
 
 # The private key never touches the runner's disk. In CI it arrives as an
 # environment secret and goes straight down a pipe; locally, sign_update falls
@@ -73,7 +104,8 @@ if git ls-remote --exit-code --heads origin "$FEED_BRANCH" >/dev/null 2>&1; then
   git fetch -q origin "$FEED_BRANCH"
   git --work-tree="$WORK" checkout "origin/$FEED_BRANCH" -- . 2>/dev/null \
     || git archive "origin/$FEED_BRANCH" | tar -x -C "$WORK"
-  echo "→ existing feed with $(grep -c '<item>' "$WORK/appcast.xml" 2>/dev/null || echo 0) item(s)"
+  EXISTING=$(grep -c '<item>' "$WORK/appcast.xml" 2>/dev/null || true)
+  echo "→ existing feed with ${EXISTING:-0} item(s)"
 else
   echo "→ no $FEED_BRANCH branch yet; this run creates it"
 fi
