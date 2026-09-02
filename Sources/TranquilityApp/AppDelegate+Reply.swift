@@ -194,7 +194,28 @@ extension AppDelegate {
         ReplyRouting.destination(
             launch: pendingLaunch,
             conversationNow: activeConversation?.sessionId,
-            lastHeard: (try? coordinator?.replyTarget() ?? nil)?.sessionId)
+            lastHeard: lastHeardSessionId())
+    }
+
+    /// `replyTarget()` throws, and the throw used to be a bare `try?`.
+    ///
+    /// A store that could not answer therefore said "nobody is waiting on a
+    /// reply", which is rung three of `ReplyRouting.destination` failing
+    /// SILENTLY toward rung four — dictation, i.e. the clipboard. The
+    /// behaviour is unchanged here on purpose (deciding what routing should
+    /// do when the store is unreadable is a real design question, not a typo
+    /// fix); what changes is that it stops being invisible. A misroute nobody
+    /// can find in a log is the same class of bug as the three fixed
+    /// alongside this one: ignorance that leaves no trace.
+    private func lastHeardSessionId() -> String? {
+        do {
+            return try coordinator?.replyTarget()?.sessionId
+        } catch {
+            Permissions.log("routing: replyTarget() threw (\(error)) — treating it as "
+                + "\"nothing is waiting on a reply\", which may send these words to "
+                + "dictation instead of an agent")
+            return nil
+        }
     }
 
     /// What we know about a session we have already decided to address.

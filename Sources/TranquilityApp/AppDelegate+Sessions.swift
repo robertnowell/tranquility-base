@@ -1246,6 +1246,23 @@ extension AppDelegate {
                         self?.hud.showReceipt(.notRevived(
                             "it's already running somewhere I don't control. End it in that terminal"))
                     }
+                case .success(.exitedWithoutResuming(let lastScreen)):
+                    // The answer that used to be spelled "already running
+                    // somewhere I don't control". It sent Robert to hunt for
+                    // a terminal three times in three minutes on 1 Sep, for
+                    // three sub-agent threads that had never had one — while
+                    // Codex's actual reason sat on a pane nobody captured.
+                    // A card, not a chip: the reason is a sentence, and the
+                    // chip truncates at about thirty characters.
+                    let why = lastScreen.map { SessionLauncher.pointOfFailure(in: $0) }
+                    Permissions.log("revive: codex \(sessionId.prefix(8)) exited without "
+                        + "resuming — " + (why ?? "nothing on its screen to read"))
+                    await MainActor.run { [weak self] in
+                        self?.hud.showResult(why.map {
+                            "\(name) didn't come back. Codex said: \($0)"
+                        } ?? "\(name) didn't come back, and Codex exited without leaving "
+                            + "anything on screen to explain why.")
+                    }
                 case .failure(let error):
                     Permissions.log("revive: failed codex \(sessionId.prefix(8)) — \(error.message)")
                     await MainActor.run { [weak self] in

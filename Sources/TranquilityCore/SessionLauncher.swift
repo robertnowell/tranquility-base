@@ -754,7 +754,35 @@ public enum SessionLauncher {
         /// (2026-08-22-tb-codex-hand-started-adoption): TB signals nothing
         /// to it, the caller asks the human to end it in their own
         /// terminal, then retries.
+        ///
+        /// **Only ever returned on evidence**: Codex's own conflict text on
+        /// the screen, or a live holder the `ResumeGuard` actually found. A
+        /// resume that merely died fast is `.exitedWithoutResuming` — see
+        /// its doc comment for what that distinction cost.
         case alreadyLive
+        /// The resume process ended on its own and nothing said the session
+        /// was live elsewhere. `lastScreen` is the last non-empty capture of
+        /// its pane, which is normally Codex's own error, verbatim.
+        ///
+        /// This case exists because it used to be spelled `.alreadyLive`.
+        /// Phase one's rule was "the pane died inside the grace window", and
+        /// EVERY reason a resume can die fast — a sub-agent id, a deleted
+        /// rollout, a flag the installed Codex no longer takes, a schema
+        /// migration — arrived at the user as "it's already running
+        /// somewhere I don't control. End it in that terminal." On 1 Sep
+        /// that sentence was returned three times in three minutes about
+        /// three sub-agent threads, while Codex had been printing the
+        /// reason on the pane the whole time:
+        ///
+        ///     thread/resume failed: cannot resume an unloaded multi-agent
+        ///     v2 sub-agent through its parent; resume the parent first
+        ///
+        /// Nobody read it, because nothing captured it. The screen is now
+        /// captured on every death-check tick, so the pane's own words
+        /// outlive the pane (CLAUDE.md's standing rule that a refusal names
+        /// its reason; commit c2afa11, "'I don't know' is not spelled
+        /// 'idle'").
+        case exitedWithoutResuming(lastScreen: String?)
     }
 
     /// Pure half of `attemptCodexResume`'s poll loop, testable against
@@ -765,6 +793,41 @@ public enum SessionLauncher {
         case alreadyLive
         case attached
         case inconclusive
+    }
+
+    /// The one sentence worth repeating out of a whole captured pane.
+    ///
+    /// A pane is 50 lines of banner, box-drawing and blank space around one
+    /// line that says what went wrong. Handing the whole capture to a
+    /// receipt or a log line buries the sentence that matters; handing over
+    /// the FIRST line hands over the Codex logo. So: the last line
+    /// mentioning a failure, whitespace collapsed, capped at a length a
+    /// human reads rather than scrolls.
+    ///
+    /// Pure and total. An unrecognisable screen returns its last non-empty
+    /// line rather than nothing — half an answer beats a confident silence,
+    /// which is the whole point of the case this serves.
+    public static func pointOfFailure(in screen: String, limit: Int = 220) -> String {
+        let lines = screen
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let needles = ["error", "failed", "cannot", "refus", "denied", "not found", "no such"]
+        let interesting = lines.filter { line in
+            let lower = line.lowercased()
+            return needles.contains { lower.contains($0) }
+        }
+        // The whole failure, not its first line: Codex wraps one error across
+        // several, and the actionable half ("resume the parent first") is
+        // never on the first of them.
+        let chosen = interesting.isEmpty
+            ? Array(lines.suffix(1))
+            : interesting
+        let joined = chosen.joined(separator: " ")
+            .split(separator: " ", omittingEmptySubsequences: true)
+            .joined(separator: " ")
+        guard joined.count > limit else { return joined }
+        return joined.prefix(limit).trimmingCharacters(in: .whitespaces) + "…"
     }
 
     static func classifyCodexResumeScreen(_ text: String, settledNeedle: String?) -> CodexResumePoll {
@@ -907,22 +970,56 @@ public enum SessionLauncher {
         case .failure(let error):
             return .failure(error)
         case .success(let tty):
+            /// What a fast death MEANS, decided on evidence rather than on
+            /// the death itself. Codex's conflict text is the first-class
+            /// answer; a holder the guard can actually see is the second;
+            /// everything else is honestly unknown and carries the screen.
+            func verdictForDeath(_ lastScreen: String?, _ how: String)
+                -> Result<CodexResumeOutcome, ScriptError> {
+                if let lastScreen, lastScreen.contains(CodexAdapter.resumeConflictNeedle) {
+                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) \(how) — "
+                        + "already live elsewhere (conflict text on the last screen)")
+                    return .success(.alreadyLive)
+                }
+                if let holder = ResumeGuard.check(sessionId: sessionId).holders.first {
+                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) \(how) — already "
+                        + "live elsewhere (pid \(holder.pid) holds it)")
+                    return .success(.alreadyLive)
+                }
+                Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) \(how) and nothing "
+                    + "says it is live elsewhere. Its last screen said: "
+                    + (lastScreen.map { "\"\(Self.pointOfFailure(in: $0))\"" }
+                        ?? "nothing we managed to capture"))
+                return .success(.exitedWithoutResuming(lastScreen: lastScreen))
+            }
+
             guard let pane = TmuxOwnership.pane(forTty: tty) else {
                 // Already gone before we even looked — the fastest possible
-                // shape of the same signal phase one polls for below.
-                Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) had no pane immediately "
-                    + "after spawn — already live elsewhere")
-                return .success(.alreadyLive)
+                // shape of the same signal phase one polls for below. Nothing
+                // was ever on screen for us to have read, so the guard is the
+                // only evidence there can be.
+                return verdictForDeath(nil, "had no pane immediately after spawn")
             }
 
             // Phase one: does the pane survive the grace window at all?
+            //
+            // The screen is captured on EVERY tick, not read once at the end:
+            // by the time `has-session` fails the pane is gone and with it
+            // everything Codex printed. Keeping the last non-empty capture is
+            // what makes a fast death able to say why it happened.
+            var lastScreen: String?
             for _ in 0..<deathCheckCount {
                 usleep(UInt32(deathCheckInterval * 1_000_000))
+                if case .success(let text) = Tmux.run(
+                    ["capture-pane", "-p", "-t", pane.paneId],
+                    socket: pane.socketName, timeout: 2),
+                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lastScreen = text
+                }
                 if case .failure = Tmux.run(["has-session", "-t", pane.sessionName],
                                             socket: pane.socketName, timeout: 2) {
-                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) exited within "
-                        + "\(deathCheckInterval * Double(deathCheckCount))s — already live elsewhere")
-                    return .success(.alreadyLive)
+                    return verdictForDeath(lastScreen, "exited within "
+                        + "\(deathCheckInterval * Double(deathCheckCount))s")
                 }
             }
 
@@ -934,12 +1031,14 @@ public enum SessionLauncher {
                 guard case .success(let text) = Tmux.run(
                     ["capture-pane", "-p", "-t", pane.paneId], socket: pane.socketName, timeout: 3)
                 else {
-                    // Exited late, past the fast-death window checked
-                    // above — still the same verdict: an ordinary
-                    // interactive resume does not otherwise exit on its own.
-                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) exited during "
-                        + "settle-wait — already live elsewhere")
-                    return .success(.alreadyLive)
+                    // Exited late, past the fast-death window checked above.
+                    // It still gets asked for evidence rather than assumed:
+                    // "an ordinary interactive resume does not exit on its
+                    // own" is a reason to look, not a verdict.
+                    return verdictForDeath(lastScreen, "exited during settle-wait")
+                }
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lastScreen = text
                 }
                 // NAME THE SCREEN, not the category. "needs a human choice"
                 // told you a class; the pane in front of you is a fact, and the

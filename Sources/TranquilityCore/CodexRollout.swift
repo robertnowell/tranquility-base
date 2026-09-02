@@ -18,6 +18,32 @@ public enum CodexRollout {
         public var sessionId: String
         public var cwd: String?
         public var cliVersion: String?
+        /// `thread_source` — Codex's own word for what this thread IS.
+        /// `"user"` on a session a human started; `"subagent"` on one a
+        /// session spawned under multi-agent v2. Absent on older rollouts,
+        /// which is why nil means "a session", not "unknown": every file
+        /// written before the field existed predates sub-agents entirely.
+        public var threadSource: String?
+        /// The name Codex gives a sub-agent ("Archimedes"). Carried because
+        /// a sub-agent's `name` in Codex's own database is EMPTY, so this is
+        /// the only human-readable thing about one — see `isSubagent`.
+        public var agentNickname: String?
+
+        /// A thread spawned by another thread, not by a person.
+        ///
+        /// Codex refuses to resume one. Measured 1 Sep against
+        /// `01a05e22-a280-7de2-97ae-f535f1c10763`:
+        ///
+        ///     thread/resume failed: cannot resume an unloaded multi-agent
+        ///     v2 sub-agent through its parent; resume the parent first,
+        ///     or use thread/read to inspect it (code -32600)
+        ///
+        /// It exits within a second, which `attemptCodexResume` read as
+        /// Codex's single-writer lock and reported as "already running
+        /// somewhere I don't control" — three times in three minutes,
+        /// about three sessions that did not exist. Eleven of the twenty
+        /// -seven rollouts written in the week to 1 Sep are these.
+        public var isSubagent: Bool { threadSource == "subagent" }
     }
 
     /// One completed turn's ground truth. `lastAgentMessage` needs no
@@ -120,7 +146,9 @@ public enum CodexRollout {
         case "session_meta":
             guard let id = payload["id"] as? String else { return .ignored }
             return .meta(SessionMeta(sessionId: id, cwd: payload["cwd"] as? String,
-                                     cliVersion: payload["cli_version"] as? String))
+                                     cliVersion: payload["cli_version"] as? String,
+                                     threadSource: payload["thread_source"] as? String,
+                                     agentNickname: payload["agent_nickname"] as? String))
 
         case "event_msg":
             guard let kind = payload["type"] as? String else { return .ignored }

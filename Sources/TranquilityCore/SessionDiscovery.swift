@@ -130,6 +130,15 @@ public enum SessionDiscovery {
         /// other exclusion here is: a silent zero and a silent thousand look
         /// identical.
         public var temporary = 0
+        /// A Codex thread another thread spawned (`thread_source: subagent`),
+        /// not one a person started. Codex refuses to resume these, so listing
+        /// them offers a door that cannot open — see
+        /// `CodexRollout.SessionMeta.isSubagent`. Claude Code's equivalent is
+        /// excluded by path (`<id>/subagents/*.jsonl`, the walk below);
+        /// Codex writes its sub-agents into the same directory as everything
+        /// else, so only the field can tell them apart. Counted for the
+        /// standing reason: a silent zero and a silent thousand look identical.
+        public var subagents = 0
         /// Dropped by `limit` after ranking, so the caller can say "and more".
         public var beyondLimit = 0
         /// The liveness probe could not answer, so every row is `unknown`.
@@ -901,6 +910,16 @@ public enum SessionDiscovery {
             let parsed = CodexRollout.parse(text)
             guard let sessionId = parsed.meta?.sessionId else {
                 result.unclassifiable += 1
+                continue
+            }
+
+            // A sub-agent is not an agent you can go to — the same sentence
+            // the Claude Code walk above makes true by path. Dropped on the
+            // file's own word for itself rather than on a guess, and only on
+            // a POSITIVE `subagent`: a rollout written before the field
+            // existed predates multi-agent v2 and is a session.
+            if parsed.meta?.isSubagent == true {
+                result.subagents += 1
                 continue
             }
 

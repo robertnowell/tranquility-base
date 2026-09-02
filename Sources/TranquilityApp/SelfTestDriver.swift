@@ -1018,6 +1018,45 @@ extension StatusHUD {
         showIdle(note: nil, rows: [])
         let lateBindingStillRefusedAfterAFault = !bindGreeting(
             sessionId: "g4", pid: 9, label: "elsewhere", cwd: "/tmp")
+
+        // 1 Sep, and the reason this drill grew three more lines. A capture
+        // started on an unbound launch card matched neither `currentTarget`
+        // (no session yet) nor `dictationDestination` (a launch probes no
+        // focused app, correctly — the words are for the agent), so the pill
+        // fell to the end of its ladder and said "→ clipboard". The words
+        // went to the agent exactly as they should have; the panel named the
+        // wrong destination for eighty seconds while they did.
+        //
+        // The destination is the ONE thing this pill exists to say, so the
+        // assertions are about the words on it, not about the ladder that
+        // produced them.
+        dictationDestination = nil
+        showGreeting(line: greetingLine, label: "projects")
+        showListening(level: { 0 })
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let unboundLaunchNamesItsAgent = face.listeningTarget == "projects"
+        let unboundLaunchIsNotTheClipboard =
+            face.listeningTarget != StateLegend.clipboardDestination
+        // And when the session lands mid-recording, the pill is retaken. It
+        // was a snapshot written once at mic-open, so nothing corrected it.
+        _ = bindGreeting(sessionId: "g5", pid: 11, label: "projects agent", cwd: "/tmp")
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        let bindingRenamesALiveCapture = face.listeningTarget == "projects agent"
+        // A capture owns its probe. `dictationDestination` was assigned in one
+        // place and cleared in none, so a focused app from an earlier capture
+        // stayed on the ladder ready to be served to a later one as fact.
+        dictationDestination = StateLegend.destination("Terminal")
+        endCapture(because: "drill")
+        let endingACaptureDropsItsProbe = dictationDestination == nil
+        showIdle(note: nil, rows: [])
+
+        SelfTest.report("destination", [
+            ("unboundLaunchNamesItsAgent", unboundLaunchNamesItsAgent),
+            ("unboundLaunchIsNotTheClipboard", unboundLaunchIsNotTheClipboard),
+            ("bindingRenamesALiveCapture", bindingRenamesALiveCapture),
+            ("endingACaptureDropsItsProbe", endingACaptureDropsItsProbe),
+        ])
+
         SelfTest.report("greeting", [
             ("cardPaintsAtOnce", greetingPainted),
             ("saysOnlyTheQuestion", greetingSaysOnlyTheQuestion),
