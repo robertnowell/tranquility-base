@@ -1770,6 +1770,7 @@ extension StatusHUD {
         contrastDrill()
         copyDrill()
         titleDoorDrill()
+        harnessMarkDrill()
         revivedDoorDrill()
         selectionDrill()
         hoverDrill()

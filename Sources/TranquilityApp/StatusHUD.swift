@@ -260,6 +260,14 @@ final class StatusHUD: NSObject {
     /// Wired by the app. Nil is a complete answer — a session never
     /// summarized has no hub and no report to open.
     var doorForSession: ((String) -> SecondDoor?)?
+    /// Which harness a session runs, so the card can wear its mark.
+    ///
+    /// A closure rather than a lookup, for the same reason `doorForSession` is
+    /// one: the HUD does not get to resolve facts about sessions. It draws what
+    /// it is handed. The app answers from the map it already builds each
+    /// repaint, which also means the card and the grid rows cannot disagree
+    /// about the same session.
+    var harnessForSession: ((String) -> String?)?
     /// Wired by the app; receives the session id, because the app rewrites the
     /// hub fresh before opening it, and the write needs the store the panel
     /// deliberately does not hold.
@@ -2424,12 +2432,33 @@ final class StatusHUD: NSObject {
         guard !face.title.isEmpty else { titleLabel.stringValue = ""; return }
         let truncating = NSMutableParagraphStyle()
         truncating.lineBreakMode = .byTruncatingTail
-        titleLabel.attributedStringValue = NSAttributedString(
-            string: face.title, attributes: [
-                .font: ChromeType.mono(ofSize: 13, weight: .semibold),
-                .foregroundColor: StateLegend.Palette.ink,
-                .paragraphStyle: truncating,
-            ])
+        let font = ChromeType.mono(ofSize: 13, weight: .semibold)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: StateLegend.Palette.ink,
+            .paragraphStyle: truncating,
+        ]
+        let line = NSMutableAttributedString()
+        // The harness mark LEADS the title (ruled 01 Sep, from the render:
+        // "I would put it at the start"). A text attachment rather than a
+        // sibling view, because an attachment's `bounds` are measured FROM THE
+        // BASELINE, which is exactly the alignment contract `HarnessMark`
+        // states and exactly what a centred sibling view gets wrong.
+        if let harness = currentTarget.flatMap({ harnessForSession?($0.sessionId) }) {
+            // As tall as a capital, sitting on the baseline: an attachment's
+            // bounds are measured from there, so this is the whole alignment.
+            let mark = NSTextAttachment()
+            let height = font.capHeight
+            mark.image = HarnessMark.tinted(
+                HarnessMark.image(height: height, harness: harness),
+                with: StateLegend.Palette.ink.withAlphaComponent(HarnessMark.opacity))
+            mark.bounds = CGRect(origin: .zero,
+                                 size: HarnessMark.size(height: height, harness: harness))
+            line.append(NSAttributedString(attachment: mark))
+            line.append(NSAttributedString(string: "\u{2009}\u{2009}", attributes: attributes))
+        }
+        line.append(NSAttributedString(string: face.title, attributes: attributes))
+        titleLabel.attributedStringValue = line
         // Only a live target has a tab to open. No per-face flag is needed for
         // this: `currentTarget` is already nil on exactly the faces whose title
         // is not a session — it is cleared going idle and again by showVoices,
@@ -2741,6 +2770,7 @@ final class StatusHUD: NSObject {
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
         let newRow = SplitPlacardRowView(
             width: Self.gridWidth, target: self,
+            leadingHarness: AgentDefaults.defaultHarness,
             leading: (StateLegend.newAgentTitle, "+", #selector(newSessionRowTapped)),
             trailing: (StateLegend.pastAgentsTitle, "↺", #selector(pastAgentsRowTapped)))
         waitingRows.addArrangedSubview(newRow)
