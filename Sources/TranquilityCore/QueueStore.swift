@@ -865,6 +865,32 @@ public final class QueueStore: Sendable {
     /// unheard Stops only — but an explicit request from a review page means "read
     /// me this session's last summary", and that stays answerable after you have
     /// heard it, dismissed it, or typed since.
+    /// The full session id a short one names, when it names exactly one.
+    ///
+    /// A page's footer carries the 8-character slug when the page was claimed by
+    /// its path, which is most pages under the agents tree. `latestStop` is an
+    /// exact lookup on the full id, so those footers resolved to nothing and the
+    /// Discuss button told you the running agent was gone (measured on 107 pages
+    /// already written, which cannot be re-stamped).
+    ///
+    /// Ambiguity refuses rather than guesses: two sessions sharing a prefix is
+    /// rare and picking one would open the wrong conversation, which is worse
+    /// than the invitation the caller falls back to.
+    public func sessionId(matching prefix: String) throws -> String? {
+        // 64, not 36: a full UUID is exactly 36 characters, so `< 36` refused
+        // the one input that is not a prefix at all. The bound is a sanity
+        // limit on a string that arrives from a URL, matching the hook's.
+        guard !prefix.isEmpty, prefix.count <= 64,
+              prefix.allSatisfy({ $0.isHexDigit || $0 == "-" }) else { return nil }
+        return try dbQueue.read { db in
+            let ids = try String.fetchAll(db, sql: """
+                SELECT DISTINCT sessionId FROM events
+                WHERE sessionId LIKE ? ESCAPE '\\' LIMIT 2
+                """, arguments: [prefix + "%"])
+            return ids.count == 1 ? ids.first : nil
+        }
+    }
+
     public func latestStop(for sessionId: String) throws -> WaitingSession? {
         try dbQueue.read { db in
             try WaitingSession.fetchOne(db, sql: """

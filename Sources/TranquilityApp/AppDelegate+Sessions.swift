@@ -154,8 +154,15 @@ extension AppDelegate {
         // Sweep first, for the same reason `reply` now does: a page can be
         // clicked before its own session has been filed.
         _ = try? coordinator?.intake()
-        let known = session.flatMap { id in try? store?.latestStop(for: id) } ?? nil
-        guard let session, known != nil else {
+        // A footer may name the 8-character slug rather than the full session
+        // id: a page under agents/<slug>/ is claimed by its path, and a path
+        // carries nothing longer. Try it as given, then as a prefix.
+        let resolved: String? = session.flatMap { id in
+            if ((try? store?.latestStop(for: id)) ?? nil) != nil { return id }
+            return (try? store?.sessionId(matching: id)) ?? nil
+        }
+        let known = resolved.flatMap { id in try? store?.latestStop(for: id) } ?? nil
+        guard let session = resolved, known != nil else {
             Permissions.log("deeplink: discuss, no agent for \(session?.prefix(8) ?? "-")")
             inviteNewSession(for: ref)
             return
