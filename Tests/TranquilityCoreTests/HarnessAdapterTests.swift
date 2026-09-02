@@ -77,7 +77,7 @@ final class HarnessAdapterTests: XCTestCase {
                        "not the header box — measured to scroll into scrollback within " +
                        "~1s of any real output; the composer's own idle placeholder " +
                        "sits at the bottom of the pane and survives (gate finding, 21 Aug)")
-        XCTAssertTrue(spec!.neverAutoAcceptNeedles.contains("Hooks need review"))
+        XCTAssertTrue(spec!.neverAutoAcceptNeedles.contains { $0.needle == "Hooks need review" })
     }
 
     func testCodexPathCandidatesIncludeCargoAheadOfTheGenericPaths() {
@@ -202,7 +202,8 @@ final class HarnessAdapterTests: XCTestCase {
         let spec = TrustPromptSpec(promptNeedles: ["Do you trust"],
                                    startedWithNoPromptNeedle: nil,
                                    settledBannerNeedle: "OpenAI Codex",
-                                   neverAutoAcceptNeedles: ["Hooks need review"])
+                                   neverAutoAcceptNeedles: [.init("Hooks need review",
+                                                                says: "Codex wants its hooks reviewed.")])
         var pressed = false
         var reads = ["Hooks need review… Trust all and continue"]
         TrustPromptWatcher.watch(spec: spec,
@@ -222,7 +223,8 @@ final class HarnessAdapterTests: XCTestCase {
         let spec = TrustPromptSpec(promptNeedles: ["Trust all"],   // matches exactly (needles are case-sensitive)
                                    startedWithNoPromptNeedle: nil,
                                    settledBannerNeedle: "OpenAI Codex",
-                                   neverAutoAcceptNeedles: ["Hooks need review"])
+                                   neverAutoAcceptNeedles: [.init("Hooks need review",
+                                                                says: "Codex wants its hooks reviewed.")])
         var pressed = false
         var reads = ["Hooks need review… Trust all and continue"]
         TrustPromptWatcher.watch(spec: spec,
@@ -308,8 +310,14 @@ final class HarnessAdapterTests: XCTestCase {
                                  pollInterval: 0.001, maxPolls: 9,
                                  onNeedsHuman: { asked = $0 })
         XCTAssertFalse(pressed, "an unrecognized screen is never pressed through")
-        XCTAssertEqual(asked, "Workspace configuration changed",
-                       "the panel is told what the pane is actually asking")
+        // The panel is told what the pane SAYS, and told that is all this is.
+        // It used to be handed the first line of the pane as though it were the
+        // question; the assertion below is the same intent stated honestly, and
+        // it now carries the options too, which is what a person acts on.
+        let said = try! XCTUnwrap(asked)
+        XCTAssertTrue(said.contains("does not recognise"), said)
+        XCTAssertTrue(said.contains("Workspace configuration changed"), said)
+        XCTAssertTrue(said.contains("1. Reload it"), said)
         XCTAssertTrue(traced.sawStoppedEarly)
         XCTAssertEqual(reads.count, 6,
                        "called it on the third identical screen, not after fifteen polls")
@@ -364,15 +372,143 @@ final class HarnessAdapterTests: XCTestCase {
         XCTAssertFalse(traced.sawStoppedEarly)
     }
 
-    func testQuestionOnScreenSkipsDecorationAndTakesTheFirstRealLine() {
-        let screen = [
-            "", "\u{250C}\u{2500}\u{2500}\u{2510}",
-            "  \u{276F} Do you trust the contents of this directory?",
-            "  1. Yes",
-        ].joined(separator: "\n")
-        XCTAssertEqual(TrustPromptWatcher.questionOnScreen(screen),
-                       "Do you trust the contents of this directory?")
-        XCTAssertNil(TrustPromptWatcher.questionOnScreen("\n \n  \u{2502}\n"))
+    /// Replaces `testQuestionOnScreenSkipsDecorationAndTakesTheFirstRealLine`.
+    ///
+    /// That test passed for two weeks against a fixture whose entire content
+    /// was the dialog. Every real pane has something above the dialog, and the
+    /// function it guarded returned that instead. The premise was the bug, so
+    /// the test went with the function; what replaces it asserts the property
+    /// that actually matters, against a REAL capture.
+    /// Captured live, 1 Sep, from `claude` in a fresh directory. Kept verbatim
+    /// (paths shortened) because every assertion about naming a prompt is only
+    /// worth what its screen is worth, and a hand-written dialog is exactly the
+    /// fixture that let `questionOnScreen` look correct for two weeks.
+    static let realClaudeTrustScreen = """
+    Permission allow rule (~/.claude/settings.json): Bash(cp /tmp/x/*.otf ~/Library/Fonts/) \
+    has a wildcard before the rest of the command, so it also matches any options inserted \
+    at that position and approves them without a prompt.
+
+    \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
+
+     Accessing workspace:
+
+     /private/tmp/probes/trustdir
+
+     Quick safety check: Is this a project you created or one you trust?
+
+     Claude Code'll be able to read, edit, and execute files here.
+
+     Security guide
+
+     \u{276F} No, exit
+       Yes, I trust this folder
+
+     Enter to confirm \u{00B7} Esc to cancel
+    """
+
+    func testTheTailOfARealTrustPromptEndsOnTheChoice() {
+        // Captured live, 1 Sep, from `claude` in a fresh directory. Note the
+        // first line: a settings warning, printed ABOVE the dialog. The old
+        // lifter returned exactly that as "the question the agent is asking".
+        let screen = Self.realClaudeTrustScreen
+        let tail = TrustPromptWatcher.meaningfulTail(screen)
+        // What a person needs in order to act is the choice, and the tail ends
+        // on it. Six lines rather than eight is deliberate: eight reaches the
+        // question, but the width cap then cuts before the options.
+        XCTAssertTrue(tail.hasSuffix("Enter to confirm \u{00B7} Esc to cancel"), tail)
+        XCTAssertTrue(tail.contains("Yes, I trust this folder"), tail)
+        // And it never reaches the settings warning at the top of the pane.
+        XCTAssertFalse(tail.contains("Permission allow rule"), tail)
+    }
+
+    /// The nil that was load-bearing in the deleted function survives as the
+    /// empty string this one returns: a pane with nothing on it must not be
+    /// announced as a question.
+    func testAnEmptyPaneSaysNothing() {
+        let bare = "\n \n  \u{2502}\n"
+        XCTAssertTrue(TrustPromptWatcher.meaningfulTail(bare)
+            .trimmingCharacters(in: .whitespaces).count <= 1)
+    }
+
+    /// The real trust prompt, driven through the real watcher.
+    ///
+    /// The unit above asserts what the pane's tail says; this asserts what the
+    /// WATCHER does with the same bytes, which is the half a fixture cannot
+    /// fake: it must still find "Yes, I trust this folder" one row below the
+    /// cursor and press Down once before Return. The 27 Aug regression this
+    /// guards (cursor starts on "No, exit", so a bare Return declines and the
+    /// launch dies claiming success) is the reason `acceptOptionNeedles`
+    /// exists, and nothing about naming prompts is allowed to disturb it.
+    func testTheRealTrustPromptIsStillPressedThroughCorrectly() {
+        let spec = ClaudeCodeAdapter().trustPrompt!
+        var steps: [Int] = []
+        var asked: String?
+        var reads = [Self.realClaudeTrustScreen]
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: { steps.append($0) },
+                                 pollInterval: 0.001, maxPolls: 3,
+                                 onNeedsHuman: { asked = $0 })
+        XCTAssertEqual(steps, [1], "the accepting row is one Down from the cursor")
+        XCTAssertNil(asked, "standing consent covers directory trust; no card is owed")
+    }
+
+    /// And the branch where it CANNOT find the accepting row: the sentence is
+    /// the harness's own, never a line off the pane. Same real screen with the
+    /// accepting row renamed, which is exactly the shape of the 27 Aug rot.
+    func testAnUnfindableAcceptRowNamesTheHarnessesOwnPrompt() {
+        let spec = ClaudeCodeAdapter().trustPrompt!
+        var pressed = false
+        var asked: String?
+        // The CURSOR is removed, not the accepting row: dropping the row's words
+        // would also drop the only "trust this folder" on the screen, and the
+        // prompt would stop being recognised as a trust prompt at all. (Which
+        // is itself worth knowing: Claude Code's current dialog asks "Is this a
+        // project you created or one you trust?", so `promptNeedles` matches
+        // this screen through the BUTTON, not through the question.)
+        var reads = [Self.realClaudeTrustScreen
+            .replacingOccurrences(of: "\u{276F} No, exit", with: "  No, exit")]
+        TrustPromptWatcher.watch(spec: spec,
+                                 read: { reads.isEmpty ? nil : reads.removeFirst() },
+                                 press: { _ in pressed = true },
+                                 pollInterval: 0.001, maxPolls: 3,
+                                 onNeedsHuman: { asked = $0 })
+        XCTAssertFalse(pressed, "never press blind at a menu whose accepting row is unknown")
+        XCTAssertEqual(asked, "It is asking whether you trust this folder.")
+        // The thing it must never say: the settings warning at the top of the pane.
+        XCTAssertFalse(asked?.contains("Permission allow rule") ?? true)
+    }
+
+    /// Both harnesses, both recognised screens, one property: a screen we
+    /// matched is described by a sentence we wrote, and that sentence never
+    /// contains the needle. A needle is an implementation detail ("1. Update
+    /// now"); a person needs to be told what it means.
+    func testEveryRecognizedPromptSaysSomethingAPersonCanAct() {
+        for adapter in [ClaudeCodeAdapter().trustPrompt, CodexAdapter().trustPrompt] {
+            let spec = try! XCTUnwrap(adapter)
+            XCTAssertFalse(spec.neverAutoAcceptNeedles.isEmpty)
+            for prompt in spec.neverAutoAcceptNeedles {
+                XCTAssertGreaterThan(prompt.says.count, 25, prompt.needle)
+                XCTAssertFalse(prompt.says.contains(prompt.needle),
+                               "\(prompt.needle): the sentence is repeating the needle")
+                XCTAssertTrue(prompt.says.hasSuffix("."), prompt.says)
+            }
+            XCTAssertGreaterThan(spec.trustPromptSays.count, 25)
+        }
+    }
+
+    /// The live values, named, because these are the two sentences Robert will
+    /// actually read on a stopped launch and they should not drift silently.
+    func testTheTwoHarnessesNameTheirOwnPrompts() {
+        let codex = CodexAdapter().trustPrompt!
+        XCTAssertEqual(codex.neverAutoAcceptNeedles.first { $0.needle == "1. Update now" }?.says,
+                       "Codex is asking whether to update itself before it starts.")
+        XCTAssertTrue(codex.trustPromptSays.contains("this directory"))
+        let claude = ClaudeCodeAdapter().trustPrompt!
+        XCTAssertTrue(claude.neverAutoAcceptNeedles
+            .first { $0.needle.hasPrefix("Resuming") }?.says
+            .contains("resume the full session") ?? false)
+        XCTAssertTrue(claude.trustPromptSays.contains("this folder"))
     }
 
     // MARK: reviveCommand goes through the adapter now, not a second literal
@@ -550,13 +686,13 @@ extension HarnessAdapterTests {
 
     func testCodexNeverAutoAcceptsTheUpdateChooser() {
         let needles = CodexAdapter().trustPrompt!.neverAutoAcceptNeedles
-        XCTAssertTrue(needles.contains("1. Update now"),
+        XCTAssertTrue(needles.contains { $0.needle == "1. Update now" },
                       "pressing Return here runs a curl-pipe-sh installer")
     }
 
     func testCodexNeverAutoAcceptsHookReview() {
         XCTAssertTrue(CodexAdapter().trustPrompt!
-            .neverAutoAcceptNeedles.contains("Hooks need review"))
+            .neverAutoAcceptNeedles.contains { $0.needle == "Hooks need review" })
     }
 
     /// The never-accept list must win over the press list, for every needle in
@@ -564,9 +700,9 @@ extension HarnessAdapterTests {
     /// guarantee is only worth anything on the object the launcher uses.
     func testNoNeverAcceptNeedleIsAlsoAPressableOne() {
         let spec = CodexAdapter().trustPrompt!
-        for needle in spec.neverAutoAcceptNeedles {
-            XCTAssertFalse(spec.promptNeedles.contains(needle),
-                           "\(needle) is on both lists; the safe one must be the only one")
+        for prompt in spec.neverAutoAcceptNeedles {
+            XCTAssertFalse(spec.promptNeedles.contains(prompt.needle),
+                           "\(prompt.needle) is on both lists; the safe one must be the only one")
         }
     }
 }
