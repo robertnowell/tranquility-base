@@ -340,6 +340,23 @@ TODAY=$(date "+%d %b %Y")
 STAMP=0
 case "$FILE" in
   "$HOME"/Documents/deep-research/*.html) STAMP=1;;
+  # And the agent hubs, since 01 Sep. Same argument as the HQ, and it was
+  # always the same argument: a page at ~/Documents/agents/<id>/ is written
+  # BY an agent INTO its own hub directory, which is Robert's private reading
+  # archive by construction and can never be a client deliverable. The
+  # asymmetry that justifies judgment elsewhere (a missing footer is a shrug,
+  # a footer on a client deck is a disaster) simply does not exist here.
+  #
+  # Leaving it as an offer meant it depended on the agent remembering, and
+  # this file already knows how that ends: "A contract that depends on
+  # remembering is not a contract." Robert, 01 Sep, on a Codex page with no
+  # footer: "they're still missing that hub footer". The Claude pages from the
+  # same afternoon were missing it too, including four this session wrote. Not
+  # a Codex bug at all, a gap in the zone that both harnesses fell into.
+  #
+  # index.html never reaches here: the hub itself is written by the app and is
+  # already excluded above.
+  "$HOME"/Documents/agents/*/*.html) STAMP=1;;
 esac
 
 # The META stamp is WIDER than the footer, on purpose.
