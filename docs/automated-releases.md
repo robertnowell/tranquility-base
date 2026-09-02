@@ -117,6 +117,60 @@ into a flaky product verdict.
 Each release carries four immutable evidence assets: the DMG, its SHA-256 file,
 the clean app notarization log, and the clean DMG notarization log.
 
+## The update feed
+
+A release is bytes plus an advertisement, and they are deliberately separate
+steps in that order. `release.sh` publishes the immutable DMG, re-downloads it,
+audits the downloaded copy, confirms GitHub made the release immutable, and only
+then runs `publish-appcast.sh`. If the feed step fails, installed copies stay on
+the previous advertised build: a delayed update rather than a broken one.
+
+The feed is one signed `appcast.xml` at `https://updates.tranquilitybase.to/`,
+served by GitHub Pages from the `gh-pages` branch, with the DMG enclosure
+pointing back at the GitHub release. Pages carries a documented soft limit of
+100 GB of bandwidth a month; release assets carry no documented bandwidth limit
+at all, so the small file goes on Pages and the large one does not.
+
+`SUFeedURL` names a domain we own rather than a `github.io` address. That string
+is compiled into every copy a user installs and is the one piece of
+configuration that can never be changed remotely, because an installed copy only
+learns about a new feed through the feed it already has. Hosting can therefore
+move to our own backend later as a DNS change, with no bootstrap release and
+nobody stranded.
+
+**Do not put the feed behind an authenticated endpoint.** The update path is how
+a broken client gets repaired. Coupling it to login, billing, entitlements or an
+API deploy means an outage in any of those blocks the fix for that outage. A
+backend may reject an obsolete client and tell it to update; it must never be
+the thing that serves the update.
+
+The feed lives on `gh-pages`, never on `main`, because every commit to `main` is
+a release and a feed-only commit would cut an entire new build.
+
+A fifth environment secret carries the signing key:
+
+| Secret | Value |
+|---|---|
+| `TB_SPARKLE_EDDSA_PRIVATE_KEY` | The ed25519 private key from Sparkle's `generate_keys`, whose public half is pinned as `SUPublicEDKey` |
+
+`ci-release.sh` deliberately does not unset it the way it unsets the other four:
+they have been consumed by then (imported into a keychain, stored as a notary
+profile), while the Sparkle key is piped into `sign_update` at the very end of
+the run and never written to disk.
+
+Losing that key is survivable but not free. Sparkle verifies both the Apple code
+signature and its own, so one can bootstrap a rotation of the other: ship a
+build signed with the existing Developer ID certificate carrying a new
+`SUPublicEDKey`. Anyone who never takes that update is stranded on the old key.
+Back it up with the same discipline as the `.p12`.
+
+`audit-release.sh` asserts the feed URL, the public key, both signed-feed
+settings, the embedded framework, the absence of the XPC services, and a
+Developer ID signature with a secure timestamp on every nested Sparkle helper.
+That block guards the one unrecoverable mistake in this path: a published build
+with the wrong feed URL or a mismatched key can never be reached by any update,
+and the only remedy is asking every user to install by hand a second time.
+
 ## Clean-install acceptance
 
 The hosted artifact audit is a hard publication gate, but Apple explicitly says

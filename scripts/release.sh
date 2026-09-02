@@ -37,6 +37,9 @@ TEAM_ID="FKE587SZ6H"
 REPO="robertnowell/tranquility-base"
 GITHUB_API_VERSION="2026-03-10"
 
+# shellcheck source=lib/sparkle.sh
+. "$(dirname "$0")/lib/sparkle.sh"
+
 # Immutable-release endpoints and response fields are versioned additions to
 # GitHub's REST API. gh still defaults to an older API version, which makes an
 # enabled repository look like a 404 and turns a healthy release into a false
@@ -298,6 +301,12 @@ else
 fi
 
 step "signing with a secure timestamp"
+# The build job assembles the app with a throwaway signature, so the embedded
+# Sparkle helpers arrive here carrying it. They are re-signed with the real
+# Developer ID before the outer bundle is sealed: a Developer ID signature
+# wrapped around a foreign-signed helper does not notarize, and the failure
+# would otherwise surface an hour into CI at the notarization step.
+sparkle_sign "$APP_SRC" "$IDENTITY" --timestamp
 codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
   --entitlements TranquilityBase.entitlements \
   --options runtime --timestamp "$APP_SRC"
@@ -428,6 +437,13 @@ if [ "$IS_IMMUTABLE" != "true" ]; then
     >/dev/null 2>&1 || true
   fail "GitHub published $TAG without making it immutable; returned it to draft"
 fi
+
+# The bytes are public, immutable and audited. Only now does the feed say so.
+# Deliberately last, and deliberately allowed to fail on its own: if this step
+# breaks, installed copies stay on the previous advertised build, which is a
+# delayed update rather than a broken one.
+step "advertising the release"
+scripts/publish-appcast.sh "$DOWNLOADED" "$VERSION" "$BUILD_NUMBER" "$TAG"
 
 echo
 echo "✓ released $TAG from $TARGET"

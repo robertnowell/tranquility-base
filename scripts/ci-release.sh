@@ -20,6 +20,7 @@ required=(
   TB_DEVELOPER_ID_P12_PASSWORD
   TB_NOTARY_APPLE_ID
   TB_NOTARY_APP_PASSWORD
+  TB_SPARKLE_EDDSA_PRIVATE_KEY
 )
 for name in "${required[@]}"; do
   [ -n "${!name:-}" ] || { echo "✗ required release secret is empty: $name" >&2; exit 1; }
@@ -82,6 +83,11 @@ xcrun notarytool store-credentials "$PROFILE" \
 # runs so child processes cannot inherit the original secrets accidentally.
 unset TB_DEVELOPER_ID_P12_BASE64 TB_DEVELOPER_ID_P12_PASSWORD
 unset TB_NOTARY_APPLE_ID TB_NOTARY_APP_PASSWORD
+# TB_SPARKLE_EDDSA_PRIVATE_KEY is deliberately NOT unset. The other three have
+# been consumed by now (imported into the keychain, stored as a notary profile),
+# but the Sparkle key has no such holding place: publish-appcast.sh pipes it
+# straight into sign_update at the very end of the release. It stays in the
+# environment and never touches the runner's disk.
 
 export TB_NOTARY_PROFILE="$PROFILE"
 export TB_NOTARY_KEYCHAIN="$KEYCHAIN"

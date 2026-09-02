@@ -115,6 +115,59 @@ case "$DESIGNATED_REQUIREMENT" in
 esac
 pass "arm64 executable, hardened runtime and app admission"
 
+# The updater, audited on the artifact rather than trusted from the build.
+#
+# This block is the guard against the ONE unrecoverable mistake available here.
+# A published build carrying the wrong SUFeedURL or a SUPublicEDKey that does not
+# match the signing key can never be reached again by any update: it would look
+# for a feed that does not exist, or reject every signature it is offered, and
+# the only remedy is asking every user to download and install by hand a second
+# time. Everything else in this release path can be fixed by cutting another
+# release. This cannot.
+EXPECTED_FEED_URL="https://updates.tranquilitybase.to/appcast.xml"
+EXPECTED_ED_KEY="C/+0I+AP9TrlyA3hLSLgXdJT1kDekOXqGGnwB9bClCE="
+[ "$(read_plist SUFeedURL)" = "$EXPECTED_FEED_URL" ] \
+  || fail "SUFeedURL is $(read_plist SUFeedURL), expected $EXPECTED_FEED_URL"
+[ "$(read_plist SUPublicEDKey)" = "$EXPECTED_ED_KEY" ] \
+  || fail "SUPublicEDKey does not match the release signing key"
+[ "$(read_plist SURequireSignedFeed)" = "true" ] \
+  || fail "SURequireSignedFeed is not set; a tampered feed would be trusted"
+[ "$(read_plist SUVerifyUpdateBeforeExtraction)" = "true" ] \
+  || fail "SUVerifyUpdateBeforeExtraction is not set (SURequireSignedFeed needs it)"
+
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+[ -d "$SPARKLE" ] || fail "Sparkle.framework is not embedded; this build cannot update itself"
+SPARKLE_VERSION_DIR=$(cd "$SPARKLE/Versions/Current" 2>/dev/null && pwd -P) \
+  || fail "Sparkle.framework has no resolvable Versions/Current"
+[ ! -e "$SPARKLE_VERSION_DIR/XPCServices" ] \
+  || fail "Sparkle XPC services are still embedded; they are unused and were removed deliberately"
+
+# Every nested Mach-O carries the SAME Developer ID, hardened, timestamped. An
+# outer Developer ID signature wrapped around a helper still holding the build
+# job's throwaway signature does not notarize, and that is a failure that only
+# appears an hour into a release.
+for nested in \
+  "$SPARKLE_VERSION_DIR/Autoupdate" \
+  "$SPARKLE_VERSION_DIR/Updater.app" \
+  "$SPARKLE"
+do
+  [ -e "$nested" ] || fail "Sparkle component is missing: ${nested#"$APP/"}"
+  NESTED_SIGNATURE=$(codesign -dv --verbose=4 "$nested" 2>&1)
+  case "$NESTED_SIGNATURE" in
+    *"TeamIdentifier=$TEAM_ID"*) ;;
+    *) fail "${nested#"$APP/"} is not signed by the expected Developer ID team" ;;
+  esac
+  case "$NESTED_SIGNATURE" in
+    *"Timestamp="*) ;;
+    *) fail "${nested#"$APP/"} has no secure timestamp" ;;
+  esac
+  case "$NESTED_SIGNATURE" in
+    *"flags=0x10000(runtime)"*|*"runtime"*) ;;
+    *) fail "${nested#"$APP/"} was not signed with the hardened runtime" ;;
+  esac
+done
+pass "updater embedded, feed and key pinned, helpers signed"
+
 ENTITLEMENTS=$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/tb-entitlements.XXXXXX")
 codesign -d --entitlements :- "$APP" >"$ENTITLEMENTS" 2>/dev/null \
   || fail "could not read app entitlements"

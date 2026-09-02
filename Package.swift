@@ -11,6 +11,10 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
+        // Sparkle arrives as a prebuilt XCFramework binary target, so SwiftPM will
+        // NOT embed it in the app bundle the way an Xcode "Embed Frameworks" phase
+        // would. scripts/bundle.sh copies it into Contents/Frameworks and signs it.
+        .package(url: "https://github.com/sparkle-project/Sparkle.git", from: "2.9.6"),
     ],
     targets: [
         .target(
@@ -27,7 +31,11 @@ let package = Package(
         .target(name: "ObjCExceptionFirewall"),
         .executableTarget(
             name: "TranquilityApp",
-            dependencies: ["TranquilityCore", "ObjCExceptionFirewall"]
+            dependencies: [
+                "TranquilityCore",
+                "ObjCExceptionFirewall",
+                .product(name: "Sparkle", package: "Sparkle"),
+            ]
         ),
         .testTarget(
             name: "TranquilityCoreTests",

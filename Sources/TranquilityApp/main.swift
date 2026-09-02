@@ -32,6 +32,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let utterancePlayer = UtterancePlayer()
     let hud = StatusHUD()
 
+    /// Self-update. Lazy because its closures read `hud` and `store`, which are
+    /// properties of the object being initialised.
+    lazy var updates = Updates(
+        panelState: { [weak self] in self?.hud.state ?? .hidden },
+        // `unsentReplyCount()` is the queue's own in-flight definition, reused
+        // rather than restated. A throw here must read as "something is
+        // unfinished" and hold the install: a database we cannot query is not
+        // evidence that it is safe to quit.
+        inFlightUtterances: { [weak self] in
+            guard let store = self?.store else { return 0 }
+            return (try? store.unsentReplyCount()) ?? 1
+        },
+        log: { Permissions.log($0) })
+
     var lastStatusLine = "starting…"
     var isBusy = false
 
@@ -421,6 +435,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AssemblyAIFileRecovery.trace = { Permissions.log("assemblyai-file: \($0)") }
         StreamedUtterance.trace = { Permissions.log("stream: \($0)") }
         CodexThreadNames.trace = { Permissions.log($0) }
+
+        // Self-update. Started here, after the traces, so anything it logs lands
+        // in the same app.log as everything else from this launch.
+        updates.start()
 
         do {
             let store = try QueueStore()
