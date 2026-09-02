@@ -128,6 +128,25 @@ public enum HomeBase {
         }
     }
 
+    /// Which turn was running when this was made.
+    ///
+    /// `ordered` is newest-first, so the answer is the last turn whose window
+    /// contains the stamp: newer than the turn before it, no newer than the
+    /// turn itself. The newest turn's window has no ceiling — a page written
+    /// after the last brief belongs to the work in flight, not to a shelf
+    /// underneath older turns.
+    ///
+    /// Extracted because three callers had copied it (pages, receipts, and now
+    /// the stamp written into the page). A rule that decides ownership in three
+    /// places drifts in two of them, which is how a page ends up filed under one
+    /// turn on the hub and stamped with another in its own head.
+    static func turnOwner(of at: Date, in ordered: [Turn]) -> Int? {
+        ordered.indices.last { index in
+            (index == 0 || at <= ordered[index].at)
+                && (index + 1 >= ordered.count || at > ordered[index + 1].at)
+        }
+    }
+
     /// Resolution tiers, in turns back from the newest — the knob the height
     /// budget actually turns. Borrowed from time-series downsampling rather
     /// than from any rule about prose: recent turns keep full resolution, older
@@ -838,15 +857,7 @@ public enum HomeBase {
         var pagesByTurn: [Int: [ArtifactStore.Page]] = [:]
         var shelved: [ArtifactStore.Page] = []
         for page in model.pages {
-            // `ordered` is newest-first, so the first turn at or after the
-            // page's stamp is the turn that was running when it was written.
-            let owner = ordered.indices.last { index in
-                // The newest turn's window has no ceiling: a page written
-                // after the last brief belongs to the work in flight, not to
-                // a shelf underneath older turns.
-                (index == 0 || page.at <= ordered[index].at)
-                    && (index + 1 >= ordered.count || page.at > ordered[index + 1].at)
-            }
+            let owner = turnOwner(of: page.at, in: ordered)
             if let owner, owner < fullTurns + lineTurns {
                 pagesByTurn[owner, default: []].append(page)
             } else {
@@ -863,10 +874,7 @@ public enum HomeBase {
         // when the command printed the URL.
         var prsByTurn: [Int: [PullRequestStore.Receipt]] = [:]
         for receipt in model.receipts {
-            let owner = ordered.indices.last { index in
-                (index == 0 || receipt.at <= ordered[index].at)
-                    && (index + 1 >= ordered.count || receipt.at > ordered[index + 1].at)
-            }
+            let owner = turnOwner(of: receipt.at, in: ordered)
             if let owner, owner < fullTurns + lineTurns {
                 prsByTurn[owner, default: []].append(receipt)
             }
@@ -1346,6 +1354,75 @@ public extension HomeBase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("index.html")
         try render(model).write(to: file, atomically: true, encoding: .utf8)
+        stampTurns(model)
         return file
+    }
+
+    /// Write each page's turn into the page.
+    ///
+    /// The hub has always known this while it rendered — it files a page under
+    /// the turn that was running when it was written — and then threw the fact
+    /// away. The catalog has carried a `turn` column since 02 Sep with nothing
+    /// in it, so an artifact could be traced to its agent and never to the
+    /// moment of work that produced it.
+    ///
+    /// It belongs HERE and nowhere else. The artifact hook does not know the
+    /// turn and refuses to guess one; three earlier mechanisms in this codebase
+    /// failed by working a fact out of something adjacent. The indexer has no
+    /// transcript and no brief table. The hub is the only thing holding both
+    /// halves at once.
+    ///
+    /// The value is the turn's START, ISO-8601. Not an ordinal: the transcript
+    /// is read as a tail and a tail cannot know how many turns came before it,
+    /// and an ordinal that means something different on every read is worse
+    /// than no field at all.
+    ///
+    /// Forward only, by construction — only pages under the turns this hub
+    /// prints are stamped. Older work stays unstamped, which is the ruling, not
+    /// a gap.
+    static func stampTurns(_ model: Model) {
+        let ordered = model.turns
+        guard !ordered.isEmpty else { return }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        for page in model.pages {
+            guard let owner = turnOwner(of: page.at, in: ordered),
+                  owner < fullTurns + lineTurns else { continue }
+            stamp(page: URL(fileURLWithPath: page.path),
+                  turn: iso.string(from: ordered[owner].at))
+        }
+    }
+
+    /// One page, one stamp. Never throws: a provenance field is worth less than
+    /// the file it sits on, so any surprise leaves the page exactly as it was.
+    static func stamp(page url: URL, turn: String) {
+        guard let before = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let html = try? String(contentsOf: url, encoding: .utf8),
+              // Declared beats inferred, the same precedence `intranet:session`
+              // uses. A page that already names its turn is left alone — and on
+              // the second render of the same hub, that page is this one.
+              html.range(of: #"<meta\s+name="intranet:turn""#, options: .regularExpression) == nil
+        else { return }
+
+        let tag = "<meta name=\"intranet:turn\" content=\"\(turn)\">"
+        let stamped: String
+        if let head = html.range(of: "<head", options: .caseInsensitive),
+           let close = html.range(of: ">", range: head.upperBound..<html.endIndex) {
+            stamped = html.replacingCharacters(in: close, with: ">\n" + tag)
+        } else if let title = html.range(of: "</title>", options: .caseInsensitive) {
+            stamped = html.replacingCharacters(in: title, with: "</title>\n" + tag)
+        } else {
+            stamped = tag + "\n" + html
+        }
+        guard stamped != html, (try? stamped.write(to: url, atomically: true, encoding: .utf8)) != nil
+        else { return }
+        // Keep the file's own mtime. A refreshed one makes the page look
+        // just-written to the next artifact-hook run, which re-attributes it to
+        // whichever session last ran a shell command — the bug dated 16 Aug in
+        // the hook's own comments, and the reason that hook stamps the same way.
+        if let mtime = before[.modificationDate] as? Date {
+            try? FileManager.default.setAttributes([.modificationDate: mtime],
+                                                   ofItemAtPath: url.path)
+        }
     }
 }
