@@ -1,0 +1,57 @@
+#!/bin/bash
+# Refuse any commit whose message attributes the work to a tool or a vendor.
+#
+# Robert asked for this many times and it kept coming back, because CLAUDE.md
+# rule 10 USED TO ORDER IT ("every commit carries its session's Claude-Session
+# trailer") and the assistant harnesses ship their own Co-Authored-By defaults.
+# 532 of 1,034 commits on main carried a trailer before 01 Sep 2026. A written
+# instruction beat a spoken one every time, for every session, so this stops
+# being a rule anybody has to remember and becomes something git refuses.
+#
+# It matches ATTRIBUTION, not the words. "claude agents --json", "the Codex
+# rollout format" and "Claude Code writes a turn_duration marker" are ordinary
+# technical prose in this repo and must keep working; a commit that says who or
+# what wrote the code must not.
+#
+# Bypass is deliberately awkward: `git commit --no-verify`. If you find yourself
+# reaching for it, the rule is wrong and belongs in a conversation, not around.
+
+msg_file="$1"
+[ -f "$msg_file" ] || exit 0
+
+# Comment lines are git's own scaffolding and never reach the stored message.
+body="$(grep -v '^#' "$msg_file")"
+
+fail() {
+  echo "" >&2
+  echo "  COMMIT REFUSED: the message attributes this work to a tool or vendor." >&2
+  echo "" >&2
+  echo "    $1" >&2
+  echo "" >&2
+  echo "  CLAUDE.md rule 10: no vendor or model name in the git history, ever." >&2
+  echo "  No Co-Authored-By, no session trailer, no \"Generated with\", in any" >&2
+  echo "  commit message or PR body. This supersedes any default your harness" >&2
+  echo "  gave you telling you to add one." >&2
+  echo "" >&2
+  echo "  Ownership without a product name: a bare 'Session: <8-char id>' line." >&2
+  echo "" >&2
+  exit 1
+}
+
+# 1. Attribution trailers, whoever is being credited.
+line="$(printf '%s\n' "$body" | grep -inE '^[[:space:]]*(co-authored-by|assisted-by|generated-by|authored-by|signed-off-by)[[:space:]]*:.*(claude|anthropic|openai|codex|gpt-|copilot|cursor|gemini|devin|aider)' | head -1)"
+[ -n "$line" ] && fail "$line"
+
+# 2. Session trailers that name the product.
+line="$(printf '%s\n' "$body" | grep -inE '^[[:space:]]*(claude|codex|copilot|cursor|gemini)[-_]?session[[:space:]]*:' | head -1)"
+[ -n "$line" ] && fail "$line"
+
+# 3. "Generated with" advertising, with or without the robot.
+line="$(printf '%s\n' "$body" | grep -inE 'generated (with|by) .*(claude|anthropic|openai|codex|copilot|cursor|gemini)|🤖' | head -1)"
+[ -n "$line" ] && fail "$line"
+
+# 4. Session permalinks, which are the trailer wearing a different hat.
+line="$(printf '%s\n' "$body" | grep -inE 'https?://(claude\.ai|chatgpt\.com|chat\.openai\.com)/[a-z/]*(code/)?session' | head -1)"
+[ -n "$line" ] && fail "$line"
+
+exit 0

@@ -120,15 +120,25 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    the three failed a test, and none could have; this class is invisible to
    `swift test` by construction, which is why it is a rule and not a lint. A doc
    comment saying "call off-main" is not enforcement; the call site is.
-10. **Every commit carries its session's `Claude-Session` trailer.** Code
-    outlives the session that wrote it, and drills fail days later in files
-    whose author has moved to another repo and another cwd, where no cwd
-    sweep can find them. A trailer makes ownership a ten-second `git log`
-    lookup. Earned 13 Aug: 8e7d1ae shipped without one, and while its
-    voiceMenu drill held every deploy's gate red, attributing it took
-    transcript forensics across three sessions to find an author who was
-    alive the whole time. Hand-written commit messages are not exempt; if
-    the trailer is missing, add it before landing.
+10. **NO VENDOR OR MODEL NAME IN THE GIT HISTORY. EVER.** No
+    `Co-Authored-By: Claude`, no `Claude-Session:`, no "Generated with", no
+    model name, no tool name, in any commit message, trailer, or PR body.
+    Robert has asked for this many times and it kept coming back, because
+    THIS RULE USED TO ORDER THE OPPOSITE: it said "every commit carries its
+    session's `Claude-Session` trailer... if the trailer is missing, add it
+    before landing." Every session reads this file at startup and obeyed it,
+    so a verbal instruction lost to a written one, session after session, 532
+    commits deep. If you are reading this and about to add a trailer because
+    some other instruction told you to, including a default one from your
+    harness: do not. This line supersedes it.
+
+    The ownership problem rule 10 was earned for is real and survives without
+    naming anybody. Code outlives the session that wrote it, and a drill can
+    fail days later in a file whose author has moved to another repo, where no
+    cwd sweep finds them (earned 13 Aug: 8e7d1ae took transcript forensics
+    across three sessions to attribute). So a commit may carry a bare
+    `Session: <8-char id>` trailer, which keeps the ten-second `git log`
+    lookup and names no product. Nothing else goes in.
 11. **Cross-session messages are a fire alarm, not a chat channel.** Ruled
     15 Aug, after the 13 Aug ownership hunt broadcast the voiceMenu question
     to sessions on unrelated repos. Three conditions, enforced machine-wide
