@@ -224,8 +224,23 @@ if not path:
     recent = []
     for pattern in roots:
         for f in glob.glob(pattern):
+            # THE HUB IS NOT A CANDIDATE, and leaving it in was the bug.
+            #
+            # The declared-path branch has excluded it since the beginning; this
+            # one never did. The app rewrites agents/<slug>/index.html at every
+            # turn end, so in a session that is doing anything at all the hub is
+            # almost always the newest HTML in the directory — newer than the
+            # page the session just wrote. The recency contest then picks the
+            # hub, the real page is never recorded and never stamped, and the
+            # hub gets an agent footer written into a file the app owns and
+            # overwrites.
+            #
+            # This is the whole of "some pages have footers and some do not,
+            # hours apart, with no pattern anyone could see" (02 Sep,
+            # 1605072d/tmux-fork-drift.html): the pattern was whether the app
+            # happened to rewrite the hub inside the same three-minute window.
             if f in seen_paths or "/node_modules/" in f or "/.git/" in f \
-                    or _is_generated_index(f):
+                    or _is_hub(f) or _is_generated_index(f):
                 continue
             seen_paths.add(f)
             try:
@@ -347,7 +362,23 @@ fi
 # the next two appeared. Bytes cannot be renamed.
 if [ -r "$FILE" ] && ! head -c 512 "$FILE" 2>/dev/null | grep -qiE '<!doctype|<html'; then
   SIBLING="$(dirname "$FILE")/index.html"
-  if [ -r "$SIBLING" ] && head -c 512 "$SIBLING" 2>/dev/null \
+  if [ "$(dirname "$(dirname "$SIBLING")")" = "$HOME/Documents/agents" ]; then
+    # THE SIBLING IS THIS AGENT'S HUB. Leave FILE alone.
+    #
+    # This rule was written for share-as-page, which builds <slug>/body.html
+    # beside <slug>/index.html, so "the index next door" means "the built
+    # page". An agent's own directory is flat and has no build step: the
+    # index.html beside a page there is the HUB, and a page written into it is
+    # the artifact whether or not it opens with a doctype.
+    #
+    # Redirecting served the hub instead of the page: the real page was never
+    # recorded and never stamped, and the footer was written into a file the
+    # app overwrites at the next turn end. That is the whole of
+    # agents/1605072d/tmux-fork-drift.html arriving with no footer on 02 Sep —
+    # a complete, styled report whose only sin was starting with <meta> instead
+    # of <!doctype>.
+    :
+  elif [ -r "$SIBLING" ] && head -c 512 "$SIBLING" 2>/dev/null \
        | grep -qiE '<!doctype|<html'; then
     FILE="$SIBLING"
   else
