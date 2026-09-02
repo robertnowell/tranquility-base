@@ -462,13 +462,7 @@ public extension ArtifactStore {
     /// seven hours into the future during the prototype, which silently emptied
     /// the list it was meant to fill.
     private static func iso8601(_ text: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: text) ?? {
-            let plain = ISO8601DateFormatter()
-            plain.formatOptions = [.withInternetDateTime]
-            return plain.date(from: text)
-        }()
+        RolloutClock.date(text)
     }
 }
 

@@ -525,6 +525,77 @@ context = (
     "human as a report."
 ).format(path=path, snippet=snippet)
 
+# ---------------------------------------------------------------------------
+# TAG IT (judged, but asked EVERY time).
+#
+# A tag is the one field on a page that a machine cannot fill honestly. The
+# session id is a fact the hook holds; the footer is a fixed string; the brand
+# can be inferred from siblings. The SUBJECT is a reading, and the attempt to
+# derive one from keywords was built and thrown away on 02 Sep for being
+# confidently wrong ("Three open PRs" -> voice-and-audio).
+#
+# So the hook does the two things it CAN do, on every page written into either
+# of Robert's trees: it notices the page has no tags, and it hands over the
+# vocabulary the archive already uses, at the moment the writer still has the
+# page in mind. The SessionStart context said the same thing once, at turn 0,
+# and 1,020 of 1,110 pages were written without tags anyway. A contract that
+# depends on remembering is not a contract; this one asks again every time.
+#
+# It stays an instruction rather than a block: PostToolUse cannot stop a Write
+# that already happened, and a page with no tags is still a page worth keeping.
+def _vocab():
+    """What the archive already calls things. Same source as hq-tags."""
+    import os
+    paths = []
+    try:
+        sys.path.insert(0, os.path.expanduser("~/.claude/skills/research-hq/scripts"))
+        from hqconfig import roots
+        paths.append(str(roots.out / "tags.json"))
+    except Exception:
+        pass
+    paths.append(os.path.expanduser("~/Projects/intranet/tags.json"))
+    for candidate in paths:
+        try:
+            with open(candidate, encoding="utf-8") as fh:
+                return [row[0] for row in json.load(fh)][:36]
+        except Exception:
+            continue
+    return []
+
+
+def _tag_ask(path):
+    if meta != "1" and stamp != "1":
+        return ""                      # not in the archive, not indexed, not asked
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            page = fh.read(60000)
+    except Exception:
+        return ""
+    want = [f for f in ("tags", "summary")
+            if not re.search(r'<meta\s+name="intranet:%s"' % f, page)]
+    if not want:
+        return ""
+    vocab = _vocab()
+    ask = (
+        "\n\nTAG IT. This page declares no intranet:{missing}, so in the index it is "
+        "findable only by whoever remembers the day it was written. Add these lines to "
+        "the head of {path} now, before you finish the turn:\n\n"
+        '  <meta name="intranet:tags" content="a, b, c">\n'
+        '  <meta name="intranet:summary" content="one sentence saying what this page '
+        'concluded">\n\n'
+        "Two to four tags, lowercase kebab-case, naming the SUBJECT — never the brand "
+        "and never the document type, both of which are already their own fields. "
+        "REUSE a term the archive has rather than coining a synonym for it."
+    ).format(missing=" or intranet:".join(want), path=path)
+    if vocab:
+        ask += (" These are the ones in use, most used first:\n  "
+                + ", ".join(vocab)
+                + "\n(`hq-tags` prints the full list; `hq-tags <word>` searches it.)")
+    return ask
+
+
+TAG_ASK = _tag_ask(path)
+
 if meta == "1":
     # The author column, written by the only thing that knows it.
     #
@@ -603,12 +674,12 @@ if stamp == "1":
             "The agent footer was stamped into {path} automatically: session "
             "id, Open hub, and Discuss with agent. Do not add another one, and "
             "do not hand-roll a footer of your own on HQ pages."
-        ).format(path=path),
+        ).format(path=path) + TAG_ASK,
     }}))
 else:
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PostToolUse",
-        "additionalContext": context,
+        "additionalContext": context + TAG_ASK,
     }}))
 PY
 

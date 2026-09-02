@@ -928,6 +928,34 @@ case "reconcile":
         case .refused(let why): print("refused: \(why)")
         }
 
+    // Why a hub shows no words. Every hub failure of this kind so far has been
+    // in the READ, not the render — a tail that decoded to nothing, a session id
+    // that matched no transcript — and none of it was visible from the page.
+    // The hub of hubs. It has existed since 02 Sep and had no way to open it
+    // that did not involve knowing a path — "I can't even find the hub of hubs".
+    case "hubs":
+        let top = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/agents/index.html")
+        guard FileManager.default.fileExists(atPath: top.path) else {
+            print("no hub of hubs yet — run the index build "
+                  + "(python3 ~/.claude/skills/research-hq/scripts/publish.py)")
+            break
+        }
+        print(top.path)
+        if !args.contains("--print") {
+            _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: [top.path])
+        }
+
+    case "turns":
+        guard args.count > 1 else { print("usage: tbase turns <sessionId>"); break }
+        let id = args[1]
+        let turns = TurnText.forSession(id, limit: HomeBase.fullTurns + HomeBase.lineTurns)
+        print("\(turns.count) turn(s) readable for \(id.prefix(8))")
+        for t in turns {
+            let when = t.at.map { ISO8601DateFormatter().string(from: $0) } ?? "no stamp"
+            print("  \(when)  \(t.prompt.prefix(72).replacingOccurrences(of: "\n", with: " "))")
+        }
+
     case "homebase":
         // One page per agent, generated from the briefs that every turn already
         // writes. Nothing is narrated and nothing is asked of the session: the
@@ -962,7 +990,12 @@ case "reconcile":
             ids = ((ClaudeAgentsCLI().sessions() ?? [])
                 + FileSessionOwnershipStore.shared.liveNonRegistrySessions()).map(\.sessionId)
         default:
-            ids = [args[1]]
+            // The eight characters a hub directory, a footer and a page's meta
+            // stamp all carry — which is the id a person actually has in hand.
+            // Passing one used to print "no briefs … nothing to write yet",
+            // which is a true sentence about a session that does not exist and
+            // a misleading one about the session being asked for.
+            ids = [(try? store.sessionId(matching: args[1])) ?? args[1]]
         }
         let live = (ClaudeAgentsCLI().sessions() ?? [])
             + FileSessionOwnershipStore.shared.liveNonRegistrySessions()

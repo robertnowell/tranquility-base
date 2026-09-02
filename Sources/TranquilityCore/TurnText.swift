@@ -33,10 +33,19 @@ public enum TurnText {
         public let prompt: String
         /// What the agent said back, in prose. Never a tool call or its result.
         public let prose: String
+        /// When the person asked it.
+        ///
+        /// This is what makes a turn joinable to the things made during it. A
+        /// page written at 14:32 belongs to the turn that opened at 14:29 and
+        /// not to the one that opened at 14:41, and that is decidable from two
+        /// timestamps — where an ordinal is not, because the transcript is read
+        /// as a tail and the tail does not know how many turns came before it.
+        public let at: Date?
 
-        public init(prompt: String, prose: String) {
+        public init(prompt: String, prose: String, at: Date? = nil) {
             self.prompt = prompt
             self.prose = prose
+            self.at = at
         }
 
         /// A turn nobody would read is not worth showing under a brief.
@@ -51,6 +60,20 @@ public enum TurnText {
     /// not. A hub renders a handful of turns and they are the last ones.
     public static let byteCap = 2 << 20
 
+    /// One escalation, to 16 MB, and no further.
+    ///
+    /// A tail is bytes and a turn is prose, and the ratio between them is not
+    /// fixed: a session whose turns carry large tool output spends its whole
+    /// 2 MB on `tool_result` lines that `claudeCode` then discards. Measured on
+    /// this machine, 02 Sep: a 17 MB transcript yielded TWO turns from the
+    /// 2 MB tail while its hub printed nine turn blocks, so seven of them had
+    /// no words to show.
+    ///
+    /// It escalates only when the cheap read came up short, and only once —
+    /// `homebase --all` renders hundreds of agents, and an unbounded search
+    /// backwards for N turns is how a page render becomes a disk scan.
+    public static let byteCeiling = 16 << 20
+
     // MARK: - Claude Code
 
     /// One turn per user message that a PERSON wrote.
@@ -64,13 +87,14 @@ public enum TurnText {
         var turns: [Turn] = []
         var prompt = ""
         var prose: [String] = []
+        var at: Date?
         var started = false
 
         func close() {
             guard started else { return }
-            let t = Turn(prompt: prompt, prose: prose.joined(separator: "\n\n"))
+            let t = Turn(prompt: prompt, prose: prose.joined(separator: "\n\n"), at: at)
             if !t.isEmpty { turns.append(t) }
-            prompt = ""; prose = []
+            prompt = ""; prose = []; at = nil
         }
 
         for line in jsonl.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -88,6 +112,7 @@ public enum TurnText {
                 close()
                 started = true
                 prompt = said
+                at = RolloutClock.date(row["timestamp"])
             } else if started {
                 let text = assistantText(message["content"])
                 if !text.isEmpty { prose.append(text) }
@@ -162,13 +187,14 @@ public enum TurnText {
         var turns: [Turn] = []
         var prompt = ""
         var prose: [String] = []
+        var at: Date?
         var started = false
 
         func close() {
             guard started else { return }
-            let t = Turn(prompt: prompt, prose: prose.joined(separator: "\n\n"))
+            let t = Turn(prompt: prompt, prose: prose.joined(separator: "\n\n"), at: at)
             if !t.isEmpty { turns.append(t) }
-            prompt = ""; prose = []
+            prompt = ""; prose = []; at = nil
         }
 
         for m in messages {
@@ -180,6 +206,7 @@ public enum TurnText {
                 close()
                 started = true
                 prompt = text
+                at = m.at
             } else if started, m.role != "developer" {
                 prose.append(text)
             }
@@ -198,10 +225,23 @@ public enum TurnText {
     public static func forSession(_ sessionId: String, limit: Int = 3,
                                   home: URL = FileManager.default
                                       .homeDirectoryForCurrentUser) -> [Turn] {
-        if let path = claudeTranscript(for: sessionId, home: home),
-           let text = tail(of: path) {
-            let turns = claudeCode(jsonl: text, limit: limit)
-            if !turns.isEmpty { return turns }
+        if let path = claudeTranscript(for: sessionId, home: home) {
+            // Against the FILE's size, never against the length of what was
+            // read. The tail drops its first partial line, so the text is
+            // always a little shorter than the cap — a "did this read reach the
+            // start of the file" test written that way is true on the first
+            // pass every time, and it silently skipped the escalation for the
+            // session that needed it most (f37aaddd: 0 turns at 2 MB, 28 at 16).
+            let size = (try? FileManager.default
+                .attributesOfItem(atPath: path.path)[.size] as? Int) ?? nil ?? 0
+            var best: [Turn] = []
+            for cap in [byteCap, byteCeiling] {
+                guard let text = tail(of: path, bytes: cap) else { break }
+                let turns = claudeCode(jsonl: text, limit: limit)
+                if turns.count > best.count { best = turns }
+                if best.count >= limit || cap >= size { break }
+            }
+            if !best.isEmpty { return best }
         }
         if let parsed = CodexRollout.parse(
             sessionId: sessionId,
@@ -230,14 +270,20 @@ public enum TurnText {
     /// whole answer. The first partial line is dropped rather than repaired: a
     /// half-decoded JSON object is not a turn, and one missing turn at the top
     /// of a bounded read is invisible where a corrupted one is not.
-    static func tail(of url: URL) -> String? {
+    static func tail(of url: URL, bytes: Int = byteCap) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
-        let start = size > UInt64(byteCap) ? size - UInt64(byteCap) : 0
+        let start = size > UInt64(bytes) ? size - UInt64(bytes) : 0
         try? handle.seek(toOffset: start)
-        guard let data = try? handle.readToEnd(),
-              let text = String(data: data, encoding: .utf8) else { return nil }
+        guard let data = try? handle.readToEnd() else { return nil }
+        // Decoded lossily, never strictly. A byte offset lands mid-character
+        // often enough that `String(data:encoding:.utf8)` returning nil was
+        // silently costing whole transcripts: session f37aaddd had 28 readable
+        // turns and its hub showed none, because one broken byte at the front
+        // of the window failed the decode for all of them. The first partial
+        // line is dropped below in any case.
+        let text = String(decoding: data, as: UTF8.self)
         guard start > 0, let nl = text.firstIndex(of: "\n") else { return text }
         return String(text[text.index(after: nl)...])
     }

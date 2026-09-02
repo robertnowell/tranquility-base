@@ -10,6 +10,30 @@ import Foundation
 /// already moved once in that window: `session_meta.payload.session_id` is
 /// absent on the oldest files here — `id` is the field present on every one
 /// sampled, and the field this reads.
+/// The one place a rollout or transcript timestamp becomes a `Date`.
+///
+/// Both harnesses write ISO-8601; Codex writes fractional seconds and Claude
+/// Code does not, and a formatter configured for one returns nil for the other
+/// without complaining. Two formatters, tried in order, is the whole fix — the
+/// same pair `ArtifactStore` worked out ("parsing UTC stamps as local time put
+/// every page seven hours into the future"), which is why that one now calls
+/// this instead of keeping its own copy.
+///
+/// Built per call rather than cached: `ISO8601DateFormatter` is not `Sendable`,
+/// so a static one is a concurrency error under strict checking, and a hub
+/// render parses a few dozen stamps — not a few million.
+public enum RolloutClock {
+    public static func date(_ value: Any?) -> Date? {
+        guard let text = value as? String, !text.isEmpty else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = fractional.date(from: text) { return d }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: text)
+    }
+}
+
 public enum CodexRollout {
     /// What `session_meta` carries. `id`, never `session_id`: the latter
     /// was added to the schema after some rollouts on this machine were
@@ -205,7 +229,8 @@ public enum CodexRollout {
                text.contains("</environment_context>") {
                 return .ignored
             }
-            return .content(Message(role: role, text: text))
+            return .content(Message(role: role, text: text,
+                                     at: RolloutClock.date(row["timestamp"])))
 
         default:
             return .ignored
@@ -250,6 +275,18 @@ public enum CodexRollout {
     public struct Message: Sendable, Equatable {
         public var role: String
         public var text: String
+        /// When the line was written. Every rollout record carries a
+        /// `timestamp`; it is kept because it is the only thing that can say
+        /// which turn an artifact was made during, and the alternative — an
+        /// ordinal counted from a truncated tail — is not a fact about the
+        /// session at all.
+        public var at: Date?
+
+        public init(role: String, text: String, at: Date? = nil) {
+            self.role = role
+            self.text = text
+            self.at = at
+        }
     }
 
     /// Everything one rollout file's lines decode to. Pure and synchronous —
