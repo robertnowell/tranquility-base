@@ -891,6 +891,15 @@ public final class QueueStore: Sendable {
         }
     }
 
+    /// The newest Stop this session recorded, or nil if it has none.
+    ///
+    /// The GROUP BY is load-bearing. `max()` with no grouping is an aggregate
+    /// over the whole table, and SQLite answers an aggregate over zero rows with
+    /// ONE row of NULLs rather than no rows at all. `fetchOne` then hands the
+    /// decoder a NULL where a String is required and this throws, for a session
+    /// that simply has no events. Invisible while every caller already knew the
+    /// session had briefs; it surfaced the moment hubs were asked for sessions
+    /// that never fired a hook, which is every Codex session there is.
     public func latestStop(for sessionId: String) throws -> WaitingSession? {
         try dbQueue.read { db in
             try WaitingSession.fetchOne(db, sql: """
@@ -901,6 +910,7 @@ public final class QueueStore: Sendable {
                 FROM events e
                 LEFT JOIN session_callsign cs ON cs.sessionId = e.sessionId
                 WHERE e.sessionId = ? AND e.hookEvent = ?
+                GROUP BY e.sessionId
                 """, arguments: [sessionId, HookEventKind.stop.rawValue])
         }
     }

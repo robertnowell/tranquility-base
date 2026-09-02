@@ -942,7 +942,18 @@ case "reconcile":
         let ids: [String]
         switch args[1] {
         case "--all":
-            ids = Array(Set(try store.recentBriefs(limit: 2000).map(\.sessionId)))
+            // Briefs AND rollouts. A sweep that reads only the brief table
+            // sweeps only the harness that writes briefs, which is the same
+            // blind spot that left 218 Codex sessions without a page: the
+            // question is which sessions exist, and one table answers it for
+            // one harness.
+            //
+            // The brief limit is the other half. At 2,000 rows it covered 227
+            // of the 357 sessions that have ever had one, so a sweep meant to
+            // rewrite every hub left 92 of them on stale paths.
+            var found = Set(try store.recentBriefs(limit: 20_000).map(\.sessionId))
+            found.formUnion(CodexRollout.knownSessionIds())
+            ids = Array(found)
         case "--live":
             // A hub is for an agent you are still working with. The archive is
             // the transcript's job — building a page for every session that

@@ -63,3 +63,43 @@ final class SessionPrefixTests: XCTestCase {
         XCTAssertNil(try store.sessionId(matching: "'; DROP TABLE events;--"))
     }
 }
+
+/// `max()` with no GROUP BY is an aggregate over the whole table, and SQLite
+/// answers an aggregate over zero rows with one row of NULLs. Decoding that as a
+/// WaitingSession throws, for a session that simply has no events. Every Codex
+/// session is such a session, so asking for its hub aborted the whole sweep.
+final class LatestStopEmptyTests: XCTestCase {
+
+    var store: QueueStore!
+    private var tmpDir: URL!
+
+    override func setUpWithError() throws {
+        tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("tb-laststop-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        store = try QueueStore(url: tmpDir.appendingPathComponent("queue.sqlite"))
+    }
+
+    override func tearDownWithError() throws {
+        store = nil
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
+
+    func testASessionWithNoEventsIsNilAndNotAThrow() throws {
+        XCTAssertNil(try store.latestStop(for: "019ea2b7-a035-7c42-bb17-b5417b3741dc"))
+    }
+
+    func testASessionWithOnlyOtherEventsIsAlsoNil() throws {
+        _ = try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .userPromptSubmit, sessionId: "s",
+            promptId: "p", cwd: "/tmp", lastAssistantMessage: "", tty: "ttys1"))
+        XCTAssertNil(try store.latestStop(for: "s"))
+    }
+
+    func testAStopIsStillFound() throws {
+        _ = try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .stop, sessionId: "s",
+            promptId: "p", cwd: "/tmp", lastAssistantMessage: "done", tty: "ttys1"))
+        XCTAssertEqual(try store.latestStop(for: "s")?.sessionId, "s")
+    }
+}

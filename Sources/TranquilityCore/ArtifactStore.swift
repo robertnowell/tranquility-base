@@ -37,20 +37,52 @@ public enum ArtifactStore {
     }
 
     @discardableResult
+    /// `resolve` is injectable for the same reason `history`'s `exists` is: the
+    /// behaviour under test is what gets WRITTEN, and every temp directory this
+    /// repo can create is one `excluded` refuses by design.
     public static func record(_ path: String, session: String, root: String,
-                              at: Date = Date()) -> Bool {
+                              at: Date = Date(),
+                              resolve: (String) -> String = canonical) -> Bool {
         guard isPlausibleSession(session), path.hasPrefix("/"),
               !excluded(path) else { return false }
         let dir = directory(root: root)
         try? FileManager.default.createDirectory(atPath: dir,
                                                  withIntermediateDirectories: true)
         let target = (dir as NSString).appendingPathComponent(session)
-        let line = "\(Int(at.timeIntervalSince1970 * 1000))\t\(path)\n"
+        // WHERE THE FILE IS, not the name it was reached by.
+        //
+        // The corpus moved under the agents tree and every old location became a
+        // symlink, so a path recorded through one still opens. That is not
+        // enough: the record is what a hub renders, so a hub kept pointing at
+        // the address that was retired, and the symlinks could never be removed.
+        //
+        // Repointing the records fixed it for an hour. Then `backfill` re-mined
+        // the transcripts, which name the paths that were true when they were
+        // written, and put 209 of them back. A one-off repair cannot beat a
+        // process that regenerates the thing being repaired, so the resolution
+        // belongs here, where every writer passes.
+        //
+        // Only when the file exists: resolving a path that does not resolve
+        // invents one, and a missing page should be recorded as it was named so
+        // the miss is visible.
+        let resolved = resolve(path)
+        let line = "\(Int(at.timeIntervalSince1970 * 1000))\t\(resolved)\n"
         guard let data = line.data(using: .utf8) else { return false }
         let fd = open(target, O_WRONLY | O_CREAT | O_APPEND, 0o600)
         guard fd >= 0 else { return false }
         defer { close(fd) }
         return data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) } == data.count
+    }
+
+    /// Where the file is, when it is there.
+    ///
+    /// Only when it exists: resolving a path that does not resolve invents one,
+    /// and a missing page should be recorded as it was named so the miss stays
+    /// visible rather than being tidied into something that looks fine.
+    public static func canonical(_ path: String) -> String {
+        FileManager.default.fileExists(atPath: path)
+            ? URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+            : path
     }
 
     /// One recorded page.
