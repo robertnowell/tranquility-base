@@ -104,6 +104,7 @@ jobs:
           TB_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.TB_DEVELOPER_ID_P12_PASSWORD }}
           TB_NOTARY_APPLE_ID: ${{ secrets.TB_NOTARY_APPLE_ID }}
           TB_NOTARY_APP_PASSWORD: ${{ secrets.TB_NOTARY_APP_PASSWORD }}
+          TB_SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.TB_SPARKLE_EDDSA_PRIVATE_KEY }}
         run: |
           [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"

@@ -56,6 +56,23 @@ fi
 APP_NAME="${VD_APP_NAME:-Tranquility Base}"
 BUNDLE_ID="${VD_BUNDLE_ID:-com.robertnowell.voice-dispatch}"
 BUILD_DIR=".build/$CONFIG"
+
+# shellcheck source=lib/sparkle.sh
+. "$(dirname "$0")/lib/sparkle.sh"
+
+# The update feed, and the key that proves an update came from us.
+#
+# Compiled in rather than fetched, because SUFeedURL is the ONE piece of
+# configuration an installed copy can never be told to change: a copy only
+# learns about a new feed through the feed it already has. It is a domain we
+# own (not a github.io URL) so hosting can move later without stranding
+# anybody. audit-release.sh asserts both of these on the artifact, because a
+# published build with the wrong feed or the wrong key is permanently
+# unreachable and costs a second manual reinstall.
+#
+# Overridable so bundle-test.sh can point a throwaway app at a throwaway feed.
+TB_FEED_URL="${TB_FEED_URL:-https://updates.tranquilitybase.to/appcast.xml}"
+TB_PUBLIC_ED_KEY="${TB_PUBLIC_ED_KEY:-C/+0I+AP9TrlyA3hLSLgXdJT1kDekOXqGGnwB9bClCE=}"
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 
 swift build --configuration "$CONFIG" --product TranquilityApp
@@ -180,6 +197,16 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
        marketing version it is never chosen or rewritten by a release job. -->
   <key>TBSourceCommit</key><string>$SOURCE_COMMIT</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
+
+  <!-- Sparkle. SURequireSignedFeed means the appcast DOCUMENT is signed, not
+       just each download: per-enclosure signatures prove the bytes you fetched
+       are ours, but not that the entry pointing at them was. The feed lives on
+       a host we do not fully control, so the document gets signed too.
+       SUVerifyUpdateBeforeExtraction is its prerequisite. -->
+  <key>SUFeedURL</key><string>$TB_FEED_URL</string>
+  <key>SUPublicEDKey</key><string>$TB_PUBLIC_ED_KEY</string>
+  <key>SUVerifyUpdateBeforeExtraction</key><true/>
+  <key>SURequireSignedFeed</key><true/>
   <!-- tranquilitybase:// deep links, so any local HTML page can carry buttons
        that open the agent that made it. The browser confirms before launching
        an external scheme, which is the drive-by guard.
@@ -222,6 +249,10 @@ $LS_ENV_XML
 </dict>
 </plist>
 PLIST
+
+# Sparkle goes in before anything is signed: the outer signature seals whatever
+# is inside Contents/, so a framework copied in afterwards invalidates it.
+sparkle_embed "$APP_DIR" "$BUILD_DIR"
 
 IDENTITY="${VOICE_DISPATCH_SIGN_IDENTITY:-}"
 # Must match make-signing-identity.sh. Overridable by the same variable so the
@@ -283,7 +314,8 @@ if [ -z "$IDENTITY" ]; then
   echo "   Privacy pane keeps showing them as granted. If that happens, run"
   echo "   scripts/reset-permissions.sh and grant again."
   echo "   Retry the identity with: scripts/make-signing-identity.sh"
-  codesign --force --deep --sign - --identifier "$BUNDLE_ID" \
+  sparkle_sign "$APP_DIR" - --timestamp=none
+  codesign --force --sign - --identifier "$BUNDLE_ID" \
     --entitlements TranquilityBase.entitlements \
     --options runtime --timestamp=none "$APP_DIR"
 else
@@ -291,7 +323,9 @@ else
   # protected resource needs the entitlement as well as the Info.plist usage string;
   # without it TCC denies instantly, shows no prompt, and never lists the app in the
   # Privacy pane — a completely silent failure.
-  codesign --force --deep --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
+  # Nested first, outer last, never --deep: see scripts/lib/sparkle.sh.
+  sparkle_sign "$APP_DIR" "$IDENTITY" --timestamp=none
+  codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
     --entitlements TranquilityBase.entitlements \
     --options runtime --timestamp=none "$APP_DIR"
   echo "signed as: $IDENTITY"
