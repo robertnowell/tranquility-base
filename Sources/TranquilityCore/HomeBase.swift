@@ -700,8 +700,7 @@ public enum HomeBase {
         return """
         <details class="transcript">
         <summary>What was said &middot; last \(turns.count) turn\(turns.count == 1 ? "" : "s")</summary>
-        <p class="sub">Straight from the transcript, newest first. Not lined up
-        with the blocks below: a brief and a turn have no key that joins them yet.</p>
+        <p class="sub">Straight from the transcript. Newest first.</p>
         <ol class="said">\(items)</ol>
         </details>
         """
@@ -1230,6 +1229,24 @@ public extension HomeBase {
         if briefs.isEmpty {
             title = title ?? CodexThreadNames.all()[sessionId]
             codexCwd = CodexRollout.parse(sessionId: sessionId)?.meta?.cwd
+        }
+        // A NAME, NOT AN ID.
+        //
+        // "Agent 019db12b" tells a reader nothing, and it was on 300 of 452
+        // hubs: Codex keeps thread names for only 9 of its own sessions, and a
+        // session with no briefs has no tab title to read either. The first
+        // thing a person typed is the best name available, and it is the same
+        // convention Codex uses for the names it does keep ("Well, 2 things.
+        // One, I got an error"). Derived, never stored: a real name from any
+        // source still wins, and this changes as the transcript does.
+        if title?.isEmpty ?? true {
+            title = transcript.first?.prompt
+                .split(whereSeparator: \.isNewline).first
+                .map { line -> String in
+                    let t = line.trimmingCharacters(in: .whitespaces)
+                    return t.count > 72 ? String(t.prefix(71)) + "\u{2026}" : t
+                }
+                .flatMap { $0.isEmpty ? nil : $0 }
         }
         let model = Model(
             sessionId: sessionId,

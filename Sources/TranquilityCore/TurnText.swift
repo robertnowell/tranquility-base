@@ -127,6 +127,37 @@ public enum TurnText {
     /// calls and reasoning items it files as ignored. So there is no second
     /// filter to write here and no second place for one to be wrong; this only
     /// has to group.
+    /// Codex injects its own scaffolding as `user` messages.
+    ///
+    /// The AGENTS.md preamble, `<environment_context>`, `<image name=…>`, a
+    /// `<subagent_notification>`: all arrive with role `user`, so role alone
+    /// says "a person typed this" when nobody did. Measured across 60 real
+    /// rollouts, every one of them opens with an XML-ish tag or the AGENTS.md
+    /// heading, and every real prompt is plain prose.
+    ///
+    /// Stripped rather than dropped, because a person attaching an image sends
+    /// one message carrying both the tag and their sentence; dropping it would
+    /// lose the sentence. What is left after the wrappers come off is what they
+    /// said, and nothing left means they said nothing.
+    static func humanPart(_ text: String) -> String {
+        var t = text
+        if t.hasPrefix("# AGENTS.md instructions for") { return "" }
+        while true {
+            let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard s.hasPrefix("<"),
+                  let close = s.firstIndex(of: ">") else { break }
+            let tag = s[s.index(after: s.startIndex)..<close]
+                .prefix(while: { !$0.isWhitespace && $0 != "/" })
+            guard !tag.isEmpty else { break }
+            if let end = s.range(of: "</\(tag)>") {
+                t = String(s[end.upperBound...])
+            } else {
+                t = String(s[s.index(after: close)...])
+            }
+        }
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     public static func codex(messages: [CodexRollout.Message], limit: Int) -> [Turn] {
         var turns: [Turn] = []
         var prompt = ""
@@ -141,7 +172,9 @@ public enum TurnText {
         }
 
         for m in messages {
-            let text = m.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = m.role == "user"
+                ? humanPart(m.text)
+                : m.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if text.isEmpty { continue }
             if m.role == "user" {
                 close()
