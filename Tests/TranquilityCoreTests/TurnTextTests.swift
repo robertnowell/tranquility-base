@@ -1,0 +1,189 @@
+import XCTest
+@testable import TranquilityCore
+
+/// A hub's brief is a summary with no way down to the source. This is the way
+/// down. The failure that matters is not "no text": it is text that is really
+/// tool traffic, because a hub full of file listings looks like it is working.
+final class TurnTextTests: XCTestCase {
+
+    // MARK: - Claude Code
+
+    private func line(_ json: String) -> String { json }
+
+    /// A tool's output arrives as `type: "user"` too. Role alone cannot tell a
+    /// person from a harness; the record can.
+    func testAToolResultIsNotATurn() {
+        let jsonl = [
+            #"{"type":"user","message":{"content":"do the thing"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"on it"}]}}"#,
+            #"{"type":"user","toolUseResult":{"ok":1},"message":{"content":[{"type":"tool_result","content":"file listing"}]}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}"#,
+        ].joined(separator: "\n")
+
+        let turns = TurnText.claudeCode(jsonl: jsonl, limit: 10)
+        XCTAssertEqual(turns.count, 1, "one person spoke once")
+        XCTAssertEqual(turns[0].prompt, "do the thing")
+        XCTAssertEqual(turns[0].prose, "on it\n\ndone")
+        XCTAssertFalse(turns[0].prose.contains("file listing"))
+    }
+
+    /// Even without `toolUseResult`, a content array carrying a tool_result is
+    /// the harness talking.
+    func testAToolResultBlockAloneIsEnoughToSkip() {
+        let jsonl = #"{"type":"user","message":{"content":[{"type":"tool_result","content":"x"}]}}"#
+        XCTAssertTrue(TurnText.claudeCode(jsonl: jsonl, limit: 10).isEmpty)
+    }
+
+    /// tool_use and thinking are how the work happened, not what was said.
+    func testOnlyTextBlocksBecomeProse() {
+        let jsonl = [
+            #"{"type":"user","message":{"content":"go"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"said"},{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}"#,
+        ].joined(separator: "\n")
+        let turns = TurnText.claudeCode(jsonl: jsonl, limit: 10)
+        XCTAssertEqual(turns.first?.prose, "said")
+    }
+
+    func testTurnsSplitOnEveryHumanMessage() {
+        let jsonl = [
+            #"{"type":"user","message":{"content":"one"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"a"}]}}"#,
+            #"{"type":"user","message":{"content":"two"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"b"}]}}"#,
+        ].joined(separator: "\n")
+        let turns = TurnText.claudeCode(jsonl: jsonl, limit: 10)
+        XCTAssertEqual(turns.map(\.prompt), ["one", "two"])
+        XCTAssertEqual(turns.map(\.prose), ["a", "b"])
+    }
+
+    /// A hub shows the end of a session, so the limit keeps the END.
+    func testTheLimitKeepsTheNewestTurns() {
+        let jsonl = (1...5).map {
+            #"{"type":"user","message":{"content":"p\#($0)"}}"# + "\n"
+                + #"{"type":"assistant","message":{"content":[{"type":"text","text":"a\#($0)"}]}}"#
+        }.joined(separator: "\n")
+        XCTAssertEqual(TurnText.claudeCode(jsonl: jsonl, limit: 2).map(\.prompt), ["p4", "p5"])
+    }
+
+    /// A bounded read starts mid-line by construction. A half-decoded object
+    /// must not become a turn, and a line that is not JSON at all must not stop
+    /// the parse.
+    func testUndecodableLinesAreSkippedNotFatal() {
+        let jsonl = [
+            "{ this is not json",
+            #"{"type":"user","message":{"content":"still here"}}"#,
+            "",
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"yes"}]}}"#,
+        ].joined(separator: "\n")
+        let turns = TurnText.claudeCode(jsonl: jsonl, limit: 10)
+        XCTAssertEqual(turns.count, 1)
+        XCTAssertEqual(turns[0].prompt, "still here")
+    }
+
+    /// Prose with no prompt before it belongs to no turn. A transcript read from
+    /// the middle starts that way.
+    func testProseBeforeAnyPromptIsDropped() {
+        let jsonl = #"{"type":"assistant","message":{"content":[{"type":"text","text":"orphan"}]}}"#
+        XCTAssertTrue(TurnText.claudeCode(jsonl: jsonl, limit: 10).isEmpty)
+    }
+
+    // MARK: - Codex
+
+    func testCodexGroupsOnTheHumanTurn() {
+        let msgs = [
+            CodexRollout.Message(role: "developer", text: "system preamble"),
+            CodexRollout.Message(role: "user", text: "one"),
+            CodexRollout.Message(role: "assistant", text: "a"),
+            CodexRollout.Message(role: "user", text: "two"),
+            CodexRollout.Message(role: "assistant", text: "b"),
+        ]
+        let turns = TurnText.codex(messages: msgs, limit: 10)
+        XCTAssertEqual(turns.map(\.prompt), ["one", "two"])
+        XCTAssertEqual(turns.map(\.prose), ["a", "b"])
+        XCTAssertFalse(turns.contains { $0.prose.contains("system preamble") },
+                       "the harness's own preamble is not something anybody said")
+    }
+
+    // MARK: - The bounded read
+
+    func testTheTailStartsAtALineBoundary() throws {
+        let dir = NSTemporaryDirectory() + "tb-turntext-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let f = URL(fileURLWithPath: dir + "/t.jsonl")
+
+        // Bigger than the cap, so the read starts inside a line.
+        let filler = String(repeating: "x", count: 4096)
+        var text = ""
+        while text.utf8.count < TurnText.byteCap + 8192 {
+            text += #"{"pad":"\#(filler)"}"# + "\n"
+        }
+        text += #"{"type":"user","message":{"content":"the last thing"}}"# + "\n"
+        try text.write(to: f, atomically: true, encoding: .utf8)
+
+        let tail = try XCTUnwrap(TurnText.tail(of: f))
+        XCTAssertLessThanOrEqual(tail.utf8.count, TurnText.byteCap)
+        XCTAssertFalse(tail.hasPrefix("x"), "a partial line was dropped, not repaired")
+        XCTAssertEqual(TurnText.claudeCode(jsonl: tail, limit: 1).first?.prompt,
+                       "the last thing")
+    }
+
+    func testASmallFileIsReadWhole() throws {
+        let dir = NSTemporaryDirectory() + "tb-turntext-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let f = URL(fileURLWithPath: dir + "/t.jsonl")
+        try #"{"type":"user","message":{"content":"only"}}"#
+            .write(to: f, atomically: true, encoding: .utf8)
+        XCTAssertEqual(TurnText.claudeCode(jsonl: try XCTUnwrap(TurnText.tail(of: f)),
+                                           limit: 5).first?.prompt, "only")
+    }
+
+    func testAMissingTranscriptIsEmptyNotACrash() {
+        let nowhere = URL(fileURLWithPath: NSTemporaryDirectory() + "/tb-nope-" + UUID().uuidString)
+        XCTAssertTrue(TurnText.forSession("no-such-session", limit: 3, home: nowhere).isEmpty)
+    }
+}
+
+/// The hub end of it. A model with no transcript must render exactly as it did
+/// before, and one with a transcript must not smuggle tool traffic onto a page.
+final class HubTranscriptTests: XCTestCase {
+
+    private func model(_ transcript: [TurnText.Turn]) -> HomeBase.Model {
+        HomeBase.Model(
+            sessionId: "0d04e845-65ff-488f-983c-58f371d661ed",
+            title: "A session", callsign: nil, cwd: "/tmp", goal: "do a thing",
+            turns: [HomeBase.Turn(at: Date(), topic: "t", happened: "it happened")],
+            pages: [], transcript: transcript)
+    }
+
+    func testNoTranscriptRendersNoSection() {
+        let html = HomeBase.render(model([]))
+        XCTAssertFalse(html.contains("details class=\"transcript\""))
+        XCTAssertFalse(html.contains("What was said"))
+    }
+
+    func testTheTranscriptRendersClosedAndNewestFirst() {
+        let html = HomeBase.render(model([
+            .init(prompt: "older ask", prose: "older prose"),
+            .init(prompt: "newest ask", prose: "newest prose"),
+        ]))
+        XCTAssertTrue(html.contains("details class=\"transcript\""))
+        XCTAssertFalse(html.contains("<details class=\"transcript\" open"),
+                       "evidence sits closed under a summary")
+        let newest = try? XCTUnwrap(html.range(of: "newest ask"))
+        let older = try? XCTUnwrap(html.range(of: "older ask"))
+        if let n = newest, let o = older {
+            XCTAssertLessThan(n.lowerBound, o.lowerBound, "newest first, like the page above it")
+        }
+    }
+
+    /// A page is HTML and a prompt is whatever somebody typed.
+    func testAPromptCannotInjectMarkup() {
+        let html = HomeBase.render(model([
+            .init(prompt: "<script>alert(1)</script>", prose: "ok"),
+        ]))
+        XCTAssertFalse(html.contains("<script>alert(1)</script>"))
+        XCTAssertTrue(html.contains("&lt;script&gt;"))
+    }
+}
