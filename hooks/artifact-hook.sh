@@ -171,6 +171,18 @@ if not path:
     for tree in ("~/Documents/deep-research", "~/Projects", "~/ClaudeWork"):
         base = os.path.expanduser(tree)
         roots += [os.path.join(base, "*", "*.html"), os.path.join(base, "*.html")]
+    # THIS SESSION'S OWN HUB, which was missing and is where reports actually
+    # live. Without it a page written by a shell command into
+    # ~/Documents/agents/<short>/ was never found, so it was never recorded and
+    # never stamped.
+    #
+    # That is the whole reason Codex pages had no footer, and it was never a
+    # Codex rule: Codex's only tool is `exec`, so EVERY Codex write takes this
+    # branch. Claude Code took it too whenever it wrote a page with a heredoc
+    # rather than the Write tool, which is why some Claude hubs had footers on
+    # Monday and some did not, hours apart, with no pattern anyone could see.
+    own_hub = os.path.expanduser("~/Documents/agents/{}".format(session.split("-")[0]))
+    roots.append(os.path.join(own_hub, "*.html"))
     seen_paths = set()
     recent = []
     for pattern in roots:
@@ -213,8 +225,14 @@ if not path:
                 if slug in line and any(w in line for w in writes):
                     return True
             return False
-        mine = [f for f in recent
-                if authored(os.path.basename(os.path.dirname(f)))]
+        # A page inside THIS session's own hub is authored by construction:
+        # the directory is named after the session that owns it. That is
+        # stronger evidence than the transcript scan below, and it is the only
+        # evidence available to a harness whose payload carries no transcript
+        # at all, which is the second half of why Codex never qualified.
+        mine = [f for f in recent if os.path.dirname(f) == own_hub]
+        mine += [f for f in recent
+                 if f not in mine and authored(os.path.basename(os.path.dirname(f)))]
         path = max(mine, key=os.path.getmtime) if mine else ""
     else:
         path = ""
