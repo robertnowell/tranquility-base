@@ -219,6 +219,20 @@ if [ -n "$STRAY" ]; then
 fi
 echo "✓ every colour comes from the Palette"
 
+# The hooks this Mac actually executes live in the main checkout's WORKING TREE,
+# which any session can move. On 01 Sep it sat on a feature branch 887 commits
+# behind, so every hook firing for both harnesses was a three-day-old file.
+# Nothing failed. A stale hook does what it used to do, which is the quietest
+# failure this repo has. Informational, not blocking: the tree belongs to
+# whoever is deploying, and refusing to land a Swift change over it would be
+# the wrong lever.
+echo "→ live hooks"
+if scripts/check-live-hooks.sh; then
+  echo "✓ the hooks on disk are the hooks that shipped"
+else
+  echo "⚠ the hooks this machine runs are not origin/main (see above) - not blocking" >&2
+fi
+
 cat <<EOF
 
 Preflight passed. Nothing has been pushed or deployed — deliberately.
