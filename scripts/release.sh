@@ -49,13 +49,44 @@ release_database_id() {
   gh release view "$TAG" --repo "$REPO" --json databaseId --jq .databaseId
 }
 
+# Read the tag back, waiting out the seconds where GitHub does not have it yet.
+#
+# THE RETRY THAT COULD NOT RETRY. This loop was added deliberately, in "Retry
+# tag verification after creation (#240)", against exactly the failure it then
+# failed to prevent: a tag is created and the ref API 404s on it for a few
+# seconds afterwards. It did not work, and the reason is worth stating because
+# it is a shape rather than a typo.
+#
+# `gh api --jq` prints an error BODY to stdout on a 404 and exits non-zero. The
+# loop tested only whether the output was empty, and a 404 body is not empty, so
+# it broke out on the first attempt with `{"message":"Not Found",...}` in hand,
+# read that whole line into `tag_type`, and reported it as the type of the tag
+# object:
+#
+#   ✗ release tag v0.3.1053-e19341a47 is a {"message":"Not Found", ... } object,
+#     expected a commit
+#
+# Which is how 0.3.1053 died with a signed, notarized, stapled, fully audited
+# DMG sitting beside it, one line from being published. A retry loop whose
+# success test cannot distinguish an answer from an error is not a retry loop;
+# it is a single attempt with extra code. So the test is now the exit status AND
+# the shape of what came back, and the wait is a backoff rather than five fixed
+# two-second naps.
 verify_release_tag() {
-  local tag_details="" tag_type tag_target
-  for _ in 1 2 3 4 5; do
-    tag_details=$(github_api "repos/$REPO/git/ref/tags/$TAG" \
-      --jq '.object.type + "\t" + .object.sha' 2>/dev/null || true)
-    [ -z "$tag_details" ] || break
-    sleep 2
+  local tag_details="" tag_type tag_target delay=1
+  for _ in 1 2 3 4 5 6 7; do
+    # `2>/dev/null` on stderr and the exit status on stdout: gh reports the
+    # failure both ways and only one of them is trustworthy here.
+    if tag_details=$(github_api "repos/$REPO/git/ref/tags/$TAG" \
+        --jq '.object.type + "\t" + .object.sha' 2>/dev/null) \
+      && [[ "$tag_details" == *$'\t'* ]]; then
+      break
+    fi
+    # Never carry a failed read forward as if it were data. That is the whole
+    # bug above, in one assignment.
+    tag_details=""
+    sleep "$delay"
+    delay=$(( delay * 2 ))
   done
   [ -n "$tag_details" ] || fail "release tag $TAG does not exist"
   IFS=$'\t' read -r tag_type tag_target <<<"$tag_details"
@@ -67,8 +98,19 @@ verify_release_tag() {
 
 ensure_release_tag() {
   if ! github_api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
-    github_api --method POST "repos/$REPO/git/refs" \
-      -f ref="refs/tags/$TAG" -f sha="$TARGET" >/dev/null
+    # A 422 here is the same eventual consistency read from the other side: the
+    # tag exists, the read that just 404ed was stale, and the create is refused
+    # as a duplicate. Under `set -e` that aborted a release whose tag was
+    # already correct, so the one refusal that means "you already have what you
+    # asked for" is tolerated and everything else still fails.
+    local created
+    if ! created=$(github_api --method POST "repos/$REPO/git/refs" \
+        -f ref="refs/tags/$TAG" -f sha="$TARGET" 2>&1); then
+      case "$created" in
+        *"Reference already exists"*) ;;
+        *) fail "could not create release tag $TAG: $created" ;;
+      esac
+    fi
   fi
   verify_release_tag
 }
@@ -81,6 +123,15 @@ APP_SRC=".build/release/$APP_NAME.app"
 
 step() { echo; echo "── $* ─────────────────────────────────────────"; }
 fail() { echo "✗ $*" >&2; exit 1; }
+
+# Stop here when sourced for its functions.
+#
+# scripts/test-release-tag-verification.sh drives `verify_release_tag` and
+# `ensure_release_tag` against a stubbed `github_api`, which is the only way to
+# test the retry: the real failure needs GitHub to 404 a tag it has, for a few
+# seconds, and nothing can arrange that on demand. One definition, tested and
+# shipped, rather than a copy in a test that agrees with the bug.
+if [ "${TB_RELEASE_LIB_ONLY:-0}" = "1" ]; then return 0; fi
 
 TOOLING_COMMIT=$(git rev-parse HEAD)
 TARGET="${TB_RELEASE_SOURCE_COMMIT:-$TOOLING_COMMIT}"
