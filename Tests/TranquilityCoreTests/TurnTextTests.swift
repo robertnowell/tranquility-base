@@ -187,3 +187,70 @@ final class HubTranscriptTests: XCTestCase {
         XCTAssertTrue(html.contains("&lt;script&gt;"))
     }
 }
+
+/// "Agent 019db12b" was on 300 of 452 hubs. Codex keeps thread names for 9 of
+/// its own sessions, and a session with no briefs has no tab title either, so
+/// the first thing a person typed is the best name available. It is also the
+/// convention Codex itself uses for the names it does keep.
+final class HubNameFallbackTests: XCTestCase {
+
+    private func rendered(title: String?, transcript: [TurnText.Turn]) -> String {
+        HomeBase.render(HomeBase.Model(
+            sessionId: "019db12b-0000-0000-0000-000000000001",
+            title: title, callsign: nil, cwd: nil, goal: nil,
+            turns: [], pages: [], transcript: transcript))
+    }
+
+    func testARealNameAlwaysWins() {
+        let html = rendered(title: "Codex agent not appearing in grid",
+                            transcript: [.init(prompt: "some first prompt", prose: "")])
+        XCTAssertTrue(html.contains("Codex agent not appearing in grid"))
+    }
+
+    /// The page still renders when there is nothing at all to name it with.
+    func testNoNameAndNoTranscriptStillRenders() {
+        let html = rendered(title: nil, transcript: [])
+        XCTAssertTrue(html.contains("019db12b"))
+    }
+
+    /// The disclaimer under the transcript is gone: it read as an apology for
+    /// the section, and the section is the evidence.
+    func testTheTranscriptSectionSaysOnlyWhatItIs() {
+        let html = rendered(title: "x", transcript: [.init(prompt: "p", prose: "s")])
+        XCTAssertTrue(html.contains("Straight from the transcript. Newest first."))
+        XCTAssertFalse(html.contains("no key that joins them"))
+    }
+}
+
+extension TurnTextTests {
+    /// Codex sends its own scaffolding with role `user`, so role alone cannot
+    /// say a person typed it. Measured across 60 rollouts: scaffolding always
+    /// opens with an XML-ish tag or the AGENTS.md heading; prompts are prose.
+    func testCodexScaffoldingIsNotAPrompt() {
+        let msgs = [
+            CodexRollout.Message(role: "user", text: "# AGENTS.md instructions for /Users/x\n\n<INSTRUCTIONS>stuff</INSTRUCTIONS>"),
+            CodexRollout.Message(role: "user", text: "<environment_context>\n<cwd>/Users/x</cwd>\n</environment_context>"),
+            CodexRollout.Message(role: "user", text: "/login"),
+            CodexRollout.Message(role: "assistant", text: "I cannot do that here."),
+        ]
+        let turns = TurnText.codex(messages: msgs, limit: 10)
+        XCTAssertEqual(turns.map(\.prompt), ["/login"])
+    }
+
+    /// A person attaching an image sends the tag and their sentence together.
+    /// Dropping the message would lose the sentence.
+    func testAWrapperIsStrippedNotTheWholeMessage() {
+        let msgs = [
+            CodexRollout.Message(role: "user",
+                text: "<image name=[Image #1] path=\"/tmp/a.png\"></image>\nwhat is wrong here?"),
+            CodexRollout.Message(role: "assistant", text: "looking"),
+        ]
+        XCTAssertEqual(TurnText.codex(messages: msgs, limit: 5).first?.prompt,
+                       "what is wrong here?")
+    }
+
+    func testProseIsUntouched() {
+        XCTAssertEqual(TurnText.humanPart("just a normal question?"), "just a normal question?")
+        XCTAssertEqual(TurnText.humanPart("a < b, surely"), "a < b, surely")
+    }
+}
