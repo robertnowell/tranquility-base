@@ -224,7 +224,7 @@ public enum HomeBase {
 
         /// House editorial. Rung 5 in the skill's ladder: a deliberate
         /// unbranded look, never a guess at somebody's identity.
-        public static let editorial = Theme(
+        static let builtInEditorial = Theme(
             id: "editorial", nameplate: "Tranquility Base",
             bg: "#fcfbf8", paper: "#f4f2ec", ink: "#1f1e1c", heading: "#141312",
             muted: "#57534c", faint: "#6e6a63", line: "#ddd9cf",
@@ -239,7 +239,7 @@ public enum HomeBase {
         /// font without embedding it renders system sans and quietly claims an
         /// identity the page does not carry, and a page rewritten every turn
         /// cannot afford 400KB of embedded faces.
-        public static let kopi = Theme(
+        static let builtInKopi = Theme(
             id: "kopi", nameplate: "Kopi",
             bg: "#fcfbf8", paper: "#f4f2ec", ink: "#1f1e1c", heading: "#1e3a52",
             muted: "#57534c", faint: "#6e6a63", line: "#ddd9cf",
@@ -254,7 +254,7 @@ public enum HomeBase {
         /// Mirai. Only two tokens are recorded (#F57C00 on #F0F8FF, from the
         /// brand record via Kopi's get_context), so only those two move; the
         /// neutrals stay editorial rather than being invented around them.
-        public static let mirai = Theme(
+        static let builtInMirai = Theme(
             id: "mirai", nameplate: "Mirai",
             bg: "#f0f8ff", paper: "#e6f1fb", ink: "#1f1e1c", heading: "#14304a",
             muted: "#4f5b66", faint: "#69737d", line: "#cddeee",
@@ -266,6 +266,66 @@ public enum HomeBase {
             serif: "'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif",
             sans: "ui-sans-serif,-apple-system,'Helvetica Neue',sans-serif",
             fontSheet: nil, hasDark: false)
+
+
+        // ---------------------------------------------------------------
+        // THE TABLE LIVES IN A FILE, and the compiled values are its floor.
+        //
+        // Three renderers held three stylesheets, which is why a hub and the
+        // report it links to could not look like the same product. The tokens
+        // were never the problem: they have been here, correct, for weeks. They
+        // were unreadable by anything that is not this binary.
+        //
+        // ~/.claude/hq-themes.json now carries them, and a page author asks for
+        // them with `hq-theme <agent>`. This reads the same file so the two
+        // cannot drift; the compiled theme stays as the fallback and is
+        // deliberately identical to what the file ships, because a fallback that
+        // differs from the thing it backs up is a second opinion waiting for a
+        // machine with no config.
+        //
+        // Overlaid per FIELD rather than per theme: a file missing a key, or
+        // carrying a non-string where a colour belongs, loses that key and
+        // nothing else. A malformed file degrades to the built-in table rather
+        // than to no theme at all.
+        static var themesURL: URL {
+            if let p = ProcessInfo.processInfo.environment["HQ_THEMES"], !p.isEmpty {
+                return URL(fileURLWithPath: p)
+            }
+            return FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".claude/hq-themes.json")
+        }
+
+        static func fileTable() -> [String: Any]? {
+            guard let data = try? Data(contentsOf: themesURL),
+                  let obj = try? JSONSerialization.jsonObject(with: data)
+                    as? [String: Any] else { return nil }
+            return obj
+        }
+
+        static func overlay(_ id: String, _ base: Theme) -> Theme {
+            guard let t = (fileTable()?["themes"] as? [String: Any])?[id]
+                    as? [String: Any] else { return base }
+            func str(_ k: String, _ fallback: String) -> String {
+                (t[k] as? String).map { $0.isEmpty ? fallback : $0 } ?? fallback
+            }
+            return Theme(
+                id: base.id, nameplate: str("nameplate", base.nameplate),
+                bg: str("bg", base.bg), paper: str("paper", base.paper),
+                ink: str("ink", base.ink), heading: str("heading", base.heading),
+                muted: str("muted", base.muted), faint: str("faint", base.faint),
+                line: str("line", base.line), accent: str("accent", base.accent),
+                brand: str("brand", base.brand), amber: str("amber", base.amber),
+                serif: str("serif", base.serif), sans: str("sans", base.sans),
+                fontSheet: (t["font_sheet"] as? String) ?? base.fontSheet,
+                hasDark: (t["has_dark"] as? Bool) ?? base.hasDark)
+        }
+
+        /// House editorial, from the file where there is one.
+        public static var editorial: Theme { overlay("editorial", builtInEditorial) }
+        /// Kopi, "The Press", from the file where there is one.
+        public static var kopi: Theme { overlay("kopi", builtInKopi) }
+        /// Mirai, from the file where there is one.
+        public static var mirai: Theme { overlay("mirai", builtInMirai) }
 
         /// THE PAGE DECLARES ITS BRAND, and the directory is only the guess
         /// of last resort.
@@ -309,7 +369,7 @@ public enum HomeBase {
         /// A BRAND theme keeps its own accent. Kopi's orange is the identity
         /// and an agent is not one; there, the mark of the agent is its
         /// nameplate and byline.
-        static let agentInks = [
+        static let builtInAgentInks = [
             "#a32c28",  // house red
             "#1f4f8f",  // ink blue
             "#3d7048",  // field green
@@ -319,6 +379,19 @@ public enum HomeBase {
             "#96432c",  // rust
             "#4a5a2b",  // olive
         ]
+
+        /// The palette, from the file where there is one.
+        ///
+        /// Every entry must be a non-empty string or the whole list is refused:
+        /// a palette with a hole in it would hand some agents a colour and
+        /// others nothing, and which agents depends on a hash.
+        static var agentInks: [String] {
+            guard let raw = fileTable()?["agent_inks"] as? [Any] else {
+                return builtInAgentInks
+            }
+            let inks = raw.compactMap { $0 as? String }.filter { !$0.isEmpty }
+            return inks.count == raw.count && !inks.isEmpty ? inks : builtInAgentInks
+        }
 
         public func forAgent(sessionId: String) -> Theme {
             guard id == Theme.editorial.id else { return self }
