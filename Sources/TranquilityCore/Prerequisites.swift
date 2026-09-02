@@ -148,6 +148,11 @@ public enum Prerequisites {
         public var tmuxPath: @Sendable () -> String?
         /// nil when every hook is wired and reachable, matching `HookManifest`.
         public var hooksProblem: @Sendable () -> String?
+        /// Every detected harness and its own verdict, success included. The
+        /// row prints this; `hooksProblem` still decides whether the row is
+        /// satisfied. Two questions, because "is anything wrong" and "what does
+        /// each harness say" have different answers on a half-broken machine.
+        public var hooksDetail: @Sendable () -> String?
         public var hasSecret: @Sendable (Secrets.Key) -> Bool
         /// What the provider last said about a stored key, or nil if it was
         /// never asked. A row that reports a refusal in its text and a green
@@ -158,10 +163,12 @@ public enum Prerequisites {
             tmuxPath: @escaping @Sendable () -> String?,
             hooksProblem: @escaping @Sendable () -> String?,
             hasSecret: @escaping @Sendable (Secrets.Key) -> Bool,
-            keyVerdict: @escaping @Sendable (Secrets.Key) -> KeyCheck.Outcome? = { _ in nil }
+            keyVerdict: @escaping @Sendable (Secrets.Key) -> KeyCheck.Outcome? = { _ in nil },
+            hooksDetail: @escaping @Sendable () -> String? = { nil }
         ) {
             self.tmuxPath = tmuxPath
             self.hooksProblem = hooksProblem
+            self.hooksDetail = hooksDetail
             self.hasSecret = hasSecret
             self.keyVerdict = keyVerdict
         }
@@ -187,7 +194,8 @@ public enum Prerequisites {
             // harness it knew to ask about.
             hooksProblem: { HookManifest.machineSummary() },
             hasSecret: { Secrets.read($0) != nil },
-            keyVerdict: { KeyVerdict.last(for: $0) })
+            keyVerdict: { KeyVerdict.last(for: $0) },
+            hooksDetail: { HookManifest.machineDetail() })
     }
 
     /// The canonical install locations, checked WITHOUT `Tmux.resolveBinary`'s memo.
@@ -236,13 +244,25 @@ public enum Prerequisites {
                 return State(item: item, satisfied: false,
                              detail: "not installed. Replies have nowhere to go")
             case .hooks:
+                // EVERY harness names itself, healthy or not.
+                //
+                // The row used to print only what was WRONG, so on a machine
+                // where Claude Code wired and Codex did not, the line read
+                // "Codex: scripts missing" and said nothing whatever about
+                // Claude Code. One lamp and one sentence were standing in for
+                // two independent installs, and the half that worked was
+                // indistinguishable from a half nobody had looked at. Ruled
+                // 1 Sep: the action stays one button, the result gets a line
+                // per harness.
+                let detail = probes.hooksDetail()
                 if let problem = probes.hooksProblem() {
                     // problemSummary says "hooks: 2 not installed" because it
-                    // also feeds a log line; in a row already labelled "Claude
-                    // Code hooks" that prefix is said twice.
+                    // also feeds a log line; in a row already labelled "Agent
+                    // hooks" that prefix is said twice.
                     let trimmed = problem.hasPrefix("hooks: ")
                         ? String(problem.dropFirst("hooks: ".count)) : problem
-                    return State(item: item, satisfied: false, detail: trimmed)
+                    return State(item: item, satisfied: false,
+                                 detail: detail ?? trimmed)
                 }
                 // Name every harness it is wired into, not the first one we
                 // happened to support. On a machine running both, "wired into
@@ -284,13 +304,24 @@ public enum Prerequisites {
         states.filter(\.item.isRequired).allSatisfy(\.satisfied)
     }
 
-    /// Rows worth drawing.
+    /// Rows worth drawing. All of them.
     ///
-    /// `hooks` is hidden while healthy. The app repairs hooks at launch and says
-    /// so in the HUD, so in the normal case a row for them is a line of furniture
-    /// reporting that nothing happened. It appears only when repair could not
-    /// finish, which is the one time the user needs a door.
-    public static func visible(_ states: [State]) -> [State] {
-        states.filter { $0.item != .hooks || !$0.satisfied }
-    }
+    /// `hooks` used to be hidden while healthy, on the argument that the app
+    /// repairs at launch and a row reporting that nothing happened is
+    /// furniture. REVERSED 1 Sep, by the only evidence that settles a question
+    /// like this: somebody used it. Robert, on a fresh install, "the hooks
+    /// don't show like success. And I wonder why."
+    ///
+    /// They did not show it because there was nothing left to show it with.
+    /// Success removed the row, so the one line on the screen that could have
+    /// said "Claude Code wired, Codex wired" was deleted at the exact moment it
+    /// had something worth saying, and the checklist's answer to "is this part
+    /// working" was a gap where a row used to be. A gap is not an answer; on a
+    /// screen whose whole job is stating what is ready, it reads as the item
+    /// having been dropped.
+    ///
+    /// This is the same ruling as the per-harness detail beside it and follows
+    /// from it: a row told to report success separately for two harnesses has
+    /// to be on screen to do it.
+    public static func visible(_ states: [State]) -> [State] { states }
 }

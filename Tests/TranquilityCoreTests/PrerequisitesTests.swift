@@ -92,11 +92,12 @@ final class PrerequisitesTests: XCTestCase {
 
     // MARK: - which rows are drawn
 
-    func testHealthyHooksAreNotDrawn() {
-        // The app repairs hooks at launch, so a healthy row is furniture
-        // reporting that nothing happened.
+    /// Reversed 1 Sep. Hiding a healthy hooks row meant success deleted the
+    /// only line that could have reported it, so the checklist answered "is
+    /// this working?" with a gap. See `Prerequisites.visible`.
+    func testHealthyHooksAreDrawnToo() {
         let visible = Prerequisites.visible(Prerequisites.snapshot(probes()))
-        XCTAssertFalse(visible.contains { $0.item == .hooks })
+        XCTAssertTrue(visible.contains { $0.item == .hooks })
     }
 
     func testBrokenHooksAreDrawn() {
@@ -107,7 +108,8 @@ final class PrerequisitesTests: XCTestCase {
 
     func testTmuxAndTheKeysAreAlwaysDrawn() {
         let visible = Prerequisites.visible(Prerequisites.snapshot(probes()))
-        XCTAssertEqual(visible.map(\.item), [.tmux, .anthropicKey, .elevenLabsKey, .assemblyAIKey])
+        XCTAssertEqual(visible.map(\.item),
+                       [.tmux, .hooks, .anthropicKey, .elevenLabsKey, .assemblyAIKey])
     }
 
     // MARK: - the links

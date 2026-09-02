@@ -205,6 +205,39 @@ final class FirstRunInstallTests: XCTestCase {
         XCTAssertEqual(key.detail, "without it, transcription after you stop")
     }
 
+    // MARK: - Two harnesses, two answers
+
+    /// The half that worked is the half that was never printed.
+    ///
+    /// One row and one lamp stood in for two independent installs. On a machine
+    /// where Claude Code wired and Codex did not, the row read "Codex: scripts
+    /// missing" and said nothing at all about Claude Code, so "did Claude Code
+    /// work?" was a question the screen could not answer. Ruled 1 Sep: one
+    /// action, one result line per harness.
+    func testAHealthyHarnessSaysSoBesideABrokenOne() {
+        let states = Prerequisites.snapshot(Prerequisites.Probes(
+            tmuxPath: { "/opt/homebrew/bin/tmux" },
+            hooksProblem: { "hooks: Codex: 5 pointing at a missing file" },
+            hasSecret: { _ in true },
+            hooksDetail: { "Claude Code wired; Codex: 5 pointing at a missing file" }))
+        let hooks = states.first { $0.item == .hooks }!
+        XCTAssertFalse(hooks.satisfied, "a broken half still holds the gate")
+        XCTAssertTrue(hooks.detail.contains("Claude Code wired"),
+                      "the half that worked has to say so: \(hooks.detail)")
+        XCTAssertTrue(hooks.detail.contains("Codex:"), hooks.detail)
+    }
+
+    /// And with no per-harness detail available, the row still says what is
+    /// wrong rather than going blank. The old text is the floor, not the ceiling.
+    func testTheRowFallsBackToTheProblemWhenThereIsNoDetail() {
+        let states = Prerequisites.snapshot(Prerequisites.Probes(
+            tmuxPath: { "/opt/homebrew/bin/tmux" },
+            hooksProblem: { "hooks: 2 not installed" },
+            hasSecret: { _ in true }))
+        let hooks = states.first { $0.item == .hooks }!
+        XCTAssertEqual(hooks.detail, "2 not installed")
+    }
+
     func testAVerdictSurvivesARoundTrip() {
         let all: [KeyCheck.Outcome] = [
             .working, .unreachable, .rejected(status: 401), .unexpected(status: 400),

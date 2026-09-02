@@ -595,23 +595,66 @@ public enum HookManifest {
     /// two-harness machine, was the app quietly telling us what it had not
     /// done. A summary that cannot name which harness is broken reproduces
     /// exactly that.
-    public static func machineSummary() -> String? {
-        let problems = detected().compactMap { harness -> String? in
+    /// Every detected harness, named, whether or not it is healthy.
+    ///
+    /// `machineSummary()` below reports only PROBLEMS, and a harness that is
+    /// fine contributes nothing at all to it: no line, no lamp, no mention. On
+    /// a two-harness machine that makes "did Claude Code work?" a question the
+    /// screen structurally cannot answer, because one row and one lamp are
+    /// standing in for two independent installs that fail independently.
+    ///
+    /// Robert, 1 Sep, having watched a fresh install: "we should report success
+    /// separately for Claude Code and for Codex. Install can be a both thing."
+    /// So the ACTION stays one button and the RESULT gets one line per harness,
+    /// which is the half that was missing. This is the same lesson the harness
+    /// dimension taught on 28 Aug, one level up: a manifest that describes half
+    /// a machine is true and useless, and so is a row that reports half a
+    /// repair.
+    ///
+    /// Ordered by `detected()`, so the same machine reads the same way twice.
+    public static func machineReport() -> [(harness: Harness, problem: String?)] {
+        detected().map { harness in
             if let wiring = problemSummary(settings: harness.settingsURL,
                                            expecting: harness.expected) {
-                return "\(harness.label): "
-                    + wiring.replacingOccurrences(of: "hooks: ", with: "")
+                return (harness,
+                        wiring.replacingOccurrences(of: "hooks: ", with: ""))
             }
             // Wired, and still not running. Reported as a problem rather than
             // a footnote, because from the user's side it is indistinguishable
             // from not being installed: no lamps, no announcements, nothing.
             switch approval(for: harness) {
-            case .notRequired, .granted: return nil
-            case .pending: return "\(harness.label): installed, awaiting approval"
-            case .unknown: return "\(harness.label): cannot read \(harness.approvalConfigURL?.lastPathComponent ?? "config")"
+            case .notRequired, .granted: return (harness, nil)
+            case .pending: return (harness, "installed, awaiting approval")
+            case .unknown:
+                return (harness, "cannot read "
+                    + (harness.approvalConfigURL?.lastPathComponent ?? "config"))
             }
         }
+    }
+
+    /// One line for a log, or for anything that only wants to know what is
+    /// wrong. Built from `machineReport()` so the two cannot disagree.
+    public static func machineSummary() -> String? {
+        let problems = machineReport().compactMap { entry in
+            entry.problem.map { "\(entry.harness.label): \($0)" }
+        }
         return problems.isEmpty ? nil : "hooks: " + problems.joined(separator: "; ")
+    }
+
+    /// What the CHECKLIST ROW says: every harness, its own verdict, success
+    /// included. nil when this machine has no harness at all to talk about.
+    ///
+    /// The healthy half is the part that was never printed, and it is the part
+    /// somebody staring at a half-broken install actually needs. "Codex:
+    /// scripts missing" leaves them guessing about Claude Code; "Claude Code
+    /// wired, Codex: scripts missing" does not.
+    public static func machineDetail() -> String? {
+        let entries = machineReport()
+        guard !entries.isEmpty else { return nil }
+        return entries.map { entry in
+            guard let problem = entry.problem else { return "\(entry.harness.label) wired" }
+            return "\(entry.harness.label): \(problem)"
+        }.joined(separator: "; ")
     }
 
     /// What the user has to DO next for this harness, in one sentence, or nil

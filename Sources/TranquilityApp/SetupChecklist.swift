@@ -332,7 +332,15 @@ final class SetupChecklistView: NSStackView {
                 failed.append("\(harness.label): \(reason)")
             }
         }
-        if !failed.isEmpty { return failed.joined(separator: "; ") }
+        // BOTH halves, never just the broken one. Returning only the failures
+        // is the same omission the row itself had: press Wire them on a machine
+        // where Claude Code takes it and Codex does not, and the note reported
+        // the Codex failure alone, so the repair that DID happen was invisible
+        // at the exact moment somebody was watching for it. Ruled 1 Sep.
+        if !failed.isEmpty {
+            let worked = wired.map { "wired " + $0 }
+            return (worked + failed).joined(separator: "; ")
+        }
         // Writing the file is not the same as the harness agreeing to run it.
         // Codex asks once and fails silent until it is answered, so a row that
         // says "wired" and stops there sends someone away believing the setup
@@ -385,13 +393,21 @@ final class SetupChecklistView: NSStackView {
                     // what pushed the Start door off the bottom edge on 1 Sep.
                     // A demo that photographs the short message photographs the
                     // case that never broke.
+                    // A MIXED machine, which is the state worth photographing
+                    // and the one a developer's Mac never shows: one harness
+                    // wired, one not. Both-broken and both-fine each have an
+                    // obvious rendering; the half-and-half is where a single
+                    // row and a single lamp used to lose the good news.
                     hooksProblem: {
-                        "hooks: scripts missing at /Applications/Tranquility "
-                        + "Base.app/Contents/Resources/hooks; Codex: scripts "
-                        + "missing at /Applications/Tranquility Base.app/"
-                        + "Contents/Resources/hooks"
+                        "hooks: Codex: scripts missing at /Applications/"
+                        + "Tranquility Base.app/Contents/Resources/hooks"
                     },
-                    hasSecret: { _ in false }))
+                    hasSecret: { _ in false },
+                    hooksDetail: {
+                        "Claude Code wired; Codex: scripts missing at "
+                        + "/Applications/Tranquility Base.app/Contents/"
+                        + "Resources/hooks"
+                    }))
                 : Prerequisites.snapshot()
             await MainActor.run {
                 self.prereqScanInFlight = false
