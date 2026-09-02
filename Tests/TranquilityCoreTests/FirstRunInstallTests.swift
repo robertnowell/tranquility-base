@@ -207,6 +207,24 @@ final class FirstRunInstallTests: XCTestCase {
 
     // MARK: - Two harnesses, two answers
 
+    /// Named, not discovered. These ran off `HookManifest.detected()` at first,
+    /// which meant they exercised nothing on CI, where no harness exists: every
+    /// one of them guarded and returned. A test that quietly does nothing on
+    /// the machine that gates the branch is worse than no test.
+    private static let claude = ClaudeCodeAdapter().id
+    private static let codex = CodexAdapter().id
+    private static let both = [claude, codex]
+
+    private func probes(
+        broken: Set<String> = [], harnesses: [String] = both
+    ) -> Prerequisites.Probes {
+        Prerequisites.Probes(
+            tmuxPath: { "/opt/homebrew/bin/tmux" },
+            hooksProblem: { broken.contains($0) ? "5 pointing at a missing file" : nil },
+            hasSecret: { _ in true },
+            harnesses: { harnesses })
+    }
+
     /// The half that worked is the half that was never printed.
     ///
     /// One row and one lamp stood in for two independent installs, so on a
@@ -214,35 +232,23 @@ final class FirstRunInstallTests: XCTestCase {
     /// scripts missing" and said nothing at all about Claude Code. Ruled 1 Sep:
     /// one row per harness, each with its own lamp.
     func testEachHarnessRowCarriesItsOwnVerdict() {
-        let broken = HookManifest.detected().first
-        // Nothing to assert on a machine with no harness at all, which is the
-        // right amount of rows for that machine.
-        try? XCTSkipIf(broken == nil)
-        guard let broken else { return }
-        let states = Prerequisites.snapshot(Prerequisites.Probes(
-            tmuxPath: { "/opt/homebrew/bin/tmux" },
-            hooksProblem: { id in
-                id == broken.id ? "5 pointing at a missing file" : nil
-            },
-            hasSecret: { _ in true }))
-
+        let states = Prerequisites.snapshot(probes(broken: [Self.codex]))
+        var seen: [String: Prerequisites.State] = [:]
         for state in states {
-            guard case .hooks(let harness) = state.item else { continue }
-            if harness == broken.id {
-                XCTAssertFalse(state.satisfied, broken.label)
-                XCTAssertEqual(state.detail, "5 pointing at a missing file")
-            } else {
-                XCTAssertTrue(state.satisfied, harness)
-                XCTAssertEqual(state.detail, "wired",
-                               "a healthy harness says so on its own row")
-            }
+            if case .hooks(let harness) = state.item { seen[harness] = state }
         }
+        XCTAssertEqual(Set(seen.keys), Set(Self.both))
+        XCTAssertTrue(seen[Self.claude]!.satisfied)
+        XCTAssertEqual(seen[Self.claude]!.detail, "wired",
+                       "a healthy harness says so on its own row")
+        XCTAssertFalse(seen[Self.codex]!.satisfied)
+        XCTAssertEqual(seen[Self.codex]!.detail, "5 pointing at a missing file")
     }
 
-    /// The row is titled with its harness, so the detail must not repeat it.
+    /// The row is titled with its harness, so the detail must not repeat it:
     /// "Codex hooks / Codex: awaiting approval" says Codex twice.
     func testAHooksRowNamesItsHarnessOnceOnly() {
-        for item in Prerequisites.items() {
+        for item in Prerequisites.items(harnesses: Self.both) {
             guard case .hooks = item, let harness = item.harness else { continue }
             XCTAssertEqual(item.title, harness.label + " hooks")
         }
@@ -251,21 +257,13 @@ final class FirstRunInstallTests: XCTestCase {
     /// The gate is ANY, not ALL. Most people run one harness; a second one
     /// whose directory exists because it was tried once must not hold the door.
     func testOneWiredHarnessOpensTheDoor() {
-        guard let first = HookManifest.detected().first else { return }
-        let states = Prerequisites.snapshot(Prerequisites.Probes(
-            tmuxPath: { "/opt/homebrew/bin/tmux" },
-            hooksProblem: { id in id == first.id ? nil : "not installed" },
-            hasSecret: { _ in true }))
+        let states = Prerequisites.snapshot(probes(broken: [Self.codex]))
         XCTAssertTrue(Prerequisites.allRequiredSatisfied(states),
                       "one wired harness is enough to finish first run")
     }
 
     func testNoWiredHarnessHoldsTheDoor() {
-        guard !HookManifest.detected().isEmpty else { return }
-        let states = Prerequisites.snapshot(Prerequisites.Probes(
-            tmuxPath: { "/opt/homebrew/bin/tmux" },
-            hooksProblem: { _ in "not installed" },
-            hasSecret: { _ in true }))
+        let states = Prerequisites.snapshot(probes(broken: Set(Self.both)))
         XCTAssertFalse(Prerequisites.allRequiredSatisfied(states))
     }
 

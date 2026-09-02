@@ -11,21 +11,28 @@ import XCTest
 /// deliver a single reply.
 final class PrerequisitesTests: XCTestCase {
 
+    /// Both harnesses, always, whatever this machine happens to have. The
+    /// snapshot is a pure function of its probes and the tests say so.
+    private static let bothHarnesses = [ClaudeCodeAdapter().id, CodexAdapter().id]
+
     private func probes(
         tmux: String? = "/opt/homebrew/bin/tmux",
         hooks: String? = nil,
-        secrets: Set<Secrets.Key> = Set(Secrets.Key.allCases)
+        secrets: Set<Secrets.Key> = Set(Secrets.Key.allCases),
+        harnesses: [String] = bothHarnesses
     ) -> Prerequisites.Probes {
         Prerequisites.Probes(
             tmuxPath: { tmux },
             hooksProblem: { _ in hooks },
-            hasSecret: { secrets.contains($0) })
+            hasSecret: { secrets.contains($0) },
+            harnesses: { harnesses })
     }
 
-    /// The first harness this machine has, which is what `items()` builds a
-    /// hooks row for. Tests that ask about "the hooks row" mean this one.
+    /// The Claude Code row, which `probes()` always supplies. Named rather
+    /// than discovered: a test that asks the machine which harness to talk
+    /// about is a test whose subject changes with the machine.
     private var aHooksRow: Prerequisites.Item {
-        .hooks(harness: HookManifest.detected().first?.id ?? ClaudeCodeAdapter().id)
+        .hooks(harness: ClaudeCodeAdapter().id)
     }
 
     private func state(_ states: [Prerequisites.State],
@@ -38,7 +45,7 @@ final class PrerequisitesTests: XCTestCase {
     /// ANTHROPIC JOINED THE GATE 1 SEP. Without that key the readout falls to
     /// the deterministic floor, which the product is not.
     func testTmuxHooksAndAnthropicHoldTheGate() {
-        let required = Prerequisites.items().filter(\.isRequired)
+        let required = Prerequisites.items(harnesses: Self.bothHarnesses).filter(\.isRequired)
         XCTAssertTrue(required.contains(.tmux))
         XCTAssertTrue(required.contains(.anthropicKey))
         XCTAssertFalse(required.contains(.elevenLabsKey))
@@ -47,12 +54,13 @@ final class PrerequisitesTests: XCTestCase {
 
     /// One row per harness, named for it. A machine with no harness gets none.
     func testEachDetectedHarnessGetsItsOwnRow() {
-        let hookRows = Prerequisites.items().compactMap { item -> String? in
+        let items = Prerequisites.items(harnesses: Self.bothHarnesses)
+        let hookRows = items.compactMap { item -> String? in
             guard case .hooks(let harness) = item else { return nil }
             return harness
         }
-        XCTAssertEqual(hookRows, HookManifest.detected().map(\.id))
-        for item in Prerequisites.items() where item.harness != nil {
+        XCTAssertEqual(hookRows, Self.bothHarnesses)
+        for item in items where item.harness != nil {
             XCTAssertTrue(item.title.hasSuffix(" hooks"), item.title)
             XCTAssertNotEqual(item.title, "Agent hooks",
                               "a hooks row has to name its harness")
@@ -61,8 +69,17 @@ final class PrerequisitesTests: XCTestCase {
 
     /// Round trip, because the button identifier is the only thing carrying a
     /// row's identity from the view back to Core.
+    /// A machine with neither harness draws no hooks row at all, and is not
+    /// told its Codex is broken.
+    func testNoHarnessMeansNoHooksRow() {
+        let states = Prerequisites.snapshot(probes(harnesses: []))
+        XCTAssertFalse(states.contains { if case .hooks = $0.item { return true }; return false })
+        XCTAssertTrue(Prerequisites.allRequiredSatisfied(states),
+                      "nothing to wire cannot be a blocker")
+    }
+
     func testAnItemSurvivesItsIdentifier() {
-        for item in Prerequisites.items() {
+        for item in Prerequisites.items(harnesses: Self.bothHarnesses) {
             XCTAssertEqual(Prerequisites.Item(id: item.id), item, item.id)
         }
         XCTAssertNil(Prerequisites.Item(id: "nonsense"))
@@ -112,7 +129,7 @@ final class PrerequisitesTests: XCTestCase {
     /// the row has to be worth reading by someone deciding whether to go get one.
     func testEveryMissingKeyNamesWhatIsLost() {
         let states = Prerequisites.snapshot(probes(secrets: []))
-        for item in Prerequisites.items() where item.secret != nil {
+        for item in Prerequisites.items(harnesses: Self.bothHarnesses) where item.secret != nil {
             let detail = state(states, item).detail
             XCTAssertTrue(detail.lowercased().contains("without it"),
                           "\(item) says '\(detail)'")
@@ -152,7 +169,7 @@ final class PrerequisitesTests: XCTestCase {
     func testTmuxAndTheKeysAreAlwaysDrawn() {
         let visible = Prerequisites.visible(Prerequisites.snapshot(probes()))
         XCTAssertEqual(visible.map(\.item),
-                       Prerequisites.items())
+                       Prerequisites.items(harnesses: Self.bothHarnesses))
     }
 
     // MARK: - the links
@@ -160,7 +177,7 @@ final class PrerequisitesTests: XCTestCase {
     /// A row that says "add a key" without saying where to get one has handed
     /// the user a search, which is what this screen exists to stop doing.
     func testEveryKeyRowCarriesASignupLink() {
-        for item in Prerequisites.items() where item.secret != nil {
+        for item in Prerequisites.items(harnesses: Self.bothHarnesses) where item.secret != nil {
             XCTAssertNotNil(item.signupURL, "\(item) has no signup URL")
             XCTAssertEqual(item.signupURL?.scheme, "https", "\(item) link is not https")
         }
@@ -189,7 +206,7 @@ final class PrerequisitesTests: XCTestCase {
     // MARK: - shape
 
     func testEveryItemCarriesATitleWhyAndFixLabel() {
-        for item in Prerequisites.items() {
+        for item in Prerequisites.items(harnesses: Self.bothHarnesses) {
             XCTAssertFalse(item.title.isEmpty, "\(item) has no title")
             XCTAssertFalse(item.why.isEmpty, "\(item) has no why")
             XCTAssertFalse(item.fixLabel.isEmpty, "\(item) has no fix label")

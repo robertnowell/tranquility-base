@@ -181,9 +181,17 @@ public enum Prerequisites {
     /// A machine with no harness gets no hooks row, which is right. Telling
     /// somebody their Codex hooks are broken when they have never run Codex is
     /// the thing `Harness.isPresent` has always existed to prevent.
-    public static func items() -> [Item] {
+    /// INJECTABLE, and it has to be. The first version read `detected()`
+    /// directly, which made every hooks test depend on the machine running it
+    /// having `~/.claude`: green here, and a force-unwrap crash on CI, where no
+    /// harness exists and the row the test asked for was simply not there. A
+    /// test that only passes on the developer's Mac is the same defect as the
+    /// path that only breaks off it, which is what this whole branch is about.
+    public static func items(
+        harnesses: [String] = HookManifest.detected().map(\.id)
+    ) -> [Item] {
         [.tmux]
-            + HookManifest.detected().map { Item.hooks(harness: $0.id) }
+            + harnesses.map { Item.hooks(harness: $0) }
             + [.anthropicKey, .elevenLabsKey, .assemblyAIKey]
     }
 
@@ -217,6 +225,10 @@ public enum Prerequisites {
         /// Was machine-wide, which is what forced one row to speak for two
         /// installs. A row per harness needs a probe per harness.
         public var hooksProblem: @Sendable (String) -> String?
+        /// Which harnesses this machine has, by id. A probe like any other:
+        /// "what is installed" is exactly the kind of question a test needs to
+        /// answer for itself.
+        public var harnesses: @Sendable () -> [String]
         public var hasSecret: @Sendable (Secrets.Key) -> Bool
         /// What the provider last said about a stored key, or nil if it was
         /// never asked. A row that reports a refusal in its text and a green
@@ -227,10 +239,13 @@ public enum Prerequisites {
             tmuxPath: @escaping @Sendable () -> String?,
             hooksProblem: @escaping @Sendable (String) -> String?,
             hasSecret: @escaping @Sendable (Secrets.Key) -> Bool,
-            keyVerdict: @escaping @Sendable (Secrets.Key) -> KeyCheck.Outcome? = { _ in nil }
+            keyVerdict: @escaping @Sendable (Secrets.Key) -> KeyCheck.Outcome? = { _ in nil },
+            harnesses: @escaping @Sendable () -> [String]
+                = { HookManifest.detected().map(\.id) }
         ) {
             self.tmuxPath = tmuxPath
             self.hooksProblem = hooksProblem
+            self.harnesses = harnesses
             self.hasSecret = hasSecret
             self.keyVerdict = keyVerdict
         }
@@ -282,7 +297,7 @@ public enum Prerequisites {
     /// hooks audit parses a file, a keychain read is a round trip, and the tmux
     /// fallback spawns a login shell. None of that belongs on a 1 Hz UI timer.
     public static func snapshot(_ probes: Probes = .live) -> [State] {
-        items().map { item in
+        items(harnesses: probes.harnesses()).map { item in
             if let secret = item.secret {
                 guard probes.hasSecret(secret) else {
                     return State(item: item, satisfied: false, detail: missingDetail(item))
