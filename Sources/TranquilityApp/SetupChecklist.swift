@@ -72,6 +72,43 @@ final class SetupChecklistView: NSStackView {
         for (index, item) in Prerequisites.Item.allCases.enumerated() {
             addArrangedSubview(prerequisiteRow(item, step: index + 1))
         }
+        // The SETUP tab gets a restart door and onboarding does not.
+        //
+        // Onboarding already has one, offered at the single moment it is the
+        // next action. This pane is the OTHER moment: you came back here
+        // deliberately, after granting something in System Settings or
+        // rotating a key, and the thing you are missing is the relaunch that
+        // makes a running process see it. Ruled 1 Sep, and it is why the row
+        // is unconditional here: a door you can only find when the app already
+        // agrees you need it is a door for a state the app can detect, and
+        // this one it cannot.
+        guard mode == .reference else { return }
+        addArrangedSubview(restartRow())
+    }
+
+    /// The relaunch door, in the pane where you go looking for it.
+    private func restartRow() -> NSView {
+        let button = ConsoleButton.door("Restart Tranquility Base",
+                                        ink: StateLegend.Palette.working,
+                                        target: self, action: #selector(restartTapped))
+        button.identifier = NSUserInterfaceItemIdentifier("prereq.restart")
+        let note = NSTextField(wrappingLabelWithString:
+            "a permission granted while the app is running only reaches it after this")
+        note.font = ChromeType.mono(ofSize: 11, weight: .regular)
+        note.textColor = StateLegend.Palette.secondary
+        note.drawsBackground = false
+        note.translatesAutoresizingMaskIntoConstraints = false
+        note.widthAnchor.constraint(equalToConstant: 300).isActive = true
+
+        let stacked = NSStackView(views: [button, note])
+        stacked.orientation = .vertical
+        stacked.alignment = .leading
+        stacked.spacing = 2
+        return stacked
+    }
+
+    @objc private func restartTapped() {
+        AppRelaunch.restart(reason: "a restart asked for from Settings")
     }
 
     @available(*, unavailable)
@@ -90,6 +127,30 @@ final class SetupChecklistView: NSStackView {
     /// "is the shared checklist really what this pane is showing", and a count
     /// answers it without handing anyone a way to mutate the state.
     var rowCountForSelfTest: Int { prereqRows.count }
+
+    /// Whether the off-main scan has landed. The preview waits on this: the
+    /// first frame of this view is always the pre-scan one, and a photograph of
+    /// it shows rows that have not measured anything yet.
+    var hasScannedForSelfTest: Bool { !prereqStates.isEmpty }
+
+    /// Whether the SETUP tab's restart door is here. Rule 7: the panel's
+    /// evidence is a drill, and this door exists precisely for a state the app
+    /// cannot detect, so nothing else would ever notice it going missing.
+    var hasRestartDoorForSelfTest: Bool {
+        subviewTree(self).contains {
+            ($0 as? NSButton)?.identifier?.rawValue == "prereq.restart"
+        }
+    }
+
+    /// Every row's visible text, for the drill that asserts what is NOT said.
+    var rowTextForSelfTest: String {
+        subviewTree(self).compactMap { ($0 as? NSTextField)?.stringValue }
+            .joined(separator: " ")
+    }
+
+    private func subviewTree(_ view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap { subviewTree($0) }
+    }
 
     /// Kick a scan and paint whatever is already known. Both hosts call this
     /// when they appear.
@@ -122,10 +183,6 @@ final class SetupChecklistView: NSStackView {
         prereqDots[item] = dot
         row.addArrangedSubview(dot)
 
-        // "recommended", never "(optional)". Same ruling as the permission
-        // screen's "(fallback)": a word that undermines a row is worse than no
-        // word, and these rows have to survive being skimmed by someone who has
-        // already spent a minute on permissions.
         // The number is set at RENDER time, not here. `hooks` is hidden whenever
         // it is healthy, and a number baked in at build time counts a row the
         // user cannot see: the first look at this screen read "1. tmux, 3.
@@ -320,7 +377,20 @@ final class SetupChecklistView: NSStackView {
             let states = demo
                 ? Prerequisites.snapshot(Prerequisites.Probes(
                     tmuxPath: { nil },
-                    hooksProblem: { "hooks: 2 not installed" },
+                    // The LONGEST true detail this row can carry, not the
+                    // shortest. A shipped install's failure text is a path
+                    // (`scripts missing at /Applications/Tranquility
+                    // Base.app/Contents/Resources/hooks`), it wraps to six
+                    // lines in the onboarding window, and those six lines are
+                    // what pushed the Start door off the bottom edge on 1 Sep.
+                    // A demo that photographs the short message photographs the
+                    // case that never broke.
+                    hooksProblem: {
+                        "hooks: scripts missing at /Applications/Tranquility "
+                        + "Base.app/Contents/Resources/hooks; Codex: scripts "
+                        + "missing at /Applications/Tranquility Base.app/"
+                        + "Contents/Resources/hooks"
+                    },
                     hasSecret: { _ in false }))
                 : Prerequisites.snapshot()
             await MainActor.run {
@@ -365,16 +435,12 @@ final class SetupChecklistView: NSStackView {
 
         for state in shownStates {
             let item = state.item
-            // The suffix rides the NAME in the wide window and the DETAIL in
-            // the panel. "2. Anthropic  (recommended)" needs about 250pt and
-            // the panel's name column is 150, so on the narrow host it
-            // truncated to "(recomm" against a door, twice. Moving it costs
-            // nothing: the detail line is right underneath, has the room, and
-            // is where the rest of the row's qualifying text already lives.
-            let wideSuffix = mode == .reference ? "" : "  (recommended)"
-            let suffix = item.isRecommended ? wideSuffix : ""
+            // A NAME, and nothing else. The "(recommended)" suffix that used to
+            // ride this line is gone (1 Sep): see `Item.isRecommended`. It had
+            // already cost two layout passes chasing somewhere to put it, which
+            // is usually the sign that a thing does not belong on the row.
             prereqNames[item]?.stringValue =
-                "\(position[item] ?? 1). " + item.title + suffix
+                "\(position[item] ?? 1). " + item.title
             // A satisfied tmux or hooks row has nothing left to do; a key row
             // keeps its door, because a key is a thing you rotate.
             prereqButtons[item]?.isHidden =
@@ -385,18 +451,22 @@ final class SetupChecklistView: NSStackView {
             // not amber: it is not waiting on anybody, and colouring it the same
             // as a blocker is how "optional" stops meaning anything.
             if let dot = prereqDots[item] {
+                // Three states, not two. Green is satisfied. Amber is "this is
+                // yours to fix now", which covers an unmet REQUIRED row and
+                // also a stored key the provider refused, and the second one is
+                // new: before 1 Sep a rejected key kept a green lamp because
+                // the lamp only ever asked whether a key was stored. Grey stays
+                // what it always meant, an optional row nobody has filled in,
+                // which is not a problem and must not look like one.
                 Self.paint(dot, state.satisfied
                     ? StateLegend.Palette.ready
-                    : (item.isRequired ? StateLegend.Palette.fault
-                                       : StateLegend.Palette.faint))
+                    : (item.isRequired || state.attention
+                        ? StateLegend.Palette.fault
+                        : StateLegend.Palette.faint))
             }
             prereqDetails[item]?.textColor = state.satisfied
                 ? StateLegend.Palette.hint : StateLegend.Palette.secondary
-            let base = prereqNote[item] ?? state.detail
-            prereqDetails[item]?.stringValue =
-                mode == .reference && item.isRecommended && prereqNote[item] == nil
-                    ? "recommended · " + base
-                    : base
+            prereqDetails[item]?.stringValue = prereqNote[item] ?? state.detail
         }
         onReadiness?(!prereqStates.isEmpty
             && Prerequisites.allRequiredSatisfied(prereqStates))

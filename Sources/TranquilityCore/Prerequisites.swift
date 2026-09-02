@@ -79,8 +79,18 @@ public enum Prerequisites {
             }
         }
 
-        /// The one whose absence costs the most. Said out loud in the row rather
-        /// than left for the user to infer from three identically-styled lines.
+        /// The one whose absence costs the most.
+        ///
+        /// NO LONGER PRINTED ANYWHERE. It used to append "(recommended)" to the
+        /// Anthropic row and prefix "recommended \u{00B7} " to its detail in the panel,
+        /// and Robert's reading of that on 1 Sep was "what the fuck is that,
+        /// get rid of it, it's just necessary". He is right on both counts: the
+        /// row already says what is lost without the key, which is the fact,
+        /// and a label ranking one row against two others is the screen having
+        /// an opinion at the moment somebody is trying to leave it.
+        ///
+        /// Kept as a fact because the gate still reads it (`isRequired` is a
+        /// different question and neither one is display).
         public var isRecommended: Bool { self == .anthropicKey }
 
         /// Which keychain entry this row is about; nil for the two that are not
@@ -117,11 +127,18 @@ public enum Prerequisites {
         public let satisfied: Bool
         /// Live status text, in the same register as `Permissions.statusDescription`.
         public let detail: String
+        /// Unsatisfied AND the user's to fix now, as opposed to unsatisfied and
+        /// merely absent. An optional row nobody has filled in is quiet; an
+        /// optional row holding a credential the provider refused is not, and
+        /// painting them the same colour is what let a rejected key sit under a
+        /// green lamp. Defaulted so every existing construction is unchanged.
+        public let attention: Bool
 
-        public init(item: Item, satisfied: Bool, detail: String) {
+        public init(item: Item, satisfied: Bool, detail: String, attention: Bool = false) {
             self.item = item
             self.satisfied = satisfied
             self.detail = detail
+            self.attention = attention
         }
     }
 
@@ -132,15 +149,21 @@ public enum Prerequisites {
         /// nil when every hook is wired and reachable, matching `HookManifest`.
         public var hooksProblem: @Sendable () -> String?
         public var hasSecret: @Sendable (Secrets.Key) -> Bool
+        /// What the provider last said about a stored key, or nil if it was
+        /// never asked. A row that reports a refusal in its text and a green
+        /// lamp beside it is the state this closes.
+        public var keyVerdict: @Sendable (Secrets.Key) -> KeyCheck.Outcome?
 
         public init(
             tmuxPath: @escaping @Sendable () -> String?,
             hooksProblem: @escaping @Sendable () -> String?,
-            hasSecret: @escaping @Sendable (Secrets.Key) -> Bool
+            hasSecret: @escaping @Sendable (Secrets.Key) -> Bool,
+            keyVerdict: @escaping @Sendable (Secrets.Key) -> KeyCheck.Outcome? = { _ in nil }
         ) {
             self.tmuxPath = tmuxPath
             self.hooksProblem = hooksProblem
             self.hasSecret = hasSecret
+            self.keyVerdict = keyVerdict
         }
 
         public static let live = Probes(
@@ -163,7 +186,8 @@ public enum Prerequisites {
             // hooks at all: the row was telling the truth about the only
             // harness it knew to ask about.
             hooksProblem: { HookManifest.machineSummary() },
-            hasSecret: { Secrets.read($0) != nil })
+            hasSecret: { Secrets.read($0) != nil },
+            keyVerdict: { KeyVerdict.last(for: $0) })
     }
 
     /// The canonical install locations, checked WITHOUT `Tmux.resolveBinary`'s memo.
@@ -188,9 +212,21 @@ public enum Prerequisites {
     public static func snapshot(_ probes: Probes = .live) -> [State] {
         Item.allCases.map { item in
             if let secret = item.secret {
-                return probes.hasSecret(secret)
-                    ? State(item: item, satisfied: true, detail: "in your keychain")
-                    : State(item: item, satisfied: false, detail: missingDetail(item))
+                guard probes.hasSecret(secret) else {
+                    return State(item: item, satisfied: false, detail: missingDetail(item))
+                }
+                // Stored is not working, and the difference is the whole reason
+                // `KeyCheck` exists. A refusal is the one verdict that means the
+                // thing the user just did did not take, so it costs the row its
+                // lamp; everything else (checked and good, never checked, could
+                // not be reached) leaves a stored key satisfied, because none of
+                // them is evidence against it.
+                guard let verdict = probes.keyVerdict(secret), verdict.isBad else {
+                    return State(item: item, satisfied: true,
+                                 detail: probes.keyVerdict(secret)?.summary ?? "in your keychain")
+                }
+                return State(item: item, satisfied: false,
+                             detail: verdict.summary, attention: true)
             }
             switch item {
             case .tmux:

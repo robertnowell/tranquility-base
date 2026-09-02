@@ -324,6 +324,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let gateLog = GateObservationLog()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before anything can take the keyboard. An accessory app with no main
+        // menu has no Command-V, in any field, ever: see `EditMenu`.
+        EditMenu.install()
+
         // One instance owns the hotkey and the microphone. Two builds running
         // at once BOTH receive the global hotkey and both open the mic —
         // verified 12 Aug: a worktree self-test build launched beside the
@@ -1126,7 +1130,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 default: break
                 }
             }
-            onboarding.writePreview(to: CommandLine.arguments[i + 1])
+            // `prereq` photographs STAGE TWO, which had no preview at all and
+            // is the stage that shipped a door below the bottom edge. Pair it
+            // with TB_PREREQ_DEMO=1, which is what makes the rows show a fresh
+            // machine's state on a developer's.
+            let stage: OnboardingWindow.Stage =
+                (i + 2 < CommandLine.arguments.count
+                    && CommandLine.arguments[i + 2] == "prereq")
+                ? .prerequisites : .permissions
+            onboarding.writePreview(to: CommandLine.arguments[i + 1], stage: stage)
             NSApp.terminate(nil)
             return
         }

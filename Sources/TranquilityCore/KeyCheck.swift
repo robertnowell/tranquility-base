@@ -51,6 +51,30 @@ public enum KeyCheck {
         }
     }
 
+    /// What a pasted key has to be reduced to before it is a header value.
+    ///
+    /// Trimming the ends was not enough, and the gap showed up as the least
+    /// diagnosable verdict this type can produce. A key carrying ONE control
+    /// character anywhere inside it makes an illegal HTTP header; Anthropic's
+    /// edge answers that with a bare 400 and an empty body, which `classify`
+    /// correctly refuses to blame on the key ("unexpected reply (400)") and
+    /// which therefore tells the user precisely nothing. Measured 1 Sep against
+    /// api.anthropic.com: every malformed KEY, of every shape tried, comes back
+    /// 401 with a message; only a malformed HEADER produces the 400. So the 400
+    /// was never evidence about the credential, and the credential was never
+    /// the thing to fix.
+    ///
+    /// No provider's key contains whitespace or a control character, so
+    /// removing them cannot damage a good key and repairs a paste that picked
+    /// up a line break or a stray invisible on its way through a clipboard. The
+    /// verification call that follows is what proves the result either way.
+    public static func sanitize(_ value: String) -> String {
+        String(String.UnicodeScalarView(value.unicodeScalars.filter {
+            !CharacterSet.whitespacesAndNewlines.contains($0)
+                && !CharacterSet.controlCharacters.contains($0)
+        }))
+    }
+
     /// Status to verdict, with no network in the way, so the interesting half is
     /// testable. Every mapping here is a decision about what to TELL somebody,
     /// and each one has a wrong answer that costs them time.
@@ -88,7 +112,20 @@ public enum KeyCheck {
             // itself a 400, which would read as a bad key.
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         case .elevenLabsAPIKey:
-            guard let url = URL(string: "https://api.elevenlabs.io/v1/user") else { return nil }
+            // `/v2/voices`, which is the call the app itself makes, and NOT
+            // `/v1/user`, which it never makes.
+            //
+            // ElevenLabs keys are scoped per endpoint group. A key created with
+            // text-to-speech alone is a perfectly good key for this app and is
+            // refused by `/v1/user` with a 401, because that endpoint wants
+            // `user_read`. Measured 1 Sep on a first-run install: a working
+            // key, a red row reading "rejected by the provider (401)", and an
+            // alert telling someone to go and check for a stray space in a
+            // credential that had nothing wrong with it. Verifying against a
+            // permission the product does not use is not verification, it is a
+            // second thing to get wrong.
+            guard let url = URL(string: "https://api.elevenlabs.io/v2/voices?page_size=1")
+            else { return nil }
             request = URLRequest(url: url)
             request.setValue(value, forHTTPHeaderField: "xi-api-key")
         case .assemblyAIAPIKey:
