@@ -242,6 +242,20 @@ extension AppDelegate {
         menu.addItem(retry)
         menu.addItem(.separator())
 
+        // Above Quit, because the two are the same kind of thing (something that
+        // happens to the app rather than to a session) and because a person
+        // hunting for "is there a newer version" looks at the bottom of the menu.
+        //
+        // Disabled while a check is already running, rather than beeping. The
+        // scheduled 24-hour check is the normal path; this row exists for the
+        // moment someone has been told a fix is out and wants it now.
+        let update = NSMenuItem(title: "Check for Updates\u{2026}",
+                                action: #selector(Updates.checkForUpdates(_:)), keyEquivalent: "")
+        update.target = updates
+        update.isEnabled = updates.canCheck
+        menu.addItem(update)
+        menu.addItem(.separator())
+
         let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
         statusMenu = menu
