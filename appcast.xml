@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Tranquility Base</title>
+    <link>https://updates.tranquilitybase.to/appcast.xml</link>
+    <description>Updates for Tranquility Base.</description>
+    <language>en</language>
+  </channel>
+</rss>
+<!-- sparkle-signatures:
+edSignature: OqwSQqfK+sDbnoADQDfz1Z4pk7NWWRUQnnGENSilhU1h2s01U12BkSUHoKgAe8JwKB/pV971BVl9TBB83BErBA==
+length: 348
+-->
