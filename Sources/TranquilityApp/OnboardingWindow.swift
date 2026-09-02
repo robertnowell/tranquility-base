@@ -28,7 +28,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     /// permissions you move on, you hit next, and it checks your tmux and your
     /// API keys." One long list would have put five optional-looking rows under
     /// four blocking ones and asked the user to work out which was which.
-    private enum Stage { case permissions, prerequisites }
+    enum Stage { case permissions, prerequisites }
     private var stage: Stage = .permissions
 
     // Stage two.
@@ -78,6 +78,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         window.contentView = stage == .permissions
             ? buildContent() : buildPrerequisitesContent()
         self.window = window
+        fitWindow()
 
         // The app is an accessory (no dock icon), so it must be activated explicitly
         // or the window opens behind whatever the user is looking at.
@@ -216,16 +217,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         doneButton = done
         stack.addArrangedSubview(done)
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 446))
-        container.wantsLayer = true
-        container.layer?.backgroundColor = StateLegend.Palette.surface.cgColor
-        container.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: container.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
-        ])
-        return container
+        return hosting(stack)
     }
 
     /// Clicky's checklist shape: a status dot, the name and why, live state text,
@@ -306,6 +298,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         window?.contentView = buildPrerequisitesContent()
         Permissions.log("onboarding: advanced to prerequisites")
         refresh()
+        fitWindow()
     }
 
     private func buildPrerequisitesContent() -> NSView {
@@ -337,12 +330,13 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         self.checklist = checklist
         stack.addArrangedSubview(checklist)
 
+        // NO CLOSING PARAGRAPH. It said the keys were optional, which every row
+        // already says by being grey, and then recommended one, which the row
+        // said too. Three lines of it sat between the checklist and the only
+        // door on the screen, and on a shipped install it was three lines of
+        // the reason the door was off the bottom edge. Cut 1 Sep, on the same
+        // ruling as "(recommended)": the rows are the screen.
         stack.addArrangedSubview(spacer(8))
-        stack.addArrangedSubview(label(
-            "The keys are optional and the app runs without them. Anthropic is the "
-            + "one worth having: it is what turns a finished turn into a sentence "
-            + "worth hearing, at about a tenth of a cent each.",
-            size: 11, secondary: true, width: 560))
 
         let start = door("Start using Tranquility Base", ink: StateLegend.Palette.ready,
                          action: #selector(doneTapped))
@@ -351,6 +345,30 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         startButton = start
         stack.addArrangedSubview(start)
 
+        return hosting(stack)
+    }
+
+    // MARK: - Chrome
+
+    /// The window's ground, sized BY its content rather than around it.
+    ///
+    /// The old shape pinned the stack to three edges and left the bottom
+    /// unconstrained inside a 640x446 view, in a window whose content rect was
+    /// also 640x446 and never resized. That is fine until a row grows, and the
+    /// rows on this screen grow for exactly the reasons the screen exists:
+    /// stage two's hooks detail is a PATH, and on a shipped install the path is
+    /// `/Applications/Tranquility Base.app/Contents/Resources/hooks`, which
+    /// wraps to six lines and pushes the Start door off the bottom edge of a
+    /// window with nothing to scroll.
+    ///
+    /// Robert, 1 Sep, on a first-run install: "it's cut off at the bottom
+    /// anyway, you can't even see Start using Tranquility Base, so you're
+    /// blocked. Unacceptable." He was: the gate had no door.
+    ///
+    /// A bottom constraint makes the container's fitting height honest, and
+    /// `fitWindow` spends it. Between them, the window is whatever its longest
+    /// row needs and the last control is always on screen.
+    private func hosting(_ stack: NSStackView) -> NSView {
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 446))
         container.wantsLayer = true
         container.layer?.backgroundColor = StateLegend.Palette.surface.cgColor
@@ -359,11 +377,34 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
             stack.topAnchor.constraint(equalTo: container.topAnchor),
             stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         return container
     }
 
-    // MARK: - Chrome
+    /// Grow the window to hold everything, never shrink it below the shape the
+    /// screen was drawn at.
+    ///
+    /// Anchored at the TOP LEFT, because a window that re-centres itself under
+    /// the cursor every time a row rewraps is its own small horror. The height
+    /// is recomputed on every render rather than once at build: the hooks row
+    /// changes length while you watch it ("wiring...", then a path, then
+    /// "wired into Claude Code and Codex"), and the door has to stay reachable
+    /// through all three.
+    private func fitWindow() {
+        guard let window, let content = window.contentView else { return }
+        content.layoutSubtreeIfNeeded()
+        let fitting = content.fittingSize
+        let size = NSSize(width: max(fitting.width, 640), height: max(fitting.height, 446))
+        guard abs(size.height - content.bounds.height) > 0.5
+                || abs(size.width - content.bounds.width) > 0.5 else { return }
+        let frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
+        let top = window.frame.maxY
+        window.setFrame(
+            NSRect(x: window.frame.minX, y: top - frame.height,
+                   width: frame.width, height: frame.height),
+            display: true)
+    }
 
     /// The panel signs the top of this window the way it signs its own corner.
     private func wordmark() -> NSTextField {
@@ -439,6 +480,9 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         case .permissions: refreshPermissions()
         case .prerequisites: checklist?.refresh()
         }
+        // Every tick, because every tick can change a row's length: a permission
+        // going stale, a hooks path appearing, a key verdict arriving.
+        fitWindow()
     }
 
     private func refreshPermissions() {
@@ -640,33 +684,11 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     }
 
     /// Relaunch, because the permission the user just granted only reaches a
-    /// process that starts up holding it.
-    ///
-    /// The new instance is launched before this one exits and `stop()` runs on
-    /// the way out, so the two never overlap on the global hotkey — two live
-    /// instances racing for one chord is a failure this app has had before.
+    /// process that starts up holding it. The mechanism lives in `AppRelaunch`
+    /// now, so the SETUP tab can offer the same door without a second copy.
     @objc private func restartTapped() {
-        let url = Bundle.main.bundleURL
-        Permissions.log("onboarding: restarting to pick up "
-                        + Permissions.pendingRestart.map(\.title).joined(separator: ","))
-        let config = NSWorkspace.OpenConfiguration()
-        config.createsNewApplicationInstance = true
-        // Without this, the new process's OWN single-instance guard
-        // (main.swift's applicationDidFinishLaunching) sees THIS process
-        // still alive at its own launch, reads it as an accidental double
-        // launch, and refuses outright before showing anything -- found
-        // live, 26 Aug: "I clicked restart and the app did not restart, it
-        // just closed." The log confirmed it exactly: the new pid logged
-        // `launch: REFUSED, instance already running (pid <this one>)`,
-        // and this process then terminated a moment later per the
-        // completion handler below, leaving nothing running. This restart
-        // is a deliberate, sequenced handoff, not the accidental
-        // double-launch that guard exists to catch, so it gets the same
-        // exemption the self-test path already has.
-        config.arguments = ["--allow-second-instance"]
-        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in
-            DispatchQueue.main.async { NSApp.terminate(nil) }
-        }
+        AppRelaunch.restart(
+            reason: "pick up " + Permissions.pendingRestart.map(\.title).joined(separator: ","))
     }
 
     /// Render the checklist to a PNG without putting it on screen.
@@ -681,14 +703,33 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     /// `cacheDisplay(in:)` draws the real view tree through the real layout
     /// pass, in-process, so what lands in the file is what the window would
     /// show — not a mock of it.
-    func writePreview(to path: String) {
-        let content = buildContent()
+    func writePreview(to path: String, stage: Stage = .permissions) {
+        self.stage = stage
+        let content = stage == .permissions
+            ? buildContent() : buildPrerequisitesContent()
         refresh()
+        // The prerequisite scan is detached by rule 9, so the first frame is
+        // always the pre-scan one: static row text, no numbering, no lamps. A
+        // preview of that frame cannot show the state this screen is judged on,
+        // which is a row whose detail has grown. Spin the loop until the scan
+        // lands, bounded, then draw.
+        if stage == .prerequisites {
+            let deadline = Date().addingTimeInterval(2)
+            while Date() < deadline {
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+                if checklist?.hasScannedForSelfTest == true { break }
+            }
+            refresh()
+        }
         content.layoutSubtreeIfNeeded()
-        let stackSize = content.subviews.first?.fittingSize ?? content.frame.size
+        // The container's OWN fitting size, which is honest now that the stack
+        // is pinned to its bottom edge. Measuring the stack and ignoring the
+        // container was the same blind spot as the window's: it is why a preview
+        // could look complete while the real window clipped its last control.
+        let fitting = content.fittingSize
         content.frame = NSRect(origin: .zero,
-                               size: NSSize(width: max(stackSize.width, 640),
-                                            height: max(stackSize.height, 430)))
+                               size: NSSize(width: max(fitting.width, 640),
+                                            height: max(fitting.height, 446)))
         content.layoutSubtreeIfNeeded()
 
         guard let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else {

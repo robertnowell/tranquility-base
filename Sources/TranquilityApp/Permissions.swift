@@ -17,7 +17,6 @@ struct Permissions {
     enum Kind: CaseIterable {
         case microphone
         case speechRecognition
-        case inputMonitoring
         case accessibility
         /// Apple Events — what GO TO AGENT needs to open a terminal window.
         ///
@@ -28,6 +27,25 @@ struct Permissions {
         /// again — so a user who declines that prompt, or whose permissions
         /// were reset, has no route back the app ever mentions.
         case automation
+        /// LAST, and the position is the design.
+        ///
+        /// This is the only permission on the screen that macOS grants to a
+        /// process that has already started without it, which means it is the
+        /// only one whose row ends in "granted, restart to finish" and the only
+        /// reason the restart door exists at all. That door appears when every
+        /// other row is done, so putting Input Monitoring anywhere but last
+        /// meant granting it, being told to restart, and then being told to
+        /// wait while three more rows were finished, with the restart still
+        /// owed at the end.
+        ///
+        /// Ordered last (1 Sep, Robert: "let's order that last because it
+        /// invites you to restart, so if you grant it and then it invites you
+        /// to restart, that's kind of perfect"), the sequence closes itself:
+        /// the last grant is the one that needs the relaunch, and the relaunch
+        /// is the next thing on screen.
+        ///
+        /// `allCases` is the row order, so this declaration IS the layout.
+        case inputMonitoring
 
         var title: String {
             switch self {

@@ -231,8 +231,18 @@ public enum HookManifest {
 
     public enum State: Sendable, Equatable {
         case installed
-        /// Wired, but the command it names is not on disk — the silent-death case.
+        /// Wired, but the command it names is not on disk, the silent-death case.
         case brokenPath(String)
+        /// Wired at a real script, in a form no shell can run it from.
+        ///
+        /// A harness executes a hook command through a shell, so a raw path
+        /// holding a space is a path plus an argument: every bundled install
+        /// wrote `/Applications/Tranquility Base.app/.../tbase-hook.sh` and
+        /// every one of them ran `/Applications/Tranquility`. The file exists,
+        /// the audit's other checks pass, and nothing fires. This is the state
+        /// that distinction needs; without it the repair looks at a settings
+        /// file it should rewrite and calls it healthy.
+        case needsQuoting(String)
         /// Wired and on disk, but firing on the wrong tools. The manifest is
         /// the contract; a matcher that drifts from it is a hook that runs at
         /// the wrong moments and reports itself healthy while doing so.
@@ -281,9 +291,13 @@ public enum HookManifest {
             }
             // The path is what rots — a rename, a moved repo, a deleted checkout. The
             // marker being present proves only that someone once installed it.
-            let executable = command.split(separator: " ").first.map(String.init) ?? command
+            let executable = executable(inCommand: command)
             guard FileManager.default.fileExists(atPath: executable) else {
                 return Status(hook: hook, state: .brokenPath(executable))
+            }
+            // On disk is not runnable. See `needsQuoting`.
+            guard command == self.command(forScript: executable) else {
+                return Status(hook: hook, state: .needsQuoting(executable))
             }
             // The matcher is contract, not decoration: widening artifact-hook
             // to Write|Edit|Bash left the installed hook firing on Write while
@@ -309,11 +323,19 @@ public enum HookManifest {
         let stale = statuses.filter {
             if case .staleMatcher = $0.state { return true } else { return false }
         }
-        if broken.isEmpty, missing.isEmpty, stale.isEmpty { return nil }
+        let unquoted = statuses.filter {
+            if case .needsQuoting = $0.state { return true } else { return false }
+        }
+        if broken.isEmpty, missing.isEmpty, stale.isEmpty, unquoted.isEmpty { return nil }
         var parts: [String] = []
         if !broken.isEmpty { parts.append("\(broken.count) pointing at a missing file") }
         if !missing.isEmpty { parts.append("\(missing.count) not installed") }
         if !stale.isEmpty { parts.append("\(stale.count) firing on the wrong tools") }
+        // Said in terms of what the user loses, not of shell quoting, which is
+        // our problem and not theirs.
+        if !unquoted.isEmpty {
+            parts.append("\(unquoted.count) the harness cannot run")
+        }
         return "hooks: " + parts.joined(separator: ", ")
     }
 
@@ -401,9 +423,12 @@ public enum HookManifest {
         // A stale matcher still names a file that exists, so it is as good a
         // witness to the hooks directory as a fully healthy entry.
         for status in statuses where status.state == .installed
-            || { if case .staleMatcher = status.state { return true } else { return false } }() {
+            || { switch status.state {
+                 case .staleMatcher, .needsQuoting: return true
+                 default: return false } }() {
             if let command = installedCommand(for: status.hook, in: hooks) {
-                candidates.append((command as NSString).deletingLastPathComponent)
+                candidates.append(
+                    (executable(inCommand: command) as NSString).deletingLastPathComponent)
             }
         }
         if let recorded = try? String(contentsOf: recordURL, encoding: .utf8) {
@@ -419,7 +444,7 @@ public enum HookManifest {
 
         var rewired = 0, added = 0
         for hook in wanted {
-            let path = directory + "/" + hook.script
+            let path = command(forScript: directory + "/" + hook.script)
             var entries = hooks[hook.event] as? [[String: Any]] ?? []
             var matched = false
             for (i, entry) in entries.enumerated() {
@@ -614,6 +639,82 @@ public enum HookManifest {
             return "could not read \(harness.label)'s config to see whether "
                 + "the hooks are approved"
         }
+    }
+
+    // MARK: - Commands that survive a space
+
+    /// THE SPACE IN "Tranquility Base.app".
+    ///
+    /// Every path in this file used to be written raw and read back with
+    /// `split(separator: " ").first`, which is correct for exactly one machine:
+    /// a developer's, where the scripts live at
+    /// `~/Projects/tranquility-base/hooks`. Ship the app and the same two lines
+    /// fail together, because the bundled directory is
+    /// `/Applications/Tranquility Base.app/Contents/Resources/hooks` and a
+    /// space is both a word boundary to that split and an argument separator to
+    /// the shell the harness runs the command in.
+    ///
+    /// Both halves were live on 1 Sep, on a first-run install, and they
+    /// compounded into a screen nobody could get past:
+    ///
+    ///   - `audit` split the command at the first space, asked whether
+    ///     `/Applications/Tranquility` existed, and reported all five hooks as
+    ///     `brokenPath`. The row read "Claude Code: 5 pointing at a missing
+    ///     file; Codex: 5 pointing at a missing file" against a bundle where
+    ///     every script was present and executable.
+    ///   - `repair` then computed the same raw path the file already held,
+    ///     changed nothing, and fell into its own "nothing changed yet the
+    ///     audit is unhappy" branch: "scripts missing at /Applications/
+    ///     Tranquility Base.app/Contents/Resources/hooks". Pressing Wire them
+    ///     again could only produce the same sentence.
+    ///   - and underneath the misreport, the hooks genuinely would not have
+    ///     run: `sh -c /Applications/Tranquility Base.app/.../tbase-hook.sh`
+    ///     executes `/Applications/Tranquility` with an argument.
+    ///
+    /// So a command is QUOTED on the way in and PARSED on the way out, and the
+    /// two live next to each other where they cannot drift apart.
+    public static func command(forScript path: String) -> String {
+        // Quoted only when it needs to be. An unquoted path is what every
+        // existing healthy install carries, and rewriting all of them to add
+        // quotes would report a repair on machines where nothing was wrong.
+        let safe = CharacterSet(charactersIn:
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/")
+        guard path.unicodeScalars.contains(where: { !safe.contains($0) })
+        else { return path }
+        // Single quotes: inside them a shell interprets nothing at all, which
+        // is the property wanted for a path. The one character that has to be
+        // handled is the quote itself.
+        return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// The file a hook command names, whatever shape it was written in.
+    ///
+    /// Three shapes reach this, and only the first was ever handled: a bare
+    /// path with no spaces, a quoted path, and a raw path with a space in it
+    /// (what this app itself wrote into every bundled install before the fix
+    /// above). The last is genuinely ambiguous by shape -- it could be a
+    /// command with an argument -- so the disk arbitrates: if the whole string
+    /// is a file, it is the file.
+    public static func executable(inCommand command: String) -> String {
+        let trimmed = command.trimmingCharacters(in: .whitespaces)
+        guard let first = trimmed.first else { return command }
+        if first == "'" || first == "\"" {
+            var out = ""
+            var rest = Substring(trimmed.dropFirst())
+            while let index = rest.firstIndex(of: first) {
+                out += rest[rest.startIndex..<index]
+                rest = rest[rest.index(after: index)...]
+                // `'\''` is one escaped quote, not the end of the string.
+                guard rest.hasPrefix("\\'") || rest.hasPrefix("\\\"") else { break }
+                out.append(first)
+                rest = rest.dropFirst(2)
+                guard rest.first == first else { break }
+                rest = rest.dropFirst()
+            }
+            return out
+        }
+        if FileManager.default.fileExists(atPath: trimmed) { return trimmed }
+        return trimmed.split(separator: " ").first.map(String.init) ?? trimmed
     }
 
     private static func installedCommand(for hook: Hook, in hooks: [String: Any]) -> String? {

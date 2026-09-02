@@ -47,7 +47,12 @@ enum KeySheet {
 
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Sanitized, not just trimmed. A single control character anywhere
+            // inside the value makes an illegal HTTP header, which Anthropic
+            // answers with a bare 400 and an empty body: the row then reads
+            // "unexpected reply (400)", which is honest about the response and
+            // useless about the cause. See `KeyCheck.sanitize`.
+            let value = KeyCheck.sanitize(field.stringValue)
             guard !value.isEmpty else { return }
             save(key, value: value, onStatus: onStatus)
         case .alertThirdButtonReturn:
@@ -71,6 +76,10 @@ enum KeySheet {
     /// un-delete it.
     private static func save(_ key: Secrets.Key, value: String,
                              onStatus: @escaping @MainActor (String) -> Void) {
+        // Forget the old verdict FIRST. It is about a credential that is no
+        // longer stored, and leaving it in place would keep a lamp amber over a
+        // key that has just been replaced.
+        KeyVerdict.record(nil, for: key)
         do {
             try Secrets.write(key, value: value)
         } catch {
@@ -84,6 +93,11 @@ enum KeySheet {
         Task.detached {
             let outcome = await KeyCheck.verify(key, value: value)
             await MainActor.run {
+                // Recorded, so the LAMP says what this line says. Before 1 Sep
+                // the verdict reached the row's text and nothing else, and a
+                // key the provider had just refused kept a green lamp beside
+                // the refusal. See `KeyVerdict`.
+                KeyVerdict.record(outcome, for: key)
                 onStatus(outcome.summary)
                 // The verdict, never the value.
                 Permissions.log("keys: \(key.rawValue) -- \(outcome.summary)")

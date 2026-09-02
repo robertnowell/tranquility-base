@@ -638,6 +638,8 @@ do {
                 case .staleMatcher(let found):
                     state = "STALE MATCHER — fires on \(found ?? "everything"), "
                         + "should be \(s.hook.matcher ?? "everything")"
+                case .needsQuoting(let p):
+                    state = "THE SHELL CANNOT RUN IT, a space in \(p) is an argument"
                 case .missing: state = "NOT INSTALLED — \(s.hook.purpose)"
                 }
                 print("  \(pad(s.hook.event, 18))  \(pad(s.hook.script, 20))  \(state)")

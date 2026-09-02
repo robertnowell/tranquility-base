@@ -428,6 +428,19 @@ extension StatusHUD {
                      self.launchRow?.isHidden == true
                         && self.harnessPicker?.isHidden == true),
                     ("tabBarPointsAtSetup", self.face.settingsTab == .setup),
+                    // Ruled 1 Sep. A permission granted while the app is
+                    // running only reaches it after a relaunch, and until now
+                    // the only door onto one lived in a first-run screen you
+                    // cannot get back to.
+                    ("theRestartDoorIsHere",
+                     self.setupChecklist?.hasRestartDoorForSelfTest == true),
+                    // And what the rows must NOT say. "(recommended)" ranked
+                    // one row against two others at the moment somebody was
+                    // trying to leave the screen; the row already states what
+                    // is lost without the key, which is the fact.
+                    ("noRowEditorialises",
+                     self.setupChecklist?.rowTextForSelfTest
+                        .contains("recommended") == false),
                 ])
             }),
             // The settings state's second pane. What must hold: a
