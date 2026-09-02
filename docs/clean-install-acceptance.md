@@ -14,11 +14,22 @@ found in the 02 Sep 2026 research even establishes whether TCC behaves
 identically for a translated process, which is precisely what this document
 spends most of its steps on.
 
-Which Intel Mac matters, because the supported set is now small: macOS 26 Tahoe
-runs on exactly four Intel models (Mac Pro 2019, MacBook Pro 16-inch 2019,
-MacBook Pro 13-inch 2020 with four Thunderbolt ports, iMac 27-inch 2020), and
-macOS 15 Sequoia already dropped the 2018 13-inch MacBook Pro and every Intel
-MacBook Air. Our macOS 14 floor is the widest list of the three.
+Which Intel Mac matters, because the supported set is now small. Checked
+against Apple's own compatibility pages, not from memory:
+
+- **macOS 26 Tahoe** runs on exactly four Intel models: Mac Pro (2019),
+  MacBook Pro (16-inch, 2019), MacBook Pro (13-inch, 2020, four Thunderbolt 3
+  ports), iMac (27-inch, 2020). It is the last macOS to support Intel at all.
+- **macOS 15 Sequoia** dropped the 2018 and 2019 MacBook Airs, and nothing
+  else that we support. Every Sonoma-capable MacBook Pro, iMac, iMac Pro,
+  Mac mini and Mac Pro is also Sequoia-capable.
+- **macOS 14 Sonoma**, our floor, is the widest list, and the two Retina
+  MacBook Airs (2018, 2019) sit on it and can go no higher.
+
+Two of the supported models have NO BUILT-IN MICROPHONE: Mac mini (2018) and
+Mac Pro (2019). For a voice-first app that is a hardware prerequisite, not a
+preference, and the checklist should say so before a tester wonders why
+nothing is heard.
 
 ## Fresh install
 
