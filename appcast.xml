@@ -6,6 +6,15 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1071</title>
+      <sparkle:version>1071</sparkle:version>
+      <sparkle:shortVersionString>0.3.1071</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <pubDate>Wed, 02 Sep 2026 21:59:54 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1071-3a97be6ec/TranquilityBase-0.3.1071.dmg" type="application/octet-stream" length="9167955" sparkle:edSignature="u3mxHXpci1ZP168PaQLa4xzTvk77kszX4jQz/0ilYNLs48gtGtfk7rtyrOUeRtpLhLEAWqHh89B40CImYNxLDQ==" />
+    </item>
+    <item>
       <title>Version 0.3.1070</title>
       <sparkle:version>1070</sparkle:version>
       <sparkle:shortVersionString>0.3.1070</sparkle:shortVersionString>
@@ -61,6 +70,6 @@
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: PUMd22MVbONHwsx9dnDCpfGb1dacid4E7fJv1Pu2nx23v/mhtAPy+yws+MWqGsu42F9jIlmrsFDZ3FCX5qPcAA==
-length: 4445
+edSignature: RaOwfc65rk/zmY/y1mNhOVpa9cvk2DrPBmzvi4GbGpaOBeqseHQhKHc9+a+Tlw+ssbbKtI2q7E/+FX3A0RH0Bw==
+length: 5128
 -->
