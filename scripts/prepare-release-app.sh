@@ -7,12 +7,13 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. "$(dirname "$0")/lib/paths.sh"
 
 TARGET=$(git rev-parse HEAD)
 BUILD_NUMBER=$(git rev-list --count "$TARGET")
 RELEASE_SERIES="${TB_RELEASE_SERIES:-0.3}"
 VERSION="$RELEASE_SERIES.$BUILD_NUMBER"
-APP=".build/release/Tranquility Base.app"
+APP="$(tb_bundle_dir release)/Tranquility Base.app"
 
 case "$VERSION" in
   *[!0-9.]*|.*|*..*|*.) echo "invalid release version: $VERSION" >&2; exit 1 ;;

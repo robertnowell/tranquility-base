@@ -33,10 +33,11 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. "$(dirname "$0")/lib/paths.sh"
 
 export VD_APP_NAME="Tranquility Base TEST"
 export VD_BUNDLE_ID="com.robertnowell.voice-dispatch-test"
-APP_PATH=".build/debug/$VD_APP_NAME.app"
+APP_PATH="$(tb_bundle_dir debug)/$VD_APP_NAME.app"
 DATA_DIR="$HOME/Library/Application Support/VoiceDispatchTEST"
 # Baked into the built .app's Info.plist as LSEnvironment (bundle.sh), so
 # every launch of THIS app carries it, however it is opened. Fixed and

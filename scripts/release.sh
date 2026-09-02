@@ -16,6 +16,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# shellcheck source=lib/paths.sh
+. "$(dirname "$0")/lib/paths.sh"
+
 DRY_RUN=0
 VERSION=""
 for arg in "$@"; do
@@ -122,7 +125,7 @@ NOTARY_PROFILE="${TB_NOTARY_PROFILE:-AC_PASSWORD}"
 NOTARY_KEYCHAIN="${TB_NOTARY_KEYCHAIN:-}"
 RELEASE_SERIES="${TB_RELEASE_SERIES:-0.3}"
 STAGE=".build/release-stage"
-APP_SRC=".build/release/$APP_NAME.app"
+APP_SRC="$(tb_bundle_dir release)/$APP_NAME.app"
 
 step() { echo; echo "── $* ─────────────────────────────────────────"; }
 fail() { echo "✗ $*" >&2; exit 1; }
@@ -226,7 +229,7 @@ else
   TB_SKIP_LIVE_HARNESS_DRILLS=1 scripts/preflight.sh "$TARGET^"
 fi
 
-step "building $VERSION (release, arm64)"
+step "building $VERSION (release, universal)"
 EXPECTED_IDENTITY="Developer ID Application: Robert Nowell ($TEAM_ID)"
 IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
   | grep -F "\"$EXPECTED_IDENTITY\"" | head -1 | sed -E 's/.*"(.*)"/\1/' || true)
@@ -361,7 +364,7 @@ NOTES="Automated release of main at $TARGET.
 
 $SUBJECT
 
-Requires macOS 14 or later on Apple silicon, plus a supported coding-agent CLI and tmux. Download the DMG, drag Tranquility Base to Applications, eject the disk image, and open the installed app."
+Requires macOS 14 or later on Apple silicon or Intel, plus a supported coding-agent CLI and tmux. Download the DMG, drag Tranquility Base to Applications, eject the disk image, and open the installed app."
 
 # GitHub refuses to create a release directly against an older commit when
 # that commit differs in .github/workflows: GITHUB_TOKEN can never receive the

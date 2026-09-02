@@ -55,7 +55,7 @@ jobs:
           TB_SKIP_LIVE_HARNESS_DRILLS=1 scripts/preflight.sh "$TARGET_COMMIT^"
           scripts/prepare-release-app.sh
           tar -czf .build/unsigned-tranquility-base.tgz \
-            -C .build/release "Tranquility Base.app"
+            -C .build/bundle/release "Tranquility Base.app"
 
       - name: Transfer the source-stamped app to the signing job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -93,8 +93,8 @@ jobs:
 
       - name: Restore the app without running product build code
         run: |
-          mkdir -p .build/release
-          tar -xzf .build/ci-artifact/unsigned-tranquility-base.tgz -C .build/release
+          mkdir -p .build/bundle/release
+          tar -xzf .build/ci-artifact/unsigned-tranquility-base.tgz -C .build/bundle/release
 
       - name: Sign, notarize, audit, and publish
         env:

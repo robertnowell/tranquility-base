@@ -17,12 +17,13 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. "$(dirname "$0")/lib/paths.sh"
 . "$(dirname "$0")/lib/app-process.sh"
 
 REF="${1:-origin/main}"
 CLEAN_WORKTREE="/private/tmp/tb-clean"
 APP="Tranquility Base.app"
-APP_PATH="$CLEAN_WORKTREE/.build/debug/$APP"
+APP_PATH="$(tb_bundle_dir debug "$CLEAN_WORKTREE")/$APP"
 
 # Never exit leaving the app down.
 #

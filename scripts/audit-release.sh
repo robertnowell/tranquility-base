@@ -86,8 +86,21 @@ if [ -n "$EXPECTED_COMMIT" ]; then
 fi
 pass "identity, version, build, source commit and macOS floor"
 
+# Both slices, not just the one this runner happens to be. A universal build
+# that quietly loses its x86_64 half still runs perfectly on every machine we
+# own, so nothing but this gate would notice until an Intel user did.
 ARCHES=$(lipo -archs "$BIN")
 case " $ARCHES " in *" arm64 "*) ;; *) fail "binary has no arm64 slice ($ARCHES)" ;; esac
+case " $ARCHES " in *" x86_64 "*) ;; *) fail "binary has no x86_64 slice ($ARCHES)" ;; esac
+
+# The updater has to cross the same bridge the app does. Sparkle ships a fat
+# macos-arm64_x86_64 xcframework slice, so a thin framework here means the
+# embedding step picked up a stale single-arch build.
+SPARKLE_BIN="$APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Sparkle"
+[ -f "$SPARKLE_BIN" ] || fail "no embedded Sparkle binary to check"
+SPARKLE_ARCHES=$(lipo -archs "$SPARKLE_BIN")
+case " $SPARKLE_ARCHES " in *" arm64 "*) ;; *) fail "Sparkle has no arm64 slice ($SPARKLE_ARCHES)" ;; esac
+case " $SPARKLE_ARCHES " in *" x86_64 "*) ;; *) fail "Sparkle has no x86_64 slice ($SPARKLE_ARCHES)" ;; esac
 codesign --verify --deep --strict --verbose=2 "$APP" >/dev/null 2>&1 \
   || fail "mounted app signature does not verify"
 APP_SIGNATURE=$(codesign -dv --verbose=4 "$APP" 2>&1)
@@ -113,7 +126,7 @@ case "$DESIGNATED_REQUIREMENT" in
   *"identifier \"$BUNDLE_ID\""*"anchor apple generic"*"certificate leaf[subject.OU] = $TEAM_ID"*) ;;
   *) fail "designated requirement is not anchored to bundle id and Developer ID team" ;;
 esac
-pass "arm64 executable, hardened runtime and app admission"
+pass "universal executable, hardened runtime and app admission"
 
 # The updater, audited on the artifact rather than trusted from the build.
 #

@@ -5,7 +5,7 @@
 # This was inline in relaunch.sh, which meant install.sh could not do it — and
 # install.sh is the script a new machine runs first. So a fresh clone hit:
 #
-#   ✗ no bundle at /private/tmp/tb-clean/.build/debug/Tranquility Base.app
+#   ✗ no bundle at /private/tmp/tb-clean/.build/bundle/debug/Tranquility Base.app
 #     Build one first: scripts/relaunch.sh (or scripts/bundle.sh debug)
 #
 # an installer that refuses to install and refers you to the relaunch script,
@@ -23,11 +23,12 @@
 #        `APP=$(scripts/build-clean.sh)` is safe.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. "$(dirname "$0")/lib/paths.sh"
 
 REF="${1:-origin/main}"
 CLEAN_WORKTREE="/private/tmp/tb-clean"
 APP="Tranquility Base.app"
-APP_PATH="$CLEAN_WORKTREE/.build/debug/$APP"
+APP_PATH="$(tb_bundle_dir debug "$CLEAN_WORKTREE")/$APP"
 
 # /private/tmp is fine for a build CACHE — it is reaped, and everything here can
 # be rebuilt. It was only ever wrong as the app's only home, which is what

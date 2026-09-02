@@ -13,8 +13,8 @@ The two workflows answer different questions:
    named `Source audit` a required check on `main`.
 2. **Release every merge / build** runs again on the exact commit that reached
    `main`, without Apple credentials. It repeats the source audit, assembles the
-   arm64 app with an ad-hoc transfer signature, stamps the full source SHA, and
-   passes a one-day artifact to a separate job.
+   universal (arm64 + x86_64) app with an ad-hoc transfer signature, stamps the
+   full source SHA, and passes a one-day artifact to a separate job.
 3. **Release every merge / release** is the only job attached to the `release`
    environment. It imports an ephemeral Developer ID identity, verifies the
    prebuilt app's version/build/source identity, then signs it. The app itself
@@ -182,7 +182,8 @@ desktop session.
 
 Before calling the channel ready for an outside user, run
 [`clean-install-acceptance.md`](clean-install-acceptance.md) against the exact
-GitHub-downloaded DMG on a pristine Apple-silicon macOS snapshot. Repeat it for
+GitHub-downloaded DMG on a pristine Apple-silicon macOS snapshot, and again on
+an Intel Mac, since nothing in CI ever opens the app on Intel. Repeat it for
 the minimum supported macOS and current macOS before broad rollout. A future
 self-hosted Mac VM appliance should hold the release as a draft until this gate
 passes; GitHub-hosted runners cannot provide nested macOS virtualization or a

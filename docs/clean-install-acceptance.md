@@ -4,6 +4,33 @@ Run this on a pristine Apple-silicon macOS VM snapshot or a Mac/user account
 that has never seen Tranquility Base. Use the exact public-candidate DMG; do not
 copy a build-machine artifact into the guest.
 
+**Run it a second time on an Intel Mac.** The app ships universal, and the
+Intel slice is gated in CI on a native x86_64 runner, but CI runs `swift test`
+and never opens the app. Everything this document actually checks (the TCC
+grant dance, the panel, the earcons, first-run timing) has only ever been
+observed on Apple Silicon. Rosetta is not a substitute here: it runs on Apple
+Silicon hardware, so it reproduces the code path and not the machine. No source
+found in the 02 Sep 2026 research even establishes whether TCC behaves
+identically for a translated process, which is precisely what this document
+spends most of its steps on.
+
+Which Intel Mac matters, because the supported set is now small. Checked
+against Apple's own compatibility pages, not from memory:
+
+- **macOS 26 Tahoe** runs on exactly four Intel models: Mac Pro (2019),
+  MacBook Pro (16-inch, 2019), MacBook Pro (13-inch, 2020, four Thunderbolt 3
+  ports), iMac (27-inch, 2020). It is the last macOS to support Intel at all.
+- **macOS 15 Sequoia** dropped the 2018 and 2019 MacBook Airs, and nothing
+  else that we support. Every Sonoma-capable MacBook Pro, iMac, iMac Pro,
+  Mac mini and Mac Pro is also Sequoia-capable.
+- **macOS 14 Sonoma**, our floor, is the widest list, and the two Retina
+  MacBook Airs (2018, 2019) sit on it and can go no higher.
+
+Two of the supported models have NO BUILT-IN MICROPHONE: Mac mini (2018) and
+Mac Pro (2019). For a voice-first app that is a hardware prerequisite, not a
+preference, and the checklist should say so before a tester wonders why
+nothing is heard.
+
 ## Fresh install
 
 1. Restore the pristine snapshot and sign in as a standard, non-admin user.

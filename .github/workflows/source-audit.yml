@@ -35,3 +35,86 @@ jobs:
         run: |
           git checkout -B ci-source-audit "$GITHUB_SHA"
           TB_SKIP_LIVE_HARNESS_DRILLS=1 scripts/preflight.sh "origin/$BASE_REF"
+
+  intel:
+    name: Intel slice (native x86_64)
+    # Real Intel hardware, which is the whole point of this job.
+    #
+    # Rosetta on our own Macs proves the x86_64 slice COMPILES and that its
+    # tests PASS: measured 02 Sep 2026, 1285 tests, 0 failures. What it cannot
+    # prove is behaviour on the CPU an Intel user actually has. Rosetta runs on
+    # Apple Silicon, and in a published real-time-audio benchmark it beat native
+    # Intel outright, so a green Rosetta run is evidence about correctness and
+    # no evidence at all about timing. For a latency-sensitive voice app that
+    # distinction is the entire risk, and this runner is the only place we
+    # close it.
+    #
+    # macos-15-intel is the LAST x86_64 image GitHub offers, available until
+    # August 2027. macos-13 shut down 04 Dec 2025, which is why Intel CI looks
+    # like it no longer exists. When this label goes away the honest options
+    # are a rented Intel box or dropping the slice; silently falling back to an
+    # Apple Silicon runner would leave a green check that tests nothing.
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - name: Check out the proposed merge
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the hermetic transport dependency
+        run: |
+          if ! command -v tmux >/dev/null 2>&1; then
+            brew install tmux
+          fi
+
+      - name: Prove the runner is genuinely Intel
+        run: |
+          test "$(uname -m)" = "x86_64" || {
+            echo "expected an x86_64 runner, got $(uname -m)" >&2
+            exit 1
+          }
+          echo "runner: $(uname -m), $(sw_vers -productVersion), $(swift --version | head -1)"
+
+      # A COMPILE gate, not a test gate, and the distinction is the whole
+      # honesty of this job.
+      #
+      # What this runner cannot do: build Sources/TranquilityApp. Two runs on
+      # 02 Sep 2026 failed with 40-odd `main actor-isolated ... can not be
+      # referenced from a nonisolated context` errors, every one in the app
+      # layer and not one in TranquilityCore. The runner reports
+      # `x86_64, 15.7.9, Apple Swift version 6.1.2`; our machines and the
+      # macos-26 runners carry Swift 6.3.3 with SDK 26, whose AppKit ships the
+      # @MainActor annotations this code is written against. An SDK two Swift
+      # versions back does not have them, so strict concurrency rejects code
+      # that is correct on the SDK we actually build with. Nothing about
+      # x86_64 is involved, and macos-15-intel is the newest Intel image that
+      # will ever exist, so there is no newer SDK to select.
+      #
+      # And `swift test` builds every target in the package, TranquilityApp
+      # included, so the test suite cannot run here. That was measured, and it
+      # corrected an earlier wrong assumption: a local run appeared to skip the
+      # app, but that run used `--arch`, which routes through XCBuild rather
+      # than SwiftPM's own build system and plans a different, smaller graph.
+      # Two build systems, two answers, and the one that matters is the one CI
+      # uses. `swift build --target TranquilityCoreTests` does scope correctly
+      # (verified: compiles GRDB, TranquilityCore and TranquilityCoreTests,
+      # never the app) but links no .xctest bundle, so there is nothing to run.
+      #
+      # So this job proves exactly one thing, and it is worth having: the core
+      # library, the CLI, and every line of test source COMPILE natively on
+      # real Intel hardware with a real Intel toolchain. A green check here is
+      # not evidence that any test passed.
+      #
+      # Where the x86_64 test evidence actually lives: run it locally with
+      # `arch -x86_64 swift test --arch x86_64 --enable-xctest
+      # --disable-swift-testing` (1285 tests, 0 failures on 02 Sep). That is
+      # Rosetta, so it speaks to correctness and not to timing. See
+      # CONTRIBUTING.md.
+      - name: Compile the core and the tests natively on Intel
+        run: |
+          swift build --product tbase
+          swift build --target TranquilityCoreTests
+          echo "core, CLI and test sources compile on native x86_64"
+          echo "NOTE: tests are not RUN here; see the comment above this step"
