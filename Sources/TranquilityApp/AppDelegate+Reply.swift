@@ -197,6 +197,19 @@ extension AppDelegate {
             lastHeard: lastHeardSessionId())
     }
 
+    /// The reply target, with a throw that is at least audible.
+    ///
+    /// Two callers wanted the same swallowed `try?`, and a swallow written
+    /// twice is a swallow nobody greps for.
+    func replyTargetNow() -> WaitingSession? {
+        do {
+            return try coordinator?.replyTarget()
+        } catch {
+            Permissions.log("routing: replyTarget() threw (\(error))")
+            return nil
+        }
+    }
+
     /// `replyTarget()` throws, and the throw used to be a bare `try?`.
     ///
     /// A store that could not answer therefore said "nobody is waiting on a
@@ -208,14 +221,15 @@ extension AppDelegate {
     /// can find in a log is the same class of bug as the three fixed
     /// alongside this one: ignorance that leaves no trace.
     private func lastHeardSessionId() -> String? {
-        do {
-            return try coordinator?.replyTarget()?.sessionId
-        } catch {
-            Permissions.log("routing: replyTarget() threw (\(error)) — treating it as "
-                + "\"nothing is waiting on a reply\", which may send these words to "
-                + "dictation instead of an agent")
+        // The throw is logged by `replyTargetNow`; what this adds is what it
+        // MEANS here, which is the consequential half: routing reads a nil as
+        // "nothing is waiting on a reply" and falls through to dictation.
+        guard let target = replyTargetNow() else {
+            Permissions.log("routing: no reply target — if that was a throw, these "
+                + "words may go to dictation instead of an agent")
             return nil
         }
+        return target.sessionId
     }
 
     /// What we know about a session we have already decided to address.
@@ -229,8 +243,16 @@ extension AppDelegate {
         if let conversation = activeConversation, conversation.sessionId == id {
             return (id, live?.pid, conversation.label, conversation.cwd)
         }
-        guard let target = try? coordinator?.replyTarget() ?? nil, target.sessionId == id else {
-            return (id, live?.pid, live?.name ?? id, nil)
+        guard let target = replyTargetNow(), target.sessionId == id else {
+            // NOT `live?.name`. That is `agents --json`'s derived slug
+            // ("robertnowell-90"), which `GridAssembler.tabTitle`'s own doc
+            // comment says the tab never displays — so the capture card, the
+            // one place you check who you are about to speak to, could show a
+            // name that appears nowhere else in the app. The right resolution
+            // is one call away and every grid row already uses it.
+            return (id, live?.pid,
+                    live.map { GridAssembler.tabDisplayName(live: $0, callsign: nil) } ?? id,
+                    nil)
         }
         // One displayed identity (re-ruled 05 Aug): the tab's string,
         // checkable at a glance — see tabDisplayName.

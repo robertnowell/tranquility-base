@@ -1046,12 +1046,18 @@ public enum SessionLauncher {
                 // only that it never settled, which sent the first reading of it
                 // to a load hypothesis that was wrong twice over.
                 if let spec, let blocking = spec.neverAutoAcceptNeedles
-                    .first(where: { text.contains($0) }) {
-                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) is waiting on "
-                        + "\"\(blocking)\" and only you can answer it; standing down")
+                    .first(where: { text.contains($0.needle) }) {
+                    // The needle names the screen for the log; the written
+                    // sentence is what a person gets. Same split as the launch
+                    // watcher, and this is the fourth call site that had it
+                    // backwards: a resume that stops on Codex's hooks-review
+                    // dialog is the SAME dialog a launch stops on, so it must
+                    // not be described in a different, worse way.
+                    Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) stopped on "
+                        + "\"\(blocking.needle)\" and only you can answer it; standing down. "
+                        + "Its screen says: " + TrustPromptWatcher.meaningfulTail(text))
                     return .failure(ScriptError(
-                        message: "attemptCodexResume: \(sessionId.prefix(8)) is waiting on "
-                            + "\"\(blocking)\" — answer it in the pane, or in Codex once"))
+                        message: "\(blocking.says) Answer it in the pane, or in Codex once."))
                 }
                 switch Self.classifyCodexResumeScreen(text, settledNeedle: spec?.settledBannerNeedle) {
                 case .alreadyLive:

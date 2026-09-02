@@ -180,7 +180,48 @@ public struct TrustPromptSpec: Sendable {
     /// before a hooks-review dialog could ever render — the path where this
     /// actually fires is an already-trusted launch whose hooks changed
     /// since the last review, not the common first-run case.
-    public var neverAutoAcceptNeedles: [String]
+    public var neverAutoAcceptNeedles: [RecognizedPrompt]
+
+    /// A screen this launcher recognises, and the sentence a person reads.
+    ///
+    /// **The sentence is written, never lifted.** It used to be lifted, by
+    /// `questionOnScreen`, whose whole implementation was "the first line of
+    /// the pane with four or more characters in it". That is a fine
+    /// description of a freshly launched TUI showing nothing but a dialog,
+    /// and a terrible one for every other pane, because a `claude resume`
+    /// reprints the whole conversation ABOVE the prompt. Measured across two
+    /// app logs, what it actually told Robert agents were waiting on:
+    ///
+    ///     "192 lines (ctrl+o to expand)"
+    ///     "unit: completed success"
+    ///     "Bash(python3 - <<EOF"
+    ///     "target: f96aa7d  Merge remote-tracking branch origin/main ..."
+    ///
+    /// and, on a live capture of the real Claude Code trust prompt (1 Sep), a
+    /// settings.json wildcard warning printed eight lines above the dialog.
+    /// One of the five logged values was a real prompt headline.
+    ///
+    /// The needle is the thing we actually identified. A matched needle means
+    /// we know exactly which screen this is, so the sentence is ours to write
+    /// and cannot drift with the vendor's line wrapping, banner or scrollback.
+    /// Screen text still reaches the user for screens nobody recognised, where
+    /// it belongs: as EVIDENCE, through `meaningfulTail`, which reads the
+    /// bottom of the pane, where a TUI puts its prompt.
+    public struct RecognizedPrompt: Sendable, Equatable {
+        /// The substring that identifies this screen.
+        public let needle: String
+        /// What to tell a person, in the app's own voice.
+        public let says: String
+        public init(_ needle: String, says: String) {
+            self.needle = needle
+            self.says = says
+        }
+    }
+
+    /// What to say when the directory-trust prompt is up but its accepting row
+    /// cannot be found. Per harness, because "this folder" and "this
+    /// directory" are the two harnesses' own words for the same thing.
+    public var trustPromptSays: String
 
     /// The menu row that GRANTS trust, and the glyph marking whichever row is
     /// currently selected.
@@ -247,10 +288,12 @@ public struct TrustPromptSpec: Sendable {
 
     public init(promptNeedles: [String], startedWithNoPromptNeedle: String?,
                settledBannerNeedle: String, settledThreshold: Int = 2,
-               neverAutoAcceptNeedles: [String] = [], stuckThreshold: Int = 3,
+               neverAutoAcceptNeedles: [RecognizedPrompt] = [], stuckThreshold: Int = 3,
                acceptOptionNeedles: [String] = [],
+               trustPromptSays: String = "It is asking whether you trust this folder.",
                selectionGlyph: String = "❯") {
         self.promptNeedles = promptNeedles
+        self.trustPromptSays = trustPromptSays
         self.startedWithNoPromptNeedle = startedWithNoPromptNeedle
         self.settledBannerNeedle = settledBannerNeedle
         self.settledThreshold = settledThreshold
@@ -262,7 +305,7 @@ public struct TrustPromptSpec: Sendable {
         // watcher on the very first poll. Can't happen from either adapter
         // today; making it impossible is cheaper than trusting that stays
         // true (gate finding, 21 Aug).
-        self.neverAutoAcceptNeedles = neverAutoAcceptNeedles.filter { !$0.isEmpty }
+        self.neverAutoAcceptNeedles = neverAutoAcceptNeedles.filter { !$0.needle.isEmpty }
     }
 
     /// How far the selection must move for Return to accept: positive means
@@ -324,14 +367,19 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
             // broken." `TrustPromptWatcher`'s `onNeedsHuman` now opens the
             // pane automatically whenever any needle in this list is hit —
             // this one included.
-            neverAutoAcceptNeedles: ["Resuming the full session will consume"],
+            neverAutoAcceptNeedles: [
+                TrustPromptSpec.RecognizedPrompt("Resuming the full session will consume",
+                                                 says: "It is asking whether to resume the full session "
+                                     + "or start from a summary. That spends your usage "
+                                     + "limits either way, so it is your call.")],
             // Both wordings, for the same reason `promptNeedles` carries
             // both: the numbered v2.1 row ("1. Yes, I trust this folder")
             // and the current unnumbered one are the same substring from
             // "Yes" onward, so one needle covers each. See
             // `acceptOptionNeedles` for what pressing Return without this
             // cost on 27 Aug.
-            acceptOptionNeedles: ["Yes, I trust this folder"])
+            acceptOptionNeedles: ["Yes, I trust this folder"],
+            trustPromptSays: "It is asking whether you trust this folder.")
     }
 
     public var capabilities: HarnessCapabilities {
@@ -441,7 +489,14 @@ public struct CodexAdapter: HarnessAdapter {
             // "1. Update now" is a row that exists only while the chooser is
             // waiting for a keypress, and it is also the exact row whose
             // selection runs the installer.
-            neverAutoAcceptNeedles: ["Hooks need review", "1. Update now"])
+            neverAutoAcceptNeedles: [
+                TrustPromptSpec.RecognizedPrompt("Hooks need review",
+                                                 says: "Codex will not run this folder's hooks until you "
+                                     + "have reviewed them, and it is holding there."),
+                TrustPromptSpec.RecognizedPrompt("1. Update now",
+                                                 says: "Codex is asking whether to update itself before "
+                                     + "it starts.")],
+            trustPromptSays: "It is asking whether you trust the contents of this directory.")
     }
 
     /// Codex's own single-writer-lock refusal — measured live, 22 Aug,
@@ -560,7 +615,8 @@ public enum TrustPromptWatcher {
             // rather than about which branch happened to look at it.
             if text == lastScreen { unchanged += 1 } else { unchanged = 1 }
             lastScreen = text
-            if let blocking = spec.neverAutoAcceptNeedles.first(where: { text.contains($0) }) {
+            if let blocking = spec.neverAutoAcceptNeedles
+                .first(where: { text.contains($0.needle) }) {
                 // The line NAMES the screen, exactly as the give-up line does
                 // for a screen no needle knew. Recognising a prompt should tell
                 // the log more than not recognising it, and until 29 Aug it told
@@ -571,10 +627,15 @@ public enum TrustPromptWatcher {
                 // the headline above it is what a person needs in order to go
                 // and answer the thing. Falls back to the needle when the screen
                 // has no question this can lift.
-                let asking = Self.questionOnScreen(text) ?? blocking
-                trace?("newSession: \(label) is waiting on \"\(asking)\" — "
-                    + "never auto-accepted; leaving it be")
-                onNeedsHuman(Self.questionOnScreen(text) ?? "It is asking you something.")
+                // The needle IS the identification, so the trace and the card
+                // say the same thing and neither one goes reading the pane for
+                // a headline. The screen still reaches the log, from the
+                // bottom, as the evidence behind the claim rather than as the
+                // claim itself.
+                trace?("newSession: \(label) stopped on \"\(blocking.needle)\" — "
+                    + "never auto-accepted; leaving it be. Its screen says: "
+                    + Self.meaningfulTail(text))
+                onNeedsHuman(blocking.says)
                 return
             }
             if spec.promptNeedles.contains(where: { text.contains($0) }) {
@@ -589,8 +650,7 @@ public enum TrustPromptWatcher {
                     // exit: the one thing that resolves an unrecognised menu
                     // is seeing it, and this branch exists precisely because
                     // nothing here knows what the options say.
-                    onNeedsHuman(Self.questionOnScreen(text)
-                        ?? "It is asking whether you trust this folder.")
+                    onNeedsHuman(spec.trustPromptSays)
                     return
                 }
                 press(steps)
@@ -610,10 +670,15 @@ public enum TrustPromptWatcher {
                 for _ in 0..<3 {
                     usleep(UInt32(pollInterval * 1_000_000))
                     guard let followUp = read() else { continue }
-                    if spec.neverAutoAcceptNeedles.contains(where: { followUp.contains($0) }) {
-                        trace?("newSession: \(label) needs a human choice after the trust "
-                            + "prompt; leaving it be")
-                        onNeedsHuman(Self.questionOnScreen(followUp) ?? "It is asking you something.")
+                    // `first`, not `contains`: this branch used to match a
+                    // needle and then throw it away, leaving nothing to name
+                    // the screen with but the top line of the pane.
+                    if let blocking = spec.neverAutoAcceptNeedles
+                        .first(where: { followUp.contains($0.needle) }) {
+                        trace?("newSession: \(label) stopped on \"\(blocking.needle)\" after "
+                            + "the trust prompt; leaving it be. Its screen says: "
+                            + Self.meaningfulTail(followUp))
+                        onNeedsHuman(blocking.says)
                         return
                     }
                 }
@@ -633,11 +698,20 @@ public enum TrustPromptWatcher {
             // to the last one instead of to a needle — see
             // `TrustPromptSpec.stuckThreshold` for the 27 Aug launch that
             // this is the whole answer to.
-            if unchanged >= spec.stuckThreshold, let question = Self.questionOnScreen(text) {
-                trace?("newSession: \(label) has stopped on a screen this launcher does not "
-                    + "know and cannot answer: \(question)")
-                onNeedsHuman(question)
-                return
+            // Nobody recognised this screen, so nothing here can say what it is
+            // ASKING. What it can do is show it, from the bottom, and say that
+            // is all it has. The emptiness check is load-bearing and survives
+            // the rewrite: it is what stops a pane merely slow to paint
+            // anything at all from being announced as a question.
+            if unchanged >= spec.stuckThreshold {
+                let says = Self.meaningfulTail(text)
+                if Self.hasWords(says) {
+                    trace?("newSession: \(label) has stopped on a screen this launcher does not "
+                        + "know and cannot answer. Its screen says: \(says)")
+                    onNeedsHuman("It has stopped on a screen this app does not recognise. "
+                        + "The pane says: \(says)")
+                    return
+                }
             }
         }
         // Giving up is a THIRD kind of needs-a-human, and until 27 Aug it was
@@ -671,7 +745,12 @@ public enum TrustPromptWatcher {
         // name is exactly the pane a human should be looking at. `onNeedsHuman`
         // already does this and has since 23 Aug; it was wired to one needle
         // list, and the failures that matter are the ones nobody listed.
-        onNeedsHuman(Self.questionOnScreen(lastScreen ?? "") ?? screen)
+        // Same split as every branch above: the app does not know what this
+        // pane is asking, so it does not say. It says what it saw.
+        onNeedsHuman(lastScreen.map {
+            "It never looked started, and this app does not recognise its screen. "
+                + "The pane says: " + Self.meaningfulTail($0)
+        } ?? "It never looked started, and there was nothing readable on its screen.")
     }
 
     /// The bottom of a captured screen with the blank lines squeezed out —
@@ -691,27 +770,27 @@ public enum TrustPromptWatcher {
         return kept.count > width ? String(kept.prefix(width)) + "…" : kept
     }
 
-    /// The one line of a stopped screen worth repeating to the user.
+    /// Whether a screen has anything on it worth calling a stop.
     ///
-    /// A capture is a rectangle of terminal, most of it chrome: box rules,
-    /// a menu of numbered options, an ANSI-styled cursor glyph. The sentence
-    /// a human needs is almost always the first one with words in it —
-    /// "Update available! 0.149.0 -> 0.150.0", "Do you trust the contents of
-    /// this directory?" — so that is what this takes, with the decoration in
-    /// front of it (✨, ›, ❯, ─) trimmed off so the line starts where the
-    /// words do.
-    ///
-    /// `nil` for a screen with nothing to say — an empty pane, a lone box
-    /// rule — and that nil is load-bearing: it is what stops a pane that is
-    /// merely slow to paint anything at all from being announced as a
-    /// question. Four characters of actual word, minimum.
-    public static func questionOnScreen(_ screen: String) -> String? {
-        for raw in screen.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            let words = line.drop(while: { !$0.isLetter && !$0.isNumber })
-            guard words.count >= 4 else { continue }
-            return String(words.prefix(140))
-        }
-        return nil
+    /// Four characters of actual word, which is the ONE part of the deleted
+    /// `questionOnScreen` that was carrying its weight: it is what stops a pane
+    /// showing nothing but box rules from being announced as a question while
+    /// it is still painting. Kept as its own predicate rather than as a side
+    /// effect of a lifter returning nil, so the rule is visible where it is
+    /// applied.
+    static func hasWords(_ text: String, minimum: Int = 4) -> Bool {
+        text.reduce(into: 0) { count, ch in
+            if ch.isLetter || ch.isNumber { count += 1 }
+        } >= minimum
     }
+
+    /// `questionOnScreen` used to live here. It returned the first line of the
+    /// pane with four or more word characters, which is only the question when
+    /// the pane holds nothing but the question. A `claude resume` reprints the
+    /// entire conversation above the prompt, and Claude Code prints settings
+    /// warnings above it, so what it actually produced was scrollback, offered
+    /// to Robert as the thing his agent was waiting on. It is gone rather than
+    /// improved: a recognised screen is named by its needle (`RecognizedPrompt`),
+    /// and an unrecognised one is SHOWN, from the bottom, by `meaningfulTail`.
+    /// There is no third case for a heuristic to serve.
 }
