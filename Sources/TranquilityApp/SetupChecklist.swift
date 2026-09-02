@@ -69,7 +69,9 @@ final class SetupChecklistView: NSStackView {
         translatesAutoresizingMaskIntoConstraints = false
         // Built from the item list, not from a scan: the scan is off-main and
         // has not landed yet on the frame this runs in.
-        for (index, item) in Prerequisites.Item.allCases.enumerated() {
+        // `items()`, not a constant list: the hooks rows depend on which
+        // harnesses this machine has, one row each.
+        for (index, item) in Prerequisites.items().enumerated() {
             addArrangedSubview(prerequisiteRow(item, step: index + 1))
         }
         // The SETUP tab gets a restart door and onboarding does not.
@@ -220,7 +222,7 @@ final class SetupChecklistView: NSStackView {
 
         let button = ConsoleButton.door(item.fixLabel, ink: StateLegend.Palette.fault,
                                         target: self, action: #selector(fixTapped(_:)))
-        button.identifier = NSUserInterfaceItemIdentifier("prereq." + item.rawValue)
+        button.identifier = NSUserInterfaceItemIdentifier("prereq." + item.id)
         prereqButtons[item] = button
 
         guard mode == .reference else {
@@ -249,7 +251,7 @@ final class SetupChecklistView: NSStackView {
     @objc private func fixTapped(_ sender: NSButton) {
         let raw = sender.identifier?.rawValue ?? ""
         guard raw.hasPrefix("prereq."),
-              let item = Prerequisites.Item(rawValue: String(raw.dropFirst(7)))
+              let item = Prerequisites.Item(id: String(raw.dropFirst(7)))
         else { return }
 
         switch item {
@@ -264,8 +266,19 @@ final class SetupChecklistView: NSStackView {
             renderPrerequisites()
 
         case .hooks:
+            // ONE BUTTON, EVERY HARNESS, BUT A NOTE PER ROW.
+            //
+            // Installing is a both thing (ruled 1 Sep) so this still repairs
+            // every harness whichever row you press it from. What changed is
+            // where the words land: each harness's note goes on that harness's
+            // own row, so a machine where Claude Code takes it and Codex does
+            // not reads as two rows saying two true things, rather than one row
+            // averaging them.
+            //
             // Off-main: this parses and rewrites a file (rule 9).
-            prereqNote[item] = "wiring..."
+            for row in Prerequisites.items() where row.harness != nil {
+                prereqNote[row] = "wiring..."
+            }
             renderPrerequisites()
             Task.detached {
                 // Every harness on this machine, so one press wires Claude Code
@@ -287,7 +300,7 @@ final class SetupChecklistView: NSStackView {
                 for (harness, _) in outcomes
                 where HookManifest.approval(for: harness) == .pending {
                     await MainActor.run {
-                        self.prereqNote[item] = "approving \(harness.label)..."
+                        self.prereqNote[.hooks(harness: harness.id)] = "approving..."
                         self.renderPrerequisites()
                     }
                     let outcome = CodexHookApproval.grantByDrivingCodex(
@@ -299,8 +312,9 @@ final class SetupChecklistView: NSStackView {
                         "onboarding: hook approval \(harness.id) -- \(outcome)")
                 }
                 await MainActor.run {
-                    self.prereqNote[item] = Self.hookRepairNote(outcomes)
                     for (harness, outcome) in outcomes {
+                        self.prereqNote[.hooks(harness: harness.id)] =
+                            Self.hookRepairNote(harness, outcome)
                         Permissions.log(
                             "onboarding: hook repair \(harness.id) -- \(outcome)")
                     }
@@ -314,44 +328,30 @@ final class SetupChecklistView: NSStackView {
     }
 
 
-    /// One line for the checklist row, naming the harnesses it actually
-    /// touched. "wired 5" on a two-harness machine cannot say which half moved,
-    /// and the half that did not is exactly the failure this pass exists to
-    /// close.
-    static func hookRepairNote(
-        _ outcomes: [(harness: HookManifest.Harness, outcome: HookManifest.RepairOutcome)]
-    ) -> String {
-        guard !outcomes.isEmpty else { return "no agent directories found" }
-        var wired: [String] = [], failed: [String] = []
-        for (harness, outcome) in outcomes {
-            switch outcome {
-            case .healthy: continue
-            case .repaired(let rewired, let added):
-                wired.append("\(harness.label) \(rewired + added)")
-            case .unavailable(let reason):
-                failed.append("\(harness.label): \(reason)")
-            }
+    /// One line for ONE harness's row.
+    ///
+    /// This took a list and returned a sentence about the machine, and it had
+    /// the same defect as the row it fed: `if !failed.isEmpty { return failed }`
+    /// dropped the successes, so pressing Wire them where Claude Code took it
+    /// and Codex did not reported only the Codex failure. The repair that DID
+    /// happen was invisible at the exact moment somebody was watching for it.
+    ///
+    /// Per harness there is nothing to drop. Each row says what happened to it.
+    static func hookRepairNote(_ harness: HookManifest.Harness,
+                               _ outcome: HookManifest.RepairOutcome) -> String {
+        switch outcome {
+        case .unavailable(let reason):
+            return reason
+        case .healthy, .repaired:
+            // Writing the file is not the same as the harness agreeing to run
+            // it. Codex asks once and fails silent until it is answered, so a
+            // row that says "wired" and stops there sends someone away
+            // believing the setup is done. Whatever is still owed is said here,
+            // in Core's words.
+            if let owed = HookManifest.nextStep(for: harness) { return owed }
+            if case .repaired = outcome { return "wired. Restart your sessions" }
+            return "already wired"
         }
-        // BOTH halves, never just the broken one. Returning only the failures
-        // is the same omission the row itself had: press Wire them on a machine
-        // where Claude Code takes it and Codex does not, and the note reported
-        // the Codex failure alone, so the repair that DID happen was invisible
-        // at the exact moment somebody was watching for it. Ruled 1 Sep.
-        if !failed.isEmpty {
-            let worked = wired.map { "wired " + $0 }
-            return (worked + failed).joined(separator: "; ")
-        }
-        // Writing the file is not the same as the harness agreeing to run it.
-        // Codex asks once and fails silent until it is answered, so a row that
-        // says "wired" and stops there sends someone away believing the setup
-        // is done. Whatever is still owed is said here, in Core's words.
-        let owed = outcomes.compactMap { HookManifest.nextStep(for: $0.harness) }
-        if !owed.isEmpty { return owed.joined(separator: " Also: ") }
-        if wired.isEmpty {
-            return "already wired ("
-                + outcomes.map(\.harness.label).joined(separator: ", ") + ")"
-        }
-        return "wired " + wired.joined(separator: ", ") + ". Restart your sessions"
     }
 
     /// The shared sheet. Onboarding and the menu must offer the same thing:
@@ -396,18 +396,15 @@ final class SetupChecklistView: NSStackView {
                     // A MIXED machine, which is the state worth photographing
                     // and the one a developer's Mac never shows: one harness
                     // wired, one not. Both-broken and both-fine each have an
-                    // obvious rendering; the half-and-half is where a single
-                    // row and a single lamp used to lose the good news.
-                    hooksProblem: {
-                        "hooks: Codex: scripts missing at /Applications/"
-                        + "Tranquility Base.app/Contents/Resources/hooks"
+                    // obvious rendering; the half-and-half is the case the
+                    // per-harness rows exist for.
+                    hooksProblem: { id in
+                        id == CodexAdapter().id
+                            ? "scripts missing at /Applications/Tranquility "
+                              + "Base.app/Contents/Resources/hooks"
+                            : nil
                     },
-                    hasSecret: { _ in false },
-                    hooksDetail: {
-                        "Claude Code wired; Codex: scripts missing at "
-                        + "/Applications/Tranquility Base.app/Contents/"
-                        + "Resources/hooks"
-                    }))
+                    hasSecret: { _ in false }))
                 : Prerequisites.snapshot()
             await MainActor.run {
                 self.prereqScanInFlight = false

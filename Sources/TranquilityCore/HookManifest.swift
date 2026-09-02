@@ -613,22 +613,28 @@ public enum HookManifest {
     ///
     /// Ordered by `detected()`, so the same machine reads the same way twice.
     public static func machineReport() -> [(harness: Harness, problem: String?)] {
-        detected().map { harness in
-            if let wiring = problemSummary(settings: harness.settingsURL,
-                                           expecting: harness.expected) {
-                return (harness,
-                        wiring.replacingOccurrences(of: "hooks: ", with: ""))
-            }
-            // Wired, and still not running. Reported as a problem rather than
-            // a footnote, because from the user's side it is indistinguishable
-            // from not being installed: no lamps, no announcements, nothing.
-            switch approval(for: harness) {
-            case .notRequired, .granted: return (harness, nil)
-            case .pending: return (harness, "installed, awaiting approval")
-            case .unknown:
-                return (harness, "cannot read "
-                    + (harness.approvalConfigURL?.lastPathComponent ?? "config"))
-            }
+        detected().map { ($0, problem(for: $0)) }
+    }
+
+    /// What is wrong with ONE harness, or nil when nothing is.
+    ///
+    /// The unit the checklist is built from, one row each. Splitting it out is
+    /// what let the row stop averaging two independent installs into a single
+    /// lamp.
+    public static func problem(for harness: Harness) -> String? {
+        if let wiring = problemSummary(settings: harness.settingsURL,
+                                       expecting: harness.expected) {
+            return wiring.replacingOccurrences(of: "hooks: ", with: "")
+        }
+        // Wired, and still not running. Reported as a problem rather than a
+        // footnote, because from the user's side it is indistinguishable from
+        // not being installed: no lamps, no announcements, nothing.
+        switch approval(for: harness) {
+        case .notRequired, .granted: return nil
+        case .pending: return "installed, awaiting approval"
+        case .unknown:
+            return "cannot read "
+                + (harness.approvalConfigURL?.lastPathComponent ?? "config")
         }
     }
 
@@ -639,22 +645,6 @@ public enum HookManifest {
             entry.problem.map { "\(entry.harness.label): \($0)" }
         }
         return problems.isEmpty ? nil : "hooks: " + problems.joined(separator: "; ")
-    }
-
-    /// What the CHECKLIST ROW says: every harness, its own verdict, success
-    /// included. nil when this machine has no harness at all to talk about.
-    ///
-    /// The healthy half is the part that was never printed, and it is the part
-    /// somebody staring at a half-broken install actually needs. "Codex:
-    /// scripts missing" leaves them guessing about Claude Code; "Claude Code
-    /// wired, Codex: scripts missing" does not.
-    public static func machineDetail() -> String? {
-        let entries = machineReport()
-        guard !entries.isEmpty else { return nil }
-        return entries.map { entry in
-            guard let problem = entry.problem else { return "\(entry.harness.label) wired" }
-            return "\(entry.harness.label): \(problem)"
-        }.joined(separator: "; ")
     }
 
     /// What the user has to DO next for this harness, in one sentence, or nil

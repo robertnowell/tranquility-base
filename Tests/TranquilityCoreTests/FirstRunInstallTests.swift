@@ -167,7 +167,7 @@ final class FirstRunInstallTests: XCTestCase {
     func testARejectedKeyLosesItsGreenLamp() {
         let states = Prerequisites.snapshot(Prerequisites.Probes(
             tmuxPath: { "/opt/homebrew/bin/tmux" },
-            hooksProblem: { nil },
+            hooksProblem: { _ in nil },
             hasSecret: { _ in true },
             keyVerdict: { _ in .rejected(status: 401) }))
         let key = states.first { $0.item == .elevenLabsKey }!
@@ -182,7 +182,7 @@ final class FirstRunInstallTests: XCTestCase {
         for verdict: KeyCheck.Outcome in [.working, .unreachable, .unexpected(status: 500)] {
             let states = Prerequisites.snapshot(Prerequisites.Probes(
                 tmuxPath: { "/opt/homebrew/bin/tmux" },
-                hooksProblem: { nil },
+                hooksProblem: { _ in nil },
                 hasSecret: { _ in true },
                 keyVerdict: { _ in verdict }))
             let key = states.first { $0.item == .anthropicKey }!
@@ -196,7 +196,7 @@ final class FirstRunInstallTests: XCTestCase {
     func testAnAbsentKeyIsQuiet() {
         let states = Prerequisites.snapshot(Prerequisites.Probes(
             tmuxPath: { "/opt/homebrew/bin/tmux" },
-            hooksProblem: { nil },
+            hooksProblem: { _ in nil },
             hasSecret: { _ in false },
             keyVerdict: { _ in .rejected(status: 401) }))
         let key = states.first { $0.item == .assemblyAIKey }!
@@ -209,33 +209,64 @@ final class FirstRunInstallTests: XCTestCase {
 
     /// The half that worked is the half that was never printed.
     ///
-    /// One row and one lamp stood in for two independent installs. On a machine
-    /// where Claude Code wired and Codex did not, the row read "Codex: scripts
-    /// missing" and said nothing at all about Claude Code, so "did Claude Code
-    /// work?" was a question the screen could not answer. Ruled 1 Sep: one
-    /// action, one result line per harness.
-    func testAHealthyHarnessSaysSoBesideABrokenOne() {
+    /// One row and one lamp stood in for two independent installs, so on a
+    /// machine where Claude Code wired and Codex did not, the row read "Codex:
+    /// scripts missing" and said nothing at all about Claude Code. Ruled 1 Sep:
+    /// one row per harness, each with its own lamp.
+    func testEachHarnessRowCarriesItsOwnVerdict() {
+        let broken = HookManifest.detected().first
+        // Nothing to assert on a machine with no harness at all, which is the
+        // right amount of rows for that machine.
+        try? XCTSkipIf(broken == nil)
+        guard let broken else { return }
         let states = Prerequisites.snapshot(Prerequisites.Probes(
             tmuxPath: { "/opt/homebrew/bin/tmux" },
-            hooksProblem: { "hooks: Codex: 5 pointing at a missing file" },
-            hasSecret: { _ in true },
-            hooksDetail: { "Claude Code wired; Codex: 5 pointing at a missing file" }))
-        let hooks = states.first { $0.item == .hooks }!
-        XCTAssertFalse(hooks.satisfied, "a broken half still holds the gate")
-        XCTAssertTrue(hooks.detail.contains("Claude Code wired"),
-                      "the half that worked has to say so: \(hooks.detail)")
-        XCTAssertTrue(hooks.detail.contains("Codex:"), hooks.detail)
+            hooksProblem: { id in
+                id == broken.id ? "5 pointing at a missing file" : nil
+            },
+            hasSecret: { _ in true }))
+
+        for state in states {
+            guard case .hooks(let harness) = state.item else { continue }
+            if harness == broken.id {
+                XCTAssertFalse(state.satisfied, broken.label)
+                XCTAssertEqual(state.detail, "5 pointing at a missing file")
+            } else {
+                XCTAssertTrue(state.satisfied, harness)
+                XCTAssertEqual(state.detail, "wired",
+                               "a healthy harness says so on its own row")
+            }
+        }
     }
 
-    /// And with no per-harness detail available, the row still says what is
-    /// wrong rather than going blank. The old text is the floor, not the ceiling.
-    func testTheRowFallsBackToTheProblemWhenThereIsNoDetail() {
+    /// The row is titled with its harness, so the detail must not repeat it.
+    /// "Codex hooks / Codex: awaiting approval" says Codex twice.
+    func testAHooksRowNamesItsHarnessOnceOnly() {
+        for item in Prerequisites.items() {
+            guard case .hooks = item, let harness = item.harness else { continue }
+            XCTAssertEqual(item.title, harness.label + " hooks")
+        }
+    }
+
+    /// The gate is ANY, not ALL. Most people run one harness; a second one
+    /// whose directory exists because it was tried once must not hold the door.
+    func testOneWiredHarnessOpensTheDoor() {
+        guard let first = HookManifest.detected().first else { return }
         let states = Prerequisites.snapshot(Prerequisites.Probes(
             tmuxPath: { "/opt/homebrew/bin/tmux" },
-            hooksProblem: { "hooks: 2 not installed" },
+            hooksProblem: { id in id == first.id ? nil : "not installed" },
             hasSecret: { _ in true }))
-        let hooks = states.first { $0.item == .hooks }!
-        XCTAssertEqual(hooks.detail, "2 not installed")
+        XCTAssertTrue(Prerequisites.allRequiredSatisfied(states),
+                      "one wired harness is enough to finish first run")
+    }
+
+    func testNoWiredHarnessHoldsTheDoor() {
+        guard !HookManifest.detected().isEmpty else { return }
+        let states = Prerequisites.snapshot(Prerequisites.Probes(
+            tmuxPath: { "/opt/homebrew/bin/tmux" },
+            hooksProblem: { _ in "not installed" },
+            hasSecret: { _ in true }))
+        XCTAssertFalse(Prerequisites.allRequiredSatisfied(states))
     }
 
     func testAVerdictSurvivesARoundTrip() {
