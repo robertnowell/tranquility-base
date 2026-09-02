@@ -65,7 +65,7 @@ types at your cursor (with Accessibility granted) or lands on the clipboard.
 
 ## Install
 
-Requires macOS 14 or later on Apple silicon, plus the `claude` CLI.
+Requires macOS 14 or later on Apple silicon or Intel, plus the `claude` CLI.
 
 **Download the DMG from [Releases](https://github.com/robertnowell/tranquility-base/releases/latest).**
 Drag *Tranquility Base* to Applications, eject the disk image, and open the
@@ -99,7 +99,7 @@ For working on the app, not for installing it.
 ```sh
 git clone https://github.com/robertnowell/tranquility-base.git && cd tranquility-base
 ./scripts/bundle.sh                  # build + sign the .app
-open ".build/debug/Tranquility Base.app"
+open ".build/bundle/debug/Tranquility Base.app"
 swift run tbase install-hooks        # wires the Claude Code hooks (backup kept)
 ```
 
