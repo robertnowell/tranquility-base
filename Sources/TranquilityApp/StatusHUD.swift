@@ -514,9 +514,38 @@ final class StatusHUD: NSObject {
         // not the focused field on this screen. The hands-free ✕/✓ buttons are
         // dead code deleted (simplification pass): they were never attached to
         // any view hierarchy, and the chords cover both actions.
-        beginCaptureFace(target: currentTarget?.label ?? dictationDestination
-                            ?? StateLegend.clipboardDestination)
+        beginCaptureFace(target: captureDestinationName())
         render()
+    }
+
+    /// What the pill should call the place these words are going.
+    ///
+    /// **The rung that was missing was the launch.** The ladder used to be
+    /// `currentTarget?.label ?? dictationDestination ?? clipboardDestination`,
+    /// and a capture begun on a launch card matches none of the first two: the
+    /// session does not exist yet, so there is no target, and
+    /// `beginCapture(to: .launch)` deliberately probes no focused app because
+    /// the words are for the agent, not for this screen. So it fell to the end
+    /// and painted `→ clipboard` — about words that were, correctly, on their
+    /// way to an agent (1 Sep, 23:22:40: pill written unbound; 23:22:42 the
+    /// session bound; 23:23:56 the reply "went to 20b51f8c" exactly as it
+    /// should have, eighty seconds after the panel started naming the wrong
+    /// destination).
+    ///
+    /// The launch card knows perfectly well who it is for — it is the card's
+    /// own title, the directory the agent is starting in — so it says that.
+    /// `clipboardDestination` stays last and stays honest: it is reached only
+    /// from a `.dictation` capture whose focused-app probe found nothing, and
+    /// there the clipboard is genuinely where the words land.
+    private func captureDestinationName() -> String {
+        if let label = currentTarget?.label { return label }
+        // A launch card on stage, session not yet minted. `awaitingGreetingBinding`
+        // is the panel's own word for exactly that, and it is the flag
+        // `bindGreeting` clears — so the two can never disagree about which
+        // moment this is.
+        if awaitingGreetingBinding, !face.title.isEmpty { return face.title }
+        if let dictationDestination { return dictationDestination }
+        return StateLegend.clipboardDestination
     }
 
     /// RMS for speech is small, so it is square-rooted and scaled. The old factor of
@@ -631,6 +660,13 @@ final class StatusHUD: NSObject {
         // "Starting agent..." pill has nothing left to say.
         face.placardOverride = ""
         adoptTarget(sessionId: sessionId, pid: pid, label: label, cwd: cwd)
+        // A capture that started before the session existed named the LAUNCH.
+        // The launch has just become an agent, so the pill is re-derived rather
+        // than left at whatever was true when the microphone opened. Written
+        // once and never revisited is how it said `→ clipboard` for the whole
+        // eighty seconds of one recording; `listeningTarget` is a snapshot, so
+        // something has to retake it, and this is the moment the fact changed.
+        if state.isCapturingAudio { face.listeningTarget = captureDestinationName() }
         // The doors are derived from the target, so the card grows GO TO AGENT
         // and its hub link at the moment it acquires one.
         render()
@@ -1664,6 +1700,12 @@ final class StatusHUD: NSObject {
         }
         meterTimer?.invalidate(); meterTimer = nil
         endTranscribingUI()
+        // The probe belongs to the capture that ran it. It was assigned in
+        // exactly one place and cleared in none, so the focused app at some
+        // earlier mic-open stayed on the ladder forever — ready to be served,
+        // as a fact, to a later capture that never probed anything. A stale
+        // true answer is the same bug as a confident false one.
+        dictationDestination = nil
         // Yield the stage so whatever the caller paints next is admitted; the
         // state value is interim and the caller's repaint replaces it at once.
         forceTransition(to: .idle(waiting: 0), because: reason)
