@@ -22,11 +22,28 @@ import Foundation
 /// the machine can run the loop at all.
 public enum Prerequisites {
 
-    public enum Item: String, Sendable, CaseIterable {
+    /// ONE ROW PER HARNESS, not one row for "hooks".
+    ///
+    /// `hooks` was a single case, so a two-harness machine got a single row and
+    /// a single lamp standing in for two installs that fail independently. The
+    /// first version of this fix kept the row and split only the TEXT, which
+    /// was what was asked for and is still not enough: most people run Claude
+    /// Code or Codex, not both, and a conflated row hides the state of whichever
+    /// one they actually use behind the state of the one they do not.
+    ///
+    /// Ruled 1 Sep: "one row per harness hooks." So the case carries the
+    /// harness it is about, and the list of items is a function of what this
+    /// machine has rather than a constant.
+    ///
+    /// Not `String`-backed any more, because a case with a payload cannot be.
+    /// `id` replaces `rawValue` and is what button identifiers and logs use.
+    public enum Item: Hashable, Sendable {
         /// The only reply transport since the 23 Aug single-transport cut.
         case tmux
-        /// How a finished turn reaches this app at all.
-        case hooks
+        /// How a finished turn reaches this app at all, per harness. The
+        /// payload is `HarnessAdapter.id`, so this never becomes a second
+        /// vocabulary for the same thing.
+        case hooks(harness: String)
         /// Spoken summaries. The product.
         case anthropicKey
         /// The voice. Falls back to the system voice, audibly.
@@ -34,10 +51,43 @@ public enum Prerequisites {
         /// The live transcript while you speak.
         case assemblyAIKey
 
+        /// Stable, and stable across harnesses: "hooks.codex" is not
+        /// "hooks.claude-code". Used for button identifiers and log lines.
+        public var id: String {
+            switch self {
+            case .tmux: return "tmux"
+            case .hooks(let harness): return "hooks." + harness
+            case .anthropicKey: return "anthropicKey"
+            case .elevenLabsKey: return "elevenLabsKey"
+            case .assemblyAIKey: return "assemblyAIKey"
+            }
+        }
+
+        public init?(id: String) {
+            switch id {
+            case "tmux": self = .tmux
+            case "anthropicKey": self = .anthropicKey
+            case "elevenLabsKey": self = .elevenLabsKey
+            case "assemblyAIKey": self = .assemblyAIKey
+            default:
+                guard id.hasPrefix("hooks.") else { return nil }
+                self = .hooks(harness: String(id.dropFirst("hooks.".count)))
+            }
+        }
+
+        /// Which harness this row is about, or nil for the rows that are not
+        /// about a harness at all.
+        public var harness: HookManifest.Harness? {
+            guard case .hooks(let id) = self else { return nil }
+            return HookManifest.harnesses.first { $0.id == id }
+        }
+
         public var title: String {
             switch self {
             case .tmux: return "tmux"
-            case .hooks: return "Agent hooks"
+            // "Claude Code hooks", "Codex hooks". Naming the harness in the
+            // row is the whole point of there being two of them.
+            case .hooks: return (harness?.label ?? "Agent") + " hooks"
             case .anthropicKey: return "Anthropic"
             case .elevenLabsKey: return "ElevenLabs"
             case .assemblyAIKey: return "AssemblyAI"
@@ -51,50 +101,46 @@ public enum Prerequisites {
             case .tmux: return "the only way a reply reaches a session"
             case .hooks: return "finished turns, and results as pages you can open"
             // "a tenth of a cent", not "$0.001". Same number, and it is the
-            // phrasing the onboarding body already uses two paragraphs down.
-            // The currency sign is also a MARK by `ChromeType.isMark`, and this
-            // row renders inside the panel now that Settings hosts the same
-            // checklist, where the `chrome` drill requires every mark to be
-            // composed. Composing a symbol inside a prose sentence would be the
-            // wrong fix: chrome composition is for chrome.
+            // phrasing the onboarding body already uses. The currency sign is
+            // also a MARK by `ChromeType.isMark`, and this row renders inside
+            // the panel now that Settings hosts the same checklist, where the
+            // `chrome` drill requires every mark to be composed. Composing a
+            // symbol inside a prose sentence would be the wrong fix: chrome
+            // composition is for chrome.
             case .anthropicKey: return "spoken summaries, about a tenth of a cent each"
             case .elevenLabsKey: return "the voice; without it, the system one"
             case .assemblyAIKey: return "the live transcript while you speak"
             }
         }
 
-        /// Only tmux and hooks hold the gate.
+        /// tmux, the hooks, and the Anthropic key hold the gate.
         ///
-        /// The keys are RECOMMENDED, not required, and the distinction is the
-        /// point of having one. Blocking on a key that only degrades trains
-        /// people to click past a checklist; staying silent about one is how
-        /// somebody ends up judging the product by `DeterministicSummarizer`,
-        /// which reads back the opening of the agent's own message and is
-        /// explicitly "a floor, not a product". Neither mistake is recoverable
-        /// by adding more text later.
+        /// ANTHROPIC IS REQUIRED AS OF 1 SEP, and the argument is the product's
+        /// own. Without that key the readout falls to `DeterministicSummarizer`,
+        /// which reads back the opening of the agent's message and whose own
+        /// comment calls it "a floor, not a product". Robert, having heard it:
+        /// "without the Anthropic key you just get the whole readout, the last
+        /// message. That's not good. That's not Tranquility Base." Shipping the
+        /// floor as the default is shipping something that is not the thing.
+        ///
+        /// The other two stay optional, and that is the same decision made
+        /// honestly rather than a failure to decide: ElevenLabs missing means
+        /// the macOS system voice and AssemblyAI missing means transcription
+        /// after you stop instead of during. Both are degraded and both still
+        /// work. The Anthropic fallback does not.
+        ///
+        /// The hooks rows are required INDIVIDUALLY here but gated COLLECTIVELY
+        /// by `allRequiredSatisfied`, which needs only one wired harness. See
+        /// there for why.
         public var isRequired: Bool {
             switch self {
-            case .tmux, .hooks: return true
-            case .anthropicKey, .elevenLabsKey, .assemblyAIKey: return false
+            case .tmux, .hooks, .anthropicKey: return true
+            case .elevenLabsKey, .assemblyAIKey: return false
             }
         }
 
-        /// The one whose absence costs the most.
-        ///
-        /// NO LONGER PRINTED ANYWHERE. It used to append "(recommended)" to the
-        /// Anthropic row and prefix "recommended \u{00B7} " to its detail in the panel,
-        /// and Robert's reading of that on 1 Sep was "what the fuck is that,
-        /// get rid of it, it's just necessary". He is right on both counts: the
-        /// row already says what is lost without the key, which is the fact,
-        /// and a label ranking one row against two others is the screen having
-        /// an opinion at the moment somebody is trying to leave it.
-        ///
-        /// Kept as a fact because the gate still reads it (`isRequired` is a
-        /// different question and neither one is display).
-        public var isRecommended: Bool { self == .anthropicKey }
-
-        /// Which keychain entry this row is about; nil for the two that are not
-        /// credentials at all.
+        /// Which keychain entry this row is about; nil for the ones that are
+        /// not credentials at all.
         public var secret: Secrets.Key? {
             switch self {
             case .tmux, .hooks: return nil
@@ -116,10 +162,37 @@ public enum Prerequisites {
         public var fixLabel: String {
             switch self {
             case .tmux: return "Copy command"
+            // One door, both harnesses. Installing IS a both thing (ruled
+            // 1 Sep); only the reporting splits. Pressing it on either row
+            // repairs every harness this machine has.
             case .hooks: return "Wire them"
             case .anthropicKey, .elevenLabsKey, .assemblyAIKey: return "Paste key"
             }
         }
+    }
+
+    /// The rows this machine has, in order.
+    ///
+    /// A function rather than `allCases`, because the hooks rows depend on which
+    /// harnesses are installed. `detected()` is two `fileExists` calls, which is
+    /// cheap enough to run while building the view: the expensive probes (the
+    /// audit, the keychain, the login shell) stay in `snapshot`, off-main.
+    ///
+    /// A machine with no harness gets no hooks row, which is right. Telling
+    /// somebody their Codex hooks are broken when they have never run Codex is
+    /// the thing `Harness.isPresent` has always existed to prevent.
+    /// INJECTABLE, and it has to be. The first version read `detected()`
+    /// directly, which made every hooks test depend on the machine running it
+    /// having `~/.claude`: green here, and a force-unwrap crash on CI, where no
+    /// harness exists and the row the test asked for was simply not there. A
+    /// test that only passes on the developer's Mac is the same defect as the
+    /// path that only breaks off it, which is what this whole branch is about.
+    public static func items(
+        harnesses: [String] = HookManifest.detected().map(\.id)
+    ) -> [Item] {
+        [.tmux]
+            + harnesses.map { Item.hooks(harness: $0) }
+            + [.anthropicKey, .elevenLabsKey, .assemblyAIKey]
     }
 
     public struct State: Sendable, Equatable {
@@ -147,7 +220,15 @@ public enum Prerequisites {
     public struct Probes: Sendable {
         public var tmuxPath: @Sendable () -> String?
         /// nil when every hook is wired and reachable, matching `HookManifest`.
-        public var hooksProblem: @Sendable () -> String?
+        /// What is wrong with ONE harness, by its id, or nil when nothing is.
+        ///
+        /// Was machine-wide, which is what forced one row to speak for two
+        /// installs. A row per harness needs a probe per harness.
+        public var hooksProblem: @Sendable (String) -> String?
+        /// Which harnesses this machine has, by id. A probe like any other:
+        /// "what is installed" is exactly the kind of question a test needs to
+        /// answer for itself.
+        public var harnesses: @Sendable () -> [String]
         public var hasSecret: @Sendable (Secrets.Key) -> Bool
         /// What the provider last said about a stored key, or nil if it was
         /// never asked. A row that reports a refusal in its text and a green
@@ -156,12 +237,15 @@ public enum Prerequisites {
 
         public init(
             tmuxPath: @escaping @Sendable () -> String?,
-            hooksProblem: @escaping @Sendable () -> String?,
+            hooksProblem: @escaping @Sendable (String) -> String?,
             hasSecret: @escaping @Sendable (Secrets.Key) -> Bool,
-            keyVerdict: @escaping @Sendable (Secrets.Key) -> KeyCheck.Outcome? = { _ in nil }
+            keyVerdict: @escaping @Sendable (Secrets.Key) -> KeyCheck.Outcome? = { _ in nil },
+            harnesses: @escaping @Sendable () -> [String]
+                = { HookManifest.detected().map(\.id) }
         ) {
             self.tmuxPath = tmuxPath
             self.hooksProblem = hooksProblem
+            self.harnesses = harnesses
             self.hasSecret = hasSecret
             self.keyVerdict = keyVerdict
         }
@@ -185,7 +269,10 @@ public enum Prerequisites {
             // green checklist coexisted with Codex sessions that had no
             // hooks at all: the row was telling the truth about the only
             // harness it knew to ask about.
-            hooksProblem: { HookManifest.machineSummary() },
+            hooksProblem: { id in
+                HookManifest.harnesses.first { $0.id == id }
+                    .flatMap { HookManifest.problem(for: $0) }
+            },
             hasSecret: { Secrets.read($0) != nil },
             keyVerdict: { KeyVerdict.last(for: $0) })
     }
@@ -210,7 +297,7 @@ public enum Prerequisites {
     /// hooks audit parses a file, a keychain read is a round trip, and the tmux
     /// fallback spawns a login shell. None of that belongs on a 1 Hz UI timer.
     public static func snapshot(_ probes: Probes = .live) -> [State] {
-        Item.allCases.map { item in
+        items(harnesses: probes.harnesses()).map { item in
             if let secret = item.secret {
                 guard probes.hasSecret(secret) else {
                     return State(item: item, satisfied: false, detail: missingDetail(item))
@@ -235,33 +322,22 @@ public enum Prerequisites {
                 }
                 return State(item: item, satisfied: false,
                              detail: "not installed. Replies have nowhere to go")
-            case .hooks:
-                if let problem = probes.hooksProblem() {
-                    // problemSummary says "hooks: 2 not installed" because it
-                    // also feeds a log line; in a row already labelled "Claude
-                    // Code hooks" that prefix is said twice.
-                    let trimmed = problem.hasPrefix("hooks: ")
-                        ? String(problem.dropFirst("hooks: ".count)) : problem
-                    return State(item: item, satisfied: false, detail: trimmed)
+            case .hooks(let harnessID):
+                // ONE harness, its own row, its own lamp.
+                //
+                // The first attempt at this kept a single row and split only
+                // the text, which was the letter of the ruling and not enough:
+                // most people run Claude Code or Codex, not both, so a row that
+                // averages two harnesses hides the state of whichever one they
+                // actually use behind the one they do not.
+                //
+                // The row is titled with the harness name, so the detail never
+                // repeats it: "Codex hooks / installed, awaiting approval", not
+                // "Codex hooks / Codex: installed, awaiting approval".
+                if let problem = probes.hooksProblem(harnessID) {
+                    return State(item: item, satisfied: false, detail: problem)
                 }
-                // Name every harness it is wired into, not the first one we
-                // happened to support. On a machine running both, "wired into
-                // Claude Code" is a true sentence that answers the wrong
-                // question: the reason this row exists on a two-harness machine
-                // is to say whether CODEX is covered too (Robert, 30 Aug,
-                // looking at exactly that line).
-                let harnesses = HookManifest.detected().map(\.label)
-                return State(item: item, satisfied: true,
-                             detail: harnesses.isEmpty
-                                ? "wired"
-                                // "and", not "+". A plus sign is a SYMBOL, so
-                                // `ChromeType.isMark` counts it, and this
-                                // string renders inside the panel where the
-                                // chrome drill requires every mark to be
-                                // composed. Same trap as the currency sign on
-                                // 30 Aug; composing a connective inside a
-                                // prose sentence is still the wrong fix.
-                                : "wired into " + harnesses.joined(separator: " and "))
+                return State(item: item, satisfied: true, detail: "wired")
             default:
                 return State(item: item, satisfied: true, detail: "")
             }
@@ -279,18 +355,53 @@ public enum Prerequisites {
         }
     }
 
-    /// The gate the Start door uses. Required rows only.
+    /// The gate the Start door uses.
+    ///
+    /// tmux and the Anthropic key are each required outright. The hooks are
+    /// required COLLECTIVELY: at least one harness has to be wired, and a
+    /// second broken one does not hold the door.
+    ///
+    /// That distinction is the reason the rows split rather than a consequence
+    /// of it. Most people run Claude Code or Codex, not both, so `detected()`
+    /// will often find a harness whose config directory exists because it was
+    /// tried once and abandoned. Demanding every one of those before first run
+    /// can finish would block somebody on a tool they do not use, which is
+    /// precisely the gauntlet this screen was cleared of on 1 Sep. An unused
+    /// harness is allowed to sit amber: it says something true, and it stops
+    /// nothing.
+    ///
+    /// A machine with no harness at all has no hooks rows and passes here,
+    /// unchanged. There is nothing to wire, and inventing a blocker for it
+    /// would be telling somebody their Codex is broken when they have never
+    /// run Codex.
     public static func allRequiredSatisfied(_ states: [State]) -> Bool {
-        states.filter(\.item.isRequired).allSatisfy(\.satisfied)
+        var hooks: [State] = [], others: [State] = []
+        for state in states {
+            if case .hooks = state.item { hooks.append(state) }
+            else if state.item.isRequired { others.append(state) }
+        }
+        guard others.allSatisfy(\.satisfied) else { return false }
+        return hooks.isEmpty || hooks.contains(where: \.satisfied)
     }
 
-    /// Rows worth drawing.
+    /// Rows worth drawing. All of them.
     ///
-    /// `hooks` is hidden while healthy. The app repairs hooks at launch and says
-    /// so in the HUD, so in the normal case a row for them is a line of furniture
-    /// reporting that nothing happened. It appears only when repair could not
-    /// finish, which is the one time the user needs a door.
-    public static func visible(_ states: [State]) -> [State] {
-        states.filter { $0.item != .hooks || !$0.satisfied }
-    }
+    /// `hooks` used to be hidden while healthy, on the argument that the app
+    /// repairs at launch and a row reporting that nothing happened is
+    /// furniture. REVERSED 1 Sep, by the only evidence that settles a question
+    /// like this: somebody used it. Robert, on a fresh install, "the hooks
+    /// don't show like success. And I wonder why."
+    ///
+    /// They did not show it because there was nothing left to show it with.
+    /// Success removed the row, so the one line on the screen that could have
+    /// said "Claude Code wired, Codex wired" was deleted at the exact moment it
+    /// had something worth saying, and the checklist's answer to "is this part
+    /// working" was a gap where a row used to be. A gap is not an answer; on a
+    /// screen whose whole job is stating what is ready, it reads as the item
+    /// having been dropped.
+    ///
+    /// This is the same ruling as the per-harness detail beside it and follows
+    /// from it: a row told to report success separately for two harnesses has
+    /// to be on screen to do it.
+    public static func visible(_ states: [State]) -> [State] { states }
 }

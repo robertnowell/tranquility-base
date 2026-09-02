@@ -595,21 +595,54 @@ public enum HookManifest {
     /// two-harness machine, was the app quietly telling us what it had not
     /// done. A summary that cannot name which harness is broken reproduces
     /// exactly that.
+    /// Every detected harness, named, whether or not it is healthy.
+    ///
+    /// `machineSummary()` below reports only PROBLEMS, and a harness that is
+    /// fine contributes nothing at all to it: no line, no lamp, no mention. On
+    /// a two-harness machine that makes "did Claude Code work?" a question the
+    /// screen structurally cannot answer, because one row and one lamp are
+    /// standing in for two independent installs that fail independently.
+    ///
+    /// Robert, 1 Sep, having watched a fresh install: "we should report success
+    /// separately for Claude Code and for Codex. Install can be a both thing."
+    /// So the ACTION stays one button and the RESULT gets one line per harness,
+    /// which is the half that was missing. This is the same lesson the harness
+    /// dimension taught on 28 Aug, one level up: a manifest that describes half
+    /// a machine is true and useless, and so is a row that reports half a
+    /// repair.
+    ///
+    /// Ordered by `detected()`, so the same machine reads the same way twice.
+    public static func machineReport() -> [(harness: Harness, problem: String?)] {
+        detected().map { ($0, problem(for: $0)) }
+    }
+
+    /// What is wrong with ONE harness, or nil when nothing is.
+    ///
+    /// The unit the checklist is built from, one row each. Splitting it out is
+    /// what let the row stop averaging two independent installs into a single
+    /// lamp.
+    public static func problem(for harness: Harness) -> String? {
+        if let wiring = problemSummary(settings: harness.settingsURL,
+                                       expecting: harness.expected) {
+            return wiring.replacingOccurrences(of: "hooks: ", with: "")
+        }
+        // Wired, and still not running. Reported as a problem rather than a
+        // footnote, because from the user's side it is indistinguishable from
+        // not being installed: no lamps, no announcements, nothing.
+        switch approval(for: harness) {
+        case .notRequired, .granted: return nil
+        case .pending: return "installed, awaiting approval"
+        case .unknown:
+            return "cannot read "
+                + (harness.approvalConfigURL?.lastPathComponent ?? "config")
+        }
+    }
+
+    /// One line for a log, or for anything that only wants to know what is
+    /// wrong. Built from `machineReport()` so the two cannot disagree.
     public static func machineSummary() -> String? {
-        let problems = detected().compactMap { harness -> String? in
-            if let wiring = problemSummary(settings: harness.settingsURL,
-                                           expecting: harness.expected) {
-                return "\(harness.label): "
-                    + wiring.replacingOccurrences(of: "hooks: ", with: "")
-            }
-            // Wired, and still not running. Reported as a problem rather than
-            // a footnote, because from the user's side it is indistinguishable
-            // from not being installed: no lamps, no announcements, nothing.
-            switch approval(for: harness) {
-            case .notRequired, .granted: return nil
-            case .pending: return "\(harness.label): installed, awaiting approval"
-            case .unknown: return "\(harness.label): cannot read \(harness.approvalConfigURL?.lastPathComponent ?? "config")"
-            }
+        let problems = machineReport().compactMap { entry in
+            entry.problem.map { "\(entry.harness.label): \($0)" }
         }
         return problems.isEmpty ? nil : "hooks: " + problems.joined(separator: "; ")
     }

@@ -422,8 +422,10 @@ extension StatusHUD {
                 let rows = self.setupChecklist?.rowCountForSelfTest ?? 0
                 SelfTest.report("setupTab", [
                     ("checklistShown", visible),
+                    // `items()`, which counts one hooks row per harness this
+                    // machine has, rather than a constant.
                     ("everyPrerequisiteHasARow",
-                     rows == Prerequisites.Item.allCases.count),
+                     rows == Prerequisites.items().count),
                     ("agentFieldsAreGone",
                      self.launchRow?.isHidden == true
                         && self.harnessPicker?.isHidden == true),

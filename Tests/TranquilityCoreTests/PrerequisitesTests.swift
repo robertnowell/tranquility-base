@@ -11,15 +11,28 @@ import XCTest
 /// deliver a single reply.
 final class PrerequisitesTests: XCTestCase {
 
+    /// Both harnesses, always, whatever this machine happens to have. The
+    /// snapshot is a pure function of its probes and the tests say so.
+    private static let bothHarnesses = [ClaudeCodeAdapter().id, CodexAdapter().id]
+
     private func probes(
         tmux: String? = "/opt/homebrew/bin/tmux",
         hooks: String? = nil,
-        secrets: Set<Secrets.Key> = Set(Secrets.Key.allCases)
+        secrets: Set<Secrets.Key> = Set(Secrets.Key.allCases),
+        harnesses: [String] = bothHarnesses
     ) -> Prerequisites.Probes {
         Prerequisites.Probes(
             tmuxPath: { tmux },
-            hooksProblem: { hooks },
-            hasSecret: { secrets.contains($0) })
+            hooksProblem: { _ in hooks },
+            hasSecret: { secrets.contains($0) },
+            harnesses: { harnesses })
+    }
+
+    /// The Claude Code row, which `probes()` always supplies. Named rather
+    /// than discovered: a test that asks the machine which harness to talk
+    /// about is a test whose subject changes with the machine.
+    private var aHooksRow: Prerequisites.Item {
+        .hooks(harness: ClaudeCodeAdapter().id)
     }
 
     private func state(_ states: [Prerequisites.State],
@@ -29,9 +42,47 @@ final class PrerequisitesTests: XCTestCase {
 
     // MARK: - the gate
 
-    func testOnlyTmuxAndHooksHoldTheGate() {
-        XCTAssertEqual(
-            Set(Prerequisites.Item.allCases.filter(\.isRequired)), [.tmux, .hooks])
+    /// ANTHROPIC JOINED THE GATE 1 SEP. Without that key the readout falls to
+    /// the deterministic floor, which the product is not.
+    func testTmuxHooksAndAnthropicHoldTheGate() {
+        let required = Prerequisites.items(harnesses: Self.bothHarnesses).filter(\.isRequired)
+        XCTAssertTrue(required.contains(.tmux))
+        XCTAssertTrue(required.contains(.anthropicKey))
+        XCTAssertFalse(required.contains(.elevenLabsKey))
+        XCTAssertFalse(required.contains(.assemblyAIKey))
+    }
+
+    /// One row per harness, named for it. A machine with no harness gets none.
+    func testEachDetectedHarnessGetsItsOwnRow() {
+        let items = Prerequisites.items(harnesses: Self.bothHarnesses)
+        let hookRows = items.compactMap { item -> String? in
+            guard case .hooks(let harness) = item else { return nil }
+            return harness
+        }
+        XCTAssertEqual(hookRows, Self.bothHarnesses)
+        for item in items where item.harness != nil {
+            XCTAssertTrue(item.title.hasSuffix(" hooks"), item.title)
+            XCTAssertNotEqual(item.title, "Agent hooks",
+                              "a hooks row has to name its harness")
+        }
+    }
+
+    /// Round trip, because the button identifier is the only thing carrying a
+    /// row's identity from the view back to Core.
+    /// A machine with neither harness draws no hooks row at all, and is not
+    /// told its Codex is broken.
+    func testNoHarnessMeansNoHooksRow() {
+        let states = Prerequisites.snapshot(probes(harnesses: []))
+        XCTAssertFalse(states.contains { if case .hooks = $0.item { return true }; return false })
+        XCTAssertTrue(Prerequisites.allRequiredSatisfied(states),
+                      "nothing to wire cannot be a blocker")
+    }
+
+    func testAnItemSurvivesItsIdentifier() {
+        for item in Prerequisites.items(harnesses: Self.bothHarnesses) {
+            XCTAssertEqual(Prerequisites.Item(id: item.id), item, item.id)
+        }
+        XCTAssertNil(Prerequisites.Item(id: "nonsense"))
     }
 
     func testMissingTmuxBlocks() {
@@ -40,19 +91,24 @@ final class PrerequisitesTests: XCTestCase {
         XCTAssertFalse(Prerequisites.allRequiredSatisfied(states))
     }
 
-    /// The distinction the type exists to draw: recommended is not required.
-    func testMissingKeysNeverBlock() {
-        let states = Prerequisites.snapshot(probes(secrets: []))
-        XCTAssertFalse(state(states, .anthropicKey).satisfied)
+    /// The two that degrade honestly still never block: no key means the macOS
+    /// system voice, and transcription after you stop instead of during. Both
+    /// still work.
+    func testTheVoiceAndTranscriptKeysNeverBlock() {
+        let states = Prerequisites.snapshot(
+            probes(secrets: [.anthropicAPIKey]))
         XCTAssertFalse(state(states, .elevenLabsKey).satisfied)
         XCTAssertFalse(state(states, .assemblyAIKey).satisfied)
         XCTAssertTrue(Prerequisites.allRequiredSatisfied(states),
-                      "an absent API key must not hold the Start door shut")
+                      "an absent voice key must not hold the Start door shut")
     }
 
-    func testAnthropicIsTheRecommendedOne() {
-        XCTAssertTrue(Prerequisites.Item.anthropicKey.isRecommended)
-        XCTAssertEqual(Prerequisites.Item.allCases.filter(\.isRecommended), [.anthropicKey])
+    /// And the one that does not degrade honestly does block.
+    func testAMissingAnthropicKeyBlocks() {
+        let states = Prerequisites.snapshot(probes(secrets: []))
+        XCTAssertFalse(state(states, .anthropicKey).satisfied)
+        XCTAssertFalse(Prerequisites.allRequiredSatisfied(states),
+                       "without it the readout is the deterministic floor")
     }
 
     // MARK: - what the rows say
@@ -73,41 +129,47 @@ final class PrerequisitesTests: XCTestCase {
     /// the row has to be worth reading by someone deciding whether to go get one.
     func testEveryMissingKeyNamesWhatIsLost() {
         let states = Prerequisites.snapshot(probes(secrets: []))
-        for item in Prerequisites.Item.allCases where item.secret != nil {
+        for item in Prerequisites.items(harnesses: Self.bothHarnesses) where item.secret != nil {
             let detail = state(states, item).detail
             XCTAssertTrue(detail.lowercased().contains("without it"),
                           "\(item) says '\(detail)'")
         }
     }
 
-    func testHookProblemDropsItsRedundantPrefix() {
-        let states = Prerequisites.snapshot(probes(hooks: "hooks: 2 not installed"))
-        XCTAssertEqual(state(states, .hooks).detail, "2 not installed")
+    /// The probe hands over a bare problem now, because `HookManifest.problem`
+    /// strips the "hooks: " prefix at the source. The row prints it verbatim:
+    /// the row is already titled with its harness, so nothing needs re-labelling
+    /// on the way through.
+    func testAHooksRowPrintsItsProblemVerbatim() {
+        let states = Prerequisites.snapshot(probes(hooks: "2 not installed"))
+        XCTAssertEqual(state(states, aHooksRow).detail, "2 not installed")
     }
 
     func testHookProblemWithoutThePrefixPassesThrough() {
         let states = Prerequisites.snapshot(probes(hooks: "settings unreadable"))
-        XCTAssertEqual(state(states, .hooks).detail, "settings unreadable")
+        XCTAssertEqual(state(states, aHooksRow).detail, "settings unreadable")
     }
 
     // MARK: - which rows are drawn
 
-    func testHealthyHooksAreNotDrawn() {
-        // The app repairs hooks at launch, so a healthy row is furniture
-        // reporting that nothing happened.
+    /// Reversed 1 Sep. Hiding a healthy hooks row meant success deleted the
+    /// only line that could have reported it, so the checklist answered "is
+    /// this working?" with a gap. See `Prerequisites.visible`.
+    func testHealthyHooksAreDrawnToo() {
         let visible = Prerequisites.visible(Prerequisites.snapshot(probes()))
-        XCTAssertFalse(visible.contains { $0.item == .hooks })
+        XCTAssertTrue(visible.contains { $0.item == aHooksRow })
     }
 
     func testBrokenHooksAreDrawn() {
         let visible = Prerequisites.visible(
             Prerequisites.snapshot(probes(hooks: "hooks: 2 not installed")))
-        XCTAssertTrue(visible.contains { $0.item == .hooks })
+        XCTAssertTrue(visible.contains { $0.item == aHooksRow })
     }
 
     func testTmuxAndTheKeysAreAlwaysDrawn() {
         let visible = Prerequisites.visible(Prerequisites.snapshot(probes()))
-        XCTAssertEqual(visible.map(\.item), [.tmux, .anthropicKey, .elevenLabsKey, .assemblyAIKey])
+        XCTAssertEqual(visible.map(\.item),
+                       Prerequisites.items(harnesses: Self.bothHarnesses))
     }
 
     // MARK: - the links
@@ -115,14 +177,14 @@ final class PrerequisitesTests: XCTestCase {
     /// A row that says "add a key" without saying where to get one has handed
     /// the user a search, which is what this screen exists to stop doing.
     func testEveryKeyRowCarriesASignupLink() {
-        for item in Prerequisites.Item.allCases where item.secret != nil {
+        for item in Prerequisites.items(harnesses: Self.bothHarnesses) where item.secret != nil {
             XCTAssertNotNil(item.signupURL, "\(item) has no signup URL")
             XCTAssertEqual(item.signupURL?.scheme, "https", "\(item) link is not https")
         }
     }
 
     func testNonKeyRowsHaveNoLinkOrSecret() {
-        for item in [Prerequisites.Item.tmux, .hooks] {
+        for item in [Prerequisites.Item.tmux, aHooksRow] {
             XCTAssertNil(item.secret)
             XCTAssertNil(item.signupURL)
         }
@@ -144,7 +206,7 @@ final class PrerequisitesTests: XCTestCase {
     // MARK: - shape
 
     func testEveryItemCarriesATitleWhyAndFixLabel() {
-        for item in Prerequisites.Item.allCases {
+        for item in Prerequisites.items(harnesses: Self.bothHarnesses) {
             XCTAssertFalse(item.title.isEmpty, "\(item) has no title")
             XCTAssertFalse(item.why.isEmpty, "\(item) has no why")
             XCTAssertFalse(item.fixLabel.isEmpty, "\(item) has no fix label")
