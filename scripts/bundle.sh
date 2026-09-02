@@ -103,6 +103,23 @@ mkdir -p "$APP_DIR/Contents/Resources/hooks"
 cp hooks/*.sh "$APP_DIR/Contents/Resources/hooks/"
 chmod +x "$APP_DIR/Contents/Resources/hooks/"*.sh
 
+# Sparkle, before anything else touches the bundle.
+#
+# Two constraints, and this is the only point that satisfies both. It has to be
+# BEFORE the icon step below, because that step EXECUTES the bundled binary to
+# draw the icon, and the binary links @rpath/Sparkle.framework: with no
+# framework and no rpath, dyld cannot load it, the process dies, and the bundle
+# silently ships with no AppIcon.icns. And it has to be BEFORE signing, because
+# the outer signature seals everything inside Contents/, so a framework copied
+# in afterwards invalidates it.
+#
+# Found the expensive way on 2 Sep: embedding sat next to the signing block, the
+# icon step warned "could not draw the iconset" into a wall of build output, and
+# the first hosted release got all the way through notarizing the app AND the
+# DMG before audit-release.sh refused it for a missing icon. The audit did its
+# job; the warning did not, because a warning nobody reads is not a signal.
+sparkle_embed "$APP_DIR" "$BUILD_DIR"
+
 # The app icon, drawn by the app itself.
 #
 # Generated rather than checked in: the mark lives in SiteMark.swift, so the
@@ -249,10 +266,6 @@ $LS_ENV_XML
 </dict>
 </plist>
 PLIST
-
-# Sparkle goes in before anything is signed: the outer signature seals whatever
-# is inside Contents/, so a framework copied in afterwards invalidates it.
-sparkle_embed "$APP_DIR" "$BUILD_DIR"
 
 IDENTITY="${VOICE_DISPATCH_SIGN_IDENTITY:-}"
 # Must match make-signing-identity.sh. Overridable by the same variable so the
