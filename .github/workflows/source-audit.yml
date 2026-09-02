@@ -77,7 +77,30 @@ jobs:
           }
           echo "runner: $(uname -m), $(sw_vers -productVersion), $(swift --version | head -1)"
 
-      - name: Build and test natively on Intel
+      # TranquilityCore and tbase, NOT TranquilityApp, and the reason is
+      # toolchain rather than architecture.
+      #
+      # The first run of this job (02 Sep 2026) failed here in 2m5s with 40-odd
+      # `main actor-isolated ... can not be referenced from a nonisolated
+      # context` errors, every one of them in Sources/TranquilityApp and not one
+      # in TranquilityCore. This runner carries Swift 6.1.2 on macOS 15.7.9; the
+      # macos-26 runners and our own machines carry Swift 6.3.3 with SDK 26,
+      # whose AppKit ships the @MainActor annotations this code is written
+      # against. An SDK two Swift versions back does not have them, so strict
+      # concurrency rejects code that is correct on the SDK we actually build
+      # with. Nothing about x86_64 is involved.
+      #
+      # Excluding the app layer costs no test coverage, because it HAS none:
+      # Sources/TranquilityApp needs a window server and its evidence is the
+      # launch self-tests, which no CI runner of any architecture can produce
+      # (CLAUDE.md rule 7). All 1285 tests live in TranquilityCore, and
+      # `swift test` does not build TranquilityApp.
+      #
+      # What still covers the app's Intel slice: it is cross-compiled for
+      # x86_64 by the SDK-26 toolchain that actually ships it, and
+      # audit-release.sh refuses any release whose app binary or embedded
+      # Sparkle framework is missing either slice.
+      - name: Build and test the core natively on Intel
         run: |
-          swift build --product TranquilityApp
+          swift build --product tbase
           swift test --enable-xctest --disable-swift-testing
