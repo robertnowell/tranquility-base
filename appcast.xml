@@ -1,0 +1,30 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Tranquility Base</title>
+    <link>https://updates.tranquilitybase.to/appcast.xml</link>
+    <description>Updates for Tranquility Base.</description>
+    <language>en</language>
+    <item>
+      <title>Version 0.3.1065</title>
+      <sparkle:version>1065</sparkle:version>
+      <sparkle:shortVersionString>0.3.1065</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <pubDate>Wed, 02 Sep 2026 17:55:17 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1065-acb4cab39/TranquilityBase-0.3.1065.dmg" type="application/octet-stream" length="5231152" sparkle:edSignature="1cjkcJyJESzOPPeKNk0Eluigdp/KbH1t/vTUMTnmZ4Axj39jsFK0VpbnDWFKmVPT1+iIkhChOt38MkwqD0SWAQ==" />
+    </item>
+    <item>
+      <title>Version 0.3.1064</title>
+      <sparkle:version>1064</sparkle:version>
+      <sparkle:shortVersionString>0.3.1064</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <pubDate>Wed, 02 Sep 2026 17:55:10 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1064-07f14d2ce/TranquilityBase-0.3.1064.dmg" type="application/octet-stream" length="5231206" sparkle:edSignature="A61HRR0xIghFBvjLrsFR5V+YwAqm/uX23torDgyfmFAJcxQmatFgFpDpvl3smqd/1l1H0y2f4Kqg69NGQH3/Bw==" />
+    </item>
+  </channel>
+</rss><!-- sparkle-signatures:
+edSignature: aiB69nisNLkcPCZLmM4LYL+ywZa2o5yA+lZCzoYoa1y2AbwxER7Cf0JXsEqqtwvRb1jmUwko5BXEvatEansXCA==
+length: 1713
+-->
