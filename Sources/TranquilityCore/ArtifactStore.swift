@@ -147,7 +147,7 @@ public enum ArtifactStore {
             // rewriting the log keeps this out of a hot append path, and makes
             // the hub and `tbase doctor` agree by construction: they both come
             // through here.
-            if let declared = declaredAgent(of: path), declared != slug { continue }
+            if !belongs(page: path, to: slug) { continue }
             let ms = parts.count == 2 ? Double(parts[0]) ?? 0 : 0
             // A line with no stamp (the hook wrote path-only lines for a
             // while) is not "31 Dec 1969" — epoch zero rendered as a date is
@@ -267,11 +267,26 @@ public extension ArtifactStore {
     /// blank template on a hub as "page.html"; measured 15 Aug). One choke
     /// point, applied on write AND on read, so logs that already carry these
     /// heal without a rewrite.
+    /// Is this page this agent's?
+    ///
+    /// ONE predicate, three callers: the hub's page list, the turn-end pass,
+    /// and `tbase doctor`. It was written twice before — Robert, 03 Sep, on the
+    /// layers that followed a misfile: "let's collapse the 4th rule". A rule
+    /// that decides ownership in more than one place drifts in all but one of
+    /// them, which is the failure that produced the misfile in the first place.
+    ///
+    /// A page with NO stamp belongs to whoever holds it: most of the archive
+    /// predates the stamp and must not vanish from its hub.
+    public static func belongs(page path: String, to slug: String) -> Bool {
+        guard let declared = declaredAgent(of: path) else { return true }
+        return declared == slug
+    }
+
     /// The agent a page names in its own head, if it names one.
     ///
     /// Only the head is read — the stamp is written there by the hook and by
     /// the turn-end pass, and a page can be megabytes of embedded font.
-    static func declaredAgent(of path: String) -> String? {
+    public static func declaredAgent(of path: String) -> String? {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: 8192) else { return nil }

@@ -560,8 +560,22 @@ who = ("Created by <b>{title}</b> &middot; session {short} &middot; {today}"
 # way would have quietly washed out the one control that carries its own
 # contrast. "Discuss with agent" keeps its solid background and white ink:
 # 8.6:1 wherever it lands, owing the page nothing.
+# IT HAS TO LAND IN THE TEXT COLUMN.
+#
+# The stamp goes in before </body>, which on almost every page in this archive
+# is OUTSIDE the container the article lives in — a <div class="wrap"> with a
+# max-width and side padding. So the footer rendered full-bleed and hard against
+# the left edge of the window while the article sat centred in the middle of it:
+# on a wide window at low zoom it reads as a stray strip of text belonging to
+# nothing, and Robert reported the page as having no footer at all (03 Sep).
+#
+# It cannot know the container's name, so it stops depending on one. Centring
+# itself at the same 860px the pages use puts it under the column whether it
+# lands inside the wrapper or after it, and no side padding keeps it flush with
+# the text in the inside case.
 snippet = (
-    '<footer data-tb-agent="{short}" style="margin-top:64px;padding-top:20px;'
+    '<footer data-tb-agent="{short}" style="box-sizing:border-box;'
+    'max-width:860px;margin:64px auto 0;padding:20px 0 0;'
     'border-top:1px solid rgba(128,128,128,.42);'
     'font:12.5px/1.5 ui-monospace,Menlo,monospace;color:inherit;'
     'display:flex;flex-wrap:wrap;gap:10px;align-items:center">\n'

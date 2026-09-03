@@ -78,7 +78,7 @@ public enum HubReconcile {
             //    do exactly what the old path rule did — assert the wrong
             //    author, and put the page on two hubs. It is left alone and
             //    reported by `tbase doctor` instead.
-            if let declared = declaredSession(in: file), declared != short {
+            if !ArtifactStore.belongs(page: file.path, to: short) {
                 result.foreign += 1
                 continue
             }
@@ -158,7 +158,8 @@ public enum HubReconcile {
             : "Created by session \(short) &middot; \(day)"
         let hub = NSString(string: "~/Documents/agents/\(short)/index.html").expandingTildeInPath
         let footer = """
-        <footer data-tb-agent="\(short)" style="margin-top:64px;padding-top:20px;\
+        <footer data-tb-agent="\(short)" style="box-sizing:border-box;\
+        max-width:860px;margin:64px auto 0;padding:20px 0 0;\
         border-top:1px solid rgba(128,128,128,.42);\
         font:12.5px/1.5 ui-monospace,Menlo,monospace;color:inherit;\
         display:flex;flex-wrap:wrap;gap:10px;align-items:center">
