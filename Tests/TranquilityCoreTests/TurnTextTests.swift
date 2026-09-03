@@ -209,20 +209,36 @@ final class HubTranscriptTests: XCTestCase {
         XCTAssertEqual(html.components(separatedBy: "only ask").count - 1, 1)
     }
 
-    /// A turn AFTER the newest brief has no brief to sit under, and is not lost.
-    func testATurnNoBriefAccountsForKeepsItsOwnSection() {
+    /// A turn AFTER the newest brief is the one still running, and leads.
+    func testTheLiveTurnIsShownAsRunningNow() {
         let brief = Date()
         let html = joined(briefs: [brief],
                           turns: [("later ask", brief.addingTimeInterval(600))])
-        XCTAssertTrue(html.contains("Turns with no summary yet"))
+        XCTAssertTrue(html.contains("Running now"))
         XCTAssertTrue(html.contains("later ask"))
+    }
+
+    /// A turn older than every summary the hub prints is NOT "no summary yet" —
+    /// its brief exists, past the window. Saying otherwise was a lie the label
+    /// told, and showing it twice is worse than not showing it.
+    func testATurnOlderThanTheOldestSummaryIsNotRepeated() {
+        // One brief claims the turn nearest before it. The one before THAT is
+        // past the window this hub prints — its own summary exists, further
+        // back in the session — so it is not shown as "no summary yet".
+        let brief = Date()
+        let html = joined(briefs: [brief],
+                          turns: [("ancient ask", brief.addingTimeInterval(-9999)),
+                                  ("recent ask", brief.addingTimeInterval(-60))])
+        XCTAssertTrue(html.contains("recent ask"), "the turn the summary belongs to")
+        XCTAssertFalse(html.contains("Running now"))
+        XCTAssertFalse(html.contains("ancient ask"))
     }
 
     /// Without the stamp there is no join, and the words still have to appear.
     func testAnUnstampedTurnStillPrints() {
         let html = joined(briefs: [Date()], turns: [("unstamped ask", nil)])
         XCTAssertTrue(html.contains("unstamped ask"))
-        XCTAssertTrue(html.contains("Turns with no summary yet"))
+        XCTAssertTrue(html.contains("Running now"), "unjudgeable, so it is kept rather than dropped")
     }
 
     /// The stamp itself, read off a real transcript row.
