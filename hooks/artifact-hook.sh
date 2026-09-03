@@ -170,6 +170,14 @@ if path and _is_generated_index(path):
 # A disagreement between the writer and the directory is a defect, and a defect
 # is reported, not laundered into provenance. The writer keeps ownership; the
 # misfile is named in the message so it gets moved.
+def _agent_dir_of(p):
+    parts = p.split(os.sep)
+    if "agents" not in parts:
+        return ""
+    i = parts.index("agents")
+    return parts[i + 1] if i + 1 < len(parts) else ""
+
+
 misfiled = ""
 if path and "/Documents/agents/" in path and not _is_hub(path):
     parts = path.split(os.sep)
@@ -238,6 +246,17 @@ if not path:
     # found, so not recorded, so not stamped, so not on any hub.
     roots.append(os.path.join(own_hub, "*.html"))
     roots.append(os.path.join(own_hub, "*", "*.html"))
+    # AND EVERY OTHER AGENT'S DIRECTORY, so a page written into the wrong one is
+    # SEEN rather than silently missed. On 03 Sep a Codex session wrote two
+    # reports into another agent's directory: no file_path in an `exec` payload,
+    # and the file was outside this session's own hub, so the hook resolved
+    # nothing, said nothing, and recorded nothing. The turn-end pass then found
+    # unstamped files in that directory and signed them for its owner. The
+    # writer never got the chance to claim its own work, or to be told.
+    #
+    # Cheap: these directories hold a couple of hundred files between them, and
+    # the recency filter below throws away all but the last three minutes.
+    roots.append(os.path.expanduser("~/Documents/agents/*/*.html"))
     seen_paths = set()
     recent = []
     for pattern in roots:
@@ -306,9 +325,26 @@ if not path:
                 or os.path.dirname(os.path.dirname(f)) == own_hub]
         mine += [f for f in recent
                  if f not in mine and authored(os.path.basename(os.path.dirname(f)))]
+        # Nothing of ours in our own directory, but something just landed in
+        # another agent's: the transcript is the only witness, and for a Codex
+        # `exec` payload there is no transcript to read. Recency inside the
+        # agents tree is weak evidence on its own, so it is used ONLY to raise
+        # the misfile — never to claim a page in a directory we can read.
         path = max(mine, key=os.path.getmtime) if mine else ""
+        if not path:
+            strays = [f for f in recent if "/Documents/agents/" in f]
+            if len(strays) == 1:
+                path = strays[0]
     else:
         path = ""
+
+# The fallback can land on a page in somebody else's directory too, and the
+# ownership question is the same wherever the path came from.
+if path and "/Documents/agents/" in path and not _is_hub(path) and session:
+    _dir = _agent_dir_of(path)
+    if _dir and _dir != session.split("-")[0]:
+        misfiled = _dir
+        owner = session.split("-")[0]
 
 # Only pages. A .md report becomes a page later, through a different tool, and
 # that write is the one that matters.
@@ -379,6 +415,22 @@ fi
 # x-page-body.html) and the pattern written for the first shipped hours before
 # the next two appeared. Bytes cannot be renamed.
 if [ -r "$FILE" ] && ! head -c 512 "$FILE" 2>/dev/null | grep -qiE '<!doctype|<html'; then
+  # THE BUILT PAGE WITH THE SAME NAME, first. A fragment beside its finished
+  # page -- x.fragment.html next to x.html -- is a build input, and the thing to
+  # record is the page. Checked before the index-next-door rule, because in an
+  # agent directory that index IS the hub (03 Sep: the hub linked the fragment
+  # and served it with no styling).
+  BUILT=""
+  case "$(basename "$FILE")" in
+    *.fragment.html) BUILT="${FILE%.fragment.html}.html";;
+    *.body.html)     BUILT="${FILE%.body.html}.html";;
+    *-body.html)     BUILT="${FILE%-body.html}.html";;
+    *.snippet.html)  BUILT="${FILE%.snippet.html}.html";;
+  esac
+  if [ -n "$BUILT" ] && [ -r "$BUILT" ] \
+     && head -c 512 "$BUILT" 2>/dev/null | grep -qiE '<!doctype|<html'; then
+    FILE="$BUILT"
+  else
   SIBLING="$(dirname "$FILE")/index.html"
   if [ "$(dirname "$(dirname "$SIBLING")")" = "$HOME/Documents/agents" ]; then
     # THE SIBLING IS THIS AGENT'S HUB. Leave FILE alone.
@@ -403,6 +455,7 @@ if [ -r "$FILE" ] && ! head -c 512 "$FILE" 2>/dev/null | grep -qiE '<!doctype|<h
     # Mid-build: nothing faithful to show yet. The finished page records itself
     # when it is written, so nothing is lost by waiting for it.
     exit 0
+  fi
   fi
 fi
 

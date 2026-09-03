@@ -128,6 +128,25 @@ public enum HomeBase {
         }
     }
 
+    /// Is this something a person would call an agent?
+    ///
+    /// The first thing typed is usually the best name available, and sometimes
+    /// it is a pasted URL, an absolute path, or a wall of preamble. 45 hubs
+    /// were named things like "file:///Users/robertnowell/Documents/agents/…"
+    /// and "It is round quiet_machines:2026-09-02 in r/quiet_machines" (03 Sep).
+    /// A name that is an address is not a name; the derived header is a better
+    /// floor than a wrong answer, so those fall through to the brief's topic.
+    static func looksLikeAName(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty { return false }
+        if t.hasPrefix("/") || t.hasPrefix("~/") { return false }
+        if t.range(of: "^[a-z][a-z0-9+.-]*://", options: [.regularExpression]) != nil { return false }
+        if t.contains("://") { return false }
+        // A path pasted without a scheme still reads as one.
+        if t.contains("/Users/") || t.contains("/Documents/") { return false }
+        return true
+    }
+
     /// Which turn was running when this was made.
     ///
     /// `ordered` is newest-first, so the answer is the last turn whose window
@@ -1337,6 +1356,14 @@ public extension HomeBase {
                     return t.count > 72 ? String(t.prefix(71)) + "\u{2026}" : t
                 }
                 .flatMap { $0.isEmpty ? nil : $0 }
+                .flatMap { looksLikeAName($0) ? $0 : nil }
+        }
+        // The brief's topic is three to six words naming the subject — written
+        // for exactly this job — so it is a better floor than an address or
+        // eight hex characters.
+        if title?.isEmpty ?? true {
+            let topic = briefs.first?.topic.trimmingCharacters(in: .whitespaces) ?? ""
+            title = topic.isEmpty ? nil : topic
         }
         let model = Model(
             sessionId: sessionId,
