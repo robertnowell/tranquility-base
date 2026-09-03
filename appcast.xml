@@ -6,6 +6,15 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1081</title>
+      <sparkle:version>1081</sparkle:version>
+      <sparkle:shortVersionString>0.3.1081</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <pubDate>Thu, 03 Sep 2026 15:56:40 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1081-d193f2142/TranquilityBase-0.3.1081.dmg" type="application/octet-stream" length="9228562" sparkle:edSignature="o+t5Gxfk6KBxC7UeHNs8Gw3L0C/RDWnL1G29d2ouzluOd4XXjGcXDH3MtYUItt2PdgLPQ0RWo2UnG+srFRb+Aw==" />
+    </item>
+    <item>
       <title>Version 0.3.1080</title>
       <sparkle:version>1080</sparkle:version>
       <sparkle:shortVersionString>0.3.1080</sparkle:shortVersionString>
@@ -86,17 +95,8 @@
       <pubDate>Wed, 02 Sep 2026 22:07:39 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1072-ffc2ca805/TranquilityBase-0.3.1072.dmg" type="application/octet-stream" length="9168253" sparkle:edSignature="2ZLevxOl/POMwYT8JcKzI3+rYvbaJJSppJJHcfHlpdLb0Sys/7fuX8xdmwUZPbt0GMVuEeJ4rMJpItBU6yV5DA==" />
     </item>
-    <item>
-      <title>Version 0.3.1071</title>
-      <sparkle:version>1071</sparkle:version>
-      <sparkle:shortVersionString>0.3.1071</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <pubDate>Wed, 02 Sep 2026 21:59:54 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1071-3a97be6ec/TranquilityBase-0.3.1071.dmg" type="application/octet-stream" length="9167955" sparkle:edSignature="u3mxHXpci1ZP168PaQLa4xzTvk77kszX4jQz/0ilYNLs48gtGtfk7rtyrOUeRtpLhLEAWqHh89B40CImYNxLDQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: BDMIg1K7VHFdpEr1pXWdy2sYahCelYu0SPQlavSj/5SV/twXjxoD/Cbsoct30UXtjrjq/3YM/jkCOfwNV5+uBQ==
+edSignature: AVa4q1OuWrAM0br7gZ9lurZ8qvH2kLaEjBGijszywpbIZqF0bqtZMgIWHMjzOkEAGoV6Tsh+R6Ww7vxKMK5lDQ==
 length: 7177
 -->
