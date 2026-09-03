@@ -103,14 +103,45 @@ PY
 
 read -r OWNER SESSION MISFILED FILE <<EOF
 $(python3 - "$PAYLOAD" <<'PY' 2>/dev/null || true
-import json, os, sys
+import json, os, re, sys
 try:
     p = json.loads(sys.argv[1])
 except Exception:
     sys.exit(0)
 session = p.get("session_id") or ""      # who ran the tool: the full id
 owner = session                          # who the page belongs to
+def _writes_a_file(cmd):
+    """Does this command WRITE, or merely mention a path?
+
+    `grep`, `open` and `ls` name pages all day. Reading is not authorship — the
+    same distinction the Swift side draws, kept coarse on purpose.
+    """
+    return bool(re.search(r"(^|[|;&]|\s)(cat|tee|cp|mv|printf|echo)\b[^|;&]*>", cmd))
+
+
+# THE COMMAND NAMES THE FILE. Read it before guessing anything.
+#
+# A Codex payload has no file_path — its only tool is `exec` — but the command
+# it carries usually contains the path outright:
+# `cat > ~/Documents/agents/<slug>/<name>.html <<EOF`. That is positive evidence
+# of what THIS session wrote, and it is the piece that was missing: a Codex
+# session writing into another agent's directory resolved to nothing at all, so
+# the hook said nothing and the turn-end pass signed the page for the directory's
+# owner.
+#
+# The first attempt at this reached for recency instead — "a page in the agents
+# tree that changed in the last three minutes" — and within a minute of shipping
+# it blamed one session for a page another had just written into its own
+# directory, stamped the wrong id into it, and recorded it twice. Evidence, or
+# nothing.
 path = (p.get("tool_input") or {}).get("file_path") or ""
+if not path:
+    _cmd = (p.get("tool_input") or {}).get("command") or ""
+    if isinstance(_cmd, str) and _writes_a_file(_cmd):
+        _found = re.findall(r"(?:~|/Users/[^/\s'\"]+)/Documents/agents/"
+                            r"[0-9a-f]{8}/[^\s'\"<>|;)]+\.html", _cmd)
+        if _found:
+            path = os.path.expanduser(_found[-1])
 
 # THE PATH ANSWERS FIRST.
 #
@@ -246,17 +277,6 @@ if not path:
     # found, so not recorded, so not stamped, so not on any hub.
     roots.append(os.path.join(own_hub, "*.html"))
     roots.append(os.path.join(own_hub, "*", "*.html"))
-    # AND EVERY OTHER AGENT'S DIRECTORY, so a page written into the wrong one is
-    # SEEN rather than silently missed. On 03 Sep a Codex session wrote two
-    # reports into another agent's directory: no file_path in an `exec` payload,
-    # and the file was outside this session's own hub, so the hook resolved
-    # nothing, said nothing, and recorded nothing. The turn-end pass then found
-    # unstamped files in that directory and signed them for its owner. The
-    # writer never got the chance to claim its own work, or to be told.
-    #
-    # Cheap: these directories hold a couple of hundred files between them, and
-    # the recency filter below throws away all but the last three minutes.
-    roots.append(os.path.expanduser("~/Documents/agents/*/*.html"))
     seen_paths = set()
     recent = []
     for pattern in roots:
@@ -325,16 +345,7 @@ if not path:
                 or os.path.dirname(os.path.dirname(f)) == own_hub]
         mine += [f for f in recent
                  if f not in mine and authored(os.path.basename(os.path.dirname(f)))]
-        # Nothing of ours in our own directory, but something just landed in
-        # another agent's: the transcript is the only witness, and for a Codex
-        # `exec` payload there is no transcript to read. Recency inside the
-        # agents tree is weak evidence on its own, so it is used ONLY to raise
-        # the misfile — never to claim a page in a directory we can read.
         path = max(mine, key=os.path.getmtime) if mine else ""
-        if not path:
-            strays = [f for f in recent if "/Documents/agents/" in f]
-            if len(strays) == 1:
-                path = strays[0]
     else:
         path = ""
 
