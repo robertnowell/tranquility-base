@@ -742,9 +742,9 @@ public enum HomeBase {
         }.joined()
         return """
         <details class="transcript">
-        <summary>Turns with no summary yet &middot; \(turns.count)</summary>
-        <p class="sub">The turn still running, and any older than the summaries \
-        on this page. Straight from the transcript, newest first.</p>
+        <summary>Running now &middot; \(turns.count) turn\(turns.count == 1 ? "" : "s")</summary>
+        <p class="sub">Said since the last summary was written. Straight from the \
+        transcript, newest first.</p>
         <ol class="said">\(items)</ol>
         </details>
         """
@@ -859,10 +859,25 @@ public enum HomeBase {
             unclaimed.remove(at: match.offset)
         }
 
-        // Anything the turns did not account for keeps its own section: a
-        // session with no briefs at all (every Codex hub before 02 Sep) has
-        // nothing to attach to, and dropping its words would leave the page
-        // blank rather than honest.
+        // WHAT IS LEFT OVER IS ALMOST ALWAYS THE TURN STILL RUNNING.
+        //
+        // A brief is written when a turn ENDS, so the live turn never has one:
+        // that is structure, not a gap, and it is the most useful thing on the
+        // page. The other leftovers are turns OLDER than the summaries this hub
+        // prints — their briefs exist, they are simply past the window — and
+        // calling those "no summary yet" was a lie the label told (02 Sep:
+        // "why is there turns with no summary? Like ever. That should never
+        // happen"). They are dropped here; the tail digest already accounts for
+        // that stretch of the session.
+        //
+        // A session with no briefs at all — every Codex hub before 02 Sep — has
+        // nothing to be older than, so it keeps all of its words.
+        if let newest = ordered.first?.at {
+            // An UNSTAMPED turn cannot be judged older, so it is kept. Dropping
+            // it on a nil would lose words, which is the one thing this section
+            // exists to prevent — and it is what the hub tests caught.
+            unclaimed = unclaimed.filter { $0.at.map { $0 > newest } ?? true }
+        }
         said = saidBlock(unclaimed, e: e)
 
         var pagesByTurn: [Int: [ArtifactStore.Page]] = [:]
