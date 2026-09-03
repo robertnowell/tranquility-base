@@ -1355,6 +1355,13 @@ public extension HomeBase {
         let file = dir.appendingPathComponent("index.html")
         try render(model).write(to: file, atomically: true, encoding: .utf8)
         stampTurns(model)
+        // And everything in the directory, whether the hook ever saw it or not.
+        // The turn stamp above covers pages that were RECORDED; this covers
+        // pages that exist. Fourteen of 182 on disk had never been recorded at
+        // all (02 Sep), because the hook has to guess which file a shell heredoc
+        // wrote and sometimes guesses wrong.
+        HubReconcile.run(sessionId: model.sessionId, title: model.title,
+                         dir: dir, turns: model.turns)
         return file
     }
 
