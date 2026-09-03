@@ -30,6 +30,9 @@ public enum HubReconcile {
         public var footers = 0
         public var sessions = 0
         public var scanned = 0
+        /// Pages in this directory that name a different agent — misfiles,
+        /// left where they are rather than claimed.
+        public var foreign = 0
     }
 
     /// Bring every page in `dir` up to the contract: recorded, attributed,
@@ -67,6 +70,19 @@ public enum HubReconcile {
             let at = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?
                 .contentModificationDate ?? now
 
+            // 0. SOMEBODY ELSE'S PAGE, sitting in this directory.
+            //
+            //    A page that already names a different agent was written by
+            //    that agent into the wrong place (02 Sep: 95d165f8 put two of
+            //    its reports in 4394c0ec's directory). Claiming it here would
+            //    do exactly what the old path rule did — assert the wrong
+            //    author, and put the page on two hubs. It is left alone and
+            //    reported by `tbase doctor` instead.
+            if let declared = declaredSession(in: file), declared != short {
+                result.foreign += 1
+                continue
+            }
+
             // 1. The record. Keyed by the SLUG, because that is what the path
             //    carries and what `history` reads back for a hub.
             if !known.contains(ArtifactStore.canonical(file.path)),
@@ -103,6 +119,21 @@ public enum HubReconcile {
             }
         }
         return result
+    }
+
+    /// The agent a page says wrote it, if it says.
+    public static func declaredSession(in file: URL) -> String? {
+        guard let html = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        return declaredSession(inHTML: html)
+    }
+
+    static func declaredSession(inHTML html: String) -> String? {
+        guard let r = html.range(of: #"<meta\s+name="intranet:session"\s+content="[^"]*""#,
+                                 options: .regularExpression),
+              let q = html[r].range(of: "content=\"")
+        else { return nil }
+        let value = html[q.upperBound...].prefix { $0 != "\"" }
+        return value.isEmpty ? nil : String(value)
     }
 
     // MARK: - The page's own furniture
