@@ -98,6 +98,34 @@ enum SiteMark {
         return image
     }
 
+    /// The mark as a BUTTON's image: `size` square, its ink starting
+    /// `inkLeading` points in from the left edge and `inkHeight` points tall,
+    /// centred vertically.
+    ///
+    /// The offsets are the caller's because the panel aligns marks by ink and
+    /// not by box (`ConsoleButton.inkOverhang`), and a control that swaps its
+    /// face must not MOVE: the mark has to start on exactly the content column
+    /// the glyph it replaces started on, and it is the header's alignment
+    /// drill — `headerSitsOnTheColumn` — that says so out loud.
+    ///
+    /// Template, like the menu bar's: the panel re-inks its controls through
+    /// `contentTintColor`, so the mark answers the hover ramp the same way an
+    /// SF Symbol does and carries no colour of its own.
+    static func buttonImage(size: CGFloat, inkLeading: CGFloat,
+                            inkHeight: CGFloat, filled: Bool = false) -> NSImage {
+        let ink = path(filled: filled).bounds
+        let inkWidth = inkHeight * ink.width / ink.height
+        let image = NSImage(size: NSSize(width: size, height: size),
+                            flipped: false) { _ in
+            draw(in: NSRect(x: inkLeading, y: (size - inkHeight) / 2,
+                            width: inkWidth, height: inkHeight),
+                 height: inkHeight, filled: filled, color: .black)
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+
     /// Draw the mark centred in `rect`, scaled to `height` points tall.
     ///
     /// Sized and centred on the mark's own INK, not on its 16-unit box: the

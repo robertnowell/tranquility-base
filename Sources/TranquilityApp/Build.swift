@@ -514,6 +514,24 @@ extension StatusHUD {
             dropOverlay.bottomAnchor.constraint(equalTo: background.bottomAnchor),
         ])
 
+        // The panel's own hover, above everything and touching nothing. It
+        // answers one question — is the pointer on us — for the controls that
+        // wear a second face while it is. Pinned to the panel's edges like the
+        // drop overlay, and outside the stack for the same reason: it must not
+        // contribute to the fitting size resizeToFit measures.
+        panelHover = PanelHoverView()
+        panelHover.translatesAutoresizingMaskIntoConstraints = false
+        panelHover.onHover = { [weak self] on in
+            self?.collapseButton?.surfaceHovered = on
+        }
+        background.addSubview(panelHover, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            panelHover.topAnchor.constraint(equalTo: background.topAnchor),
+            panelHover.leadingAnchor.constraint(equalTo: background.leadingAnchor),
+            panelHover.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+            panelHover.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+        ])
+
         // Collapse lives on the panel, left of the gear. It was in the menu bar
         // first, which was wrong twice over: clicking the status item already
         // opens the panel, so "Show panel" was a second door to one room, and a
@@ -532,6 +550,27 @@ extension StatusHUD {
                 .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))!,
             target: self, action: #selector(collapseTapped))
         collapseButton.isBordered = false
+        // Two faces in one slot: the site mark while nobody is pointing at the
+        // panel, the chevron above the moment they are. Requested 02 Sep — "the
+        // Tranquility Base icon becomes the collapsed chevron... nothing visual
+        // needs to change, the hovered state should be the current state" — and
+        // it is the rule the collapsed strip has followed since 18 Aug, finally
+        // answered on the face you spend the day looking at. The grid's top-left
+        // is the panel's one permanent corner, so a mark there costs nothing and
+        // is the only place the app says its own name at rest.
+        //
+        // Built to the CHEVRON'S OWN INK, measured off the image that is in the
+        // button right now rather than to a point size that looks about right:
+        // same left edge, so the header stays on the content column and
+        // `headerSitsOnTheColumn` holds whichever face is up; same height, so
+        // the swap trades optical weight for optical weight and the corner does
+        // not appear to grow when the pointer arrives.
+        collapseButton.pinInkOverhang()
+        let chevronInk = collapseButton.inkOverhang.leading
+        collapseButton.hoverFace = collapseButton.image
+        collapseButton.restingFace = SiteMark.buttonImage(
+            size: collapseButton.pointerTarget, inkLeading: chevronInk,
+            inkHeight: collapseButton.inkHeight)
         collapseButton.restingInk = StateLegend.Lens.chrome.color
         collapseButton.translatesAutoresizingMaskIntoConstraints = false
         collapseButton.widthAnchor.constraint(equalToConstant: 26).isActive = true

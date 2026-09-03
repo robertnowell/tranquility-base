@@ -918,8 +918,49 @@ extension StatusHUD {
         Permissions.log(String(format: "chrome: column %.1f · chevron ink %.1f · gear ink %.1f",
                                StatusHUD.contentColumn, chevronInk, gearInk))
 
+        // The collapse control's two faces: the site mark at rest, the chevron
+        // once the pointer is on the panel.
+        //
+        // Four separate claims, because three different things can go wrong and
+        // only one of them is visible in the code. That the swap happens at all;
+        // that the two faces start on the SAME ink edge, which is what keeps the
+        // corner from stepping sideways when the pointer arrives and is not
+        // guaranteed by generating them to the same number (they rasterise
+        // separately); that they are the same height, so the corner does not
+        // appear to grow; and that a panel-wide hover does NOT brighten the ink,
+        // because the ink step means "the pointer is on THIS one" and the panel
+        // is not this one.
+        let mark = collapseButton.restingFace
+        let chevron = collapseButton.hoverFace
+        collapseButton.surfaceHovered = false
+        let restsAsTheMark = mark != nil && collapseButton.image === mark
+        let restingChromeInk = collapseButton.currentInkForTesting
+        collapseButton.surfaceHovered = true
+        let hoversAsTheChevron = chevron != nil && collapseButton.image === chevron
+        let surfaceHoverKeepsItsInk = collapseButton.currentInkForTesting == restingChromeInk
+        collapseButton.surfaceHovered = false
+        let target = collapseButton.pointerTarget
+        let markEdge = ConsoleButton.inkOverhang(of: mark, target: target).leading
+        let chevronEdge = ConsoleButton.inkOverhang(of: chevron, target: target).leading
+        // One rasterisation step, because that is the floor of the instrument:
+        // `inkBox` reads alpha on a 1pt grid, so a mark drawn at 10.5 measures
+        // its first inked column at 10. The faces are GENERATED to one edge;
+        // anything under a full step is the ruler, not a disagreement.
+        let facesShareTheColumn = mark != nil && abs(markEdge - chevronEdge) <= 1
+        let markHeight = ConsoleButton.inkBox(of: mark)?.height ?? 0
+        let chevronHeight = ConsoleButton.inkBox(of: chevron)?.height ?? 0
+        let facesShareAHeight = markHeight > 0 && abs(markHeight - chevronHeight) <= 1
+        Permissions.log(String(format:
+            "chrome: collapse faces · mark edge %.1f h %.1f · chevron edge %.1f h %.1f",
+            markEdge, markHeight, chevronEdge, chevronHeight))
+
         SelfTest.report("chrome", [
             ("headerSitsOnTheColumn", headerSitsOnTheColumn),
+            ("collapseRestsAsTheMark", restsAsTheMark),
+            ("collapseHoversAsTheChevron", hoversAsTheChevron),
+            ("collapseFacesShareTheColumn", facesShareTheColumn),
+            ("collapseFacesShareAHeight", facesShareAHeight),
+            ("surfaceHoverKeepsItsInk", surfaceHoverKeepsItsInk),
             ("marksSitOnTheLine", worstMark <= 0.25),
             ("marksShareOneOpticalSize", markSpread <= 0.5),
             ("marksAreSmallerThanTheCaps", (markHeights.max() ?? 0) < capBand),
