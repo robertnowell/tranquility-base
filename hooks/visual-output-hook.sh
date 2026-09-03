@@ -63,8 +63,77 @@ fi
 # ~/Documents/agents/<agent-id>/<report-slug>.html states its own author in its
 # own path, so there is nothing to infer -- and that is beside the agent's own
 # hub, which is the page that lists it.
-cat <<'JSON'
-{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The user runs Tranquility Base: they hear sessions by voice and are usually NOT looking at this terminal. TREAT THE TERMINAL AS INVISIBLE. Anything you leave there, they will probably never see.\n\nWhenever you PRESENT A RESULT to them -- a finding, evidence, a comparison, a recommendation, numbers they are meant to weigh, anything they need in order to make a decision -- it goes on a page, not in the terminal. The test is NOT 'is this visual?'. The test is 'is this FOR THEM, rather than working notes for me?'. A findings table with an argued conclusion and three options at the end is exactly this, even though it is prose and numbers rather than a chart. If you are about to end a turn by asking them to choose something, the thing they are choosing between belongs on a page.\n\nWHERE IT GOES: ~/Documents/agents/$AGENT/<report-slug>.html -- your own agent directory, one file per report, a short slug naming the subject. Your agent id is the first dash-separated piece of your session id. That directory is where your agent hub lives, so a page written there is listed on your hub automatically and needs nothing else from you; a page written anywhere else has to be guessed at and is usually missed. Do not touch index.html in that directory -- that is the hub itself and the app writes it.\n\nALWAYS ALL THREE STEPS: (1) write ~/Documents/agents/$AGENT/<slug>.html, self-contained -- inline CSS/SVG, no external assets, and a favicon; (2) run `open` on it; (3) leave the terminal a one-line pointer at what opened, nothing more. Writing without opening is a failure -- they will never find it.\n\nIf the page is also going OUTSIDE -- to a customer or a prospect -- build it with the share-as-page skill instead, which deploys it, and still write or link it under your agent directory so it is on your hub.\n\nWhat does NOT need a page: conversational replies, progress narration, a one-line answer, and your own intermediate reasoning. When in doubt, ask whether you would be happy for them to miss it entirely -- if not, it is a page."}}
-JSON
+# NAME THE DIRECTORY. DO NOT DESCRIBE HOW TO DERIVE IT.
+#
+# This emitted the literal string "~/Documents/agents/$AGENT/" three times and
+# then explained that $AGENT is "the first dash-separated piece of your session
+# id". Nothing ever substituted it: the heredoc is quoted, and this hook had
+# never once read the session id off its own payload -- zero occurrences in its
+# entire history -- even though every SessionStart payload carries it.
+#
+# So the instruction was a rule to apply rather than a path to use, and the one
+# concrete eight-hex id a session actually sees during a turn is usually
+# somebody else's: whatever directory it has been reading. On 02 Sep session
+# 95d165f8 wrote two of its own reports into 4394c0ec's directory, the archive
+# read authorship off the path, and both hubs listed them. Robert, on the
+# defensive layers that followed: "this seems a bit like a hat on a hat... we
+# just need to get the mechanism right... somehow we had context that wasn't
+# clear about which agent directory the current agent should put it in."
+#
+# It is not a rule any more. The path is resolved here, from the payload, and
+# printed in full.
+PAYLOAD=$(cat)
+AGENT=$(printf '%s' "$PAYLOAD" | python3 -c 'import json,sys
+try:
+    print((json.load(sys.stdin).get("session_id") or "").split("-")[0])
+except Exception:
+    print("")' 2>/dev/null)
+
+# With no id there is no honest path to print, so it falls back to the rule
+# rather than inventing a directory. Silence would be worse: a session with no
+# instruction writes wherever it happens to be, which is the failure this hook
+# was built for.
+if [ -n "$AGENT" ]; then
+  DIR="$HOME/Documents/agents/$AGENT"
+  WHOSE="This is YOUR directory and nobody else's -- $AGENT is your own session id. NEVER write a page into another agent's directory: the archive reads authorship from the path, so a page filed under somebody else's id says THEY wrote it, lands on THEIR hub, and its Discuss button opens THEIR conversation."
+else
+  DIR="$HOME/Documents/agents/<first dash-separated piece of your session id>"
+  WHOSE="Never write a page into another agent's directory."
+fi
+
+python3 - "$DIR" "$WHOSE" <<'PYCTX' 2>/dev/null || true
+import json, sys
+directory, whose = sys.argv[1], sys.argv[2]
+text = (
+    "The user runs Tranquility Base: they hear sessions by voice and are usually "
+    "NOT looking at this terminal. TREAT THE TERMINAL AS INVISIBLE. Anything you "
+    "leave there, they will probably never see.\n\n"
+    "Whenever you PRESENT A RESULT to them -- a finding, evidence, a comparison, a "
+    "recommendation, numbers they are meant to weigh, anything they need in order "
+    "to make a decision -- it goes on a page, not in the terminal. The test is NOT "
+    "'is this visual?'. The test is 'is this FOR THEM, rather than working notes "
+    "for me?'. A findings table with an argued conclusion and three options at the "
+    "end is exactly this, even though it is prose and numbers rather than a chart. "
+    "If you are about to end a turn by asking them to choose something, the thing "
+    "they are choosing between belongs on a page.\n\n"
+    "WHERE IT GOES: " + directory + "/<report-slug>.html -- one file per report, a "
+    "short slug naming the subject. " + whose + " That directory is where your agent "
+    "hub lives, so a page written there is listed on your hub automatically and "
+    "needs nothing else from you. Do not touch index.html in it -- that is the hub "
+    "itself and the app writes it.\n\n"
+    "ALWAYS ALL THREE STEPS: (1) write " + directory + "/<slug>.html, self-contained "
+    "-- inline CSS/SVG, no external assets, and a favicon; (2) run `open` on it; (3) "
+    "leave the terminal a one-line pointer at what opened, nothing more. Writing "
+    "without opening is a failure -- they will never find it.\n\n"
+    "If the page is also going OUTSIDE -- to a customer or a prospect -- build it "
+    "with the share-as-page skill instead, which deploys it, and still write or link "
+    "it under your agent directory so it is on your hub.\n\n"
+    "What does NOT need a page: conversational replies, progress narration, a "
+    "one-line answer, and your own intermediate reasoning. When in doubt, ask "
+    "whether you would be happy for them to miss it entirely -- if not, it is a page."
+)
+print(json.dumps({"hookSpecificOutput": {
+    "hookEventName": "SessionStart", "additionalContext": text}}))
+PYCTX
 
 exit 0
