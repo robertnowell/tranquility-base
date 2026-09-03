@@ -709,6 +709,16 @@ public enum HomeBase {
     ///
     /// Prompt and prose only. Tool calls are how the work happened and they are
     /// what makes a transcript unreadable; `TurnText` never emits them.
+    /// What this block actually holds, said plainly.
+    ///
+    /// It was labelled "N turns not filed above", which is jargon twice over:
+    /// "filed" is this code's word for the join and "above" is a position on a
+    /// page that scrolls. Robert, 02 Sep: "why does it say above with this
+    /// shit? Is below the turns below? Doesn't make sense." A turn lands here
+    /// for one of two reasons and neither of them is a filing cabinet — the
+    /// turn is still running so no brief has been written for it yet, or it is
+    /// older than the summaries this hub prints.
+
     /// One turn's words, under the turn they belong to.
     static func saidTurn(_ turn: TurnText.Turn, e: (String) -> String) -> String {
         let ask = turn.prompt.isEmpty ? "" : "<p class=\"ask\">\(e(turn.prompt))</p>"
@@ -732,8 +742,9 @@ public enum HomeBase {
         }.joined()
         return """
         <details class="transcript">
-        <summary>What was said &middot; \(turns.count) turn\(turns.count == 1 ? "" : "s") not filed above</summary>
-        <p class="sub">Straight from the transcript. Newest first.</p>
+        <summary>Turns with no summary yet &middot; \(turns.count)</summary>
+        <p class="sub">The turn still running, and any older than the summaries \
+        on this page. Straight from the transcript, newest first.</p>
         <ol class="said">\(items)</ol>
         </details>
         """
