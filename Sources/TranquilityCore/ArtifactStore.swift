@@ -374,9 +374,59 @@ public extension ArtifactStore {
     // shipped hours before the next two appeared.
     static func faithfulRendering(of path: String) -> String? {
         guard isBodyFragment(path) else { return path }
-        let sibling = ((path as NSString).deletingLastPathComponent as NSString)
-            .appendingPathComponent("index.html")
-        return FileManager.default.fileExists(atPath: sibling) ? sibling : nil
+        let dir = (path as NSString).deletingLastPathComponent
+        // THE BUILT PAGE WITH THE SAME NAME, first.
+        //
+        // A fragment beside its finished page — mirai-september-import-visual
+        // .fragment.html next to mirai-september-import-proof.html — is a build
+        // input, and the thing to show is the page. Resolving to "index.html in
+        // this folder" is share-as-page's shape and is wrong in an agent's own
+        // directory, where index.html is the HUB: the hub would list itself.
+        // On 03 Sep the hub linked the fragment and it rendered with no styling
+        // at all, which is what Robert opened.
+        if let built = builtSibling(of: path) { return built }
+        let sibling = (dir as NSString).appendingPathComponent("index.html")
+        guard FileManager.default.fileExists(atPath: sibling),
+              !isAgentHub(sibling) else { return nil }
+        return sibling
+    }
+
+    /// `x.fragment.html` -> `x.html`, when that exists and is a whole document.
+    static func builtSibling(of path: String) -> String? {
+        let ns = path as NSString
+        var stem = ns.lastPathComponent
+        guard stem.hasSuffix(".html") else { return nil }
+        stem = String(stem.dropLast(5))
+        for suffix in [".fragment", ".body", "-body", ".snippet"] where stem.hasSuffix(suffix) {
+            stem = String(stem.dropLast(suffix.count))
+            let candidate = (ns.deletingLastPathComponent as NSString)
+                .appendingPathComponent(stem + ".html")
+            // It has to be a whole document. `body.snippet.html` next to
+            // `body.html` strips to another fragment, and swapping one build
+            // input for another shows the reader the same unstyled page.
+            guard FileManager.default.fileExists(atPath: candidate),
+                  !isBodyFragment(candidate), isWholeDocument(candidate) else { return nil }
+            return candidate
+        }
+        return nil
+    }
+
+    /// Does this file open like a page a browser will style?
+    static func isWholeDocument(_ path: String) -> Bool {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 512) else { return false }
+        return String(decoding: data, as: UTF8.self)
+            .range(of: "<!doctype|<html", options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// agents/<slug>/index.html — the index over the pages, never one of them.
+    static func isAgentHub(_ path: String) -> Bool {
+        let ns = path as NSString
+        guard ns.lastPathComponent == "index.html" else { return false }
+        let parent = (ns.deletingLastPathComponent as NSString).deletingLastPathComponent
+        return parent == FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/agents").path
     }
 
     /// Is this file a build INPUT rather than something to show?
@@ -392,6 +442,9 @@ public extension ArtifactStore {
             || name.hasSuffix(".body.html")
             || name.hasSuffix("-body.html")
             || name.hasSuffix(".snippet.html")
+            // Added 03 Sep: a `.fragment.html` was not on this list, so the hub
+            // linked one and served a page with no styling.
+            || name.hasSuffix(".fragment.html")
             || path.contains("-page-sources/")
     }
 
