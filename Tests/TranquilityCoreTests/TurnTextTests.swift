@@ -195,7 +195,7 @@ final class HubTranscriptTests: XCTestCase {
         let html = joined(briefs: [brief],
                           turns: [("the ask", brief.addingTimeInterval(-120))])
         XCTAssertTrue(html.contains("details class=\"transcript inline\""))
-        XCTAssertFalse(html.contains("not filed above"),
+        XCTAssertFalse(html.contains("Turns with no summary yet"),
                        "nothing is left over, so the remainder section is absent")
         XCTAssertEqual(html.components(separatedBy: "the ask").count - 1, 1,
                        "the words print once, under their turn")
@@ -214,7 +214,7 @@ final class HubTranscriptTests: XCTestCase {
         let brief = Date()
         let html = joined(briefs: [brief],
                           turns: [("later ask", brief.addingTimeInterval(600))])
-        XCTAssertTrue(html.contains("not filed above"))
+        XCTAssertTrue(html.contains("Turns with no summary yet"))
         XCTAssertTrue(html.contains("later ask"))
     }
 
@@ -222,7 +222,7 @@ final class HubTranscriptTests: XCTestCase {
     func testAnUnstampedTurnStillPrints() {
         let html = joined(briefs: [Date()], turns: [("unstamped ask", nil)])
         XCTAssertTrue(html.contains("unstamped ask"))
-        XCTAssertTrue(html.contains("not filed above"))
+        XCTAssertTrue(html.contains("Turns with no summary yet"))
     }
 
     /// The stamp itself, read off a real transcript row.
@@ -275,8 +275,9 @@ final class HubNameFallbackTests: XCTestCase {
     /// the section, and the section is the evidence.
     func testTheTranscriptSectionSaysOnlyWhatItIs() {
         let html = rendered(title: "x", transcript: [.init(prompt: "p", prose: "s")])
-        XCTAssertTrue(html.contains("Straight from the transcript. Newest first."))
+        XCTAssertTrue(html.contains("Straight from the transcript, newest first."))
         XCTAssertFalse(html.contains("no key that joins them"))
+        XCTAssertFalse(html.contains("not filed"), "no jargon, and no page positions")
     }
 }
 
