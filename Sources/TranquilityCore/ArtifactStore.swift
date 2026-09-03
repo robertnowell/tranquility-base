@@ -139,6 +139,15 @@ public enum ArtifactStore {
             // right — they are one report, and listing both is how the same work
             // came to appear twice with one copy unstyled.
             guard let path = faithfulRendering(of: recorded) else { continue }
+            // THE PAGE HAS A VOTE. A record is a claim; the page itself is
+            // evidence, and when a page names a different agent the claim is
+            // false — somebody wrote a report into another agent's directory
+            // and the hook of the day recorded it here (02 Sep: two reports
+            // listed on two hubs at once). Filtering at read time rather than
+            // rewriting the log keeps this out of a hot append path, and makes
+            // the hub and `tbase doctor` agree by construction: they both come
+            // through here.
+            if let declared = declaredAgent(of: path), declared != slug { continue }
             let ms = parts.count == 2 ? Double(parts[0]) ?? 0 : 0
             // A line with no stamp (the hook wrote path-only lines for a
             // while) is not "31 Dec 1969" — epoch zero rendered as a date is
@@ -258,6 +267,22 @@ public extension ArtifactStore {
     /// blank template on a hub as "page.html"; measured 15 Aug). One choke
     /// point, applied on write AND on read, so logs that already carry these
     /// heal without a rewrite.
+    /// The agent a page names in its own head, if it names one.
+    ///
+    /// Only the head is read — the stamp is written there by the hook and by
+    /// the turn-end pass, and a page can be megabytes of embedded font.
+    static func declaredAgent(of path: String) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 8192) else { return nil }
+        let head = String(decoding: data, as: UTF8.self)
+        guard let r = head.range(of: #"<meta\s+name="intranet:session"\s+content="[^"]*""#,
+                                 options: .regularExpression),
+              let q = head[r].range(of: "content=\"") else { return nil }
+        let value = head[q.upperBound...].prefix { $0 != "\"" }
+        return value.isEmpty ? nil : String(value)
+    }
+
     static func excluded(_ path: String) -> Bool {
         path.contains("/scratchpad/")
             || path.hasPrefix("/tmp/")

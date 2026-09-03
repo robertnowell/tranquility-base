@@ -101,7 +101,7 @@ with open(os.path.join(root, session), "a") as fh:
         fh.write("%d\t%s\n" % (stamp, url))
 PY
 
-read -r OWNER SESSION FILE <<EOF
+read -r OWNER SESSION MISFILED FILE <<EOF
 $(python3 - "$PAYLOAD" <<'PY' 2>/dev/null || true
 import json, os, sys
 try:
@@ -157,12 +157,30 @@ def _is_hub(f):
 if path and _is_generated_index(path):
     path = ""
 
+# THE WRITER OWNS THE PAGE. The directory is where it should be.
+#
+# This used to read the owner straight off the path, on the reasoning that
+# filing a page under an agent's slug is a deliberate act. It is not always.
+# On 02 Sep session 95d165f8 wrote two of its own reports into 4394c0ec's
+# directory with a heredoc, and the path rule then stamped 4394c0ec's id, name
+# and discuss link into both — so the archive asserted the wrong author, and
+# BOTH hubs linked the pages. Robert: "these agents are linking to the wrong
+# reports. That can never happen."
+#
+# A disagreement between the writer and the directory is a defect, and a defect
+# is reported, not laundered into provenance. The writer keeps ownership; the
+# misfile is named in the message so it gets moved.
+misfiled = ""
 if path and "/Documents/agents/" in path and not _is_hub(path):
     parts = path.split(os.sep)
     if "agents" in parts:
         _i = parts.index("agents")
         if _i + 1 < len(parts) and parts[_i + 1]:
-            owner = parts[_i + 1]
+            in_dir = parts[_i + 1]
+            if not session or in_dir == session.split("-")[0]:
+                owner = in_dir
+            else:
+                misfiled = in_dir
 
 # THE ARCHIVE ANSWERS, NOT THE TOOL.
 #
@@ -312,7 +330,7 @@ if not all(c in "0123456789abcdefABCDEF-" for c in owner + session) or len(owner
 # exact lookup keyed on the full id, so a footer carrying the 8-character slug
 # says "no agent" for a session that is running in the foreground. Collapsing
 # both facts into one variable is what broke the button on 107 pages.
-print(owner, session, path)
+print(owner, session, misfiled or "-", path)
 PY
 )
 EOF
@@ -489,13 +507,15 @@ case "$FILE" in
 esac
 [ "$FILE" = "$HOME/Documents/agents/$SHORT/index.html" ] && META=0
 
-python3 - "$FILE" "$LINK_SESSION" "$SHORT" "$TODAY" "$STAMP" "$TITLE" "$META" <<'PY' 2>/dev/null || true
+python3 - "$FILE" "$LINK_SESSION" "$SHORT" "$TODAY" "$STAMP" "$TITLE" "$META" "$MISFILED" <<'PY' 2>/dev/null || true
 import html as htmllib
 import json, re, sys
 
 path, session, short, today, stamp = sys.argv[1:6]
 title = sys.argv[6] if len(sys.argv) > 6 else ""
 meta = sys.argv[7] if len(sys.argv) > 7 else "0"
+# The directory this page was written into, when it is NOT the writer's own.
+misfiled = sys.argv[8] if len(sys.argv) > 8 and sys.argv[8] != "-" else ""
 
 # The way UP: every artifact links its agent's hub — the page that lists
 # everything this agent made — so the correlation runs both directions even
@@ -648,6 +668,19 @@ def _tag_ask(path):
 
 TAG_ASK = _tag_ask(path)
 
+# A misfile is louder than anything else this hook says, because it is the one
+# failure that makes the archive assert something untrue about who did the work.
+MISFILE_ASK = ("\n\nWRONG DIRECTORY. You wrote this page into agent {other}'s hub "
+               "directory, and it is not yours. Your pages belong in "
+               "~/Documents/agents/{mine}/ — the first eight characters of YOUR "
+               "session id, nothing else.\n\nMove it now:\n"
+               "  mv {path} ~/Documents/agents/{mine}/\n\n"
+               "Left where it is, the archive says {other} wrote it: that agent's "
+               "hub lists it, its footer names {other}, and Discuss with agent "
+               "opens the wrong conversation. Two pages did exactly this on "
+               "02 Sep and both hubs claimed them."
+               ).format(other=misfiled, mine=short, path=path) if misfiled else ""
+
 if meta == "1":
     # The author column, written by the only thing that knows it.
     #
@@ -726,12 +759,12 @@ if stamp == "1":
             "The agent footer was stamped into {path} automatically: session "
             "id, Open hub, and Discuss with agent. Do not add another one, and "
             "do not hand-roll a footer of your own on HQ pages."
-        ).format(path=path) + TAG_ASK,
+        ).format(path=path) + MISFILE_ASK + TAG_ASK,
     }}))
 else:
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PostToolUse",
-        "additionalContext": context + TAG_ASK,
+        "additionalContext": context + MISFILE_ASK + TAG_ASK,
     }}))
 PY
 

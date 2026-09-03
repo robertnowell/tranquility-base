@@ -98,6 +98,31 @@ public enum HubIntegrity {
             }
         }
 
+        // 3. A page in the wrong agent's directory.
+        //
+        //    The page says who wrote it; the directory says whose hub it is on.
+        //    When they disagree somebody wrote a report into another agent's
+        //    hub, and the archive is asserting the wrong author to anyone who
+        //    opens it. Reported rather than repaired: moving a file is not a
+        //    check's job, and the fix is one `mv`.
+        let agentsRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/agents", isDirectory: true)
+        for dir in (try? FileManager.default.contentsOfDirectory(
+            at: agentsRoot, includingPropertiesForKeys: nil)) ?? [] {
+            let slug = dir.lastPathComponent
+            guard slug.count == 8, !slug.hasPrefix("_") else { continue }
+            for page in (try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil)) ?? []
+            where page.pathExtension == "html" && page.lastPathComponent != "index.html" {
+                if let declared = HubReconcile.declaredSession(in: page), declared != slug {
+                    problems.append(Problem(
+                        session: slug,
+                        detail: "\(page.lastPathComponent) says \(declared) wrote it "
+                              + "— it is in the wrong agent's directory"))
+                }
+            }
+        }
+
         // 2. One footer per page, over the whole archive rather than per
         //    session: a duplicate is usually inherited from somebody else.
         let pages = (try? FileManager.default.contentsOfDirectory(
