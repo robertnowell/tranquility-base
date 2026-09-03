@@ -114,7 +114,8 @@ public enum HubIntegrity {
             for page in (try? FileManager.default.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: nil)) ?? []
             where page.pathExtension == "html" && page.lastPathComponent != "index.html" {
-                if let declared = HubReconcile.declaredSession(in: page), declared != slug {
+                if !ArtifactStore.belongs(page: page.path, to: slug),
+                   let declared = ArtifactStore.declaredAgent(of: page.path) {
                     problems.append(Problem(
                         session: slug,
                         detail: "\(page.lastPathComponent) says \(declared) wrote it "

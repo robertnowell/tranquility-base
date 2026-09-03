@@ -135,6 +135,17 @@ final class HubReconcileTests: XCTestCase {
         XCTAssertNil(HubReconcile.declaredSession(inHTML: "<p>no meta here</p>"))
     }
 
+    /// The footer has to land in the text column. Stamped before </body>, it is
+    /// usually OUTSIDE the page's own wrapper, so it centres itself instead of
+    /// inheriting a container it cannot name.
+    func testTheFooterCentresItselfRatherThanHuggingTheEdge() throws {
+        let p = try page("report.html")
+        reconcile()
+        let html = try String(contentsOf: p, encoding: .utf8)
+        XCTAssertTrue(html.contains("max-width:860px"), "it must not run the full window width")
+        XCTAssertTrue(html.contains("margin:64px auto 0"), "and it must be centred under the column")
+    }
+
     /// The turn stamp rides along, through the one rule that decides ownership.
     func testTheTurnIsStampedToo() throws {
         let p = try page("report.html")
