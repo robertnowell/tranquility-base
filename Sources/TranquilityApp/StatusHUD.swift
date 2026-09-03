@@ -212,6 +212,9 @@ final class StatusHUD: NSObject {
     var voiceListHeight: NSLayoutConstraint!
     var gearButton: ConsoleButton!
     var collapseButton: ConsoleButton!
+    /// Is the pointer on the panel at all — the signal behind the collapse
+    /// control's two faces. See `PanelHoverView`.
+    var panelHover: PanelHoverView!
     var backButton: ConsoleButton!
     var pastBackButton: ConsoleButton!
     var waitingRows: NSStackView!
@@ -2148,6 +2151,12 @@ final class StatusHUD: NSObject {
             gridFooter.isHidden = false
             waitingRows.isHidden = false
             collapseButton?.isHidden = isCollapsed
+            // Ask the pointer where it actually is, once, as the grid arms. A
+            // panel ordered out while the pointer was on it never gets an exit
+            // event, so the collapse control would come back wearing the
+            // chevron with nobody pointing at it. One point lookup on a face
+            // change is not a hot path; polling for it would be.
+            panelHover?.resync()
             // Settings is an expanded-face affordance. The gear lives on
             // `background` rather than inside the stack, so hiding the stack
             // does not take it with it — it has to be named.

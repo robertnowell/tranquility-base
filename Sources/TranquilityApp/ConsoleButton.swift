@@ -41,12 +41,45 @@ final class ConsoleButton: NSButton {
     /// Set this BEFORE `restingInk`, which is what triggers the first paint.
     var reink: ((NSColor) -> Void)?
     private var hovering = false {
-        didSet { guard hovering != oldValue else { return }; paintInk() }
+        didSet { guard hovering != oldValue else { return }; paintInk(); paintFace() }
     }
 
     /// The hover, without a mouse. `mouseEntered` takes an NSEvent no drill can
     /// post, and the panel's only coverage is drills.
     func setHovered(_ hovered: Bool) { hovering = hovered }
+
+    /// A control with TWO FACES: the mark it wears at rest, and the mark it
+    /// wears once the pointer is anywhere on the panel.
+    ///
+    /// Ruled 02 Sep, for the collapse control: at rest it is the site mark, so
+    /// the grid always carries the app's own mark rather than a naked chevron
+    /// pointing at nothing; the moment the pointer is on the panel it becomes
+    /// the chevron, which is the control it has always been. The collapsed
+    /// strip has done exactly this since 18 Aug (`CollapsedStrip.drawHeader`) —
+    /// "the logo at rest, the Expand chevron while hovering, one slot two
+    /// faces" — and the expanded face simply did not answer it.
+    ///
+    /// The pair is set together or not at all; a button with one image and no
+    /// second face never enters this path, so nothing else on the panel changes.
+    var restingFace: NSImage? { didSet { paintFace() } }
+    var hoverFace: NSImage? { didSet { paintFace() } }
+
+    /// Whether the pointer is on the SURFACE this control belongs to, as
+    /// opposed to on the control itself.
+    ///
+    /// Deliberately not `hovering`: the ink step means "the pointer is on THIS
+    /// one" (rule 2) and a panel-wide hover has no business brightening every
+    /// control on it. Surface hover swaps the face and touches no colour.
+    var surfaceHovered = false {
+        didSet { guard surfaceHovered != oldValue else { return }; paintFace() }
+    }
+
+    private func paintFace() {
+        guard let restingFace, let hoverFace else { return }
+        let wanted = (surfaceHovered || hovering) ? hoverFace : restingFace
+        guard image !== wanted else { return }
+        image = wanted
+    }
 
     /// A hidden button gets no hover events, so a button hidden while the
     /// pointer is on it would come back lit. Faces swap buttons constantly.
@@ -90,20 +123,56 @@ final class ConsoleButton: NSButton {
 
     /// How far this control's box reaches past the MARK inside it, per side.
     ///
-    /// Two boxes deep, and the second one is why the first attempt at this
-    /// still missed. A symbol button centres its image in the 26pt target, and
-    /// the image is itself padded around the glyph — so aligning by
-    /// `image.size` put the chevron's paint at 16.5 when the column is at 14
-    /// (measured). This rasterises the image once, at build, and finds the
-    /// columns that actually carry alpha.
-    ///
     /// Nothing here shrinks the target. These are the numbers a call site
     /// subtracts so the MARK lands on `StatusHUD.contentColumn` and the target
     /// overhangs outward, into the panel's own margin, where nothing else is
     /// competing for the space.
+    ///
+    /// Pinned once a two-faced control has been laid out. The faces are
+    /// generated to share an ink edge, but they are rasterised separately, and
+    /// a control whose alignment constant moved by a rounding step the moment
+    /// the pointer arrived would MOVE under the pointer — the one thing rule 3
+    /// forbids outright. So layout reads the face the panel was measured to,
+    /// and the drill compares the other face against it rather than against a
+    /// number that quietly followed it.
     var inkOverhang: (leading: CGFloat, trailing: CGFloat) {
+        pinnedOverhang ?? Self.inkOverhang(of: image, target: pointerTarget)
+    }
+
+    private var pinnedOverhang: (leading: CGFloat, trailing: CGFloat)?
+
+    /// Freeze the overhang at whatever mark is in the button right now. Called
+    /// before a second face is hung on it, never after.
+    func pinInkOverhang() {
+        pinnedOverhang = Self.inkOverhang(of: image, target: pointerTarget)
+    }
+
+    /// How tall the MARK is, as opposed to the image around it.
+    ///
+    /// The number a second face is built to, so a control that swaps its mark
+    /// swaps optical weight for optical weight: the site mark is generated at
+    /// the chevron's own ink height rather than at a guessed point size, and
+    /// the two faces cannot drift when either symbol is retuned.
+    var inkHeight: CGFloat { Self.inkBox(of: image)?.height ?? 0 }
+
+    /// Where an image's ink sits inside a `target`-wide slot, per side.
+    ///
+    /// Two boxes deep, and the second one is why the first attempt at aligning
+    /// this still missed. A symbol button centres its image in the 26pt target,
+    /// and the image is itself padded around the glyph — so aligning by
+    /// `image.size` put the chevron's paint at 16.5 when the column is at 14
+    /// (measured). This reads the columns that actually carry alpha.
+    static func inkOverhang(of image: NSImage?,
+                            target: CGFloat) -> (leading: CGFloat, trailing: CGFloat) {
         guard let image, image.size.width > 0 else { return (0, 0) }
-        let slack = (pointerTarget - image.size.width) / 2
+        let slack = (target - image.size.width) / 2
+        guard let ink = inkBox(of: image) else { return (slack, slack) }
+        return (slack + ink.minX, slack + (image.size.width - ink.maxX))
+    }
+
+    /// The alpha bounds of an image, in its own points — rasterised on demand.
+    static func inkBox(of image: NSImage?) -> NSRect? {
+        guard let image, image.size.width > 0 else { return nil }
         let width = Int(image.size.width.rounded(.up))
         let height = max(1, Int(image.size.height.rounded(.up)))
         guard width > 0,
@@ -111,22 +180,23 @@ final class ConsoleButton: NSButton {
                 bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
                 bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                 colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
-        else { return (slack, slack) }
+        else { return nil }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
         image.draw(in: NSRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
         NSGraphicsContext.restoreGraphicsState()
 
-        var first = width, last = -1
+        var minX = width, maxX = -1, minY = height, maxY = -1
         for x in 0..<width {
             for y in 0..<height where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
-                first = min(first, x); last = max(last, x)
-                break
+                minX = min(minX, x); maxX = max(maxX, x)
+                minY = min(minY, y); maxY = max(maxY, y)
             }
         }
-        guard last >= first else { return (slack, slack) }
-        return (slack + CGFloat(first),
-                slack + (image.size.width - CGFloat(last + 1)))
+        guard maxX >= minX, maxY >= minY else { return nil }
+        return NSRect(x: CGFloat(minX), y: CGFloat(minY),
+                      width: CGFloat(maxX - minX + 1),
+                      height: CGFloat(maxY - minY + 1))
     }
 
     /// The hover ink, for the drill. Reading it off the button rather than
