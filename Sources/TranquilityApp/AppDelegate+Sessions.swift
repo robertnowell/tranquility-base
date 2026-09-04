@@ -1638,7 +1638,9 @@ extension AppDelegate {
             // investigation.
             let launchedAt = Date()
             let sessionIdOrNil = isCodex
-                ? LaunchGreeting.awaitCodexRegistration(excluding: before)
+                ? LaunchGreeting.awaitCodexRegistration(
+                    excluding: before,
+                    screen: { SessionLauncher.paneTail(tty: tty) })
                 // The pane goes in so the wait can end the moment the screen
                 // stops moving, rather than paying the whole thirty seconds
                 // for a launch that is sitting on a dialog. See

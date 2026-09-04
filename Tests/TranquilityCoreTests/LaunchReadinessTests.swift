@@ -158,4 +158,74 @@ final class LaunchReadinessTests: XCTestCase {
         XCTAssertTrue(Self.trustDialog.contains(glyph))
         XCTAssertTrue(Self.bypassGate.contains(glyph))
     }
+
+    // MARK: - Codex, audited the same way
+
+    /// Codex first run, captured live 3 Sep against codex-cli 0.152.1.
+    static let codexSignIn = """
+          Welcome to Codex, OpenAI's command-line coding agent
+          Sign in with ChatGPT to use Codex as part of your paid plan
+          or connect an API key for usage-based billing
+        > 1. Sign in with ChatGPT
+             Usage included with Plus, Pro, Business, and Enterprise plans
+          2. Sign in with Device Code
+          3. Provide your own API key
+          Press enter to continue
+        """
+
+    /// The one TB must never press Return on, because the selected row runs
+    /// an installer. Captured live the same day, on this machine, where it
+    /// was blocking every fresh Codex pane.
+    static let codexUpdateChooser = """
+          ✨ Update available! 0.152.1 -> 0.153.2
+          Release notes: https://github.com/openai/codex/releases/latest
+        › 1. Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh'`)
+          2. Skip
+          3. Skip until next version
+          Press enter to continue
+        """
+
+    /// The contrast with Claude Code, and the reason Codex never had this bug.
+    ///
+    /// `settledBannerNeedle` for Codex is "Ask Codex to do anything", the
+    /// composer's own idle placeholder, so it appears when the session is
+    /// READY and on no blocking screen. Claude Code's is the word "Claude",
+    /// which appears on all of them. Same field, opposite information content,
+    /// and that single choice is the whole difference between a harness whose
+    /// blocked launches surface and one whose blocked launches were announced
+    /// as successes.
+    func testCodexSettledNeedleIsAbsentFromItsBlockingScreens() {
+        guard let spec = CodexAdapter().trustPrompt else {
+            return XCTFail("Codex adapter must carry a trust prompt spec")
+        }
+        XCTAssertFalse(Self.codexSignIn.contains(spec.settledBannerNeedle))
+        XCTAssertFalse(Self.codexUpdateChooser.contains(spec.settledBannerNeedle))
+    }
+
+    /// The installer row is recognised, so it is never pressed. The needle is
+    /// the ROW and not the headline, deliberately: a dismissed update still
+    /// prints "Update available!" as a passive banner in a perfectly healthy
+    /// session, and matching that stood down every good resume (29 Aug).
+    func testCodexUpdateChooserIsRefusedRatherThanAnswered() {
+        guard let spec = CodexAdapter().trustPrompt else {
+            return XCTFail("Codex adapter must carry a trust prompt spec")
+        }
+        XCTAssertTrue(spec.neverAutoAcceptNeedles.contains {
+            Self.codexUpdateChooser.contains($0.needle)
+        }, "pressing Return here runs curl | sh")
+        XCTAssertFalse(spec.promptNeedles.contains { Self.codexUpdateChooser.contains($0) },
+                       "it must never be mistaken for a trust prompt, which IS auto-accepted")
+    }
+
+    /// Sign-in is recognised by nothing, which is correct: it is a screen the
+    /// app cannot answer and has no business naming. It reaches the human
+    /// through the stuck-screen path instead, carrying its own words.
+    func testCodexSignInIsRecognisedByNoNeedleAtAll() {
+        guard let spec = CodexAdapter().trustPrompt else {
+            return XCTFail("Codex adapter must carry a trust prompt spec")
+        }
+        XCTAssertFalse(spec.promptNeedles.contains { Self.codexSignIn.contains($0) })
+        XCTAssertFalse(spec.neverAutoAcceptNeedles.contains { Self.codexSignIn.contains($0.needle) })
+        XCTAssertFalse(Self.codexSignIn.contains(spec.settledBannerNeedle))
+    }
 }

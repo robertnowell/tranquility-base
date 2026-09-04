@@ -241,13 +241,43 @@ public enum LaunchGreeting {
         liveThreadIds: () -> [String] = { CodexRollout.liveThreadIds() },
         timeout: TimeInterval = 30,
         interval: TimeInterval = 0.5,
+        screen: (() -> String?)? = nil,
+        quietFloor: TimeInterval = 12,
+        stillThreshold: Int = 6,
         now: () -> Date = Date.init,
         sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
     ) -> String? {
-        let deadline = now().addingTimeInterval(timeout)
+        let started = now()
+        let deadline = started.addingTimeInterval(timeout)
+        var lastScreen: String?
+        var unchanged = 0
         while now() < deadline {
             if let fresh = liveThreadIds().first(where: { !known.contains($0) }) {
                 return fresh
+            }
+            // Parity with the Claude twin above, and for the same reason: a
+            // pane that has stopped moving does not need the rest of the
+            // budget. Codex is the harness where this matters MORE, not less
+            // — its update chooser ("1. Update now") is a screen TB
+            // deliberately refuses to answer, so every launch that meets one
+            // is a launch that will wait out the whole timeout unless
+            // something notices the pane went still. Measured live 3 Sep:
+            // codex-cli 0.152.1 with 0.153.2 released, and every fresh pane
+            // on this machine stops there.
+            //
+            // `stillThreshold` is doubled against the Claude path because
+            // this loop polls twice as fast; both come to about three seconds
+            // of stillness past the floor.
+            if let screen, now().timeIntervalSince(started) >= quietFloor {
+                let text = screen()
+                if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if text == lastScreen { unchanged += 1 } else { unchanged = 1 }
+                    lastScreen = text
+                    if unchanged >= stillThreshold { return nil }
+                } else {
+                    lastScreen = nil
+                    unchanged = 0
+                }
             }
             sleep(interval)
         }
