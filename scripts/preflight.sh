@@ -88,6 +88,11 @@ echo "→ borrowed descriptors"
 python3 scripts/check-borrowed-descriptors.sh
 
 echo "→ notarization log parser"
+# Anything that decides WHO WROTE A PAGE runs against the adversarial set
+# first. Both attribution regressions of 03 Sep would have died here in seconds;
+# both were written after the damage instead.
+scripts/test-attribution.sh
+
 scripts/test-notary-log-parser.sh
 
 # The release's last line, which is where 0.3.1053 died with a signed,

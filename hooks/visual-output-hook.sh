@@ -101,9 +101,9 @@ else
   WHOSE="Never write a page into another agent's directory."
 fi
 
-python3 - "$DIR" "$WHOSE" <<'PYCTX' 2>/dev/null || true
+python3 - "$DIR" "$WHOSE" "${AGENT:-<your session id>}" <<'PYCTX' 2>/dev/null || true
 import json, sys
-directory, whose = sys.argv[1], sys.argv[2]
+directory, whose, agent = sys.argv[1], sys.argv[2], sys.argv[3]
 text = (
     "The user runs Tranquility Base: they hear sessions by voice and are usually "
     "NOT looking at this terminal. TREAT THE TERMINAL AS INVISIBLE. Anything you "
@@ -121,6 +121,11 @@ text = (
     "hub lives, so a page written there is listed on your hub automatically and "
     "needs nothing else from you. Do not touch index.html in it -- that is the hub "
     "itself and the app writes it.\n\n"
+    "THE PAGE SAYS WHO WROTE IT. Put this in its head, first line of metadata:\n"
+    "  <meta name=\"intranet:session\" content=\"" + agent + "\">\n"
+    "That one line is what makes the page yours. Without it the archive falls "
+    "back to assuming whoever owns the directory wrote it, which is how reports "
+    "have ended up on the wrong agent's hub with the wrong Discuss button.\n\n"
     "ALWAYS ALL THREE STEPS: (1) write " + directory + "/<slug>.html, self-contained "
     "-- inline CSS/SVG, no external assets, and a favicon; (2) run `open` on it; (3) "
     "leave the terminal a one-line pointer at what opened, nothing more. Writing "
