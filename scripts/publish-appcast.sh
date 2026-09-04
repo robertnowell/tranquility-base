@@ -119,7 +119,19 @@ fi
 step "merging this release into the feed"
 DMG_NAME=$(basename "$DMG")
 ENCLOSURE_URL="https://github.com/$REPO/releases/download/$TAG/$DMG_NAME"
-export ENCLOSURE_ATTRS ENCLOSURE_URL VERSION BUILD KEEP_ITEMS FEED_DOMAIN
+# The architectures of the thing actually being shipped, read off the DMG, so
+# the feed describes the artifact rather than an assumption about it.
+TB_DMG_ARCHES=""
+_ARCH_MNT=$(mktemp -d)
+if hdiutil attach -readonly -nobrowse -mountpoint "$_ARCH_MNT" "$DMG" >/dev/null 2>&1; then
+  _ARCH_BIN=$(find "$_ARCH_MNT" -type f -path '*.app/Contents/MacOS/*' -perm +111 2>/dev/null | head -1)
+  [ -n "$_ARCH_BIN" ] && TB_DMG_ARCHES=$(lipo -archs "$_ARCH_BIN" 2>/dev/null || true)
+  hdiutil detach "$_ARCH_MNT" >/dev/null 2>&1 || true
+fi
+rmdir "$_ARCH_MNT" 2>/dev/null || true
+echo "→ shipped architectures: ${TB_DMG_ARCHES:-<unreadable>}"
+export TB_DMG_ARCHES
+export ENCLOSURE_ATTRS ENCLOSURE_URL VERSION BUILD KEEP_ITEMS FEED_DOMAIN TB_DMG_ARCHES
 python3 - "$WORK/appcast.xml" <<'PY'
 import os, re, sys, datetime, xml.etree.ElementTree as ET
 
@@ -168,10 +180,27 @@ ET.SubElement(item, "title").text = f"Version {version}"
 # string is only ever shown to a person.
 ET.SubElement(item, f"{{{SPARKLE}}}version").text = build
 ET.SubElement(item, f"{{{SPARKLE}}}shortVersionString").text = version
-# Mirrors what audit-release.sh already asserts about the bundle itself, so a
-# machine that cannot run this build is never offered it.
 ET.SubElement(item, f"{{{SPARKLE}}}minimumSystemVersion").text = "14.0"
-ET.SubElement(item, f"{{{SPARKLE}}}hardwareRequirements").text = "arm64"
+# NO hardwareRequirements, and the absence is the point.
+#
+# This line used to read `hardwareRequirements = "arm64"`, with a comment
+# claiming it mirrored audit-release.sh. It mirrored the opposite: that script
+# FAILS the release when either slice is missing (`binary has no x86_64 slice`,
+# `Sparkle has no x86_64 slice`), so every build that reaches this point is
+# universal by construction. The feed was declaring a requirement the artifact
+# does not have.
+#
+# What it cost, 4 Sep: the first external user, on an Intel MacBook Pro, clicked
+# Check for Updates and got Sparkle's "Your Mac is too old — this update requires
+# a new Apple silicon Mac." The DMG she was refused is `x86_64 arm64`, minos 14.0,
+# and would have run. Sparkle was doing exactly as it was told.
+#
+# Derived, not asserted, so this cannot drift again: the arches come out of the
+# DMG that is being published. A genuinely thin build still gets a truthful
+# requirement; a universal one gets none.
+arches = os.environ.get("TB_DMG_ARCHES", "")
+if arches and "x86_64" not in arches.split():
+    ET.SubElement(item, f"{{{SPARKLE}}}hardwareRequirements").text = "arm64"
 ET.SubElement(item, "pubDate").text = datetime.datetime.now(
     datetime.timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
 ET.SubElement(item, "enclosure", {
