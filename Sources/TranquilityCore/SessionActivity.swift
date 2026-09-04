@@ -208,6 +208,10 @@ public enum SessionActivity: Equatable, Sendable {
         // find — which makes it a first-hand statement that the turn those
         // words belonged to is over. See `endedAt`.
         var endedAt: Date?
+        // The newest thing that proved the file moved, whatever it was. Kept
+        // separate from `endedAt` because movement and completion answer
+        // different questions, and only one of them ends the walk.
+        var lastMovement: Date?
         for line in tail.reversed() {
             guard let data = line.data(using: .utf8),
                   let entry = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -258,16 +262,39 @@ public enum SessionActivity: Equatable, Sendable {
                 }
                 continue
             case .turnStarted:
-                // Working, said by the harness rather than inferred from a
-                // hook. `working` still decides from its age whether that is
-                // still true.
-                return (working(since: observed, now: now), observed)
-            case .content, .activity:
-                // Somebody wrote something, or the agent ran a tool. Both are
-                // movement at this timestamp — the same meaning as an
-                // assistant entry with a tool use in Claude Code's file — and
-                // `working` decides from its age whether it is still true.
-                return (working(since: observed, now: now), observed)
+                // A turn is open and nothing has closed it. Dated by the
+                // freshest movement seen on the way here rather than by the
+                // start itself, because a turn that began an hour ago and ran
+                // a tool ten seconds ago is ten seconds old, not an hour.
+                return (working(since: lastMovement ?? observed, now: now),
+                        lastMovement ?? observed)
+            case .activity:
+                // Movement, but NOT a verdict, and the distinction is the whole
+                // bug. A tool call, an `item_completed`, a `token_count`: each
+                // says the file moved at this timestamp, and none of them says
+                // a turn is open.
+                //
+                // Returning here short-circuited the backwards walk before it
+                // could reach the `task_complete` underneath, so a session that
+                // finished at 14:26 and went on flushing `item_completed` until
+                // 14:50 read as working for as long as the trailing records
+                // kept the lamp inside its stall window. Robert, 04 Sep, on
+                // 01a05885: "its turn is over, but it's marked as blue."
+                //
+                // So remember when it moved and keep walking. Whichever
+                // lifecycle record comes next decides what the movement MEANT.
+                lastMovement = lastMovement ?? observed
+                continue
+
+            case .content:
+                // A real message, which is the same shape as Claude Code's
+                // assistant entry below and takes the same rule: if the turn
+                // has been declared over, the words belong to a turn that is
+                // finished.
+                if turnIsOver(endedAt: endedAt, boundary: boundary) {
+                    return (.idle, observed)
+                }
+                return (working(since: lastMovement ?? observed, now: now), observed)
             case .meta, .ignored, .undecodable:
                 break   // not a Codex line, or nothing this decides on
             }

@@ -232,3 +232,77 @@ final class CodexTurnErrorTests: XCTestCase {
         return String(data: try! JSONSerialization.data(withJSONObject: row), encoding: .utf8)!
     }
 }
+
+/// Trailing records do not reopen a finished turn.
+///
+/// Robert, 04 Sep, on session 01a05885: "its turn is over, but it's marked as
+/// blue." The rollout's last lifecycle record was `task_complete` at 14:26,
+/// and the file then went on flushing `item_completed` until 14:50. The
+/// backwards walk hit those first, called them movement, and returned working
+/// without ever reaching the completion underneath.
+///
+/// Movement and completion answer different questions. Only one of them ends
+/// the walk.
+final class TrailingActivityTests: XCTestCase {
+
+    private var at: Date { ISO8601DateFormatter().date(from: "2026-09-04T14:26:13Z")! }
+
+    private func line(_ payloadType: String, _ minutesAfter: Int,
+                      turnId: String = "01a05885") -> String {
+        let ts = ISO8601DateFormatter().string(from: at.addingTimeInterval(Double(minutesAfter) * 60))
+        let payload: [String: Any] = ["type": payloadType, "turn_id": turnId]
+        let row: [String: Any] = ["timestamp": ts, "type": "event_msg", "payload": payload]
+        return String(data: try! JSONSerialization.data(withJSONObject: row), encoding: .utf8)!
+    }
+
+    /// The exact shape from the rollout: a completion, then 24 minutes of
+    /// `item_completed` after it.
+    func testItemCompletedAfterATaskCompleteDoesNotReadAsWorking() {
+        var tail = [line("task_started", -9), line("task_complete", 0)]
+        for m in [1, 4, 12, 20, 23, 24] { tail.append(line("item_completed", m)) }
+        let verdict = SessionActivity.classify(
+            tail: tail, modified: at.addingTimeInterval(24 * 60),
+            now: at.addingTimeInterval(30 * 60))
+        XCTAssertEqual(verdict, .idle, "a finished turn stays finished")
+    }
+
+    /// And the case this must not break: a turn that is genuinely open, whose
+    /// tail is nothing but tool activity, is working and is dated by the
+    /// FRESHEST movement rather than by the distant start.
+    func testAnOpenTurnIsDatedByItsNewestMovement() {
+        var tail = [line("task_started", 0)]
+        for m in [10, 30, 50, 58] { tail.append(line("item_completed", m)) }
+        // Started an hour ago, moved two minutes ago: working, not stalled.
+        let verdict = SessionActivity.classify(
+            tail: tail, modified: at.addingTimeInterval(58 * 60),
+            now: at.addingTimeInterval(60 * 60))
+        XCTAssertEqual(verdict, .working,
+                       "a long turn that moved recently is working, not stalled")
+    }
+
+    /// A turn with no movement since it started still stalls on the usual clock.
+    func testAnOpenTurnThatWentSilentStillStalls() {
+        let tail = [line("task_started", 0)]
+        guard case .stalled = SessionActivity.classify(
+            tail: tail, modified: at,
+            now: at.addingTimeInterval(SessionActivity.stalled + 120)) else {
+            return XCTFail("expected stalled")
+        }
+    }
+
+    /// An error still wins over trailing activity, since the turn ended badly
+    /// rather than merely ending.
+    func testAnErrorSurvivesTrailingActivity() {
+        let err = """
+        {"timestamp":"\(ISO8601DateFormatter().string(from: at))","type":"event_msg",\
+        "payload":{"type":"task_complete","turn_id":"01a05885",\
+        "error":{"message":"stream disconnected before completion","codex_error_info":"other"}}}
+        """
+        let tail = [line("task_started", -5), err, line("item_completed", 3)]
+        guard case .blocked = SessionActivity.classify(
+            tail: tail, modified: at.addingTimeInterval(180),
+            now: at.addingTimeInterval(600)) else {
+            return XCTFail("expected blocked")
+        }
+    }
+}
