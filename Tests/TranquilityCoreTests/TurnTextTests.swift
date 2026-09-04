@@ -214,7 +214,7 @@ final class HubTranscriptTests: XCTestCase {
         let brief = Date()
         let html = joined(briefs: [brief],
                           turns: [("later ask", brief.addingTimeInterval(600))])
-        XCTAssertTrue(html.contains("Running now"))
+        XCTAssertTrue(html.contains("Running now"), "the live turn leads, in the open")
         XCTAssertTrue(html.contains("later ask"))
     }
 
@@ -230,7 +230,7 @@ final class HubTranscriptTests: XCTestCase {
                           turns: [("ancient ask", brief.addingTimeInterval(-9999)),
                                   ("recent ask", brief.addingTimeInterval(-60))])
         XCTAssertTrue(html.contains("recent ask"), "the turn the summary belongs to")
-        XCTAssertFalse(html.contains("Running now"))
+        XCTAssertFalse(html.contains("class=\"now\""))
         XCTAssertFalse(html.contains("ancient ask"))
     }
 
