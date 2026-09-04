@@ -64,6 +64,39 @@ check "echo with a stderr redirect"    no  "echo hi 2>/dev/null; ls $REAL"
 check "code that quotes a redirect"    no  "python3 <<PY"$'\n'"re.search(r'(cat|tee)\\s*>+', s)"$'\n'"p='$REAL'"$'\n'"PY"
 check "a write to a path that is gone" no  "cat > $THEIRS/never-existed.html <<EOF"$'\n'"x"$'\n'"EOF"
 
+# ---------------------------------------------------------------- the guard
+# The same question from the other side: what may be WRITTEN WHERE. The post-hoc
+# rules above decide who wrote a page; this one makes the wrong write impossible,
+# which is what finally took the guessing out (03 Sep).
+GUARD="hooks/one-agent-one-directory.py"
+guard() {                       # guard <name> <expect: deny|allow> <json payload>
+  local name="$1" want="$2" got
+  if [ -n "$(printf '%s' "$3" | python3 "$GUARD" 2>/dev/null)" ]; then got=deny; else got=allow; fi
+  if [ "$got" = "$want" ]; then
+    pass=$((pass + 1)); printf '  ok   %-42s %s\n' "$name" "$got"
+  else
+    fail=$((fail + 1)); printf '  FAIL %-42s got %s, want %s\n' "$name" "$got" "$want"
+  fi
+}
+
+if [ -r "$GUARD" ]; then
+  ME='"session_id":"0d04e845-65ff-488f-983c-58f371d661ed"'
+  # Real home: the guard deliberately only speaks about paths under ~/Documents
+  # /agents, so a fixture under a made-up home tests nothing (caught 03 Sep, by
+  # this file, on its first run).
+  OTHER="$HOME/Documents/agents/4394c0ec/p.html"
+  MINE_P="$HOME/Documents/agents/0d04e845/p.html"
+  echo
+  echo "→ what may be written where"
+  guard "Write into another agent's directory" deny  "{$ME,\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$OTHER\"}}"
+  guard "Write into my own"                    allow "{$ME,\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$MINE_P\"}}"
+  guard "redirect into another agent's"        deny  "{$ME,\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat >$OTHER\"}}"
+  guard "reading another agent's page"         allow "{$ME,\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"grep foo $OTHER\"}}"
+  guard "the deliberate-move marker"           allow "{$ME,\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"TB_ALLOW_CROSS_AGENT_WRITE=1 cp a $OTHER\"}}"
+  guard "a payload with no session id"         allow "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$OTHER\"}}"
+  guard "a malformed payload"                  allow "not json"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
   echo "✓ attribution: $pass case(s), no rule reads a mention as an act"
