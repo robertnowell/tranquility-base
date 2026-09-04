@@ -580,6 +580,18 @@ public extension ArtifactStore {
         /// character count; this keeps the text short enough that clipping is
         /// rarely needed.
         public let blurb: String?
+        /// The subjects the page declares, from `<meta name="intranet:tags">`.
+        /// Lowercased and de-duplicated; empty when the page never declared any.
+        ///
+        /// These are the only durable index this archive has. A title says what
+        /// one page is called; a tag says what it is ABOUT, which is the
+        /// question asked by somebody who remembers the subject and not the day
+        /// — the whole reason the hub stopped being a list sorted by date.
+        public let tags: [String]
+
+        public init(title: String?, blurb: String?, tags: [String] = []) {
+            self.title = title; self.blurb = blurb; self.tags = tags
+        }
     }
 
     /// Only the head and the opening of the body are read — a rendered page can
@@ -590,9 +602,9 @@ public extension ArtifactStore {
         }
         defer { try? handle.close() }
         let data = (try? handle.read(upToCount: limit)) ?? Data()
-        guard let html = String(data: data, encoding: .utf8) else {
-            return DocumentSummary(title: nil, blurb: nil)
-        }
+        // Lossy on purpose: a page with one bad byte still has a title, and
+        // refusing the whole document over it is how pages went untitled.
+        let html = String(decoding: data, as: UTF8.self)
         let og = firstMatch(in: html,
             #"<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']"#)
         let titleTag = firstMatch(in: html, #"(?s)<title[^>]*>(.*?)</title>"#)
@@ -612,14 +624,64 @@ public extension ArtifactStore {
         } else {
             title = heading ?? candidate
         }
-        let description = firstMatch(in: html,
-            #"<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']"#)
+        // The page's OWN sentence about itself outranks anything derived. A
+        // first paragraph is whatever the layout put first — a dateline, a
+        // nav link, a pull quote — and it read as the summary on hubs for
+        // weeks. `intranet:summary` is written to be this and nothing else.
+        let declared = meta(html, "intranet:summary")
+        let description = meta(html, "description")
         let paragraph = firstMatch(in: html, #"(?s)<p[^>]*>(.*?)</p>"#).map(stripTags)
-        let blurb = (description ?? paragraph).map { text -> String in
+        let blurb = (declared ?? description ?? paragraph).map { text -> String in
             text.count > 220 ? String(text.prefix(217)) + "…" : text
         }
         return DocumentSummary(title: title?.isEmpty == false ? title : nil,
-                               blurb: blurb?.isEmpty == false ? blurb : nil)
+                               blurb: blurb?.isEmpty == false ? blurb : nil,
+                               tags: tags(html))
+    }
+
+    /// Is this page one the ARCHIVE generated, rather than one an agent wrote?
+    ///
+    /// The publisher stamps its own indexes on the first line
+    /// (`<!-- research-hq-generated: index -->`), so this is a fact read off
+    /// the file rather than a guess made from its path. It matters because a
+    /// session that merely REBUILDS the index has a record for it, and the hub
+    /// of hubs then appears on that agent's own hub as something it made —
+    /// which is exactly the misattribution the archive keeps being fixed for.
+    ///
+    /// Only the head is read: the marker is on line one by construction, and a
+    /// page that puts it anywhere else is not one of ours.
+    public static func isGeneratedIndex(path: String) -> Bool {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? handle.close() }
+        let head = String(decoding: (try? handle.read(upToCount: 256)) ?? Data(), as: UTF8.self)
+        return head.contains("research-hq-generated: index")
+            || head.contains("intranet-generated: index")
+    }
+
+    /// One `<meta name="…" content="…">` value, in either attribute order.
+    ///
+    /// Both orders occur in this archive — hand-written pages put `name`
+    /// first, pandoc puts `content` first — and a pattern that only knew one
+    /// of them silently returned nothing for a third of the pages.
+    static func meta(_ html: String, _ name: String) -> String? {
+        let n = NSRegularExpression.escapedPattern(for: name)
+        return firstMatch(in: html,
+            #"<meta[^>]+name=["']"# + n + #"["'][^>]*?content=["']([^"']*)["']"#)
+            ?? firstMatch(in: html,
+                #"<meta[^>]+content=["']([^"']*)["'][^>]*?name=["']"# + n + #"["']"#)
+    }
+
+    /// The subjects a page declares, normalised the way the archive stores
+    /// them: lowercase, trimmed, comma-separated, first occurrence wins.
+    static func tags(_ html: String) -> [String] {
+        guard let raw = meta(html, "intranet:tags") else { return [] }
+        var seen: Set<String> = [], out: [String] = []
+        for part in raw.split(separator: ",") {
+            let tag = part.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !tag.isEmpty, tag.count <= 40, seen.insert(tag).inserted else { continue }
+            out.append(tag)
+        }
+        return out
     }
 
     /// "Plan — Tranquility Base" is one title with a site name stapled on. The

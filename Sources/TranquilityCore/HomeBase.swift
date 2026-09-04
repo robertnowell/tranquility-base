@@ -677,6 +677,92 @@ public enum HomeBase {
         }.joined()
     }
 
+    /// EVERYTHING THIS AGENT HAS MADE, IN ONE PLACE, FILED BY SUBJECT.
+    ///
+    /// The stack above answers "what just happened". It cannot answer "where
+    /// is that report" — a page written eleven turns ago is under a turn block
+    /// that has long since compacted into the digest, and the reader looking
+    /// for it remembers the SUBJECT, not the day (31 pages scattered under 9
+    /// turn blocks, measured 02 Sep). So this section lists every page once,
+    /// newest first, and hands the reader the archive's own index: the tags
+    /// the pages declare about themselves.
+    ///
+    /// One list, not a list per tag. A page carrying three subjects would
+    /// otherwise print three times, and the reader cannot tell a repeat from a
+    /// second document — the filter does the grouping instead, which costs one
+    /// line of markup per page rather than three copies of it.
+    static func madeIndex(_ pages: [ArtifactStore.Page],
+                          e: (String) -> String,
+                          published: [String: String] = publishedURLs()) -> String {
+        // The archive's OWN indexes are not work this agent made. A session
+        // that rebuilds the hub of hubs has a record for it, and without this
+        // the hub of hubs is listed on that agent's hub as one of its reports
+        // — the same misattribution by a different door.
+        let authored = pages.filter { !ArtifactStore.isGeneratedIndex(path: $0.path) }
+        guard !authored.isEmpty else { return "" }
+        let newestFirst = authored.sorted { $0.at > $1.at }
+        let summaries = newestFirst.map { ArtifactStore.summarize(path: $0.path) }
+        let names = strippingSharedAffix(summaries.map(\.title))
+
+        // Count first: the bar is ordered by how much an agent has actually
+        // written about a subject, which is the order a reader scans in.
+        var counts: [String: Int] = [:]
+        for summary in summaries { for tag in summary.tags { counts[tag, default: 0] += 1 } }
+        let untagged = summaries.filter { $0.tags.isEmpty }.count
+        let ranked = counts.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+
+        var chips = "<button class=\"chip on\" data-tag=\"\">everything"
+            + "<i>\(newestFirst.count)</i></button>"
+        for (tag, n) in ranked.prefix(24) {
+            chips += "<button class=\"chip\" data-tag=\"\(e(tag))\">\(e(tag))<i>\(n)</i></button>"
+        }
+        // Untagged pages get a chip of their own rather than being hidden by
+        // the filter: a page nobody can find by subject is the thing this
+        // section is for showing, not for tidying away.
+        if untagged > 0 {
+            chips += "<button class=\"chip none\" data-tag=\"*none\">untagged"
+                + "<i>\(untagged)</i></button>"
+        }
+
+        var rows = ""
+        for (page, pair) in zip(newestFirst, zip(names, summaries)) {
+            let (stripped, summary) = pair
+            let name = stripped ?? summary.title ?? page.label
+            let blurb = summary.blurb.map { " data-blurb=\"\(e($0))\"" } ?? ""
+            let on = page.at > Date(timeIntervalSince1970: 0)
+                ? "<span class=\"on\">\(e(dayStamp.string(from: page.at)))</span>" : ""
+            let slug = (page.path as NSString).deletingLastPathComponent
+            let live = published[(slug as NSString).lastPathComponent].map {
+                "<a class=\"live\" href=\"\(e($0))\" target=\"_blank\" rel=\"noopener\">published</a>"
+            } ?? ""
+            // Padded with spaces so a substring test cannot match "hub" inside
+            // "hubs" — the filter is a string contains, and " hubs " is not
+            // " hub ".
+            let key = summary.tags.isEmpty ? "" : " " + summary.tags.map(e).joined(separator: " ") + " "
+            let shown = summary.tags.isEmpty
+                ? "<span class=\"tags none\">untagged</span>"
+                : "<span class=\"tags\">"
+                    + summary.tags.map { "<span>\(e($0))</span>" }.joined() + "</span>"
+            rows += "<li data-tags=\"\(key)\"><a class=\"page\" href=\"file://\(e(page.path))\""
+                + " target=\"_blank\" rel=\"noopener\"\(blurb)>\(e(name))</a>"
+                + "\(live)\(on)\(shown)</li>"
+        }
+
+        // No subline. It would count what the chip bar counts one line below
+        // and the list proves one line below that (ruled 16 Aug, when the old
+        // page list carried "2 pages" over a list of two pages). The counts
+        // that survive are the ones INSIDE the chips, which are not a tally of
+        // what you can see — they say how much is behind a filter you have not
+        // pressed yet, which is the only thing a reader cannot count for
+        // themselves.
+        return """
+            <h2>Everything here</h2>
+            <div class="tagbar">\(chips)</div>
+            <ul class="index">\(rows)</ul>
+            <p class="idxempty" hidden>Nothing filed under that subject.</p>
+            """
+    }
+
     /// The turn's pull request row: number, title, and state.
     ///
     /// State is here on purpose, reversing the first design's refusal. That
@@ -913,13 +999,10 @@ public enum HomeBase {
         said = saidBlock(unclaimed, e: e)
 
         var pagesByTurn: [Int: [ArtifactStore.Page]] = [:]
-        var shelved: [ArtifactStore.Page] = []
         for page in model.pages {
             let owner = turnOwner(of: page.at, in: ordered)
             if let owner, owner < fullTurns + lineTurns {
                 pagesByTurn[owner, default: []].append(page)
-            } else {
-                shelved.append(page)
             }
         }
 
@@ -1030,19 +1113,19 @@ public enum HomeBase {
                 + e(shown) + (topics.count > 14 ? "…" : ".") + "</div>"
         }
 
-        // ---- the shelf: pages no shown turn accounts for --------------------
+        // ---- the index: everything made, filed by subject --------------------
         //
-        // Everything a shown turn made is printed with that turn. What is left
-        // is older work, and older work belongs BELOW the stack, not above it
-        // (ruled 16 Aug). An agent whose every page is inline has no shelf at
-        // all, which is the healthy case.
-        var pages = ""
-        if !shelved.isEmpty {
-            pages = """
-                <h2>Earlier work</h2>
-                <ul class="pages">\(pageItems(shelved, e: e))</ul>
-                """
-        }
+        // This replaces the shelf, which listed only the leftovers — the pages
+        // no shown turn accounted for. That was the wrong cut. A reader hunting
+        // a report does not know or care whether its turn is still on the page,
+        // and the shelf's contents changed every time a turn compacted, so the
+        // same document moved between two lists for reasons invisible to them.
+        // One index of everything answers the question in one place; the turn
+        // blocks above keep showing their own work, because a made thing reads
+        // as a RESULT under the turn that made it and as an entry down here.
+        // Below the stack, not above it — older work never outranks the work
+        // you just did (ruled 16 Aug).
+        let pages = madeIndex(model.pages, e: e)
 
         let empty = ordered.isEmpty
             ? "<div class=\"digest\">Nothing summarized yet. This page fills in as the "
@@ -1210,6 +1293,48 @@ public enum HomeBase {
                 letter-spacing:.08em;text-transform:uppercase;color:var(--accent);
                 text-decoration:none;white-space:nowrap;margin-left:2px}
           .live:hover{text-decoration:underline}
+          /* THE INDEX. Sans throughout: this is a finding aid, a set of facts
+             about the documents, not the documents' own prose. The serif is
+             spent on the stack above, where the story is. */
+          .tagbar{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 6px}
+          /* A chip is a control, so it is a <button>: focusable, operable from
+             the keyboard, and announced as pressed. The old tag chips on the
+             top hub were <a> elements doing nothing, which read to a screen
+             reader as links that go nowhere. */
+          .chip{font-family:var(--sans);font-size:11.5px;letter-spacing:.05em;
+            background:transparent;color:var(--dim);border:1px solid var(--rule);
+            border-radius:999px;padding:3px 9px 3px 10px;cursor:pointer;
+            display:inline-flex;align-items:baseline;gap:6px;line-height:1.7}
+          .chip i{font-style:normal;font-size:10px;color:var(--faint);
+            font-variant-numeric:tabular-nums}
+          .chip:hover{border-color:var(--accent);color:var(--fg)}
+          .chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+          /* The pressed chip is the only place the index spends the accent —
+             one signal, so the eye finds the live filter with no hunting. */
+          .chip.on{border-color:var(--accent);color:var(--accent);font-weight:700}
+          .chip.on i{color:var(--accent)}
+          .chip.none{font-style:italic}
+          ul.index{list-style:none;padding:0;margin:10px 0 0}
+          ul.index li{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;
+            padding:11px 0;border-top:1px solid var(--rule)}
+          ul.index .page{color:var(--fg);text-decoration:none;font-size:16.5px;
+            font-family:var(--serif);line-height:1.4;flex:1 1 62%}
+          ul.index .page:hover{color:var(--accent)}
+          ul.index .on{font-family:var(--sans);font-size:12px;color:var(--faint);
+            white-space:nowrap;font-variant-numeric:tabular-nums}
+          /* The tags sit on their own line under the title at narrow widths and
+             at the end of the row when there is space: they are the least
+             important thing in the row and must never push the title around. */
+          ul.index .tags{flex:1 0 100%;display:flex;flex-wrap:wrap;gap:5px;
+            font-family:var(--sans);font-size:10.5px;letter-spacing:.06em;
+            text-transform:uppercase}
+          ul.index .tags span{color:var(--faint)}
+          ul.index .tags span::after{content:"\\2009·";margin-left:5px;color:var(--rule)}
+          ul.index .tags span:last-child::after{content:""}
+          ul.index .tags.none{color:var(--faint);opacity:.7;font-style:italic;
+            text-transform:none;letter-spacing:0}
+          p.idxempty{font-family:var(--sans);font-size:13px;color:var(--faint);
+            margin:16px 0 0}
           ol{list-style:none;padding:0;margin:0}
           ol li{display:flex;gap:20px;padding:16px 0;border-top:1px solid var(--rule)}
           .when{flex:0 0 84px;font-family:var(--sans);font-size:12.5px;line-height:1.9;
@@ -1288,6 +1413,42 @@ public enum HomeBase {
           });
           card.addEventListener('mouseleave', hide);
           document.addEventListener('keydown', function(e){ if(e.key === 'Escape') hide(); });
+        })();
+        // The index filter. No network, no state kept: pressing a chip hides
+        // the rows that do not carry that subject, and pressing it again shows
+        // everything. A page carrying three subjects is ONE row that three
+        // different chips reveal, which is why the grouping lives here and not
+        // in the markup.
+        (function(){
+          var bar = document.querySelector('.tagbar'); if(!bar) return;
+          var rows = [].slice.call(document.querySelectorAll('ul.index > li'));
+          var empty = document.querySelector('p.idxempty');
+          var NONE = '*none';
+          function apply(tag){
+            var shown = 0;
+            rows.forEach(function(li){
+              var keys = li.getAttribute('data-tags') || '';
+              var hit = !tag || (tag === NONE ? keys === ''
+                                              : keys.indexOf(' ' + tag + ' ') >= 0);
+              li.hidden = !hit; if (hit) shown++;
+            });
+            if (empty) empty.hidden = shown > 0;
+          }
+          bar.addEventListener('click', function(ev){
+            var chip = ev.target.closest('.chip'); if(!chip) return;
+            var already = chip.classList.contains('on') && chip.getAttribute('data-tag');
+            bar.querySelectorAll('.chip').forEach(function(c){
+              c.classList.remove('on'); c.setAttribute('aria-pressed', 'false');
+            });
+            // Pressing the live chip again is how a reader gets back to
+            // everything without hunting for the "everything" chip.
+            var pick = already ? bar.querySelector('.chip[data-tag=""]') : chip;
+            pick.classList.add('on'); pick.setAttribute('aria-pressed', 'true');
+            apply(pick.getAttribute('data-tag'));
+          });
+          bar.querySelectorAll('.chip').forEach(function(c){
+            c.setAttribute('aria-pressed', c.classList.contains('on') ? 'true' : 'false');
+          });
         })();
         </script></body></html>
         """

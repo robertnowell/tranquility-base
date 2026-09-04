@@ -167,21 +167,27 @@ final class HomeBaseTests: XCTestCase {
         XCTAssertTrue(made.lowerBound > done.lowerBound)
     }
 
-    /// A page whose turn has been compacted past the cap falls to the shelf,
-    /// and the shelf sits BELOW the stack — older work never outranks the work
-    /// you just did.
-    func testCompactedPagesFallToTheShelfBelow() {
+    /// A page whose turn has been compacted past the cap is still reachable,
+    /// from the index BELOW the stack — older work never outranks the work you
+    /// just did.
+    ///
+    /// This used to assert a shelf of leftovers ("Earlier work"). The shelf was
+    /// the wrong cut: which list a document sat in depended on whether its turn
+    /// was still on the page, so the same report moved between two lists for a
+    /// reason invisible to the reader. One index of everything replaced it.
+    func testCompactedPagesAreStillIndexedBelow() {
         // 20 turns: everything past the 3+6 cap is digest, so a page made
         // during turn 15 has no block to sit under.
         let turns = (1...20).reversed().map { turn($0) }   // newest first
         let ancient = ArtifactStore.Page(path: "/Users/x/Documents/old/index.html",
                                          at: turns[15].at)
         let html = HomeBase.render(model(turns: turns, pages: [ancient]))
-        let done = html.range(of: "What it has done")!
-        // "Earlier work", not "Earlier pages": the shelf holds pull requests
-        // too since 18 Aug.
-        let shelf = html.range(of: "Earlier work")!
-        XCTAssertTrue(shelf.lowerBound > done.lowerBound)
+        guard let done = html.range(of: "What it has done"),
+              let index = html.range(of: "Everything here") else {
+            return XCTFail("the stack and the index must both render")
+        }
+        XCTAssertTrue(index.lowerBound > done.lowerBound)
+        XCTAssertTrue(html.contains("ul class=\"index\""))
     }
 
     /// The page declares its brand; the directory only guesses. A session
@@ -475,5 +481,157 @@ extension HomeBaseTests {
     func testTheDataURIIsEscaped() {
         XCTAssertFalse(HomeBase.favicon().contains("fill:#"),
                        "an unescaped # silently produces no icon")
+    }
+}
+
+/// THE INDEX: everything the agent has made, filed by the subjects the pages
+/// declare about themselves.
+///
+/// The hub could answer "what just happened" and could not answer "where is
+/// that report" — 31 pages scattered under 9 turn blocks, most of them
+/// compacted past the cap and therefore invisible (measured 02 Sep). These
+/// tests hold the mechanism that fixed it: the page's own `intranet:tags`, one
+/// row per page, and a filter key that cannot match the wrong subject.
+final class MadeIndexTests: XCTestCase {
+    private func write(_ dir: String, _ name: String, tags: String?,
+                       summary: String? = nil, title: String = "A report") throws -> String {
+        let path = dir + "/" + name
+        let meta = (tags.map { "<meta name=\"intranet:tags\" content=\"\($0)\">\n" } ?? "")
+            + (summary.map { "<meta name=\"intranet:summary\" content=\"\($0)\">\n" } ?? "")
+        try """
+        <!doctype html><html><head><meta charset="utf-8">
+        \(meta)<title>\(title)</title></head>
+        <body><p>The first paragraph, which is not the summary.</p></body></html>
+        """.write(toFile: path, atomically: true, encoding: .utf8)
+        return path
+    }
+
+    private func sandbox() throws -> String {
+        // NOT /var/folders: ArtifactStore refuses paths under the temp tree, so
+        // fixtures there exercise the refusal path and go green saying nothing
+        // (found 02 Sep, after a suite passed against zero real reads).
+        let dir = NSHomeDirectory() + "/Library/Caches/tb-index-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// The tags come off the page, and each one becomes a chip carrying how
+    /// many pages sit behind it.
+    func testTheChipsCountTheSubjects() throws {
+        let dir = try sandbox()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let now = Date()
+        let pages = [
+            ArtifactStore.Page(path: try write(dir, "a.html", tags: "hubs, hooks"), at: now),
+            ArtifactStore.Page(path: try write(dir, "b.html", tags: "hubs"), at: now),
+        ]
+        let html = HomeBase.madeIndex(pages, e: HomeBase.escape, published: [:])
+        XCTAssertTrue(html.contains("data-tag=\"hubs\">hubs<i>2</i>"))
+        XCTAssertTrue(html.contains("data-tag=\"hooks\">hooks<i>1</i>"))
+        // Ordered by weight: the subject an agent has written most about first.
+        let hubs = html.range(of: "data-tag=\"hubs\"")!
+        let hooks = html.range(of: "data-tag=\"hooks\"")!
+        XCTAssertTrue(hubs.lowerBound < hooks.lowerBound)
+    }
+
+    /// A page carrying three subjects is ONE row, not three. Printing it once
+    /// per tag makes a repeat indistinguishable from a second document.
+    func testAPageAppearsOnceHoweverManySubjectsItCarries() throws {
+        let dir = try sandbox()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let page = ArtifactStore.Page(
+            path: try write(dir, "a.html", tags: "hubs, hooks, releases",
+                            title: "The only report"), at: Date())
+        let html = HomeBase.madeIndex([page], e: HomeBase.escape, published: [:])
+        XCTAssertEqual(html.components(separatedBy: "<li data-tags=").count - 1, 1)
+    }
+
+    /// The filter key is padded, so " hub " cannot match inside " hubs ". An
+    /// unpadded contains() is how a tag index quietly returns the wrong pages.
+    func testTheFilterKeyCannotMatchAProperPrefix() throws {
+        let dir = try sandbox()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let page = ArtifactStore.Page(path: try write(dir, "a.html", tags: "hubs"),
+                                      at: Date())
+        let html = HomeBase.madeIndex([page], e: HomeBase.escape, published: [:])
+        XCTAssertTrue(html.contains("data-tags=\" hubs \""))
+        XCTAssertFalse(html.contains("data-tags=\"hubs\""))
+    }
+
+    /// An untagged page is SHOWN as untagged, with a chip of its own. A page
+    /// nobody can find by subject is the thing this section exists to surface,
+    /// not the thing it should quietly drop.
+    func testUntaggedPagesGetTheirOwnChip() throws {
+        let dir = try sandbox()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let page = ArtifactStore.Page(path: try write(dir, "a.html", tags: nil),
+                                      at: Date())
+        let html = HomeBase.madeIndex([page], e: HomeBase.escape, published: [:])
+        XCTAssertTrue(html.contains("data-tag=\"*none\""))
+        XCTAssertTrue(html.contains("untagged"))
+        XCTAssertTrue(html.contains("data-tags=\"\""))
+    }
+
+    /// The page's own sentence about itself beats the first paragraph, which is
+    /// whatever the layout happened to put first.
+    func testTheDeclaredSummaryBeatsTheFirstParagraph() throws {
+        let dir = try sandbox()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = try write(dir, "a.html", tags: "hubs",
+                             summary: "What the page is actually about.")
+        let summary = ArtifactStore.summarize(path: path)
+        XCTAssertEqual(summary.blurb, "What the page is actually about.")
+        XCTAssertEqual(summary.tags, ["hubs"])
+    }
+
+    /// Both attribute orders occur in this archive — hand-written pages put
+    /// `name` first, pandoc puts `content` first — and a pattern that knew only
+    /// one of them returned nothing for a third of the pages.
+    func testEitherAttributeOrderIsRead() throws {
+        let dir = try sandbox()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = dir + "/reversed.html"
+        try """
+        <!doctype html><html><head><meta charset="utf-8">
+        <meta content="Hubs, Hooks" name="intranet:tags">
+        <title>Reversed</title></head><body></body></html>
+        """.write(toFile: path, atomically: true, encoding: .utf8)
+        // Lowercased on the way in, so "Hubs" and "hubs" are one subject.
+        XCTAssertEqual(ArtifactStore.summarize(path: path).tags, ["hubs", "hooks"])
+    }
+
+    /// No pages, no section. An agent that has made nothing gets a hub that
+    /// says nothing about it rather than an empty heading.
+    func testNoPagesMeansNoIndex() {
+        XCTAssertEqual(HomeBase.madeIndex([], e: HomeBase.escape, published: [:]), "")
+    }
+}
+
+extension MadeIndexTests {
+    /// The archive's own generated indexes are not this agent's work. A session
+    /// that merely rebuilt the hub of hubs had it listed on its own hub as a
+    /// report it wrote (seen 04 Sep, two rows, both untagged because no agent
+    /// ever wrote them).
+    func testGeneratedIndexesAreNotListedAsWork() throws {
+        let dir = try sandbox()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let generated = dir + "/index.html"
+        try """
+        <!-- research-hq-generated: index -->
+        <!doctype html><html><head><title>Agents</title></head><body></body></html>
+        """.write(toFile: generated, atomically: true, encoding: .utf8)
+        let mine = try write(dir, "mine.html", tags: "hubs", title: "A real report")
+        let now = Date()
+        let html = HomeBase.madeIndex(
+            [ArtifactStore.Page(path: generated, at: now),
+             ArtifactStore.Page(path: mine, at: now)],
+            e: HomeBase.escape, published: [:])
+        XCTAssertTrue(ArtifactStore.isGeneratedIndex(path: generated))
+        XCTAssertFalse(ArtifactStore.isGeneratedIndex(path: mine))
+        XCTAssertEqual(html.components(separatedBy: "<li data-tags=").count - 1, 1)
+        XCTAssertFalse(html.contains(">Agents<"))
+        // Nothing but generated indexes means no section at all.
+        XCTAssertEqual(HomeBase.madeIndex([ArtifactStore.Page(path: generated, at: now)],
+                                          e: HomeBase.escape, published: [:]), "")
     }
 }
