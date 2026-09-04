@@ -84,7 +84,24 @@ else
     echo "→ restoring $gone reaped file(s) in $CLEAN_WORKTREE" >&2
     git -C "$CLEAN_WORKTREE" checkout -- .
   fi
-  git -C "$CLEAN_WORKTREE" fetch -q origin
+  # A FETCH THAT CANNOT HANG FOREVER.
+  #
+  # 03 Sep: this line hung for 43 minutes on `ssh` to github.com. relaunch.sh
+  # holds a lockfile while it runs and refuses every other deploy, so one stalled
+  # network call froze deploying on the whole machine — silently, because a
+  # hanging fetch prints nothing. Two bounds, because either alone is not enough:
+  # ssh gives up on a dead connection, and the whole fetch gives up on a live one
+  # that has stopped making progress.
+  #
+  # A failed fetch is not fatal. The worktree still has whatever it fetched last,
+  # and the checkout below either finds the target or fails loudly, which is the
+  # outcome we want over waiting forever.
+  if ! GIT_SSH_COMMAND="ssh -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3" \
+       git -C "$CLEAN_WORKTREE" \
+           -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 \
+           fetch -q origin; then
+    echo "→ fetch failed or timed out; building from what the worktree already has" >&2
+  fi
   git -C "$CLEAN_WORKTREE" checkout -q --detach "$TARGET"
 fi
 
