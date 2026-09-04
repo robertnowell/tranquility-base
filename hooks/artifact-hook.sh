@@ -110,13 +110,27 @@ except Exception:
     sys.exit(0)
 session = p.get("session_id") or ""      # who ran the tool: the full id
 owner = session                          # who the page belongs to
-def _writes_a_file(cmd):
-    """Does this command WRITE, or merely mention a path?
+def _written_paths(cmd):
+    """Paths this command actually WRITES.
 
-    `grep`, `open` and `ls` name pages all day. Reading is not authorship — the
-    same distinction the Swift side draws, kept coarse on purpose.
+    The earlier version asked two questions separately — does this look like a
+    write, and does it contain a page path — and answered yes to a command that
+    merely TALKED about writing. `echo "x"` plus `2>/dev/null` satisfied the
+    first; a page path anywhere in the text satisfied the second. On 03 Sep it
+    told this session to move a page it had only grepped, and wrote a phantom
+    record for a file that did not exist.
+
+    One question instead: is the path the TARGET of a redirect or a copy?
     """
-    return bool(re.search(r"(^|[|;&]|\s)(cat|tee|cp|mv|printf|echo)\b[^|;&]*>", cmd))
+    pat = r"(?:~|/Users/[^/\s'\"]+)/Documents/agents/[0-9a-f]{8}/[^\s'\"<>|;)]+\.html"
+    out = re.findall(r">>?\s*['\"]?(" + pat + r")", cmd)
+    out += re.findall(r"\b(?:cp|mv|install)\s+[^|;&]*?\s(" + pat + r")\b", cmd)
+    out += re.findall(r"\btee\s+(?:-\S+\s+)*['\"]?(" + pat + r")", cmd)
+    # AND THE FILE HAS TO BE THERE. A command that merely quotes a write —
+    # test data, a runbook, a diff — names a path that was never created, and
+    # recording one produced a phantom entry and a message claiming a footer
+    # had been stamped into a file that does not exist (03 Sep).
+    return [f for f in out if os.path.exists(os.path.expanduser(f))]
 
 
 # THE COMMAND NAMES THE FILE. Read it before guessing anything.
@@ -137,9 +151,8 @@ def _writes_a_file(cmd):
 path = (p.get("tool_input") or {}).get("file_path") or ""
 if not path:
     _cmd = (p.get("tool_input") or {}).get("command") or ""
-    if isinstance(_cmd, str) and _writes_a_file(_cmd):
-        _found = re.findall(r"(?:~|/Users/[^/\s'\"]+)/Documents/agents/"
-                            r"[0-9a-f]{8}/[^\s'\"<>|;)]+\.html", _cmd)
+    if isinstance(_cmd, str):
+        _found = _written_paths(_cmd)
         if _found:
             path = os.path.expanduser(_found[-1])
 
