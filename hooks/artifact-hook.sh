@@ -101,7 +101,7 @@ with open(os.path.join(root, session), "a") as fh:
         fh.write("%d\t%s\n" % (stamp, url))
 PY
 
-read -r OWNER SESSION MISFILED FILE <<EOF
+read -r OWNER SESSION MISFILED MODE FILE <<EOF
 $(python3 - "$PAYLOAD" <<'PY' 2>/dev/null || true
 import json, os, re, sys
 try:
@@ -110,13 +110,27 @@ except Exception:
     sys.exit(0)
 session = p.get("session_id") or ""      # who ran the tool: the full id
 owner = session                          # who the page belongs to
-def _writes_a_file(cmd):
-    """Does this command WRITE, or merely mention a path?
+def _written_paths(cmd):
+    """Paths this command actually WRITES.
 
-    `grep`, `open` and `ls` name pages all day. Reading is not authorship — the
-    same distinction the Swift side draws, kept coarse on purpose.
+    The earlier version asked two questions separately — does this look like a
+    write, and does it contain a page path — and answered yes to a command that
+    merely TALKED about writing. `echo "x"` plus `2>/dev/null` satisfied the
+    first; a page path anywhere in the text satisfied the second. On 03 Sep it
+    told this session to move a page it had only grepped, and wrote a phantom
+    record for a file that did not exist.
+
+    One question instead: is the path the TARGET of a redirect or a copy?
     """
-    return bool(re.search(r"(^|[|;&]|\s)(cat|tee|cp|mv|printf|echo)\b[^|;&]*>", cmd))
+    pat = r"(?:~|/Users/[^/\s'\"]+)/Documents/agents/[0-9a-f]{8}/[^\s'\"<>|;)]+\.html"
+    out = re.findall(r">>?\s*['\"]?(" + pat + r")", cmd)
+    out += re.findall(r"\b(?:cp|mv|install)\s+[^|;&]*?\s(" + pat + r")\b", cmd)
+    out += re.findall(r"\btee\s+(?:-\S+\s+)*['\"]?(" + pat + r")", cmd)
+    # AND THE FILE HAS TO BE THERE. A command that merely quotes a write —
+    # test data, a runbook, a diff — names a path that was never created, and
+    # recording one produced a phantom entry and a message claiming a footer
+    # had been stamped into a file that does not exist (03 Sep).
+    return [f for f in out if os.path.exists(os.path.expanduser(f))]
 
 
 # THE COMMAND NAMES THE FILE. Read it before guessing anything.
@@ -134,12 +148,31 @@ def _writes_a_file(cmd):
 # it blamed one session for a page another had just written into its own
 # directory, stamped the wrong id into it, and recorded it twice. Evidence, or
 # nothing.
+# ADVISORY, NEVER AUTHORITATIVE.
+#
+# A path the TOOL declared (`file_path`) is a fact. A path this hook read out of
+# a shell command is a reading, and six different readings have been wrong in six
+# different ways since 16 Aug — one page on four hubs, reports recorded nowhere,
+# Codex pages unstamped, the wrong author on two hubs, a session blamed for a
+# page it grepped, a record for a file that never existed. Narrowing the reading
+# again would buy another week.
+#
+# So a read path is trusted for exactly one thing: telling the writer something.
+# It may raise the misfile warning and the tag request. It may NOT record or
+# stamp unless the page sits in the writer's OWN directory — where the path
+# itself names the owner, and being wrong about which file cannot attribute
+# anything to the wrong agent.
+#
+# The cost is nil. Of 3,468 records ever written, 3,343 are in the agent tree
+# (96.4%); over the last week, 529 of 552. The turn-end pass walks that tree and
+# finds every file in it, whatever wrote it and however — so nothing here is
+# load-bearing for attribution any more.
 path = (p.get("tool_input") or {}).get("file_path") or ""
+declared = bool(path)
 if not path:
     _cmd = (p.get("tool_input") or {}).get("command") or ""
-    if isinstance(_cmd, str) and _writes_a_file(_cmd):
-        _found = re.findall(r"(?:~|/Users/[^/\s'\"]+)/Documents/agents/"
-                            r"[0-9a-f]{8}/[^\s'\"<>|;)]+\.html", _cmd)
+    if isinstance(_cmd, str):
+        _found = _written_paths(_cmd)
         if _found:
             path = os.path.expanduser(_found[-1])
 
@@ -210,6 +243,7 @@ def _agent_dir_of(p):
 
 
 misfiled = ""
+advisory_only = False
 if path and "/Documents/agents/" in path and not _is_hub(path):
     parts = path.split(os.sep)
     if "agents" in parts:
@@ -349,13 +383,16 @@ if not path:
     else:
         path = ""
 
-# The fallback can land on a page in somebody else's directory too, and the
-# ownership question is the same wherever the path came from.
+# The ownership question is the same wherever the path came from.
 if path and "/Documents/agents/" in path and not _is_hub(path) and session:
     _dir = _agent_dir_of(path)
     if _dir and _dir != session.split("-")[0]:
         misfiled = _dir
         owner = session.split("-")[0]
+        # Somebody else's directory, and we only READ that this was written:
+        # say so, record nothing. The record would be the guess doing damage.
+        if not declared:
+            advisory_only = True
 
 # Only pages. A .md report becomes a page later, through a different tool, and
 # that write is the one that matters.
@@ -377,7 +414,7 @@ if not all(c in "0123456789abcdefABCDEF-" for c in owner + session) or len(owner
 # exact lookup keyed on the full id, so a footer carrying the 8-character slug
 # says "no agent" for a session that is running in the foreground. Collapsing
 # both facts into one variable is what broke the button on 107 pages.
-print(owner, session, misfiled or "-", path)
+print(owner, session, misfiled or "-", "advisory" if advisory_only else "record", path)
 PY
 )
 EOF
@@ -483,7 +520,12 @@ mkdir -p "$ARTIFACTS" 2>/dev/null || exit 0
 #    path carries, and ArtifactStore.history reads both the slug file and the
 #    full-id file for a session, so a slug-keyed record is found by the hub that
 #    owns it. Only the deep link needs the full id, and it gets it separately.
-printf '%s\t%s\n' "$(($(date +%s) * 1000))" "$FILE" >> "$ARTIFACTS/$OWNER" 2>/dev/null
+# In advisory mode nothing is written down: the path was READ out of a command,
+# it is in another agent's directory, and a record there is the guess doing the
+# damage. The message below still tells the writer to move it.
+if [ "$MODE" != "advisory" ]; then
+  printf '%s\t%s\n' "$(($(date +%s) * 1000))" "$FILE" >> "$ARTIFACTS/$OWNER" 2>/dev/null
+fi
 
 # 2. OFFER. The footer's name is the session TITLE alone — the string Claude
 #    Code puts in the terminal tab, the identity the grid shows, the one the
@@ -571,6 +613,7 @@ case "$FILE" in
 esac
 [ "$FILE" = "$HOME/Documents/agents/$SHORT/index.html" ] && META=0
 
+[ "$MODE" = "advisory" ] && STAMP=0 && META=0
 python3 - "$FILE" "$LINK_SESSION" "$SHORT" "$TODAY" "$STAMP" "$TITLE" "$META" "$MISFILED" <<'PY' 2>/dev/null || true
 import html as htmllib
 import json, re, sys
@@ -721,22 +764,35 @@ def _tag_ask(path):
             page = fh.read(60000)
     except Exception:
         return ""
-    want = [f for f in ("tags", "summary")
+    # SESSION FIRST, because it is the one field that decides ownership.
+    #
+    # Everything else on this page can be inferred badly and corrected later; who
+    # wrote it cannot. It is stamped after the fact today (87% coverage) and
+    # stamping is an inference — the page is in a directory, so the directory's
+    # owner is assumed. Asking the writer to DECLARE it turns the last inference
+    # in the chain into a statement, the same move that took tags from 8% to
+    # 100% in a day.
+    want = [f for f in ("session", "tags", "summary")
             if not re.search(r'<meta\s+name="intranet:%s"' % f, page)]
     if not want:
         return ""
     vocab = _vocab()
     ask = (
-        "\n\nTAG IT. This page declares no intranet:{missing}, so in the index it is "
-        "findable only by whoever remembers the day it was written. Add these lines to "
+        "\n\nDECLARE IT. This page declares no intranet:{missing}. Add these lines to "
         "the head of {path} now, before you finish the turn:\n\n"
+        '  <meta name="intranet:session" content="{short}">\n'
         '  <meta name="intranet:tags" content="a, b, c">\n'
         '  <meta name="intranet:summary" content="one sentence saying what this page '
         'concluded">\n\n'
+        "intranet:session is YOUR agent id and it is what makes this page yours: "
+        "without it the archive falls back to assuming the directory's owner wrote "
+        "it, which is how pages have ended up on the wrong hub. The other two are "
+        "how it is found later — without tags it is findable only by whoever "
+        "remembers the day it was written.\n\n"
         "Two to four tags, lowercase kebab-case, naming the SUBJECT — never the brand "
         "and never the document type, both of which are already their own fields. "
         "REUSE a term the archive has rather than coining a synonym for it."
-    ).format(missing=" or intranet:".join(want), path=path)
+    ).format(missing=" or intranet:".join(want), path=path, short=short)
     if vocab:
         ask += (" These are the ones in use, most used first:\n  "
                 + ", ".join(vocab)
