@@ -249,6 +249,20 @@ extension AppDelegate {
         // Disabled while a check is already running, rather than beeping. The
         // scheduled 24-hour check is the normal path; this row exists for the
         // moment someone has been told a fix is out and wants it now.
+        // WHICH BUILD IS THIS. Logged at every launch since 27 Aug, and until
+        // now that was the only place it existed: to answer "did the fix reach
+        // you" somebody had to open a support person's app.log mid-call. The
+        // row is disabled on purpose — it is a fact, not an action — and it
+        // sits directly above Check for Updates because the two questions are
+        // asked in that order.
+        let info = Bundle.main.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        let stamp = NSMenuItem(title: "Version \(short) (\(build))",
+                               action: nil, keyEquivalent: "")
+        stamp.isEnabled = false
+        menu.addItem(stamp)
+
         let update = NSMenuItem(title: "Check for Updates\u{2026}",
                                 action: #selector(Updates.checkForUpdates(_:)), keyEquivalent: "")
         update.target = updates

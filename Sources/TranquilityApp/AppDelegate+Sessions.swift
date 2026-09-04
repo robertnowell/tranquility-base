@@ -1636,6 +1636,7 @@ extension AppDelegate {
             // auto-answered when it needs a human. If nothing registers, say so
             // — a walked-away launch must not be a silently stillborn
             // investigation.
+            let launchedAt = Date()
             let sessionIdOrNil = isCodex
                 ? LaunchGreeting.awaitCodexRegistration(excluding: before)
                 // The pane goes in so the wait can end the moment the screen
@@ -1718,7 +1719,14 @@ extension AppDelegate {
                 // same, and that identical outcome is what makes dropping
                 // the question safe rather than merely simpler.
                 let screen = SessionLauncher.paneTail(tty: tty)
-                Permissions.log("launcher: nothing registered in \(dir) after 30s"
+                // The ELAPSED time, not the budget. It read "after 30s" for
+                // one evening, which was already false the moment the wait
+                // learned to end early: the first run after that fix reported
+                // "after 30s" over a verdict reached in 14.6. A line that
+                // names its expectation rather than what happened is the
+                // exact shape this whole day was spent unpicking.
+                let waited = Int(Date().timeIntervalSince(launchedAt).rounded())
+                Permissions.log("launcher: nothing registered in \(dir) after \(waited)s"
                     + (started == nil ? " and no process is alive on \(tty)"
                                       : " though a process is alive on \(tty)")
                     + ". Opening a window on it. Its screen says: "
