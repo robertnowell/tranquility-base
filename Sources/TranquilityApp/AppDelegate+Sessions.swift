@@ -1638,7 +1638,14 @@ extension AppDelegate {
             // investigation.
             let sessionIdOrNil = isCodex
                 ? LaunchGreeting.awaitCodexRegistration(excluding: before)
-                : LaunchGreeting.awaitRegistration(directory: dir, excluding: before)
+                // The pane goes in so the wait can end the moment the screen
+                // stops moving, rather than paying the whole thirty seconds
+                // for a launch that is sitting on a dialog. See
+                // `awaitRegistration` for the floor that keeps a healthy but
+                // slow launch from being called stuck.
+                : LaunchGreeting.awaitRegistration(
+                    directory: dir, excluding: before,
+                    screen: { SessionLauncher.paneTail(tty: tty) })
             guard let sessionId = sessionIdOrNil else {
                 launch?.abandon()
                 // Did it actually fail, or did it just not have anything to

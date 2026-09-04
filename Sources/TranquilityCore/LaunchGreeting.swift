@@ -152,10 +152,16 @@ public enum LaunchGreeting {
         agents: any ClaudeAgentsReading = ClaudeAgentsCLI(),
         timeout: TimeInterval = 30,
         interval: TimeInterval = 1,
+        screen: (() -> String?)? = nil,
+        quietFloor: TimeInterval = 12,
+        stillThreshold: Int = 3,
         now: () -> Date = Date.init,
         sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
     ) -> String? {
-        let deadline = now().addingTimeInterval(timeout)
+        let started = now()
+        let deadline = started.addingTimeInterval(timeout)
+        var lastScreen: String?
+        var unchanged = 0
         while now() < deadline {
             // nil means the probe could not answer, which is not the same as
             // "not registered yet" — keep waiting rather than concluding.
@@ -164,6 +170,44 @@ public enum LaunchGreeting {
                    $0.cwd == directory && !known.contains($0.sessionId)
                }) {
                 return fresh.sessionId
+            }
+            // A pane that has STOPPED does not need the rest of the budget.
+            //
+            // Measured 3 Sep on this machine: a healthy launch registers in
+            // about seven seconds, and the full timeout is thirty. That gap
+            // used to be paid in full by every blocked launch, because the
+            // only early exit here was success. Robert, on watching it:
+            // "why is it 30 … 15 seems reasonable".
+            //
+            // The fast detector already existed — `TrustPromptWatcher`'s
+            // `stuckThreshold`, which notices that a TUI has stopped
+            // redrawing — but it never fires for this harness, because the
+            // settled-banner needle claims victory first. So the same idea
+            // lives here too, where it does not depend on recognising
+            // anything: a screen that has not changed, while nothing has
+            // registered, is a screen waiting on a human.
+            //
+            // The floor is the safety. Below it nothing concludes, however
+            // still the pane looks, so a healthy launch that has drawn its
+            // composer and is a beat behind on registering is never called
+            // stuck. Above it, three identical reads end the wait. Blocked
+            // launches surface at roughly the floor; healthy ones are
+            // untouched, because they have already returned.
+            //
+            // Costs nothing when `screen` is nil, which is every caller that
+            // has no pane to read (tests, and the Codex twin below).
+            if let screen, now().timeIntervalSince(started) >= quietFloor {
+                let text = screen()
+                if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if text == lastScreen { unchanged += 1 } else { unchanged = 1 }
+                    lastScreen = text
+                    if unchanged >= stillThreshold { return nil }
+                } else {
+                    // Unreadable is not evidence of anything. Do not let a
+                    // failed capture accumulate toward a verdict.
+                    lastScreen = nil
+                    unchanged = 0
+                }
             }
             sleep(interval)
         }
