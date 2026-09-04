@@ -759,9 +759,20 @@ public enum HomeBase {
                 "<p class=\"said\">\(e(t.prose))</p>"
             return "<li>\(ask)\(said)</li>"
         }.joined()
+        // THE LIVE TURN IS THE ONLY THING HERE STILL MOVING, and it was the
+        // smallest thing on the page: a collapsed grey line between the header
+        // and the first section heading. What the agent was asked a minute ago
+        // is the most useful sentence on a hub, so it is shown; the rest of the
+        // words stay one click away.
+        let asked = turns.last?.prompt.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let lead = asked.isEmpty ? "" :
+            "<p class=\"now\"><span>Running now</span>"
+            + e(asked.count > 240 ? String(asked.prefix(239)) + "\u{2026}" : asked)
+            + "</p>"
         return """
+        \(lead)
         <details class="transcript">
-        <summary>Running now &middot; \(turns.count) turn\(turns.count == 1 ? "" : "s")</summary>
+        <summary>What was said &middot; \(turns.count) turn\(turns.count == 1 ? "" : "s") with no summary yet</summary>
         <p class="sub">Said since the last summary was written. Straight from the \
         transcript, newest first.</p>
         <ol class="said">\(items)</ol>
@@ -824,8 +835,9 @@ public enum HomeBase {
             // seen (ruled 16 Aug). It is a SPOKEN name, minted to be said out
             // loud once in an announcement, and on a page it read as a third
             // identity competing with the two real ones.
-            var byline = "\(e(model.title ?? "Untitled session")) · session "
-                + "\(e(String(model.sessionId.prefix(8))))"
+            // The title is the NAMEPLATE now, not a line of small print, so the
+            // byline stops repeating it.
+            var byline = "session \(e(String(model.sessionId.prefix(8))))"
             if let dir = (model.cwd as NSString?)?.lastPathComponent, !dir.isEmpty {
                 byline += " · in \(e(dir))"
             }
@@ -842,7 +854,8 @@ public enum HomeBase {
             head = """
                 <header class="plate"><span>\(e(plate))</span><span>\(e(dateline))</span></header>
                 <p class="kicker">Agent</p>
-                <h1>\(e(n.headline ?? n.topic))</h1>
+                <h1>\(e(name))</h1>
+                <p class="latest">\(e(n.headline ?? n.topic))</p>
                 <p class="deck">\(deck)</p>
                 <p class="byline">\(byline)</p>
                 """
@@ -1119,6 +1132,21 @@ public enum HomeBase {
                   text-transform:uppercase;color:var(--accent);margin:34px 0 10px}
           h1{font-size:44px;line-height:1.06;letter-spacing:-.022em;font-weight:600;
              margin:0 0 18px;max-width:17ch;color:var(--brand)}
+          /* WHAT THIS PAGE IS ABOUT, BEFORE WHAT JUST HAPPENED. The h1 was
+             the newest turn's headline, so a hub was titled after its last
+             event while the agent's own name sat in 11px grey three lines
+             down — you learned what happened before you learned whose page you
+             were on (03 Sep). The headline keeps its place, one step below the
+             name. */
+          .latest{font-family:var(--serif);font-size:21px;line-height:1.32;
+            color:var(--fg);margin:2px 0 14px;font-weight:600;max-width:56ch;
+            letter-spacing:-.005em}
+          /* The live turn, given the weight of the only thing still moving. */
+          .now{font-size:15px;line-height:1.55;color:var(--fg);margin:22px 0 4px;
+            padding-left:13px;border-left:2px solid var(--accent);max-width:60ch}
+          .now span{display:block;font-family:var(--sans);font-size:10.5px;
+            letter-spacing:.1em;text-transform:uppercase;color:var(--accent);
+            margin-bottom:4px}
           .deck{font-size:20px;line-height:1.5;color:var(--dim);margin:0 0 22px;max-width:60ch}
           .byline{font-family:var(--sans);font-size:12.5px;line-height:1.55;color:var(--faint);
                   letter-spacing:.02em;

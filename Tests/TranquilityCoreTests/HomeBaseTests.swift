@@ -39,12 +39,16 @@ final class HomeBaseTests: XCTestCase {
                                     headline: "Input Monitoring is required after all",
                                     deck: "Accessibility alone fails. Cleanup is irreversible.")
         let html = HomeBase.render(model(turns: [written, turn(1)]))
-        XCTAssertTrue(html.contains("<h1>Input Monitoring is required after all</h1>"))
+        // The h1 names the AGENT; the newest headline sits directly under it.
+        // Titling a hub after its last event meant you learned what happened
+        // before you learned whose page you were on (03 Sep).
+        XCTAssertTrue(html.contains("<p class=\"latest\">Input Monitoring is required after all</p>"))
+        XCTAssertFalse(html.contains("<h1>Input Monitoring is required after all</h1>"))
         XCTAssertTrue(html.contains("Accessibility alone fails. Cleanup is irreversible."))
         // The older, unwritten turn keeps its derived row header.
         XCTAssertTrue(html.contains("<h3>the poller</h3>"))
         let bare = HomeBase.render(model(turns: [turn(1)]))
-        XCTAssertTrue(bare.contains("<h1>the poller</h1>"))
+        XCTAssertTrue(bare.contains("<p class=\"latest\">the poller</p>"))
     }
 
     /// The deck joins two stored sentences; the join supplies the full stop
@@ -372,7 +376,9 @@ final class HomeBaseTests: XCTestCase {
     func testAnUntitledSessionStillNamesItself() {
         let html = HomeBase.render(model(turns: [turn(1)], title: nil))
         XCTAssertTrue(html.contains("session 489b4804"))
-        XCTAssertTrue(html.contains("Untitled session"))
+        // The nameplate falls back to the id rather than to the word
+        // "Untitled": a hub with no name should still say whose it is.
+        XCTAssertTrue(html.contains("<h1>Agent 489b4804</h1>"))
     }
 
     /// The seam check catches what unit tests structurally cannot: a page
