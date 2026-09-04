@@ -1372,30 +1372,46 @@ extension AppDelegate {
                         // with the answer on it, and this branch used to log
                         // only the absence — the shape that cost an afternoon
                         // on the launch path.
-                        let revivedState = SessionLauncher.paneState(
-                            tty: revivedTty, adapter: launch.adapter)
-                        if case .stopped(let screen) = revivedState {
-                            Permissions.log("revive: \(sessionId.prefix(8)) launched but never "
-                                + "registered — its screen says: \(screen). Opening a window.")
-                            SessionLauncher.showPane(
-                                tty: revivedTty,
-                                why: "the revive stopped on something only you can answer")
-                            self.hud.showResult(
-                                "\(name) is waiting for you. I opened its terminal. It says: "
-                                + screen)
-                            return
-                        }
+                        // Unconditional, for the same reason the launch path
+                        // is: `paneState` asked whether the harness's banner
+                        // was up, and for Claude Code that question always
+                        // answered yes — `settledBannerNeedle` is the word
+                        // "Claude", which every dialog it can stop on
+                        // contains. So `.stopped` was unreachable here too,
+                        // and a revive that landed on the Bypass Permissions
+                        // gate fell through to the clipboard branch below and
+                        // told the reader to paste a command, over a pane
+                        // that was one keypress from running.
+                        //
+                        // Registration already failed. That is the finding.
+                        // Show the pane and quote it, whatever is on it.
+                        let screen = SessionLauncher.paneTail(tty: revivedTty)
                         Permissions.log("revive: \(sessionId.prefix(8)) launched but never "
-                            + "registered (its banner is up) — reporting it rather than "
-                            + "claiming success")
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(
-                            SessionLauncher.manualRevival(
-                                sessionId: sessionId, directory: command.cwd, launch: launch),
-                            forType: .string)
+                            + "registered. Opening a window. Its screen says: "
+                            + (screen.isEmpty ? "(nothing readable)" : screen))
+                        let opened = SessionLauncher.showPane(
+                            tty: revivedTty,
+                            why: "the revive never registered, and its screen is the only "
+                                + "thing that knows why")
+                        // The clipboard rescue survives, but as the FALLBACK
+                        // it always should have been: it is what you need when
+                        // no window could be opened, not the first thing a
+                        // reader is handed while a live pane sits there with
+                        // the answer on it.
+                        if !opened {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(
+                                SessionLauncher.manualRevival(
+                                    sessionId: sessionId, directory: command.cwd, launch: launch),
+                                forType: .string)
+                        }
                         self.hud.showResult(
-                            "\(name) started but hasn't come back yet. Copied the manual "
-                            + "revival command to your clipboard. Paste it in a terminal.")
+                            "\(name) is waiting for you"
+                            + (screen.isEmpty ? "" : ". It says: " + screen)
+                            + (opened
+                               ? ". I opened its terminal."
+                               : ". I couldn't open its terminal, so the manual revival "
+                                 + "command is on your clipboard."))
                     }
                 }
             case .failure(let error):
@@ -1670,57 +1686,49 @@ extension AppDelegate {
                 // harness's own banner is up; anything else means it stopped on
                 // something, and a launch that has stopped is not a background
                 // act any more.
-                let state = started == nil
-                    ? SessionLauncher.PaneState.unknown
-                    : SessionLauncher.paneState(tty: tty, adapter: adapter)
-                if case .stopped(let screen) = state {
-                    Permissions.log("launcher: \(tty) is alive but never started — its screen "
-                        + "says: \(screen). Opening a window on it.")
-                    let opened = SessionLauncher.showPane(
-                        tty: tty, why: "the launch stopped on something only you can answer")
-                    // The same amber card the watcher paints at ~8s, on the
-                    // slower path that catches what the watcher's stability
-                    // test cannot: a screen that never stops changing (a
-                    // spinner, a countdown) and still never starts. One face
-                    // for one situation, whichever clock finds it.
-                    await MainActor.run { [weak self] in
-                        self?.hud.showLaunchQuestion(screen, windowOpened: opened)
-                    }
-                    return
-                }
-                if started != nil {
-                    Permissions.log("launcher: nothing registered in \(dir) after 30s, but the "
-                        + "process is alive on \(tty) and its banner is up — reporting it "
-                        + "as started, not failed")
-                    await MainActor.run { [weak self] in
-                        // Settle FIRST. Showing a result over a card that is
-                        // still waiting leaves the spinner up underneath it,
-                        // which is exactly what this branch shipped: an agent
-                        // that started fine, a message nobody could see, and
-                        // "Starting agent…" forever.
-                        self?.hud.settleLaunchCard()
-                        self?.hud.showResult(
-                            "Started in \((dir as NSString).lastPathComponent). It'll appear on the grid "
-                            + "once it starts working.")
-                    }
-                    return
-                }
-                Permissions.log("launcher: no session registered in \(dir) after 30s")
-                // showResult, not showIdleGrid(note:) — found live, 26 Aug,
-                // chasing a Codex launch that failed in total silence: the
-                // greeting card is on stage for the whole 30s wait (that's
-                // the point of "launch is a turn"), so canSurfaceAmbiently
-                // (idle/hidden only) was false the entire time and the note
-                // never painted, on this or any other launch that reaches
-                // this branch. showResult already has a case for exactly
-                // this state (`greetingAwaitsItsSession`, its own doc
-                // comment, 19 Aug) — it joins the message onto the card
-                // that's already up instead of requiring a quiet panel.
+                // Nothing registered inside the budget. That IS the
+                // finding, and nothing on the screen is allowed to overrule
+                // it any more.
+                //
+                // This used to ask `paneState` first and, if the pane looked
+                // "started", announce a launch. For Claude Code that question
+                // has only ever had one answer: `settledBannerNeedle` is the
+                // word "Claude", and every screen that harness can block on
+                // contains it — the theme picker renders `Hello, Claude!` in
+                // its syntax sample, the sign-in screen says "Claude account",
+                // the trust dialog says "Claude Code may read files in this
+                // folder". So `.stopped` was unreachable, the branch below it
+                // shipped, and a customer watched an agent sit on a dialog
+                // under a card reading "It'll appear on the grid once it
+                // starts working" (Kristen, 3 Sep, three launches, none of
+                // which ever registered).
+                //
+                // A live process is not a started agent. It never was. The
+                // registry is the fact; the screen is the evidence we hand
+                // the human, never the thing we reason from. Whatever is on
+                // it — a dialog we know, one we do not, or a version of this
+                // harness nobody here has seen — the correct action is the
+                // same, and that identical outcome is what makes dropping
+                // the question safe rather than merely simpler.
+                let screen = SessionLauncher.paneTail(tty: tty)
+                Permissions.log("launcher: nothing registered in \(dir) after 30s"
+                    + (started == nil ? " and no process is alive on \(tty)"
+                                      : " though a process is alive on \(tty)")
+                    + ". Opening a window on it. Its screen says: "
+                    + (screen.isEmpty ? "(nothing readable)" : screen))
+                let opened = SessionLauncher.showPane(
+                    tty: tty, why: "it never registered, and its screen is the only thing "
+                        + "that knows why")
                 await MainActor.run { [weak self] in
-                    self?.hud.markLaunchFailed()
-                    self?.hud.showResult(
-                        "Couldn't confirm the new agent started. Attach a "
-                        + "terminal to check, or try again.")
+                    // settleLaunchCard first, for the reason the old branch
+                    // documented: a result painted over a still-waiting card
+                    // leaves the spinner underneath it.
+                    self?.hud.settleLaunchCard()
+                    self?.hud.showLaunchQuestion(
+                        screen.isEmpty
+                            ? "It never started, and its screen could not be read."
+                            : screen,
+                        windowOpened: opened)
                 }
                 return
             }

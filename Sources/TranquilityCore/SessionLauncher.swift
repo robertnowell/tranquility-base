@@ -175,6 +175,22 @@ public enum SessionLauncher {
         let name = "tb-" + String(UUID().uuidString.prefix(8)).lowercased()
         let path = adapter.pathCandidates.joined(separator: ":")
 
+        // Answer the trust dialog by writing the record, not by pressing the
+        // screen. Before the pane exists, so the dialog never renders and
+        // there is nothing for `watchForTrustPrompt` to find, count rows on,
+        // or get wrong. See `ClaudeTrust` for why this is the sanctioned
+        // form of a consent TB was already giving, and for the race it
+        // deliberately keeps narrow.
+        //
+        // Claude Code only: the key is that harness's, and Codex keeps its
+        // own arrangements in ~/.codex. `trust` is a no-op when the folder is
+        // already trusted, which is every launch after the first.
+        if adapter.id == ClaudeCodeAdapter().id,
+           ClaudeTrust.trust(directory: directory) {
+            Self.trace?("newSession: recorded trust for \(directory) in ~/.claude.json "
+                + "before launching — user-commanded launch")
+        }
+
         // `-P -F` prints the new pane's tty as part of THIS command's own
         // output, atomically with creation — not a separate query run
         // afterward. That second query used to be a `display-message` call
@@ -1180,6 +1196,29 @@ public enum SessionLauncher {
         case stopped(screen: String)
         /// No resolvable pane, or nothing readable in it.
         case unknown
+    }
+
+    /// Whatever the pane is showing, with no verdict attached.
+    ///
+    /// `paneState` answers "did this start?", and for Claude Code it always
+    /// answers yes, because `settledBannerNeedle` is the word "Claude" and
+    /// every dialog that harness draws contains it — the theme picker's code
+    /// sample says `Hello, Claude!`, the sign-in screen says "Claude account",
+    /// the trust dialog says "Claude Code may read files in this folder".
+    /// Reproduced 3 Sep against claude 2.1.260 on a first-run profile.
+    ///
+    /// So the launch path stopped asking. It reports what it SAW rather than
+    /// what it concluded, and the conclusion comes from registration, which
+    /// is a fact rather than a reading. This is the same rule the give-up
+    /// branch in `TrustPromptWatcher` already states about itself: a line
+    /// naming only its expectation is unfalsifiable.
+    public static func paneTail(tty: String) -> String {
+        guard let pane = TmuxOwnership.pane(forTty: tty),
+              case .success(let text) = Tmux.run(
+                ["capture-pane", "-p", "-t", pane.paneId],
+                socket: pane.socketName, timeout: 3)
+        else { return "" }
+        return TrustPromptWatcher.meaningfulTail(text)
     }
 
     public static func paneState(tty: String, adapter: any HarnessAdapter) -> PaneState {
