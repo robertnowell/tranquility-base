@@ -635,3 +635,42 @@ extension MadeIndexTests {
                                           e: HomeBase.escape, published: [:]), "")
     }
 }
+
+/// The hub DECLARES when its agent last moved, so the index that orders agents
+/// never has to ask the filesystem.
+///
+/// The hub of hubs read the hub file's mtime and reasoned that the app rewrites
+/// it at every turn end, so the two agree. They agree only until something else
+/// writes the file — and something else keeps writing it. The 02 Sep migration
+/// stamped 395 hubs with its own date; the 04 Sep link surgery stamped 82 more.
+/// A third of the index claimed activity on a day those agents did nothing.
+final class HubDeclaresWhenItMovedTests: XCTestCase {
+    func testTheHubDeclaresItsLastMovedAsAMachineDate() {
+        let at = Date(timeIntervalSince1970: 1_786_500_000)
+        let m = HomeBase.Model(sessionId: "abcd1234-0000-0000-0000-000000000000",
+                               title: "An agent", callsign: nil,
+                               cwd: "/Users/x/Projects/tranquility-base",
+                               goal: "Do the thing.", turns: [], pages: [],
+                               lastActive: at)
+        let html = HomeBase.render(m)
+        XCTAssertTrue(html.contains("<meta name=\"intranet:moved\" content="),
+                      "the hub must declare when its agent last moved")
+        // ISO-8601 with an offset: the one shape a sorter reads without having
+        // to guess a year, which "12 Aug, 08:00" makes it do.
+        let iso = HomeBase.isoStamp(at)
+        XCTAssertTrue(html.contains("content=\"\(iso)\""))
+        // Shaped like a date a sorter can read: four-digit year, month, day.
+        XCTAssertNotNil(iso.range(of: #"^\d{4}-\d{2}-\d{2}T"#, options: .regularExpression),
+                        "not an ISO-8601 date: \(iso)")
+    }
+
+    /// An agent that has never moved declares nothing rather than 1970 — a
+    /// wrong date sorts confidently, a missing one lets the reader fall back.
+    func testNoActivityDeclaresNothing() {
+        let m = HomeBase.Model(sessionId: "abcd1234-0000-0000-0000-000000000000",
+                               title: "An agent", callsign: nil,
+                               cwd: "/Users/x/Projects/tranquility-base",
+                               goal: "Do the thing.", turns: [], pages: [])
+        XCTAssertFalse(HomeBase.render(m).contains("intranet:moved"))
+    }
+}
