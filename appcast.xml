@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1090</title>
+      <sparkle:version>1090</sparkle:version>
+      <sparkle:shortVersionString>0.3.1090</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Sat, 05 Sep 2026 03:15:44 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1090-57ce7d71a/TranquilityBase-0.3.1090.dmg" type="application/octet-stream" length="9262985" sparkle:edSignature="siqY4sIgYqbH6r2OlsFLoCSHyus/Ih+uxeEO6BfGer1Tz/d1+JfdvyBtSHoFgI0y1DKFi9Y63d78zC5H5cgYCg==" />
+    </item>
+    <item>
       <title>Version 0.3.1089</title>
       <sparkle:version>1089</sparkle:version>
       <sparkle:shortVersionString>0.3.1089</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Thu, 03 Sep 2026 15:56:40 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1081-d193f2142/TranquilityBase-0.3.1081.dmg" type="application/octet-stream" length="9228562" sparkle:edSignature="o+t5Gxfk6KBxC7UeHNs8Gw3L0C/RDWnL1G29d2ouzluOd4XXjGcXDH3MtYUItt2PdgLPQ0RWo2UnG+srFRb+Aw==" />
     </item>
-    <item>
-      <title>Version 0.3.1080</title>
-      <sparkle:version>1080</sparkle:version>
-      <sparkle:shortVersionString>0.3.1080</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Thu, 03 Sep 2026 15:29:10 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1080-bcf10ea99/TranquilityBase-0.3.1080.dmg" type="application/octet-stream" length="9219834" sparkle:edSignature="LGHO7yC4xAx0QQcxt6GP4pTv4072tbAr50B5oqUZWGF9d8TORSorAu7B31flt7UZsYRd2dJ8zkknADgTpVvPCQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: m89QLdAQpJfT6l4EgkUno+inoCrke67oHpcUjLdPpQsfDpwqWvMUBzPB5cEH8vENVbQgnb6+NP42I614nGhrCg==
+edSignature: 6oinTH4VdONukZ8LI4c0Rd4fwinV1pU0ufYpx3jTEFvA7bReJkVIL8s31veWdnZoWH3E4UVa8Pwx1t9RBLzNCQ==
 length: 6447
 -->
