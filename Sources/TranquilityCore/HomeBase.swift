@@ -794,6 +794,16 @@ public enum HomeBase {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
+    /// ISO-8601 with an offset: the one date format a machine reads without
+    /// guessing a year, which "30 Aug, 08:57" makes it do.
+    /// A fresh formatter per call: ISO8601DateFormatter is not Sendable, and a
+    /// shared one is the cheap kind of data race that never shows up in a test.
+    static func isoStamp(_ date: Date) -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f.string(from: date)
+    }
+
     static let stamp: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "d MMM, HH:mm"
@@ -1138,6 +1148,23 @@ public enum HomeBase {
         <title>\(e(name)) — agent</title>
         <meta name="intranet:type" content="agent">
         <meta name="intranet:visibility" content="local">
+        \(model.lastActive.map {
+            // WHEN THIS AGENT LAST DID SOMETHING, as a fact the page carries.
+            //
+            // The hub of hubs used to read this off the hub FILE's mtime,
+            // reasoning that the app rewrites the file at every turn end so the
+            // two agree. They agree only until something else writes the file.
+            // The 02 Sep migration stamped 395 hubs with its own date and the
+            // 04 Sep link surgery stamped 82 more, so a third of the index
+            // claimed activity on a day when those agents did nothing, and the
+            // ordering meant nothing (reported both times, fixed once).
+            //
+            // An mtime answers "when was this file written". Only the agent's
+            // own last turn answers "when did this agent last work", and the
+            // byline already prints it for humans; this is the same fact in a
+            // form a sorter can read.
+            "\n<meta name=\"intranet:moved\" content=\"\(isoStamp($0))\">"
+        } ?? "")
         \(favicon())
         \(theme.fontSheet.map {
             // The brand's faces, from one shared file on disk. A hub is local
