@@ -851,8 +851,7 @@ case "reconcile":
             }
         case .failure(let error):
             print("couldn't launch: \(error.message)")
-            print("(a missing tmux binary or `new-session` failing is the usual suspect —")
-            print(" launches stopped touching Terminal automation 21 Aug)")
+            print("(to see it yourself: \(SessionLauncher.manualLaunch(directory: dir, command: command)))")
         }
 
     case "end":

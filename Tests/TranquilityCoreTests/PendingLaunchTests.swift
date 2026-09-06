@@ -10,6 +10,16 @@ final class PendingLaunchTests: XCTestCase {
                       conversationAtLaunch: nil)
     }
 
+    /// Every launch stages its own drops, under a key no session id can be.
+    func testEveryLaunchHasItsOwnStagingKey() {
+        let a = launch(), b = launch()
+        XCTAssertNotEqual(a.stagingKey, b.stagingKey,
+                          "a second + NEW AGENT must never inherit the first one's files")
+        XCTAssertTrue(a.stagingKey.hasPrefix("launch:"),
+                      "a key that could be mistaken for a session id is a cross-session leak "
+                      + "waiting to happen: \(a.stagingKey)")
+    }
+
     func testAResolvedLaunchAnswersImmediately() async {
         let l = launch()
         l.resolve(sessionId: "s-1")

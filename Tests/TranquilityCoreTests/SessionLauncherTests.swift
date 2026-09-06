@@ -77,6 +77,16 @@ final class ManualRevivalTests: XCTestCase {
                        "the app's PATH is the app's problem; a human shell has its own")
     }
 
+    /// The failure card's reproduction line, same rules: a fresh launch has
+    /// no session id, so it is the directory and the command, nothing else.
+    func testTheManualLaunchLineIsTheDirectoryAndTheCommand() {
+        let line = SessionLauncher.manualLaunch(
+            directory: "/Users/x/Projects",
+            command: "codex --dangerously-bypass-approvals-and-sandbox")
+        XCTAssertEqual(line, "cd '/Users/x/Projects' && codex --dangerously-bypass-approvals-and-sandbox")
+        XCTAssertFalse(line.contains("arch -arm64"), line)
+    }
+
     /// Retryability is not a mood. A command that ran and exited on its own
     /// terms will exit the same way next time; a pane tmux never delivered
     /// might.
@@ -98,11 +108,31 @@ final class NativeArchTests: XCTestCase {
         let command = SessionLauncher.paneCommand(
             path: "/usr/bin:/bin", directory: "/tmp/x", command: "claude --resume 'abc'")
         #if arch(arm64)
-        XCTAssertTrue(command.contains("&& arch -arm64 claude --resume 'abc'"),
+        XCTAssertTrue(command.contains("&& arch -arm64 -x86_64 claude --resume 'abc'"),
                       "the prefix belongs to the agent, not the shell or the cd: \(command)")
         #else
         XCTAssertTrue(command.hasSuffix("&& claude --resume 'abc'"),
                       "an Intel host must not be handed an arm64 re-exec: \(command)")
+        #endif
+    }
+
+    /// A harness packaged for one architecture only must still start. The
+    /// Codex standalone package on this machine is x86_64-only (6 Sep), and
+    /// `arch -arm64` alone refused it outright: "Bad CPU type in executable",
+    /// three launches in a minute. Native is PREFERRED, so `-arm64` comes
+    /// first; translated is the fallback, so `-x86_64` must follow it and
+    /// never replace it.
+    func testAnIntelOnlyHarnessIsRunTranslatedRatherThanRefused() {
+        #if arch(arm64)
+        let prefix = SessionLauncher.nativeArchPrefix
+        let native = prefix.range(of: "-arm64")
+        let translated = prefix.range(of: "-x86_64")
+        XCTAssertNotNil(native, prefix)
+        XCTAssertNotNil(translated, "an Intel-only binary must have somewhere to run: \(prefix)")
+        if let native, let translated {
+            XCTAssertLessThan(native.lowerBound, translated.lowerBound,
+                              "native first, translated as the fallback: \(prefix)")
+        }
         #endif
     }
 
