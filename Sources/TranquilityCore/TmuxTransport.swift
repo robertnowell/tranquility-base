@@ -67,6 +67,9 @@ public enum Tmux {
     /// on every probe.
     public static func forgetBinary() { binaryCache.forget() }
 
+    /// Where the app's own tmux resolved, for the diagnostics record.
+    public static var resolvedBinaryPath: String? { locateBinary() }
+
     private static func locateBinary() -> String? {
         let candidates = [
             "/opt/homebrew/bin/tmux",

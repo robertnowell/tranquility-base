@@ -169,6 +169,12 @@ summaries are the point.
   whenever the on-device Apple engine runs (the last-resort fallback): one line
   per recognised utterance, text included. Same 0700 boundary as the recordings;
   it's the file you'd attach to an issue, so know what's in it.
+- `failures.jsonl` (same directory) records one line per failure card the panel
+  shows: the kind, the reason, the build, the app's architecture, which harness
+  binaries were found and what they are, permission states, and the last few
+  machinery log lines (allow-listed by category, so never dictated text). Home
+  directory, emails and keys are scrubbed before it is written. Nothing reads
+  or sends it yet; "Failure log…" in the menu opens it.
 - Long-running headless `claude -p` jobs can be announced while still executing.
 - On-disk state still lives in `~/Library/Application Support/VoiceDispatch/`
   and credentials under the Keychain service `voice-dispatch` — both predate the

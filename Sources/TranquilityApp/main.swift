@@ -1046,6 +1046,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `QueueStore.supportDirectory`, so the isolated test build hardens
         // its OWN directory rather than reaching into the real app's.
         PrivateStorage.harden(directory: QueueStore.supportDirectory)
+        // The failure record (Core `Failures`): every card the panel shows
+        // becomes one scrubbed, structured line in failures.jsonl, beside the
+        // other private files. Configured before any site can fail, and the
+        // environment it depends on is probed off-main right away.
+        Failures.configure(directory: QueueStore.supportDirectory)
+        Failures.trace = { Permissions.log("failure: \($0)") }
+        Diagnostics.refreshEnvironment(reason: "startup")
 
         ElevenLabsSpeechProvider.trace = { Permissions.log("11labs: \($0)") }
         // Populate the picker from the account rather than a hardcoded list.

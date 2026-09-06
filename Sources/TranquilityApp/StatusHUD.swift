@@ -811,8 +811,12 @@ final class StatusHUD: NSObject {
                 log("launch card still waiting \(Int(seconds))s after a launch — an exit path "
                     + "did not settle it. Releasing; this is a bug in that path, not in the launch.")
                 self.settleLaunchCard()
-                self.showResult("That agent may have started, but the panel lost track of it. "
-                                + "Check the grid, or attach a terminal.")
+                let card = "That agent may have started, but the panel lost track of it. "
+                    + "Check the grid, or attach a terminal."
+                Failures.report(.panelLostTrack,
+                                reason: "launch card still waiting \(Int(seconds))s after a launch",
+                                card: card)
+                self.showResult(card)
             }
         }
     }
@@ -1321,6 +1325,10 @@ final class StatusHUD: NSObject {
     /// an agent, and `showDeviceFault` says so by carrying no title at all.
     func showResult(_ message: String,
                     about: (sessionId: String, pid: Int?, label: String)? = nil) {
+        // The receipt is the record: a card nobody can miss on screen must not
+        // be a failure nobody can find afterwards. Sites that know more report
+        // first with the same card text and this becomes a no-op for them.
+        Failures.notice(message, session: about?.sessionId)
         // Read BEFORE the transition, which is the only moment that can tell
         // the two kinds of failure apart: one that arrives while the capture
         // flow owns the stage happened TO the capture; one that arrives from

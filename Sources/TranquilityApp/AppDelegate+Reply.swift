@@ -119,30 +119,35 @@ extension AppDelegate {
                     // Documented as ambiguous and never auto-retried: only a human
                     // can decide whether to repeat themselves. That is needs-you.
                     Earcons.play(.needsYou, gate: earconGate())
-                    hud.showResult(
-                        "Typed it into \(label), but couldn't confirm it landed. "
+                    let card = "Typed it into \(label), but couldn't confirm it landed. "
                         + "Check the tab before repeating yourself. "
-                        + wordsKept(utteranceId: utteranceId),
-                        about: (sessionId: sessionId, pid: pid, label: label))
+                        + wordsKept(utteranceId: utteranceId)
+                    Failures.report(.deliveryFailed, reason: "verification timed out", card: card,
+                                    session: sessionId)
+                    hud.showResult(card, about: (sessionId: sessionId, pid: pid, label: label))
                 case .dispatchFailed(.tabNotFound, let utteranceId),
                      .dispatchFailed(.targetGone, let utteranceId):
                     // The destination no longer exists — "kept" must mean usable,
                     // not archived. The words go to the clipboard, plainly said.
                     Earcons.play(.needsYou, gate: earconGate())
                     let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
-                    hud.showResult(
-                        StateLegend.tabGoneRescueMessage(label: label, copied: copied),
-                        about: (sessionId: sessionId, pid: pid, label: label))
+                    let card = StateLegend.tabGoneRescueMessage(label: label, copied: copied)
+                    Failures.report(.deliveryFailed, reason: "tab not found or target gone", card: card,
+                                    session: sessionId)
+                    hud.showResult(card, about: (sessionId: sessionId, pid: pid, label: label))
                 case .dispatchFailed(let failure, _):
                     Earcons.play(.needsYou, gate: earconGate())
-                    hud.showResult("Couldn't type into \(label): \(failure). "
-                                   + wordsKept(utteranceId: utteranceId),
-                                   about: (sessionId: sessionId, pid: pid, label: label))
+                    let card = "Couldn't type into \(label): \(failure). "
+                        + wordsKept(utteranceId: utteranceId)
+                    Failures.report(.deliveryFailed, reason: "dispatch failed: \(failure)", card: card,
+                                    session: sessionId)
+                    hud.showResult(card, about: (sessionId: sessionId, pid: pid, label: label))
                 case .noTarget:
                     Earcons.play(.needsYou, gate: earconGate())
-                    hud.showResult("That reply lost its agent. "
-                                   + wordsKept(utteranceId: utteranceId),
-                                   about: (sessionId: sessionId, pid: pid, label: label))
+                    let card = "That reply lost its agent. " + wordsKept(utteranceId: utteranceId)
+                    Failures.report(.deliveryFailed, reason: "no target for the reply", card: card,
+                                    session: sessionId)
+                    hud.showResult(card, about: (sessionId: sessionId, pid: pid, label: label))
                 case .duplicateSuppressed(let duplicateId):
                     // A stale timer is already a completed interaction. Its
                     // losing callback is audit information, not a new problem
@@ -159,9 +164,10 @@ extension AppDelegate {
             } catch {
                 Permissions.log("confirmAndSend threw: \(error)")
                 Earcons.play(.needsYou, gate: earconGate())
-                hud.showResult("Send failed: \(error). "
-                               + wordsKept(utteranceId: utteranceId),
-                               about: (sessionId: sessionId, pid: pid, label: label))
+                let card = "Send failed: \(error). " + wordsKept(utteranceId: utteranceId)
+                Failures.report(.deliveryFailed, reason: "confirmAndSend threw: \(error)", card: card,
+                                session: sessionId)
+                hud.showResult(card, about: (sessionId: sessionId, pid: pid, label: label))
             }
             rebuildMenu()
         }

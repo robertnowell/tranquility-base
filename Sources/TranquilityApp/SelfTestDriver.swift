@@ -118,6 +118,10 @@ extension StatusHUD {
     /// Take the panel. Idempotent, and it always arms a release.
     private func beginDrills() {
         drillsHoldThePanel = true
+        // A drill paints failures on purpose. They are counted (so a drill
+        // can prove the wiring) and never written or forwarded: a record that
+        // says the microphone failed must mean the microphone failed.
+        Failures.suppressed = true
         drillRelease?.cancel()
         // A hard ceiling, because relaunch.sh passes --selftest-hud on EVERY
         // deploy: a flag that stuck would leave the panel permanently deaf to
@@ -133,6 +137,7 @@ extension StatusHUD {
     private func endDrills() {
         guard drillsHoldThePanel else { return }
         drillsHoldThePanel = false
+        Failures.suppressed = false
         drillRelease?.cancel()
         drillRelease = nil
         Permissions.log("selftest: drills released the panel")
@@ -1044,8 +1049,15 @@ extension StatusHUD {
         // refusal, so every word after it went to the previous agent, in
         // another repository. The card must survive its microphone.
         showGreeting(line: greetingLine, label: "projects")
+        let recordsBefore = Failures.reportedCount
         showResult("Couldn't open the microphone, audio stack unresponsive.")
         panel?.contentView?.layoutSubtreeIfNeeded()
+        // The receipt is the record (6 Sep): a card the panel shows is a
+        // failure the maintainer can find. Counted, not written, under drills.
+        SelfTest.report("failureRecord", [
+            ("cardBecomesOneRecord", Failures.reportedCount == recordsBefore + 1),
+            ("drillsAreSuppressed", Failures.suppressed),
+        ])
         let micFaultKeepsTheCard = bodyLabel.stringValue == greetingLine
             && titleLabel.stringValue == "projects" && currentTarget == nil
         let micFaultSpeaksFromTheStrip = face.captureFault != nil
