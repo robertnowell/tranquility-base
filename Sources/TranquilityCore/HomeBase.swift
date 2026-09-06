@@ -1525,6 +1525,57 @@ public extension HomeBase {
     /// The main-actor caller (the card's door) leaves it false and renders
     /// from whatever the snapshot already holds — a subprocess on the main
     /// thread is the frozen-frame class this codebase has paid for twice.
+    /// ONE NAME FOR A SESSION.
+    ///
+    /// The grid, this hub, and the hub of hubs (which copies this page's
+    /// `<title>`) must all call a session the same thing, or a person reads
+    /// three names for one agent and cannot tell they are one agent. So the
+    /// harness's own name comes from the SAME resolver the grid rows use
+    /// (`GridAssembler.harnessTitle`), and this function only adds the floors a
+    /// page needs that a row does not: a page must have an h1, a row may show
+    /// its callsign.
+    ///
+    /// Ruled 06 Sep, after the Codex lookup sat behind `if briefs.isEmpty`.
+    /// That guard was written on 30 Aug, when "Codex" meant "no Stop hook, so
+    /// no briefs". The Codex hooks landed 01 Sep, every Codex session got
+    /// briefs, and the guard silently skipped the name for all of them: 13 of
+    /// 16 named Codex sessions had a hub titled after their first prompt while
+    /// the grid, correctly, showed Codex's own name. A guard that encodes what
+    /// a harness "does not have" is stale the day the harness gets it; asking
+    /// the one resolver every time is not.
+    ///
+    /// Derived, never stored: a real name from any source still wins, and the
+    /// answer changes as the transcript does.
+    static func title(sessionId: String, transcriptPath: String?, live: LiveSession?,
+                      firstPrompt: String?, topic: String?) -> String? {
+        if let name = GridAssembler.harnessTitle(
+            sessionId: sessionId, transcriptPath: transcriptPath, live: live) {
+            return name
+        }
+        // A NAME, NOT AN ID.
+        //
+        // "Agent 019db12b" tells a reader nothing, and it was on 300 of 452
+        // hubs: Codex keeps thread names for only some of its own sessions,
+        // and a session with no transcript title has nothing else to read.
+        // The first thing a person typed is the best name available, and it
+        // is the same convention Codex uses for the names it does keep
+        // ("Well, 2 things. One, I got an error").
+        let prompt = firstPrompt?
+            .split(whereSeparator: \.isNewline).first
+            .map { line -> String in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                return t.count > 72 ? String(t.prefix(71)) + "\u{2026}" : t
+            }
+            .flatMap { $0.isEmpty ? nil : $0 }
+            .flatMap { looksLikeAName($0) ? $0 : nil }
+        if let prompt { return prompt }
+        // The brief's topic is three to six words naming the subject — written
+        // for exactly this job — so it is a better floor than an address or
+        // eight hex characters.
+        let topic = topic?.trimmingCharacters(in: .whitespaces) ?? ""
+        return topic.isEmpty ? nil : topic
+    }
+
     static func write(sessionId: String, store: QueueStore,
                       live: [LiveSession] = [],
                       priming: Bool = false) throws -> URL? {
@@ -1543,44 +1594,14 @@ public extension HomeBase {
                                    root: QueueStore.supportDirectory.path)
         }
         let here = live.first { $0.sessionId == sessionId }
-        var title = (latest?.transcriptPath).flatMap {
-            TranscriptTitles.shared.latestTitle(transcriptPath: $0)
-        }
-        // A Codex session has no Claude Code transcript to read a tab title out
-        // of, and no `latestStop` row at all. Codex keeps its own name for a
-        // thread, which is the only human-readable thing about one, so ask it
-        // rather than fall back to eight hex characters.
-        var codexCwd: String?
-        if briefs.isEmpty {
-            title = title ?? CodexThreadNames.all()[sessionId]
-            codexCwd = CodexRollout.parse(sessionId: sessionId)?.meta?.cwd
-        }
-        // A NAME, NOT AN ID.
-        //
-        // "Agent 019db12b" tells a reader nothing, and it was on 300 of 452
-        // hubs: Codex keeps thread names for only 9 of its own sessions, and a
-        // session with no briefs has no tab title to read either. The first
-        // thing a person typed is the best name available, and it is the same
-        // convention Codex uses for the names it does keep ("Well, 2 things.
-        // One, I got an error"). Derived, never stored: a real name from any
-        // source still wins, and this changes as the transcript does.
-        if title?.isEmpty ?? true {
-            title = transcript.first?.prompt
-                .split(whereSeparator: \.isNewline).first
-                .map { line -> String in
-                    let t = line.trimmingCharacters(in: .whitespaces)
-                    return t.count > 72 ? String(t.prefix(71)) + "\u{2026}" : t
-                }
-                .flatMap { $0.isEmpty ? nil : $0 }
-                .flatMap { looksLikeAName($0) ? $0 : nil }
-        }
-        // The brief's topic is three to six words naming the subject — written
-        // for exactly this job — so it is a better floor than an address or
-        // eight hex characters.
-        if title?.isEmpty ?? true {
-            let topic = briefs.first?.topic.trimmingCharacters(in: .whitespaces) ?? ""
-            title = topic.isEmpty ? nil : topic
-        }
+        // A Codex session keeps its cwd in the rollout rather than in a stored
+        // event, and a session that predates the Codex hooks has no event at
+        // all to read one from.
+        let codexCwd = briefs.isEmpty
+            ? CodexRollout.parse(sessionId: sessionId)?.meta?.cwd : nil
+        let title = Self.title(
+            sessionId: sessionId, transcriptPath: latest?.transcriptPath, live: here,
+            firstPrompt: transcript.first?.prompt, topic: briefs.first?.topic)
         let model = Model(
             sessionId: sessionId,
             title: title,

@@ -148,8 +148,8 @@ public enum GridAssembler {
     /// last resort, and it is the answer Robert kept being shown.
     public static func tabDisplayName(for event: WaitingSession, live: LiveSession?) -> String {
         SessionRow.displayName(
-            liveName: tabTitle(transcriptPath: event.transcriptPath, live: live)
-                ?? harnessName(event.sessionId),
+            liveName: harnessTitle(sessionId: event.sessionId,
+                                   transcriptPath: event.transcriptPath, live: live),
             callsign: event.callsign, fallback: event.projectLabel)
     }
 
@@ -157,8 +157,7 @@ public enum GridAssembler {
     /// behind it — the band that used to fall back to the literal "session".
     public static func tabDisplayName(live: LiveSession, callsign: String?) -> String {
         SessionRow.displayName(
-            liveName: tabTitle(transcriptPath: nil, live: live)
-                ?? harnessName(live.sessionId),
+            liveName: harnessTitle(sessionId: live.sessionId, transcriptPath: nil, live: live),
             callsign: callsign, fallback: "session")
     }
 
@@ -169,6 +168,19 @@ public enum GridAssembler {
             liveName: title ?? harnessName(sessionId),
             callsign: callsign,
             fallback: cwd.map { ($0 as NSString).lastPathComponent } ?? "session")
+    }
+
+    /// THE HARNESS'S OWN NAME FOR A SESSION, from whichever harness it is:
+    /// Claude Code's transcript title (or the CLI's name for a live one), else
+    /// Codex's thread name. Every surface that names a session — the grid
+    /// rows here, the hub page, and through the hub's `<title>` the hub of
+    /// hubs — resolves through this one function, so they cannot disagree
+    /// about what a session is called. The hub used to run its own copy of
+    /// this chain with a guard the grid did not have, and the two named the
+    /// same Codex session differently for five days.
+    public static func harnessTitle(sessionId: String, transcriptPath: String?,
+                                    live: LiveSession?) -> String? {
+        tabTitle(transcriptPath: transcriptPath, live: live) ?? harnessName(sessionId)
     }
 
     /// What the harness itself calls this session, for a harness that keeps a
