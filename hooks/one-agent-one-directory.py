@@ -34,13 +34,26 @@ import re
 import sys
 
 AGENTS = os.path.expanduser("~/Documents/agents")
-SLUG = re.compile(r"^[0-9a-f]{8}$")
+# A directory is the FULL session id since 06 Sep; the eight-character form
+# is the compatibility symlink the migration left behind, and still names the
+# same session, which is what `same` below says.
+SLUG = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f-]{4,55})?$")
 # A page path inside somebody's agent directory, as it appears in a command.
-PATH = (r"(?:~|\$HOME|/Users/[^/\s'\"]+)/Documents/agents/([0-9a-f]{8})/"
+PATH = (r"(?:~|\$HOME|/Users/[^/\s'\"]+)/Documents/agents/([0-9a-f-]{8,36})/"
         r"[^\s'\"<>|;)]+\.(?:html|htm|md)")
 REDIRECT = re.compile(r">>?\s*['\"]?" + PATH)
 COPY = re.compile(r"\b(?:cp|mv|install|rsync)\s+[^|;&]*?\s" + PATH)
 TEE = re.compile(r"\btee\s+(?:-\S+\s+)*['\"]?" + PATH)
+
+
+def same(a, b):
+    """One session, whichever spelling: equal, or one is the other's prefix
+    and the shared part is at least the eight characters a short id has."""
+    a, b = a.lower(), b.lower()
+    if a == b:
+        return bool(a)
+    head, whole = (a, b) if len(a) <= len(b) else (b, a)
+    return len(head) >= 8 and whole.startswith(head)
 
 
 def targets(payload):
@@ -80,10 +93,10 @@ def main() -> int:
         return 0
     if os.environ.get("TB_ALLOW_CROSS_AGENT_WRITE") == "1":
         return 0
-    mine = (payload.get("session_id") or "")[:8]
+    mine = (payload.get("session_id") or "").strip().lower()
     if not SLUG.match(mine):
         return 0                      # no id, no opinion
-    others = sorted({d for d in targets(payload) if d != mine})
+    others = sorted({d for d in targets(payload) if not same(d, mine)})
     if not others:
         return 0
     other = others[0]

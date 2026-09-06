@@ -110,7 +110,13 @@ public enum HubIntegrity {
         for dir in (try? FileManager.default.contentsOfDirectory(
             at: agentsRoot, includingPropertiesForKeys: nil)) ?? [] {
             let slug = dir.lastPathComponent
-            guard slug.count == 8, !slug.hasPrefix("_") else { continue }
+            // A full id or a legacy eight; never `_archive`, and never the
+            // compatibility symlink the migration left at the old name, which
+            // would count every page twice.
+            guard SessionIdentity.isDirectoryName(slug),
+                  (try? dir.resourceValues(forKeys: [.isSymbolicLinkKey]))?
+                      .isSymbolicLink != true
+            else { continue }
             for page in (try? FileManager.default.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: nil)) ?? []
             where page.pathExtension == "html" && page.lastPathComponent != "index.html" {

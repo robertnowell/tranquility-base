@@ -420,10 +420,13 @@ final class HomeBaseTests: XCTestCase {
     /// The URL is keyed on the id alone. A callsign is minted at the agent's
     /// first summary, so a name in the path means every hub written before that
     /// moment lives at a different URL — and every link into it rots.
+    /// The FULL id, since 06 Sep: the first eight characters of a Codex id
+    /// are a timestamp, and two threads a minute apart shared a directory.
     func testTheSlugIsTheIdAndNothingElse() {
-        XCTAssertEqual(HomeBase.slug(for: model(turns: [], callsign: "a/b: c's  d")),
-                       "489b4804")
-        XCTAssertEqual(HomeBase.slug(for: model(turns: [], callsign: nil)), "489b4804")
+        let full = "489b4804-8d64-4a91-a63c-5e493141c772"
+        XCTAssertEqual(HomeBase.slug(for: model(turns: [], callsign: "a/b: c's  d")), full)
+        XCTAssertEqual(HomeBase.slug(for: model(turns: [], callsign: nil)), full)
+        XCTAssertEqual(HomeBase.slug(forSessionId: full.uppercased()), full)
     }
 
     /// An agent that has made nothing gets no section at all, rather than an

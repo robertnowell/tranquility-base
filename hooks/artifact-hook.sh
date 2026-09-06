@@ -122,7 +122,7 @@ def _written_paths(cmd):
 
     One question instead: is the path the TARGET of a redirect or a copy?
     """
-    pat = r"(?:~|/Users/[^/\s'\"]+)/Documents/agents/[0-9a-f]{8}/[^\s'\"<>|;)]+\.html"
+    pat = r"(?:~|/Users/[^/\s'\"]+)/Documents/agents/[0-9a-f-]{8,36}/[^\s'\"<>|;)]+\.html"
     out = re.findall(r">>?\s*['\"]?(" + pat + r")", cmd)
     out += re.findall(r"\b(?:cp|mv|install)\s+[^|;&]*?\s(" + pat + r")\b", cmd)
     out += re.findall(r"\btee\s+(?:-\S+\s+)*['\"]?(" + pat + r")", cmd)
@@ -234,6 +234,17 @@ if path and _is_generated_index(path):
 # A disagreement between the writer and the directory is a defect, and a defect
 # is reported, not laundered into provenance. The writer keeps ownership; the
 # misfile is named in the message so it gets moved.
+def _same(a, b):
+    """One session, whichever spelling: the directory is the full id (06 Sep),
+    a stamp written before then is the first eight characters, and a page
+    reached through the compatibility symlink carries the eight in its path."""
+    a, b = (a or "").lower(), (b or "").lower()
+    if a == b:
+        return bool(a)
+    head, whole = (a, b) if len(a) <= len(b) else (b, a)
+    return len(head) >= 8 and whole.startswith(head)
+
+
 def _agent_dir_of(p):
     parts = p.split(os.sep)
     if "agents" not in parts:
@@ -250,7 +261,7 @@ if path and "/Documents/agents/" in path and not _is_hub(path):
         _i = parts.index("agents")
         if _i + 1 < len(parts) and parts[_i + 1]:
             in_dir = parts[_i + 1]
-            if not session or in_dir == session.split("-")[0]:
+            if not session or _same(in_dir, session):
                 owner = in_dir
             else:
                 misfiled = in_dir
@@ -302,7 +313,7 @@ if not path:
     # branch. Claude Code took it too whenever it wrote a page with a heredoc
     # rather than the Write tool, which is why some Claude hubs had footers on
     # Monday and some did not, hours apart, with no pattern anyone could see.
-    own_hub = os.path.expanduser("~/Documents/agents/{}".format(session.split("-")[0]))
+    own_hub = os.path.expanduser("~/Documents/agents/{}".format(session.lower()))
     # BOTH LEVELS. A page sits at agents/<slug>/<name>.html, and a research
     # report sits at agents/<slug>/<date-slug>/index.html -- a dated directory
     # holding report.md beside index.html, which is the canonical layout and
@@ -386,9 +397,9 @@ if not path:
 # The ownership question is the same wherever the path came from.
 if path and "/Documents/agents/" in path and not _is_hub(path) and session:
     _dir = _agent_dir_of(path)
-    if _dir and _dir != session.split("-")[0]:
+    if _dir and not _same(_dir, session):
         misfiled = _dir
-        owner = session.split("-")[0]
+        owner = session.lower()
         # Somebody else's directory, and we only READ that this was written:
         # say so, record nothing. The record would be the guess doing damage.
         if not declared:
@@ -567,7 +578,13 @@ SHORT="${OWNER%%-*}"
 # agent's directory the owner's full id is not knowable from a path, so the link
 # names the slug and the app resolves the prefix (issue #251).
 LINK_SESSION="$SESSION"
-[ "${SESSION%%-*}" = "$SHORT" ] || LINK_SESSION="$SHORT"
+# The directory is the FULL id since 06 Sep; SHORT is only what a footer
+# prints for a person to read. An owner that is a full id links itself; a
+# legacy eight-character owner keeps the older rule.
+case "$OWNER" in
+  *-*) LINK_SESSION="$OWNER";;
+  *)   [ "${SESSION%%-*}" = "$SHORT" ] || LINK_SESSION="$SHORT";;
+esac
 TODAY=$(date "+%d %b %Y")
 
 # The HQ is Robert's own archive: everything under it is a page he reads, so
@@ -611,14 +628,19 @@ case "$FILE" in
   "$HOME"/Documents/deep-research/*.html) META=1;;
   "$HOME"/Documents/agents/*.html)        META=1;;
 esac
-[ "$FILE" = "$HOME/Documents/agents/$SHORT/index.html" ] && META=0
+case "$FILE" in
+  "$HOME/Documents/agents/$SHORT/index.html"|"$HOME/Documents/agents/$OWNER/index.html") META=0;;
+esac
 
 [ "$MODE" = "advisory" ] && STAMP=0 && META=0
-python3 - "$FILE" "$LINK_SESSION" "$SHORT" "$TODAY" "$STAMP" "$TITLE" "$META" "$MISFILED" <<'PY' 2>/dev/null || true
+python3 - "$FILE" "$LINK_SESSION" "$SHORT" "$TODAY" "$STAMP" "$TITLE" "$META" "$MISFILED" "$OWNER" <<'PY' 2>/dev/null || true
 import html as htmllib
 import json, re, sys
 
 path, session, short, today, stamp = sys.argv[1:6]
+# The directory's name, which is the full id since 06 Sep. It is what the hub
+# link and every stamp carry; `short` is only what the sentence prints.
+owner = (sys.argv[9] if len(sys.argv) > 9 and sys.argv[9] else short).lower()
 title = sys.argv[6] if len(sys.argv) > 6 else ""
 meta = sys.argv[7] if len(sys.argv) > 7 else "0"
 # The directory this page was written into, when it is NOT the writer's own.
@@ -630,7 +652,7 @@ misfiled = sys.argv[8] if len(sys.argv) > 8 and sys.argv[8] != "-" else ""
 # slug alone (ruled: nothing but the id in the name), so it is computable
 # here with nothing running.
 import os
-hub = os.path.expanduser("~/Documents/agents/{}/index.html".format(short))
+hub = os.path.expanduser("~/Documents/agents/{}/index.html".format(owner))
 
 # One name and one number: the tab title says WHAT the session did, the id
 # beside it is the durable handle. The date closes the line.
@@ -681,7 +703,7 @@ who = ("Created by <b>{title}</b> &middot; session {short} &middot; {today}"
 # lands inside the wrapper or after it, and no side padding keeps it flush with
 # the text in the inside case.
 snippet = (
-    '<footer data-tb-agent="{short}" style="box-sizing:border-box;'
+    '<footer data-tb-agent="{owner}" style="box-sizing:border-box;'
     'max-width:860px;margin:64px auto 0;padding:20px 0 0;'
     'border-top:1px solid rgba(128,128,128,.42);'
     'font:12.5px/1.5 ui-monospace,Menlo,monospace;color:inherit;'
@@ -694,7 +716,7 @@ snippet = (
     'style="text-decoration:none;background:#1f4f8f;color:#fbfaf8;padding:8px 14px;'
     'border-radius:7px;font-weight:640">Discuss with agent</a>\n'
     '</footer>'
-).format(who=who, short=short, today=today, session=session, path=path,
+).format(who=who, short=short, owner=owner, today=today, session=session, path=path,
          hub=hub)
 
 context = (
@@ -780,7 +802,7 @@ def _tag_ask(path):
     ask = (
         "\n\nDECLARE IT. This page declares no intranet:{missing}. Add these lines to "
         "the head of {path} now, before you finish the turn:\n\n"
-        '  <meta name="intranet:session" content="{short}">\n'
+        '  <meta name="intranet:session" content="{owner}">\n'
         '  <meta name="intranet:tags" content="a, b, c">\n'
         '  <meta name="intranet:summary" content="one sentence saying what this page '
         'concluded">\n\n'
@@ -792,7 +814,7 @@ def _tag_ask(path):
         "Two to four tags, lowercase kebab-case, naming the SUBJECT — never the brand "
         "and never the document type, both of which are already their own fields. "
         "REUSE a term the archive has rather than coining a synonym for it."
-    ).format(missing=" or intranet:".join(want), path=path, short=short)
+    ).format(missing=" or intranet:".join(want), path=path, owner=owner)
     if vocab:
         ask += (" These are the ones in use, most used first:\n  "
                 + ", ".join(vocab)
@@ -806,14 +828,14 @@ TAG_ASK = _tag_ask(path)
 # failure that makes the archive assert something untrue about who did the work.
 MISFILE_ASK = ("\n\nWRONG DIRECTORY. You wrote this page into agent {other}'s hub "
                "directory, and it is not yours. Your pages belong in "
-               "~/Documents/agents/{mine}/ — the first eight characters of YOUR "
-               "session id, nothing else.\n\nMove it now:\n"
+               "~/Documents/agents/{mine}/ — YOUR full session id, nothing "
+               "else.\n\nMove it now:\n"
                "  mv {path} ~/Documents/agents/{mine}/\n\n"
                "Left where it is, the archive says {other} wrote it: that agent's "
                "hub lists it, its footer names {other}, and Discuss with agent "
                "opens the wrong conversation. Two pages did exactly this on "
                "02 Sep and both hubs claimed them."
-               ).format(other=misfiled, mine=short, path=path) if misfiled else ""
+               ).format(other=misfiled, mine=owner, path=path) if misfiled else ""
 
 if meta == "1":
     # The author column, written by the only thing that knows it.
@@ -831,7 +853,7 @@ if meta == "1":
         with open(path, "r", encoding="utf-8") as fh:
             page = fh.read()
         if not re.search(r'<meta\s+name="intranet:session"', page):
-            tag = '<meta name="intranet:session" content="{}">'.format(short)
+            tag = '<meta name="intranet:session" content="{}">'.format(owner)
             if "</head>" in page:
                 h, _, t = page.partition("</head>")
                 out = h + "  " + tag + "\n</head>" + t

@@ -116,7 +116,10 @@ public enum ArtifactStore {
         // that owns it. The slug is derived from the id, never stored, so the two
         // cannot drift.
         let dir = directory(root: root) as NSString
-        let slug = HomeBase.slug(forSessionId: session)
+        // The slug WAS the eight characters until 06 Sep and the record files
+        // written under that name are still on disk, so it is read by its old
+        // spelling on purpose, not through `HomeBase.slug`.
+        let slug = SessionIdentity.short(session)
         var targets = [dir.appendingPathComponent(session)]
         let slugTarget = dir.appendingPathComponent(slug)
         if slugTarget != targets[0] { targets.append(slugTarget) }
@@ -279,7 +282,10 @@ public extension ArtifactStore {
     /// predates the stamp and must not vanish from its hub.
     public static func belongs(page path: String, to slug: String) -> Bool {
         guard let declared = declaredAgent(of: path) else { return true }
-        return declared == slug
+        // Either spelling: a page stamped before 06 Sep declares the eight
+        // characters, a directory is now named by the full id, and they are
+        // the same session.
+        return SessionIdentity.same(declared, slug)
     }
 
     /// The agent a page names in its own head, if it names one.
