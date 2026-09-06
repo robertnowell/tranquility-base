@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1093</title>
+      <sparkle:version>1093</sparkle:version>
+      <sparkle:shortVersionString>0.3.1093</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Sun, 06 Sep 2026 18:54:16 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1093-43558d176/TranquilityBase-0.3.1093.dmg" type="application/octet-stream" length="9395930" sparkle:edSignature="rmhv3KkjChFXygCTsrCuavHQkRQS+5FpVQYVGN77wZ5SjnjKWLKzV1Zsxo0Lo4xURMJBFcXT8soKyzD3r48MBQ==" />
+    </item>
+    <item>
       <title>Version 0.3.1092</title>
       <sparkle:version>1092</sparkle:version>
       <sparkle:shortVersionString>0.3.1092</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Fri, 04 Sep 2026 04:00:52 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1084-78eb50ee0/TranquilityBase-0.3.1084.dmg" type="application/octet-stream" length="9231715" sparkle:edSignature="eoDZwOz/NK7bD8PXN12FZju5A7Tw8P8w9wVb3MESpm/EBQiblo+SmQNnkDcG3IIGLtLWBQWyHbGHpO2EWqE5AA==" />
     </item>
-    <item>
-      <title>Version 0.3.1083</title>
-      <sparkle:version>1083</sparkle:version>
-      <sparkle:shortVersionString>0.3.1083</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Fri, 04 Sep 2026 03:53:53 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1083-b79041c22/TranquilityBase-0.3.1083.dmg" type="application/octet-stream" length="9228621" sparkle:edSignature="4E/4pOG11DPok1xgRYon95KLhjA6+DOKhQOKk4c/TTom++OJzIe6ELbFJt5xbgUZM7myNO/q6B/NDRkgPZCfDg==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: BtlLl+swS+4cSpMH+Sx4BwIjo5J8QM1AcApo+KBYe+YtQmzDwFeysayuLrETEQk958n/7mkFWXZZtQ4PT5zaAg==
+edSignature: Crs0VvZSqA6iL1PkMHpnvVIusBsc7UqkQHhwWQrbUw9Lw4O7K31X++u6gste4tUWzbvjCNBygwiLxRaJTpmXAg==
 length: 6447
 -->
