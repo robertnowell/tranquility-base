@@ -285,9 +285,13 @@ extension AppDelegate {
     /// this calls the one in Core. A file must land where your voice would, or
     /// the panel is naming one destination and using another.
     ///
-    /// A launch with no id yet has nowhere to stage a file, so it is no target
-    /// — honest, and strictly better than the previous answer, which was the
-    /// agent you were talking to BEFORE you pressed + NEW AGENT.
+    /// A launch with no id yet stages under its own key (`PendingLaunch.
+    /// stagingKey`) and the chips follow it to the real id when it registers.
+    /// Until 6 Sep this case answered nil — honest, and strictly better than
+    /// the answer before it (the agent you were talking to BEFORE you pressed
+    /// + NEW AGENT) — but it meant the card refused screenshots for the five
+    /// to nine seconds the agent took to come up, which is precisely the
+    /// moment you have one to hand.
     func refreshDropTarget() {
         switch replyDestinationNow() {
         case .session(let id):
@@ -298,7 +302,9 @@ extension AppDelegate {
             } else {
                 dropTarget = (id, id)
             }
-        case .launch, .dictation:
+        case .launch(let launch):
+            dropTarget = (launch.stagingKey, launch.label)
+        case .dictation:
             dropTarget = nil
         }
     }

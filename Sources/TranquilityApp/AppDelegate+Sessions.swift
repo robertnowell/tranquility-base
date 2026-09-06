@@ -1558,6 +1558,12 @@ extension AppDelegate {
             let superseded = pendingLaunch
             pendingLaunch = launch
             superseded?.abandon()
+            if let superseded {
+                coordinator?.attachments.clearStaged(session: superseded.stagingKey)
+            }
+            // The card is a drop target NOW, not one tick from now: the
+            // whole point of the staging key is the first seconds.
+            refreshDropTarget()
         }
         if greet, hud.showGreeting(line: line, label: label) {
             // Through the greeting cache, which is what it is for: one fixed
@@ -1613,11 +1619,23 @@ extension AppDelegate {
                 // hanging is a reply that never lands and never says why, which
                 // is the one outcome worse than the misroute this replaces.
                 launch?.abandon()
+                if let launch {
+                    await self?.coordinator?.attachments.clearStaged(session: launch.stagingKey)
+                }
                 if case .failure(let error) = result {
+                    // The reason, then the one line that reproduces it in a
+                    // terminal. The card used to close with "A missing tmux
+                    // binary is the usual suspect" — a guess, and on 6 Sep a
+                    // wrong one three times in a minute: tmux had made the
+                    // pane, `arch` had refused the Codex binary, and the
+                    // card sent the reader to check a tool that was fine.
+                    // The pane's own last line is now in `error.message`;
+                    // what the card adds is how to see it for yourself.
+                    let byHand = SessionLauncher.manualLaunch(directory: dir, command: command)
                     await MainActor.run { [weak self] in
                         self?.hud.markLaunchFailed()
                         self?.hud.showResult("Couldn't start an agent: \(error.message). "
-                                             + "A missing tmux binary is the usual suspect.")
+                                             + "To see it yourself, run in a terminal: \(byHand)")
                     }
                 }
                 return
@@ -1651,6 +1669,9 @@ extension AppDelegate {
                     screen: { SessionLauncher.paneTail(tty: tty) })
             guard let sessionId = sessionIdOrNil else {
                 launch?.abandon()
+                if let launch {
+                    await self?.coordinator?.attachments.clearStaged(session: launch.stagingKey)
+                }
                 // Did it actually fail, or did it just not have anything to
                 // register yet? Those are opposite facts and this branch was
                 // reporting the first for both.
@@ -1784,6 +1805,13 @@ extension AppDelegate {
             // true, and it must not be hostage to a store write or to whether
             // the card is still on stage. Binding can fail — it does, whenever
             // you started talking — and the words must reach the agent anyway.
+            //
+            // Chips before the promise: a reply waiting on `resolve` snapshots
+            // the tray for the session id the instant it wakes, so anything
+            // dropped on the greeting card has to be under that id already.
+            if let launch, let attachments = await self?.coordinator?.attachments {
+                attachments.adopt(stagingKey: launch.stagingKey, asSession: sessionId)
+            }
             launch?.resolve(sessionId: sessionId)
             guard greet else { return }
 

@@ -17,6 +17,37 @@ final class AttachmentTrayTests: XCTestCase {
         XCTAssertEqual(tray.staged(for: "C"), [])
     }
 
+    /// A screenshot dropped on the greeting card before the agent has an id
+    /// stages under the launch's own key and belongs to the session the
+    /// launch becomes — the 6 Sep ruling that the card takes drops the moment
+    /// it opens.
+    func testALaunchsChipsFollowItToTheSessionItBecame() {
+        var tray = AttachmentTray()
+        tray.stage("/shots/one.png", session: "launch:abc")
+        tray.stage("/shots/two.png", session: "launch:abc")
+        tray.adopt(stagingKey: "launch:abc", asSession: "S")
+        XCTAssertEqual(tray.staged(for: "S"), ["/shots/one.png", "/shots/two.png"])
+        XCTAssertEqual(tray.staged(for: "launch:abc"), [],
+                       "the provisional key is spent; nothing can stage against it again")
+    }
+
+    func testAdoptionAppendsAndDeduplicatesLikeAReDrop() {
+        var tray = AttachmentTray()
+        tray.stage("/shots/one.png", session: "S")
+        tray.stage("/shots/one.png", session: "launch:abc")
+        tray.stage("/shots/two.png", session: "launch:abc")
+        tray.adopt(stagingKey: "launch:abc", asSession: "S")
+        XCTAssertEqual(tray.staged(for: "S"), ["/shots/one.png", "/shots/two.png"])
+    }
+
+    func testAdoptingAKeyNothingWasDroppedOnChangesNothing() {
+        var tray = AttachmentTray()
+        tray.stage("/a/one.png", session: "S")
+        let before = tray
+        tray.adopt(stagingKey: "launch:never", asSession: "S")
+        XCTAssertEqual(tray, before)
+    }
+
     func testReDropOfTheSamePathIsOneChip() {
         var tray = AttachmentTray()
         XCTAssertTrue(tray.stage("/a/one.png", session: "A"))

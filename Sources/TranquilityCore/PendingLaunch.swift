@@ -48,6 +48,18 @@ public final class PendingLaunch: @unchecked Sendable {
     /// question.
     public let conversationAtLaunch: String?
 
+    /// Where a file dropped on the greeting card is staged until the agent
+    /// has an id. Ruled 6 Sep ("screenshots should be droppable as soon as
+    /// the card opens"): the card is on screen and speaking in milliseconds,
+    /// registration is seconds behind it, and a drop in that window used to
+    /// be refused outright — the tray keys chips by session id and a launch
+    /// had none. So the launch mints a key of its own, the chips stage under
+    /// it, and `AttachmentTray.adopt` moves them to the real id at the moment
+    /// `resolve` is called, before any waiter can send. Prefixed so it can
+    /// never collide with a session id, and per-launch so a second + NEW
+    /// AGENT never inherits the first one's files.
+    public let stagingKey: String
+
     private let lock = NSLock()
     private var sessionId: String?
     private var abandoned = false
@@ -60,6 +72,7 @@ public final class PendingLaunch: @unchecked Sendable {
         self.directory = directory
         self.conversationAtLaunch = conversationAtLaunch
         self.startedAt = startedAt
+        self.stagingKey = "launch:" + UUID().uuidString.lowercased()
     }
 
     /// True while the agent has neither arrived nor been given up on.

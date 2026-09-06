@@ -63,6 +63,18 @@ public struct AttachmentTray: Equatable, Sendable {
         staged[session] = nil
     }
 
+    /// A launch registered: everything staged under its provisional key now
+    /// belongs to the session it became. Appended after anything already
+    /// staged for that session (nothing was, in practice — the id did not
+    /// exist a moment ago), de-duplicated by path like a re-drop, and the
+    /// provisional entry is gone so a stale drop target cannot stage against
+    /// it twice. A key nothing was dropped on is a no-op.
+    public mutating func adopt(stagingKey: String, asSession session: String) {
+        guard let paths = staged.removeValue(forKey: stagingKey), !paths.isEmpty else { return }
+        let existing = staged[session] ?? []
+        staged[session] = existing + paths.filter { !existing.contains($0) }
+    }
+
     /// A session left the roster; its chips die with it. Files on disk stay.
     public mutating func sessionEnded(_ session: String) {
         staged[session] = nil
@@ -174,6 +186,11 @@ public final class AttachmentStore: @unchecked Sendable {
     public func sessionEnded(_ session: String) {
         lock.lock(); defer { lock.unlock() }
         tray.sessionEnded(session)
+    }
+
+    public func adopt(stagingKey: String, asSession session: String) {
+        lock.lock(); defer { lock.unlock() }
+        tray.adopt(stagingKey: stagingKey, asSession: session)
     }
 
     public func snapshot(session: String, utteranceId: String) -> [String] {

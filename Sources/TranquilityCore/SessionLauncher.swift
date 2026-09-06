@@ -229,6 +229,21 @@ public enum SessionLauncher {
             // environment and `tbase` reads it. It is simply not the thing
             // the pane obeys, so it cannot be the only place the fact lives.
             "/bin/zsh", "-c", Self.paneCommand(path: path, directory: directory, command: command),
+            // `remain-on-exit` is armed in the SAME request that creates the
+            // pane — a bare `;` in tmux's argv is its command separator, so
+            // this runs inside the server before it answers, not in a later
+            // subprocess. It used to be armed three `Tmux.run`s later, just
+            // before `survivalFailure`, and a command that fails in the
+            // first few milliseconds (a binary the CPU cannot run, 6 Sep;
+            // `command not found`, 24 Aug) was dead and its session
+            // destroyed before the arming ever reached the server. The
+            // check then saw no pane at all and could only say "gone",
+            // which is how a `Bad CPU type` exit was reported as a missing
+            // tmux binary. Armed here, the dead pane stays, and the check
+            // reads its exit status and its last line. Verified live on a
+            // throwaway socket: an instantly-failing command lands as
+            // `pane_dead=1`, status 1, with the spawn error on its screen.
+            ";", "set", "-t", name, "remain-on-exit", "on",
         ], socket: Tmux.socketName, timeout: 10) {
         case .failure(let error):
             Self.trace?("newSession(tmux) FAILED: \(error.message)")
@@ -268,12 +283,11 @@ public enum SessionLauncher {
         // precondition to the launch's success condition, which is what it
         // always was.
         //
-        // `remain-on-exit` is armed for the length of this check so a
-        // failure leaves its own reason behind rather than vanishing — the
+        // `remain-on-exit` was armed by the `new-session` request itself so
+        // a failure leaves its own reason behind rather than vanishing — the
         // 24 Aug diagnosis needed the dead pane's exit status and its one
-        // line of stderr, and neither exists without this. Disarmed on the
+        // line of stderr, and neither exists without it. Disarmed on the
         // success path so live panes never linger as corpses.
-        Tmux.run(["set", "-t", name, "remain-on-exit", "on"], socket: Tmux.socketName)
         if let failure = Self.survivalFailure(session: name, tty: tty) {
             Tmux.run(["kill-session", "-t", name], socket: Tmux.socketName)
             Self.trace?("newSession: \(name) died on launch — \(failure.reason)")
@@ -443,12 +457,35 @@ public enum SessionLauncher {
     /// running on a Mac that has it. A missing `/usr/bin/arch` would be a
     /// broken macOS install, but it costs one stat to not bet on that, and a
     /// wrong bet here is a pane that cannot start at all.
+    ///
+    /// `-x86_64` AFTER `-arm64`, since 6 Sep. `arch` tries the listed
+    /// architectures in order and runs the first one the binary actually
+    /// has, so a harness that ships only an Intel slice still starts —
+    /// translated, which is what it would have been anyway — instead of
+    /// dying on `posix_spawnp: Bad CPU type in executable`. That is exactly
+    /// what the Codex standalone package on this machine is (`file
+    /// ~/.local/bin/codex`: "Mach-O 64-bit executable x86_64", installed 4
+    /// Sep): three Codex launches in one minute died on that line while
+    /// every Claude launch beside them worked, and the pane died so fast the
+    /// card could only say the session "was gone". A prefix that insists on
+    /// one architecture is a bet on how every harness was packaged; this one
+    /// only says which to PREFER. Verified live before it was written:
+    /// `arch -arm64 -x86_64 codex --version` answers, and the same prefix on
+    /// a fat binary still lands on arm64 (`uname -m` under it: arm64).
     static var nativeArchPrefix: String {
         #if arch(arm64)
-        FileManager.default.isExecutableFile(atPath: "/usr/bin/arch") ? "arch -arm64 " : ""
+        FileManager.default.isExecutableFile(atPath: "/usr/bin/arch") ? "arch -arm64 -x86_64 " : ""
         #else
         ""
         #endif
+    }
+
+    /// The line a human runs to see a failed launch fail in front of them.
+    /// Same discipline as `manualRevival`: no PATH export, no `arch`, short
+    /// enough to read before trusting. `command` is already the shell-ready
+    /// string the pane was handed.
+    public static func manualLaunch(directory: String, command: String) -> String {
+        "cd \(shellQuoted(directory)) && \(command)"
     }
 
     /// Why the pane this launch just made is not running, or nil when it is.
@@ -505,8 +542,14 @@ public enum SessionLauncher {
         guard let seen = lastSeen else {
             // tmux never delivered a pane we could address. Nothing was
             // observed to refuse anything, so a second attempt is a fair ask.
-            return ("tmux session \(name) (tty \(tty)) was gone within a second of launching — "
-                + "its pane never reached the server's inventory", true)
+            // Said plainly as "no exit status": with `remain-on-exit` armed
+            // at creation this shape should no longer be reachable by a
+            // command that merely fails fast, so when it IS reached the
+            // honest report is that nothing was observed — not a guess at a
+            // culprit (the old text named a missing tmux binary, over a pane
+            // tmux had demonstrably created).
+            return ("tmux session \(name) (tty \(tty)) was gone within a second of "
+                + "launching and left no exit status behind", true)
         }
         let reason = Self.lastLine(ofPane: name)
         let status = seen.status.isEmpty ? "unknown" : seen.status
