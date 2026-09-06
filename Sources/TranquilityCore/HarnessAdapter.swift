@@ -402,7 +402,7 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
             "\(home)/.local/bin", "\(home)/.claude/local",
             "/opt/homebrew/bin", "/usr/local/bin",
             "\(home)/.bun/bin", "\(home)/.npm-global/bin",
-            "/usr/bin", "/bin",
+            "/usr/bin", "/bin", "/usr/sbin", "/sbin",
         ]
     }
 }
@@ -532,13 +532,26 @@ public struct CodexAdapter: HarnessAdapter {
     /// check against), included because the failure mode of guessing wrong
     /// is silent (a launch that can't find `codex` at all), not because it
     /// was measured.
+    ///
+    /// `/usr/sbin` and `/sbin` close the list (both adapters), since 6 Sep.
+    /// This list IS the pane's whole PATH, not an addition to one, so
+    /// anything a harness or its agent runs in that pane can only see what
+    /// is here. macOS's own default PATH ends `/usr/sbin:/sbin`, and that is
+    /// where `sysctl`, `system_profiler`, `lsof`, `diskutil` live. Measured
+    /// 5 Sep: Codex's "Update now" ran the official installer inside the
+    /// pane, the installer asked `sysctl -n sysctl.proc_translated` to tell
+    /// a Rosetta shell from an Intel Mac, `sysctl` was not on this PATH, and
+    /// it installed the Intel-only build — which the launcher then refused
+    /// with "Bad CPU type". A pane that hides system tools from an agent is
+    /// a pane where an agent's ordinary commands fail for a reason the
+    /// agent cannot see either.
     public var pathCandidates: [String] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return [
             "\(home)/.local/bin", "\(home)/.cargo/bin",
             "/opt/homebrew/bin", "/usr/local/bin",
             "\(home)/.npm-global/bin",
-            "/usr/bin", "/bin",
+            "/usr/bin", "/bin", "/usr/sbin", "/sbin",
         ]
     }
 }

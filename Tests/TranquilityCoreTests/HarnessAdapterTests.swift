@@ -93,6 +93,21 @@ final class HarnessAdapterTests: XCTestCase {
         XCTAssertFalse(candidates.isEmpty)
     }
 
+    /// The candidate list is the pane's ENTIRE PATH. Measured 5 Sep: Codex's
+    /// self-update ran the official installer in a pane, the installer asked
+    /// `sysctl` (in /usr/sbin) whether the shell was translated, could not
+    /// find it, and installed the Intel-only build. An agent's shell must see
+    /// at least what a bare macOS login shell sees.
+    func testEveryHarnessPaneSeesTheWholeSystemPath() {
+        for adapter in KnownHarnesses.all {
+            for dir in ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] {
+                XCTAssertTrue(adapter.pathCandidates.contains(dir),
+                              "\(adapter.id) pane PATH is missing \(dir); sysctl, lsof and "
+                              + "system_profiler live in the sbin directories")
+            }
+        }
+    }
+
     // MARK: TrustPromptWatcher — the one loop both transports now share
 
     func testWatcherAcceptsOnPromptNeedle() {
