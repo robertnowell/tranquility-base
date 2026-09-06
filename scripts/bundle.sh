@@ -185,24 +185,13 @@ rm -rf "$(dirname "$ICONSET")"
 # VOICE_DISPATCH_SUPPORT_DIR. Empty for the real app, so its Info.plist is
 # byte-identical to before.
 #
-# MALLOC DIAGNOSTICS, ON DELIBERATELY AND TEMPORARILY. Added 29 Aug 2026,
-# alongside the AEDesc double-free fix (fdb9edb). The Aug 27 session proposed
-# exactly this and it was never actually switched on, so when the next crash
-# came the stack still only named the victim. It is ON BY DEFAULT rather than
-# behind an env var on purpose: deploys here come from whichever session merges
-# next, and an opt-in flag none of them set is an opt-in flag that is off. The
-# cost is a slower malloc and some memory; the return is that the next crash
-# names who freed the memory instead of who touched it afterwards.
-#
-# Deliberately NOT MallocScribble or MallocErrorAbort: both make latent
-# corruption crash sooner, which would corrupt the very measurement this
-# window exists to take (is the crash rate now zero?). Add them only if a
-# crash actually appears and we need it to fail faster.
-#
-# REMOVE AFTER 1 SEP 2026 if the soak is clean. Delete this block and the
-# MallocStackLogging entry below.
-MALLOC_DIAG_XML="
-    <key>MallocStackLogging</key><string>1</string>"
+# MallocStackLogging was injected here from 29 Aug to 6 Sep 2026 to soak the
+# AEDesc double-free fix (fdb9edb). The soak ran clean (no TranquilityApp
+# crash report since 29 Aug) and the block said to remove it after 1 Sep, so
+# it is gone: it slowed every malloc in the app AND in every process the app
+# spawned, and printed its banner into every pane. Put it back only for a
+# specific crash, with a date.
+MALLOC_DIAG_XML=""
 
 LS_ENV_XML=""
 if [ -n "${VD_DATA_DIR:-}" ]; then

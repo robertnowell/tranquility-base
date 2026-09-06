@@ -327,6 +327,8 @@ extension AppDelegate {
                         return
                     }
                     guard let text = utterance.transcriptText, !text.isEmpty else {
+                        Failures.report(.transcriptionProvider, reason: "dictation: empty transcript",
+                                        card: "Couldn't transcribe that. Audio kept.")
                         hud.showResult("Couldn't transcribe that. Audio kept.")
                         return
                     }
@@ -396,8 +398,12 @@ extension AppDelegate {
                         // at them rather than into somebody else's tab.
                         recordingDestination = nil
                         Permissions.log("send: \(launch.label) never registered; nothing sent")
-                        hud.showResult("\(launch.label) never came up, nothing was sent. "
-                                       + "Your words are kept; check Terminal for a prompt.")
+                        let card = "\(launch.label) never came up, nothing was sent. "
+                            + "Your words are kept; check Terminal for a prompt."
+                        Failures.report(.launchNeverRegistered,
+                                        reason: "\(launch.label) never registered within 30s of launch",
+                                        card: card)
+                        hud.showResult(card)
                         rebuildMenu()
                         return
                     }
@@ -533,12 +539,17 @@ extension AppDelegate {
                     hud.showResult("Can't send yet, \(why). Recording kept. Try again shortly.")
                 case .transcriptionFailed:
                     lastStatusLine = "couldn't transcribe, audio kept"
+                    Failures.report(.transcriptionProvider, reason: "transcription failed; audio kept",
+                                    card: "Couldn't transcribe that. The audio is saved. Retry from the menu.",
+                                    session: spokenTo)
                     hud.showResult("Couldn't transcribe that. The audio is saved. Retry from the menu.")
                 case .dispatchFailed(.verificationTimedOut, _):
                     lastStatusLine = "\(StateLegend.Glyph.needsYou) unconfirmed. Check the tab before resending"
-                    hud.showResult(
-                        "Sent, but never confirmed. It may or may not have landed. "
-                        + "check the tab before resending.")
+                    let card = "Sent, but never confirmed. It may or may not have landed. "
+                        + "check the tab before resending."
+                    Failures.report(.deliveryFailed, reason: "verification timed out", card: card,
+                                    session: spokenTo)
+                    hud.showResult(card)
                 case .dispatchFailed(.tabNotFound, let utteranceId),
                      .dispatchFailed(.targetGone, let utteranceId):
                     // This path painted nothing at all before — a silently lost
@@ -546,9 +557,17 @@ extension AppDelegate {
                     let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
                     lastStatusLine = copied ? "tab gone, words on the clipboard"
                                             : "tab gone, words kept in the log"
-                    hud.showResult(StateLegend.tabGoneRescueMessage(label: nil, copied: copied))
+                    let card = StateLegend.tabGoneRescueMessage(label: nil, copied: copied)
+                    Failures.report(.deliveryFailed, reason: "tab not found or target gone", card: card,
+                                    session: spokenTo)
+                    hud.showResult(card)
                 case .dispatchFailed(let failure, _):
                     lastStatusLine = "send failed: \(failure), audio kept"
+                    // This branch paints no card at all, which is exactly the
+                    // kind of failure a maintainer never hears about. Recorded
+                    // even though the panel says nothing.
+                    Failures.report(.deliveryFailed, reason: "dispatch failed: \(failure)",
+                                    session: spokenTo)
                 case .duplicateSuppressed(let utteranceId):
                     lastStatusLine = "duplicate send suppressed"
                     Permissions.log("send: duplicate callback suppressed for "
@@ -1632,10 +1651,16 @@ extension AppDelegate {
                     // The pane's own last line is now in `error.message`;
                     // what the card adds is how to see it for yourself.
                     let byHand = SessionLauncher.manualLaunch(directory: dir, command: command)
+                    let card = "Couldn't start an agent: \(error.message). "
+                        + "To see it yourself, run in a terminal: \(byHand)"
+                    Failures.report(.launchFailed, reason: error.message, card: card,
+                                    reproduction: byHand, harness: adapter.id)
+                    // The harness may have just changed under us (an update, a
+                    // reinstall); the next record should describe it as it is now.
                     await MainActor.run { [weak self] in
+                        Diagnostics.refreshEnvironment(reason: "launch failed")
                         self?.hud.markLaunchFailed()
-                        self?.hud.showResult("Couldn't start an agent: \(error.message). "
-                                             + "To see it yourself, run in a terminal: \(byHand)")
+                        self?.hud.showResult(card)
                     }
                 }
                 return

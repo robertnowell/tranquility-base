@@ -11,6 +11,8 @@ extension AppDelegate {
 
     /// Left-click opens the grid; right-click opens the menu. The grid is the
     /// interface, the menu is the toolbox.
+    @objc func revealFailureLog() { Diagnostics.revealFailureLog() }
+
     @objc func statusItemClicked() {
         if NSApp.currentEvent?.type == .rightMouseUp {
             statusItem.menu = statusMenu
@@ -262,6 +264,13 @@ extension AppDelegate {
                                action: nil, keyEquivalent: "")
         stamp.isEnabled = false
         menu.addItem(stamp)
+        // The failure record, as a file you can read. Every card the panel
+        // has shown is one line in it; nothing else is. Before anything is
+        // sent anywhere this is the whole of "what we send".
+        let failures = NSMenuItem(title: "Failure log\u{2026}",
+                                  action: #selector(revealFailureLog), keyEquivalent: "")
+        failures.target = self
+        menu.addItem(failures)
 
         let update = NSMenuItem(title: "Check for Updates\u{2026}",
                                 action: #selector(Updates.checkForUpdates(_:)), keyEquivalent: "")

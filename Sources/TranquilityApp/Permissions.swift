@@ -244,7 +244,14 @@ struct Permissions {
         // than when the writer got round to it. Everything after this point is
         // bookkeeping and belongs off the caller's thread.
         let stamp = Date()
-        logQueue.async { writeLine(stamp: stamp, message: message) }
+        logQueue.async {
+            // The breadcrumb ring reads the same line, allow-listed by
+            // category so a line carrying dictated text never enters it.
+            // Here rather than on the caller's thread: a prefix check and a
+            // scrub are cheap, and the caller pays nothing at all.
+            Breadcrumbs.shared.record(message, at: stamp)
+            writeLine(stamp: stamp, message: message)
+        }
     }
 
     /// Block until everything queued so far is on disk.
@@ -318,6 +325,13 @@ struct Permissions {
         let build = info["CFBundleVersion"] as? String ?? "?"
         log("bundleID=\(bundle.bundleIdentifier ?? "nil") path=\(bundle.bundlePath) "
             + "version=\(short) build=\(build)")
+        // Which slice this process is and whether Rosetta is under it. A
+        // universal app runs whichever slice its launcher chose, and on 6 Sep
+        // the difference (launchd: arm64, a Rosetta-pinned `open`: x86_64)
+        // decided whether an agent launch worked at all. It was inferred
+        // from a failure; now it is a line.
+        log("arch=\(EnvironmentProbe.currentArch) translated=\(EnvironmentProbe.isTranslated) "
+            + "commit=\((info["TBSourceCommit"] as? String)?.prefix(7) ?? "?")")
         log("micUsageDescription=\(bundle.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") != nil)")
         // Speech status is logged but is NOT a gate — measured 10 Aug: the
         // recogniser transcribes with the status still at notDetermined, so

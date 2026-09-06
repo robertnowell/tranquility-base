@@ -248,7 +248,9 @@ extension AppDelegate {
                     try recorder.start()
                 } catch {
                     Permissions.log("mic: start failed (hands-free) — nothing changed: \(error)")
-                    hud.showResult(micFailureMessage(error))
+                    let card = micFailureMessage(error)
+                    Failures.report(.microphone, reason: "start failed (hands-free): \(error)", card: card)
+                    hud.showResult(card)
                     return
                 }
 
@@ -530,7 +532,9 @@ extension AppDelegate {
                     // rather than showing a Listening pill over a dead microphone.
                     Permissions.log("mic: start failed: \(error)")
                     recordingDestination = nil
-                    hud.showResult(micFailureMessage(error))
+                    let card = micFailureMessage(error)
+                    Failures.report(.microphone, reason: "start failed: \(error)", card: card)
+                    hud.showResult(card)
                     return
                 }
             }
