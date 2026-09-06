@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1091</title>
+      <sparkle:version>1091</sparkle:version>
+      <sparkle:shortVersionString>0.3.1091</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Sun, 06 Sep 2026 17:56:31 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1091-2c543bb57/TranquilityBase-0.3.1091.dmg" type="application/octet-stream" length="9270502" sparkle:edSignature="g94mwxH/ZBampqNl2ENcmcO/dinY3skek2xvnGhgVWK5clGjiB+WmD9y4CKRRkllqsFi2iKZkU840BSs0+vwAg==" />
+    </item>
+    <item>
       <title>Version 0.3.1090</title>
       <sparkle:version>1090</sparkle:version>
       <sparkle:shortVersionString>0.3.1090</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Thu, 03 Sep 2026 16:11:07 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1082-8697a7bc5/TranquilityBase-0.3.1082.dmg" type="application/octet-stream" length="9228622" sparkle:edSignature="65BSsIYPbrasWRkVWGi2ZUCqGAe2SNp7ZJT0kpT1P8JooXt7nBq2VqBLrurmsxR2NAaFSjQSAWOl5p99/rr2BA==" />
     </item>
-    <item>
-      <title>Version 0.3.1081</title>
-      <sparkle:version>1081</sparkle:version>
-      <sparkle:shortVersionString>0.3.1081</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Thu, 03 Sep 2026 15:56:40 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1081-d193f2142/TranquilityBase-0.3.1081.dmg" type="application/octet-stream" length="9228562" sparkle:edSignature="o+t5Gxfk6KBxC7UeHNs8Gw3L0C/RDWnL1G29d2ouzluOd4XXjGcXDH3MtYUItt2PdgLPQ0RWo2UnG+srFRb+Aw==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 6oinTH4VdONukZ8LI4c0Rd4fwinV1pU0ufYpx3jTEFvA7bReJkVIL8s31veWdnZoWH3E4UVa8Pwx1t9RBLzNCQ==
+edSignature: PjOPVRvTYNCyIBYcUtZoVsXMDxhDejQk4Gv9BAitHGI8LL1gdbUeKVbJ1ymlHVcDDuWd5zwRmWVKRc3Dn1bXBQ==
 length: 6447
 -->
