@@ -374,6 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("launch: ownership acquired (\(AppIdentity.channel.rawValue))")
             } catch {
                 Permissions.log("launch: REFUSED — app ownership \(error)")
+                Permissions.flushLog()
                 exit(1)
             }
         }
