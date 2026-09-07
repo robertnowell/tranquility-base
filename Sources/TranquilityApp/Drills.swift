@@ -67,8 +67,9 @@ extension StatusHUD {
     /// not establish is not liveness.
     ///
     /// The ORDER is asserted too (18 Aug). Go to agent is the harmless item and
-    /// it holds the top; End session sits last, behind a separator, so the one
-    /// item that kills a process is never where a fast pointer lands. A silent
+    /// it holds the top; handoff follows; End session sits last, behind a
+    /// separator, so the one item that kills a process is never where a fast
+    /// pointer lands. A silent
     /// reorder would be invisible in every screenshot and expensive exactly
     /// once.
     /// A launch card always settles, on every path.
@@ -148,22 +149,24 @@ extension StatusHUD {
 
     func terminateDrill() {
         func row(_ id: String, _ lamp: Lamp,
-                 revivable: Bool = false) -> SessionRow {
+                 revivable: Bool = false,
+                 harness: String = ClaudeCodeAdapter().id) -> SessionRow {
             SessionRow(id: id, name: "agent-\(id)", aux: id,
-                                   lamp: lamp, revivable: revivable)
+                                   lamp: lamp, revivable: revivable, harness: harness)
         }
         let rows = [
             // `busy` rather than `running` for the third live row: an IDLE
             // session is no longer drawn on the grid (18 Aug), and this drill
             // is about which LIVE rows carry the kill, not about membership.
-            row("ready", .ready), row("working", .working), row("busy", .working),
+            row("ready", .ready), row("working", .working),
+            row("codex", .working, harness: CodexAdapter().id),
             row("fault", .fault),
             row("exited", .unlit, revivable: true),   // REVIVE's row: no kill
             row("unproven", .unlit),                  // liveness unknown: no kill
         ]
         showIdle(rows: rows)
         let menus = Dictionary(uniqueKeysWithValues: gridRowsForTesting)
-        let liveCarry = ["ready", "working", "busy", "fault"]
+        let liveCarry = ["ready", "working", "codex", "fault"]
             .allSatisfy { menus[$0] == true }
         let deadDoNot = ["exited", "unproven"].allSatisfy { menus[$0] == false }
         let everyRowDrawn = rows.allSatisfy { menus[$0.id] != nil }
@@ -172,6 +175,15 @@ extension StatusHUD {
         // The menu names its target, because the name IS the confirmation.
         let titles = items.map(\.title)
         let named = titles.last ?? ""
+        let codexTitles = (waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
+            .first { $0.identifier?.rawValue == "codex" }?.menu?.items.map(\.title)) ?? []
+        let priorContinue = onContinueWork
+        var continued: (String, String)?
+        onContinueWork = { continued = ($0, $1) }
+        if items.indices.contains(1) {
+            _ = items[1].target?.perform(items[1].action, with: items[1])
+        }
+        onContinueWork = priorContinue
         showIdle(rows: [])
 
         SelfTest.report("terminate", [
@@ -179,8 +191,14 @@ extension StatusHUD {
             ("liveRowsCarryIt", liveCarry),
             ("deadRowsDoNot", deadDoNot),
             ("goToAgentIsFirst", titles.first == "Go to agent"),
+            ("claudeHandsOffToCodex",
+             titles.dropFirst().first == "Continue work with Codex"),
+            ("codexHandsOffToClaudeCode",
+             codexTitles.contains("Continue work with Claude Code")),
+            ("handoffNamesTheSource",
+             continued?.0 == "ready" && continued?.1 == "agent-ready"),
             ("destructiveIsLastAndSeparated",
-             items.count == 3 && items[1].isSeparatorItem),
+             items.count == 4 && items[2].isSeparatorItem),
             ("theItemNamesItsTarget", named == "End session \u{201C}agent-ready\u{201D}"),
         ])
     }
@@ -499,8 +517,8 @@ extension StatusHUD {
     /// the same list twice would exercise nothing.
     func trayTeardownChurnDrill() {
         let priorTarget = replyTargetForDrop
-        let priorStaged = stagedFiles
-        defer { replyTargetForDrop = priorTarget; stagedFiles = priorStaged }
+        let priorStaged = stagedFragments
+        defer { replyTargetForDrop = priorTarget; stagedFragments = priorStaged }
 
         let sets: [[String]] = [
             ["/tmp/a.png"],
@@ -526,21 +544,29 @@ extension StatusHUD {
                 }
             }
         }
+        trayRow.apply([
+            AttachmentTray.quoted("/tmp/a file.png"),
+            "Please continue the work of \u{201C}search indexing\u{201D}.\n\nMore context",
+        ])
+        let genericFragmentsHaveUsefulPreviews =
+            trayRow.displayedNamesForTesting
+                == ["a file.png", "Please continue the work of \u{201C}search indexing\u{201D}."]
         trayRow.apply([])
 
         SelfTest.report("tray-teardown-churn", [
             ("every apply landed exactly", everyApplyLandedExactly),
             ("never left an orphan row", neverLeftAnOrphanRow),
+            ("generic fragments have useful previews", genericFragmentsHaveUsefulPreviews),
         ])
     }
 
     func dropTrayDrill() {
         let priorTarget = replyTargetForDrop
-        let priorStaged = stagedFiles
+        let priorStaged = stagedFragments
         let priorUnstage = onUnstage
         defer {
             replyTargetForDrop = priorTarget
-            stagedFiles = priorStaged
+            stagedFragments = priorStaged
             onUnstage = priorUnstage
         }
 
@@ -548,7 +574,7 @@ extension StatusHUD {
         // be caught showing B's.
         var tray = ["A": ["/tmp/one.png", "/tmp/two.pdf"], "B": ["/tmp/other.png"]]
         var unstaged: (session: String, path: String)?
-        stagedFiles = { tray[$0] ?? [] }
+        stagedFragments = { tray[$0] ?? [] }
         onUnstage = { session, path in unstaged = (session, path) }
 
         // Addressing A, on a card.

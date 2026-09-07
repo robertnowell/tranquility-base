@@ -74,7 +74,7 @@ final class StatusHUD: NSObject {
     private var stickyPlacement: [NSLayoutConstraint] = []
     var stripLabel: NSTextField!
     var stripRule: NSView!
-    /// The drop tray's chips: what would ride the next voice reply to the
+    /// The message tray's chips: what would ride the next voice reply to the
     /// session currently addressed. A row in the content stack like any other
     /// — it extends the panel downward rather than displacing the card, the
     /// same geometry the capture strip already uses.
@@ -2391,23 +2391,23 @@ final class StatusHUD: NSObject {
             stateLabel.attributedStringValue = Widgets.placardText(notice, color: noticeLens.color)
         }
 
-        // The drop tray's chips, derived rather than stored: whatever Core
+        // The message tray's chips, derived rather than stored: whatever Core
         // has staged for the session THIS panel would send to. One resolution
-        // answers "who gets a drop" and "whose chips are these", so the files
-        // you can see are exactly the files that would ride — the invariant
+        // answers "who gets a reply" and "whose chips are these", so the fragments
+        // you can see are exactly the fragments that would ride — the invariant
         // the whole feature rests on, held by construction instead of by two
         // call sites agreeing.
         //
         // Suppressed on the faces that address nobody: the list and the
         // settings panes are not conversations, and chips there would name a
         // session the face does not show. If the chips cannot be rendered,
-        // the files do not ride — the disclosure IS the license to attach.
+        // the fragments do not ride — the disclosure IS the license to attach.
         switch state {
         case .settings, .pastAgents, .hidden:
             break
         default:
             if let target = replyTargetForDrop?() {
-                let staged = stagedFiles?(target.sessionId) ?? []
+                let staged = stagedFragments?(target.sessionId) ?? []
                 trayRow.apply(staged)
                 trayRow.isHidden = staged.isEmpty
             } else {
@@ -2873,21 +2873,24 @@ final class StatusHUD: NSObject {
     var onOpenPastAgents: (() -> Void)?
     /// Wired by the app: focus a LIVE session's terminal tab.
     var onGoToSession: ((String) -> Void)?
+    /// Wired by the app: create an ordinary agent under the other harness,
+    /// carrying this live row's context into its first explicit user message.
+    var onContinueWork: ((_ id: String, _ name: String) -> Void)?
 
-    // MARK: - The drop tray's three wires
+    // MARK: - The message tray's wires
 
     /// What is staged for a session right now, asked at render time rather
     /// than pushed and cached. The chips are then a PROJECTION of Core's tray
     /// — they cannot go stale, and there is no second copy of the truth to
     /// keep in step (the five-booleans lesson, applied to data instead of
     /// state).
-    var stagedFiles: ((String) -> [String])?
+    var stagedFragments: ((String) -> [String])?
     /// A drop landed on the panel. The app resolves the target, persists
     /// image data that has no file behind it, and stages. Returns false when
     /// it could not be taken, so the surface can say so instead of eating it.
     var onFilesDropped: (([DroppedItem]) -> Bool)?
-    /// One chip's ✕: unstage that path for this session.
-    var onUnstage: ((_ session: String, _ path: String) -> Void)?
+    /// One chip's ✕: unstage that exact fragment for this session.
+    var onUnstage: ((_ session: String, _ fragment: String) -> Void)?
 
     /// Who a drop would go to, and whose chips are therefore on screen. Nil
     /// refuses the drag outright — no overlay, no promise the app cannot keep
@@ -2896,8 +2899,8 @@ final class StatusHUD: NSObject {
     ///
     /// ONE closure answers both questions on purpose. The invariant this
     /// feature lives or dies by is that the chips you can see are exactly the
-    /// files that will ride; two resolutions could disagree, and the failure
-    /// would be a file riding to a session the panel never named.
+    /// fragments that will ride; two resolutions could disagree, and the
+    /// failure would be a fragment riding to a session the panel never named.
     ///
     /// Must be CHEAP — render() calls it on every repaint, and rule 9 says
     /// the main actor never waits. The app answers from a value it refreshes
@@ -3566,8 +3569,8 @@ final class StatusHUD: NSObject {
     /// that can only lie. `StateLegend.isLive` asks that question through the
     /// same function the left-click branches on, so the two can never drift.
     ///
-    /// Two items, in that order (ruled 18 Aug). GO TO AGENT first because it is
-    /// the harmless one and by far the common one — the card has carried that
+    /// GO TO AGENT first because it is the harmless one and by far the common
+    /// one — the card has carried that
     /// door since the beginning, and the grid is where you are actually looking
     /// when you want it. END SESSION keeps the bottom, behind a separator, so
     /// the destructive item is never where the pointer lands by momentum.
@@ -3575,9 +3578,9 @@ final class StatusHUD: NSObject {
     /// GO TO AGENT is offered on EVERY live row, which since 24 Aug means it
     /// duplicates the left-click everywhere except green. That repetition is
     /// deliberate: a menu that hid the item on the lamps whose tap already
-    /// does it would be teaching the exception rather than the rule — and the
-    /// rule is now that the door IS the default, and the card is green's
-    /// privilege alone.
+    /// does it would be teaching the exception rather than the rule. CONTINUE
+    /// WORK is another harmless create action and follows it. END SESSION stays
+    /// last and separated because it is the only destructive verb.
     private func rowMenu(for item: SessionRow) -> NSMenu? {
         guard SessionRow.isLive(item) else { return nil }
         let menu = NSMenu()
@@ -3587,6 +3590,15 @@ final class StatusHUD: NSObject {
         go.target = self
         go.representedObject = item.id
         menu.addItem(go)
+        if let destination = AgentHandoff.destination(for: item.harness) {
+            let handoff = NSMenuItem(
+                title: "Continue work with \(destination.label)",
+                action: #selector(continueWorkGridRowPicked(_:)),
+                keyEquivalent: "")
+            handoff.target = self
+            handoff.representedObject = item.id
+            menu.addItem(handoff)
+        }
         menu.addItem(.separator())
         // The item NAMES its target, and that IS the confirmation.
         let end = NSMenuItem(title: "End session \u{201C}\(item.name)\u{201D}",
@@ -3621,6 +3633,17 @@ final class StatusHUD: NSObject {
                   let row = face.sessionRows.first(where: { $0.id == id }) else { return }
             Track.record("row_menu", ["item": "end_session", "agent_id": Track.hash(id), "surface": "grid"])
             onTerminateSession?(id, row.name)
+        }
+    }
+
+    @objc nonisolated private func continueWorkGridRowPicked(_ sender: NSMenuItem) {
+        let picked = sender.representedObject as? String
+        MainActor.assumeIsolated {
+            guard let id = picked,
+                  let row = face.sessionRows.first(where: { $0.id == id }) else { return }
+            Track.record("row_menu", ["item": "continue_work",
+                                       "agent_id": Track.hash(id), "surface": "grid"])
+            onContinueWork?(id, row.name)
         }
     }
 

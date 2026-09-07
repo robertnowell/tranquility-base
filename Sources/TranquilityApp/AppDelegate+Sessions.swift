@@ -982,6 +982,68 @@ extension AppDelegate {
                    adapter: adapter)
     }
 
+    /// The grid's handoff is deliberately an ordinary New Agent launch with
+    /// one staged message fragment. Everything that can wait — the live probe,
+    /// archive lookup, and rollout walk — stays off the main actor; the UI half
+    /// receives only resolved strings and enters `newSession` once.
+    func continueWork(from sourceSessionId: String, name sourceName: String) {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let live = (ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
+            guard let source = live.first(where: { $0.sessionId == sourceSessionId }),
+                  let directory = source.cwd else {
+                await MainActor.run {
+                    self?.hud.showResult("That agent is no longer available to hand off.")
+                }
+                return
+            }
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                await MainActor.run {
+                    self?.hud.showResult("That agent's working directory is no longer available.")
+                }
+                return
+            }
+            guard let destination = AgentHandoff.destination(for: source.harness) else {
+                await MainActor.run {
+                    self?.hud.showResult("That agent's harness cannot be handed off yet.")
+                }
+                return
+            }
+
+            let logLocation: String
+            if source.harness == CodexAdapter().id {
+                logLocation = CodexRollout.rolloutPath(forSessionId: sourceSessionId)
+                    ?? CodexRollout.sessionsDirectory.path
+            } else {
+                logLocation = TranscriptArchive.transcriptPath(forSessionId: sourceSessionId)
+                    ?? TranscriptArchive.projectsDirectory.path
+            }
+            let reportsDirectory = HomeBase.existingPage(sessionId: sourceSessionId)
+                .map { ($0 as NSString).deletingLastPathComponent }
+            let fragment = AgentHandoff.fragment(
+                sourceName: sourceName,
+                sourceHarness: source.harness,
+                sourceSessionId: sourceSessionId,
+                logLocation: logLocation,
+                reportsDirectory: reportsDirectory)
+            let command = AgentDefaults.load(for: destination.harness)
+            let adapter = KnownHarnesses.adapter(for: destination.harness)
+
+            await MainActor.run { [weak self] in
+                Track.record("agent_handoff_requested", [
+                    "source_agent_id": Track.hash(sourceSessionId),
+                    "source_harness": .token(source.harness),
+                    "destination_harness": .token(destination.harness),
+                    "has_reports": .bool(reportsDirectory != nil),
+                ])
+                self?.newSession(directory: directory, command: command,
+                                 adapter: adapter, initialFragments: [fragment])
+            }
+        }
+    }
+
     /// Bring back a session whose process has ended.
     ///
     /// The row already checked that this session is gone and that its directory
@@ -1603,7 +1665,8 @@ extension AppDelegate {
     /// prompt. Everywhere else the greeting is the point: a launched agent is a
     /// waiting agent, and it says so.
     func newSession(directory dir: String, command: String, greet: Bool = true,
-                    adapter: any HarnessAdapter = ClaudeCodeAdapter()) {
+                    adapter: any HarnessAdapter = ClaudeCodeAdapter(),
+                    initialFragments: [String] = []) {
         let label = (dir as NSString).lastPathComponent
         let line = LaunchGreeting.nextLine()
         Track.record("agent_launch_requested", ["via": greet ? "new_agent" : "invitation",
@@ -1644,6 +1707,9 @@ extension AppDelegate {
             superseded?.abandon()
             if let superseded {
                 coordinator?.attachments.clearStaged(session: superseded.stagingKey)
+            }
+            for fragment in initialFragments {
+                _ = coordinator?.attachments.stage(fragment, session: launch.stagingKey)
             }
             // The card is a drop target NOW, not one tick from now: the
             // whole point of the staging key is the first seconds.

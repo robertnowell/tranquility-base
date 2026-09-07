@@ -164,17 +164,22 @@ final class AttachmentTrayTests: XCTestCase {
 
     // MARK: - Message assembly
 
-    func testComposeAppendsQuotedPathsAfterTranscript() {
+    func testComposePrependsFragmentsInStagingOrder() {
         let text = AttachmentTray.compose(
             transcript: "here is the repro",
-            paths: ["/Users/rob/Screen Shot 2026-08-15.png", "/tmp/log.txt"])
+            fragments: ["handoff context", "\"/Users/rob/Screen Shot 2026-08-15.png\""])
         XCTAssertEqual(text,
-            "here is the repro \"/Users/rob/Screen Shot 2026-08-15.png\" \"/tmp/log.txt\"")
+            "handoff context\n\n\"/Users/rob/Screen Shot 2026-08-15.png\"\n\nhere is the repro")
     }
 
-    func testComposeWithoutPathsIsTheTranscriptVerbatim() {
-        XCTAssertEqual(AttachmentTray.compose(transcript: "go ahead", paths: []),
+    func testComposeWithoutFragmentsIsTheTranscriptVerbatim() {
+        XCTAssertEqual(AttachmentTray.compose(transcript: "go ahead", fragments: []),
                        "go ahead")
+    }
+
+    func testComposeWithoutTranscriptIsTheFragmentsVerbatim() {
+        XCTAssertEqual(AttachmentTray.compose(transcript: "", fragments: ["one", "two"]),
+                       "one\n\ntwo")
     }
 
     func testQuotingEscapesEmbeddedQuotes() {
@@ -183,11 +188,11 @@ final class AttachmentTrayTests: XCTestCase {
     }
 
     func testComposedTextSurvivesFlatten() {
-        // The transport collapses newlines; quoted paths must not smuggle any.
+        // The transport deliberately collapses the visual paragraph boundaries
+        // before typing into a TUI whose Return key submits.
         let text = AttachmentTray.compose(transcript: "see attached",
-                                          paths: ["/a/one two.png"])
-        XCTAssertEqual(DispatchText.flatten(text), text,
-                       "assembly produces a single line already")
+                                          fragments: [AttachmentTray.quoted("/a/one two.png")])
+        XCTAssertEqual(DispatchText.flatten(text), "\"/a/one two.png\" see attached")
     }
 
     // MARK: - The holder
