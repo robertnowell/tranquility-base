@@ -550,13 +550,184 @@ extension StatusHUD {
         ])
         let genericFragmentsHaveUsefulPreviews =
             trayRow.displayedNamesForTesting
-                == ["a file.png", "Please continue the work of \u{201C}search indexing\u{201D}."]
+                == ["a file.png", "Please continue the work of \u{201C}search indexing\u{201D}. +14 chars"]
         trayRow.apply([])
 
         SelfTest.report("tray-teardown-churn", [
             ("every apply landed exactly", everyApplyLandedExactly),
             ("never left an orphan row", neverLeftAnOrphanRow),
             ("generic fragments have useful previews", genericFragmentsHaveUsefulPreviews),
+        ])
+    }
+
+
+    /// Card paste, end to end on the real panel: the reader on every shape
+    /// the clipboard takes, then the keyboard borrowed by a press and given
+    /// back by everything that should give it back. A private pasteboard, so
+    /// the drill never reads or clobbers the clipboard.
+    func cardPasteDrill() {
+        let priorTarget = replyTargetForDrop
+        let priorStaged = stagedFragments
+        let priorHandler = onItemsStaged
+        let priorBoard = pasteboardForTesting
+        defer {
+            releasePaste(because: "drill done", repaint: false)
+            replyTargetForDrop = priorTarget
+            stagedFragments = priorStaged
+            onItemsStaged = priorHandler
+            pasteboardForTesting = priorBoard
+        }
+        guard let panel else {
+            SelfTest.report("cardPaste", [("panelExists", false)])
+            return
+        }
+
+        let board = NSPasteboard(name: NSPasteboard.Name("tb-card-paste-drill"))
+        defer { board.clearContents() }
+        pasteboardForTesting = board
+        func read(_ text: Bool = true) -> PasteboardReading {
+            DropSurfaceView.read(board, acceptsText: text)
+        }
+        let png = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1, bitsPerSample: 8,
+            samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)?
+            .representation(using: .png, properties: [:]) ?? Data()
+
+        // The reader. Text is trimmed; a file outranks its own name; text
+        // outranks a rendered image; a drag never takes text; the cap
+        // refuses with a reason; an empty board is empty, not refused.
+        board.clearContents()
+        board.setString("  ship it on Tuesday\n", forType: .string)
+        var textReads = false
+        if case .text("ship it on Tuesday")? = read().items.first { textReads = true }
+        board.clearContents()
+        board.writeObjects([URL(fileURLWithPath: "/tmp/one.png") as NSURL])
+        board.setString("one.png", forType: .string)
+        var fileOutranksText = false
+        if case .file("/tmp/one.png")? = read().items.first { fileOutranksText = true }
+        board.clearContents()
+        board.setData(png, forType: .png)
+        var imageReads = false
+        if case .imageData? = read().items.first { imageReads = true }
+        board.clearContents()
+        board.setData(png, forType: .png)
+        board.setString("42", forType: .string)
+        var textOutranksImage = false
+        if case .text("42")? = read().items.first { textOutranksImage = true }
+        board.clearContents()
+        board.setString("dragged words", forType: .string)
+        let dragIgnoresText = read(false).items.isEmpty
+        board.clearContents()
+        board.setString(String(repeating: "x", count: DropSurfaceView.itemCap + 1), forType: .string)
+        let over = read()
+        let capRefusesWithAReason = over.items.isEmpty
+            && over.refusal?.contains("too large") == true
+        board.clearContents()
+        let emptyIsEmpty = read().items.isEmpty && read().refusal == nil
+
+        // A card addressing A, with a spy where the app's handler sits.
+        var tray: [String] = []
+        stagedFragments = { _ in tray }
+        var received: [(items: [DroppedItem], via: StagingSource)] = []
+        onItemsStaged = { items, via in
+            received.append((items, via))
+            for item in items { if case .text(let text) = item { tray.append(text) } }
+            return true
+        }
+        replyTargetForDrop = { (sessionId: "A", label: "promotions copy") }
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("A card you can paste to."),
+            sessionId: "A", pid: 1, project: "promotions copy", cwd: "/tmp")
+
+        // Arming: nothing but a hand does it, and it shows.
+        let notArmedAtRest = !pasteArmed && !panel.acceptsKey
+        armPaste(via: "drill")
+        let armedTakesKey = pasteArmed && panel.acceptsKey
+        let ringShows = (surfaceView?.layer?.borderWidth ?? 0) > 0
+        let hintNamesKeyAndAgent = pasteHintForTesting.contains("Command-V")
+            && pasteHintForTesting.contains("promotions copy")
+            && pasteHintForTesting.contains("Escape")
+
+        func key(_ chars: String, code: UInt16, command: Bool = false) -> NSEvent? {
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero,
+                modifierFlags: command ? [.command] : [], timestamp: 0,
+                windowNumber: panel.windowNumber, context: nil, characters: chars,
+                charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)
+        }
+        let commandV = key("v", code: 9, command: true)
+        let letterA = key("a", code: 0)
+        let escape = key("\u{1B}", code: 53)
+
+        // Command-V while armed: one paste, through the handler, as a paste,
+        // and the card stays armed for a second one. The chip shows the cut
+        // first line and says how much it is not showing.
+        let paragraph = String(repeating: "the quick brown fox jumps over the lazy dog ", count: 6)
+            .trimmingCharacters(in: .whitespaces)
+        board.clearContents()
+        board.setString(paragraph, forType: .string)
+        if let commandV { panel.sendEvent(commandV) }
+        let pasteStagedOnce = received.count == 1 && received.first?.via == .paste
+        let staysArmedAfterPaste = pasteArmed
+        let chip = trayRow.displayedNamesForTesting.first ?? ""
+        let chipIsCutAndCounted = chip == FragmentPreview.preview(paragraph)
+            && chip.hasSuffix("+\(paragraph.count - 48) chars")
+            && chip.count < paragraph.count
+
+        // A refused paste says why, on the card, and stages nothing.
+        board.clearContents()
+        board.setString(String(repeating: "x", count: DropSurfaceView.itemCap + 1), forType: .string)
+        if let commandV { panel.sendEvent(commandV) }
+        let refusalOnTheCard = received.count == 1
+            && pasteHintForTesting.contains("too large")
+
+        // Every way out. A stray key releases and is dropped; Escape releases;
+        // another window taking key releases (AppKit's own resignKey); a face
+        // change releases; and released, Command-V stages nothing.
+        if let letterA { panel.sendEvent(letterA) }
+        let strayKeyReleases = !pasteArmed && !panel.acceptsKey
+        pasteIntoTray()
+        let releasedPastesNothing = received.count == 1
+        armPaste(via: "drill")
+        if let escape { panel.sendEvent(escape) }
+        let escapeReleases = !pasteArmed
+        armPaste(via: "drill")
+        panel.resignKey()
+        let clickAwayReleases = !pasteArmed && !panel.acceptsKey
+        armPaste(via: "drill")
+        showPastAgents(items: [])
+        let faceChangeReleases = !pasteArmed
+        goHomeFromPastAgents()
+
+        // No target, no arm: the same predicate that shows chips.
+        replyTargetForDrop = { nil }
+        render()
+        armPaste(via: "drill")
+        let noTargetNoArm = !pasteArmed && !panel.acceptsKey
+
+        SelfTest.report("cardPaste", [
+            ("textReads", textReads),
+            ("fileOutranksText", fileOutranksText),
+            ("imageReads", imageReads),
+            ("textOutranksImage", textOutranksImage),
+            ("dragIgnoresText", dragIgnoresText),
+            ("capRefusesWithAReason", capRefusesWithAReason),
+            ("emptyIsEmpty", emptyIsEmpty),
+            ("notArmedAtRest", notArmedAtRest),
+            ("armedTakesKey", armedTakesKey),
+            ("ringShows", ringShows),
+            ("hintNamesKeyAndAgent", hintNamesKeyAndAgent),
+            ("pasteStagedOnce", pasteStagedOnce),
+            ("staysArmedAfterPaste", staysArmedAfterPaste),
+            ("chipIsCutAndCounted", chipIsCutAndCounted),
+            ("refusalOnTheCard", refusalOnTheCard),
+            ("strayKeyReleases", strayKeyReleases),
+            ("releasedPastesNothing", releasedPastesNothing),
+            ("escapeReleases", escapeReleases),
+            ("clickAwayReleases", clickAwayReleases),
+            ("faceChangeReleases", faceChangeReleases),
+            ("noTargetNoArm", noTargetNoArm),
         ])
     }
 
