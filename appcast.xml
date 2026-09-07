@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1104</title>
+      <sparkle:version>1104</sparkle:version>
+      <sparkle:shortVersionString>0.3.1104</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 07 Sep 2026 16:17:41 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1104-9f3da8b77/TranquilityBase-0.3.1104.dmg" type="application/octet-stream" length="13450836" sparkle:edSignature="1H3nw5V3tWPWL6SJcMWyqMlRLFXIBC6BDZNep95wzmJNrZjW41+fiTEyelw4OG5UHY/TGEVAf3ip1n5hfpW4CA==" />
+    </item>
+    <item>
       <title>Version 0.3.1103</title>
       <sparkle:version>1103</sparkle:version>
       <sparkle:shortVersionString>0.3.1103</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Mon, 07 Sep 2026 00:40:41 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1095-ce19315a8/TranquilityBase-0.3.1095.dmg" type="application/octet-stream" length="11731259" sparkle:edSignature="EKY7jCVHwb9LEdgVXKhK6kX4+8yifq3hMAxNr+tG4d/s+ufL49qvklmbwNFZbvoFGj5EpJIRGwtDIsBf2ctHDw==" />
     </item>
-    <item>
-      <title>Version 0.3.1094</title>
-      <sparkle:version>1094</sparkle:version>
-      <sparkle:shortVersionString>0.3.1094</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Mon, 07 Sep 2026 00:30:05 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1094-c9f12d2bc/TranquilityBase-0.3.1094.dmg" type="application/octet-stream" length="11730265" sparkle:edSignature="u/tcyrIZyfIKWadlak2D3sbxcIHiP/jCZrS29TgJIGQjBHST2zoJtBHsFFR0eSGHcFx+/ZonPb/c+U5XNA48DQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 0TzVv8VMt8mQ57e7Nt4On4xXYEquwLjsaBcERWLGyy5W0jASbVdXiTEQ6nekt7VvXkMUBjboAEAzKl88S38pDQ==
+edSignature: lFOIy94krZv5IyRKchUG3QruoXWcVQ/AJKT3TJK0DByc2KEJEYuTVUV73hJV6bm7nCnIs2i4PrHxklAoE6fgAg==
 length: 6457
 -->
