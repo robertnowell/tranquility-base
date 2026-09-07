@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1099</title>
+      <sparkle:version>1099</sparkle:version>
+      <sparkle:shortVersionString>0.3.1099</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 07 Sep 2026 02:55:56 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1099-108f8b9ad/TranquilityBase-0.3.1099.dmg" type="application/octet-stream" length="11743417" sparkle:edSignature="+bbxIrgcOvgzLB47oZo27Yzz6jt5qZhWxZSzlYgcIFm8dBMxKSARS489gpudVP6miTXbQsEyPP/6CVievl32BA==" />
+    </item>
+    <item>
       <title>Version 0.3.1098</title>
       <sparkle:version>1098</sparkle:version>
       <sparkle:shortVersionString>0.3.1098</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Sat, 05 Sep 2026 03:15:44 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1090-57ce7d71a/TranquilityBase-0.3.1090.dmg" type="application/octet-stream" length="9262985" sparkle:edSignature="siqY4sIgYqbH6r2OlsFLoCSHyus/Ih+uxeEO6BfGer1Tz/d1+JfdvyBtSHoFgI0y1DKFi9Y63d78zC5H5cgYCg==" />
     </item>
-    <item>
-      <title>Version 0.3.1089</title>
-      <sparkle:version>1089</sparkle:version>
-      <sparkle:shortVersionString>0.3.1089</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Fri, 04 Sep 2026 17:51:10 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1089-33a0cce1b/TranquilityBase-0.3.1089.dmg" type="application/octet-stream" length="9262066" sparkle:edSignature="c850Rt13kbZd05pzE4tT68Ffp5nH9gwTgpYAZ8h/oCqQQbt9pppp0y+ycWvcFO8x5NWDQQcXR0qx5nU6d1u7Bg==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: mwD3ZsoqUFURbP2wcRHrOPVXKcdGrzX37P9O0aGadVAXvqB0XvKMsDcDnFv0JY9sjLYAdrK4YIVE4ailJqcNAg==
-length: 6452
+edSignature: PmQJEKNXWRogEZog4GxvhmXoioeLsKIinCGKIwmLqAM5W2PS2kgKEh9JZ/B375Xag8+1w7dsrHN73QRMey4MDg==
+length: 6453
 -->
