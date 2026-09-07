@@ -800,3 +800,46 @@ final class PublishedURLLookupTests: XCTestCase {
         XCTAssertTrue(html.contains("https://example.com/p/"))
     }
 }
+
+/// What the hub prints is what the drill looks for.
+///
+/// #304 fixed the reader after `slug(forSessionId:)` became the full session
+/// id (#299) and HubIntegrity began demanding a 36-character UUID from a
+/// byline that has only ever written eight. 216 correct hubs were reported
+/// broken, beside a remedy -- `tbase homebase <id>` -- that could not work:
+/// re-rendering produced exactly the string being rejected.
+///
+/// Both sides now ask `SessionIdentity.short`. This asserts the agreement
+/// end-to-end, through the real renderer, because the two spellings sitting
+/// in different files is what allowed them to drift apart in silence.
+final class TheBylineSatisfiesTheDrillTests: XCTestCase {
+
+    private let fullId = "489b4804-8d64-4a91-a63c-5e493141c772"
+
+    private func rendered() -> String {
+        HomeBase.render(HomeBase.Model(
+            sessionId: fullId, title: "Add the discuss button",
+            callsign: "tranquility base discuss",
+            cwd: "/Users/x/Projects/tranquility-base",
+            goal: "Make the button work.",
+            turns: [HomeBase.Turn(at: Date(timeIntervalSince1970: 1_000_000),
+                                  topic: "Wire it", happened: "Finished turn.",
+                                  nextStep: "Land it.", question: nil, risk: nil)],
+            pages: []))
+    }
+
+    /// The exact substring HubIntegrity searches for is in the page.
+    func testTheRenderedHubContainsWhatTheDrillAsksFor() {
+        let expected = "session \(SessionIdentity.short(fullId))"
+        XCTAssertTrue(rendered().contains(expected),
+                      "the drill looks for \(expected); the renderer must write it")
+    }
+
+    /// The directory name and the byline name are different on purpose.
+    /// Conflating them was the bug, so the distinction is what gets held down.
+    func testTheBylineIsNotTheDirectoryName() {
+        XCTAssertEqual(HomeBase.slug(forSessionId: fullId), fullId)
+        XCTAssertFalse(rendered().contains("session \(fullId)"),
+                       "a UUID in small print names nothing a reader recognises")
+    }
+}
