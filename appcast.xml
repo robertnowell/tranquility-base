@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1100</title>
+      <sparkle:version>1100</sparkle:version>
+      <sparkle:shortVersionString>0.3.1100</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 07 Sep 2026 03:06:43 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1100-cbda9f065/TranquilityBase-0.3.1100.dmg" type="application/octet-stream" length="11743647" sparkle:edSignature="qIwwcH1w+BGUvRR8tvMhlF9xbIPJSx5MyKth3cTQ41wnLnemniZad3umMdguzw06yYt0XdRKkFKxMB12bhIzCQ==" />
+    </item>
+    <item>
       <title>Version 0.3.1099</title>
       <sparkle:version>1099</sparkle:version>
       <sparkle:shortVersionString>0.3.1099</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Sun, 06 Sep 2026 17:56:31 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1091-2c543bb57/TranquilityBase-0.3.1091.dmg" type="application/octet-stream" length="9270502" sparkle:edSignature="g94mwxH/ZBampqNl2ENcmcO/dinY3skek2xvnGhgVWK5clGjiB+WmD9y4CKRRkllqsFi2iKZkU840BSs0+vwAg==" />
     </item>
-    <item>
-      <title>Version 0.3.1090</title>
-      <sparkle:version>1090</sparkle:version>
-      <sparkle:shortVersionString>0.3.1090</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Sat, 05 Sep 2026 03:15:44 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1090-57ce7d71a/TranquilityBase-0.3.1090.dmg" type="application/octet-stream" length="9262985" sparkle:edSignature="siqY4sIgYqbH6r2OlsFLoCSHyus/Ih+uxeEO6BfGer1Tz/d1+JfdvyBtSHoFgI0y1DKFi9Y63d78zC5H5cgYCg==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: PmQJEKNXWRogEZog4GxvhmXoioeLsKIinCGKIwmLqAM5W2PS2kgKEh9JZ/B375Xag8+1w7dsrHN73QRMey4MDg==
-length: 6453
+edSignature: LB9uOXpNw8bzWAESK1j0KWN9BqduHmV1PggvzKTEOpXdh37t9GTpAqJ3LleXp55qxstS+CkHr6cD+JVe8wfACQ==
+length: 6454
 -->
