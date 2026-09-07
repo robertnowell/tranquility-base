@@ -143,7 +143,13 @@ echo "→ testing"
 TEST_OUT=$(scripts/test.sh 2>&1) && TEST_STATUS=0 || TEST_STATUS=$?
 if [ "$TEST_STATUS" -ne 0 ]; then
   echo "✗ tests failed (exit $TEST_STATUS)" >&2
-  printf '%s\n' "$TEST_OUT" | grep -E "✗|error:|XCTAssert" | head -20 >&2 || true
+  # The failing ASSERTIONS, not the compiler's source-context lines. `XCTAssert`
+  # also matched the " 65 |   XCTAssertTrue(" context the compiler prints under
+  # a warning, and twenty of those from the build phase pushed every real
+  # failure off the bottom of a CI log (PR #299: three lines, seven times,
+  # and not one of them the failure).
+  printf '%s\n' "$TEST_OUT" | grep -E "✗|: error: |error: -\[|Test Case .* failed|Test Suite .* failed" \
+    | grep -v " warning: " | head -40 >&2 || true
   exit 1
 fi
 printf '%s\n' "$TEST_OUT" | grep -E "^✓ [0-9]+ XCTest" | tail -1 | sed 's/^✓/ /'
