@@ -40,6 +40,17 @@ enum Diagnostics {
         var sentryDsn: String?
         var org: String?
         var project: String?
+
+        /// The DSN to use, or nil. An empty string is the published way of
+        /// saying "every install off", and it must read as absent
+        /// everywhere: the first deployed build logged "DSN present" for
+        /// the empty string (7 Sep), which was true of the field and false
+        /// of the fact.
+        var effectiveDSN: String? {
+            guard enabled ?? true, let dsn = sentryDsn?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !dsn.isEmpty else { return nil }
+            return dsn
+        }
     }
 
     static let remoteURL = URL(string: "https://updates.tranquilitybase.to/diagnostics.json")!
@@ -116,7 +127,7 @@ enum Diagnostics {
             Permissions.log("\(channel): DSN from TB_SENTRY_DSN")
         } else if let cached = try? Data(contentsOf: cacheURL),
                   let config = try? JSONDecoder().decode(RemoteConfig.self, from: cached) {
-            dsn = (config.enabled ?? true) ? config.sentryDsn : nil
+            dsn = config.effectiveDSN
         }
         apply()
         fetchRemoteConfig()
@@ -257,7 +268,7 @@ enum Diagnostics {
                 return
             }
             try? data.write(to: cache, options: .atomic)
-            let next = (config.enabled ?? true) ? config.sentryDsn : nil
+            let next = config.effectiveDSN
             DispatchQueue.main.async {
                 if ProcessInfo.processInfo.environment["TB_SENTRY_DSN"] == nil {
                     let changed = next != dsn
