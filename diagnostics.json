@@ -1,7 +1,7 @@
 {
   "enabled": true,
-  "sentryDsn": "",
-  "org": "",
-  "project": "",
+  "sentryDsn": "https://745e22c5956e0f399669315b627807f7@o1067849.ingest.us.sentry.io/4512042320003072",
+  "org": "rendition",
+  "project": "tranquility-base",
   "note": "Published beside the update feed by scripts/publish-diagnostics.sh. The DSN is a public, submit-only key (Sentry's own words); rotating it here rotates it for every install without a release. Empty means every install stays dormant."
 }
