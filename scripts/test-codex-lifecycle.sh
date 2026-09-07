@@ -54,7 +54,15 @@ check() { # check <name> <0-if-ok>
 echo "codex lifecycle drill (attach -> dispatch -> end, against a real session)"
 
 echo "→ seeding a real Codex session (codex exec, one cheap turn)"
-SEED_OUT=$(codex exec "Reply with exactly: DRILL-SEED-OK. Nothing else." 2>&1)
+# Bounded (7 Sep). One `codex exec` hung for twelve hours and thirty-eight
+# minutes inside a preflight run on 6 Sep; nothing above it had a deadline,
+# so the whole landing sat overnight. macOS ships no `timeout`, so perl's
+# alarm is the deadline: the seed either answers inside three minutes or
+# the drill says so and fails on its own terms.
+SEED_OUT=$(perl -e 'alarm shift; exec @ARGV' 180 codex exec "Reply with exactly: DRILL-SEED-OK. Nothing else." 2>&1) || true
+if ! printf '%s' "$SEED_OUT" | grep -q "DRILL-SEED-OK"; then
+  echo "✗ codex exec did not answer inside 180s (or answered wrongly); the drill cannot seed" >&2
+fi
 SID=$(echo "$SEED_OUT" | grep -oE 'session id: [0-9a-f-]+' | head -1 | awk '{print $3}')
 if [ -z "$SID" ]; then
   echo "✗ could not determine the seeded session id"; echo "$SEED_OUT"; exit 1
