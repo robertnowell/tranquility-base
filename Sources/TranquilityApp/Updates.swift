@@ -62,6 +62,25 @@ final class Updates: NSObject {
             startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
         let feed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String
         log("updates: feed \(feed ?? "<absent>")")
+        // A check at EVERY launch, not only when the daily clock says so.
+        // Sparkle's scheduled check fires at last-check plus a day, and a
+        // launch inside that day does not check at all: the 7 Sep drill
+        // installed the 0.3.1106 release, launched it with 0.3.1110 on the
+        // appcast, and watched it sit for ten minutes without asking,
+        // because the dev bundle had checked at 17:50. Ruled the same day:
+        // updates land as soon as possible, so a launch asks. Background,
+        // so nothing is shown unless there is something to install; a few
+        // seconds in, so the panel's first paint is never behind a fetch.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, let updater = self.controller?.updater else { return }
+            guard updater.canCheckForUpdates else {
+                self.log("updates: launch check skipped, a session is already in progress")
+                return
+            }
+            self.log("updates: launch check")
+            Track.record("update_checked", ["via": "launch"])
+            updater.checkForUpdatesInBackground()
+        }
     }
 
     /// The menu action. Always available, always allowed, even while busy: asking
