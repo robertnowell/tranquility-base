@@ -178,6 +178,15 @@ public enum Track {
         return .token(String(out.prefix(48)))
     }
 
+    /// App copy as a token: the fixed phrase before the first colon or full
+    /// stop, where the app's sentences put their own words, and never what
+    /// comes after, where they put the user's ("Typed into Terminal.",
+    /// "Install id copied: ad8e...", "could not save. <error>").
+    public static func phrase(_ text: String) -> TrackValue {
+        let head = text.split(whereSeparator: { $0 == ":" || $0 == "." }).first.map(String.init) ?? text
+        return token(from: String(head.prefix(32)))
+    }
+
     /// A thing on the user's machine, as something that can be counted and
     /// followed but not read. Sixteen hex characters of a salted SHA-256.
     public static func hash(_ id: String) -> TrackValue {
@@ -334,12 +343,34 @@ public struct LampWatch: Sendable {
         return out
     }
 
-    /// A row's reason column is prose ("waiting on you", "working 3m").
-    /// Reduce it to a token: lowercase words joined by underscores, digits
-    /// dropped, capped. Never a name, because reasons are the app's own words.
+    /// A row's reason column is prose, and for a blocked or stalled row it
+    /// is the AGENT'S prose: the first sentence of whatever error the
+    /// harness printed ("stream disconnected before completion: error
+    /// sending request for url ..."). Until 7 Sep this took its first four
+    /// words into the record. Now it classifies into a vocabulary and never
+    /// emits a word from the string itself.
     static func reasonToken(_ reason: String) -> String {
-        let words = reason.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
-        let joined = words.prefix(4).joined(separator: "_")
-        return joined.isEmpty ? "none" : String(joined.prefix(48))
+        let r = reason.lowercased()
+        if r.isEmpty { return "none" }
+        // An eight-hex short id stands in for a row with no reason.
+        if r.count == 8, r.unicodeScalars.allSatisfy({ ("0"..."9").contains(Character(String($0))) || ("a"..."f").contains(Character(String($0))) }) {
+            return "none"
+        }
+        let app: [(String, String)] = [
+            ("needs you", "needs_you"), ("waiting", "waiting"), ("answering", "answering"),
+            ("working", "working"), ("thinking", "working"), ("running", "running"),
+            ("asked", "asked"), ("blocked", "blocked"), ("stalled", "stalled"),
+            ("reviving", "reviving"), ("starting", "starting"), ("launch", "launching"),
+            ("ended", "ended"), ("exited", "ended"), ("done", "done"), ("idle", "idle"),
+        ]
+        for (needle, token) in app where r.contains(needle) { return token }
+        if r.contains("rate limit") || r.contains("429") { return "rate_limit" }
+        if r.contains("quota") || r.contains("usage limit") || r.contains("credit") || r.contains("billing") { return "quota" }
+        if r.contains("disconnect") || r.contains("network") || r.contains("connection")
+            || r.contains("request") || r.contains("timed out") || r.contains("timeout") { return "network" }
+        if r.contains("permission") || r.contains("denied") || r.contains("trust") { return "permission" }
+        if r.contains("auth") || r.contains("login") || r.contains("sign in") || r.contains("token") { return "auth" }
+        if r.contains("error") || r.contains("fail") { return "error" }
+        return "other"
     }
 }

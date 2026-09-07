@@ -249,6 +249,18 @@ public enum DispatchFailure: Error, Sendable, Equatable {
     /// We sent the keystrokes but never saw the text land. AMBIGUOUS — it may have
     /// arrived. Never auto-retried; a duplicate injection is worse than a drop.
     case verificationTimedOut
+
+    /// The case, and only the case, for the record. The payloads name a tab,
+    /// which is a directory, which is the user's; "\(failure)" carried them.
+    public var trackName: String {
+        switch self {
+        case .notEnrolled: return "not_enrolled"
+        case .targetGone: return "target_gone"
+        case .tabNotFound: return "tab_not_found"
+        case .injectionFailed: return "injection_failed"
+        case .verificationTimedOut: return "verification_timed_out"
+        }
+    }
 }
 
 public enum DispatchOutcome: Sendable {

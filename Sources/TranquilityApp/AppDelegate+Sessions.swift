@@ -595,7 +595,7 @@ extension AppDelegate {
                     hud.showResult(card)
                 case .dispatchFailed(let failure, _):
                     Track.replyOutcome("dispatch_failed", stage: "capture", agent: spokenTo,
-                                       extra: ["failure": Track.token(from: "\(failure)")])
+                                       extra: ["failure": .token(failure.trackName)])
                     lastStatusLine = "send failed: \(failure), audio kept"
                     // This branch paints no card at all, which is exactly the
                     // kind of failure a maintainer never hears about. Recorded
@@ -692,7 +692,7 @@ extension AppDelegate {
             // click that caused them.
             Permissions.log("keys: \(key.rawValue) -- \(status)")
             Track.record("api_key_set", ["key": Track.token(from: key.rawValue),
-                                         "status": Track.token(from: status)])
+                                         "status": Track.phrase(status)])
         }
     }
 
@@ -1745,8 +1745,15 @@ extension AppDelegate {
         // neither one's question is news about the other.
         let launchQuestion = LaunchQuestionSeen()
         let reportQuestion: @Sendable (String) -> Void = { [weak self] asked in
-            Track.record("launch_question_shown", ["harness": .token(adapter.id),
-                                                   "question": Track.token(from: String(asked.prefix(40)))])
+            // Classified, never quoted: the question is the pane's own text
+            // and a trust prompt names the directory it is asking about.
+            let lower = asked.lowercased()
+            let kind = lower.contains("trust") ? "trust"
+                : lower.contains("update") ? "update"
+                : lower.contains("hook") ? "hooks"
+                : lower.contains("log in") || lower.contains("sign in") || lower.contains("login") ? "sign_in"
+                : "other"
+            Track.record("launch_question_shown", ["harness": .token(adapter.id), "question": .token(kind)])
             launchQuestion.mark()
             Task { @MainActor in self?.hud.showLaunchQuestion(asked) }
         }
