@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1103</title>
+      <sparkle:version>1103</sparkle:version>
+      <sparkle:shortVersionString>0.3.1103</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 07 Sep 2026 16:07:14 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1103-016b4fb98/TranquilityBase-0.3.1103.dmg" type="application/octet-stream" length="13450980" sparkle:edSignature="YcD835P7olxqpZ1M2srw6yDzvbalkhN9yeFfB3FxC00UFlYepVmn4hx+RMNPNJ5ilPPCJ0eJ3DGIH8k4UBAzBw==" />
+    </item>
+    <item>
       <title>Version 0.3.1102</title>
       <sparkle:version>1102</sparkle:version>
       <sparkle:shortVersionString>0.3.1102</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Mon, 07 Sep 2026 00:30:05 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1094-c9f12d2bc/TranquilityBase-0.3.1094.dmg" type="application/octet-stream" length="11730265" sparkle:edSignature="u/tcyrIZyfIKWadlak2D3sbxcIHiP/jCZrS29TgJIGQjBHST2zoJtBHsFFR0eSGHcFx+/ZonPb/c+U5XNA48DQ==" />
     </item>
-    <item>
-      <title>Version 0.3.1093</title>
-      <sparkle:version>1093</sparkle:version>
-      <sparkle:shortVersionString>0.3.1093</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Sun, 06 Sep 2026 18:54:16 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1093-43558d176/TranquilityBase-0.3.1093.dmg" type="application/octet-stream" length="9395930" sparkle:edSignature="rmhv3KkjChFXygCTsrCuavHQkRQS+5FpVQYVGN77wZ5SjnjKWLKzV1Zsxo0Lo4xURMJBFcXT8soKyzD3r48MBQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: iPMPkyRl4lWz8SkHaY8ntVhckCUThO+PPM6zLb+N+wK40tM8YN1+78c7Xz/lMrNjAcbenkxsdysS+x0LsUl8DQ==
-length: 6456
+edSignature: 0TzVv8VMt8mQ57e7Nt4On4xXYEquwLjsaBcERWLGyy5W0jASbVdXiTEQ6nekt7VvXkMUBjboAEAzKl88S38pDQ==
+length: 6457
 -->
