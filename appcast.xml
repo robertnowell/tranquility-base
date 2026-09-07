@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1098</title>
+      <sparkle:version>1098</sparkle:version>
+      <sparkle:shortVersionString>0.3.1098</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 07 Sep 2026 02:35:39 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1098-6c72b4ee9/TranquilityBase-0.3.1098.dmg" type="application/octet-stream" length="11742249" sparkle:edSignature="gUVO1zvwe1V6dg3WpqHYq4jKzC8qtSyPAzHKslLNcuN+MmhJ79nJq6+b96bXiIvfPGuhu1R9rJc+phdLkDffCw==" />
+    </item>
+    <item>
       <title>Version 0.3.1097</title>
       <sparkle:version>1097</sparkle:version>
       <sparkle:shortVersionString>0.3.1097</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Fri, 04 Sep 2026 17:51:10 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1089-33a0cce1b/TranquilityBase-0.3.1089.dmg" type="application/octet-stream" length="9262066" sparkle:edSignature="c850Rt13kbZd05pzE4tT68Ffp5nH9gwTgpYAZ8h/oCqQQbt9pppp0y+ycWvcFO8x5NWDQQcXR0qx5nU6d1u7Bg==" />
     </item>
-    <item>
-      <title>Version 0.3.1088</title>
-      <sparkle:version>1088</sparkle:version>
-      <sparkle:shortVersionString>0.3.1088</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Fri, 04 Sep 2026 15:47:00 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1088-1f4a7a558/TranquilityBase-0.3.1088.dmg" type="application/octet-stream" length="9261842" sparkle:edSignature="Uw5lcDqqIbnO/v+LiIewMy6hyOVA1/4OipBfzWogqbaIXs12uwapZjk6zwxbdpSMqQGfLeX2+NCeH5nuJVonBw==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: HBegMgPzLhXIvpE1qFHpl7Z5DgLVPCMbEQn2koFGFQc5l51ObIbse63yKMfGtmsGDeuhvhzwG6J6PmoQEovXCA==
-length: 6451
+edSignature: mwD3ZsoqUFURbP2wcRHrOPVXKcdGrzX37P9O0aGadVAXvqB0XvKMsDcDnFv0JY9sjLYAdrK4YIVE4ailJqcNAg==
+length: 6452
 -->
