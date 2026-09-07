@@ -147,4 +147,39 @@ final class LampSwitchTests: XCTestCase {
         XCTAssertEqual(LampSwitch.loadOn(from: onUrl), ["here"])
         XCTAssertEqual(LampSwitch.load(from: url), ["filed"])
     }
+
+    func testRekeyCarriesAPickedUpLampToTheFork() {
+        LampSwitch.turnOn("parent", at: url, onAt: onUrl)
+
+        LampSwitch.rekey(from: "parent", to: "child", at: url, onAt: onUrl)
+
+        XCTAssertEqual(LampSwitch.loadOn(from: onUrl), ["child"])
+        XCTAssertEqual(LampSwitch.load(from: url), [])
+    }
+
+    func testRekeyCarriesAFiledLampToTheFork() {
+        LampSwitch.turnOff("parent", at: url, onAt: onUrl)
+
+        LampSwitch.rekey(from: "parent", to: "child", at: url, onAt: onUrl)
+
+        XCTAssertEqual(LampSwitch.load(from: url), ["child"])
+        XCTAssertEqual(LampSwitch.loadOn(from: onUrl), [])
+    }
+
+    func testDestinationPreferenceWinsAndTheParentIsCleanedUp() {
+        LampSwitch.turnOn("parent", at: url, onAt: onUrl)
+        LampSwitch.turnOff("child", at: url, onAt: onUrl)
+
+        LampSwitch.rekey(from: "parent", to: "child", at: url, onAt: onUrl)
+
+        XCTAssertEqual(LampSwitch.load(from: url), ["child"])
+        XCTAssertEqual(LampSwitch.loadOn(from: onUrl), [])
+    }
+
+    func testRekeyIsIdempotent() {
+        LampSwitch.turnOn("parent", at: url, onAt: onUrl)
+        LampSwitch.rekey(from: "parent", to: "child", at: url, onAt: onUrl)
+        LampSwitch.rekey(from: "parent", to: "child", at: url, onAt: onUrl)
+        XCTAssertEqual(LampSwitch.loadOn(from: onUrl), ["child"])
+    }
 }
