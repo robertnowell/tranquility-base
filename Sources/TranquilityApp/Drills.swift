@@ -640,14 +640,27 @@ extension StatusHUD {
             spoken: SpokenTextSanitizer().sanitize("A card you can paste to."),
             sessionId: "A", pid: 1, project: "promotions copy", cwd: "/tmp")
 
-        // Arming: nothing but a hand does it, and it shows.
+        // Arming: nothing but a hand does it, and it shows without adding a
+        // line or moving the panel's actions under the pointer.
         let notArmedAtRest = !pasteArmed && !panel.acceptsKey
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let restingHeight = intendedHeight
+        let restingFit = contentStack?.fittingSize.height
+        let restingActionFrame = actionRow.convert(actionRow.bounds, to: panel.contentView)
+        let restingGoFrame = goButton.convert(goButton.bounds, to: panel.contentView)
         armPaste(via: "drill")
+        panel.contentView?.layoutSubtreeIfNeeded()
         let armedTakesKey = pasteArmed && panel.acceptsKey
         let ringShows = (surfaceView?.layer?.borderWidth ?? 0) > 0
-        let hintNamesKeyAndAgent = pasteHintForTesting.contains("Command-V")
-            && pasteHintForTesting.contains("promotions copy")
-            && pasteHintForTesting.contains("Escape")
+        let ringIsWorkingBlue = surfaceView?.layer?.borderColor
+            == StateLegend.Palette.working.cgColor
+        let armAddsNoHint = pasteHintForTesting.isEmpty
+        let armedActionFrame = actionRow.convert(actionRow.bounds, to: panel.contentView)
+        let armedGoFrame = goButton.convert(goButton.bounds, to: panel.contentView)
+        let armKeepsGeometry = restingHeight == intendedHeight
+            && restingFit == contentStack?.fittingSize.height
+            && restingActionFrame == armedActionFrame
+            && restingGoFrame == armedGoFrame
 
         func key(_ chars: String, code: UInt16, command: Bool = false) -> NSEvent? {
             NSEvent.keyEvent(
@@ -717,7 +730,9 @@ extension StatusHUD {
             ("notArmedAtRest", notArmedAtRest),
             ("armedTakesKey", armedTakesKey),
             ("ringShows", ringShows),
-            ("hintNamesKeyAndAgent", hintNamesKeyAndAgent),
+            ("ringIsWorkingBlue", ringIsWorkingBlue),
+            ("armAddsNoHint", armAddsNoHint),
+            ("armKeepsGeometry", armKeepsGeometry),
             ("pasteStagedOnce", pasteStagedOnce),
             ("staysArmedAfterPaste", staysArmedAfterPaste),
             ("chipIsCutAndCounted", chipIsCutAndCounted),

@@ -2435,20 +2435,20 @@ final class StatusHUD: NSObject {
         // this.)
         updateActionRowVisibility()
 
-        // Card paste: the ring and the line are DERIVED from the panel's own
-        // flag, the way chips are derived from the tray, so neither can
-        // outlive the keyboard that licensed them. Written here, above the
-        // one resize, so an armed card is measured with its line already in
-        // place rather than resized a second time on every tick.
+        // Card paste: selection is the ring, and only the ring. The shortcut
+        // sentence that used to appear here added a stack row, grew the panel,
+        // and moved its actions under the pointer at exactly the moment a missed
+        // button click armed paste. The keyboard state is discoverable by use;
+        // it does not get to change the card's geometry.
+        //
+        // A real refusal still says why. That line appears only after Command-V
+        // has been attempted, when feedback is owed, never merely because the
+        // card took focus.
         let armed = pasteArmed
         surfaceView?.layer?.borderWidth = armed ? 1 : 0
-        surfaceView?.layer?.borderColor = armed ? StateLegend.Palette.accent.cgColor : nil
-        if armed, let target = replyTargetForDrop?() {
-            // The key carries its NAME, never a bare mark.
-            let line = "Command-V pastes to \(target.label) \u{00B7} Escape releases"
-            let composed = pasteNote.map { "\(line) \u{00B7} \($0)" } ?? line
-            hintLabel.stringValue = [composed, hintLabel.stringValue]
-                .filter { !$0.isEmpty }.joined(separator: "\n")
+        surfaceView?.layer?.borderColor = armed ? StateLegend.Palette.working.cgColor : nil
+        if armed, let pasteNote {
+            hintLabel.stringValue = pasteNote
         }
 
         // And the same rule for the line under it: an empty hint is not a line.
