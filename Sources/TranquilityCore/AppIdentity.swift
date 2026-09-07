@@ -71,16 +71,20 @@ public enum ProductDefaults {
     /// the choices the installed app already owns. Never overwrite a shared
     /// value: after migration, it is the authority for both lanes.
     public static func migrateLegacyProductionValues() {
-        guard let legacy = UserDefaults(suiteName: "com.robertnowell.voice-dispatch")
-        else { return }
-        migrate(keys: migratedKeys, from: legacy, to: shared)
+        let legacy = UserDefaults.standard.persistentDomain(
+            forName: "com.robertnowell.voice-dispatch") ?? [:]
+        migrate(keys: migratedKeys, values: legacy, to: shared)
     }
 
-    /// Pure migration seam for the unit test; production uses the two named
-    /// domains above. Existing shared choices always win.
-    static func migrate(keys: [String], from source: UserDefaults, to destination: UserDefaults) {
+    /// Pure migration seam for the unit test; production reads the legacy
+    /// persistent domain above. Existing shared choices always win.
+    static func migrate(
+        keys: [String],
+        values source: [String: Any],
+        to destination: UserDefaults
+    ) {
         for key in keys where destination.object(forKey: key) == nil {
-            guard let value = source.object(forKey: key) else { continue }
+            guard let value = source[key] else { continue }
             destination.set(value, forKey: key)
         }
     }
