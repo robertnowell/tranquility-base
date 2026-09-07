@@ -44,6 +44,10 @@ extension AppDelegate {
             case .show, .unknown:    session = nil; ref = nil
             }
             Permissions.log("deeplink: \(action) session=\(session?.prefix(8) ?? "-")")
+            var link: [String: TrackValue] = ["action": Track.token(from: action),
+                                              "names_agent": .bool(session != nil)]
+            if let session { link["agent_id"] = Track.hash(session) }
+            Track.record("deep_link", link)
             // A deeplink is an instruction that arrived and is being carried
             // out, so it reads as recognized — the same green a gesture gets.
             hud.acknowledge(.recognized)
@@ -227,6 +231,12 @@ extension AppDelegate {
     func reportNothingHeard(because reason: String) {
         let held = recorder.lastOpenSeconds
         let signal = recorder.peakLevel > 0
+        Track.record("capture_refused", [
+            "reason": Track.token(from: reason),
+            "seconds": .double((Double(held) * 100).rounded() / 100),
+            "peak_bucket": .token(recorder.peakLevel < 0.005 ? "silent"
+                                  : recorder.peakLevel < 0.05 ? "quiet" : "audible"),
+        ])
         Permissions.log(String(format: "nothing heard (%@): held %.2fs, peak %.4f",
                                reason, held, recorder.peakLevel))
         // Home first, through the user door: the capture state owns the stage,
@@ -324,6 +334,7 @@ extension AppDelegate {
                     // be pasted anywhere. The audio row is durable and stays.
                     guard mine == replyGeneration else {
                         Permissions.log("dictation: superseded or cancelled mid-transcription; dropped")
+                        Track.record("dictation", ["destination": "none", "outcome": "superseded"])
                         return
                     }
                     guard let text = utterance.transcriptText, !text.isEmpty else {
@@ -341,6 +352,8 @@ extension AppDelegate {
                     if let app = FocusedInput.focusedEditableApp() {
                         FocusedInput.paste(text)
                         Permissions.log("dictation: typed \(text.count) chars into \(app)")
+                        Track.record("dictation", ["destination": "field", "chars": .int(text.count),
+                                                   "words": .int(Track.wordCount(text))])
                         lastStatusLine = "typed into \(app)"
                         hud.showDictationReceipt("Typed into \(app).")
                     } else {
@@ -349,6 +362,8 @@ extension AppDelegate {
                         pasteboard.clearContents()
                         pasteboard.setString(text, forType: .string)
                         Permissions.log("dictation: copied \(text.count) chars to clipboard")
+                        Track.record("dictation", ["destination": "clipboard", "chars": .int(text.count),
+                                                   "words": .int(Track.wordCount(text))])
                         lastStatusLine = "copied to clipboard"
                         hud.showDictationReceipt(
                             "Copied to clipboard: \u{201C}\(text.prefix(80))\u{201D}")
@@ -378,6 +393,9 @@ extension AppDelegate {
                     let waited = Int(Date().timeIntervalSince(launch.startedAt))
                     Permissions.log("launch: reply waited \(waited)s for \(launch.label) — "
                         + (arrived.map { "went to \($0.prefix(8))" } ?? "never came up"))
+                    Track.record("reply_waited_for_launch", [
+                        "seconds": .int(waited), "arrived": .bool(arrived != nil),
+                    ])
                     guard let arrived else {
                         // A newer launch can win while an answer to the old
                         // greeting is still closing. The old promise correctly
@@ -398,6 +416,7 @@ extension AppDelegate {
                         // at them rather than into somebody else's tab.
                         recordingDestination = nil
                         Permissions.log("send: \(launch.label) never registered; nothing sent")
+                        Track.replyOutcome("launch_never_registered", stage: "capture")
                         let card = "\(launch.label) never came up, nothing was sent. "
                             + "Your words are kept; check Terminal for a prompt."
                         Failures.report(.launchNeverRegistered,
@@ -413,6 +432,7 @@ extension AppDelegate {
                     // `.none` is a capture that lost its address, which refuses
                     // rather than falling back to a derivation.
                     Permissions.log("send: recording has no captured address; refusing")
+                    Track.replyOutcome("no_address", stage: "capture")
                     hud.showResult("This recording lost its address. Audio kept; nothing sent.")
                     rebuildMenu()
                     return
@@ -463,6 +483,7 @@ extension AppDelegate {
                         try? coordinator.cancelSend(utteranceId: staleId)
                     }
                     lastStatusLine = "replaced by a newer reply"
+                    Track.replyOutcome("superseded", stage: "capture", agent: spokenTo)
                     rebuildMenu()
                     return
                 }
@@ -472,6 +493,8 @@ extension AppDelegate {
                 // dead): status line + log, straight back to the grid.
                 case .dispatched(let text, let ms, let dispatchedSessionId, let dispatchedPid):
                     landedOnTheSession = true
+                    Track.replyOutcome("dispatched", stage: "capture", agent: spokenTo, text: text,
+                                       extra: ["latency_ms": .int(ms)])
                     lastStatusLine = "\(StateLegend.Glyph.sent) sent (\(ms)ms): \(text.prefix(48))"
                     if let dispatchedPid {
                         hud.attachLivePid(dispatchedPid, sessionId: dispatchedSessionId)
@@ -483,6 +506,7 @@ extension AppDelegate {
                     // simply behind a turn that has not finished. The row is
                     // honestly working until the agent's own output says so.
                     landedOnTheSession = true
+                    Track.replyOutcome("queued", stage: "capture", agent: spokenTo, text: text)
                     lastStatusLine = "\(StateLegend.Glyph.sent) queued: \(text.prefix(48))"
                     if let dispatchedPid {
                         hud.attachLivePid(dispatchedPid, sessionId: dispatchedSessionId)
@@ -490,6 +514,7 @@ extension AppDelegate {
                     hud.endCapture(because: "queued")
                     showIdleGrid()
                 case .noTarget:
+                    Track.replyOutcome("no_target", stage: "capture", agent: spokenTo)
                     lastStatusLine = "nothing to reply to yet"
                     hud.showResult("Nothing to reply to yet. "
                                    + "Tap ⌃ Ctrl + ⌥ Option to hear one first.")
@@ -502,6 +527,7 @@ extension AppDelegate {
                     // be replied to. The old fallback chain ended at the raw
                     // cwd basename, which is how "arc-work" reached a card.
                     let label = coreLabel
+                    Track.replyOutcome("ready_to_send", stage: "capture", agent: sessionId, text: text)
                     // Sending is the default. The window exists to stop it, not to
                     // permit it: approving every correct transcript is a toll.
                     lastStatusLine = "sending to \(label)…"
@@ -535,15 +561,19 @@ extension AppDelegate {
                 case .sessionNotReady(let readiness):
                     // Sanctioned change (b): plain words for the actual condition.
                     let why = StateLegend.plainWords(for: readiness)
+                    Track.replyOutcome("session_not_ready", stage: "capture", agent: spokenTo,
+                                       extra: ["readiness": Track.token(from: "\(readiness)")])
                     lastStatusLine = "can't send, \(why); audio kept"
                     hud.showResult("Can't send yet, \(why). Recording kept. Try again shortly.")
                 case .transcriptionFailed:
+                    Track.replyOutcome("transcription_failed", stage: "capture", agent: spokenTo)
                     lastStatusLine = "couldn't transcribe, audio kept"
                     Failures.report(.transcriptionProvider, reason: "transcription failed; audio kept",
                                     card: "Couldn't transcribe that. The audio is saved. Retry from the menu.",
                                     session: spokenTo)
                     hud.showResult("Couldn't transcribe that. The audio is saved. Retry from the menu.")
                 case .dispatchFailed(.verificationTimedOut, _):
+                    Track.replyOutcome("verification_timed_out", stage: "capture", agent: spokenTo)
                     lastStatusLine = "\(StateLegend.Glyph.needsYou) unconfirmed. Check the tab before resending"
                     let card = "Sent, but never confirmed. It may or may not have landed. "
                         + "check the tab before resending."
@@ -555,6 +585,8 @@ extension AppDelegate {
                     // This path painted nothing at all before — a silently lost
                     // reply. Same rescue as the confirm path: clipboard + card.
                     let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
+                    Track.replyOutcome("tab_gone", stage: "capture", agent: spokenTo,
+                                       extra: ["clipboard_rescue": .bool(copied)])
                     lastStatusLine = copied ? "tab gone, words on the clipboard"
                                             : "tab gone, words kept in the log"
                     let card = StateLegend.tabGoneRescueMessage(label: nil, copied: copied)
@@ -562,6 +594,8 @@ extension AppDelegate {
                                     session: spokenTo)
                     hud.showResult(card)
                 case .dispatchFailed(let failure, _):
+                    Track.replyOutcome("dispatch_failed", stage: "capture", agent: spokenTo,
+                                       extra: ["failure": Track.token(from: "\(failure)")])
                     lastStatusLine = "send failed: \(failure), audio kept"
                     // This branch paints no card at all, which is exactly the
                     // kind of failure a maintainer never hears about. Recorded
@@ -569,11 +603,13 @@ extension AppDelegate {
                     Failures.report(.deliveryFailed, reason: "dispatch failed: \(failure)",
                                     session: spokenTo)
                 case .duplicateSuppressed(let utteranceId):
+                    Track.replyOutcome("duplicate_suppressed", stage: "capture", agent: spokenTo)
                     lastStatusLine = "duplicate send suppressed"
                     Permissions.log("send: duplicate callback suppressed for "
                                     + utteranceId.prefix(8))
                 }
             } catch {
+                Track.replyOutcome("threw", stage: "capture")
                 lastStatusLine = "reply failed: \(error)"
             }
             rebuildMenu()
@@ -635,6 +671,7 @@ extension AppDelegate {
         AudioInputPreference.current = preference
         let resolved = AudioInputDevice.resolve(preference)
         lastStatusLine = "mic: \(resolved?.name ?? preference.title)"
+        Track.record("setting_changed", ["key": "microphone", "value": Track.token(from: preference.rawValue)])
         Permissions.log("mic: preference \(preference.rawValue) "
             + "→ \(resolved?.name ?? "engine default")")
         // Rebuild now rather than on the next press, for the same reason launch
@@ -654,6 +691,8 @@ extension AppDelegate {
             // HUD, which is where this app already says things that outlive the
             // click that caused them.
             Permissions.log("keys: \(key.rawValue) -- \(status)")
+            Track.record("api_key_set", ["key": Track.token(from: key.rawValue),
+                                         "status": Track.token(from: status)])
         }
     }
 
@@ -681,6 +720,7 @@ extension AppDelegate {
                 // is a notification nobody reads twice.
                 if outcome?.isBad == true { lines.append("\(key.provider): \(summary)") }
             }
+            Track.record("keys_checked", ["stored": .int(stored.count), "bad": .int(lines.count)])
             await MainActor.run {
                 self.hud.note(lines.isEmpty
                     ? "All \(stored.count) keys are working."
@@ -703,6 +743,8 @@ extension AppDelegate {
             VoiceCatalog.selectedVoiceId = id
         }
         lastStatusLine = "voice: \(sender.title)"
+        Track.record("voice_changed", ["provider": SystemVoiceCatalog.isSystemVoice(id) ? "system" : "elevenlabs",
+                                       "via": "menu"])
         rebuildMenu()
 
         // Hear it now. Choosing from a list of names is guesswork otherwise.
@@ -731,6 +773,7 @@ extension AppDelegate {
             // Held, not dropped. The count is still right the moment the panel is
             // next shown, and nothing was lost by staying quiet.
             Permissions.log("ambient: held (\(decision.reason))")
+            Track.record("panel_held", ["reason": Track.token(from: decision.reason), "waiting": .int(waiting)])
             gateLog.record(decision, context: "arrival")
             // A hail held because the device is busy looks exactly like an agent
             // that never came back, so this one refusal explains itself. Every
@@ -809,6 +852,7 @@ extension AppDelegate {
             return
         }
         Permissions.log("ambient: surfaced for \(waiting) waiting")
+        Track.record("panel_shown", ["via": "ambient", "waiting": .int(waiting)])
         hud.showIdle(rows: rows)
         // The arrival makes a SOUND, not a sentence.
         //
@@ -1014,6 +1058,7 @@ extension AppDelegate {
         Permissions.log("past agents: \(items.count) rows "
             + "(\(codex) codex, \(items.count - codex) claude-code), "
             + "archiveRead=\(SessionDiscovery.hasScanned())")
+        Track.record("past_agents_opened", ["rows": .int(items.count), "codex": .int(codex)])
         hud.showPastAgents(items: items)
 
         // The list is on screen and usable before a single transcript is read.
@@ -1069,6 +1114,11 @@ extension AppDelegate {
     /// and a silent return, which on a control you just pressed is
     /// indistinguishable from the app being broken — the exact complaint.
     func goToSession(_ sessionId: String) {
+        let began = Date()
+        let report: @Sendable (String) -> Void = { outcome in
+            Track.record("go_to_agent", ["agent_id": Track.hash(sessionId), "outcome": .token(outcome),
+                                         "ms": .int(Int(Date().timeIntervalSince(began) * 1000))])
+        }
         Task.detached { [weak self] in
             // `agents` alone made GO TO AGENT a permanent no-op for every
             // Codex session (26 Aug) — silently logged and returned, never
@@ -1077,6 +1127,7 @@ extension AppDelegate {
                 + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                 .first(where: { $0.sessionId == sessionId }) else {
                 Permissions.log("goTo: \(sessionId.prefix(8)) is not live any more")
+                report("not_live")
                 await MainActor.run { [weak self] in
                     self?.hud.finishGoToSession("That agent isn't running any more. "
                                          + "Revive it from Past Agents.")
@@ -1105,6 +1156,7 @@ extension AppDelegate {
                     case .endedButNotRestarted(let why, _, let manual):
                         Permissions.log("goTo: transfer ended but did not restart "
                             + "\(sessionId.prefix(8)) — \(why)")
+                        report("transfer_ended_not_restarted")
                         await MainActor.run {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(manual, forType: .string)
@@ -1133,6 +1185,7 @@ extension AppDelegate {
                             let outcome = await TerminalTabFocus.focus(
                                 tty: pane.paneTty, sessionId: sessionId)
                             if case .focused = outcome {
+                                report("focused_other_holder")
                                 await MainActor.run { [weak self] in
                                     self?.hud.finishGoToSession(nil)
                                 }
@@ -1151,6 +1204,7 @@ extension AppDelegate {
                     case .moved:
                         message = ""
                     }
+                    report("transfer_refused")
                     await MainActor.run { [weak self] in self?.hud.finishGoToSession(message) }
                     return
                 }
@@ -1166,16 +1220,20 @@ extension AppDelegate {
                 switch outcome {
                 case .focused:
                     Permissions.log("goTo: focused \(tty)")
+                    report(owned == nil ? "focused_after_transfer" : "focused")
                     self.hud.finishGoToSession(nil)
                 case .tabGone:
                     Permissions.log("goTo: tab not found for \(tty)")
+                    report("tab_gone")
                     self.hud.finishGoToSession("That agent's window isn't open any more.")
                 case .timedOut(let seconds):
                     Permissions.log("goTo TIMEOUT after \(seconds)s for \(tty)")
+                    report("timed_out")
                     self.hud.finishGoToSession("Terminal didn't answer within \(seconds) seconds. "
                                         + "The session is fine. Try again in a moment.")
                 case .failed(let message):
                     Permissions.log("goTo FAILED: \(message)")
+                    report("failed")
                     self.hud.finishGoToSession("Couldn't control Terminal: \(message)")
                 }
             }
@@ -1183,6 +1241,7 @@ extension AppDelegate {
     }
 
     func revive(_ sessionId: String, name: String) {
+        Track.record("agent_revive_requested", ["agent_id": Track.hash(sessionId)])
         hud.showReceipt(.reviving(name))
         Task.detached {
             let fresh = SessionDiscovery.discover(ttl: 0).sessions
@@ -1524,6 +1583,8 @@ extension AppDelegate {
         let command = inline ?? SessionLauncher.defaultCommand
         Permissions.log("invitation: launching in \(directory) "
                         + "(prompt \(inline == nil ? "clipboard only" : "inline"))")
+        Track.record("agent_launch_requested", ["via": "invitation", "prompt": inline == nil ? "clipboard" : "inline",
+                                                "directory_id": Track.hash(directory)])
         // No greeting here. This session was started FOR something and the card
         // that offered it already said what; asking "how would you like to get
         // started?" over the top of an answered question is the app talking to
@@ -1545,6 +1606,10 @@ extension AppDelegate {
                     adapter: any HarnessAdapter = ClaudeCodeAdapter()) {
         let label = (dir as NSString).lastPathComponent
         let line = LaunchGreeting.nextLine()
+        Track.record("agent_launch_requested", ["via": greet ? "new_agent" : "invitation",
+                                                "harness": .token(adapter.id),
+                                                "directory_id": Track.hash(dir)])
+        let requestedAt = Date()
 
         // The card, FIRST — before Terminal is asked to do anything (ruled
         // 18 Aug). Painting after the launch meant painting after a window
@@ -1614,6 +1679,8 @@ extension AppDelegate {
         // neither one's question is news about the other.
         let launchQuestion = LaunchQuestionSeen()
         let reportQuestion: @Sendable (String) -> Void = { [weak self] asked in
+            Track.record("launch_question_shown", ["harness": .token(adapter.id),
+                                                   "question": Track.token(from: String(asked.prefix(40)))])
             launchQuestion.mark()
             Task { @MainActor in self?.hud.showLaunchQuestion(asked) }
         }
@@ -1669,6 +1736,8 @@ extension AppDelegate {
                 SessionLauncher.watchForTrustPrompt(
                     tty: tty, adapter: adapter, onNeedsHuman: reportQuestion)
             }
+            Track.record("agent_launched", ["harness": .token(adapter.id), "how": "new",
+                                            "ms": .int(Int(Date().timeIntervalSince(requestedAt) * 1000))])
             await MainActor.run { [weak self] in
                 self?.lastStatusLine = "new session launched"
                 self?.rebuildMenu()
@@ -1774,6 +1843,8 @@ extension AppDelegate {
                 // names its expectation rather than what happened is the
                 // exact shape this whole day was spent unpicking.
                 let waited = Int(Date().timeIntervalSince(launchedAt).rounded())
+                Track.record("launch_unregistered", ["harness": .token(adapter.id), "seconds": .int(waited),
+                                                     "process_alive": .bool(started != nil)])
                 Permissions.log("launcher: nothing registered in \(dir) after \(waited)s"
                     + (started == nil ? " and no process is alive on \(tty)"
                                       : " though a process is alive on \(tty)")
@@ -1873,6 +1944,9 @@ extension AppDelegate {
                     launch?.settle()
                     Permissions.log("launch: \(sessionId.prefix(8)) registered, but you "
                         + "moved on — replies stay where you put them")
+                    Track.record("agent_registered", ["agent_id": Track.hash(sessionId), "harness": .token(adapter.id),
+                                                      "seconds_to_register": .int(Int(Date().timeIntervalSince(launchedAt))),
+                                                      "claimed_reply": false])
                     return
                 }
                 self.activeConversation = (sessionId, label, dir)
@@ -1881,6 +1955,9 @@ extension AppDelegate {
                 // hand-off the 24 Aug misroute happened one hop before.
                 launch?.settle()
                 Permissions.log("launch: replies now go to \(sessionId.prefix(8))")
+                Track.record("agent_registered", ["agent_id": Track.hash(sessionId), "harness": .token(adapter.id),
+                                                  "seconds_to_register": .int(Int(Date().timeIntervalSince(launchedAt))),
+                                                  "claimed_reply": true])
             }
 
             guard let store = await self?.store else { return }

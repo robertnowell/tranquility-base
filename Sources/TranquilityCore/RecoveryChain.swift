@@ -270,13 +270,37 @@ extension QueueStore {
             utterance.transcriptFinality = streamed.finality
             utterance.status = .transcribed
             try update(utterance: utterance)
+            Track.record("transcription", [
+                "outcome": "completed", "streamed": true,
+                "provider": Track.token(from: streamed.provider),
+                "finality": Track.token(from: "\(streamed.finality)"),
+                "latency_ms": 0, "audio_ms": .int(Int(stored.durationMs)),
+                "chars": .int(streamed.text.count), "words": .int(Track.wordCount(streamed.text)),
+            ])
             return utterance
         }
 
         utterance.status = .transcribing
         try update(utterance: utterance)
 
+        let began = Date()
         let outcome = await chain.transcribe(fileAt: stored.url)
+        var transcription: [String: TrackValue] = [
+            "streamed": .bool(streamed != nil),
+            "latency_ms": .int(Int(Date().timeIntervalSince(began) * 1000)),
+            "audio_ms": .int(Int(stored.durationMs)),
+            "attempts": .int(outcome.attempts.count),
+        ]
+        if let result = outcome.result {
+            transcription["outcome"] = "completed"
+            transcription["provider"] = Track.token(from: result.provider)
+            transcription["finality"] = Track.token(from: "\(result.finality)")
+            transcription["chars"] = .int(result.text.count)
+            transcription["words"] = .int(Track.wordCount(result.text))
+        } else {
+            transcription["outcome"] = "failed"
+        }
+        Track.record("transcription", transcription)
 
         if let result = outcome.result {
             utterance.transcriptText = result.text

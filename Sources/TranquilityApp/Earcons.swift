@@ -78,6 +78,8 @@ enum Earcons {
     static func play(_ cue: EarconGate.Cue, gate: EarconGate) {
         if let why = gate.refusal(for: cue) {
             Permissions.log("earcon: dropped \(cue.rawValue) — \(why)")
+            Track.record("earcon", ["cue": Track.token(from: cue.rawValue), "played": false,
+                                    "dropped_why": Track.token(from: why)])
             return
         }
         emit(cue)
@@ -155,8 +157,11 @@ enum Earcons {
             // file, so it is safe from here.
             if voice.play() {
                 Permissions.log("earcon: \(cue.rawValue)")
+                Track.record("earcon", ["cue": Track.token(from: cue.rawValue), "played": true])
             } else {
                 Permissions.log("earcon: \(cue.rawValue) play refused")
+                Track.record("earcon", ["cue": Track.token(from: cue.rawValue), "played": false,
+                                        "dropped_why": "play_refused"])
             }
         }
     }

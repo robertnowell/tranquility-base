@@ -69,6 +69,33 @@ final class TrackTests: XCTestCase {
         XCTAssertEqual(lines().first?["build"] as? String, "1096")
     }
 
+    func testAReplyOutcomeCarriesCountsOfTheTextAndNeverTheText() {
+        Track.replyOutcome("dispatched", stage: "capture", agent: "sess-1",
+                           text: "please rename the flag to dry-run", extra: ["latency_ms": 41])
+        let line = lines().first
+        XCTAssertEqual(line?["event"] as? String, "reply_outcome")
+        XCTAssertEqual(line?["outcome"] as? String, "dispatched")
+        XCTAssertEqual(line?["stage"] as? String, "capture")
+        XCTAssertEqual(line?["chars"] as? Int, 33)
+        XCTAssertEqual(line?["words"] as? Int, 6)
+        XCTAssertEqual(line?["latency_ms"] as? Int, 41)
+        XCTAssertEqual((line?["agent_id"] as? String)?.count, 16)
+        // The words themselves are not in the record, under any key.
+        let raw = (try? String(contentsOf: Track.eventsURL!, encoding: .utf8)) ?? ""
+        XCTAssertFalse(raw.contains("rename"))
+        XCTAssertFalse(raw.contains("sess-1"))
+    }
+
+    func testTheMicMachineRecordsEachStateChangeOnce() {
+        var mic = MicMachine()
+        mic.submit(.unitPrepared)          // cold -> warm
+        mic.submit(.unitPrepared)          // warm -> warm: not a change
+        let names = lines().map { $0["event"] as? String }
+        XCTAssertEqual(names, ["mic_state"])
+        XCTAssertEqual(lines().first?["from"] as? String, "cold")
+        XCTAssertEqual(lines().first?["to"] as? String, "warm")
+    }
+
     func testEventsRecordedBeforeASinkExistsReplayOnAttach() {
         Track.record("app_launched", ["launched_by": "login_or_user"])
         Track.record("face_changed", ["from": "hidden", "to": "idle"])

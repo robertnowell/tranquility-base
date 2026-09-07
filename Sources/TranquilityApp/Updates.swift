@@ -70,6 +70,7 @@ final class Updates: NSObject {
             log("updates: no updater to check with")
             return
         }
+        Track.record("update_checked", ["via": "menu"])
         controller.checkForUpdates(sender)
     }
 
@@ -114,6 +115,7 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         log("updates: found \(item.displayVersionString)")
+        Track.record("update_found", ["to_version": Track.token(from: item.displayVersionString)])
     }
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
@@ -124,6 +126,7 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
             ? "updates: already current"
             : "updates: check failed, \(error.localizedDescription)"
         log(text)
+        Track.record("update_check_result", ["result": quiet ? "current" : "failed"])
     }
 
     // MARK: - Waiting

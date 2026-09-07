@@ -143,6 +143,10 @@ public struct MicMachine: Equatable {
     @discardableResult
     public mutating func submit(_ event: MicEvent) -> MicTransition {
         func accept(_ next: MicState, _ effect: MicEffect? = nil) -> MicTransition {
+            if next != state {
+                Track.record("mic_state", ["from": Track.token(from: "\(state)"),
+                                           "to": Track.token(from: "\(next)")])
+            }
             state = next
             return MicTransition(accepted: true, state: next, effect: effect)
         }
