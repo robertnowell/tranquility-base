@@ -1128,6 +1128,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "updated": .bool(previousVersion != nil && previousVersion != thisVersion),
         ]
         if let previousVersion { launched["previous_version"] = Track.token(from: previousVersion) }
+        // Every permission, by name, at every launch (ruled 7 Sep: "missing
+        // permissions is a good thing to alert on and be clear about"). A
+        // microphone that is denied is the difference between an app that
+        // does nothing and an app that is broken, and the person who has it
+        // usually cannot tell which.
+        var missing: [String] = []
+        for kind in Permissions.Kind.allCases {
+            let state = Permissions.state(kind)
+            let name = Track.token(from: kind.title).tokenString
+            launched["permission_\(name)"] = Track.token(from: "\(state)")
+            if state != .active { missing.append(name) }
+        }
+        launched["permissions_missing"] = .int(missing.count)
+        if !missing.isEmpty { launched["permissions_missing_names"] = .prose(missing.joined(separator: " ")) }
         Track.record("app_launched", launched)
         Diagnostics.refreshEnvironment(reason: "startup")
         // Sending, one run-loop turn later: after this method returns and the

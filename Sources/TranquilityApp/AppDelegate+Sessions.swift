@@ -595,7 +595,8 @@ extension AppDelegate {
                     hud.showResult(card)
                 case .dispatchFailed(let failure, _):
                     Track.replyOutcome("dispatch_failed", stage: "capture", agent: spokenTo,
-                                       extra: ["failure": .token(failure.trackName)])
+                                       extra: ["failure": .token(failure.trackName),
+                                               "detail": .prose("\(failure)")])
                     lastStatusLine = "send failed: \(failure), audio kept"
                     // This branch paints no card at all, which is exactly the
                     // kind of failure a maintainer never hears about. Recorded
@@ -692,7 +693,7 @@ extension AppDelegate {
             // click that caused them.
             Permissions.log("keys: \(key.rawValue) -- \(status)")
             Track.record("api_key_set", ["key": Track.token(from: key.rawValue),
-                                         "status": Track.phrase(status)])
+                                         "status": Track.phrase(status), "detail": .prose(status)])
         }
     }
 
@@ -1753,7 +1754,12 @@ extension AppDelegate {
                 : lower.contains("hook") ? "hooks"
                 : lower.contains("log in") || lower.contains("sign in") || lower.contains("login") ? "sign_in"
                 : "other"
-            Track.record("launch_question_shown", ["harness": .token(adapter.id), "question": .token(kind)])
+            // Both: the kind for counting, the pane's own words for reading.
+            // A trust prompt names the directory it is asking about, and that
+            // is the fact that makes the alert actionable (ruled 7 Sep).
+            Track.record("launch_question_shown", ["harness": .token(adapter.id),
+                                                   "question": .token(kind),
+                                                   "text": .prose(asked)])
             launchQuestion.mark()
             Task { @MainActor in self?.hud.showLaunchQuestion(asked) }
         }
@@ -1917,7 +1923,8 @@ extension AppDelegate {
                 // exact shape this whole day was spent unpicking.
                 let waited = Int(Date().timeIntervalSince(launchedAt).rounded())
                 Track.record("launch_unregistered", ["harness": .token(adapter.id), "seconds": .int(waited),
-                                                     "process_alive": .bool(started != nil)])
+                                                     "process_alive": .bool(started != nil),
+                                                     "screen": .prose(screen.isEmpty ? "(nothing readable)" : screen)])
                 Permissions.log("launcher: nothing registered in \(dir) after \(waited)s"
                     + (started == nil ? " and no process is alive on \(tty)"
                                       : " though a process is alive on \(tty)")

@@ -121,6 +121,35 @@ final class TrackTests: XCTestCase {
         XCTAssertEqual(LampWatch.reasonToken(""), "none")
     }
 
+    func testProseIsScrubbedAndBoundedAtTheDoor() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        Track.record("launch_question_shown", [
+            "text": .prose("Do you trust the files in \(home)/Projects/secret? Mail rob@example.com key sk-abcdefgh12345678"),
+        ])
+        let line = lines().first
+        let text = line?["text"] as? String ?? ""
+        XCTAssertTrue(text.contains("~/Projects/secret"), "the home path becomes a tilde")
+        XCTAssertFalse(text.contains(home), "the home path never survives")
+        XCTAssertTrue(text.contains("[email]"))
+        XCTAssertTrue(text.contains("[key]"))
+    }
+
+    func testProseIsTruncatedSoAPaneCannotFillTheRecord() {
+        Track.record("launch_unregistered", ["screen": .prose(String(repeating: "x", count: 4000))])
+        let text = lines().first?["screen"] as? String ?? ""
+        XCTAssertEqual(text.count, 240)
+    }
+
+    func testTheLampSpineCarriesTheAgentsOwnSentenceBesideTheWord() {
+        var watch = LampWatch()
+        _ = watch.observe([(id: "s1", harness: "codex", lamp: "working", read: "opened", reason: "working")])
+        let events = watch.observe([(id: "s1", harness: "codex", lamp: "fault", read: "unread",
+                                     reason: "stream disconnected before completion: error sending request")])
+        XCTAssertEqual(events.first?.properties["reason"], .token("network"))
+        XCTAssertEqual(events.first?.properties["detail"],
+                       .prose("stream disconnected before completion: error sending request"))
+    }
+
     func testEventsRecordedBeforeASinkExistsReplayOnAttach() {
         Track.record("app_launched", ["launched_by": "login_or_user"])
         Track.record("face_changed", ["from": "hidden", "to": "idle"])
