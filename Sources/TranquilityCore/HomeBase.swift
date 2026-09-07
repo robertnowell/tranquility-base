@@ -967,7 +967,14 @@ public enum HomeBase {
             // identity competing with the two real ones.
             // The title is the NAMEPLATE now, not a line of small print, so the
             // byline stops repeating it.
-            var byline = "session \(e(String(model.sessionId.prefix(8))))"
+            // Asked of SessionIdentity rather than spelled here. HubIntegrity
+            // reads this byline back and, until #304, spelled its own copy of
+            // the expectation -- so when `slug(forSessionId:)` became the full
+            // id (#299) the drill started demanding a string this line has
+            // never written, and called 216 correct hubs broken. #304 fixed
+            // the reader. This is the writer: with both sides asking the same
+            // function, there is no second spelling left to drift.
+            var byline = "session \(e(SessionIdentity.short(model.sessionId)))"
             if let dir = (model.cwd as NSString?)?.lastPathComponent, !dir.isEmpty {
                 byline += " · in \(e(dir))"
             }
