@@ -57,6 +57,17 @@ FLOOR_SWIFT_TESTING=41
 # /usr/bin/env bash still is on macOS. Caught while proving the gate below —
 # on a native arm64 shell, where no re-exec is needed, the script would have
 # died before running a single test.
+# Nothing a test writes lands in the real archive. The Coordinator tests run a
+# real announcer, which writes a hub at every Stop; without this, four hubs
+# titled "export refactor" for fixture ids sat in ~/Documents/agents and the
+# hub of hubs listed them as agents (6 and 7 Sep 2026). Caches, not the
+# system temp dir: ArtifactStore refuses /var/folders and /tmp, and a fixture
+# there passes by exercising the refusal.
+SCRATCH="$HOME/Library/Caches/tranquility-tests/run-$$"
+mkdir -p "$SCRATCH/agents" "$SCRATCH/support"
+export TB_AGENTS_ROOT="$SCRATCH/agents"
+export VOICE_DISPATCH_SUPPORT_DIR="$SCRATCH/support"
+trap 'rm -rf "$SCRATCH"' EXIT
 RUNNER=(env)
 if [ "$(uname -m)" != "arm64" ] && arch -arm64e true 2>/dev/null; then
   RUNNER=(arch -arm64e)

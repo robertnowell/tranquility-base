@@ -1528,9 +1528,24 @@ public extension HomeBase {
     /// these are for reading and browsing, and a folder nobody can find in
     /// Finder is a folder nobody reads.
     static var root: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        if let override = rootOverride { return override }
+        if let env = ProcessInfo.processInfo.environment["TB_AGENTS_ROOT"], !env.isEmpty {
+            return URL(fileURLWithPath: env, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Documents/agents", isDirectory: true)
     }
+
+    /// Somewhere other than ~/Documents/agents, for a test or a drill.
+    ///
+    /// Four hubs titled "export refactor" for sessions "sess-1", "codex-1",
+    /// "sess" and "codex" appeared in the real agents tree and in the hub of
+    /// hubs (6 and 7 Sep 2026). They were written by `swift test`: the
+    /// Coordinator tests build a real Coordinator on a temporary store, and
+    /// the announcer writes a hub at every Stop through THIS root, which had
+    /// no override. `scripts/test.sh` sets `TB_AGENTS_ROOT` to a scratch
+    /// directory; a test that needs the root in-process sets this.
+    public nonisolated(unsafe) static var rootOverride: URL?
 
     /// The page already on disk for a session, if any turn ever wrote one.
     /// An existence check and nothing more — cheap enough for the panel to ask
@@ -1689,6 +1704,11 @@ public extension HomeBase {
     static func write(sessionId: String, store: QueueStore,
                       live: [LiveSession] = [],
                       priming: Bool = false) throws -> URL? {
+        // A session id is hex and dashes, from either harness. Anything else is
+        // a fixture or a bug, and a hub for it is a directory nobody asked for
+        // in a tree the hub of hubs lists: "sess-1" and "codex-1" got hubs and
+        // rows (6 Sep 2026) because nothing here said no.
+        guard ArtifactStore.isPlausibleSession(sessionId) else { return nil }
         let briefs = try store.briefs(for: sessionId)
         // Read once and reuse: the model needs it and the guard needs it, and
         // this is a bounded file read, not a free property.
