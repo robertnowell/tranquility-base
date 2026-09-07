@@ -23,10 +23,11 @@ enum Analytics {
     /// Called once, after the panel's first paint, beside Sentry.
     @MainActor
     static func start(key: String?, host: String?) {
-        Track.attach { event in forward(event) }
         Track.trace = { Permissions.log("\(channel): \($0)") }
         self.key = key
         guard let key, !key.isEmpty else {
+            // No sink yet: Track keeps a bounded backlog, so what happened
+            // before the key arrived is not lost, it is waiting.
             Permissions.log("\(channel): dormant, no PostHog key configured")
             return
         }
@@ -44,6 +45,12 @@ enum Analytics {
         PostHogSDK.shared.identify(Failures.installId, userProperties: personProperties())
         PostHogSDK.shared.register(commonProperties())
         started = true
+        // The sink attaches only now, AFTER setup: the SDK drops a capture it
+        // receives before it is set up, and on the first deployed build the
+        // sink was attached while the key was still being fetched, so the
+        // launch's own events were replayed into a closed door and lost.
+        // Track's backlog holds them until this line.
+        Track.attach { event in forward(event) }
         let ms = Int(Date().timeIntervalSince(t0) * 1000)
         Permissions.log("\(channel): reporting on, sdk started in \(ms) ms")
     }
