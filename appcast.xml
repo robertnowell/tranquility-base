@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1114</title>
+      <sparkle:version>1114</sparkle:version>
+      <sparkle:shortVersionString>0.3.1114</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 07 Sep 2026 21:48:44 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1114-241346df8/TranquilityBase-0.3.1114.dmg" type="application/octet-stream" length="13551294" sparkle:edSignature="FR92N1r717CEZjcNojgKxWy1Ol9jkQfycSLUGk8MooNlr0eyqCHNkIAhMZcjpYmZBV69hrecXDjCZo1+97FnBA==" />
+    </item>
+    <item>
       <title>Version 0.3.1113</title>
       <sparkle:version>1113</sparkle:version>
       <sparkle:shortVersionString>0.3.1113</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Mon, 07 Sep 2026 16:33:36 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1105-30bb82032/TranquilityBase-0.3.1105.dmg" type="application/octet-stream" length="13452019" sparkle:edSignature="E2ArNSZvMM76Pv/JEM9Sk9lK36W/x5mnWJFY2rwkBdAsBZoIxpdUAPdusBy5ld1A95rKHsw/nuT5wg38FIHwCA==" />
     </item>
-    <item>
-      <title>Version 0.3.1104</title>
-      <sparkle:version>1104</sparkle:version>
-      <sparkle:shortVersionString>0.3.1104</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Mon, 07 Sep 2026 16:17:41 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1104-9f3da8b77/TranquilityBase-0.3.1104.dmg" type="application/octet-stream" length="13450836" sparkle:edSignature="1H3nw5V3tWPWL6SJcMWyqMlRLFXIBC6BDZNep95wzmJNrZjW41+fiTEyelw4OG5UHY/TGEVAf3ip1n5hfpW4CA==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 1LR8LI4MTogepJhKMUlE3ejVt3rpCQIWyaidlobBao4LjnuusRxEYlDqIi28NysZwMKaXiyLl5E5NRKsApShDg==
+edSignature: o0wuU2RWg4K/mLdfDwasH2i3nmZllSIHfOOESdpqqNzSODu8UDdVktIFomyqszbBQO1y95ONnqLYbYy81FraBQ==
 length: 6457
 -->
