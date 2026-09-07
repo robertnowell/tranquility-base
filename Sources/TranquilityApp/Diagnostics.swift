@@ -138,7 +138,7 @@ enum Diagnostics {
             b.message = crumb.message
             SentrySDK.addBreadcrumb(b)
         }
-        Failures.sink = { event in forward(event) }
+        Failures.attach { event in forward(event) }
         let cachedConfig = (try? Data(contentsOf: cacheURL))
             .flatMap { try? JSONDecoder().decode(RemoteConfig.self, from: $0) }
         if let override = ProcessInfo.processInfo.environment["TB_SENTRY_DSN"], !override.isEmpty {

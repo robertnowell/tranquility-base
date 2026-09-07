@@ -61,7 +61,7 @@ final class TrackTests: XCTestCase {
         Track.setCommon(["build": "1096", "arch": "arm64"])
         let got = expectation(description: "sink")
         let seen = Box<TrackEvent?>(nil)
-        Track.sink = { e in seen.update { $0 = e }; got.fulfill() }
+        Track.attach { e in seen.update { $0 = e }; got.fulfill() }
         Track.record("face_changed", ["from": "idle", "to": "speaking", "reason": "announce_requested"])
         wait(for: [got], timeout: 2)
         XCTAssertEqual(seen.value?.properties["arch"], .token("arm64"))
@@ -112,12 +112,29 @@ final class TrackTests: XCTestCase {
     func testSuppressedEventsAreCountedNotWrittenNotForwarded() {
         Track.suppressed = true
         let forwarded = Box<Int>(0)
-        Track.sink = { _ in forwarded.update { $0 += 1 } }
+        Track.attach { _ in forwarded.update { $0 += 1 } }
         Track.record("gesture", ["chord": "option"])
         Track.flush()
         XCTAssertEqual(Track.recordedCount, 1)
+        XCTAssertEqual(Track.suppressedCount, 1)
         XCTAssertEqual(lines().count, 0)
         XCTAssertEqual(forwarded.value, 0)
+    }
+
+    func testDetachSendsEventsBackToTheBacklogUntilTheNextAttach() {
+        let first = Box<Int>(0)
+        Track.attach { _ in first.update { $0 += 1 } }
+        Track.record("gesture", ["chord": "option"])
+        Track.flush()
+        Track.detach()
+        XCTAssertFalse(Track.hasSink)
+        Track.record("gesture", ["chord": "option"])
+        Track.flush()
+        let second = Box<Int>(0)
+        Track.attach { _ in second.update { $0 += 1 } }
+        Track.flush()
+        XCTAssertEqual(first.value, 1)
+        XCTAssertEqual(second.value, 1, "the event recorded with no sink waited for the next one")
     }
 
     func testRecordingNeverBlocksTheCaller() {

@@ -167,7 +167,9 @@ extension StatusHUD {
         Track.suppressed = false
         drillRelease?.cancel()
         drillRelease = nil
-        Permissions.log("selftest: drills released the panel")
+        Permissions.log("selftest: drills released the panel; sinks: "
+            + "failures \(Failures.hasSink ? "attached" : "none"), "
+            + "track \(Track.hasSink ? "attached" : "none")")
     }
 
     /// Prove that LEAVING the read-back stops the send — not just pressing the
@@ -1094,28 +1096,30 @@ extension StatusHUD {
         // another repository. The card must survive its microphone.
         showGreeting(line: greetingLine, label: "projects")
         let recordsBefore = Failures.reportedCount
+        let dropsBefore = Failures.suppressedCount
         let eventsBefore = Track.recordedCount
-        let priorTrackSink = Track.sink
-        let trackForwarded = SinkCounter()
-        Track.sink = { _ in trackForwarded.bump() }
-        defer { Track.sink = priorTrackSink }
-        let priorSink = Failures.sink
-        let forwarded = SinkCounter()
-        Failures.sink = { _ in forwarded.bump() }
+        let eventDropsBefore = Track.suppressedCount
         showResult("Couldn't open the microphone, audio stack unresponsive.")
         panel?.contentView?.layoutSubtreeIfNeeded()
         Failures.flush()
-        Failures.sink = priorSink
         // The receipt is the record (6 Sep): a card the panel shows is a
         // failure the maintainer can find. Counted, not written, not sent,
         // under drills: a record that says the microphone failed must mean
         // the microphone failed.
+        //
+        // Proven by the funnels' own drop counters, never by swapping their
+        // sinks. This drill used to capture `Track.sink`, replace it with a
+        // counter and restore the captured value in a defer; the real sink
+        // attaches from a config fetch that landed inside that window, so
+        // the defer put back nil and no event after the slate ever left the
+        // machine (7 Sep, every deploy since the sink existed).
         SelfTest.report("failureRecord", [
             ("cardBecomesOneRecord", Failures.reportedCount == recordsBefore + 1),
             ("drillsAreSuppressed", Failures.suppressed),
-            ("suppressedNeverReachesTheSink", forwarded.count == 0),
+            ("suppressedNeverReachesTheSink", Failures.suppressedCount == dropsBefore + 1),
             ("eventStreamCountsUnderDrills", Track.recordedCount > eventsBefore),
-            ("eventStreamSuppressedUnderDrills", trackForwarded.count == 0),
+            ("eventStreamSuppressedUnderDrills",
+             Track.suppressedCount - eventDropsBefore == Track.recordedCount - eventsBefore),
         ])
         let micFaultKeepsTheCard = bodyLabel.stringValue == greetingLine
             && titleLabel.stringValue == "projects" && currentTarget == nil
