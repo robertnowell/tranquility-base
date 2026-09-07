@@ -40,7 +40,23 @@ extension StatusHUD {
     /// So the rule, stated once: **the top band is divided into four lanes that
     /// may touch but never overlap, in this order — collapse, placard, receipt,
     /// gear.** Anything new in that band takes a lane or takes someone's.
+    /// A window frame animation does not advance while the display is asleep:
+    /// the frame is queued and lands when the display wakes. Measured 6 Sep
+    /// 2026 across nine launches: every red `collapsed`/`topBand` verdict fell
+    /// inside a display-off window in `pmset -g log` (three of three) and every
+    /// green one outside it (six of six), and the settle log showed the frame
+    /// not moving once through four settle windows and then jumping. A drill
+    /// that measures geometry in the dark measures the frame from before, so
+    /// it says so and skips rather than failing a build that is fine.
+    private func displayIsAsleep() -> Bool {
+        CGDisplayIsAsleep(CGMainDisplayID()) != 0
+    }
+
     private func topBandDrill() {
+        if displayIsAsleep() {
+            SelfTest.skipped("topBand", because: "display asleep, frames do not animate")
+            return
+        }
         guard let host = panel?.contentView else { return }
         func rect(_ v: NSView?) -> CGRect {
             guard let v, !v.isHidden, let parent = v.superview else { return .null }
@@ -304,7 +320,8 @@ extension StatusHUD {
             "settle: \(samples) samples, \(moves) moves, "
             + "\(Int(Date().timeIntervalSince(start) * 1000))ms, "
             + "from \(NSStringFromRect(first)) to \(NSStringFromRect(last))"
-            + (Date() >= deadline ? "; DEADLINE, still moving" : ""))
+            + (Date() >= deadline ? "; DEADLINE, still moving" : "")
+            + (displayIsAsleep() ? "; display asleep" : ""))
         panel?.contentView?.layoutSubtreeIfNeeded()
         panel?.displayIfNeeded()
     }
@@ -1454,6 +1471,9 @@ extension StatusHUD {
         // silently expanded a panel the user had collapsed, and wrote that back
         // to disk. Saved and restored.
         let widthBeforeDrill = isCollapsed
+        // Sampled where the section starts: the verdict below is only a verdict
+        // if the display was awake for the frames it measures.
+        let darkAtCollapse = displayIsAsleep()
         defer { setCollapsed(widthBeforeDrill) }
         setCollapsed(false)
         showIdle(rows: mixed)
@@ -1687,6 +1707,9 @@ extension StatusHUD {
             ("appIconShowsTheMarkAtSixteen", iconReadsAt16),
         ])
 
+        if darkAtCollapse {
+            SelfTest.skipped("collapsed", because: "display asleep, frames do not animate")
+        } else {
         SelfTest.report("collapsed", [
             ("idleLampsOmitted", idleLampsOmitted),
             ("stripShown", stripShown),
@@ -1714,6 +1737,7 @@ extension StatusHUD {
             ("headerWearsTheSiteMark", headerWearsTheMark),
             ("headerYieldsToExpandOnHover", headerYieldsToExpand),
         ])
+        }
         showIdle(rows: [])
 
         // The notice: takes the strip on the grid, refused onto a card, and
