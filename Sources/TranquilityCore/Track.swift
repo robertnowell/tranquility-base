@@ -29,6 +29,25 @@ public enum TrackValue: Equatable, Sendable {
     case double(Double)
     case bool(Bool)
     case hash(String)
+    /// Words written by the AGENT or by this APP, never by the person.
+    ///
+    /// Ruled 7 Sep 2026 by Robert, and it is the sharper line: "text coming
+    /// from an agent or the app is fine, it's the user's messages that are
+    /// privileged." A harness's error, a pane's trust prompt, a notice the
+    /// panel showed: all of these are the machine talking about itself, and
+    /// they are the most useful thing in the record when a launch stalls on
+    /// someone else's desk.
+    ///
+    /// The door scrubs every one of these through `Scrub.text` (home path to
+    /// `~`, emails, API keys and bearer tokens to placeholders) and truncates,
+    /// so a call site cannot leak a home directory even by accident. What
+    /// still never appears is what the PERSON said: no transcript, no
+    /// dictation, no announcement text, and no call site passes one.
+    case prose(String)
+
+    /// The longest prose the record keeps. A pane's screen is the longest
+    /// thing here and its first two lines are what a reader needs.
+    static let proseLimit = 240
 
     /// The vocabulary shape. Enumerations only.
     static let tokenAllowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-")
@@ -39,15 +58,25 @@ public enum TrackValue: Equatable, Sendable {
             return !s.isEmpty && s.count <= 48 && s.unicodeScalars.allSatisfy { Self.tokenAllowed.contains($0) }
         case .hash(let s):
             return s.count == 16 && s.unicodeScalars.allSatisfy { ("0"..."9").contains(Character(String($0))) || ("a"..."f").contains(Character(String($0))) }
+        case .prose(let s):
+            return !s.isEmpty
         case .int, .double, .bool:
             return true
         }
+    }
+
+    /// Scrubbed and bounded. Applied at the door, so admissibility is a
+    /// property of the funnel rather than of every call site.
+    var scrubbed: TrackValue {
+        guard case .prose(let s) = self else { return self }
+        return .prose(String(Scrub.text(s).prefix(TrackValue.proseLimit)))
     }
 
     /// The token as a String, for callers composing a decision from prose.
     public var tokenString: String {
         if case .token(let t) = self { return t }
         if case .hash(let h) = self { return h }
+        if case .prose(let s) = self { return s }
         return "none"
     }
 
@@ -58,6 +87,7 @@ public enum TrackValue: Equatable, Sendable {
         case .double(let d): return d
         case .bool(let b): return b
         case .hash(let h): return h
+        case .prose(let s): return s
         }
     }
 }
@@ -187,6 +217,10 @@ public enum Track {
         return token(from: String(head.prefix(32)))
     }
 
+    /// The agent's or the app's own words, scrubbed at the door. Never the
+    /// person's: see `TrackValue.prose`.
+    public static func prose(_ text: String) -> TrackValue { .prose(text) }
+
     /// A thing on the user's machine, as something that can be counted and
     /// followed but not read. Sixteen hex characters of a salted SHA-256.
     public static func hash(_ id: String) -> TrackValue {
@@ -207,6 +241,7 @@ public enum Track {
         // The door: a name and every value must be admissible, or the event
         // is dropped whole and said so. Dropping half an event would leave a
         // record that looks complete.
+        let properties = properties.mapValues { $0.scrubbed }
         let nameOK = TrackValue.token(name).isAdmissible
         let bad = properties.filter { !$0.value.isAdmissible }.map(\.key)
         guard nameOK, bad.isEmpty else {
@@ -314,12 +349,17 @@ public struct LampWatch: Sendable {
             let next = Seen(lamp: row.lamp, read: row.read, reason: row.reason, since: now)
             if let prior = seen[row.id] {
                 if prior.lamp != row.lamp || prior.read != row.read {
-                    out.append(TrackEvent(name: "agent_lamp_changed", at: now, properties: [
+                    var props: [String: TrackValue] = [
                         "agent_id": Track.hash(row.id), "harness": .token(row.harness),
                         "from": .token(prior.lamp), "to": .token(row.lamp), "read": .token(row.read),
                         "reason": .token(Self.reasonToken(row.reason)),
                         "seconds_in_previous": .int(Int(now.timeIntervalSince(prior.since))),
-                    ]))
+                    ]
+                    // The harness's own sentence, when the row has one. This is
+                    // where "429 rate limit" and "stream disconnected" actually
+                    // live, and the classified word above cannot carry them.
+                    if let detail = Self.detail(row.reason) { props["detail"] = detail }
+                    out.append(TrackEvent(name: "agent_lamp_changed", at: now, properties: props))
                     current[row.id] = next
                 } else {
                     current[row.id] = prior
@@ -349,6 +389,14 @@ public struct LampWatch: Sendable {
     /// sending request for url ..."). Until 7 Sep this took its first four
     /// words into the record. Now it classifies into a vocabulary and never
     /// emits a word from the string itself.
+    /// The row's own words, when they are the agent's rather than a bare id
+    /// or one of the app's short states.
+    static func detail(_ reason: String) -> TrackValue? {
+        let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 12 else { return nil }
+        return .prose(trimmed)
+    }
+
     static func reasonToken(_ reason: String) -> String {
         let r = reason.lowercased()
         if r.isEmpty { return "none" }
