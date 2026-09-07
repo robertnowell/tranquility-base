@@ -654,8 +654,15 @@ public struct TmuxTransport: DispatchTransport {
         // not evidence about this delivery. Without it a short reply ("yes")
         // that ever appeared in an earlier message false-confirms without
         // sending — found by the 19 Aug audit hours after this shipped.
-        let watermark = TranscriptWatcher.fileSize(atPath: target.transcriptPath
-            ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId))
+        let transcriptPathAtStart: String?
+        if target.readinessSource == .rolloutTail {
+            transcriptPathAtStart = target.transcriptPath
+                ?? CodexRollout.rolloutPath(forSessionId: target.sessionId)
+        } else {
+            transcriptPathAtStart = target.transcriptPath
+                ?? TranscriptArchive.transcriptPath(forSessionId: target.sessionId)
+        }
+        let watermark = TranscriptWatcher.fileSize(atPath: transcriptPathAtStart)
         func elapsed() -> Int { Int(Date().timeIntervalSince(start) * 1000) }
 
         // Set once any attempt has seen its own words in the composer.
@@ -1209,7 +1216,9 @@ public struct TmuxTransport: DispatchTransport {
         // wrong parser found zero messages, always, deterministically
         // (found live, 22 Aug, not reasoned about in advance).
         if target.readinessSource == .rolloutTail {
-            guard let path = target.transcriptPath else { return false }
+            guard let path = target.transcriptPath
+                ?? CodexRollout.rolloutPath(forSessionId: target.sessionId)
+            else { return false }
             return TranscriptWatcher.codexUserMessages(in: path, fromByteOffset: watermark)
                 .contains { $0.contains(payload) }
         }
@@ -1225,10 +1234,10 @@ public struct TmuxTransport: DispatchTransport {
         fromByteOffset watermark: Int64
     ) async -> Bool {
         if target.readinessSource == .rolloutTail {
-            guard let path = target.transcriptPath else { return false }
             return await TranscriptWatcher.waitForCodexUserText(
-                payload, path: path, timeout: timeout ?? verificationTimeout,
-                pollInterval: pollInterval, fromByteOffset: watermark)
+                payload, sessionId: target.sessionId, knownPath: target.transcriptPath,
+                timeout: timeout ?? verificationTimeout, pollInterval: pollInterval,
+                fromByteOffset: watermark)
         }
         return await TranscriptWatcher.waitForUserText(
             payload, sessionId: target.sessionId, knownPath: target.transcriptPath,

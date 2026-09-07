@@ -164,6 +164,28 @@ final class TranscriptWatermarkTests: XCTestCase {
             fromByteOffset: watermark)
         XCTAssertTrue(confirmedFromAppend)
     }
+
+    func testCodexRolloutThatAppearsDuringTheWaitConfirms() async throws {
+        let sessionId = "01a07d2f-269e-7f62-801c-ad07b321d062"
+        let sessions = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("codex-first-witness-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: sessions) }
+        let day = sessions.appendingPathComponent("2026/09/07")
+        try FileManager.default.createDirectory(at: day, withIntermediateDirectories: true)
+        let rollout = day.appendingPathComponent(
+            "rollout-2026-09-07T11-43-57-\(sessionId).jsonl")
+        let record = Data((codexUserLine("the first reply landed") + "\n").utf8)
+
+        Task {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            try? record.write(to: rollout)
+        }
+
+        let confirmed = await TranscriptWatcher.waitForCodexUserText(
+            "the first reply landed", sessionId: sessionId, knownPath: nil,
+            timeout: 2, pollInterval: 0.05, sessions: sessions)
+        XCTAssertTrue(confirmed, "the first message must be able to create its own witness")
+    }
 }
 
 /// A message typed into a busy session is queued by the TUI, not written as a
