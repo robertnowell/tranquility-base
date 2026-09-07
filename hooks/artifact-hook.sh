@@ -246,11 +246,25 @@ def _same(a, b):
 
 
 def _agent_dir_of(p):
+    """The directory's REAL name. A session that started before 06 Sep was
+    told to write to agents/<eight characters>/, which is now a symlink to
+    the full-id directory; keying the record by the link's name put a
+    short-keyed record file back on disk within the hour of retiring them
+    (d419c9f3, 7 Sep). The link is a courtesy for old addresses, never an
+    identity, so the name that counts is the one the link resolves to."""
     parts = p.split(os.sep)
     if "agents" not in parts:
         return ""
     i = parts.index("agents")
-    return parts[i + 1] if i + 1 < len(parts) else ""
+    if i + 1 >= len(parts):
+        return ""
+    name = parts[i + 1]
+    link = os.path.join(_agents, name)
+    if os.path.islink(link):
+        target = os.path.basename(os.path.realpath(link))
+        if target:
+            return target
+    return name
 
 
 misfiled = ""
@@ -260,7 +274,7 @@ if path and "/Documents/agents/" in path and not _is_hub(path):
     if "agents" in parts:
         _i = parts.index("agents")
         if _i + 1 < len(parts) and parts[_i + 1]:
-            in_dir = parts[_i + 1]
+            in_dir = _agent_dir_of(path)
             if not session or _same(in_dir, session):
                 owner = in_dir
             else:
