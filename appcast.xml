@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1096</title>
+      <sparkle:version>1096</sparkle:version>
+      <sparkle:shortVersionString>0.3.1096</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 07 Sep 2026 01:02:54 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1096-4d4551141/TranquilityBase-0.3.1096.dmg" type="application/octet-stream" length="11731351" sparkle:edSignature="hBOAPdxb7jEP4s+sOTl2FOqytNrPzOv4dPqm3Dz93Jx8m1HqcAltNJaYNrSf0+m+L1pGM/J0muADlCVEQ/I9DQ==" />
+    </item>
+    <item>
       <title>Version 0.3.1095</title>
       <sparkle:version>1095</sparkle:version>
       <sparkle:shortVersionString>0.3.1095</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Fri, 04 Sep 2026 14:55:55 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1087-cc8a39acd/TranquilityBase-0.3.1087.dmg" type="application/octet-stream" length="9260136" sparkle:edSignature="WzSgyeIP4NmaBMi5ZZOEroLYZ847rT3LexVZAoS0iL0gkhE+xiXB9aeyPpJCN3HSyHr8hrf8O00LtOKvQCVBAg==" />
     </item>
-    <item>
-      <title>Version 0.3.1086</title>
-      <sparkle:version>1086</sparkle:version>
-      <sparkle:shortVersionString>0.3.1086</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Fri, 04 Sep 2026 14:23:12 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1086-34c42a6f9/TranquilityBase-0.3.1086.dmg" type="application/octet-stream" length="9241722" sparkle:edSignature="BDkpRPDA5vtQKPj61YouhwLtmJm83f0lR4m4jHsXxyB15CsRuDFpex3D4oi3w6+LXp0kq67NygMYycPmLi0uBg==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: ZsNKflFFuSqL9XDHXxq4c9V9A8Kgqn4leVaCrWBB8CeFLhhPiUDBdw52S3vp725w9Pw82D14RkMfK/k5VZTfCg==
-length: 6449
+edSignature: /WCtgycMdN1fVDuBgVq0eplq/ejFI2pLa6Lcj1N2bkKRyEyEMr4A/9PNz2iLBGAlJTDqRA9DiUpufXAMwds6Dw==
+length: 6450
 -->
