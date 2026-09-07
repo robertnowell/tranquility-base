@@ -36,13 +36,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// properties of the object being initialised.
     lazy var updates = Updates(
         panelState: { [weak self] in self?.hud.state ?? .hidden },
-        // `unsentReplyCount()` is the queue's own in-flight definition, reused
-        // rather than restated. A throw here must read as "something is
-        // unfinished" and hold the install: a database we cannot query is not
-        // evidence that it is safe to quit.
+        // The delivery window, not the database. This used to ask
+        // `unsentReplyCount()`, which counts every row the queue ever left
+        // in ready, dispatching or dispatched_unconfirmed, and on 7 Sep that
+        // was 129 rows going back weeks: the 0.3.1106 release build found
+        // 0.3.1110 two seconds after launch, downloaded it, and then
+        // postponed the install every ten seconds for ever, "utterances in
+        // flight". No update had ever installed on this machine, and the
+        // same would hold for any user after their first unconfirmed reply.
+        // `DeliveryInFlight` is what the lamp trusts: a reply is in flight
+        // from its capture's close until it lands or its ceiling expires.
         inFlightUtterances: { [weak self] in
-            guard let store = self?.store else { return 0 }
-            return (try? store.unsentReplyCount()) ?? 1
+            self?.delivering.inFlightSessions().count ?? 0
         },
         log: { Permissions.log($0) })
 
