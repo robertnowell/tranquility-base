@@ -26,6 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let recorder = Recorder()
     var store: QueueStore?
     var coordinator: Coordinator?
+    /// Held for the process lifetime. Prod and Dev have different bundle ids,
+    /// so LaunchServices cannot arbitrate their shared hotkey and microphone.
+    var appOwnership: AppOwnershipLock?
     var permissionTimer: Timer?
     var intakeTimer: Timer?
     let onboarding = OnboardingWindow()
@@ -359,18 +362,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // relaunch.sh, which a directly-launched worktree build never runs,
         // so the app now defends itself: the newcomer logs the collision and
         // exits before touching the status bar, the hotkey, or the microphone.
-        // --allow-second-instance exists for a deliberate side-by-side (none
-        // known today); the self-test path needs no exemption because
-        // relaunch.sh stops the old instance before launching the new one.
-        let myPid = ProcessInfo.processInfo.processIdentifier
-        let bundleId = Bundle.main.bundleIdentifier ?? "com.robertnowell.voice-dispatch"
-        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
-            .filter { $0.processIdentifier != myPid }
-        if !others.isEmpty, !CommandLine.arguments.contains("--allow-second-instance") {
-            let pids = others.map { String($0.processIdentifier) }.joined(separator: ", ")
-            Permissions.log("launch: REFUSED — instance already running (pid \(pids)); "
-                + "pass --allow-second-instance to override")
-            exit(1)
+        // --allow-second-instance remains only for isolated fixtures and the
+        // TEST app. Normal Prod and Dev launches contend on the SAME kernel
+        // lock in their shared Application Support directory. A file lock,
+        // unlike a pid file, is released automatically after a crash.
+        if !CommandLine.arguments.contains("--allow-second-instance") {
+            do {
+                appOwnership = try AppOwnershipLock.acquire(
+                    in: QueueStore.supportDirectory,
+                    owner: "\(AppIdentity.channel.rawValue) \(AppIdentity.bundleIdentifier)")
+                Permissions.log("launch: ownership acquired (\(AppIdentity.channel.rawValue))")
+            } catch {
+                Permissions.log("launch: REFUSED — app ownership \(error)")
+                exit(1)
+            }
         }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -1123,6 +1128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Track.configure(directory: QueueStore.supportDirectory, installId: Failures.installId)
         Track.setCommon([
             "app_version": .token(Track.token(from: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "?").tokenString),
+            "app_channel": .token(AppIdentity.channel.rawValue),
             "app_arch": .token(EnvironmentProbe.currentArch),
             "app_translated": .bool(EnvironmentProbe.isTranslated),
         ])
@@ -1620,6 +1626,11 @@ if let flag = CommandLine.arguments.firstIndex(of: "--write-iconset"),
         exit(1)
     }
 }
+
+// Product choices lived in the production bundle's defaults before Dev had a
+// separate identity. Import them before AppDelegate constructs views that read
+// the voice, microphone, and collapsed-panel choices.
+ProductDefaults.migrateLegacyProductionValues()
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

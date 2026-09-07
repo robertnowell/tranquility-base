@@ -80,6 +80,14 @@ read_plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$INFO" 2>/dev/null || tru
   || fail "minimum macOS version is not 14.0"
 [ "$(read_plist LSUIElement)" = "true" ] \
   || fail "app is no longer a menu-bar-only LSUIElement"
+[ "$(read_plist TBAppChannel)" = "production" ] \
+  || fail "release is not stamped as the production channel"
+[ "$(read_plist TBUpdatesEnabled)" = "true" ] \
+  || fail "release updater is disabled"
+[ "$(read_plist SUEnableAutomaticChecks)" = "true" ] \
+  || fail "release automatic update checks are disabled"
+[ "$(read_plist SUAutomaticallyUpdate)" = "true" ] \
+  || fail "release automatic installation is disabled"
 if [ -n "$EXPECTED_COMMIT" ]; then
   [ "$(read_plist TBSourceCommit)" = "$EXPECTED_COMMIT" ] \
     || fail "bundle source commit does not match $EXPECTED_COMMIT"
@@ -193,6 +201,8 @@ entitlement() { /usr/libexec/PlistBuddy -c "Print :$1" "$ENTITLEMENTS" 2>/dev/nu
   || fail "audio-input entitlement is absent"
 [ -z "$(entitlement com.apple.security.get-task-allow)" ] \
   || fail "debug-only get-task-allow entitlement is present"
+[ -z "$(entitlement com.apple.security.cs.disable-library-validation)" ] \
+  || fail "temporary icon-helper entitlement leaked into the release"
 rm -f "$ENTITLEMENTS"
 pass "runtime entitlements"
 

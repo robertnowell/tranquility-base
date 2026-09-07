@@ -15,19 +15,19 @@ final class AudioInputDeviceTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        saved = UserDefaults.standard.string(forKey: key)
+        saved = ProductDefaults.shared.string(forKey: key)
     }
 
     override func tearDown() {
-        if let saved { UserDefaults.standard.set(saved, forKey: key) }
-        else { UserDefaults.standard.removeObject(forKey: key) }
+        if let saved { ProductDefaults.shared.set(saved, forKey: key) }
+        else { ProductDefaults.shared.removeObject(forKey: key) }
         super.tearDown()
     }
 
     /// The recommendation is the default, not an opt-in. A first-run user on
     /// AirPods is exactly who this protects, and they have not opened a menu.
     func testDefaultIsBuiltInWhenNothingIsStored() {
-        UserDefaults.standard.removeObject(forKey: key)
+        ProductDefaults.shared.removeObject(forKey: key)
         XCTAssertEqual(AudioInputPreference.current, .builtIn)
     }
 
@@ -35,7 +35,7 @@ final class AudioInputDeviceTests: XCTestCase {
     /// recommendation rather than to whatever the system default happens to be.
     /// Failing open here would silently reintroduce the bug.
     func testUnparseableStoredValueFallsBackToBuiltIn() {
-        UserDefaults.standard.set("someFutureOption", forKey: key)
+        ProductDefaults.shared.set("someFutureOption", forKey: key)
         XCTAssertEqual(AudioInputPreference.current, .builtIn)
     }
 

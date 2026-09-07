@@ -56,7 +56,7 @@ public enum SystemVoiceCatalog {
     /// nothing better to offer, and passing the compact identifier explicitly would
     /// be the same voice with more ceremony.
     public static func preferredIdentifier(language: String = "en") -> String? {
-        if let chosen = UserDefaults.standard.string(forKey: preferenceKey) {
+        if let chosen = ProductDefaults.shared.string(forKey: preferenceKey) {
             // Honour an explicit choice only while it is still installed — a voice can
             // be removed in Settings, and a stale identifier makes AVSpeechSynthesizer
             // fall back silently, which would look like this fix had regressed.
@@ -73,9 +73,9 @@ public enum SystemVoiceCatalog {
     /// Set or clear the explicit choice. Clearing returns to "best installed".
     public static func choose(_ identifier: String?) {
         if let identifier {
-            UserDefaults.standard.set(identifier, forKey: preferenceKey)
+            ProductDefaults.shared.set(identifier, forKey: preferenceKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: preferenceKey)
+            ProductDefaults.shared.removeObject(forKey: preferenceKey)
         }
     }
 

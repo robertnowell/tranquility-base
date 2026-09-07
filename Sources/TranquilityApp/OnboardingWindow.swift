@@ -653,14 +653,14 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
             // build a reset command aimed at the real app.
             let bundleId = Bundle.main.bundleIdentifier ?? "com.robertnowell.voice-dispatch"
             return "Click Grant, then switch Terminal off and back on under "
-                + "Tranquility Base. If that changes nothing, run "
+                + "\(AppIdentity.displayName). If that changes nothing, run "
                 + "`tccutil reset AppleEvents \(bundleId)` "
                 + "in a terminal and grant it again."
         case .accessibility, .inputMonitoring:
-            return "Click Grant, remove Tranquility Base with the minus button, "
+            return "Click Grant, remove \(AppIdentity.displayName) with the minus button, "
                 + "and then add it back with plus."
         case .microphone, .speechRecognition:
-            return "Click Grant, then switch Tranquility Base off and back on "
+            return "Click Grant, then switch \(AppIdentity.displayName) off and back on "
                 + "in Settings."
         }
     }

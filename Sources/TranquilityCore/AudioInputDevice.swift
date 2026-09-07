@@ -44,10 +44,10 @@ public enum AudioInputPreference: String, CaseIterable {
     /// longer parses falls back to the recommendation rather than to nothing.
     public static var current: AudioInputPreference {
         get {
-            UserDefaults.standard.string(forKey: key)
+            ProductDefaults.shared.string(forKey: key)
                 .flatMap(AudioInputPreference.init(rawValue:)) ?? .builtIn
         }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+        set { ProductDefaults.shared.set(newValue.rawValue, forKey: key) }
     }
 }
 

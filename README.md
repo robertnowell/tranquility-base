@@ -94,14 +94,27 @@ only by the release pipeline.
 
 ### Building from source
 
-For working on the app, not for installing it.
+For working on the app. Development has its own stable macOS identity, so it
+can live beside the exact published app without replacing that app or resetting
+either one's permission grants.
 
 ```sh
 git clone https://github.com/robertnowell/tranquility-base.git && cd tranquility-base
-./scripts/bundle.sh                  # build + sign the .app
-open ".build/bundle/debug/Tranquility Base.app"
+./scripts/bundle-dev.sh              # same target, stable Dev identity
+./scripts/install-dev.sh --activate  # install beside Prod and select Dev
 swift run tbase install-hooks        # wires the Claude Code hooks (backup kept)
 ```
+
+Use `scripts/switch-app.sh prod` to run the installed Developer ID release and
+`scripts/switch-app.sh dev` to return to the local build. The switch waits for a
+live recording, validates the target signature and database compatibility, and
+ensures only one lane owns the global hotkey. `scripts/relaunch.sh` and automatic
+merge deploys update Dev only. They never write
+`/Applications/Tranquility Base.app`; that path belongs to the DMG and Sparkle.
+
+`scripts/bundle-test.sh --reset --open` remains the third, throwaway lane for
+fresh onboarding and permission-denial tests. Unlike Dev, TEST has isolated
+Application Support data and is not daily dogfood.
 
 `tbase new [dir]` starts a fresh session in its own Terminal window.
 

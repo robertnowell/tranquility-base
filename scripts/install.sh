@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Give the app a permanent home, so quitting it is recoverable.
+# Install an exact published release at the production path.
 #
 # Why this exists: until now the only copy of this app lived in
 # /private/tmp/tb-clean, built there by relaunch.sh. That had four consequences,
@@ -15,75 +15,70 @@
 #   4. Nothing started it at login, so a reboot ended with no menu bar item and
 #      nothing on screen to say why.
 #
-# What makes this safe to do: the bundle is signed with a real Apple Development
-# identity and a stable bundle id (bundle.sh finds the identity; the ad-hoc
-# fallback is only for machines without one). TCC keys Microphone, Input
-# Monitoring and Accessibility to the SIGNATURE, not the path — so moving the
-# app does not re-prompt and does not lose the grants. Verified below rather
-# than assumed: the script refuses to install an ad-hoc bundle over a signed one,
-# because that IS the case where permissions would be lost.
+# Production is deliberately narrower than Dev: this accepts only the expected
+# notarized Developer ID identity. Local builds belong at the Dev path, even if
+# they use the production bundle id, because swapping signing requirements at
+# one path is what invalidates macOS privacy grants.
 #
 # Idempotent. Run it as often as you like.
 #
-# Usage: scripts/install.sh [source.app] [--no-login-item]
+# Usage: scripts/install.sh source.app [--no-login-item]
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . "$(dirname "$0")/lib/app-process.sh"
-. "$(dirname "$0")/lib/paths.sh"
-
-DEFAULT_SRC="$(tb_bundle_dir debug /private/tmp/tb-clean)/Tranquility Base.app"
-SRC="${1:-$DEFAULT_SRC}"
-[ "${1:-}" = "--no-login-item" ] && SRC="$DEFAULT_SRC"
 DEST="/Applications/Tranquility Base.app"
 BUNDLE_ID="com.robertnowell.voice-dispatch"
-AGENT="$HOME/Library/LaunchAgents/$BUNDLE_ID.plist"
+TEAM_ID="FKE587SZ6H"
+LOGIN_LABEL="$BUNDLE_ID.selected"
+AGENT="$HOME/Library/LaunchAgents/$LOGIN_LABEL.plist"
 WANT_LOGIN_ITEM=1
-for a in "$@"; do [ "$a" = "--no-login-item" ] && WANT_LOGIN_ITEM=0; done
-
-# The default source is BUILT, always — never trusted from disk.
-#
-# Two failures taught this, one each way. First (11 Aug): the source was
-# demanded rather than built, so a fresh clone hit an installer that refused
-# and pointed at relaunch.sh — then the script carrying the pkill fault. Then
-# the fix checked `[ ! -d "$SRC" ]` and built only when the bundle was
-# MISSING — and on 12 Aug installed a bundle another session had built two
-# commits earlier: absent was guarded, stale was not, and "✓ installed"
-# deployed the wrong code minutes after a merge. The guard existed and did
-# not cover the path that mattered. build-clean.sh is idempotent and
-# fetches/checks out its target itself, so building unconditionally costs an
-# incremental no-op build when nothing changed and correctness the rest of
-# the time.
-#
-# An explicit path given as $1 is the caller saying "install exactly this":
-# it is still checked for existence and never rebuilt or substituted.
-if [ "$SRC" = "$DEFAULT_SRC" ]; then
-  echo "→ building committed origin/main"
-  SRC=$(scripts/build-clean.sh)
+SRC=""
+for arg in "$@"; do
+  case "$arg" in
+    --no-login-item) WANT_LOGIN_ITEM=0 ;;
+    *) [ -z "$SRC" ] || { echo "✗ more than one source app" >&2; exit 2; }; SRC="$arg" ;;
+  esac
+done
+if [ -z "$SRC" ]; then
+  echo "✗ a published Tranquility Base.app source is required" >&2
+  echo "  Local source builds belong in Dev: scripts/install-dev.sh" >&2
+  exit 2
 elif [ ! -d "$SRC" ]; then
   echo "✗ no bundle at $SRC" >&2
-  echo "  That path was given explicitly. Build it, or run with no argument" >&2
-  echo "  to build committed origin/main automatically." >&2
+  echo "  Mount or download the published release artifact, then pass its app path." >&2
   exit 1
 fi
 
-# --- the signature check, before anything is copied -------------------------
-#
-# An ad-hoc signature ("Signature=adhoc") is tied to the bytes, not to a team.
-# Installing one over a Developer-signed copy is the one move that WOULD cost
-# the user their permission grants, so it is refused rather than warned about.
-SRC_AUTH=$(codesign -dv --verbose=2 "$SRC" 2>&1 | grep -E "^Authority=" | head -1 || true)
-if [ -z "$SRC_AUTH" ]; then
-  if [ -d "$DEST" ] && codesign -dv --verbose=2 "$DEST" 2>&1 | grep -q "^Authority="; then
-    echo "✗ refusing: the source is ad-hoc signed and the installed copy is not." >&2
-    echo "  Installing it would drop Microphone / Input Monitoring / Accessibility." >&2
-    echo "  Check that a codesigning identity is visible: security find-identity -v -p codesigning" >&2
-    exit 1
-  fi
-  echo "→ warning: ad-hoc signature. Permissions will be re-prompted after a rebuild."
-else
-  echo "→ signature: ${SRC_AUTH#Authority=}"
+# The production destination is sacred. An explicit path is allowed so a
+# downloaded release can be installed, but its identity must still be the
+# production identity; otherwise this script would recreate the collision this
+# split exists to end by putting Dev bytes at the Prod path.
+SRC_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" \
+  "$SRC/Contents/Info.plist" 2>/dev/null || echo "")
+if [ "$SRC_BUNDLE_ID" != "$BUNDLE_ID" ]; then
+  echo "✗ refusing to install bundle id ${SRC_BUNDLE_ID:-missing} at $DEST" >&2
+  echo "  Production requires $BUNDLE_ID; use scripts/install-dev.sh for Dev." >&2
+  exit 1
 fi
+
+# --- the release identity check, before anything is copied -----------------
+codesign --verify --deep --strict "$SRC" 2>/dev/null \
+  || { echo "✗ source signature does not verify" >&2; exit 1; }
+SRC_SIGNING=$(codesign -dv --verbose=4 "$SRC" 2>&1 || true)
+case "$SRC_SIGNING" in
+  *"Authority=Developer ID Application: Robert Nowell ($TEAM_ID)"*"TeamIdentifier=$TEAM_ID"*) ;;
+  *)
+    echo "✗ Prod accepts only the expected Developer ID release identity" >&2
+    echo "  Local Apple Development builds belong in Dev: scripts/install-dev.sh" >&2
+    exit 1 ;;
+esac
+SRC_ASSESS=$(/usr/sbin/spctl --assess --type execute -vv "$SRC" 2>&1 || true)
+case "$SRC_ASSESS" in
+  *": accepted"*"source=Notarized Developer ID"*) ;;
+  *) echo "✗ Prod source is not an accepted notarized release" >&2; exit 1 ;;
+esac
+echo "→ signature: Developer ID Application: Robert Nowell ($TEAM_ID)"
 
 # --- install ----------------------------------------------------------------
 #
@@ -101,9 +96,8 @@ cp -R "$SRC" "$DEST"
 # defensively so a bundle that came from anywhere else opens without a dialog.
 xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
 
-# Prove the signature survived the copy. `codesign --verify` is the check that
-# actually matters for TCC — a bundle that fails it is one macOS will treat as a
-# different app, permissions and all.
+# Prove the release signature survived the copy. A bundle that fails this is
+# not merely a different TCC identity; it is not a valid production app.
 if codesign --verify --deep --strict "$DEST" 2>/dev/null; then
   echo "→ signature verified at the new path"
 else
@@ -131,7 +125,7 @@ if [ "$WANT_LOGIN_ITEM" -eq 1 ]; then
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>$BUNDLE_ID</string>
+  <key>Label</key><string>$LOGIN_LABEL</string>
   <key>ProgramArguments</key>
   <array><string>$DEST/Contents/MacOS/TranquilityApp</string></array>
   <key>RunAtLoad</key><true/>
@@ -145,7 +139,11 @@ if [ "$WANT_LOGIN_ITEM" -eq 1 ]; then
 PLIST
   # bootout then bootstrap: reloading is how an edited plist takes effect, and
   # bootout on a not-loaded agent is a harmless error.
+  # Retire the pre-channel label. Leaving both loaded makes login a race in
+  # which whichever identity gets the ownership lock first wins.
   launchctl bootout "gui/$UID/$BUNDLE_ID" 2>/dev/null || true
+  rm -f "$HOME/Library/LaunchAgents/$BUNDLE_ID.plist"
+  launchctl bootout "gui/$UID/$LOGIN_LABEL" 2>/dev/null || true
   launchctl bootstrap "gui/$UID" "$AGENT" 2>/dev/null || true
 else
   echo "→ skipping login item (--no-login-item)"
@@ -163,7 +161,7 @@ fi
 # reproduced it. So: give launchd a moment to answer before deciding.
 started=0
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if app_running; then started=1; break; fi
+  if app_at_path_running "$DEST"; then started=1; break; fi
   sleep 0.5
 done
 if [ "$started" -eq 1 ]; then
@@ -183,7 +181,7 @@ if [ "$COUNT" -gt 1 ]; then
   exit 1
 fi
 
-if app_running; then
+if app_at_path_running "$DEST"; then
   echo "✓ installed at $DEST"
   echo "  Spotlight, Raycast and the Dock can see it now, and Quit is recoverable."
   [ "$WANT_LOGIN_ITEM" -eq 1 ] && echo "  Starts at login. Turn it off in System Settings › General › Login Items."

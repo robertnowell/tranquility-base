@@ -22,8 +22,20 @@ cd "$(dirname "$0")/.."
 
 REF="${1:-origin/main}"
 CLEAN_WORKTREE="/private/tmp/tb-clean"
-APP="Tranquility Base.app"
+# Merged source deploys into a stable development identity. The published app
+# is installed only from a release artifact or Sparkle, so a local build can no
+# longer replace it and flip TCC's designated requirement.
+export VD_APP_NAME="Tranquility Base Dev"
+export VD_BUNDLE_ID="com.robertnowell.voice-dispatch.dev"
+export VD_APP_CHANNEL="development"
+export VD_UPDATES_ENABLED="false"
+export VD_URL_SCHEMES="tbdev"
+export TB_FEED_URL="https://updates.tranquilitybase.to/dev-appcast.xml"
+APP="$VD_APP_NAME.app"
 APP_PATH="$(tb_bundle_dir debug "$CLEAN_WORKTREE")/$APP"
+PROD_APP="/Applications/Tranquility Base.app"
+PROD_WAS_RUNNING=0
+app_at_path_running "$PROD_APP" && PROD_WAS_RUNNING=1
 
 # Never exit leaving the app down.
 #
@@ -222,6 +234,7 @@ done
 # bundle after launch — it draws its whole interface programmatically — and the
 # process is replaced seconds later anyway.
 APP_PATH=$(scripts/build-clean.sh "$REF")
+"$CLEAN_WORKTREE/scripts/audit-dev.sh" "$APP_PATH"
 
 # Deploy INTO the installed copy when there is one.
 #
@@ -234,6 +247,18 @@ APP_PATH=$(scripts/build-clean.sh "$REF")
 # before, so this is safe on a machine that has never run the installer.
 INSTALLED="/Applications/$APP"
 if [ -d "$INSTALLED" ]; then
+  # Bundle id alone is not TCC identity. If the selected certificate changed,
+  # replacing Dev would make every existing privacy grant look enabled but no
+  # longer apply. Refuse before stopping either lane or deleting any bundle.
+  OLD_REQUIREMENT=$(codesign -dr - "$INSTALLED" 2>&1 \
+    | sed -n 's/^designated => //p' || true)
+  NEW_REQUIREMENT=$(codesign -dr - "$APP_PATH" 2>&1 \
+    | sed -n 's/^designated => //p' || true)
+  if [ -n "$OLD_REQUIREMENT" ] && [ "$OLD_REQUIREMENT" != "$NEW_REQUIREMENT" ]; then
+    echo "✗ Dev's signing requirement changed; leaving the installed app untouched." >&2
+    echo "  Rotate deliberately with TB_ALLOW_DEV_IDENTITY_CHANGE=1 scripts/install-dev.sh." >&2
+    exit 1
+  fi
   # STOP FIRST. `rm -rf` on the installed bundle deletes the executable of a
   # process that is still running, and macOS does not keep a deleted binary's
   # pages alive: every page the live app has not already faulted in becomes
@@ -255,7 +280,9 @@ if [ -d "$INSTALLED" ]; then
   # the BUILD still happens before any of this, so stopping here is still
   # "immediately before the new one comes up", just not after deleting the
   # binary out from under the old one.
-  app_stop
+  # A merge should never evict somebody who deliberately selected the exact
+  # production release for testing. Only stop the Dev path being replaced.
+  app_stop_path "$INSTALLED"
   echo "→ updating the installed copy"
   rm -rf "$INSTALLED"
   cp -R "$APP_PATH" "$INSTALLED"
@@ -268,6 +295,15 @@ if [ -d "$INSTALLED" ]; then
     INSTALLED=""
   fi
   [ -n "$INSTALLED" ] && APP_PATH="$INSTALLED"
+fi
+
+# Prod is a selected test lane, not an obstacle to a merge. The new Dev bundle
+# is now installed and audited; leave the published process running exactly as
+# it was. Dev's launch drills run the next time Dev is selected or deployed
+# while active.
+if [ "$PROD_WAS_RUNNING" -eq 1 ]; then
+  echo "✓ Dev updated at $APP_PATH; active Prod left running"
+  exit 0
 fi
 
 # Belt and braces: a no-op when the branch above already stopped it, and the
@@ -289,7 +325,7 @@ LAUNCHED_AT=$(date +%s)
 open "$APP_PATH" --args --selftest-hud
 sleep 4
 
-if app_running; then
+if app_at_path_running "$APP_PATH"; then
   # "Running" was a pid check, and a pid proves a process, not a BUILD. Every
   # claim this script made about which ref was live was an inference from what
   # it had just installed — true in the ordinary case, and silent in exactly
