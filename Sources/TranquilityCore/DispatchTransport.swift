@@ -926,12 +926,8 @@ public enum TranscriptWatcher {
             .map(\.text)
     }
 
-    /// The Codex twin of `waitForUserText` — polls `codexUserMessages`
-    /// instead. `path` is required rather than resolved by session id: a
-    /// Codex `DispatchTarget` always carries its rollout path already
-    /// (`CodexRollout.rolloutPath`, resolved at construction), so there is
-    /// no "the file arrives during the wait" race to handle the way Claude
-    /// Code's transcript-creation-on-first-message timing needed.
+    /// The direct-path Codex twin of `waitForUserText` — used when the
+    /// rollout's address is already known.
     public static func waitForCodexUserText(
         _ text: String, path: String, timeout: TimeInterval, pollInterval: TimeInterval,
         fromByteOffset: Int64 = 0
@@ -941,6 +937,35 @@ public enum TranscriptWatcher {
         while Date() < deadline {
             if codexUserMessages(in: path, fromByteOffset: fromByteOffset)
                 .contains(where: { $0.contains(needle) }) { return true }
+            try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+        }
+        return false
+    }
+
+    /// The same wait, for a Codex rollout that may not exist yet.
+    ///
+    /// Codex creates a thread and its writer lock before materializing the
+    /// rollout. Its first accepted user message is what creates the file, so
+    /// requiring a path before dispatch makes that message unverifiable by
+    /// construction. Resolve by the stable thread id until the file appears;
+    /// once found, retain the path and read only that file.
+    public static func waitForCodexUserText(
+        _ text: String, sessionId: String, knownPath: String?,
+        timeout: TimeInterval, pollInterval: TimeInterval,
+        sessions: URL = CodexRollout.sessionsDirectory,
+        fromByteOffset: Int64 = 0
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var path = knownPath
+        while Date() < deadline {
+            if path == nil {
+                path = CodexRollout.rolloutPath(forSessionId: sessionId, sessions: sessions)
+            }
+            if let path, codexUserMessages(in: path, fromByteOffset: fromByteOffset)
+                .contains(where: { $0.contains(needle) }) {
+                return true
+            }
             try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
         }
         return false
