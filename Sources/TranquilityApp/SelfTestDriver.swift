@@ -116,6 +116,15 @@ extension StatusHUD {
     }
 
     /// Take the panel. Idempotent, and it always arms a release.
+    /// A lock around a count, for the sink closure the compiler will not
+    /// let mutate a captured var.
+    private final class SinkCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n = 0
+        func bump() { lock.lock(); n += 1; lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+    }
+
     private func beginDrills() {
         drillsHoldThePanel = true
         // A drill paints failures on purpose. They are counted (so a drill
@@ -1050,13 +1059,21 @@ extension StatusHUD {
         // another repository. The card must survive its microphone.
         showGreeting(line: greetingLine, label: "projects")
         let recordsBefore = Failures.reportedCount
+        let priorSink = Failures.sink
+        let forwarded = SinkCounter()
+        Failures.sink = { _ in forwarded.bump() }
         showResult("Couldn't open the microphone, audio stack unresponsive.")
         panel?.contentView?.layoutSubtreeIfNeeded()
+        Failures.flush()
+        Failures.sink = priorSink
         // The receipt is the record (6 Sep): a card the panel shows is a
-        // failure the maintainer can find. Counted, not written, under drills.
+        // failure the maintainer can find. Counted, not written, not sent,
+        // under drills: a record that says the microphone failed must mean
+        // the microphone failed.
         SelfTest.report("failureRecord", [
             ("cardBecomesOneRecord", Failures.reportedCount == recordsBefore + 1),
             ("drillsAreSuppressed", Failures.suppressed),
+            ("suppressedNeverReachesTheSink", forwarded.count == 0),
         ])
         let micFaultKeepsTheCard = bodyLabel.stringValue == greetingLine
             && titleLabel.stringValue == "projects" && currentTarget == nil

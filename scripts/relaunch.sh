@@ -343,6 +343,12 @@ sleep 6
 if ! "$CLEAN_WORKTREE/scripts/check-selftests.sh" "" "$LAUNCHED_AT"; then
   echo "✗ the build is running, but its self-tests did not pass." >&2
   echo "  Fix or revert before landing this — the panel has no other coverage." >&2
+  # Said in the channel too (6 Sep): a failed deploy used to be a line in a
+  # terminal nobody was looking at. The same channel and poster the watchers
+  # use; a Slack that is down does not change the exit code.
+  . "$CLEAN_WORKTREE/scripts/lib/slack.sh"
+  printf '%s\n' ":rotating_light: *Tranquility Base deploy of $REF: launch self-tests FAILED* on $(hostname -s). The build is running but a drill did not pass. \`scripts/check-selftests.sh\` has the verdicts; app.log has the rest." \
+    | tb_slack_post "C0BR963MBJ9"
   exit 1
 fi
 

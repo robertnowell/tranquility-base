@@ -195,3 +195,37 @@ final class FailuresTests: XCTestCase {
         #endif
     }
 }
+
+/// Phase 1 additions: the crumb hook the crash reporter rides, and the
+/// user's door out of an install id.
+final class FailuresPhaseOneTests: XCTestCase {
+    func testTheHookSeesEachAdmittedCrumbAndNoRefusedOne() {
+        let crumbs = Breadcrumbs(capacity: 5)
+        let seen = Counter()
+        crumbs.onRecord = { _ in seen.bump() }
+        crumbs.record("launcher: ok")
+        crumbs.record("HUD chrome: not a category we admit")
+        crumbs.record("routing: dispatched(text: refused)")
+        XCTAssertEqual(seen.count, 1)
+    }
+
+    func testResettingTheInstallIdMintsADifferentOneAndKeepsIt() {
+        Failures.resetForTesting()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tb-id-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir); Failures.resetForTesting() }
+        Failures.configure(directory: dir)
+        let first = Failures.installId
+        let second = Failures.resetInstallId()
+        XCTAssertNotEqual(first, second)
+        XCTAssertEqual(Failures.installId, second)
+        Failures.resetForTesting()
+        Failures.configure(directory: dir)
+        XCTAssertEqual(Failures.installId, second, "the reset is written, not just remembered")
+    }
+
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock(); private var n = 0
+        func bump() { lock.lock(); n += 1; lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+    }
+}

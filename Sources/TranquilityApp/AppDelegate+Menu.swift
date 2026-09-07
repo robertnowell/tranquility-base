@@ -13,6 +13,18 @@ extension AppDelegate {
     /// interface, the menu is the toolbox.
     @objc func revealFailureLog() { Diagnostics.revealFailureLog() }
 
+    @objc func toggleFailureReports() {
+        Diagnostics.sendingEnabled.toggle()
+        lastStatusLine = Diagnostics.sendingEnabled ? "failure reports on" : "failure reports off"
+        rebuildMenu()
+    }
+
+    @objc func resetInstallId() {
+        Diagnostics.resetInstallId()
+        lastStatusLine = "install id reset"
+        rebuildMenu()
+    }
+
     @objc func statusItemClicked() {
         if NSApp.currentEvent?.type == .rightMouseUp {
             statusItem.menu = statusMenu
@@ -264,13 +276,28 @@ extension AppDelegate {
                                action: nil, keyEquivalent: "")
         stamp.isEnabled = false
         menu.addItem(stamp)
-        // The failure record, as a file you can read. Every card the panel
-        // has shown is one line in it; nothing else is. Before anything is
-        // sent anywhere this is the whole of "what we send".
+        // Diagnostics: the toggle says in its own title what is never sent,
+        // because there is no first-run paragraph to say it (the checklist
+        // is ruled prose-free) and the README is not on screen. The failure
+        // log is "what we send", as a file: every card the panel has shown
+        // is one line in it and nothing else is.
+        let diagnostics = NSMenuItem(title: "Diagnostics", action: nil, keyEquivalent: "")
+        let diagnosticsMenu = NSMenu()
+        let send = NSMenuItem(title: "Send failure reports (never what you say)",
+                              action: #selector(toggleFailureReports), keyEquivalent: "")
+        send.target = self
+        send.state = Diagnostics.sendingEnabled ? .on : .off
+        diagnosticsMenu.addItem(send)
         let failures = NSMenuItem(title: "Failure log\u{2026}",
                                   action: #selector(revealFailureLog), keyEquivalent: "")
         failures.target = self
-        menu.addItem(failures)
+        diagnosticsMenu.addItem(failures)
+        let reset = NSMenuItem(title: "Reset install id",
+                               action: #selector(resetInstallId), keyEquivalent: "")
+        reset.target = self
+        diagnosticsMenu.addItem(reset)
+        diagnostics.submenu = diagnosticsMenu
+        menu.addItem(diagnostics)
 
         let update = NSMenuItem(title: "Check for Updates\u{2026}",
                                 action: #selector(Updates.checkForUpdates(_:)), keyEquivalent: "")

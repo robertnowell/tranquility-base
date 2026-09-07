@@ -303,6 +303,31 @@ else
   [ -d "$APP_SRC" ] || fail "bundle.sh produced no app at $APP_SRC"
 fi
 
+# Debug symbols to the error tracker (6 Sep), when there is one to send to.
+# Three things have to exist and each absence is said out loud rather than
+# silently producing a release whose crashes have no names: the dSYM
+# bundle.sh wrote, sentry-cli, and SENTRY_AUTH_TOKEN (claude-secrets on a
+# Mac, an Actions secret in CI). The org and project live in
+# diagnostics.json beside the DSN.
+DSYM_SRC="$(dirname "$APP_SRC")/$(basename "$APP_SRC" .app).dSYM"
+if [ -d "$DSYM_SRC" ] && command -v sentry-cli >/dev/null 2>&1 && [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
+  SENTRY_ORG=$(python3 -c 'import json;print(json.load(open("diagnostics.json")).get("org",""))')
+  SENTRY_PROJECT=$(python3 -c 'import json;print(json.load(open("diagnostics.json")).get("project",""))')
+  if [ -n "$SENTRY_ORG" ] && [ -n "$SENTRY_PROJECT" ]; then
+    step "uploading debug symbols to $SENTRY_ORG/$SENTRY_PROJECT"
+    sentry-cli debug-files upload --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" "$DSYM_SRC" \
+      || fail "debug symbol upload failed"
+  else
+    echo "→ debug symbols not uploaded: diagnostics.json names no org/project"
+  fi
+else
+  reasons=""
+  [ -d "$DSYM_SRC" ] || reasons="$reasons no dSYM;"
+  command -v sentry-cli >/dev/null 2>&1 || reasons="$reasons no sentry-cli;"
+  [ -n "${SENTRY_AUTH_TOKEN:-}" ] || reasons="$reasons no SENTRY_AUTH_TOKEN;"
+  echo "→ debug symbols not uploaded:$reasons crashes from this release will carry addresses, not names"
+fi
+
 step "signing with a secure timestamp"
 # The build job assembles the app with a throwaway signature, so the embedded
 # Sparkle helpers arrive here carrying it. They are re-signed with the real
