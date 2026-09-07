@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1110</title>
+      <sparkle:version>1110</sparkle:version>
+      <sparkle:shortVersionString>0.3.1110</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 07 Sep 2026 19:21:48 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1110-942c40af7/TranquilityBase-0.3.1110.dmg" type="application/octet-stream" length="13536321" sparkle:edSignature="4BufbleRJIFOp2vlgxVITw6DBHrFqWpCALUR0V4nFdSTxcASifcRl0BNtwqzwiCU2hkfRL/S4mxu5DwQx0ywBg==" />
+    </item>
+    <item>
       <title>Version 0.3.1109</title>
       <sparkle:version>1109</sparkle:version>
       <sparkle:shortVersionString>0.3.1109</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Mon, 07 Sep 2026 03:23:46 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1101-3101ecd12/TranquilityBase-0.3.1101.dmg" type="application/octet-stream" length="11744513" sparkle:edSignature="ydul1F0sX84HSYIuDWWC9xNIutyiwlcvnudlOWmkLpC+4EQUoUUqRdAsGwe90fgGyuIgDJ9Vv6U0LsQ28XitDw==" />
     </item>
-    <item>
-      <title>Version 0.3.1100</title>
-      <sparkle:version>1100</sparkle:version>
-      <sparkle:shortVersionString>0.3.1100</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Mon, 07 Sep 2026 03:06:43 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1100-cbda9f065/TranquilityBase-0.3.1100.dmg" type="application/octet-stream" length="11743647" sparkle:edSignature="qIwwcH1w+BGUvRR8tvMhlF9xbIPJSx5MyKth3cTQ41wnLnemniZad3umMdguzw06yYt0XdRKkFKxMB12bhIzCQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: hOyREUNTeoClANImwdNYDDFYRKn4yzI9NeWvjkyYHGXmJ5KSHDK4K744vmAWgaS2Cy4hHSWCiGaTI5g241KWAQ==
+edSignature: IO0daehYu9odoOpyUWR75wjmLe74uNkyDeq3myd7OdI2axJckY6Xkl9MwLIXQbFHZKGqelimIh1DYoeocEKLCA==
 length: 6457
 -->
