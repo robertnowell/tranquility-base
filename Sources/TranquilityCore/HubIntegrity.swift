@@ -84,15 +84,25 @@ public enum HubIntegrity {
                 continue
             }
 
-            // 1. Every page it made is on its page.
-            for page in pages where !hub.contains(page.path) {
-                problems.append(Problem(
-                    session: slug,
-                    detail: "made \(page.path) but the hub does not list it"))
+            // 1. Every page it made is on its page. A record written through
+            // the old eight-character link names agents/<eight>/…, while the
+            // hub lists the path under the full-id directory; the two are one
+            // file, so either spelling counts.
+            for page in pages {
+                let resolved = URL(fileURLWithPath: page.path).resolvingSymlinksInPath().path
+                if !hub.contains(page.path), !hub.contains(resolved) {
+                    problems.append(Problem(
+                        session: slug,
+                        detail: "made \(page.path) but the hub does not list it"))
+                }
             }
 
-            // 3. The hub names its session where a reader looks first.
-            if !hub.contains("session \(slug)") {
+            // 3. The hub names its session where a reader looks first. The
+            // byline prints the eight characters a person reads, never the
+            // full id, so that is what is looked for: checking for the slug
+            // after it became the full id (06 Sep) flagged 216 hubs whose
+            // bylines were exactly right.
+            if !hub.contains("session \(SessionIdentity.short(session))") {
                 problems.append(Problem(
                     session: slug, detail: "hub byline does not name the session"))
             }

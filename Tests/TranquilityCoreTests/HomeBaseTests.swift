@@ -408,12 +408,16 @@ final class HomeBaseTests: XCTestCase {
                                           pageExists: { _ in true })
         XCTAssertTrue(problems.contains { $0.detail.contains("does not list it") })
 
-        // And the healthy case is silent.
-        try "<html>session \(slug) \(page)</html>".write(
+        // And the healthy case is silent. The byline prints the EIGHT
+        // characters, as every hub does; the check must read that, not the
+        // full id the directory is named by (06 Sep: 216 false bylines).
+        try "<html>session \(SessionIdentity.short(session)) \(page)</html>".write(
             to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
-        XCTAssertTrue(HubIntegrity.check(artifactRoot: root, hubRoot: hubs,
+        let healthy = HubIntegrity.check(artifactRoot: root, hubRoot: hubs,
                                          pageExists: { _ in true })
-            .filter { $0.detail.contains("does not list it") }.isEmpty)
+        XCTAssertTrue(healthy.filter { $0.detail.contains("does not list it") }.isEmpty)
+        XCTAssertTrue(healthy.filter { $0.detail.contains("byline") }.isEmpty,
+                      "a byline with the eight characters is the right byline")
         try? FileManager.default.removeItem(atPath: root)
     }
 
