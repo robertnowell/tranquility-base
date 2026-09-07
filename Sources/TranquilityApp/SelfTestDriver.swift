@@ -131,6 +131,7 @@ extension StatusHUD {
         // can prove the wiring) and never written or forwarded: a record that
         // says the microphone failed must mean the microphone failed.
         Failures.suppressed = true
+        Track.suppressed = true
         drillRelease?.cancel()
         // A hard ceiling, because relaunch.sh passes --selftest-hud on EVERY
         // deploy: a flag that stuck would leave the panel permanently deaf to
@@ -147,6 +148,7 @@ extension StatusHUD {
         guard drillsHoldThePanel else { return }
         drillsHoldThePanel = false
         Failures.suppressed = false
+        Track.suppressed = false
         drillRelease?.cancel()
         drillRelease = nil
         Permissions.log("selftest: drills released the panel")
@@ -1075,6 +1077,11 @@ extension StatusHUD {
         // another repository. The card must survive its microphone.
         showGreeting(line: greetingLine, label: "projects")
         let recordsBefore = Failures.reportedCount
+        let eventsBefore = Track.recordedCount
+        let priorTrackSink = Track.sink
+        let trackForwarded = SinkCounter()
+        Track.sink = { _ in trackForwarded.bump() }
+        defer { Track.sink = priorTrackSink }
         let priorSink = Failures.sink
         let forwarded = SinkCounter()
         Failures.sink = { _ in forwarded.bump() }
@@ -1090,6 +1097,8 @@ extension StatusHUD {
             ("cardBecomesOneRecord", Failures.reportedCount == recordsBefore + 1),
             ("drillsAreSuppressed", Failures.suppressed),
             ("suppressedNeverReachesTheSink", forwarded.count == 0),
+            ("eventStreamCountsUnderDrills", Track.recordedCount > eventsBefore),
+            ("eventStreamSuppressedUnderDrills", trackForwarded.count == 0),
         ])
         let micFaultKeepsTheCard = bodyLabel.stringValue == greetingLine
             && titleLabel.stringValue == "projects" && currentTarget == nil

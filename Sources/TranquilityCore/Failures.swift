@@ -443,6 +443,13 @@ public enum Failures {
         let store = _store
         lock.unlock()
         guard !suppressed else { return }
+        // The product stream sees the same failure as a fact: kind, site,
+        // harness. Enough to join failures to gestures and to retention;
+        // nothing of the reason text.
+        var mirror: [String: TrackValue] = ["kind": .token(kind.rawValue), "site": Track.token(from: site)]
+        if let harness { mirror["harness"] = .token(harness) }
+        if let session { mirror["agent_id"] = Track.hash(session) }
+        Track.record("failure", mirror)
         queue.async {
             let event = FailureEvent(
                 at: now, kind: kind, reason: Scrub.text(reason), site: site,

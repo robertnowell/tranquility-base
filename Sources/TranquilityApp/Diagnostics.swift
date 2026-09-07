@@ -32,7 +32,12 @@ enum Diagnostics {
     @MainActor
     static var sendingEnabled: Bool {
         get { UserDefaults.standard.object(forKey: sendKey) as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: sendKey); apply() }
+        set {
+            UserDefaults.standard.set(newValue, forKey: sendKey)
+            Track.record("setting_changed", ["key": "diagnostics_send", "value": .bool(newValue)])
+            apply()
+            Analytics.apply(enabled: newValue)
+        }
     }
 
     struct RemoteConfig: Codable, Equatable {
@@ -40,6 +45,14 @@ enum Diagnostics {
         var sentryDsn: String?
         var org: String?
         var project: String?
+        var posthogKey: String?
+        var posthogHost: String?
+
+        var effectivePostHogKey: String? {
+            guard enabled ?? true, let key = posthogKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !key.isEmpty else { return nil }
+            return key
+        }
 
         /// The DSN to use, or nil. An empty string is the published way of
         /// saying "every install off", and it must read as absent
@@ -56,6 +69,7 @@ enum Diagnostics {
     static let remoteURL = URL(string: "https://updates.tranquilitybase.to/diagnostics.json")!
     private static var cacheURL: URL { QueueStore.supportDirectory.appendingPathComponent("diagnostics-config.json") }
     @MainActor private static var dsn: String?
+    @MainActor private static var posthog: (key: String, host: String?)?
     @MainActor private static var startedAt: Date?
 
     // MARK: Environment
@@ -106,6 +120,9 @@ enum Diagnostics {
         let fresh = Failures.resetInstallId()
         Permissions.log("\(channel): install id reset to \(fresh.prefix(8))")
         if SentrySDK.isEnabled { SentrySDK.configureScope { $0.setUser(User(userId: fresh)) } }
+        Track.configure(directory: QueueStore.supportDirectory, installId: fresh)
+        Track.record("install_id_reset")
+        Analytics.reidentify()
     }
 
     // MARK: Reporting
@@ -122,15 +139,30 @@ enum Diagnostics {
             SentrySDK.addBreadcrumb(b)
         }
         Failures.sink = { event in forward(event) }
+        let cachedConfig = (try? Data(contentsOf: cacheURL))
+            .flatMap { try? JSONDecoder().decode(RemoteConfig.self, from: $0) }
         if let override = ProcessInfo.processInfo.environment["TB_SENTRY_DSN"], !override.isEmpty {
             dsn = override
             Permissions.log("\(channel): DSN from TB_SENTRY_DSN")
-        } else if let cached = try? Data(contentsOf: cacheURL),
-                  let config = try? JSONDecoder().decode(RemoteConfig.self, from: cached) {
-            dsn = config.effectiveDSN
+        } else if let cachedConfig {
+            dsn = cachedConfig.effectiveDSN
+        }
+        if let override = ProcessInfo.processInfo.environment["TB_POSTHOG_KEY"], !override.isEmpty {
+            posthog = (override, nil)
+        } else if let cachedConfig, let key = cachedConfig.effectivePostHogKey {
+            posthog = (key, cachedConfig.posthogHost)
         }
         apply()
+        applyAnalytics()
         fetchRemoteConfig()
+    }
+
+    /// The product-event side of the same switch: start PostHog when a key
+    /// is known and the toggle is on; otherwise it stays dormant.
+    @MainActor
+    private static func applyAnalytics() {
+        Analytics.start(key: sendingEnabled ? posthog?.key : nil, host: posthog?.host)
+        if !sendingEnabled { Analytics.apply(enabled: false) }
     }
 
     /// Reconcile the SDK with the toggle and the DSN. Idempotent.
@@ -269,12 +301,19 @@ enum Diagnostics {
             }
             try? data.write(to: cache, options: .atomic)
             let next = config.effectiveDSN
+            let nextKey = config.effectivePostHogKey
             DispatchQueue.main.async {
                 if ProcessInfo.processInfo.environment["TB_SENTRY_DSN"] == nil {
                     let changed = next != dsn
                     dsn = next
                     if changed { Permissions.log("\(channel): config fetched; DSN \(next == nil ? "absent" : "present")") }
                     apply()
+                }
+                if ProcessInfo.processInfo.environment["TB_POSTHOG_KEY"] == nil {
+                    let changed = nextKey != posthog?.key
+                    if let nextKey { posthog = (nextKey, config.posthogHost) } else { posthog = nil }
+                    if changed { Permissions.log("\(channel): config fetched; PostHog key \(nextKey == nil ? "absent" : "present")") }
+                    applyAnalytics()
                 }
             }
         }.resume()

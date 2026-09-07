@@ -445,3 +445,29 @@ public struct SessionRow: Equatable, Sendable {
         return min(capacity, max(floor, lit))
     }
 }
+
+
+// MARK: - Names the event stream uses
+
+public extension Lamp {
+    /// The lamp as a vocabulary word for `agent_lamp_changed`.
+    var trackName: String {
+        switch self {
+        case .ready: return "ready"
+        case .working: return "working"
+        case .running: return "running"
+        case .fault: return "fault"
+        case .unlit: return "unlit"
+        }
+    }
+}
+
+public extension ReadState {
+    var trackName: String {
+        switch self {
+        case .unread: return "unread"
+        case .opened: return "opened"
+        case .none: return "none"
+        }
+    }
+}
