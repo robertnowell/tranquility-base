@@ -21,6 +21,9 @@ let package = Package(
         // upstream package is not used directly); it links into the binary,
         // nothing is copied into the bundle.
         .package(path: "Vendor/SentryStatic"),
+        // PostHog, for product events (Track). Source-built; its own
+        // automatic capture is switched off in Analytics.swift.
+        .package(url: "https://github.com/PostHog/posthog-ios.git", from: "3.71.4"),
     ],
     targets: [
         .target(
@@ -42,6 +45,7 @@ let package = Package(
                 "ObjCExceptionFirewall",
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "SentryStatic", package: "SentryStatic"),
+                .product(name: "PostHog", package: "posthog-ios"),
             ]
         ),
         .testTarget(

@@ -298,6 +298,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// identical, and a summary arriving changes a row's topic with no count
     /// change at all.
     var lastShownRows: [SessionRow]?
+    /// What each agent's lamp looked like on the last tick, for the
+    /// `agent_lamp_changed` spine (Core `LampWatch`).
+    var lampWatch = LampWatch()
+    let launchedAt = Date()
     /// Which sessions were already waiting on the previous tick.
     ///
     /// `turnArrived` is honest about a TURN arriving — it keys off rows being
@@ -536,6 +540,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // most one tick is exactly as stale as the grid beside it.
                 self.refreshDropTarget()
                 let rows = self.sessionRowsNow()
+                // The lamp spine: one event per agent per change, from the
+                // same rows the grid draws, so the record and the screen
+                // cannot disagree.
+                for event in self.lampWatch.observe(rows.map {
+                    (id: $0.id, harness: $0.harness ?? "unknown", lamp: $0.lamp.trackName,
+                     read: $0.read.trackName, reason: $0.aux)
+                }) {
+                    Track.record(event.name, event.properties)
+                }
                 let waiting = rows.filter { $0.lamp == .ready }.count
                 // The menu-bar annunciator refreshes every tick, so its count can
                 // never go stale even while the panel stays hidden.
@@ -1052,6 +1065,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // environment it depends on is probed off-main right away.
         Failures.configure(directory: QueueStore.supportDirectory)
         Failures.trace = { Permissions.log("failure: \($0)") }
+        // The product-event funnel (Core `Track`), salted with the same
+        // install id, writing events.jsonl beside failures.jsonl. Common
+        // properties ride every event from here on.
+        Track.configure(directory: QueueStore.supportDirectory, installId: Failures.installId)
+        Track.setCommon([
+            "app_version": .token(Track.token(from: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "?").tokenString),
+            "app_arch": .token(EnvironmentProbe.currentArch),
+            "app_translated": .bool(EnvironmentProbe.isTranslated),
+        ])
+        Track.record("app_launched", [
+            "launched_by": .token(CommandLine.arguments.contains("--selftest-hud") ? "relaunch" : "login_or_user"),
+            "hooks_healthy": .bool(true),
+        ])
         Diagnostics.refreshEnvironment(reason: "startup")
         // Sending, one run-loop turn later: after this method returns and the
         // panel has painted, so the SDK's start (a crash handler, a watchdog
@@ -1441,6 +1467,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        Track.record("app_quit", ["uptime_s": .int(Int(Date().timeIntervalSince(launchedAt)))])
+        Track.flush()
+        Analytics.flush()
         permissionTimer?.invalidate()
         intakeTimer?.invalidate()
         hotkey?.stop()

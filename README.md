@@ -179,9 +179,17 @@ summaries are the point.
   DSN: those same lines, plus crashes, hangs over two seconds, MetricKit's
   diagnostics, and one "session started" per launch for the crash-free rate.
   Never what you say or what an agent says; the SDK's own personal-data
-  collection is off and paths are scrubbed again before send. On by default;
-  "Diagnostics › Send failure reports" turns it off, "Reset install id"
-  severs the random id that groups your reports.
+  collection is off and paths are scrubbed again before send.
+- **Usage events are sent** (PostHog) when the config names a project key:
+  which chord you pressed in which panel face and what the app did with it,
+  panel faces changing, each agent's lamp changing, launches, captures (their
+  length in seconds, never their words), transcription lengths in characters
+  and words, replies and their outcomes, settings changed. A property can only
+  be a word from a fixed vocabulary, a number, a yes/no, or a salted hash of a
+  session or directory id; the code has no way to send text. `events.jsonl`
+  beside `failures.jsonl` is the local copy. On by default; "Diagnostics ›
+  Send usage and failure reports" turns both off, "Reset install id" severs
+  the random id that groups them.
 - Long-running headless `claude -p` jobs can be announced while still executing.
 - On-disk state still lives in `~/Library/Application Support/VoiceDispatch/`
   and credentials under the Keychain service `voice-dispatch` — both predate the

@@ -27,10 +27,15 @@ extension AppDelegate {
 
     @objc func statusItemClicked() {
         if NSApp.currentEvent?.type == .rightMouseUp {
+            Track.record("menubar_clicked", ["button": "right", "result": "menu",
+                                             "panel_was_on_screen": .bool(hud.isOnScreen)])
             statusItem.menu = statusMenu
             statusItem.button?.performClick(nil)
             statusItem.menu = nil
         } else if hud.isOnScreen {
+            Track.record("menubar_clicked", ["button": "left", "panel_was_on_screen": true,
+                                             "result": .token(hud.canSurfaceAmbiently ? "hidden" : "dismissed"),
+                                             "face": .token(hud.state.name)])
             // Toggle (ruled 05 Aug): the click that opens the panel also hides
             // it. From the resting grid that is a plain hide — nothing on stage
             // to retire. From any active state it is the full dismiss, because
@@ -38,6 +43,7 @@ extension AppDelegate {
             // announcement heard-by-accident: dismiss is the honest teardown.
             if hud.canSurfaceAmbiently { hud.hide() } else { hud.dismiss() }
         } else {
+            Track.record("menubar_clicked", ["button": "left", "panel_was_on_screen": false, "result": "shown"])
             showPanel()
         }
     }
@@ -283,7 +289,7 @@ extension AppDelegate {
         // is one line in it and nothing else is.
         let diagnostics = NSMenuItem(title: "Diagnostics", action: nil, keyEquivalent: "")
         let diagnosticsMenu = NSMenu()
-        let send = NSMenuItem(title: "Send failure reports (never what you say)",
+        let send = NSMenuItem(title: "Send usage and failure reports (never what you say)",
                               action: #selector(toggleFailureReports), keyEquivalent: "")
         send.target = self
         send.state = Diagnostics.sendingEnabled ? .on : .off

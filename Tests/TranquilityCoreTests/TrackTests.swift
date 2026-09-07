@@ -1,0 +1,139 @@
+import XCTest
+@testable import TranquilityCore
+
+/// The product-event funnel: no text by type, hashed identity, off-thread
+/// writing, and the lamp spine's diffing.
+final class TrackTests: XCTestCase {
+    private var dir: URL!
+
+    override func setUp() {
+        super.setUp()
+        Track.resetForTesting()
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("tb-track-\(UUID().uuidString)")
+        Track.configure(directory: dir, installId: "install-a")
+    }
+
+    override func tearDown() {
+        Track.resetForTesting()
+        try? FileManager.default.removeItem(at: dir)
+        super.tearDown()
+    }
+
+    private func lines() -> [[String: Any]] {
+        Track.flush()
+        guard let url = Track.eventsURL, let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return text.split(separator: "\n").compactMap {
+            try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
+        }
+    }
+
+    func testATokenIsAVocabularyWordAndNothingElse() {
+        XCTAssertTrue(TrackValue.token("ctrl_option").isAdmissible)
+        XCTAssertTrue(TrackValue.token("result.failed").isAdmissible)
+        XCTAssertFalse(TrackValue.token("what I said to the agent").isAdmissible, "spaces are prose")
+        XCTAssertFalse(TrackValue.token("").isAdmissible)
+        XCTAssertFalse(TrackValue.token(String(repeating: "a", count: 49)).isAdmissible)
+        XCTAssertTrue(TrackValue.int(3).isAdmissible)
+        XCTAssertTrue(Track.hash("anything").isAdmissible)
+        XCTAssertFalse(TrackValue.hash("not-hex").isAdmissible)
+    }
+
+    func testAnEventWithProseIsDroppedWholeAndCounted() {
+        Track.record("gesture", ["chord": "ctrl_option", "decision": .token("ignored, microphone is open")])
+        Track.record("gesture", ["chord": "ctrl_option", "decision": "ignored_mic_open"])
+        let all = lines()
+        XCTAssertEqual(all.count, 1)
+        XCTAssertEqual(all[0]["decision"] as? String, "ignored_mic_open")
+        XCTAssertEqual(Track.refusedCount, 1)
+        XCTAssertEqual(Track.recordedCount, 2)
+    }
+
+    func testHashesAreStablePerInstallAndDifferentAcrossInstalls() {
+        let a1 = Track.hash("session-1"), a2 = Track.hash("session-1")
+        XCTAssertEqual(a1, a2)
+        if case .hash(let h) = a1 { XCTAssertEqual(h.count, 16) } else { XCTFail() }
+        Track.resetForTesting()
+        Track.configure(directory: dir, installId: "install-b")
+        XCTAssertNotEqual(Track.hash("session-1"), a1, "another install cannot correlate the same agent")
+    }
+
+    func testCommonPropertiesRideEveryEventAndTheSinkSeesIt() {
+        Track.setCommon(["build": "1096", "arch": "arm64"])
+        let got = expectation(description: "sink")
+        let seen = Box<TrackEvent?>(nil)
+        Track.sink = { e in seen.update { $0 = e }; got.fulfill() }
+        Track.record("face_changed", ["from": "idle", "to": "speaking", "reason": "announce_requested"])
+        wait(for: [got], timeout: 2)
+        XCTAssertEqual(seen.value?.properties["arch"], .token("arm64"))
+        XCTAssertEqual(seen.value?.properties["to"], .token("speaking"))
+        XCTAssertEqual(lines().first?["build"] as? String, "1096")
+    }
+
+    func testEventsRecordedBeforeASinkExistsReplayOnAttach() {
+        Track.record("app_launched", ["launched_by": "login_or_user"])
+        Track.record("face_changed", ["from": "hidden", "to": "idle"])
+        Track.flush()
+        let seen = Box<[String]>([])
+        Track.attach { e in seen.update { $0.append(e.name) } }
+        Track.flush()   // the replay rides the funnel's own queue
+        XCTAssertEqual(seen.value, ["app_launched", "face_changed"], "in order, nothing lost")
+        Track.record("gesture", ["chord": "ctrl_option"])
+        Track.flush()
+        XCTAssertEqual(seen.value.count, 3, "after attach, events go straight through")
+    }
+
+    func testSuppressedEventsAreCountedNotWrittenNotForwarded() {
+        Track.suppressed = true
+        let forwarded = Box<Int>(0)
+        Track.sink = { _ in forwarded.update { $0 += 1 } }
+        Track.record("gesture", ["chord": "option"])
+        Track.flush()
+        XCTAssertEqual(Track.recordedCount, 1)
+        XCTAssertEqual(lines().count, 0)
+        XCTAssertEqual(forwarded.value, 0)
+    }
+
+    func testRecordingNeverBlocksTheCaller() {
+        let started = Date()
+        for i in 0..<500 { Track.record("tick", ["n": .int(i)]) }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.3)
+        XCTAssertEqual(lines().count, 500)
+    }
+
+    func testTheLampSpineEmitsOnePerChangeAndOneWhenARowLeaves() {
+        var watch = LampWatch()
+        let t0 = Date(timeIntervalSince1970: 1000)
+        // The first feed is a census, not a change.
+        var events = watch.observe([("s0", "claude-code", "running", "none", "quiet")], now: t0)
+        XCTAssertTrue(events.isEmpty)
+        // A new row after that is a change from nothing.
+        events = watch.observe([("s0", "claude-code", "running", "none", "quiet"),
+                                ("s1", "codex", "ready", "unread", "waiting on you")], now: t0)
+        XCTAssertEqual(events.map { $0.properties["to"] }, [.token("ready")])
+        XCTAssertEqual(events[0].properties["from"], .token("none"))
+        // Same again: nothing.
+        events = watch.observe([("s0", "claude-code", "running", "none", "quiet"),
+                                ("s1", "codex", "ready", "unread", "waiting on you")], now: t0.addingTimeInterval(5))
+        XCTAssertTrue(events.isEmpty)
+        // Opened, then working, then gone.
+        events = watch.observe([("s0", "claude-code", "running", "none", "quiet"),
+                                ("s1", "codex", "ready", "opened", "waiting on you")], now: t0.addingTimeInterval(10))
+        XCTAssertEqual(events[0].properties["read"], .token("opened"))
+        XCTAssertEqual(events[0].properties["seconds_in_previous"], .int(10))
+        events = watch.observe([("s0", "claude-code", "running", "none", "quiet"),
+                                ("s1", "codex", "working", "none", "working 3m")], now: t0.addingTimeInterval(20))
+        XCTAssertEqual(events[0].properties["from"], .token("ready"))
+        XCTAssertEqual(events[0].properties["reason"], .token("working_m"), "digits and prose reduce to a token")
+        events = watch.observe([("s0", "claude-code", "running", "none", "quiet")], now: t0.addingTimeInterval(30))
+        XCTAssertEqual(events[0].properties["to"], .token("gone"))
+        XCTAssertEqual(events[0].properties["reason"], .token("left_the_grid"))
+        for e in events { for (_, v) in e.properties { XCTAssertTrue(v.isAdmissible) } }
+    }
+
+    private final class Box<T>: @unchecked Sendable {
+        private let lock = NSLock(); private var v: T
+        init(_ v: T) { self.v = v }
+        var value: T { lock.lock(); defer { lock.unlock() }; return v }
+        func update(_ f: (inout T) -> Void) { lock.lock(); f(&v); lock.unlock() }
+    }
+}

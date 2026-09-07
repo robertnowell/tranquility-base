@@ -56,7 +56,7 @@ extension AppDelegate {
             // Acknowledged above and nothing else. A first ⌃ is not an
             // instruction — the whole point of the case is that the light can
             // report a press the app is not going to act on.
-            break
+            Analytics.gesture("ctrl", phase: "registered", decision: "registered_only", face: hud.state)
         case .next:
             // Open issue #6, wired at last: ⌃⌥ while the microphone is open would
             // start an announcement into a live mic — it would record itself.
@@ -64,6 +64,7 @@ extension AppDelegate {
             // that opens the mic through `.listening`.
             guard !hud.isCapturingAudio else {
                 Permissions.log("next: ignored, microphone is open")
+                Analytics.gesture("ctrl_option", phase: "tapped", decision: "ignored_mic_open", face: hud.state)
                 return
             }
             // Advancing mid-transcription would announce against a panel the
@@ -71,6 +72,7 @@ extension AppDelegate {
             // the press works then. Same law as the microphone guard above.
             if case .transcribing = hud.state {
                 Permissions.log("next: ignored, transcription in flight")
+                Analytics.gesture("ctrl_option", phase: "tapped", decision: "ignored_transcribing", face: hud.state)
                 return
             }
             // During the undo window, ⌃⌥ commits the send and goes HOME
@@ -82,6 +84,7 @@ extension AppDelegate {
             // the next agent from there, same as every other altitude.
             if hud.commitPendingSendNow() {
                 Permissions.log("next: committed the pending send, going home")
+                Analytics.gesture("ctrl_option", phase: "tapped", decision: "committed_pending_send", face: hud.state)
                 showIdleGrid()
                 return
             } else if hud.state.isCardOnStage {
@@ -98,6 +101,7 @@ extension AppDelegate {
                 // rather than advancing it. A rapid double-press composes
                 // into "next agent": the first press lands on the grid, and
                 // from the grid the second press invites the next agent below.
+                Analytics.gesture("ctrl_option", phase: "tapped", decision: "home", face: hud.state)
                 goHomeFromCard(via: "⌃⌥")  // key-names:exempt — log label
                 return
             }
@@ -108,6 +112,7 @@ extension AppDelegate {
             // the panel visible and plays immediately, exactly as before.
             guard hud.isOnScreen else {
                 Permissions.log("⌃⌥: surface")
+                Analytics.gesture("ctrl_option", phase: "tapped", decision: "surface", face: hud.state)
                 showIdleGrid()
                 return
             }
@@ -117,10 +122,15 @@ extension AppDelegate {
             // dismiss-on-advance died with home-first: advancing can no
             // longer happen FROM the speaking card at all.
             Permissions.log("⌃⌥: next")
+            Analytics.gesture("ctrl_option", phase: "tapped", decision: "next", face: hud.state)
             activeConversation = nil   // moving on is the explicit end of a conversation
             announceNext()
 
         case .dismiss:
+            Analytics.gesture("ctrl_shift", phase: "tapped", decision: {
+                if case .transcribing = hud.state { return "cancelled_transcription" }
+                return (hud.isBusyOnScreen || hud.isOnScreen) ? "dismissed" : "ignored"
+            }(), face: hud.state)
             // Same action as the Dismiss button; a chord because Escape leaks ESC
             // into the focused terminal and interrupts the Claude session there.
             //
@@ -163,6 +173,7 @@ extension AppDelegate {
                 listeningJustStarted: listeningStartedAt.map { Date().timeIntervalSince($0) < 0.45 } ?? false,
                 micGranted: micGranted)
             Permissions.log("⌥ tap: \(decision) in \(hud.state)")
+            Analytics.gesture("option", phase: "tapped", decision: Track.token(from: "\(decision)").tokenString, face: hud.state)
 
             switch decision {
             case .ignore:
@@ -199,6 +210,7 @@ extension AppDelegate {
                 guard micGranted else { return }
                 if recorder.isRecording {
                     Permissions.log("hands-free: refused, mic already live")
+                    Analytics.gesture("option_option", phase: "completed", decision: "refused_mic_live", face: hud.state)
                     lastStatusLine = "mic already live, tap ⌥ Option to send"
                     return
                 }
@@ -275,6 +287,7 @@ extension AppDelegate {
                 updateTitle()
                 hud.showListening(level: { [weak self] in self?.recorder.level ?? 0 })
                 Permissions.log("hands-free: listening locked")
+                Analytics.gesture("option_option", phase: "completed", decision: "hands_free_locked", face: hud.state)
             }
 
         case .pauseToggled:
@@ -290,12 +303,14 @@ extension AppDelegate {
             guard let coordinator else { return }
             guard !hud.isCapturingAudio else {
                 Permissions.log("depth-1: ignored, microphone is open")
+                Analytics.gesture("ctrl_ctrl", phase: "tapped", decision: "ignored_mic_open", face: hud.state)
                 return
             }
             guard let announcement = lastAnnouncement else {
                 // Quiet, not spoken: nothing has been announced this launch, and
                 // the voice is the away-channel — it never narrates empty state.
                 Permissions.log("depth-1: nothing announced yet; staying quiet")
+                Analytics.gesture("ctrl_ctrl", phase: "tapped", decision: "nothing_announced", face: hud.state)
                 return
             }
             // The ladder (ruled: findings → solution → why → message, the
@@ -335,6 +350,10 @@ extension AppDelegate {
                 Permissions.log("ladder: \(rung.kind.rawValue) "
                                 + "(\(ladderIndex)/\(rungs.count)) for "
                                 + "\(announcement.event.sessionId.prefix(8))")
+                                Analytics.gesture("ctrl_ctrl", phase: "tapped", decision: "rung", face: hud.state, extra: [
+                                    "rung": .token(rung.kind.rawValue.lowercased()), "rung_index": .int(ladderIndex),
+                                    "rung_count": .int(rungs.count), "agent_id": Track.hash(announcement.event.sessionId),
+                                ])
                 try? store?.recordDogfood(.depthOnePulled,
                                           sessionId: announcement.event.sessionId)
                 // In the session's voice (ruled 05 Aug, a559f29): the pull deepens
@@ -381,14 +400,17 @@ extension AppDelegate {
             // skips painting an arming face that would only revert.
             guard recorder.allowsAutoArm else {
                 Permissions.log("arm: skipped, mic machine wedged")
+                Analytics.gesture("option", phase: "arm_opened", decision: "skipped_mic_wedged", face: hud.state)
                 return
             }
             guard armedAt == nil, !recorder.isRecording else {
                 // Hands-free is live (a ⌥ tap will SEND) or a capture is
                 // already running: nothing to arm.
                 Permissions.log("arm: skipped, mic already live")
+                Analytics.gesture("option", phase: "arm_opened", decision: "skipped_mic_live", face: hud.state)
                 return
             }
+            Analytics.gesture("option", phase: "arm_opened", decision: "armed", face: hud.state)
             // Visual FIRST (eval E5): between the grace timer firing and this
             // render sit only in-memory stash writes — no probes, no engine.
             // Identity only if already in hand: resolveReplyContext shells out
@@ -439,6 +461,7 @@ extension AppDelegate {
             if hadFace { hud.revertArming(because: "tap or chord") }
             if let armedDuration {
                 Permissions.log("arm: discarded, \(Int(armedDuration * 1000))ms audio")
+                Analytics.gesture("option", phase: "arm_aborted", decision: "tap_or_chord", face: hud.state, extra: ["audio_ms": .int(Int(armedDuration * 1000))])
             }
             // If the revert landed back on the receipt, its clock — which this
             // gesture deliberately never cancelled, but whose work item may have
@@ -473,9 +496,11 @@ extension AppDelegate {
                 // stomped-pill incident left the recorder live behind an idle
                 // facade and every press landed here, invisibly.
                 Permissions.log("reply: refused, mic already live")
+                Analytics.gesture("option", phase: "hold_began", decision: "refused_mic_live", face: hud.state)
                 lastStatusLine = "mic already live, tap ⌥ Option to send"
                 return
             }
+            Analytics.gesture("option", phase: "hold_began", decision: "reply_began", face: hud.state)
             // Open issue #7 is NOT wired here, deliberately. `canStartReply` as a
             // hard refusal would break three live behaviors: dictation-to-clipboard
             // when nothing is waiting (which is how #7's "transcribe then fail" was
@@ -555,17 +580,21 @@ extension AppDelegate {
                 // cases that most need telling apart, and the dead-mic one is
                 // the reason this path exists at all.
                 reportNothingHeard(because: "nothing recorded")
+                Analytics.gesture("option", phase: "hold_ended", decision: "nothing_recorded", face: hud.state)
                 return
             }
             updateTitle()
+            Analytics.gesture("option", phase: "hold_ended", decision: "sending", face: hud.state)
             sendReply(capture)
 
         case .replyAborted where handsFreeListening:
+            Analytics.gesture("option", phase: "hold_aborted", decision: "ignored_hands_free", face: hud.state)
             // A stray key during locked listening is not an abort signal: nothing is
             // being held, so there is no gesture to have interfered with. Ignore.
             return
 
         case .replyAborted:
+            Analytics.gesture("option", phase: "hold_aborted", decision: "reply_aborted", face: hud.state)
             // The hold turned out to be part of a real shortcut. Drop the audio
             // rather than transcribing whatever happened to be in the room.
             isBusy = false

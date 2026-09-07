@@ -109,6 +109,7 @@ final class StatusHUD: NSObject {
         didSet {
             UserDefaults.standard.set(isCollapsed, forKey: StatusHUD.collapsedKey)
             Permissions.log("panel: \(isCollapsed ? "collapsed" : "expanded")")
+            Track.record(isCollapsed ? "panel_collapsed" : "panel_expanded", ["face": .token(state.name)])
         }
     }
 
@@ -1594,6 +1595,20 @@ final class StatusHUD: NSObject {
     /// those are conversations in progress, and a background update that interrupts
     /// one is worse than a stale count.
     private(set) var state: PanelState = .hidden
+    /// When `state` last changed, for `face_changed`'s time-in-previous.
+    private var stateEnteredAt = Date()
+
+    /// The `face_changed` spine. One call per transition attempt, refused or
+    /// not: a refused transition is a fact about what the panel would not
+    /// do, which is as much a product signal as what it did.
+    private func trackFace(from: PanelState, to: PanelState, reason: String, userDoor: Bool, refused: Bool) {
+        Track.record("face_changed", [
+            "from": .token(from.name), "to": .token(to.name), "reason": Track.token(from: reason),
+            "user_door": .bool(userDoor), "refused": .bool(refused),
+            "seconds_in_previous": .int(Int(Date().timeIntervalSince(stateEnteredAt))),
+            "collapsed": .bool(isCollapsed),
+        ])
+    }
 
     /// The only way state changes — and now the only place legality is decided.
     /// Every transition is logged, which is the whole point: when the panel gets
@@ -1608,12 +1623,15 @@ final class StatusHUD: NSObject {
     private func transition(to next: PanelState, because reason: String) -> Bool {
         guard state.admits(next) else {
             Permissions.log("state: REFUSED \(state.name) -> \(next.name)  (\(reason))")
+            trackFace(from: state, to: next, reason: reason, userDoor: false, refused: true)
             return false
         }
         if next != state {
             leaving(for: next)
             Permissions.log("state: \(state.name) -> \(next.name)  (\(reason))")
+            trackFace(from: state, to: next, reason: reason, userDoor: false, refused: false)
             state = next
+            stateEnteredAt = Date()
         }
         entered(next)
         return true
@@ -1625,7 +1643,9 @@ final class StatusHUD: NSObject {
         guard next != state else { return }
         leaving(for: next)
         Permissions.log("state: \(state.name) -> \(next.name)  (\(reason), user door)")
+        trackFace(from: state, to: next, reason: reason, userDoor: true, refused: false)
         state = next
+        stateEnteredAt = Date()
         entered(next)
     }
 
