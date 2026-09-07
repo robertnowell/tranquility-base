@@ -24,6 +24,7 @@ writes to the eight-character path writes through into the new directory.
 
     python3 tools/migrate-hub-dirs.py --dry-run     # say what would happen
     python3 tools/migrate-hub-dirs.py               # do it, and write the ledger
+    python3 tools/migrate-hub-dirs.py --records     # then: record files and stamps
 """
 import glob
 import json
@@ -144,8 +145,124 @@ def apply(acts, dry):
     return done
 
 
+ARTIFACTS = os.path.join(HOME, "Library", "Application Support", "VoiceDispatch", "artifacts")
+STAMP = re.compile(r'(<meta\s+name="intranet:session"\s+content=")([0-9a-fA-F]{8})(")')
+FOOTER = re.compile(r'(data-tb-agent=")([0-9a-fA-F]{8})(")')
+HUBLINK = re.compile(r'(Documents/agents/)([0-9a-fA-F]{8})(/index\.html)')
+
+
+def plan_records():
+    """Record files keyed by the eight characters go to the full id.
+
+    The hook wrote `artifacts/<owner>` where the owner was the directory's
+    name, so until 06 Sep that was the short id, and `ArtifactStore.history`
+    reads the short file as well as the full one. For an unambiguous prefix
+    that is only untidy. For a collided prefix it is the defect the card on
+    06 Sep named: two sessions' pages in one record file, so each hub lists
+    the other's work. Each record is assigned by the page's own path: the
+    directory it lives in IS the record now. A record whose page is not under
+    agents/ at all goes to the one full id, or, on a collision, to the
+    directory the hub names (the primary), and is logged as such.
+    """
+    acts = []
+    if not os.path.isdir(ARTIFACTS):
+        return acts
+    fulls = sorted(d for d in os.listdir(AGENTS)
+                   if FULL.match(d) and not os.path.islink(os.path.join(AGENTS, d)))
+    by_prefix = {}
+    for d in fulls:
+        by_prefix.setdefault(d[:8], []).append(d)
+    for name in sorted(os.listdir(ARTIFACTS)):
+        if not SHORT.match(name):
+            continue
+        owners = by_prefix.get(name, [])
+        if not owners:
+            acts.append(("records-unresolved", os.path.join(ARTIFACTS, name), ""))
+            continue
+        link = os.path.join(AGENTS, name)
+        primary = os.path.realpath(link).split(os.sep)[-1] if os.path.islink(link) else owners[0]
+        src = os.path.join(ARTIFACTS, name)
+        with open(src, errors="ignore") as fh:
+            lines = [l.rstrip("\n") for l in fh if l.strip()]
+        for line in lines:
+            path = line.split("\t", 1)[1] if "\t" in line else line
+            parts = path.split(os.sep)
+            target = None
+            if "agents" in parts:
+                cand = parts[parts.index("agents") + 1] if parts.index("agents") + 1 < len(parts) else ""
+                if cand in owners:
+                    target = cand
+                elif SHORT.match(cand) and cand == name:
+                    # Recorded through the old name; find the page where it is now.
+                    for o in owners:
+                        if os.path.exists(path.replace(f"/agents/{name}/", f"/agents/{o}/")):
+                            target = o
+                            break
+            if target is None:
+                target = primary
+                if len(owners) > 1:
+                    acts.append(("records-ambiguous-to-primary", path, target))
+            acts.append(("record", line, os.path.join(ARTIFACTS, target)))
+        acts.append(("records-retire", src, ""))
+    # Pages under a COLLIDED prefix that still declare the eight characters:
+    # the directory is the record, so the stamp says what the directory says.
+    for prefix, owners in by_prefix.items():
+        if len(owners) < 2:
+            continue
+        for o in owners:
+            for page in pages_of(os.path.join(AGENTS, o)):
+                acts.append(("restamp", page, o))
+    return acts
+
+
+def apply_records(acts, dry):
+    done = []
+    for action, src, dst in acts:
+        if action == "record":
+            if not dry:
+                seen = set()
+                if os.path.exists(dst):
+                    with open(dst, errors="ignore") as fh:
+                        seen = {l.rstrip("\n") for l in fh}
+                if src not in seen:
+                    with open(dst, "a") as fh:
+                        fh.write(src + "\n")
+        elif action == "records-retire":
+            if not dry:
+                os.rename(src, src + ".migrated-06sep")
+        elif action == "restamp":
+            try:
+                with open(src, errors="ignore") as fh:
+                    html = fh.read()
+            except OSError:
+                continue
+            new = STAMP.sub(lambda m: m.group(1) + dst + m.group(3), html)
+            new = FOOTER.sub(lambda m: m.group(1) + dst + m.group(3), new)
+            new = HUBLINK.sub(lambda m: m.group(1) + dst + m.group(3), new)
+            if new == html:
+                continue
+            if not dry:
+                with open(src, "w") as fh:
+                    fh.write(new)
+        done.append((action, src, dst))
+    return done
+
+
 def main():
     dry = "--dry-run" in sys.argv
+    if "--records" in sys.argv:
+        done = apply_records(plan_records(), dry)
+        counts = Counter(a for a, _, _ in done)
+        for a, s, d in done:
+            if a != "record":
+                print(f"{a}\t{s}\t{d}")
+        print(("would do: " if dry else "did: ") + json.dumps(counts))
+        if not dry:
+            os.makedirs(os.path.dirname(LEDGER), exist_ok=True)
+            with open(LEDGER, "a") as fh:
+                for a, s, d in done:
+                    fh.write(f"{a}\t{s}\t{d}\n")
+        return 0
     known = on_record()
     acts = plan(known)
     done = apply(acts, dry)
