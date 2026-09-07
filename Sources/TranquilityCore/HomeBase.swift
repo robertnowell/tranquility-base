@@ -647,9 +647,29 @@ public enum HomeBase {
     /// One `<li>` per page: the document's own title, its day, and a hover
     /// blurb. Shared by the inline list under a turn and the shelf at the
     /// bottom, so a page looks the same wherever it is filed.
+    /// The published copy of a page, if the catalog knows one.
+    ///
+    /// Two keys, because the two halves of this system slug a page differently
+    /// and have done since publishing existed. `publish.py` names a report
+    /// DIRECTORY by its folder (`report_item`) and a loose page by its FILE
+    /// STEM (`collect_agent_pages`), while this side only ever asked the
+    /// catalog about the parent folder. So a hosted loose page had a URL in the
+    /// catalog and no badge on the hub, silently: no error, no log, nothing to
+    /// notice. Asking both ways is the whole fix, and it costs one dictionary
+    /// lookup.
+    static func publishedURL(for page: ArtifactStore.Page,
+                             in published: [String: String]) -> String? {
+        let dir = (page.path as NSString).deletingLastPathComponent
+        if let byDirectory = published[(dir as NSString).lastPathComponent] {
+            return byDirectory
+        }
+        let file = (page.path as NSString).lastPathComponent
+        return published[(file as NSString).deletingPathExtension]
+    }
+
     static func pageItems(_ pages: [ArtifactStore.Page],
                           e: (String) -> String,
-                          published: [String: String] = publishedURLs()) -> String {
+                          published: [String: String]) -> String {
         let newestFirst = pages.sorted { $0.at > $1.at }
         let summaries = newestFirst.map { ArtifactStore.summarize(path: $0.path) }
         // The siblings name the brand. A single title cannot say which of
@@ -670,8 +690,7 @@ public enum HomeBase {
             // Published pages say so, and link to the copy other people can
             // open. The local file stays the primary link: it is the one that
             // works with no network and is always current.
-            let slug = (page.path as NSString).deletingLastPathComponent
-            let live = published[(slug as NSString).lastPathComponent].map {
+            let live = publishedURL(for: page, in: published).map {
                 "<a class=\"live\" href=\"\(e($0))\" target=\"_blank\" rel=\"noopener\">published</a>"
             } ?? ""
             return "<li><a class=\"page\" href=\"file://\(e(page.path))\""
@@ -696,7 +715,7 @@ public enum HomeBase {
     /// line of markup per page rather than three copies of it.
     static func madeIndex(_ pages: [ArtifactStore.Page],
                           e: (String) -> String,
-                          published: [String: String] = publishedURLs()) -> String {
+                          published: [String: String]) -> String {
         // The archive's OWN indexes are not work this agent made. A session
         // that rebuilds the hub of hubs has a record for it, and without this
         // the hub of hubs is listed on that agent's hub as one of its reports
@@ -734,8 +753,7 @@ public enum HomeBase {
             let blurb = summary.blurb.map { " data-blurb=\"\(e($0))\"" } ?? ""
             let on = page.at > Date(timeIntervalSince1970: 0)
                 ? "<span class=\"on\">\(e(dayStamp.string(from: page.at)))</span>" : ""
-            let slug = (page.path as NSString).deletingLastPathComponent
-            let live = published[(slug as NSString).lastPathComponent].map {
+            let live = publishedURL(for: page, in: published).map {
                 "<a class=\"live\" href=\"\(e($0))\" target=\"_blank\" rel=\"noopener\">published</a>"
             } ?? ""
             // Padded with spaces so a substring test cannot match "hub" inside
@@ -881,6 +899,19 @@ public enum HomeBase {
 
     public static func render(_ model: Model, now: Date = Date()) -> String {
         let e = escape
+        // READ THE CATALOG ONCE PER RENDER, NOT ONCE PER CALL.
+        //
+        // `publishedURLs()` was a DEFAULT ARGUMENT on both pageItems and
+        // madeIndex, and a default argument is evaluated at every call. This
+        // function calls pageItems once per turn that made something and
+        // madeIndex once, so a hub with pages under four turns parsed
+        // catalog.json — 1.4 MB — five times to render one page.
+        //
+        // That is rule 9's class exactly, and worse than it sounds: openHub
+        // runs this whole render ON THE MAIN ACTOR, from the card's door. No
+        // test can see it, because the cost is in a default argument rather
+        // than in anything a test would call.
+        let liveURLs = publishedURLs()
         // Filled after the join below, from whatever no turn claimed. A turn
         // whose words already print under it must not print again down here.
         var said = ""
@@ -1102,7 +1133,7 @@ public enum HomeBase {
             }
             let made = pagesByTurn[i] ?? []
             if !made.isEmpty {
-                body += "<ul class=\"made\">" + pageItems(made, e: e) + "</ul>"
+                body += "<ul class=\"made\">" + pageItems(made, e: e, published: liveURLs) + "</ul>"
             }
             // The words that caused all of the above, folded shut. The brief is
             // the summary; this is the source, one click away and in the same
@@ -1138,7 +1169,7 @@ public enum HomeBase {
         // as a RESULT under the turn that made it and as an entry down here.
         // Below the stack, not above it — older work never outranks the work
         // you just did (ruled 16 Aug).
-        let pages = madeIndex(model.pages, e: e)
+        let pages = madeIndex(model.pages, e: e, published: liveURLs)
 
         let empty = ordered.isEmpty
             ? "<div class=\"digest\">Nothing summarized yet. This page fills in as the "

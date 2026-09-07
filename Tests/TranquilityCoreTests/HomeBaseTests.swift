@@ -743,3 +743,56 @@ final class HomeBaseTitleTests: XCTestCase {
         XCTAssertEqual(title, "modal scrolling")
     }
 }
+
+/// The published badge asked the catalog one question and the catalog answers to
+/// two names, so a whole class of hosted page had a URL and no badge.
+///
+/// `publish.py` slugs a report DIRECTORY by its folder name and a loose page by
+/// its FILE STEM. This side only ever looked up the parent folder. The miss was
+/// silent: no error, no log, just a page that never said it was published.
+final class PublishedURLLookupTests: XCTestCase {
+    private let dirPage = ArtifactStore.Page(
+        path: "/Users/x/Documents/agents/abcd1234/2026-09-01-a-report/index.html",
+        at: Date())
+    private let loosePage = ArtifactStore.Page(
+        path: "/Users/x/Documents/agents/abcd1234/a-loose-page.html",
+        at: Date())
+
+    func testAReportDirectoryIsFoundByItsFolderName() {
+        let map = ["2026-09-01-a-report": "https://example.com/2026-09-01-a-report/"]
+        XCTAssertEqual(HomeBase.publishedURL(for: dirPage, in: map),
+                       "https://example.com/2026-09-01-a-report/")
+    }
+
+    /// The regression. Before this, the lookup asked for "abcd1234" — the agent
+    /// directory — and got nothing.
+    func testALoosePageIsFoundByItsFileStem() {
+        let map = ["a-loose-page": "https://example.com/a-loose-page/"]
+        XCTAssertEqual(HomeBase.publishedURL(for: loosePage, in: map),
+                       "https://example.com/a-loose-page/")
+    }
+
+    /// The folder wins when both could match, because that is the shape the
+    /// catalog has always used for reports and changing it would move existing
+    /// badges.
+    func testTheFolderNameWinsWhenBothAreKnown() {
+        let map = ["2026-09-01-a-report": "https://example.com/by-folder/",
+                   "index": "https://example.com/by-stem/"]
+        XCTAssertEqual(HomeBase.publishedURL(for: dirPage, in: map),
+                       "https://example.com/by-folder/")
+    }
+
+    /// An unpublished page says nothing, rather than guessing a URL shape.
+    func testAnUnpublishedPageHasNoURL() {
+        XCTAssertNil(HomeBase.publishedURL(for: loosePage, in: [:]))
+        XCTAssertNil(HomeBase.publishedURL(for: dirPage, in: ["something-else": "https://x/"]))
+    }
+
+    /// And the badge actually renders from the stem lookup, end to end.
+    func testTheBadgeAppearsForALoosePage() {
+        let html = HomeBase.madeIndex([loosePage], e: HomeBase.escape,
+                                      published: ["a-loose-page": "https://example.com/p/"])
+        XCTAssertTrue(html.contains("class=\"live\""))
+        XCTAssertTrue(html.contains("https://example.com/p/"))
+    }
+}
