@@ -843,3 +843,41 @@ final class TheBylineSatisfiesTheDrillTests: XCTestCase {
                        "a UUID in small print names nothing a reader recognises")
     }
 }
+
+/// A hub is written for a session, never for a fixture.
+///
+/// "sess-1" and "codex-1" are the ids the Coordinator tests use, and hubs for
+/// them, titled after the fixture brief "export refactor", turned up in the
+/// real agents tree and the hub of hubs (6 and 7 Sep 2026). The root now has
+/// an override that the test script sets, and the writer refuses an id that
+/// is not hex and dashes, so neither path can put a fixture on a hub again.
+final class NoHubForAFixtureTests: XCTestCase {
+
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("tranquility-tests/nohub-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        HomeBase.rootOverride = root
+    }
+
+    override func tearDownWithError() throws {
+        HomeBase.rootOverride = nil
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func testTheRootOverrideIsTheRoot() {
+        XCTAssertEqual(HomeBase.root, root)
+    }
+
+    func testAFixtureIdGetsNoHub() throws {
+        let store = try QueueStore(url: root.appendingPathComponent("queue.sqlite"))
+        XCTAssertNil(try HomeBase.write(sessionId: "sess-1", store: store))
+        XCTAssertNil(try HomeBase.write(sessionId: "codex-1", store: store))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("sess-1").path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path)
+            .filter { !$0.hasPrefix("queue") }, [])
+    }
+}
