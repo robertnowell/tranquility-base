@@ -80,9 +80,18 @@ public struct TrackEvent: Equatable, Sendable {
 }
 
 public enum Track {
-    /// Where events go once wired to a service. Set by the app; nil means
-    /// local only. Called off the caller's thread.
-    nonisolated(unsafe) public static var sink: (@Sendable (TrackEvent) -> Void)?
+    /// Where events go once wired to a service. Only `attach` writes it (and
+    /// `detach` clears it); nil means local only. Called off the caller's
+    /// thread.
+    ///
+    /// One writer, by construction. Until 7 Sep a drill in the self-test
+    /// slate swapped this for a counter and put back whatever it had seen,
+    /// and the real sink arrives from a config fetch that can land in the
+    /// middle of that drill: the restore put back nil, every event after
+    /// the slate went to a backlog nothing would ever drain, and PostHog
+    /// received exactly the launch events replayed at attach and nothing
+    /// else, on every deploy, while the local record looked complete.
+    nonisolated(unsafe) public private(set) static var sink: (@Sendable (TrackEvent) -> Void)?
     nonisolated(unsafe) public static var trace: (@Sendable (String) -> Void)?
 
     private static let lock = NSLock()
@@ -92,6 +101,7 @@ public enum Track {
     nonisolated(unsafe) private static var _suppressed = false
     nonisolated(unsafe) private static var _recorded = 0
     nonisolated(unsafe) private static var _refused = 0
+    nonisolated(unsafe) private static var _suppressedDrops = 0
     nonisolated(unsafe) private static var common: [String: TrackValue] = [:]
     /// Events recorded before a sink exists (app launch happens a run-loop
     /// turn before the SDK starts). Replayed on `attach`, capped so a sink
@@ -110,6 +120,14 @@ public enum Track {
         lock.unlock()
         queue.async { for event in backlog { newSink(event) } }
     }
+
+    /// No sink: events go to the backlog again. The service was turned off,
+    /// or a test is done with its counter.
+    public static func detach() {
+        lock.lock(); sink = nil; lock.unlock()
+    }
+
+    public static var hasSink: Bool { lock.lock(); defer { lock.unlock() }; return sink != nil }
 
     /// Point the funnel at a directory and give it the install id as salt.
     public static func configure(directory: URL, installId: String) {
@@ -133,6 +151,10 @@ public enum Track {
     }
     public static var recordedCount: Int { lock.lock(); defer { lock.unlock() }; return _recorded }
     public static var refusedCount: Int { lock.lock(); defer { lock.unlock() }; return _refused }
+    /// How many admissible events were dropped because `suppressed` was on.
+    /// A drill proves suppression by this count moving, never by swapping
+    /// the sink.
+    public static var suppressedCount: Int { lock.lock(); defer { lock.unlock() }; return _suppressedDrops }
 
     /// The app's own prose ("grid from goHomeFromCard(via:):1428", "arm
     /// reverted: tap or chord", "TranquilityApp/StatusHUD.swift:1331") as a
@@ -183,7 +205,10 @@ public enum Track {
             trace?("refused \(name): inadmissible \(nameOK ? bad.joined(separator: ",") : "name")")
             return
         }
-        guard !suppressed else { return }
+        guard !suppressed else {
+            lock.lock(); _suppressedDrops += 1; lock.unlock()
+            return
+        }
         let event = TrackEvent(name: name, at: now, properties: base.merging(properties) { _, new in new })
         queue.async {
             if let url { append(event, to: url) }
@@ -240,7 +265,7 @@ public enum Track {
     /// Tests only.
     public static func resetForTesting() {
         lock.lock(); defer { lock.unlock() }
-        storeURL = nil; salt = ""; _suppressed = false; _recorded = 0; _refused = 0; common = [:]
+        storeURL = nil; salt = ""; _suppressed = false; _recorded = 0; _refused = 0; _suppressedDrops = 0; common = [:]
         pending = []
         sink = nil
     }

@@ -373,9 +373,12 @@ public final class FailureStore: @unchecked Sendable {
 /// The one door. Every failure the panel shows passes through here; the
 /// named sites add what they know, the panel's own receipt adds the rest.
 public enum Failures {
-    /// Where records go once wired to a service. Set by the app; nil means
-    /// local only. Called off the caller's thread.
-    nonisolated(unsafe) public static var sink: (@Sendable (FailureEvent) -> Void)?
+    /// Where records go once wired to a service. Only `attach` writes it
+    /// (and `detach` clears it); nil means local only. Called off the
+    /// caller's thread. Same rule as `Track.sink`, for the same reason: a
+    /// drill that captures this, swaps it and puts it back is racing
+    /// whoever attaches the real one.
+    nonisolated(unsafe) public private(set) static var sink: (@Sendable (FailureEvent) -> Void)?
     nonisolated(unsafe) public static var trace: (@Sendable (String) -> Void)?
 
     private static let lock = NSLock()
@@ -385,6 +388,7 @@ public enum Failures {
     nonisolated(unsafe) private static var _suppressed = false
     nonisolated(unsafe) private static var lastReported: (card: String, at: Date)?
     nonisolated(unsafe) private static var _reportedCount = 0
+    nonisolated(unsafe) private static var _suppressedCount = 0
     private static let queue = DispatchQueue(label: "base.tranquility.failures.report", qos: .utility)
 
     public static var environment: EnvironmentSnapshot? {
@@ -419,6 +423,16 @@ public enum Failures {
 
     /// How many reports were accepted (including while suppressed). For drills.
     public static var reportedCount: Int { lock.lock(); defer { lock.unlock() }; return _reportedCount }
+    /// How many of those were dropped because `suppressed` was on.
+    public static var suppressedCount: Int { lock.lock(); defer { lock.unlock() }; return _suppressedCount }
+
+    public static func attach(sink newSink: @escaping @Sendable (FailureEvent) -> Void) {
+        lock.lock(); sink = newSink; lock.unlock()
+    }
+
+    public static func detach() { lock.lock(); sink = nil; lock.unlock() }
+
+    public static var hasSink: Bool { lock.lock(); defer { lock.unlock() }; return sink != nil }
 
     /// A site that knows what happened. Cheap on the caller's thread: it
     /// snapshots the breadcrumbs and enqueues; everything else is off-thread.
@@ -441,6 +455,7 @@ public enum Failures {
         let installId = _installId ?? "unconfigured"
         let environment = _environment
         let store = _store
+        if suppressed { _suppressedCount += 1 }
         lock.unlock()
         guard !suppressed else { return }
         // The product stream sees the same failure as a fact: kind, site,
@@ -509,7 +524,9 @@ public enum Failures {
 
     /// Tests only: forget the configured store and id.
     public static func resetForTesting() {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock(); defer { lock.unlock()
+        _suppressedCount = 0; sink = nil
+    }
         _store = nil; _installId = nil; _environment = nil; _suppressed = false
         lastReported = nil; _reportedCount = 0
     }

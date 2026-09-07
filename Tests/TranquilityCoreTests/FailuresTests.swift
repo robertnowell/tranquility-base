@@ -157,21 +157,22 @@ final class FailuresTests: XCTestCase {
     func testSuppressedReportsAreCountedButNeverWritten() {
         Failures.suppressed = true
         let forwarded = Box<Int>(0)
-        Failures.sink = { _ in forwarded.update { $0 += 1 } }
+        Failures.attach { _ in forwarded.update { $0 += 1 } }
         Failures.report(.microphone, reason: "drill")
         XCTAssertEqual(Failures.reportedCount, 1)
+        XCTAssertEqual(Failures.suppressedCount, 1)
         XCTAssertEqual(records().count, 0)
         XCTAssertEqual(forwarded.value, 0)
-        Failures.sink = nil
+        Failures.detach()
     }
 
     func testTheSinkSeesTheSameRecordTheFileGets() {
         let got = expectation(description: "sink")
         let seen = Box<FailureEvent?>(nil)
-        Failures.sink = { event in seen.update { $0 = event }; got.fulfill() }
+        Failures.attach { event in seen.update { $0 = event }; got.fulfill() }
         Failures.report(.deliveryFailed, reason: "verification timed out", session: "abcdefgh1234")
         wait(for: [got], timeout: 2)
-        Failures.sink = nil
+        Failures.detach()
         XCTAssertEqual(seen.value?.kind, .deliveryFailed)
         XCTAssertEqual(records().first?.id, seen.value?.id)
     }
