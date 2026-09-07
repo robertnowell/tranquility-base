@@ -90,6 +90,10 @@ enum Analytics {
             "app_arch": EnvironmentProbe.currentArch,
             "app_translated": EnvironmentProbe.isTranslated,
             "os_version": ProcessInfo.processInfo.operatingSystemVersionString,
+            // The install id as a property in its own right, so that when
+            // sign-in arrives and the distinct id becomes the person, the
+            // machine each event came from is still on the event.
+            "device_id": Failures.installId,
         ]
         if let commit = info["TBSourceCommit"] as? String { props["app_commit"] = String(commit.prefix(7)) }
         return props
