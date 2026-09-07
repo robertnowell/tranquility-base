@@ -277,16 +277,32 @@ extension StatusHUD {
         // deadline catches a frame that never settles at all.
         let start = Date()
         let minimum: TimeInterval = 0.35
-        var last = panel?.frame ?? .zero
+        let first = panel?.frame ?? .zero
+        var last = first
         var stableReads = 0
+        var samples = 0
+        var moves = 0
         let deadline = start.addingTimeInterval(2)
         while Date() < deadline,
               stableReads < 2 || Date().timeIntervalSince(start) < minimum {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             let now = panel?.frame ?? .zero
+            samples += 1
+            if !now.equalTo(last) { moves += 1 }
             stableReads = now.equalTo(last) ? stableReads + 1 : 0
             last = now
         }
+        // What the loop SAW, so a red drill can say which of two different
+        // things happened: a frame still in flight when the deadline hit, or
+        // a frame that never moved at all. On 7 Sep 2026 two drills failed
+        // twice with the panel at its pre-morph size, every sample identical,
+        // and the driver's own note about in-flight frames was read as the
+        // explanation for a day before the log proved nothing had moved.
+        Permissions.log(
+            "settle: \(samples) samples, \(moves) moves, "
+            + "\(Int(Date().timeIntervalSince(start) * 1000))ms, "
+            + "from \(NSStringFromRect(first)) to \(NSStringFromRect(last))"
+            + (Date() >= deadline ? "; DEADLINE, still moving" : ""))
         panel?.contentView?.layoutSubtreeIfNeeded()
         panel?.displayIfNeeded()
     }
