@@ -48,11 +48,14 @@ final class Updates: NSObject {
 
     /// Start checking.
     ///
-    /// `startingUpdater: true` begins the scheduled cycle: Sparkle asks permission
-    /// on the SECOND launch (deliberately not suppressed with
-    /// `SUEnableAutomaticChecks`, because an app that already asks for the
-    /// microphone, Accessibility and Apple Events should not also start phoning
-    /// out unannounced), then checks every 24 hours.
+    /// `startingUpdater: true` begins the scheduled cycle. Since 7 Sep the
+    /// bundle carries `SUEnableAutomaticChecks` and `SUAutomaticallyUpdate`
+    /// (ruled: updates land as soon as possible), so there is no permission
+    /// prompt: Sparkle checks at launch and every 24 hours, downloads in the
+    /// background, and installs when this delegate says nothing is in
+    /// motion, or on quit. Every stage is logged and recorded as
+    /// `update_cycle`, because nobody had ever seen the dialog and the log
+    /// could not say whether a check had happened at all.
     func start() {
         guard controller == nil else { return }
         controller = SPUStandardUpdaterController(
@@ -116,6 +119,64 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         log("updates: found \(item.displayVersionString)")
         Track.record("update_found", ["to_version": Track.token(from: item.displayVersionString)])
+    }
+
+    // Every stage of the cycle, said in the log and counted in the record.
+    private func stage(_ name: String, _ item: SUAppcastItem? = nil, detail: String? = nil) {
+        log("updates: \(name)" + (item.map { " \($0.displayVersionString)" } ?? "") + (detail.map { ", \($0)" } ?? ""))
+        var props: [String: TrackValue] = ["stage": .token(name)]
+        if let item { props["to_version"] = Track.token(from: item.displayVersionString) }
+        if let detail { props["detail"] = Track.token(from: String(detail.prefix(40))) }
+        Track.record("update_cycle", props)
+    }
+
+    func updater(_ updater: SPUUpdater, didFinishLoading appcast: SUAppcast) {
+        stage("appcast_loaded", detail: "\(appcast.items.count) items")
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        stage("no_update")
+    }
+
+    func updater(_ updater: SPUUpdater, userDidMake choice: SPUUserUpdateChoice,
+                 forUpdate updateItem: SUAppcastItem, state: SPUUserUpdateState) {
+        let name: String
+        switch choice {
+        case .install: name = "install"
+        case .skip: name = "skip"
+        case .dismiss: name = "dismiss"
+        @unknown default: name = "other"
+        }
+        stage("user_chose_\(name)", updateItem)
+    }
+
+    func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
+        stage("downloading", item)
+    }
+
+    func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+        stage("downloaded", item)
+    }
+
+    func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
+        stage("download_failed", item, detail: error.localizedDescription)
+    }
+
+    func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        stage("installing", item)
+    }
+
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        stage("relaunching")
+        Analytics.flush()
+    }
+
+    func updater(_ updater: SPUUpdater, willScheduleUpdateCheckAfterDelay delay: TimeInterval) {
+        log("updates: next check in \(Int(delay / 60)) min")
+    }
+
+    func updaterWillNotScheduleUpdateCheck(_ updater: SPUUpdater) {
+        stage("checks_not_scheduled")
     }
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {

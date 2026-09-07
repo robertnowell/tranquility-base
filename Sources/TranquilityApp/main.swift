@@ -1110,10 +1110,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "app_arch": .token(EnvironmentProbe.currentArch),
             "app_translated": .bool(EnvironmentProbe.isTranslated),
         ])
-        Track.record("app_launched", [
+        // The two facts a Slack alert wants: is this install new, and did
+        // this launch bring a new version. The previous version is the one
+        // this machine last launched, kept in defaults, so an update shows
+        // up as the pair rather than as an absence.
+        let thisVersion = (Bundle.main.infoDictionary ?? [:])["CFBundleShortVersionString"] as? String ?? "?"
+        let previousVersion = UserDefaults.standard.string(forKey: "TBLastLaunchedVersion")
+        UserDefaults.standard.set(thisVersion, forKey: "TBLastLaunchedVersion")
+        var launched: [String: TrackValue] = [
             "launched_by": .token(CommandLine.arguments.contains("--selftest-hud") ? "relaunch" : "login_or_user"),
             "hooks_healthy": .bool(true),
-        ])
+            "first_launch": .bool(Failures.installIdWasMinted),
+            "updated": .bool(previousVersion != nil && previousVersion != thisVersion),
+        ]
+        if let previousVersion { launched["previous_version"] = Track.token(from: previousVersion) }
+        Track.record("app_launched", launched)
         Diagnostics.refreshEnvironment(reason: "startup")
         // Sending, one run-loop turn later: after this method returns and the
         // panel has painted, so the SDK's start (a crash handler, a watchdog

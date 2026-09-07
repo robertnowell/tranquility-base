@@ -385,6 +385,7 @@ public enum Failures {
     nonisolated(unsafe) private static var _environment: EnvironmentSnapshot?
     nonisolated(unsafe) private static var _store: FailureStore?
     nonisolated(unsafe) private static var _installId: String?
+    nonisolated(unsafe) private static var _installIdMinted = false
     nonisolated(unsafe) private static var _suppressed = false
     nonisolated(unsafe) private static var lastReported: (card: String, at: Date)?
     nonisolated(unsafe) private static var _reportedCount = 0
@@ -400,8 +401,15 @@ public enum Failures {
     public static func configure(directory: URL) {
         lock.lock(); defer { lock.unlock() }
         _store = FailureStore(url: directory.appendingPathComponent("failures.jsonl"))
-        _installId = loadOrMintInstallId(directory: directory)
+        let (id, minted) = loadOrMintInstallId(directory: directory)
+        _installId = id
+        _installIdMinted = minted
     }
+
+    /// True on the run that minted this install's id: the first launch of a
+    /// fresh install, or the first after a reset. `app_launched` carries it,
+    /// so a new install can announce itself.
+    public static var installIdWasMinted: Bool { lock.lock(); defer { lock.unlock() }; return _installIdMinted }
 
     public static var storeURL: URL? { lock.lock(); defer { lock.unlock() }; return _store?.url }
 
@@ -504,22 +512,23 @@ public enum Failures {
         guard let store = _store else { return "unconfigured" }
         let directory = store.url.deletingLastPathComponent()
         try? FileManager.default.removeItem(at: directory.appendingPathComponent("install-id"))
-        let fresh = loadOrMintInstallId(directory: directory)
+        let (fresh, _) = loadOrMintInstallId(directory: directory)
         _installId = fresh
+        _installIdMinted = true
         return fresh
     }
 
-    private static func loadOrMintInstallId(directory: URL) -> String {
+    private static func loadOrMintInstallId(directory: URL) -> (id: String, minted: Bool) {
         let url = directory.appendingPathComponent("install-id")
         if let existing = try? String(contentsOf: url, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines), !existing.isEmpty {
-            return existing
+            return (existing, false)
         }
         let fresh = UUID().uuidString.lowercased()
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try? fresh.write(to: url, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        return fresh
+        return (fresh, true)
     }
 
     /// Tests only: forget the configured store and id.

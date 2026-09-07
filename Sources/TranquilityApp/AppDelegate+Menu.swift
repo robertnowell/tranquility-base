@@ -19,6 +19,14 @@ extension AppDelegate {
         rebuildMenu()
     }
 
+    @objc func copyInstallId() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(Failures.installId, forType: .string)
+        lastStatusLine = "install id copied"
+        hud.note("Install id copied: \(Failures.installId.prefix(8))\u{2026}")
+        Track.record("install_id_copied")
+    }
+
     @objc func resetInstallId() {
         Diagnostics.resetInstallId()
         lastStatusLine = "install id reset"
@@ -298,6 +306,14 @@ extension AppDelegate {
                                   action: #selector(revealFailureLog), keyEquivalent: "")
         failures.target = self
         diagnosticsMenu.addItem(failures)
+        // The id itself, readable and one click from the clipboard, so a
+        // person can tell us which install is theirs. Without this the
+        // record had ids and nobody on either end could match one to a
+        // machine (ruled 7 Sep).
+        let installId = NSMenuItem(title: "Install id \(Failures.installId.prefix(8))\u{2026} (click to copy)",
+                                   action: #selector(copyInstallId), keyEquivalent: "")
+        installId.target = self
+        diagnosticsMenu.addItem(installId)
         let reset = NSMenuItem(title: "Reset install id",
                                action: #selector(resetInstallId), keyEquivalent: "")
         reset.target = self
