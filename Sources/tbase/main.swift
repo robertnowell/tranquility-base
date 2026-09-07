@@ -994,7 +994,12 @@ case "reconcile":
             // Passing one used to print "no briefs … nothing to write yet",
             // which is a true sentence about a session that does not exist and
             // a misleading one about the session being asked for.
-            ids = [(try? store.sessionId(matching: args[1])) ?? args[1]]
+            // The store knows sessions with events; the directory names know
+            // every session that ever had a hub, which since 06 Sep are full
+            // ids and so answer a prefix on their own.
+            ids = [(try? store.sessionId(matching: args[1]))
+                   ?? HomeBase.sessionId(matchingPrefix: args[1])
+                   ?? args[1]]
         }
         let live = (ClaudeAgentsCLI().sessions() ?? [])
             + FileSessionOwnershipStore.shared.liveNonRegistrySessions()

@@ -50,8 +50,9 @@ final class HubReconcileTests: XCTestCase {
         XCTAssertEqual(out.footers, 1)
         XCTAssertEqual(out.sessions, 1)
         let html = try String(contentsOf: p, encoding: .utf8)
-        XCTAssertTrue(html.contains(#"<meta name="intranet:session" content="0d04e845">"#))
-        XCTAssertTrue(html.contains("data-tb-agent=\"0d04e845\""))
+        // The full id in both (06 Sep): the directory is named by it now.
+        XCTAssertTrue(html.contains(#"<meta name="intranet:session" content="\#(session)">"#))
+        XCTAssertTrue(html.contains("data-tb-agent=\"\(session)\""))
         XCTAssertTrue(html.contains("Open hub"))
     }
 

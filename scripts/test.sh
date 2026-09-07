@@ -86,7 +86,12 @@ $ST_OUT"
 
 fail() {
   echo "✗ $1" >&2
-  printf '%s\n' "$OUT" | grep -E "error:|XCTAssert|couldn't be loaded|incompatible architecture|recorded an issue" | head -20 >&2 || true
+  # The failing assertions and test cases, never the compiler's " 65 |" source
+  # context under a warning, which also contains "XCTAssert" and used to fill
+  # all twenty lines before a single real failure was reached (PR #299).
+  printf '%s\n' "$OUT" \
+    | grep -E ": error: |error: -\[|Test Case .* failed|Test Suite .* failed|couldn't be loaded|incompatible architecture|recorded an issue" \
+    | grep -v " warning: " | head -40 >&2 || true
   exit 1
 }
 

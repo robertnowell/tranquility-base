@@ -45,7 +45,10 @@ public enum HubReconcile {
                            root: String = QueueStore.supportDirectory.path,
                            now: Date = Date()) -> Result {
         var result = Result()
-        let short = String(sessionId.prefix(8))
+        // The directory and every stamp carry the FULL id (06 Sep); the eight
+        // characters are only what the footer prints for a person to read.
+        let full = HomeBase.slug(forSessionId: sessionId)
+        let short = SessionIdentity.short(sessionId)
         guard ArtifactStore.isPlausibleSession(sessionId) else { return result }
         // BOTH LEVELS, like the hook's own glob. A page sits at
         // agents/<slug>/<name>.html; a research report sits at
@@ -78,7 +81,7 @@ public enum HubReconcile {
             //    do exactly what the old path rule did — assert the wrong
             //    author, and put the page on two hubs. It is left alone and
             //    reported by `tbase doctor` instead.
-            if !ArtifactStore.belongs(page: file.path, to: short) {
+            if !ArtifactStore.belongs(page: file.path, to: full) {
                 result.foreign += 1
                 continue
             }
@@ -86,7 +89,7 @@ public enum HubReconcile {
             // 1. The record. Keyed by the SLUG, because that is what the path
             //    carries and what `history` reads back for a hub.
             if !known.contains(ArtifactStore.canonical(file.path)),
-               ArtifactStore.record(file.path, session: short, root: root, at: at) {
+               ArtifactStore.record(file.path, session: full, root: root, at: at) {
                 result.recorded += 1
             }
 
@@ -99,7 +102,7 @@ public enum HubReconcile {
             let original = html
             if html.range(of: #"<meta\s+name="intranet:session""#,
                           options: .regularExpression) == nil {
-                html = insertInHead("<meta name=\"intranet:session\" content=\"\(short)\">",
+                html = insertInHead("<meta name=\"intranet:session\" content=\"\(full)\">",
                                     into: html)
                 result.sessions += 1
             }
@@ -156,9 +159,12 @@ public enum HubReconcile {
         let who = (title?.isEmpty == false)
             ? "Created by <b>\(escape(title!))</b> &middot; session \(short) &middot; \(day)"
             : "Created by session \(short) &middot; \(day)"
-        let hub = NSString(string: "~/Documents/agents/\(short)/index.html").expandingTildeInPath
+        // The link and the stamp carry the directory's name, which is the full
+        // id; only the sentence a person reads keeps the short one.
+        let owner = HomeBase.slug(forSessionId: session)
+        let hub = NSString(string: "~/Documents/agents/\(owner)/index.html").expandingTildeInPath
         let footer = """
-        <footer data-tb-agent="\(short)" style="box-sizing:border-box;\
+        <footer data-tb-agent="\(owner)" style="box-sizing:border-box;\
         max-width:860px;margin:64px auto 0;padding:20px 0 0;\
         border-top:1px solid rgba(128,128,128,.42);\
         font:12.5px/1.5 ui-monospace,Menlo,monospace;color:inherit;\

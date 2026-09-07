@@ -420,10 +420,13 @@ final class HomeBaseTests: XCTestCase {
     /// The URL is keyed on the id alone. A callsign is minted at the agent's
     /// first summary, so a name in the path means every hub written before that
     /// moment lives at a different URL — and every link into it rots.
+    /// The FULL id, since 06 Sep: the first eight characters of a Codex id
+    /// are a timestamp, and two threads a minute apart shared a directory.
     func testTheSlugIsTheIdAndNothingElse() {
-        XCTAssertEqual(HomeBase.slug(for: model(turns: [], callsign: "a/b: c's  d")),
-                       "489b4804")
-        XCTAssertEqual(HomeBase.slug(for: model(turns: [], callsign: nil)), "489b4804")
+        let full = "489b4804-8d64-4a91-a63c-5e493141c772"
+        XCTAssertEqual(HomeBase.slug(for: model(turns: [], callsign: "a/b: c's  d")), full)
+        XCTAssertEqual(HomeBase.slug(for: model(turns: [], callsign: nil)), full)
+        XCTAssertEqual(HomeBase.slug(forSessionId: full.uppercased()), full)
     }
 
     /// An agent that has made nothing gets no section at all, rather than an
@@ -672,5 +675,71 @@ final class HubDeclaresWhenItMovedTests: XCTestCase {
                                cwd: "/Users/x/Projects/tranquility-base",
                                goal: "Do the thing.", turns: [], pages: [])
         XCTAssertFalse(HomeBase.render(m).contains("intranet:moved"))
+    }
+}
+
+/// One name for a session, on every surface.
+///
+/// The hub named a Codex session after its first prompt while the grid named
+/// it "Scope graphics and extension" — Codex's own name, which the hub could
+/// have read too. Its lookup sat behind `if briefs.isEmpty`, a guard that was
+/// true of Codex on 30 Aug and false from 01 Sep, when the Codex hooks
+/// started writing briefs. The hub of hubs copies the hub's `<title>`, so it
+/// was wrong the same way. These cases pin the chain to the grid's own
+/// resolver, with the seam that resolver already has for tests.
+final class HomeBaseTitleTests: XCTestCase {
+
+    private static let known = ["01a072c1-43be-75f2-8ce3-48d506f8c4ba":
+                                    "Scope graphics and extension"]
+
+    override func setUp() {
+        super.setUp()
+        GridAssembler.harnessNames = { Self.known }
+    }
+
+    override func tearDown() {
+        GridAssembler.harnessNames = { CodexThreadNames.all() }
+        super.tearDown()
+    }
+
+    /// The case from the screenshot: a Codex session WITH briefs (so a topic
+    /// and a first prompt both exist) still wears Codex's name.
+    func testTheHarnessNameWinsEvenWhenTheSessionHasBriefs() {
+        let title = HomeBase.title(
+            sessionId: "01a072c1-43be-75f2-8ce3-48d506f8c4ba",
+            transcriptPath: "/Users/x/.codex/sessions/rollout-01a072c1.jsonl", live: nil,
+            firstPrompt: "So, a couple things I'd like to go ahead and do for Ascendit",
+            topic: "Syndit bookmark queue and popup")
+        XCTAssertEqual(title, "Scope graphics and extension")
+    }
+
+    /// And it is the SAME answer the grid gives for the same session, by
+    /// construction: both call `GridAssembler.harnessTitle`.
+    func testTheHubAndTheGridAgree() {
+        let id = "01a072c1-43be-75f2-8ce3-48d506f8c4ba"
+        var e = WaitingSession(sessionId: id, latestId: 1, createdAtMs: 0, hookEvent: .stop)
+        e.cwd = "/Users/x/Projects"
+        e.transcriptPath = "/Users/x/.codex/sessions/rollout-01a072c1.jsonl"
+        XCTAssertEqual(
+            HomeBase.title(sessionId: id, transcriptPath: e.transcriptPath, live: nil,
+                           firstPrompt: "So, a couple things", topic: "a topic"),
+            GridAssembler.tabDisplayName(for: e, live: nil))
+    }
+
+    /// With no harness name anywhere, the first prompt is the floor the page
+    /// stands on — not the hex id.
+    func testNoHarnessNameFallsToTheFirstPrompt() {
+        let title = HomeBase.title(
+            sessionId: "01a05003-0000-0000-0000-000000000000", transcriptPath: nil,
+            live: nil, firstPrompt: "Fix the modal that will not scroll\nsecond line",
+            topic: "modal scrolling")
+        XCTAssertEqual(title, "Fix the modal that will not scroll")
+    }
+
+    func testNoPromptFallsToTheTopic() {
+        let title = HomeBase.title(
+            sessionId: "01a05003-0000-0000-0000-000000000000", transcriptPath: nil,
+            live: nil, firstPrompt: nil, topic: " modal scrolling ")
+        XCTAssertEqual(title, "modal scrolling")
     }
 }

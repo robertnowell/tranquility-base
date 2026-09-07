@@ -85,7 +85,7 @@ fi
 PAYLOAD=$(cat)
 AGENT=$(printf '%s' "$PAYLOAD" | python3 -c 'import json,sys
 try:
-    print((json.load(sys.stdin).get("session_id") or "").split("-")[0])
+    print((json.load(sys.stdin).get("session_id") or "").strip().lower())
 except Exception:
     print("")' 2>/dev/null)
 
@@ -97,7 +97,7 @@ if [ -n "$AGENT" ]; then
   DIR="$HOME/Documents/agents/$AGENT"
   WHOSE="This is YOUR directory and nobody else's -- $AGENT is your own session id. NEVER write a page into another agent's directory: the archive reads authorship from the path, so a page filed under somebody else's id says THEY wrote it, lands on THEIR hub, and its Discuss button opens THEIR conversation."
 else
-  DIR="$HOME/Documents/agents/<first dash-separated piece of your session id>"
+  DIR="$HOME/Documents/agents/<your full session id>"
   WHOSE="Never write a page into another agent's directory."
 fi
 

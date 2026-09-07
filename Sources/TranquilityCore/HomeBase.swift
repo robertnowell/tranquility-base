@@ -192,8 +192,11 @@ public enum HomeBase {
         slug(forSessionId: model.sessionId)
     }
 
+    /// The FULL id since 06 Sep, not its first eight characters: Codex ids are
+    /// time-ordered, so two threads started a minute apart shared a directory.
+    /// `SessionIdentity` is the one place that rule lives.
     public static func slug(forSessionId id: String) -> String {
-        id.split(separator: "-").first.map(String.init) ?? id
+        SessionIdentity.directoryName(id)
     }
 
     /// Drop the segment that repeats at the same end of two or more titles.
@@ -1499,6 +1502,75 @@ public extension HomeBase {
             .appendingPathComponent("index.html").path
         return FileManager.default.fileExists(atPath: path) ? path : nil
     }
+
+    /// A session with a directory under its OLD name (the first eight
+    /// characters, the rule until 06 Sep) and none under its full id gets the
+    /// old one renamed, and a symlink left at the old name so every footer
+    /// link written before then still opens. Refused when the old directory's
+    /// hub names a different session: that is the prefix collision the rename
+    /// exists to end, and the session already there keeps its directory.
+    ///
+    /// Run by `write` before every hub write, so the app heals a directory the
+    /// bulk migration (tools/migrate-hub-dirs.py) never saw. Idempotent: once
+    /// the old name is a symlink there is nothing to adopt.
+    @discardableResult
+    static func adoptLegacyDirectory(sessionId: String, root: URL = HomeBase.root) -> Bool {
+        let full = slug(forSessionId: sessionId)
+        let short = SessionIdentity.short(full)
+        guard full != short else { return false }
+        let fm = FileManager.default
+        let old = root.appendingPathComponent(short, isDirectory: true)
+        let new = root.appendingPathComponent(full, isDirectory: true)
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: old.path, isDirectory: &isDir), isDir.boolValue,
+              !isSymlink(old), !fm.fileExists(atPath: new.path)
+        else { return false }
+        if let hub = try? String(contentsOf: old.appendingPathComponent("index.html"),
+                                 encoding: .utf8),
+           let owner = discussSession(inHTML: hub),
+           !SessionIdentity.same(owner, full) {
+            return false
+        }
+        do {
+            try fm.moveItem(at: old, to: new)
+            try fm.createSymbolicLink(atPath: old.path, withDestinationPath: full)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// The full id behind a short one, read off the directory names
+    /// themselves. Nil unless exactly one real directory starts with it — a
+    /// prefix two sessions share is not an answer.
+    static func sessionId(matchingPrefix prefix: String, root: URL = HomeBase.root) -> String? {
+        let p = SessionIdentity.directoryName(prefix)
+        guard p.count >= 4 else { return nil }
+        let names = ((try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isSymbolicLinkKey])) ?? [])
+            .filter { !isSymlink($0) }
+            .map(\.lastPathComponent)
+            .filter { $0.count > 8 && $0.hasPrefix(p) && SessionIdentity.isDirectoryName($0) }
+        return names.count == 1 ? names[0] : nil
+    }
+
+    /// The session a hub's own Discuss button opens: the full id, written by
+    /// this renderer, so it is the most reliable statement of ownership a
+    /// directory on disk makes.
+    static func discussSession(inHTML html: String) -> String? {
+        // Escaped, because the "?" in the scheme is a quantifier to a regex:
+        // unescaped, this matched nothing, every hub read as unclaimed, and
+        // the collision case adopted the other session's directory. The test
+        // for exactly that case is what caught it.
+        let lead = "tranquilitybase://discuss?session="
+        let pattern = NSRegularExpression.escapedPattern(for: lead) + "[0-9a-fA-F-]+"
+        guard let r = html.range(of: pattern, options: .regularExpression) else { return nil }
+        return String(html[r].dropFirst(lead.count))
+    }
+
+    private static func isSymlink(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
+    }
 }
 
 public extension HomeBase {
@@ -1525,6 +1597,57 @@ public extension HomeBase {
     /// The main-actor caller (the card's door) leaves it false and renders
     /// from whatever the snapshot already holds — a subprocess on the main
     /// thread is the frozen-frame class this codebase has paid for twice.
+    /// ONE NAME FOR A SESSION.
+    ///
+    /// The grid, this hub, and the hub of hubs (which copies this page's
+    /// `<title>`) must all call a session the same thing, or a person reads
+    /// three names for one agent and cannot tell they are one agent. So the
+    /// harness's own name comes from the SAME resolver the grid rows use
+    /// (`GridAssembler.harnessTitle`), and this function only adds the floors a
+    /// page needs that a row does not: a page must have an h1, a row may show
+    /// its callsign.
+    ///
+    /// Ruled 06 Sep, after the Codex lookup sat behind `if briefs.isEmpty`.
+    /// That guard was written on 30 Aug, when "Codex" meant "no Stop hook, so
+    /// no briefs". The Codex hooks landed 01 Sep, every Codex session got
+    /// briefs, and the guard silently skipped the name for all of them: 13 of
+    /// 16 named Codex sessions had a hub titled after their first prompt while
+    /// the grid, correctly, showed Codex's own name. A guard that encodes what
+    /// a harness "does not have" is stale the day the harness gets it; asking
+    /// the one resolver every time is not.
+    ///
+    /// Derived, never stored: a real name from any source still wins, and the
+    /// answer changes as the transcript does.
+    static func title(sessionId: String, transcriptPath: String?, live: LiveSession?,
+                      firstPrompt: String?, topic: String?) -> String? {
+        if let name = GridAssembler.harnessTitle(
+            sessionId: sessionId, transcriptPath: transcriptPath, live: live) {
+            return name
+        }
+        // A NAME, NOT AN ID.
+        //
+        // "Agent 019db12b" tells a reader nothing, and it was on 300 of 452
+        // hubs: Codex keeps thread names for only some of its own sessions,
+        // and a session with no transcript title has nothing else to read.
+        // The first thing a person typed is the best name available, and it
+        // is the same convention Codex uses for the names it does keep
+        // ("Well, 2 things. One, I got an error").
+        let prompt = firstPrompt?
+            .split(whereSeparator: \.isNewline).first
+            .map { line -> String in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                return t.count > 72 ? String(t.prefix(71)) + "\u{2026}" : t
+            }
+            .flatMap { $0.isEmpty ? nil : $0 }
+            .flatMap { looksLikeAName($0) ? $0 : nil }
+        if let prompt { return prompt }
+        // The brief's topic is three to six words naming the subject — written
+        // for exactly this job — so it is a better floor than an address or
+        // eight hex characters.
+        let topic = topic?.trimmingCharacters(in: .whitespaces) ?? ""
+        return topic.isEmpty ? nil : topic
+    }
+
     static func write(sessionId: String, store: QueueStore,
                       live: [LiveSession] = [],
                       priming: Bool = false) throws -> URL? {
@@ -1543,44 +1666,14 @@ public extension HomeBase {
                                    root: QueueStore.supportDirectory.path)
         }
         let here = live.first { $0.sessionId == sessionId }
-        var title = (latest?.transcriptPath).flatMap {
-            TranscriptTitles.shared.latestTitle(transcriptPath: $0)
-        }
-        // A Codex session has no Claude Code transcript to read a tab title out
-        // of, and no `latestStop` row at all. Codex keeps its own name for a
-        // thread, which is the only human-readable thing about one, so ask it
-        // rather than fall back to eight hex characters.
-        var codexCwd: String?
-        if briefs.isEmpty {
-            title = title ?? CodexThreadNames.all()[sessionId]
-            codexCwd = CodexRollout.parse(sessionId: sessionId)?.meta?.cwd
-        }
-        // A NAME, NOT AN ID.
-        //
-        // "Agent 019db12b" tells a reader nothing, and it was on 300 of 452
-        // hubs: Codex keeps thread names for only 9 of its own sessions, and a
-        // session with no briefs has no tab title to read either. The first
-        // thing a person typed is the best name available, and it is the same
-        // convention Codex uses for the names it does keep ("Well, 2 things.
-        // One, I got an error"). Derived, never stored: a real name from any
-        // source still wins, and this changes as the transcript does.
-        if title?.isEmpty ?? true {
-            title = transcript.first?.prompt
-                .split(whereSeparator: \.isNewline).first
-                .map { line -> String in
-                    let t = line.trimmingCharacters(in: .whitespaces)
-                    return t.count > 72 ? String(t.prefix(71)) + "\u{2026}" : t
-                }
-                .flatMap { $0.isEmpty ? nil : $0 }
-                .flatMap { looksLikeAName($0) ? $0 : nil }
-        }
-        // The brief's topic is three to six words naming the subject — written
-        // for exactly this job — so it is a better floor than an address or
-        // eight hex characters.
-        if title?.isEmpty ?? true {
-            let topic = briefs.first?.topic.trimmingCharacters(in: .whitespaces) ?? ""
-            title = topic.isEmpty ? nil : topic
-        }
+        // A Codex session keeps its cwd in the rollout rather than in a stored
+        // event, and a session that predates the Codex hooks has no event at
+        // all to read one from.
+        let codexCwd = briefs.isEmpty
+            ? CodexRollout.parse(sessionId: sessionId)?.meta?.cwd : nil
+        let title = Self.title(
+            sessionId: sessionId, transcriptPath: latest?.transcriptPath, live: here,
+            firstPrompt: transcript.first?.prompt, topic: briefs.first?.topic)
         let model = Model(
             sessionId: sessionId,
             title: title,
@@ -1619,6 +1712,7 @@ public extension HomeBase {
             }
         }
 
+        adoptLegacyDirectory(sessionId: model.sessionId)
         let dir = root.appendingPathComponent(slug(for: model))
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("index.html")
