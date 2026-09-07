@@ -105,9 +105,9 @@ final class StatusHUD: NSObject {
     /// on every relaunch would not be a preference, it would be a default with
     /// extra steps. See docs/ruling-the-collapsed-strip.md.
     private static let collapsedKey = "panelCollapsed"
-    private(set) var isCollapsed: Bool = UserDefaults.standard.bool(forKey: StatusHUD.collapsedKey) {
+    private(set) var isCollapsed: Bool = ProductDefaults.shared.bool(forKey: StatusHUD.collapsedKey) {
         didSet {
-            UserDefaults.standard.set(isCollapsed, forKey: StatusHUD.collapsedKey)
+            ProductDefaults.shared.set(isCollapsed, forKey: StatusHUD.collapsedKey)
             Permissions.log("panel: \(isCollapsed ? "collapsed" : "expanded")")
             Track.record(isCollapsed ? "panel_collapsed" : "panel_expanded", ["face": .token(state.name)])
         }

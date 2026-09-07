@@ -24,8 +24,8 @@ public enum VoiceCatalog {
     public static let fallbackVoiceId = "EXAVITQu4vr4xnSDxMaL"
 
     public static var selectedVoiceId: String {
-        get { UserDefaults.standard.string(forKey: defaultsKey) ?? fallbackVoiceId }
-        set { UserDefaults.standard.set(newValue, forKey: defaultsKey) }
+        get { ProductDefaults.shared.string(forKey: defaultsKey) ?? fallbackVoiceId }
+        set { ProductDefaults.shared.set(newValue, forKey: defaultsKey) }
     }
 
     /// Cached on disk so the menu is populated instantly at launch and a network

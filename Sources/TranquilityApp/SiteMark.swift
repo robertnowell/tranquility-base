@@ -155,15 +155,21 @@ enum SiteMark {
     /// from Apple's own icon templates. They are not published as prose
     /// anywhere — an Apple Developer Forums thread complains about exactly that
     /// — so they are recorded here as measured convention rather than spec.
-    /// `VOICE_DISPATCH_TEST_ICON`, set only by `scripts/bundle.sh` when it is
-    /// building `scripts/bundle-test.sh`'s isolated variant: the real app's
-    /// plate colour is the whole point of a recognisable icon, and the test
-    /// build needs to be UNMISTAKABLE at a glance in the Dock and
-    /// Cmd-Tab, not just correctly TCC-isolated. Requested directly, 26 Aug
-    /// ("change logo on test app"), after the two builds shared the exact
-    /// same icon and were genuinely hard to tell apart at a glance.
-    private static var isTestBuild: Bool {
-        ProcessInfo.processInfo.environment["VOICE_DISPATCH_TEST_ICON"] != nil
+    /// `VOICE_DISPATCH_ICON_VARIANT` is present only while bundle.sh asks the
+    /// executable to draw a non-production icon. The real app keeps its dark
+    /// plate; persistent Dev is blue and isolated TEST is amber, so none can
+    /// be mistaken in the Dock or Cmd-Tab. The executable itself remains the
+    /// same across all three bundles.
+    private enum IconVariant {
+        case production, development, test
+    }
+
+    private static var iconVariant: IconVariant {
+        switch ProcessInfo.processInfo.environment["VOICE_DISPATCH_ICON_VARIANT"] {
+        case "development": return .development
+        case "test": return .test
+        default: return .production
+        }
     }
 
     static func iconImage(pixels: CGFloat) -> NSImage {
@@ -173,7 +179,12 @@ enum SiteMark {
             let inset = (1024 - 824) / 2 * unit
             let plate = NSRect(x: inset, y: inset,
                                width: pixels - inset * 2, height: pixels - inset * 2)
-            (isTestBuild ? StateLegend.Palette.fault : StateLegend.Palette.surface).setFill()
+            let plateColour: NSColor = switch iconVariant {
+            case .production: StateLegend.Palette.surface
+            case .development: StateLegend.Palette.working
+            case .test: StateLegend.Palette.fault
+            }
+            plateColour.setFill()
             NSBezierPath(roundedRect: plate, xRadius: 185.4 * unit,
                          yRadius: 185.4 * unit).fill()
 
@@ -195,11 +206,11 @@ enum SiteMark {
                                  yBy: plate.midY - (drawn.midY * scale))
             transform.scale(by: scale)
             transform.concat()
-            // On the amber test plate, the mark's usual grey-beige has almost
-            // no contrast against it (both are mid-luminance). The dark
-            // surface colour that is the REAL app's plate reads clearly on
-            // amber instead.
-            (isTestBuild ? StateLegend.Palette.surface : StateLegend.Palette.secondary).setFill()
+            // On either coloured non-production plate, the usual grey-beige
+            // mark loses contrast. The dark production plate colour reads
+            // clearly on blue and amber alike.
+            (iconVariant == .production
+                ? StateLegend.Palette.secondary : StateLegend.Palette.surface).setFill()
             path(filled: false, wall: wall, bar: bar).fill()
             return true
         }

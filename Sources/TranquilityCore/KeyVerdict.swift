@@ -35,15 +35,15 @@ public enum KeyVerdict {
     /// longer there.
     public static func record(_ outcome: KeyCheck.Outcome?, for key: Secrets.Key) {
         guard let outcome else {
-            UserDefaults.standard.removeObject(forKey: defaultsKey(key))
+            ProductDefaults.shared.removeObject(forKey: defaultsKey(key))
             return
         }
-        UserDefaults.standard.set(encode(outcome), forKey: defaultsKey(key))
+        ProductDefaults.shared.set(encode(outcome), forKey: defaultsKey(key))
     }
 
     /// The last thing the provider said, or nil if it was never asked.
     public static func last(for key: Secrets.Key) -> KeyCheck.Outcome? {
-        guard let raw = UserDefaults.standard.string(forKey: defaultsKey(key))
+        guard let raw = ProductDefaults.shared.string(forKey: defaultsKey(key))
         else { return nil }
         return decode(raw)
     }

@@ -321,9 +321,11 @@ extension AppDelegate {
         diagnostics.submenu = diagnosticsMenu
         menu.addItem(diagnostics)
 
-        let update = NSMenuItem(title: "Check for Updates\u{2026}",
-                                action: #selector(Updates.checkForUpdates(_:)), keyEquivalent: "")
-        update.target = updates
+        let update = NSMenuItem(
+            title: updates.isEnabled ? "Check for Updates\u{2026}" : "Updates are installed through Prod",
+            action: updates.isEnabled ? #selector(Updates.checkForUpdates(_:)) : nil,
+            keyEquivalent: "")
+        update.target = updates.isEnabled ? updates : nil
         update.isEnabled = updates.canCheck
         menu.addItem(update)
         menu.addItem(.separator())

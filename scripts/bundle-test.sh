@@ -37,6 +37,10 @@ cd "$(dirname "$0")/.."
 
 export VD_APP_NAME="Tranquility Base TEST"
 export VD_BUNDLE_ID="com.robertnowell.voice-dispatch-test"
+export VD_APP_CHANNEL="test"
+export VD_UPDATES_ENABLED="false"
+export VD_URL_SCHEMES="tbtest"
+export TB_FEED_URL="https://updates.tranquilitybase.to/test-appcast.xml"
 APP_PATH="$(tb_bundle_dir debug)/$VD_APP_NAME.app"
 DATA_DIR="$HOME/Library/Application Support/VoiceDispatchTEST"
 # Baked into the built .app's Info.plist as LSEnvironment (bundle.sh), so

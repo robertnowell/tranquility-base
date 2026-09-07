@@ -31,9 +31,9 @@ enum Diagnostics {
     /// The toggle. Default on; explicitly stored once the user touches it.
     @MainActor
     static var sendingEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: sendKey) as? Bool ?? true }
+        get { ProductDefaults.shared.object(forKey: sendKey) as? Bool ?? true }
         set {
-            UserDefaults.standard.set(newValue, forKey: sendKey)
+            ProductDefaults.shared.set(newValue, forKey: sendKey)
             Track.record("setting_changed", ["key": "diagnostics_send", "value": .bool(newValue)])
             apply()
             Analytics.apply(enabled: newValue)

@@ -21,13 +21,15 @@
 # Usage: scripts/build-clean.sh [ref]        (default ref: origin/main)
 #        Prints the built .app path on stdout. Progress goes to stderr, so
 #        `APP=$(scripts/build-clean.sh)` is safe.
+#        VD_APP_NAME and the other bundle identity variables are honoured;
+#        relaunch.sh exports the stable Dev identity before calling this.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . "$(dirname "$0")/lib/paths.sh"
 
 REF="${1:-origin/main}"
 CLEAN_WORKTREE="/private/tmp/tb-clean"
-APP="Tranquility Base.app"
+APP="${VD_APP_NAME:-Tranquility Base}.app"
 APP_PATH="$(tb_bundle_dir debug "$CLEAN_WORKTREE")/$APP"
 
 # /private/tmp is fine for a build CACHE — it is reaped, and everything here can

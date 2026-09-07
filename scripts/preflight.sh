@@ -155,6 +155,13 @@ fi
 printf '%s\n' "$TEST_OUT" | grep -E "^✓ [0-9]+ XCTest" | tail -1 | sed 's/^✓/ /'
 echo "✓ build clean, tests green"
 
+# The app target is intentionally identical between Dev and Prod, while the
+# packaging envelope must be intentionally different. This builds both from
+# this checkout and guards both halves of that contract, including the exact
+# local-signature-at-the-Prod-path regression that reset TCC grants.
+echo "→ Dev/Prod packaging lanes"
+scripts/test-dev-lanes.sh
+
 # --- the drills that were never actually wired to anything --------------------
 #
 # Found in the arc's closing audit (24 Aug): the arc's own rule 4 requires

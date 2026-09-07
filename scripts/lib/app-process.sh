@@ -11,16 +11,18 @@
 # one relaunch producing no app.
 #
 # The pattern below is the bundle's executable PATH, which a build command can
-# never contain, and which matches both the installed copy and a worktree build:
+# never contain, and which matches both persistent product lanes plus their
+# worktree builds:
 #
 #   /Applications/Tranquility Base.app/Contents/MacOS/TranquilityApp
+#   /Applications/Tranquility Base Dev.app/Contents/MacOS/TranquilityApp
 #   /private/tmp/tb-clean/.build/bundle/debug/Tranquility Base.app/Contents/MacOS/TranquilityApp
 #
 # Defined once and sourced, rather than pasted into both scripts: the pose
 # fixture in StatusHUD.swift is currently living proof of what happens when the
 # same literal is maintained in two places — one copy was upgraded and the other
 # still holds the shape it was upgraded away from.
-APP_PROC_PATTERN="Tranquility Base.app/Contents/MacOS/TranquilityApp"
+APP_PROC_PATTERN="Tranquility Base( Dev)?[.]app/Contents/MacOS/TranquilityApp"
 
 # True when a real app process is up. Never true for a build.
 app_running() {
@@ -30,6 +32,21 @@ app_running() {
 # How many are up. Two instances fight over one global hotkey.
 app_count() {
   pgrep -f "$APP_PROC_PATTERN" 2>/dev/null | wc -l | tr -d ' '
+}
+
+# True only for the bundle at an exact path. The broad helpers arbitrate both
+# lanes; deploy verification must prove the lane it just launched, not merely
+# notice that the other one is still alive.
+app_at_path_running() {
+  pgrep -f "$1/Contents/MacOS/TranquilityApp" >/dev/null 2>&1
+}
+
+app_stop_path() {
+  if app_at_path_running "$1"; then
+    echo "→ stopping $1"
+    pkill -f "$1/Contents/MacOS/TranquilityApp" || true
+    sleep 1
+  fi
 }
 
 # Stop it if it is up. Safe to call when nothing is running.

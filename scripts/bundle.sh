@@ -13,12 +13,10 @@
 #
 # Usage: scripts/bundle.sh [debug|release]
 #
-# APP_NAME and BUNDLE_ID are overridable (VD_APP_NAME, VD_BUNDLE_ID) so
-# scripts/bundle-test.sh can stamp out a SEPARATE app -- different bundle
-# id, different code identity, so TCC treats it as an entirely different
-# app with its own, independently resettable permission grants. Every
-# other caller of this script (relaunch.sh, preflight.sh) leaves both
-# unset and gets the real app, unchanged.
+# Identity settings are overridable so bundle-dev.sh and bundle-test.sh stamp
+# out separate macOS applications from this same target. Production callers
+# leave them unset. relaunch.sh sets the persistent Dev identity explicitly;
+# release.sh leaves the production identity untouched.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -58,6 +56,22 @@ else
 fi
 APP_NAME="${VD_APP_NAME:-Tranquility Base}"
 BUNDLE_ID="${VD_BUNDLE_ID:-com.robertnowell.voice-dispatch}"
+APP_CHANNEL="${VD_APP_CHANNEL:-production}"
+UPDATES_ENABLED="${VD_UPDATES_ENABLED:-true}"
+DATABASE_SCHEMA_VERSION="${VD_DATABASE_SCHEMA_VERSION:-18}"
+URL_SCHEMES="${VD_URL_SCHEMES:-tranquilitybase voicedispatch}"
+
+case "$UPDATES_ENABLED" in
+  true) UPDATES_BOOL_XML="<true/>" ;;
+  false) UPDATES_BOOL_XML="<false/>" ;;
+  *) echo "✗ VD_UPDATES_ENABLED must be true or false" >&2; exit 1 ;;
+esac
+
+URL_SCHEMES_XML=""
+for scheme in $URL_SCHEMES; do
+  URL_SCHEMES_XML="${URL_SCHEMES_XML}        <string>$scheme</string>
+"
+done
 
 # Architectures. Universal by default so Intel Macs are covered; a single arch
 # stays available for fast local iteration (TB_ARCHS=arm64 scripts/bundle.sh).
@@ -154,6 +168,18 @@ chmod +x "$APP_DIR/Contents/Resources/hooks/"*.sh
 # job; the warning did not, because a warning nobody reads is not a signal.
 sparkle_embed "$APP_DIR" "$PRODUCTS_DIR"
 
+# The icon renderer executes this copied binary before the bundle receives its
+# final stable signature below. On macOS 26, the SwiftPM ad-hoc signature is not
+# enough once the binary loads embedded Sparkle under the hardened runtime: the
+# kernel kills it with SIGKILL before main. Give the helper invocation a
+# temporary signature with library validation disabled. The framework still
+# carries its vendor signature at this point, so this entitlement is what lets
+# the helper load it; the final app signature below uses
+# TranquilityBase.entitlements and does NOT carry this exception.
+codesign --force --sign - --identifier "$BUNDLE_ID.icon-helper" \
+  --entitlements scripts/icon-helper.entitlements \
+  --options runtime --timestamp=none "$APP_DIR/Contents/MacOS/TranquilityApp"
+
 # The app icon, drawn by the app itself.
 #
 # Generated rather than checked in: the mark lives in SiteMark.swift, so the
@@ -166,9 +192,8 @@ sparkle_embed "$APP_DIR" "$PRODUCTS_DIR"
 # onboarding flips the app to .regular, which put the GENERIC DEFAULT icon in
 # the Dock and ⌘-Tab at exactly the moment a new user meets it.
 ICONSET="$(mktemp -d)/AppIcon.iconset"
-# The test build's icon is unmistakable at a glance (SiteMark.swift's
-# `isTestBuild`, keyed on this same env var): an amber plate instead of the
-# real app's, so it never gets confused with it in the Dock or Cmd-Tab.
+# Non-production identities are unmistakable at a glance: Dev gets a blue
+# plate and TEST gets amber, while the production artwork is unchanged.
 #
 # `env` as the no-op prefix, not an empty array: `"${ICON_ENV[@]}"` on an
 # EMPTY array is an unbound-variable error under `set -u` in bash 3.2,
@@ -176,9 +201,10 @@ ICONSET="$(mktemp -d)/AppIcon.iconset"
 # app's own build the first time this shipped, on a bash that never
 # takes the test-build branch below at all. scripts/test.sh's own
 # comment already documents this exact trap; reproduced it anyway.
-ICON_ENV=(env)
-[ "$BUNDLE_ID" = "com.robertnowell.voice-dispatch-test" ] \
-  && ICON_ENV=(env VOICE_DISPATCH_TEST_ICON=1)
+ICON_ENV=(env -u MallocStackLogging -u MallocStackLoggingNoCompact)
+[ "$APP_CHANNEL" != "production" ] \
+  && ICON_ENV=(env -u MallocStackLogging -u MallocStackLoggingNoCompact \
+      VOICE_DISPATCH_ICON_VARIANT="$APP_CHANNEL")
 if "${ICON_ENV[@]}" "$APP_DIR/Contents/MacOS/TranquilityApp" --write-iconset "$ICONSET" >/dev/null; then
   if iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/AppIcon.icns"; then
     echo "→ icon: AppIcon.icns"
@@ -232,6 +258,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
   <key>CFBundleVersion</key><string>$APP_BUILD</string>
+  <key>TBAppChannel</key><string>$APP_CHANNEL</string>
+  <key>TBUpdatesEnabled</key>$UPDATES_BOOL_XML
+  <key>TBDatabaseSchemaVersion</key><integer>$DATABASE_SCHEMA_VERSION</integer>
   <!-- The release number tells people which build they have; this binds those
        bytes to the exact source commit the automated release built. Unlike the
        marketing version it is never chosen or rewritten by a release job. -->
@@ -251,8 +280,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
        on the second launch, a check at launch and every day, the download
        in the background, and the install the moment nothing is in motion
        (Updates.swift postpones the relaunch until then) or on quit. -->
-  <key>SUEnableAutomaticChecks</key><true/>
-  <key>SUAutomaticallyUpdate</key><true/>
+  <key>SUEnableAutomaticChecks</key>$UPDATES_BOOL_XML
+  <key>SUAutomaticallyUpdate</key>$UPDATES_BOOL_XML
   <!-- tranquilitybase:// deep links, so any local HTML page can carry buttons
        that open the agent that made it. The browser confirms before launching
        an external scheme, which is the drive-by guard.
@@ -270,7 +299,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <dict>
       <key>CFBundleURLName</key><string>Tranquility Base actions</string>
       <key>CFBundleURLSchemes</key>
-      <array><string>tranquilitybase</string><string>voicedispatch</string></array>
+      <array>
+$URL_SCHEMES_XML      </array>
     </dict>
   </array>
 

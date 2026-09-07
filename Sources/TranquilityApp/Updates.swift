@@ -35,6 +35,11 @@ final class Updates: NSObject {
     /// a non-Sendable closure cannot cross into it under Swift 6.
     private var pendingInstall: (() -> Void)?
 
+    /// Identity configuration, not a compile-time Dev branch. The published
+    /// app exercises this exact implementation; local and TEST identities must
+    /// never replace themselves from the production feed.
+    let isEnabled = AppIdentity.updatesEnabled
+
     init(
         panelState: @escaping @MainActor () -> PanelState,
         inFlightUtterances: @escaping @MainActor () -> Int,
@@ -57,6 +62,10 @@ final class Updates: NSObject {
     /// `update_cycle`, because nobody had ever seen the dialog and the log
     /// could not say whether a check had happened at all.
     func start() {
+        guard isEnabled else {
+            log("updates: disabled for \(AppIdentity.channel.rawValue) identity")
+            return
+        }
         guard controller == nil else { return }
         controller = SPUStandardUpdaterController(
             startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
@@ -98,7 +107,7 @@ final class Updates: NSObject {
 
     /// Whether the menu item should be clickable, so it greys out rather than
     /// beeping while a check is already running.
-    var canCheck: Bool { controller?.updater.canCheckForUpdates ?? false }
+    var canCheck: Bool { isEnabled && (controller?.updater.canCheckForUpdates ?? false) }
 }
 
 extension Updates: @preconcurrency SPUUpdaterDelegate {
