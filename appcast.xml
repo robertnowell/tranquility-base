@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1094</title>
+      <sparkle:version>1094</sparkle:version>
+      <sparkle:shortVersionString>0.3.1094</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 07 Sep 2026 00:30:05 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1094-c9f12d2bc/TranquilityBase-0.3.1094.dmg" type="application/octet-stream" length="11730265" sparkle:edSignature="u/tcyrIZyfIKWadlak2D3sbxcIHiP/jCZrS29TgJIGQjBHST2zoJtBHsFFR0eSGHcFx+/ZonPb/c+U5XNA48DQ==" />
+    </item>
+    <item>
       <title>Version 0.3.1093</title>
       <sparkle:version>1093</sparkle:version>
       <sparkle:shortVersionString>0.3.1093</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Fri, 04 Sep 2026 04:10:32 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1085-2dfe43aa2/TranquilityBase-0.3.1085.dmg" type="application/octet-stream" length="9233165" sparkle:edSignature="Z35jiOSaqG2rhkjZ9kv/mNAGxPThv0gd01OCL2Td3haEgvHoDGos76m0ROwTUxmBr2KxQye6DkCWBtm95MJWAw==" />
     </item>
-    <item>
-      <title>Version 0.3.1084</title>
-      <sparkle:version>1084</sparkle:version>
-      <sparkle:shortVersionString>0.3.1084</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Fri, 04 Sep 2026 04:00:52 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1084-78eb50ee0/TranquilityBase-0.3.1084.dmg" type="application/octet-stream" length="9231715" sparkle:edSignature="eoDZwOz/NK7bD8PXN12FZju5A7Tw8P8w9wVb3MESpm/EBQiblo+SmQNnkDcG3IIGLtLWBQWyHbGHpO2EWqE5AA==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: Crs0VvZSqA6iL1PkMHpnvVIusBsc7UqkQHhwWQrbUw9Lw4O7K31X++u6gste4tUWzbvjCNBygwiLxRaJTpmXAg==
-length: 6447
+edSignature: 2oZKaUh8lTMUPTPfpJ6dDxMdveyZ4tyEMzHjT+0RnBRGZc2CmV+F95W32hMitN77X0WviVhqo1Zd6UC9pt2XCg==
+length: 6448
 -->
