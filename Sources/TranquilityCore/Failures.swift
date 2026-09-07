@@ -180,6 +180,10 @@ public final class Breadcrumbs: @unchecked Sendable {
     static let refusedFragments = ["text:", "transcript", "dispatched(", "queued(", "said:", "Its screen says"]
 
     public static let capacity = 40
+    /// Sees each admitted crumb, on the recording thread. The app hands
+    /// them to the crash reporter so a crash carries the same trail a
+    /// record does.
+    nonisolated(unsafe) public var onRecord: (@Sendable (Breadcrumb) -> Void)?
     private let lock = NSLock()
     private var ring: [Breadcrumb] = []
     private let capacity: Int
@@ -196,9 +200,11 @@ public final class Breadcrumbs: @unchecked Sendable {
         var message = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
         if message.count > 240 { message = String(message.prefix(240)) + "…" }
         let crumb = Breadcrumb(at: at, category: category, message: Scrub.text(message))
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         ring.append(crumb)
         if ring.count > capacity { ring.removeFirst(ring.count - capacity) }
+        lock.unlock()
+        onRecord?(crumb)
         return true
     }
 
@@ -466,6 +472,19 @@ public enum Failures {
         queue.sync {}
         lock.lock(); let store = _store; lock.unlock()
         store?.flush()
+    }
+
+    /// Forget this install's id and mint another. The user's door out of
+    /// any history the id has accrued. Returns the new id.
+    @discardableResult
+    public static func resetInstallId() -> String {
+        lock.lock(); defer { lock.unlock() }
+        guard let store = _store else { return "unconfigured" }
+        let directory = store.url.deletingLastPathComponent()
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("install-id"))
+        let fresh = loadOrMintInstallId(directory: directory)
+        _installId = fresh
+        return fresh
     }
 
     private static func loadOrMintInstallId(directory: URL) -> String {

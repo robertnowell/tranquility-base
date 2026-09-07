@@ -101,6 +101,20 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 mkdir -p "$BUILD_DIR"
 cp "$PRODUCTS_DIR/TranquilityApp" "$APP_DIR/Contents/MacOS/TranquilityApp"
 
+# Debug symbols beside the bundle, for crash reports with names in them
+# (6 Sep). dsymutil reads the DWARF SwiftPM left in the object files; a
+# universal binary yields one dSYM with one UUID per slice, and those UUIDs
+# are what a crash report is matched on. Uploaded by release.sh when the
+# error tracker has a token; kept here regardless, so a crash on this Mac
+# can be symbolicated by hand with atos.
+DSYM_DIR="$BUILD_DIR/$APP_NAME.dSYM"
+rm -rf "$DSYM_DIR"
+if dsymutil "$PRODUCTS_DIR/TranquilityApp" -o "$DSYM_DIR" 2>/dev/null; then
+  echo "dSYM: $(dwarfdump --uuid "$DSYM_DIR" 2>/dev/null | awk '{printf "%s %s  ", $2, $3}')"
+else
+  echo "dSYM: dsymutil failed; crash reports from this build will not symbolicate" >&2
+fi
+
 # The earcon set. Four short files, ~160KB total, loaded by name through
 # Bundle.main in Earcons.swift. Flat in Resources/ rather than in a SwiftPM
 # resource bundle, because this .app is assembled by hand and a

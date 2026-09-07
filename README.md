@@ -173,8 +173,15 @@ summaries are the point.
   shows: the kind, the reason, the build, the app's architecture, which harness
   binaries were found and what they are, permission states, and the last few
   machinery log lines (allow-listed by category, so never dictated text). Home
-  directory, emails and keys are scrubbed before it is written. Nothing reads
-  or sends it yet; "Failure log…" in the menu opens it.
+  directory, emails and keys are scrubbed before it is written. "Diagnostics ›
+  Failure log…" in the menu opens it.
+- **Failure reports are sent** (Sentry) when the published config names a
+  DSN: those same lines, plus crashes, hangs over two seconds, MetricKit's
+  diagnostics, and one "session started" per launch for the crash-free rate.
+  Never what you say or what an agent says; the SDK's own personal-data
+  collection is off and paths are scrubbed again before send. On by default;
+  "Diagnostics › Send failure reports" turns it off, "Reset install id"
+  severs the random id that groups your reports.
 - Long-running headless `claude -p` jobs can be announced while still executing.
 - On-disk state still lives in `~/Library/Application Support/VoiceDispatch/`
   and credentials under the Keychain service `voice-dispatch` — both predate the

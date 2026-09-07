@@ -1053,6 +1053,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Failures.configure(directory: QueueStore.supportDirectory)
         Failures.trace = { Permissions.log("failure: \($0)") }
         Diagnostics.refreshEnvironment(reason: "startup")
+        // Sending, one run-loop turn later: after this method returns and the
+        // panel has painted, so the SDK's start (a crash handler, a watchdog
+        // thread) is never in the way of the first frame. Dormant without a
+        // DSN; see Diagnostics.
+        DispatchQueue.main.async { Diagnostics.startReporting() }
 
         ElevenLabsSpeechProvider.trace = { Permissions.log("11labs: \($0)") }
         // Populate the picker from the account rather than a hardcoded list.
