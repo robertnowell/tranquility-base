@@ -114,20 +114,20 @@ extension Coordinator {
         Coordinator.trace?(
             "replyTarget resolved: session=\(target.sessionId) label=\(target.projectLabel) "
             + "cwd=\(target.cwd ?? "-") event=\(target.latestId)")
-        // The drop tray's capture close: staged files bind to THIS utterance
-        // and leave the chips. The text the undo window shows is the text
-        // that will be typed — quoted paths included — so the disclosure IS
+        // The message tray's capture close: staged fragments bind to THIS
+        // utterance and leave the chips. The text the undo window shows is
+        // the text that will be typed, so the disclosure IS
         // the message. Composed here and again at confirm, never by mutating
         // the transcript: transcriptText stays the record of what was heard,
         // and a cancel has nothing to restore because nothing was overwritten.
         let carrying = attachments.snapshot(
             session: target.sessionId, utteranceId: utterance.id)
         if !carrying.isEmpty {
-            Coordinator.trace?("tray: \(carrying.count) file(s) riding \(utterance.id.prefix(8))")
+            Coordinator.trace?("tray: \(carrying.count) fragment(s) riding \(utterance.id.prefix(8))")
         }
         return .readyToSend(
             utteranceId: utterance.id,
-            text: AttachmentTray.compose(transcript: text, paths: carrying),
+            text: AttachmentTray.compose(transcript: text, fragments: carrying),
             // The name the grid shows, not the folder the session happens to
             // sit in. `projectLabel` is the raw last path component of the
             // cwd, so a session in `.claude/worktrees/arc-work` was announced
@@ -176,7 +176,7 @@ extension Coordinator {
         // Same composition as readyToSend showed, from the same riding set —
         // the user confirms exactly the text that dispatches.
         let outgoing = AttachmentTray.compose(
-            transcript: text, paths: attachments.riding(utteranceId: utteranceId))
+            transcript: text, fragments: attachments.riding(utteranceId: utteranceId))
 
         // Own the utterance before dispatch does any process probing or session
         // adoption. Those are preflight from the transport's perspective, but
@@ -209,7 +209,7 @@ extension Coordinator {
         attachments.resolve(utteranceId: utteranceId, landed: false)
     }
 
-    /// Bind files dropped during the undo window to its already-prepared
+    /// Bind fragments staged during the undo window to its already-prepared
     /// utterance and return the exact message the countdown will dispatch.
     /// The caller uses this to refresh the readback, so visible disclosure and
     /// transport payload remain one value rather than two promises that drift.
@@ -222,9 +222,9 @@ extension Coordinator {
               utterance.targetSessionId == sessionId,
               let transcript = utterance.transcriptText
         else { return nil }
-        let paths = attachments.absorbStaged(
+        let fragments = attachments.absorbStaged(
             session: sessionId, utteranceId: utteranceId)
-        return AttachmentTray.compose(transcript: transcript, paths: paths)
+        return AttachmentTray.compose(transcript: transcript, fragments: fragments)
     }
 
     /// `dispatch`'s Codex twin for `preferringTmuxOwned` — same question

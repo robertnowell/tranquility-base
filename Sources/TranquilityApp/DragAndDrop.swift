@@ -102,21 +102,21 @@ final class DropSurfaceView: NSView {
     }
 }
 
-/// The drop tray's chips: one row per staged file, above the action row.
+/// The message tray's chips: one row per staged fragment, above the action row.
 ///
 /// A vertical list rather than wrapped pills, for the reason the grid is a
-/// list: filenames are long and a wrapped row reflows unpredictably as the
+/// list: fragments can be long and a wrapped row reflows unpredictably as the
 /// set changes, while rows only ever grow downward — the geometry the panel
 /// already handles by anchoring its top edge.
 final class TrayRowView: NSStackView {
-    /// Per-path, never clear-all (a cross that took files you did not point
-    /// at is the surprise this whole feature exists to avoid).
+    /// Per-fragment, never clear-all (a cross that took entries you did not
+    /// point at is the surprise this whole feature exists to avoid).
     var onRemove: ((String) -> Void)?
 
     /// What is drawn right now, so `apply` can skip identical repaints —
     /// render() runs on every tick and rebuilding subviews under the pointer
     /// would kill the hover state on the ✕ you are reaching for.
-    private(set) var paths: [String] = []
+    private(set) var fragments: [String] = []
 
     init() {
         super.init(frame: .zero)
@@ -128,18 +128,18 @@ final class TrayRowView: NSStackView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func apply(_ next: [String]) {
-        guard next != paths else { return }
-        paths = next
+        guard next != fragments else { return }
+        fragments = next
         removeAllArrangedSubviews()
-        for path in next {
-            let row = ChipRow(path: path)
-            row.onRemove = { [weak self] in self?.onRemove?(path) }
+        for fragment in next {
+            let row = ChipRow(fragment: fragment)
+            row.onRemove = { [weak self] in self?.onRemove?(fragment) }
             addArrangedSubview(row)
             row.widthAnchor.constraint(equalToConstant: 348).isActive = true
         }
     }
 
-    /// For the drill: the names as drawn, not the paths handed in.
+    /// For the drill: the previews as drawn, not the full fragments handed in.
     var displayedNamesForTesting: [String] {
         arrangedSubviews.compactMap { ($0 as? ChipRow)?.displayName }
     }
@@ -158,8 +158,8 @@ final class TrayRowView: NSStackView {
         let displayName: String
         let removeButton: ConsoleButton
 
-        init(path: String) {
-            displayName = (path as NSString).lastPathComponent
+        init(fragment: String) {
+            displayName = Self.preview(fragment)
             removeButton = ConsoleButton(title: StateLegend.Glyph.denied,
                                          target: nil, action: nil)
             super.init(frame: .zero)
@@ -167,7 +167,7 @@ final class TrayRowView: NSStackView {
 
             // The paperclip is the one glyph here that is not from the state
             // legend: the legend's marks all mean something about a SESSION,
-            // and a staged file is a fact about the message instead.
+            // and a staged fragment is a fact about the message instead.
             // ONE label, mark and name together, so `ChromeType.line` centres
             // the ▣ on the name's cap line by measurement. It used to be its
             // own text field pinned with `centerY`, which centres two FRAMES —
@@ -224,6 +224,25 @@ final class TrayRowView: NSStackView {
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
         @objc private func removeTapped() { onRemove?() }
+
+        /// Paths keep the compact filename chip they have always had; prose
+        /// gets its first meaningful line. This is presentation only — the
+        /// tray itself intentionally carries no kind tag.
+        private static func preview(_ fragment: String) -> String {
+            let firstLine = fragment.split(whereSeparator: \.isNewline).first
+                .map(String.init) ?? fragment
+            var candidate = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if candidate.hasPrefix("\"") && candidate.hasSuffix("\"")
+                && candidate.count >= 2 {
+                candidate.removeFirst()
+                candidate.removeLast()
+                candidate = candidate.replacingOccurrences(of: "\\\"", with: "\"")
+            }
+            if candidate.hasPrefix("/") {
+                return (candidate as NSString).lastPathComponent
+            }
+            return candidate
+        }
 
         override func resetCursorRects() {
             super.resetCursorRects()

@@ -696,6 +696,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
+        hud.onContinueWork = { [weak self] id, name in
+            self?.continueWork(from: id, name: name)
+        }
         hud.onRevive = { [weak self] id, name in self?.revive(id, name: name) }
         // Ruled 13 Aug on the Past Agents face, moved to the grid 16 Aug: the
         // right-click ends the session. SIGTERM first — a Claude session dies
@@ -798,19 +801,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSWorkspace.shared.open(url)
             }
         }
-        // The drop tray's three wires (docs: the panel takes files).
+        // The message tray's wires. File drops are one producer today;
+        // handoff context is another, and both stage ordinary strings.
         //
         // Answered from a CACHED tuple, never a live probe: render() calls
         // this on every repaint, and resolveReplyContext shells out to
         // `claude agents --json` for a pid the tray does not need. Rule 9 —
         // the main actor draws, it does not wait on a subprocess.
         hud.replyTargetForDrop = { [weak self] in self?.dropTarget }
-        hud.stagedFiles = { [weak self] session in
+        hud.stagedFragments = { [weak self] session in
             self?.coordinator?.attachments.staged(for: session) ?? []
         }
-        hud.onUnstage = { [weak self] session, path in
+        hud.onUnstage = { [weak self] session, fragment in
             Track.record("chip_removed", ["agent_id": Track.hash(session)])
-            self?.coordinator?.attachments.unstage(path, session: session)
+            self?.coordinator?.attachments.unstage(fragment, session: session)
         }
         hud.onFilesDropped = { [weak self] items in
             guard let self, let coordinator, let target = dropTarget else {
@@ -826,7 +830,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for item in items {
                 switch item {
                 case .file(let path):
-                    if coordinator.attachments.stage(path, session: target.sessionId) {
+                    let fragment = AttachmentTray.quoted(path)
+                    if coordinator.attachments.stage(fragment, session: target.sessionId) {
                         staged += 1
                     }
                 case .imageData(let data, let ext):
@@ -840,7 +845,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         Permissions.log("drop: could not persist \(data.count) bytes")
                         continue
                     }
-                    if coordinator.attachments.stage(path, session: target.sessionId) {
+                    let fragment = AttachmentTray.quoted(path)
+                    if coordinator.attachments.stage(fragment, session: target.sessionId) {
                         staged += 1
                     }
                 }
@@ -860,7 +866,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.log("drop: staged \(staged) for "
                             + "\(target.sessionId.prefix(8)) (\(total) total)")
             // A drop during the undo window changes THIS message, not a
-            // mysterious future one. Core binds the newly staged paths to the
+            // mysterious future one. Core binds the newly staged fragments to the
             // pending utterance; the HUD refreshes the exact text that will be
             // sent without replacing or restarting its one countdown.
             if let utteranceId = hud.pendingSendUtteranceId,
