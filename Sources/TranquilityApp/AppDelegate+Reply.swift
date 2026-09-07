@@ -75,6 +75,7 @@ extension AppDelegate {
                 // 05 Aug — "two further states, all saying different things").
                 case .queued(_, _, let dispatchedPid):
                     landedOnTheSession = true
+                    Track.replyOutcome("queued", stage: "confirm", agent: sessionId)
                     hud.showReceipt(.queued)
                     lastStatusLine = "queued in \(label), sends when its turn finishes"
                     Permissions.log("send: queued in \(label)")
@@ -90,8 +91,10 @@ extension AppDelegate {
                     if let dispatchedPid {
                         hud.rebindLivePid(dispatchedPid, sessionId: sessionId)
                     }
-                case .dispatched(_, _, _, let dispatchedPid):
+                case .dispatched(_, let ms, _, let dispatchedPid):
                     landedOnTheSession = true
+                    Track.replyOutcome("dispatched", stage: "confirm", agent: sessionId,
+                                       extra: ["latency_ms": .int(ms)])
                     hud.showReceipt(.sent)
                     lastStatusLine = "sent to \(label)"
                     Permissions.log("send: confirmed to \(label)")
@@ -118,6 +121,7 @@ extension AppDelegate {
                 case .dispatchFailed(.verificationTimedOut, _):
                     // Documented as ambiguous and never auto-retried: only a human
                     // can decide whether to repeat themselves. That is needs-you.
+                    Track.replyOutcome("verification_timed_out", stage: "confirm", agent: sessionId)
                     Earcons.play(.needsYou, gate: earconGate())
                     let card = "Typed it into \(label), but couldn't confirm it landed. "
                         + "Check the tab before repeating yourself. "
@@ -131,11 +135,15 @@ extension AppDelegate {
                     // not archived. The words go to the clipboard, plainly said.
                     Earcons.play(.needsYou, gate: earconGate())
                     let copied = copyTranscriptToClipboard(utteranceId: utteranceId)
+                    Track.replyOutcome("tab_gone", stage: "confirm", agent: sessionId,
+                                       extra: ["clipboard_rescue": .bool(copied)])
                     let card = StateLegend.tabGoneRescueMessage(label: label, copied: copied)
                     Failures.report(.deliveryFailed, reason: "tab not found or target gone", card: card,
                                     session: sessionId)
                     hud.showResult(card, about: (sessionId: sessionId, pid: pid, label: label))
                 case .dispatchFailed(let failure, _):
+                    Track.replyOutcome("dispatch_failed", stage: "confirm", agent: sessionId,
+                                       extra: ["failure": Track.token(from: "\(failure)")])
                     Earcons.play(.needsYou, gate: earconGate())
                     let card = "Couldn't type into \(label): \(failure). "
                         + wordsKept(utteranceId: utteranceId)
@@ -143,6 +151,7 @@ extension AppDelegate {
                                     session: sessionId)
                     hud.showResult(card, about: (sessionId: sessionId, pid: pid, label: label))
                 case .noTarget:
+                    Track.replyOutcome("no_target", stage: "confirm", agent: sessionId)
                     Earcons.play(.needsYou, gate: earconGate())
                     let card = "That reply lost its agent. " + wordsKept(utteranceId: utteranceId)
                     Failures.report(.deliveryFailed, reason: "no target for the reply", card: card,
@@ -153,9 +162,11 @@ extension AppDelegate {
                     // losing callback is audit information, not a new problem
                     // for the user to solve and therefore not a result card.
                     lastStatusLine = "duplicate send suppressed"
+                    Track.replyOutcome("duplicate_suppressed", stage: "confirm", agent: sessionId)
                     Permissions.log("send: duplicate callback suppressed for "
                                     + duplicateId.prefix(8))
                 default:
+                    Track.replyOutcome("unexpected", stage: "confirm", agent: sessionId)
                     Earcons.play(.needsYou, gate: earconGate())
                     hud.showResult("Unexpected result: \(outcome). "
                                    + wordsKept(utteranceId: utteranceId),
@@ -163,6 +174,7 @@ extension AppDelegate {
                 }
             } catch {
                 Permissions.log("confirmAndSend threw: \(error)")
+                Track.replyOutcome("threw", stage: "confirm", agent: sessionId)
                 Earcons.play(.needsYou, gate: earconGate())
                 let card = "Send failed: \(error). " + wordsKept(utteranceId: utteranceId)
                 Failures.report(.deliveryFailed, reason: "confirmAndSend threw: \(error)", card: card,
@@ -180,6 +192,7 @@ extension AppDelegate {
         else { return }
         try? coordinator.dismiss(sessionId: sessionId, through: latest.latestId)
         Permissions.log("dismissed \(sessionId.prefix(8)) through event \(latest.latestId)")
+        Track.record("turn_heard", ["agent_id": Track.hash(sessionId), "via": "dismiss"])
     }
 
     /// Who the next reply would go to, resolved BEFORE the microphone opens.
@@ -268,6 +281,14 @@ extension AppDelegate {
     /// Adopt a decided destination: paint it, and remember it for the send.
     func beginCapture(to destination: ReplyDestination) {
         recordingDestination = destination
+        var started: [String: TrackValue] = ["face_before": .token(hud.state.name),
+                                             "waiting": .int(waitingNow())]
+        switch destination {
+        case .session(let id): started["destination"] = "session"; started["agent_id"] = Track.hash(id)
+        case .launch: started["destination"] = "launch"
+        case .dictation: started["destination"] = "dictation"
+        }
+        Track.record("capture_started", started)
         switch destination {
         case .session(let id):
             let d = describe(session: id)

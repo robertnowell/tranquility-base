@@ -496,6 +496,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // case of all, because it is what a session doing several turns
                     // in a row looks like.
                     turnArrived = true
+                    Track.record("turn_arrived", ["inserted": .int(result.inserted),
+                                                  "face": .token(self.hud.state.name)])
                     self.rebuildMenu()
                 }
                 // Warm the liveness cache off-main first. The probe is a ~0.3s
@@ -674,6 +676,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { @MainActor in
                     guard let self, let speech = self.coordinator?.speech,
                           speech.isSpeaking || speech.isPaused else { return }
+                    Analytics.gesture("shift", phase: "tapped",
+                                      decision: speech.isPaused ? "resumed" : "paused", face: self.hud.state)
                     speech.togglePause()
                 }
                 return
@@ -717,6 +721,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                     .first(where: { $0.sessionId == id }) else {
                     Permissions.log("terminate: \(name) (\(id.prefix(8))) not in agents — already gone")
+                    Track.record("agent_ended", ["agent_id": Track.hash(id), "outcome": "already_gone"])
                     await MainActor.run { self?.refreshGridAfterTerminate() }
                     return
                 }
@@ -732,15 +737,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // seconds while Robert clicked End (31 Aug).
                     expectedCommand: KnownHarnesses.adapter(for: live.harness)
                         .processCommandFragment)
+                let ended: String
                 switch outcome {
                 case .refused(let why):
                     Permissions.log("terminate: \(name) NOT ended — \(why)")
+                    ended = "refused"
                 case .survived:
                     Permissions.log("terminate: \(name) (pid \(live.pid)) survived "
                         + "SIGTERM and SIGKILL, it is wedged, and nothing else can be sent")
-                case .alreadyGone, .died:
-                    break   // SessionTermination.trace has already said it
+                    ended = "survived"
+                case .alreadyGone:
+                    ended = "already_gone"   // SessionTermination.trace has already said it
+                case .died:
+                    ended = "died"
                 }
+                Track.record("agent_ended", ["agent_id": Track.hash(id), "outcome": .token(ended),
+                                             "harness": .token(live.harness), "via": "row_menu"])
                 await MainActor.run { self?.refreshGridAfterTerminate() }
             }
         }
@@ -797,6 +809,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.coordinator?.attachments.staged(for: session) ?? []
         }
         hud.onUnstage = { [weak self] session, path in
+            Track.record("chip_removed", ["agent_id": Track.hash(session)])
             self?.coordinator?.attachments.unstage(path, session: session)
         }
         hud.onFilesDropped = { [weak self] items in
@@ -806,6 +819,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // session died mid-drag — say so instead of eating the file.
                 self?.lastStatusLine = "nothing to attach to yet"
                 Permissions.log("drop: refused, no reply target")
+                Track.record("files_dropped", ["count": .int(items.count), "accepted": false, "staged": 0])
                 return false
             }
             var staged = 0
@@ -831,6 +845,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+            Track.record("files_dropped", [
+                "count": .int(items.count), "accepted": true, "staged": .int(staged),
+                "images": .int(items.filter { if case .imageData = $0 { return true } else { return false } }.count),
+                "during_undo_window": .bool(hud.pendingSendUtteranceId != nil),
+                "agent_id": Track.hash(target.sessionId),
+            ])
             guard staged > 0 else {
                 lastStatusLine = "already attached"
                 return true    // taken, just nothing new — never an error badge
@@ -880,6 +900,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // just filed sits there quietly, still on the panel.
             LampSwitch.turnOff(id)
             Permissions.log("lamp: switched off \(id.prefix(8)) — filed to past agents")
+            Track.record("lamp_switched_off", ["agent_id": Track.hash(id), "via": "click"])
             self.showIdleGrid()
         }
         // The other half of the switch: the list hands a session back.
@@ -889,6 +910,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onRestoreLamp = { [weak self] id in
             LampSwitch.turnOn(id)
             Permissions.log("lamp: switched on \(id.prefix(8)) — back on the grid")
+            Track.record("lamp_switched_on", ["agent_id": Track.hash(id), "via": "past_agents"])
             self?.showIdleGrid()
         }
         hud.onLeaveSettings = { [weak self] in
@@ -956,6 +978,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Permissions.log("roster: \(nowOn ? "added" : "dropped") \(id) to the "
                             + "\(system ? "system" : "ElevenLabs") roster "
                             + "(\(roster.count) on it)")
+            Track.record("roster_changed", ["action": nowOn ? "added" : "dropped",
+                                            "provider": system ? "system" : "elevenlabs",
+                                            "roster_size": .int(roster.count)])
         }
 
         hud.onRosterReordered = { ids in
@@ -963,6 +988,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             VoiceRoster.save(ids.filter { !SystemVoiceCatalog.isSystemVoice($0) })
             VoiceRoster.saveSystem(ids.filter(SystemVoiceCatalog.isSystemVoice))
             Permissions.log("roster: reordered to \(ids.count) entries across both rosters")
+            Track.record("roster_changed", ["action": "reordered", "roster_size": .int(ids.count)])
         }
 
         hud.onShowRecentAudio = { [weak self] in self?.showRecentAudio() }
@@ -994,6 +1020,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("recent-audio: no audio on disk to play")
                 return
             }
+            Track.record("recent_audio", ["action": "played"])
             self.utterancePlayer.toggle(id: id, path: path)
         }
 
@@ -1007,6 +1034,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
             Permissions.log("recent-audio: revealed \(id.prefix(8)) in Finder")
+            Track.record("recent_audio", ["action": "revealed"])
         }
 
         // A row's ↻ — the ONLY path that retries a transcription (ruled
@@ -1020,6 +1048,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 do {
                     if let updated = try await store.retryTranscription(utteranceId: id) {
+                        Track.record("audio_retry", ["via": "recent_row",
+                                                     "outcome": updated.transcriptText == nil ? "no_transcript" : "transcribed"])
                         Permissions.log("recent-audio: retried \(id.prefix(8)) → "
                             + "\(updated.transcriptText.map { "\($0.count) chars" } ?? "no transcript") "
                             + "(\(updated.transcriptProvider ?? "no provider"))")
@@ -1447,6 +1477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// it now covers the already-finished card too.
     func goHomeFromCard(via door: String) {
         Permissions.log("\(door): home")
+        Track.record("go_home", ["via": Track.token(from: door), "face_before": .token(hud.state.name)])
         // Leaving DURING Preparing is the one door out that has to reach into
         // the announcement itself. Nothing has been spoken yet, so stopping the
         // voice stops nothing: the task is still summarizing, and it would

@@ -220,6 +220,23 @@ public enum Track {
     /// Block until queued events are written. Tests and termination.
     public static func flush() { queue.sync {} }
 
+    /// Words in a transcript, as a count. The text itself never leaves.
+    public static func wordCount(_ text: String) -> Int {
+        text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+    }
+
+    /// The reply event, in one place so every outcome carries the same
+    /// shape: which stage decided (capture, before the undo window; confirm,
+    /// after it), what it decided, and how much was said, as counts.
+    public static func replyOutcome(_ outcome: String, stage: String, agent: String? = nil,
+                                    text: String? = nil, extra: [String: TrackValue] = [:]) {
+        var props: [String: TrackValue] = ["outcome": .token(outcome), "stage": .token(stage)]
+        if let agent { props["agent_id"] = hash(agent) }
+        if let text { props["chars"] = .int(text.count); props["words"] = .int(wordCount(text)) }
+        for (k, v) in extra { props[k] = v }
+        record("reply_outcome", props)
+    }
+
     /// Tests only.
     public static func resetForTesting() {
         lock.lock(); defer { lock.unlock() }

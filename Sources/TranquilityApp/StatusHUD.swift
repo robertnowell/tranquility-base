@@ -851,6 +851,8 @@ final class StatusHUD: NSObject {
         else { return }
         onCancelSend = cancel
         onCommitSend = send
+        pendingSendOpenedAt = Date()
+        Track.record("readback_shown", ["seconds_countdown": .int(Int(seconds)), "over_card": .bool(face.hasCard)])
         // The read-back joins the strip instead of taking the stage (ruling
         // item 4): the READBACK placard, the words and the countdown all render
         // under the reply they answer, which is the first time checking one
@@ -879,6 +881,20 @@ final class StatusHUD: NSObject {
             face.body = "\u{201C}\(text)\u{201D}"
         }
         render()
+    }
+
+    /// When the undo window opened, for `pending_send_resolved`'s seconds_open.
+    private var pendingSendOpenedAt: Date?
+
+    /// The undo window closed. One door for the five ways out, so the
+    /// record says how every reply was confirmed or stopped.
+    private func trackPendingSendResolved(_ how: String) {
+        let opened = pendingSendOpenedAt
+        pendingSendOpenedAt = nil
+        Track.record("pending_send_resolved", [
+            "how": .token(how),
+            "seconds_open": .double(opened.map { (Date().timeIntervalSince($0) * 10).rounded() / 10 } ?? 0),
+        ])
     }
 
     /// The sole constructor of a pending-send timer. `render()` is a pure
@@ -919,6 +935,7 @@ final class StatusHUD: NSObject {
         let send = onCommitSend
         onCommitSend = nil
         onCancelSend = nil
+        trackPendingSendResolved("countdown_completed")
         // The bar running out IS the confirmation — the contract completed
         // exactly as displayed, so the stage is yielded before dispatch.
         forceTransition(to: .idle(waiting: 0), because: "countdown completed")
@@ -936,6 +953,7 @@ final class StatusHUD: NSObject {
         countdownBar.isHidden = true
         let send = onCommitSend
         onCommitSend = nil; onCancelSend = nil
+        trackPendingSendResolved("committed_early")
         // Ruled 07 Aug: "when I hit ⌃⌥ from the confirmation readback it should
         // IMMEDIATELY show Sending, and then Sent." The receipt was living
         // inside the dispatch task, so it appeared once the send was already
@@ -958,13 +976,14 @@ final class StatusHUD: NSObject {
     /// recording of its own — holding ⌥ during the window is itself the instruction
     /// to say it again, so restarting from here as well would double-start.
     @discardableResult
-    func cancelPendingSend(restartListening: Bool = true) -> Bool {
+    func cancelPendingSend(restartListening: Bool = true, how: String = "cancelled") -> Bool {
         guard awaitingConfirm else { return false }
         countdownTimer?.invalidate(); countdownTimer = nil
         pendingSendTimerToken = nil
         countdownBar.isHidden = true
         let cancel = onCancelSend
         onCancelSend = nil
+        trackPendingSendResolved(restartListening ? "cancelled_new_capture" : how)
         cancel?(restartListening)
         return true
     }
@@ -988,7 +1007,7 @@ final class StatusHUD: NSObject {
         // for the same reason and has always been the only one that should
         // restart a capture.
         MainActor.assumeIsolated {
-            guard cancelPendingSend(restartListening: false) else { return }
+            guard cancelPendingSend(restartListening: false, how: "cancelled_button") else { return }
             // Stopping the send is only half the button's job. Cancelling used
             // to end here, which stranded the panel: still `.pendingSend`, but
             // with a dead countdown — so `awaitingConfirm` was false, commit
@@ -1105,6 +1124,7 @@ final class StatusHUD: NSObject {
     /// pane happened to be open before it.
     func showAgentSettings() {
         guard transition(to: .settings, because: "settings opened") else { return }
+        Track.record("settings_opened", ["tab": "agents"])
         currentTarget = nil
         face = Face(title: "Agents", body: "How every agent starts, new ones here, "
                     + "revived ones in their own directory.")
@@ -1164,6 +1184,8 @@ final class StatusHUD: NSObject {
         AgentDefaults.save(directory: url.path, for: viewingHarness)
         directoryRow.show(url.path)
         Permissions.log("settings: \(viewingHarness) agent directory set to \(url.path)")
+        Track.record("setting_changed", ["key": "agent_directory", "harness": .token(viewingHarness),
+                                         "value": Track.hash(url.path), "via": "browse"])
     }
 
     /// Push one harness's LAUNCH/DIRECTORY values and placeholders into the
@@ -1196,6 +1218,7 @@ final class StatusHUD: NSObject {
         // A pane is its data. Switching to one and not fetching it is the same
         // bug as a grid row keeping a lamp from the session it used to show.
         if tab != .agents { releaseKeyboard() }
+        Track.record("settings_tab", ["tab": Track.token(from: "\(tab)")])
         onOpenSettingsTab?(tab)
     }
 
@@ -1455,9 +1478,11 @@ final class StatusHUD: NSObject {
             switch door {
             case .hub:
                 Permissions.log("openHub: \(id.prefix(8))")
+                Track.record("door_opened", ["door": "hub", "agent_id": Track.hash(id)])
                 onOpenHub?(id)
             case .report(let path):
                 Permissions.log("openReport: \(path)")
+                Track.record("door_opened", ["door": "report", "agent_id": Track.hash(id)])
                 onOpenReport?(path)
             }
         }
@@ -1517,6 +1542,7 @@ final class StatusHUD: NSObject {
             Permissions.log("notice: refused in \(state.name): \(text)")
             return
         }
+        Track.record("notice_flashed", ["notice": Track.token(from: String(text.prefix(40)))])
         noticeLens = lens
         noticeExpiry?.cancel()
         notice = text
@@ -1713,7 +1739,7 @@ final class StatusHUD: NSObject {
         // FALSE for the same reason the button passes false: whatever is taking
         // the stage is already the next thing, and restarting a capture from
         // here would double-start it.
-        cancelPendingSend(restartListening: false)
+        cancelPendingSend(restartListening: false, how: "left_for_face")
     }
 
     /// Guards `releasePendingSend` against a cancel closure that transitions.
@@ -1730,8 +1756,9 @@ final class StatusHUD: NSObject {
         guard state.ownsStage else { return }
         // A dismissed arm has nothing left to revert to.
         stashBeforeArming = nil
+        Track.record("capture_ended", ["reason": Track.token(from: reason), "face_before": .token(state.name)])
         if awaitingConfirm {
-            cancelPendingSend(restartListening: false)
+            cancelPendingSend(restartListening: false, how: "ended_" + Track.token(from: reason).tokenString)
         } else {
             countdownTimer?.invalidate(); countdownTimer = nil
             pendingSendTimerToken = nil
@@ -1831,6 +1858,7 @@ final class StatusHUD: NSObject {
         // silent for the rest of the session.
         // The user door: hiding is always an explicit act (Dismiss, quit),
         // never a stale resume — so it bypasses the table.
+        Track.record("panel_hidden", ["face_before": .token(state.name), "collapsed": .bool(isCollapsed)])
         forceTransition(to: .hidden, because: "panel hidden")
         currentTarget = nil; currentEventId = nil
         render()
@@ -3458,11 +3486,17 @@ final class StatusHUD: NSObject {
     /// which beats both a dead control and a button named after the pane it can
     /// actually reach. Proposal: docs/design/settings-microphone.html.
     @objc nonisolated func micSettingsTapped() {
-        MainActor.assumeIsolated { onOpenSettings?() }
+        MainActor.assumeIsolated {
+            Track.record("placard_clicked", ["which": "mic_settings", "face": .token(state.name)])
+            onOpenSettings?()
+        }
     }
 
     @objc nonisolated func gearTapped() {
-        MainActor.assumeIsolated { onOpenSettings?() }
+        MainActor.assumeIsolated {
+            Track.record("placard_clicked", ["which": "gear", "face": .token(state.name)])
+            onOpenSettings?()
+        }
     }
 
     // The separate waiting-list face is gone (WS-B): the idle grid IS the list,
@@ -3480,9 +3514,17 @@ final class StatusHUD: NSObject {
         MainActor.assumeIsolated {
             guard let id = sender.identifier?.rawValue else { return }
             guard let row = face.sessionRows.first(where: { $0.id == id }) else {
+                Track.record("row_clicked", ["action": "announce", "agent_id": Track.hash(id), "lamp": "none"])
                 onPickWaiting?(id); return
             }
-            switch SessionRow.action(for: row) {
+            let action = SessionRow.action(for: row)
+            Track.record("row_clicked", [
+                "action": Track.token(from: "\(action)"), "agent_id": Track.hash(id),
+                "lamp": .token(row.lamp.trackName), "read": .token(row.read.trackName),
+                "harness": .token(row.harness ?? "unknown"),
+                "position": .int(face.sessionRows.firstIndex(where: { $0.id == id }) ?? -1),
+            ])
+            switch action {
             case .announce: onPickWaiting?(id)
             // Every live lamp but green lands here, for three different
             // reasons and one verb. Amber already carries its reason in its
@@ -3563,6 +3605,7 @@ final class StatusHUD: NSObject {
         let picked = sender.representedObject as? String
         MainActor.assumeIsolated {
             guard let id = picked else { return }
+            Track.record("row_menu", ["item": "go_to_agent", "agent_id": Track.hash(id), "surface": "grid"])
             onGoToSession?(id)
         }
     }
@@ -3576,6 +3619,7 @@ final class StatusHUD: NSObject {
         MainActor.assumeIsolated {
             guard let id = picked,
                   let row = face.sessionRows.first(where: { $0.id == id }) else { return }
+            Track.record("row_menu", ["item": "end_session", "agent_id": Track.hash(id), "surface": "grid"])
             onTerminateSession?(id, row.name)
         }
     }

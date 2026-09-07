@@ -630,8 +630,12 @@ extension AppDelegate {
         // same table as the pixels, so nothing is announced either.
         guard hud.showPreparing() else {
             Permissions.log("announce: refused, reply flow on stage")
+            Track.record("announcement", ["outcome": "refused_stage", "face": .token(hud.state.name),
+                                          "via": eventId == nil ? "next" : "pick"])
             return
         }
+        let announceVia: TrackValue = eventId == nil ? "next" : "pick"
+        let announceBegan = Date()
         announceTask = Task { @MainActor in
             // Silence the old one first, then wait for it to actually be over.
             coordinator.speech.stop()
@@ -730,6 +734,8 @@ extension AppDelegate {
                             eventId: announcement.event.sessionId)
                         else {
                             Permissions.log("announce: stage refused, not speaking")
+                            Track.record("announcement", ["outcome": "refused_stage", "via": announceVia,
+                                                          "agent_id": Track.hash(announcement.event.sessionId)])
                             return false
                         }
                         self.activeConversation = (
@@ -773,12 +779,22 @@ extension AppDelegate {
                 // switch, no branch can be added that forgets it.
                 guard !Task.isCancelled else {
                     Permissions.log("announce: superseded, not reporting")
+                    Track.record("announcement", ["outcome": "superseded", "via": announceVia])
                     return
                 }
 
+                let seconds = Int(Date().timeIntervalSince(announceBegan))
                 switch outcome {
                 case .spoke(let announcement):
                     Permissions.log("announce: spoke via \(announcement.via)")
+                    Track.record("announcement", [
+                        "outcome": "spoke", "via": announceVia, "seconds": .int(seconds),
+                        "agent_id": Track.hash(announcement.event.sessionId),
+                        "voice": Track.token(from: "\(announcement.via)"),
+                        "degraded": .bool(announcement.degraded != nil),
+                        "chars_spoken": .int(announcement.spoken.text.count),
+                        "replayed": .bool(replayId != nil),
+                    ])
                     if let degraded = announcement.degraded {
                         // Heard, but in the plainer voice. Say why, or an outage
                         // reads as the app just sounding worse for no reason.
@@ -804,15 +820,19 @@ extension AppDelegate {
                                                              priming: true) {
                                 Permissions.log("homebase: \(file.lastPathComponent) "
                                                 + "for \(spokenSession.prefix(8))")
+                                Track.record("hub_written", ["agent_id": Track.hash(spokenSession), "ok": true])
                             }
                         } catch {
                             Permissions.log("homebase FAILED: \(error)")
+                            Track.record("hub_written", ["agent_id": Track.hash(spokenSession), "ok": false])
                         }
                     }
                     // Ruling 14 reversed (12 Aug): fully spoken dwells. The card
                     // stays until a gesture moves it — the grid is one tap away,
                     // not four seconds away.
                 case .interrupted(let failure):
+                    Track.record("announcement", ["outcome": failure == nil ? "interrupted" : "playback_failed",
+                                                  "via": announceVia, "seconds": .int(seconds)])
                     if let failure {
                         // Nobody asked for this one. Say so, rather than letting a
                         // dropped connection masquerade as something you chose.
@@ -830,15 +850,19 @@ extension AppDelegate {
                         showIdleGrid(note: "Stopped.")
                     }
                 case .held(let reason):
+                    Track.record("announcement", ["outcome": "held", "via": announceVia,
+                                                  "reason": Track.token(from: reason)])
                     lastStatusLine = "held: \(reason)"
                     showIdleGrid(note: "Holding. \(reason).")
                 case .nothingWaiting:
                     Permissions.log("announce: nothingWaiting")
+                    Track.record("announcement", ["outcome": "nothing_waiting", "via": announceVia])
                     lastStatusLine = "nothing waiting"
                     showIdleGrid()
                 }
             } catch {
                 Permissions.log("announce: threw \(error)")
+                Track.record("announcement", ["outcome": "threw", "via": announceVia])
                 lastStatusLine = "announce failed: \(error)"
             }
             rebuildMenu()

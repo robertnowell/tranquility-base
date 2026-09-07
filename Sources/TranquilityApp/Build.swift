@@ -389,6 +389,7 @@ extension StatusHUD {
         harnessPicker.onMakeDefault = { [weak self] harness in
             guard let self else { return }
             AgentDefaults.defaultHarness = harness
+            Track.record("setting_changed", ["key": "default_harness", "value": .token(harness)])
             self.harnessPicker.update(selected: harness, defaultHarness: harness)
             self.onDefaultHarnessChanged?()
         }
@@ -398,6 +399,8 @@ extension StatusHUD {
         launchRow.onCommit = { [weak self] in
             guard let self else { return }
             AgentDefaults.save($0, for: self.viewingHarness)
+            Track.record("setting_changed", ["key": "launch_command", "harness": .token(self.viewingHarness),
+                                             "value": $0.isEmpty ? "default" : "custom"])
         }
         directoryRow = SettingRowView(width: Self.gridWidth, label: "DIRECTORY",
                                       placeholder: AgentDefaults.fallbackDirectory,
@@ -405,6 +408,8 @@ extension StatusHUD {
         directoryRow.onCommit = { [weak self] in
             guard let self else { return }
             AgentDefaults.save(directory: $0, for: self.viewingHarness)
+            Track.record("setting_changed", ["key": "agent_directory", "harness": .token(self.viewingHarness),
+                                             "value": Track.hash($0)])
         }
         directoryRow.onBrowse = { [weak self] in self?.pickAgentDirectory() }
         harnessPicker.isHidden = true
@@ -666,12 +671,20 @@ extension StatusHUD {
         let column = CollapsedStrip(frame: NSRect(x: 0, y: 0,
                                                   width: CollapsedStrip.width,
                                                   height: CollapsedStrip.height))
-        column.onExpand = { [weak self] in self?.setCollapsed(false) }
-        column.onDismiss = { [weak self] in self?.dismiss() }
+        column.onExpand = { [weak self] in
+            Track.record("strip_clicked", ["band": "logo_expand"])
+            self?.setCollapsed(false)
+        }
+        column.onDismiss = { [weak self] in
+            Track.record("strip_clicked", ["band": "dismiss"])
+            self?.dismiss()
+        }
         column.onNewAgent = { [weak self] in
+            Track.record("strip_clicked", ["band": "new_agent"])
             MainActor.assumeIsolated { self?.onNewSession?() }
         }
         column.onPick = { [weak self] id in
+            Track.record("strip_clicked", ["band": "lamp", "agent_id": Track.hash(id)])
             MainActor.assumeIsolated { self?.onPickWaiting?(id) }
         }
         panel.contentView = background
