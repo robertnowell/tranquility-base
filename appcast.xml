@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1097</title>
+      <sparkle:version>1097</sparkle:version>
+      <sparkle:shortVersionString>0.3.1097</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 07 Sep 2026 01:28:12 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1097-8c79293a4/TranquilityBase-0.3.1097.dmg" type="application/octet-stream" length="11742833" sparkle:edSignature="yQ3dkC29POMc6WRmwryzNJfOvjY+LalwXnwK2Y3w1gXt5BqtYwtGFfRwL+C2jcwwHVXqqLf3FxHe+2uPiuG9Bw==" />
+    </item>
+    <item>
       <title>Version 0.3.1096</title>
       <sparkle:version>1096</sparkle:version>
       <sparkle:shortVersionString>0.3.1096</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Fri, 04 Sep 2026 15:47:00 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1088-1f4a7a558/TranquilityBase-0.3.1088.dmg" type="application/octet-stream" length="9261842" sparkle:edSignature="Uw5lcDqqIbnO/v+LiIewMy6hyOVA1/4OipBfzWogqbaIXs12uwapZjk6zwxbdpSMqQGfLeX2+NCeH5nuJVonBw==" />
     </item>
-    <item>
-      <title>Version 0.3.1087</title>
-      <sparkle:version>1087</sparkle:version>
-      <sparkle:shortVersionString>0.3.1087</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Fri, 04 Sep 2026 14:55:55 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1087-cc8a39acd/TranquilityBase-0.3.1087.dmg" type="application/octet-stream" length="9260136" sparkle:edSignature="WzSgyeIP4NmaBMi5ZZOEroLYZ847rT3LexVZAoS0iL0gkhE+xiXB9aeyPpJCN3HSyHr8hrf8O00LtOKvQCVBAg==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: /WCtgycMdN1fVDuBgVq0eplq/ejFI2pLa6Lcj1N2bkKRyEyEMr4A/9PNz2iLBGAlJTDqRA9DiUpufXAMwds6Dw==
-length: 6450
+edSignature: HBegMgPzLhXIvpE1qFHpl7Z5DgLVPCMbEQn2koFGFQc5l51ObIbse63yKMfGtmsGDeuhvhzwG6J6PmoQEovXCA==
+length: 6451
 -->
