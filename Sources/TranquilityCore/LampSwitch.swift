@@ -144,6 +144,36 @@ public enum LampSwitch {
         return on
     }
 
+    /// Carry the user's session-level switch when the same live pane changes
+    /// conversation identity (Codex prompt-edit forks). A preference already
+    /// recorded on the destination wins: it is necessarily the more specific
+    /// and newer action. Idempotent so concurrent ownership readers can safely
+    /// observe the same migration.
+    public static func rekey(from oldSessionId: String, to newSessionId: String,
+                             at url: URL = LampSwitch.url,
+                             onAt onUrl: URL = LampSwitch.onURL) {
+        guard oldSessionId != newSessionId else { return }
+        var off = load(from: url)
+        var on = load(from: onUrl)
+        let destinationAlreadyDecided = off.contains(newSessionId) || on.contains(newSessionId)
+        let wasOff = off.remove(oldSessionId) != nil
+        let wasOn = on.remove(oldSessionId) != nil
+
+        if !destinationAlreadyDecided {
+            if wasOn {
+                on.insert(newSessionId)
+                off.remove(newSessionId)
+            } else if wasOff {
+                off.insert(newSessionId)
+                on.remove(newSessionId)
+            }
+        }
+        if wasOff || wasOn {
+            save(off, to: url)
+            save(on, to: onUrl)
+        }
+    }
+
     /// Drop ids for sessions that no longer exist anywhere.
     ///
     /// Without this the file grows for the life of the install, and every entry

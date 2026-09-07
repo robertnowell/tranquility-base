@@ -66,9 +66,17 @@ public protocol SessionOwnershipStore: Sendable {
     func current(sessionId: String) -> SessionOwnershipRecord?
     func remove(sessionId: String)
     func all() -> [SessionOwnershipRecord]
+    /// Move one live attachment to the thread it now owns. Implementations
+    /// that cannot make the remove+insert one operation decline by returning
+    /// nil; a partial identity move is worse than a stale record.
+    func rekey(from oldSessionId: String, to newSessionId: String,
+               expectedPid: Int) -> SessionOwnershipRecord?
 }
 
 extension SessionOwnershipStore {
+    public func rekey(from oldSessionId: String, to newSessionId: String,
+                      expectedPid: Int) -> SessionOwnershipRecord? { nil }
+
     /// The record for a session, ONLY if its pid is still actually alive —
     /// never hand back a stale pid without checking, the same "never trust a
     /// stale live-lookup" discipline `TmuxOwnership` already lives by. Does
@@ -133,14 +141,45 @@ extension SessionOwnershipStore {
     /// directory and both said "Projects".
     public func liveNonRegistrySessions(
         status: (String) -> String? = { _ in nil },
-        name: (String) -> String? = { _ in nil }
+        name: (String) -> String? = { _ in nil },
+        activeSessionId: (SessionOwnershipRecord) -> String? = {
+            CodexProcessIdentity.activeThreadId(for: $0)
+        },
+        migratePreference: (String, String) -> Void = {
+            LampSwitch.rekey(from: $0, to: $1)
+        }
     ) -> [LiveSession] {
         all().filter { $0.harness != ClaudeCodeAdapter().id && ProcessProbe.isAlive($0.pid) }
-            .map { LiveSession(harness: $0.harness,
-                               pid: $0.pid, sessionId: $0.sessionId, cwd: $0.cwd,
-                               status: status($0.sessionId),
-                               name: name($0.sessionId), waitingFor: nil) }
+            .map { original in
+                var record = original
+                if let currentId = activeSessionId(original),
+                   currentId.caseInsensitiveCompare(original.sessionId) != .orderedSame {
+                    if let migrated = rekey(from: original.sessionId, to: currentId,
+                                            expectedPid: original.pid) {
+                        migratePreference(original.sessionId, currentId)
+                        SessionOwnershipReconciliation.trace?(
+                            "ownership: Codex \(original.sessionId.prefix(8)) → "
+                            + "\(currentId.prefix(8)), pid \(original.pid), "
+                            + "pane \(original.paneId ?? "?")")
+                        record = migrated
+                    } else if let alreadyMoved = current(sessionId: currentId),
+                              alreadyMoved.pid == original.pid {
+                        // Another caller won the same race after `all()` was
+                        // read. Return its answer now instead of flashing the
+                        // parent row for one refresh.
+                        record = alreadyMoved
+                    }
+                }
+                return LiveSession(harness: record.harness,
+                                   pid: record.pid, sessionId: record.sessionId, cwd: record.cwd,
+                                   status: status(record.sessionId),
+                                   name: name(record.sessionId), waitingFor: nil)
+            }
     }
+}
+
+public enum SessionOwnershipReconciliation {
+    public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 }
 
 /// Default, local implementation — one JSON file, same shape
@@ -206,5 +245,26 @@ public final class FileSessionOwnershipStore: SessionOwnershipStore, @unchecked 
     public func all() -> [SessionOwnershipRecord] {
         lock.lock(); defer { lock.unlock() }
         return Array(load().values)
+    }
+
+    public func rekey(from oldSessionId: String, to newSessionId: String,
+                      expectedPid: Int) -> SessionOwnershipRecord? {
+        lock.lock(); defer { lock.unlock() }
+        var records = load()
+        guard var source = records[oldSessionId], source.pid == expectedPid else { return nil }
+
+        // A different live process already answering to the child id is a
+        // conflict, not an ownership transfer. A dead record may be replaced:
+        // it cannot own the writer lock `activeSessionId` just observed.
+        if let destination = records[newSessionId], destination.pid != expectedPid,
+           ProcessProbe.isAlive(destination.pid) {
+            return nil
+        }
+
+        records.removeValue(forKey: oldSessionId)
+        source.sessionId = newSessionId
+        records[newSessionId] = source
+        save(records)
+        return source
     }
 }

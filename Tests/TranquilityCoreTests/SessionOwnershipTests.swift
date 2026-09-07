@@ -58,6 +58,47 @@ final class SessionOwnershipTests: XCTestCase {
         XCTAssertEqual(store.current(sessionId: "s1")?.pid, 2)
     }
 
+    func testRekeyMovesOneAttachmentWithoutChangingItsPaneFacts() throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let attached = Date(timeIntervalSince1970: 1234)
+        store.record(SessionOwnershipRecord(
+            sessionId: "parent", harness: "codex", pid: 42,
+            paneId: "%7", socketName: "tb", sessionName: "tb-one",
+            paneTty: "/dev/ttys014", cwd: "/Projects", attachedAt: attached))
+
+        let moved = store.rekey(from: "parent", to: "child", expectedPid: 42)
+
+        XCTAssertNil(store.current(sessionId: "parent"))
+        XCTAssertEqual(store.current(sessionId: "child"), moved)
+        XCTAssertEqual(moved?.sessionId, "child")
+        XCTAssertEqual(moved?.paneId, "%7")
+        XCTAssertEqual(moved?.paneTty, "/dev/ttys014")
+        XCTAssertEqual(moved?.attachedAt, attached)
+    }
+
+    func testRekeyRefusesARecordWhosePidChangedAfterItWasObserved() throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        store.record(SessionOwnershipRecord(sessionId: "parent", harness: "codex", pid: 42))
+
+        XCTAssertNil(store.rekey(from: "parent", to: "child", expectedPid: 99))
+        XCTAssertNotNil(store.current(sessionId: "parent"))
+        XCTAssertNil(store.current(sessionId: "child"))
+    }
+
+    func testRekeyRefusesToOverwriteADifferentLiveOwner() throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let livePid = Int(ProcessInfo.processInfo.processIdentifier)
+        store.record(SessionOwnershipRecord(sessionId: "parent", harness: "codex", pid: 42))
+        store.record(SessionOwnershipRecord(sessionId: "child", harness: "codex", pid: livePid))
+
+        XCTAssertNil(store.rekey(from: "parent", to: "child", expectedPid: 42))
+        XCTAssertEqual(store.current(sessionId: "parent")?.pid, 42)
+        XCTAssertEqual(store.current(sessionId: "child")?.pid, livePid)
+    }
+
     func testAllReturnsEveryHarnessTogether() throws {
         let (store, dir) = makeStore()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -144,6 +185,107 @@ final class SessionOwnershipTests: XCTestCase {
 
         store.record(SessionOwnershipRecord(sessionId: "codex-1", harness: "codex", pid: deadPid))
         XCTAssertTrue(store.liveNonRegistrySessions().isEmpty)
+    }
+
+    func testLiveNonRegistrySessionsRekeysACodexForkBeforeDecoratingIt() throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let livePid = Int(ProcessInfo.processInfo.processIdentifier)
+        store.record(SessionOwnershipRecord(
+            sessionId: "parent", harness: "codex", pid: livePid,
+            paneId: "%12", paneTty: "/dev/ttys014", cwd: "/Projects"))
+        var preferenceMove: (String, String)?
+
+        let live = store.liveNonRegistrySessions(
+            status: { $0 == "child" ? "busy" : nil },
+            name: { $0 == "child" ? "Adapt tariff refund document" : nil },
+            activeSessionId: { _ in "child" },
+            migratePreference: { preferenceMove = ($0, $1) })
+
+        XCTAssertEqual(live.map(\.sessionId), ["child"])
+        XCTAssertEqual(live.first?.status, "busy")
+        XCTAssertEqual(live.first?.name, "Adapt tariff refund document")
+        XCTAssertNil(store.current(sessionId: "parent"))
+        XCTAssertEqual(store.current(sessionId: "child")?.pid, livePid)
+        XCTAssertEqual(preferenceMove?.0, "parent")
+        XCTAssertEqual(preferenceMove?.1, "child")
+    }
+
+    func testNoRuntimeIdentityAnswerLeavesOwnershipUntouched() throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let livePid = Int(ProcessInfo.processInfo.processIdentifier)
+        store.record(SessionOwnershipRecord(sessionId: "parent", harness: "codex", pid: livePid))
+
+        let live = store.liveNonRegistrySessions(
+            activeSessionId: { _ in nil }, migratePreference: { _, _ in
+                XCTFail("no identity migration should move a preference")
+            })
+
+        XCTAssertEqual(live.map(\.sessionId), ["parent"])
+        XCTAssertNotNil(store.current(sessionId: "parent"))
+    }
+}
+
+final class CodexProcessIdentityTests: XCTestCase {
+    private let locks = URL(fileURLWithPath: "/Users/test/.codex/thread-writer-locks")
+    private let parent = "01a07cf2-a32a-77d0-b806-e9c3398d9da4"
+    private let child = "01a07d1d-a9b8-7e73-932b-7be43ca5c032"
+
+    func testOneHeldWriterLockNamesTheActiveThread() {
+        let output = """
+        p63621
+        f52
+        n/Users/test/.codex/thread-writer-locks/\(child).lock
+        """
+        XCTAssertEqual(CodexProcessIdentity.threadId(lsofOutput: output, locks: locks), child)
+    }
+
+    func testNoHeldWriterLockIsNotAnAnswer() {
+        XCTAssertNil(CodexProcessIdentity.threadId(lsofOutput: "p63621\nf52", locks: locks))
+    }
+
+    func testTwoHeldWriterLocksAreAmbiguousRatherThanNewestWins() {
+        let output = """
+        p63621
+        f51
+        n/Users/test/.codex/thread-writer-locks/\(parent).lock
+        f52
+        n/Users/test/.codex/thread-writer-locks/\(child).lock
+        """
+        XCTAssertNil(CodexProcessIdentity.threadId(lsofOutput: output, locks: locks))
+    }
+
+    func testNonUuidAndNestedFilesCannotBecomeThreadIdentity() {
+        let output = """
+        p63621
+        n/Users/test/.codex/thread-writer-locks/.coordination.lock
+        n/Users/test/.codex/thread-writer-locks/nested/\(child).lock
+        """
+        XCTAssertNil(CodexProcessIdentity.threadId(lsofOutput: output, locks: locks))
+    }
+
+    func testTtyNormalizationTreatsDevPrefixAsPresentationOnly() {
+        XCTAssertEqual(CodexProcessIdentity.normalizedTty("/dev/ttys014"), "ttys014")
+        XCTAssertEqual(CodexProcessIdentity.normalizedTty("ttys014"), "ttys014")
+    }
+
+    func testLsofQueryAvoidsTheDirectorySelectorThatReturnsFailureOnMacOS() {
+        XCTAssertEqual(CodexProcessIdentity.lsofArguments(pid: 63621),
+                       ["-p", "63621", "-Fn"])
+    }
+
+    func testExistingRecordedLockIsTheFastPathWithoutNeedingATty() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-locks-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data().write(to: dir.appendingPathComponent(parent + ".lock"))
+        let record = SessionOwnershipRecord(
+            sessionId: parent, harness: CodexAdapter().id,
+            pid: Int(ProcessInfo.processInfo.processIdentifier), paneTty: nil)
+
+        XCTAssertEqual(CodexProcessIdentity.activeThreadId(for: record, locks: dir), parent)
     }
 }
 
