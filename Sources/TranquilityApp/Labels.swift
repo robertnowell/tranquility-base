@@ -104,6 +104,16 @@ final class CardBodyLabel: NSTextField {
 
     override var acceptsFirstResponder: Bool { acceptsPress(NSApp.currentEvent) }
 
+    /// Card paste: a press on the words is a press on the card. Fired before
+    /// the selection machinery runs, so arming never depends on whether the
+    /// press became a selection.
+    var onPress: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onPress?()
+        super.mouseDown(with: event)
+    }
+
     /// New words, no selection.
     ///
     /// Guarded on the WORDS rather than on the assignment: `paintInk` rewrites

@@ -1683,6 +1683,8 @@ final class StatusHUD: NSObject {
     /// some call site forgot, and the forgetting was silent.
     private func leaving(for next: PanelState) {
         releasePendingSend(for: next)
+        // An armed card that changes face is no longer the card you clicked.
+        releasePaste(because: "face changed to \(next.name)", repaint: false)
     }
 
     /// What ARRIVING somewhere owes, wherever the arrival came from.
@@ -2134,9 +2136,12 @@ final class StatusHUD: NSObject {
         // one unforgivable bug.
         // Two faces ask for typing now — the list's filter and settings'
         // launch/directory rows — and every other one gives the keyboard back.
+        // Card paste is the third borrower, and the only one a card face
+        // holds: the baseline leaves it alone while armed, and `leaving`
+        // ends it the moment the face changes.
         switch state {
         case .pastAgents, .settings: break
-        default: releaseKeyboard()
+        default: if !pasteArmed { releaseKeyboard() }
         }
         gearButton.isHidden = false; backButton.isHidden = true
         // Only the grid can be collapsed: a card is a conversation in progress
@@ -2429,6 +2434,23 @@ final class StatusHUD: NSObject {
         // slow-transcription tick unhides its own actions later and re-runs
         // this.)
         updateActionRowVisibility()
+
+        // Card paste: the ring and the line are DERIVED from the panel's own
+        // flag, the way chips are derived from the tray, so neither can
+        // outlive the keyboard that licensed them. Written here, above the
+        // one resize, so an armed card is measured with its line already in
+        // place rather than resized a second time on every tick.
+        let armed = pasteArmed
+        surfaceView?.layer?.borderWidth = armed ? 1 : 0
+        surfaceView?.layer?.borderColor = armed ? StateLegend.Palette.accent.cgColor : nil
+        if armed, let target = replyTargetForDrop?() {
+            // The key carries its NAME, never a bare mark.
+            let line = "Command-V pastes to \(target.label) \u{00B7} Escape releases"
+            let composed = pasteNote.map { "\(line) \u{00B7} \($0)" } ?? line
+            hintLabel.stringValue = [composed, hintLabel.stringValue]
+                .filter { !$0.isEmpty }.joined(separator: "\n")
+        }
+
         // And the same rule for the line under it: an empty hint is not a line.
         syncHintVisibility()
 
@@ -2885,10 +2907,11 @@ final class StatusHUD: NSObject {
     /// keep in step (the five-booleans lesson, applied to data instead of
     /// state).
     var stagedFragments: ((String) -> [String])?
-    /// A drop landed on the panel. The app resolves the target, persists
-    /// image data that has no file behind it, and stages. Returns false when
-    /// it could not be taken, so the surface can say so instead of eating it.
-    var onFilesDropped: (([DroppedItem]) -> Bool)?
+    /// Items arrived, by drop or by paste. The app resolves the target,
+    /// persists image data that has no file behind it, and stages. Returns
+    /// false when it could not be taken, so the surface can say so instead
+    /// of eating it.
+    var onItemsStaged: (([DroppedItem], StagingSource) -> Bool)?
     /// One chip's ✕: unstage that exact fragment for this session.
     var onUnstage: ((_ session: String, _ fragment: String) -> Void)?
 
@@ -3203,7 +3226,9 @@ final class StatusHUD: NSObject {
     /// safe to call when it was never taken: a panel that cannot become key
     /// cannot be holding it.
     private func releaseKeyboard() {
-        guard let panel, panel.acceptsKey else { return }
+        guard let panel else { return }
+        panel.pasteArmed = false
+        guard panel.acceptsKey else { return }
         panel.acceptsKey = false
         panel.makeFirstResponder(nil)
         panel.resignKey()
@@ -3211,6 +3236,80 @@ final class StatusHUD: NSObject {
         // rather than leaving a keyboard nobody owns.
         panel.orderFront(nil)
     }
+
+    // MARK: - Card paste
+
+    /// Command-V on the card (ruled 7 Sep). The panel is non-activating and
+    /// never key, so a paste borrows the keyboard the way Settings borrows
+    /// it, but narrower: only a press on the card takes it, and anything that
+    /// moves your attention elsewhere gives it back: another window taking
+    /// key (`ConsolePanel.resignKey`), a stray key, Escape, a face change.
+    /// Nothing arms it but a hand. Command-V is never watched system-wide;
+    /// the only route in is the Edit menu's key equivalent, which reaches
+    /// the panel only while it is key, which only a press makes it.
+    var pasteArmed: Bool { panel?.pasteArmed ?? false }
+
+    /// The pasteboard a paste reads. A drill points this at a private board
+    /// so the user's clipboard is neither read nor clobbered.
+    var pasteboardForTesting: NSPasteboard?
+
+    /// The hint's second sentence after a refused paste. Cleared by the next
+    /// arm or paste, so it cannot outlive the moment it explains.
+    private var pasteNote: String?
+
+    func armPaste(via door: String) {
+        guard let panel, let target = replyTargetForDrop?() else { return }
+        switch state {
+        case .settings, .pastAgents, .hidden: return
+        default: break
+        }
+        pasteNote = nil
+        guard !panel.pasteArmed else { return }
+        panel.pasteArmed = true
+        panel.acceptsKey = true
+        panel.makeKeyAndOrderFront(nil)
+        Permissions.log("paste: armed for \(target.sessionId.prefix(8)) via \(door)")
+        Track.record("paste_armed", ["via": .token(door)])
+        render()
+    }
+
+    /// Give the keyboard back. `repaint` is false from inside a transition,
+    /// whose own render follows.
+    func releasePaste(because reason: String, repaint: Bool) {
+        guard let panel, panel.pasteArmed else { return }
+        Permissions.log("paste: released (\(reason))")
+        releaseKeyboard()
+        if repaint { render() }
+    }
+
+    /// Command-V arrived while armed. Read once, stage through the same
+    /// handler a drop uses, and stay armed: a second paste is a second chip.
+    func pasteIntoTray() {
+        guard pasteArmed else { return }
+        guard let target = replyTargetForDrop?() else {
+            pasteNote = "nothing to attach to yet"
+            render(); return
+        }
+        let board = pasteboardForTesting ?? NSPasteboard.general
+        let reading = DropSurfaceView.read(board, acceptsText: true)
+        if let refusal = reading.refusal {
+            pasteNote = refusal
+            Track.record("pasted", ["accepted": false, "reason": "too_large"])
+            render(); return
+        }
+        guard !reading.items.isEmpty else {
+            pasteNote = "nothing to paste"
+            Track.record("pasted", ["accepted": false, "reason": "empty"])
+            render(); return
+        }
+        pasteNote = nil
+        _ = onItemsStaged?(reading.items, .paste)
+        Permissions.log("paste: \(reading.items.count) item(s) for \(target.sessionId.prefix(8))")
+        render()
+    }
+
+    /// What the armed card says, for the drill.
+    var pasteHintForTesting: String { hintLabel?.stringValue ?? "" }
 
 
 

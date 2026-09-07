@@ -806,8 +806,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSWorkspace.shared.open(url)
             }
         }
-        // The message tray's wires. File drops are one producer today;
-        // handoff context is another, and both stage ordinary strings.
+        // The message tray's wires. File drops, card paste and handoff
+        // context are its producers, and all three stage ordinary strings.
         //
         // Answered from a CACHED tuple, never a live probe: render() calls
         // this on every repaint, and resolveReplyContext shells out to
@@ -821,17 +821,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Track.record("chip_removed", ["agent_id": Track.hash(session)])
             self?.coordinator?.attachments.unstage(fragment, session: session)
         }
-        hud.onFilesDropped = { [weak self] items in
+        hud.onItemsStaged = { [weak self] items, via in
+            let event = via == .drop ? "files_dropped" : "pasted"
             guard let self, let coordinator, let target = dropTarget else {
                 // Refused rather than swallowed. The overlay never appears
                 // without a target, so this is the race where the last
                 // session died mid-drag — say so instead of eating the file.
                 self?.lastStatusLine = "nothing to attach to yet"
-                Permissions.log("drop: refused, no reply target")
-                Track.record("files_dropped", ["count": .int(items.count), "accepted": false, "staged": 0])
+                Permissions.log("\(via.rawValue): refused, no reply target")
+                Track.record(event, ["count": .int(items.count), "accepted": false, "staged": 0])
                 return false
             }
             var staged = 0
+            var images = 0
             for item in items {
                 switch item {
                 case .file(let path):
@@ -839,15 +841,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if coordinator.attachments.stage(fragment, session: target.sessionId) {
                         staged += 1
                     }
+                case .text(let text):
+                    // Already send-ready: the tray stores what will be typed.
+                    if coordinator.attachments.stage(text, session: target.sessionId) {
+                        staged += 1
+                    }
                 case .imageData(let data, let ext):
-                    // A drag out of a browser has no file behind it. It goes
-                    // to disk BEFORE it is staged — a chip pointing at bytes
-                    // that live only in a pasteboard would break the moment
-                    // the drag ended, and the session needs a path it can
+                    // A drag out of a browser, or a screenshot on the
+                    // clipboard, has no file behind it. It goes to disk
+                    // BEFORE it is staged — a chip pointing at bytes that
+                    // live only in a pasteboard would break the moment the
+                    // drag ended, and the session needs a path it can
                     // actually open. Content-hashed, so re-dropping the same
                     // image is the same chip rather than a second copy.
+                    images += 1
                     guard let path = Self.persistDroppedImage(data, ext: ext) else {
-                        Permissions.log("drop: could not persist \(data.count) bytes")
+                        Permissions.log("\(via.rawValue): could not persist \(data.count) bytes")
                         continue
                     }
                     let fragment = AttachmentTray.quoted(path)
@@ -856,9 +865,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
-            Track.record("files_dropped", [
+            Track.record(event, [
                 "count": .int(items.count), "accepted": true, "staged": .int(staged),
-                "images": .int(items.filter { if case .imageData = $0 { return true } else { return false } }.count),
+                "images": .int(images),
                 "during_undo_window": .bool(hud.pendingSendUtteranceId != nil),
                 "agent_id": Track.hash(target.sessionId),
             ])
@@ -867,8 +876,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return true    // taken, just nothing new — never an error badge
             }
             let total = coordinator.attachments.staged(for: target.sessionId).count
-            lastStatusLine = "\(staged) file\(staged == 1 ? "" : "s") attached to \(target.label)"
-            Permissions.log("drop: staged \(staged) for "
+            lastStatusLine = via == .paste
+                ? "pasted to \(target.label)"
+                : "\(staged) file\(staged == 1 ? "" : "s") attached to \(target.label)"
+            Permissions.log("\(via.rawValue): staged \(staged) for "
                             + "\(target.sessionId.prefix(8)) (\(total) total)")
             // A drop during the undo window changes THIS message, not a
             // mysterious future one. Core binds the newly staged fragments to the

@@ -1,4 +1,5 @@
 import AppKit
+import TranquilityCore
 
 /// One dragged item, already resolved to something durable. A file drag
 /// carries a path; a drag out of a browser carries bitmap data with no
@@ -10,6 +11,27 @@ import AppKit
 enum DroppedItem {
     case file(String)
     case imageData(Data, suggestedName: String)
+    /// Clipboard prose, staged verbatim. Only a paste produces this: a drag
+    /// keeps its file-then-image reading, because a browser image drag also
+    /// carries its URL as text and the image is what was meant.
+    case text(String)
+}
+
+/// Where a batch of items came from. The handler stages them identically;
+/// only the receipt line and the analytics event say which door they used.
+enum StagingSource: String {
+    case drop, paste
+}
+
+/// One pasteboard, read into items, with the reason when it could not be.
+///
+/// `refusal` is a sentence for the hint line, present when the pasteboard held
+/// something we understood but would not take: an item over the cap. It is nil
+/// when the pasteboard simply held nothing usable, which the caller words for
+/// itself ("nothing to paste").
+struct PasteboardReading {
+    var items: [DroppedItem] = []
+    var refusal: String?
 }
 
 /// The panel's whole surface, as a drag destination.
@@ -76,29 +98,73 @@ final class DropSurfaceView: NSView {
         return onDrop?(dropped) ?? false
     }
 
-    /// Files first, bitmap second. A Finder drag advertises both a file URL
-    /// and a preview image; taking the image would copy a file that already
-    /// has a perfectly good path, and hand the session a name like
-    /// "pasted-3f2a.png" instead of its own.
+    /// A press on the surface that no control claimed: the card's own click.
+    /// The panel forwards it to the paste arm; the surface knows nothing about
+    /// keyboards, only that a hand landed on it.
+    var onPress: (() -> Void)?
+
+    /// The panel is never key, so every click on it is a "first" click. Without
+    /// this the press would only order the window and never reach `mouseDown`.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        onPress?()
+        super.mouseDown(with: event)
+    }
+
     private func items(from sender: any NSDraggingInfo) -> [DroppedItem] {
-        let board = sender.draggingPasteboard
+        Self.read(sender.draggingPasteboard, acceptsText: false).items
+    }
+
+    /// Anything pasted or dropped over this many bytes is refused. Ruled 7 Sep
+    /// ("cap the size of pasted elements to, like, 20 megabytes just to be
+    /// safe"). Files are exempt: a path is a few bytes whatever it names.
+    static let itemCap = 20 * 1024 * 1024
+
+    /// Files first, text second, bitmap last. A Finder copy advertises a file
+    /// URL, the filename as text, and a preview image; the path is the thing.
+    /// A spreadsheet cell carries text and a rendered image; the text is the
+    /// thing. Only when nothing else is offered is an image what was meant,
+    /// and a drag never takes text at all (see `DroppedItem.text`).
+    ///
+    /// One reader for both doors: a drag pasteboard and the clipboard are the
+    /// same class, so paste is this function pointed at `.general`.
+    static func read(_ board: NSPasteboard, acceptsText: Bool) -> PasteboardReading {
         if let urls = board.readObjects(forClasses: [NSURL.self],
                                         options: [.urlReadingFileURLsOnly: true]) as? [URL],
            !urls.isEmpty {
-            return urls.map { .file($0.path) }
+            return PasteboardReading(items: urls.map { .file($0.path) })
         }
-        // A drag with no file behind it: PNG if offered, else the TIFF every
-        // AppKit drag carries, re-encoded so what lands on disk is a format
+        if acceptsText, let raw = board.string(forType: .string) {
+            let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                let bytes = text.utf8.count
+                guard bytes <= itemCap else {
+                    return PasteboardReading(refusal: "text too large to paste (\(megabytes(bytes)), limit 20 MB)")
+                }
+                return PasteboardReading(items: [.text(text)])
+            }
+        }
+        // No file behind it: PNG if offered, else the TIFF every AppKit
+        // pasteboard carries, re-encoded so what lands on disk is a format
         // anything downstream can open.
+        var image: Data?
         if let png = board.data(forType: .png) {
-            return [.imageData(png, suggestedName: "png")]
+            image = png
+        } else if let tiff = board.data(forType: .tiff),
+                  let rep = NSBitmapImageRep(data: tiff),
+                  let png = rep.representation(using: .png, properties: [:]) {
+            image = png
         }
-        if let tiff = board.data(forType: .tiff),
-           let rep = NSBitmapImageRep(data: tiff),
-           let png = rep.representation(using: .png, properties: [:]) {
-            return [.imageData(png, suggestedName: "png")]
+        guard let image else { return PasteboardReading() }
+        guard image.count <= itemCap else {
+            return PasteboardReading(refusal: "image too large to paste (\(megabytes(image.count)), limit 20 MB)")
         }
-        return []
+        return PasteboardReading(items: [.imageData(image, suggestedName: "png")])
+    }
+
+    private static func megabytes(_ bytes: Int) -> String {
+        String(format: "%.0f MB", Double(bytes) / 1_048_576)
     }
 }
 
@@ -226,22 +292,11 @@ final class TrayRowView: NSStackView {
         @objc private func removeTapped() { onRemove?() }
 
         /// Paths keep the compact filename chip they have always had; prose
-        /// gets its first meaningful line. This is presentation only — the
-        /// tray itself intentionally carries no kind tag.
+        /// gets its first line, cut, and a count of what is not shown. Core
+        /// owns the rule (`FragmentPreview`) so a unit test can pin it; this
+        /// is presentation only and the tray carries no kind tag.
         private static func preview(_ fragment: String) -> String {
-            let firstLine = fragment.split(whereSeparator: \.isNewline).first
-                .map(String.init) ?? fragment
-            var candidate = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if candidate.hasPrefix("\"") && candidate.hasSuffix("\"")
-                && candidate.count >= 2 {
-                candidate.removeFirst()
-                candidate.removeLast()
-                candidate = candidate.replacingOccurrences(of: "\\\"", with: "\"")
-            }
-            if candidate.hasPrefix("/") {
-                return (candidate as NSString).lastPathComponent
-            }
-            return candidate
+            FragmentPreview.preview(fragment)
         }
 
         override func resetCursorRects() {

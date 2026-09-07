@@ -1927,6 +1927,7 @@ extension StatusHUD {
         launchSettingsDrill()
         dropTrayDrill()
         trayTeardownChurnDrill()
+        cardPasteDrill()
         elasticGridDrill()
         goToSessionDrill()
         speechCallbackDrill()

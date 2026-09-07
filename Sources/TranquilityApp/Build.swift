@@ -21,8 +21,45 @@ extension StatusHUD {
     /// exactly as unstealable as it was.
     final class ConsolePanel: NSPanel {
         var acceptsKey = false
+        /// Card paste (ruled 7 Sep): the keyboard was borrowed for exactly one
+        /// key. True only between a press on the card and whatever ends it.
+        var pasteArmed = false
+        var onPasteRequested: (() -> Void)?
+        /// The keyboard left while armed: another window took key, or a key
+        /// that was not Command-V arrived. The panel releases through this.
+        var onPasteReleased: (() -> Void)?
         override var canBecomeKey: Bool { acceptsKey }
         override var canBecomeMain: Bool { false }
+
+        /// AppKit's own release. Clicking any other window makes it key and
+        /// lands here: no event tap, no timer, no "did they click away" guess.
+        override func resignKey() {
+            super.resignKey()
+            if pasteArmed { onPasteReleased?() }
+        }
+
+        /// The Edit menu's Paste, when the responder chain reaches the window
+        /// because nothing narrower is first responder.
+        @objc func paste(_ sender: Any?) {
+            if pasteArmed { onPasteRequested?() }
+        }
+
+        /// Every key while armed, ahead of any first responder: Command-V
+        /// pastes; anything else releases and is dropped, because a key meant
+        /// for another window has nowhere to be forwarded. One lost key is
+        /// the whole cost of an armed card, and the ring said so.
+        override func sendEvent(_ event: NSEvent) {
+            if pasteArmed, event.type == .keyDown {
+                let held = event.modifierFlags.intersection([.command, .shift, .option, .control])
+                if held == .command, event.charactersIgnoringModifiers?.lowercased() == "v" {
+                    onPasteRequested?()
+                } else {
+                    onPasteReleased?()
+                }
+                return
+            }
+            super.sendEvent(event)
+        }
     }
 
     func build() -> ConsolePanel {
@@ -60,6 +97,14 @@ extension StatusHUD {
         // below every floor in the palette. Under `.darkAqua` the same band is
         // #464646 under white at 9.44:1.
         panel.appearance = NSAppearance(named: .darkAqua)
+        // Card paste: the panel reports the two things that end an armed
+        // card, and asks for the paste itself; the HUD owns what they mean.
+        panel.onPasteRequested = { [weak self] in
+            MainActor.assumeIsolated { self?.pasteIntoTray() }
+        }
+        panel.onPasteReleased = { [weak self] in
+            MainActor.assumeIsolated { self?.releasePaste(because: "keyboard left", repaint: true) }
+        }
 
         // Opaque light console surface, panel-wide (ruled — the blur is dead: an
         // instrument guarantees its own contrast, a blur borrowed the desktop's).
@@ -75,8 +120,10 @@ extension StatusHUD {
             if let target { dropOverlay.show(target: target) }
             else { dropOverlay.isHidden = true }
         }
+        // A press the surface's controls did not claim arms card paste.
+        background.onPress = { [weak self] in self?.armPaste(via: "surface") }
         background.onDrop = { [weak self] items in
-            guard let self, let accepted = onFilesDropped?(items) else { return false }
+            guard let self, let accepted = onItemsStaged?(items, .drop) else { return false }
             // Repaint on the way out: the chips the drop just created are a
             // render-time read of Core's tray, so the surface only has to say
             // "something changed".
@@ -126,6 +173,9 @@ extension StatusHUD {
             NSClickGestureRecognizer(target: self, action: #selector(goToSession)))
 
         bodyLabel = CardBodyLabel(wrappingLabelWithString: "")
+        // A press on the words selects AND arms: the selection takes the
+        // event, so the surface never sees this one.
+        bodyLabel.onPress = { [weak self] in self?.armPaste(via: "words") }
         bodyLabel.font = StateLegend.Face.message(12)
         bodyLabel.textColor = StateLegend.Lens.content.color
         bodyLabel.maximumNumberOfLines = 0
