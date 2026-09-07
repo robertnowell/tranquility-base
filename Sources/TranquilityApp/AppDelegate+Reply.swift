@@ -143,7 +143,7 @@ extension AppDelegate {
                     hud.showResult(card, about: (sessionId: sessionId, pid: pid, label: label))
                 case .dispatchFailed(let failure, _):
                     Track.replyOutcome("dispatch_failed", stage: "confirm", agent: sessionId,
-                                       extra: ["failure": Track.token(from: "\(failure)")])
+                                       extra: ["failure": .token(failure.trackName)])
                     Earcons.play(.needsYou, gate: earconGate())
                     let card = "Couldn't type into \(label): \(failure). "
                         + wordsKept(utteranceId: utteranceId)

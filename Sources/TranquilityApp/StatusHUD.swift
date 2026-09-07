@@ -1542,7 +1542,7 @@ final class StatusHUD: NSObject {
             Permissions.log("notice: refused in \(state.name): \(text)")
             return
         }
-        Track.record("notice_flashed", ["notice": Track.token(from: String(text.prefix(40)))])
+        Track.record("notice_flashed", ["notice": Track.phrase(text)])
         noticeLens = lens
         noticeExpiry?.cancel()
         notice = text

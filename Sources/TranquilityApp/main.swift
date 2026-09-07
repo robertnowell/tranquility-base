@@ -1124,7 +1124,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(thisVersion, forKey: "TBLastLaunchedVersion")
         var launched: [String: TrackValue] = [
             "launched_by": .token(CommandLine.arguments.contains("--selftest-hud") ? "relaunch" : "login_or_user"),
-            "hooks_healthy": .bool(true),
             "first_launch": .bool(Failures.installIdWasMinted),
             "updated": .bool(previousVersion != nil && previousVersion != thisVersion),
         ]
@@ -1190,12 +1189,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch outcome {
                 case .healthy:
                     Permissions.log("startup: \(harness.id) hooks healthy on re-audit")
+                    Track.record("hooks_state", ["harness": .token(harness.id), "state": "healthy"])
                 case .repaired(let rewired, let added):
                     Permissions.log("startup: \(harness.id) hooks repaired — "
                         + "\(rewired) rewired, \(added) added")
+                    Track.record("hooks_state", ["harness": .token(harness.id), "state": "repaired",
+                                                 "rewired": .int(rewired), "added": .int(added)])
                     repairedHarnesses.append(harness.label)
                 case .unavailable(let reason):
                     Permissions.log("startup: \(harness.id) hooks NOT repaired — \(reason)")
+                    Track.record("hooks_state", ["harness": .token(harness.id), "state": "not_repaired",
+                                                 "reason": Track.phrase(reason)])
                     hud.note("\(harness.label) hooks need attention: \(reason)")
                 }
             }
@@ -1206,6 +1210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else {
             Permissions.log("startup: hooks installed and reachable")
+            Track.record("hooks_state", ["state": "healthy"])
         }
 
         // Look at the checklist without launching a second live instance.

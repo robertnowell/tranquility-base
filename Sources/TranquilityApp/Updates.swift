@@ -145,7 +145,7 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
         log("updates: \(name)" + (item.map { " \($0.displayVersionString)" } ?? "") + (detail.map { ", \($0)" } ?? ""))
         var props: [String: TrackValue] = ["stage": .token(name)]
         if let item { props["to_version"] = Track.token(from: item.displayVersionString) }
-        if let detail { props["detail"] = Track.token(from: String(detail.prefix(40))) }
+        if let detail { props["detail"] = Track.phrase(detail) }
         Track.record("update_cycle", props)
     }
 

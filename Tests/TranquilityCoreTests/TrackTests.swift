@@ -96,6 +96,31 @@ final class TrackTests: XCTestCase {
         XCTAssertEqual(lines().first?["to"] as? String, "warm")
     }
 
+    func testAPhraseKeepsTheAppsWordsAndDropsWhatFollowsTheColon() {
+        XCTAssertEqual(Track.phrase("Install id copied: ad8eb762-5a5a"), .token("install_id_copied"))
+        XCTAssertEqual(Track.phrase("could not save. The operation failed for /Users/kristen/x"), .token("could_not_save"))
+        XCTAssertEqual(Track.phrase("Typed into Terminal."), .token("typed_into_terminal"))
+        XCTAssertEqual(Track.phrase("working"), .token("working"))
+    }
+
+    func testADispatchFailureNamesItsCaseAndNeverItsTab() {
+        let failure = DispatchFailure.tabNotFound("kristen-project-window")
+        XCTAssertEqual(failure.trackName, "tab_not_found")
+        Track.replyOutcome("dispatch_failed", stage: "confirm", extra: ["failure": .token(failure.trackName)])
+        let raw = (try? String(contentsOf: Track.eventsURL!, encoding: .utf8)) ?? ""
+        XCTAssertFalse(raw.contains("kristen"))
+    }
+
+    func testARowsReasonBecomesAVocabularyWordAndNeverItsOwnWords() {
+        XCTAssertEqual(LampWatch.reasonToken("waiting on you"), "waiting")
+        XCTAssertEqual(LampWatch.reasonToken("working 3m"), "working")
+        XCTAssertEqual(LampWatch.reasonToken("429 rate limit exceeded"), "rate_limit")
+        XCTAssertEqual(LampWatch.reasonToken("stream disconnected before completion: error sending request for url (https://api.openai.com/v1/responses)"), "network")
+        XCTAssertEqual(LampWatch.reasonToken("Cannot read /Users/kristen/secret-project"), "other")
+        XCTAssertEqual(LampWatch.reasonToken("4394c0ec"), "none")
+        XCTAssertEqual(LampWatch.reasonToken(""), "none")
+    }
+
     func testEventsRecordedBeforeASinkExistsReplayOnAttach() {
         Track.record("app_launched", ["launched_by": "login_or_user"])
         Track.record("face_changed", ["from": "hidden", "to": "idle"])
@@ -167,7 +192,7 @@ final class TrackTests: XCTestCase {
         events = watch.observe([("s0", "claude-code", "running", "none", "quiet"),
                                 ("s1", "codex", "working", "none", "working 3m")], now: t0.addingTimeInterval(20))
         XCTAssertEqual(events[0].properties["from"], .token("ready"))
-        XCTAssertEqual(events[0].properties["reason"], .token("working_m"), "digits and prose reduce to a token")
+        XCTAssertEqual(events[0].properties["reason"], .token("working"), "prose reduces to a vocabulary word")
         events = watch.observe([("s0", "claude-code", "running", "none", "quiet")], now: t0.addingTimeInterval(30))
         XCTAssertEqual(events[0].properties["to"], .token("gone"))
         XCTAssertEqual(events[0].properties["reason"], .token("left_the_grid"))
