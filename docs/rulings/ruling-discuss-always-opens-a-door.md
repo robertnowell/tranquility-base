@@ -32,6 +32,12 @@ Deep links are now queued until launch completes. When LaunchServices chooses a
 second Prod/Dev bundle, the process that loses the shared ownership lock forwards
 its URLs to the process that owns the panel before exiting. Only that owner acts.
 
+Prod and Dev both declare the durable product schemes. On launch, the selected
+lane makes itself their default handler; switching lanes changes the handler
+back as part of starting that lane. Thus an old report goes directly to the app
+the operator selected, while forwarding remains a backstop for a stale routing
+decision or a launch race. TEST owns only `tbtest` and never claims real reports.
+
 Discuss resolves the requested id against both stored Stops and live sessions.
 Its routing policy is a pure Core function with regression tests for all three
 destinations.
