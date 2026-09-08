@@ -42,6 +42,33 @@ final class DeepLinkTests: XCTestCase {
                        .discuss(session: nil, ref: nil))
     }
 
+    // MARK: - Discuss routing
+
+    /// A finished turn is the normal Discuss promise, whether the process has
+    /// since stopped or is already busy writing the next turn.
+    func testDiscussPrefersTheConversationCardWhenATurnExists() {
+        XCTAssertEqual(
+            DeepLink.discussDestination(hasCompletedTurn: true, isLive: true),
+            .conversationCard)
+        XCTAssertEqual(
+            DeepLink.discussDestination(hasCompletedTurn: true, isLive: false),
+            .conversationCard)
+    }
+
+    /// The incident case: an agent wrote a report during its first turn, so it
+    /// was live but had no Stop event from which a card could be made.
+    func testDiscussOpensTheTerminalForALiveFirstTurn() {
+        XCTAssertEqual(
+            DeepLink.discussDestination(hasCompletedTurn: false, isLive: true),
+            .agentTerminal)
+    }
+
+    func testDiscussOffersAnInvitationOnlyWhenTheAgentIsAbsent() {
+        XCTAssertEqual(
+            DeepLink.discussDestination(hasCompletedTurn: false, isLive: false),
+            .invitation)
+    }
+
     // MARK: - The artifact, which is where a shell is downstream
 
     func testAnExistingAbsolutePathSurvives() {

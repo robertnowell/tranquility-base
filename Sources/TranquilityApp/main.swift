@@ -29,6 +29,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Held for the process lifetime. Prod and Dev have different bundle ids,
     /// so LaunchServices cannot arbitrate their shared hotkey and microphone.
     var appOwnership: AppOwnershipLock?
+    /// Deep links can arrive before launch finishes, and (because Prod and Dev
+    /// have different bundle ids) can arrive in a second process that is about
+    /// to lose the shared ownership lock. The loser forwards its queued URLs to
+    /// the owner; only the owner drains and acts on them.
+    var pendingDeepLinks: [URL] = []
+    var deepLinksReady = false
+    static let forwardedDeepLink = Notification.Name(
+        "com.robertnowell.tranquilitybase.forwarded-deep-link")
     var permissionTimer: Timer?
     var intakeTimer: Timer?
     let onboarding = OnboardingWindow()
@@ -373,11 +381,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     owner: "\(AppIdentity.channel.rawValue) \(AppIdentity.bundleIdentifier)")
                 Permissions.log("launch: ownership acquired (\(AppIdentity.channel.rawValue))")
             } catch {
+                // The URL may have been delivered to the other installed build.
+                // It must reach the process that owns the panel before this one
+                // exits, or its card exists for only a few milliseconds.
+                if case AppOwnershipLock.AcquireError.alreadyHeld = error {
+                    forwardPendingDeepLinksToOwner()
+                }
                 Permissions.log("launch: REFUSED — app ownership \(error)")
                 Permissions.flushLog()
                 exit(1)
             }
         }
+
+        // Register immediately after taking the lock. If another bundle is
+        // launched while this one is still building, its notification queues
+        // here and drains only after the app is ready to present a destination.
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(receiveForwardedDeepLinks(_:)),
+            name: Self.forwardedDeepLink,
+            object: nil,
+            suspensionBehavior: .deliverImmediately)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // Position is a durable fact. Without an autosave name, every relaunch —
@@ -1516,6 +1540,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.showIdleGrid()
             }
         }
+        deepLinksReady = true
+        drainPendingDeepLinksIfReady()
+    }
+
+    /// Hand the launch URL from a rejected Prod/Dev process to the process that
+    /// owns Tranquility Base's UI. Distributed notifications cross bundle ids;
+    /// the payload remains only URL strings and goes through DeepLink.parse in
+    /// the owner, so the inbound security boundary does not change.
+    func forwardPendingDeepLinksToOwner() {
+        let strings = pendingDeepLinks.map(\.absoluteString)
+        guard !strings.isEmpty else { return }
+        DistributedNotificationCenter.default().postNotificationName(
+            Self.forwardedDeepLink,
+            object: nil,
+            userInfo: ["urls": strings],
+            deliverImmediately: true)
+        Permissions.log("deeplink: forwarded \(strings.count) URL(s) to owner")
+    }
+
+    @objc nonisolated func receiveForwardedDeepLinks(_ notification: Notification) {
+        let strings = notification.userInfo?["urls"] as? [String] ?? []
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let urls = strings.compactMap(URL.init(string:))
+            guard !urls.isEmpty else { return }
+            Permissions.log("deeplink: owner received \(urls.count) forwarded URL(s)")
+            pendingDeepLinks.append(contentsOf: urls)
+            drainPendingDeepLinksIfReady()
+        }
     }
 
     /// A2 — the hail. A turn arrived and the panel surfaced for it; say WHO and
@@ -1558,6 +1611,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        DistributedNotificationCenter.default().removeObserver(self,
+                                                               name: Self.forwardedDeepLink,
+                                                               object: nil)
         Track.record("app_quit", ["uptime_s": .int(Int(Date().timeIntervalSince(launchedAt)))])
         Track.flush()
         Analytics.flush()
