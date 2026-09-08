@@ -1,5 +1,4 @@
 import AppKit
-import CoreServices
 import CryptoKit
 import Foundation
 import TranquilityCore
@@ -403,25 +402,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: Self.forwardedDeepLink,
             object: nil,
             suspensionBehavior: .deliverImmediately)
-
-        // Reports predate the Prod/Dev lane split and correctly carry the
-        // product schemes, not a build-specific one. Whichever lane owns the
-        // app must therefore own those links too. Without this, every click
-        // while Dev was selected launched the published Prod bundle, which
-        // immediately lost the shared lock and made its card disappear.
-        //
-        // Both installed lanes declare these schemes. Selection is restored
-        // simply by launching the chosen lane: switch-app starts it here and it
-        // becomes the handler. TEST deliberately keeps only tbtest and never
-        // changes a real report's association.
-        if AppIdentity.channel != .test {
-            for scheme in ["tranquilitybase", "voicedispatch"] {
-                let status = LSSetDefaultHandlerForURLScheme(
-                    scheme as CFString, AppIdentity.bundleIdentifier as CFString)
-                Permissions.log("deeplink: handler \(scheme)=\(AppIdentity.bundleIdentifier) "
-                    + "status=\(status)")
-            }
-        }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // Position is a durable fact. Without an autosave name, every relaunch —

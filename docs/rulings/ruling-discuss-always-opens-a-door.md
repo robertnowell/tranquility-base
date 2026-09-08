@@ -32,11 +32,20 @@ Deep links are now queued until launch completes. When LaunchServices chooses a
 second Prod/Dev bundle, the process that loses the shared ownership lock forwards
 its URLs to the process that owns the panel before exiting. Only that owner acts.
 
-Prod and Dev both declare the durable product schemes. On launch, the selected
-lane makes itself their default handler; switching lanes changes the handler
-back as part of starting that lane. Thus an old report goes directly to the app
-the operator selected, while forwarding remains a backstop for a stale routing
-decision or a launch race. TEST owns only `tbtest` and never claims real reports.
+Prod alone declares the durable product schemes; Dev keeps `tbdev` and TEST
+keeps `tbtest`, so neither ever claims a real report. An old report therefore
+always reaches Prod first. When another lane owns the panel, Prod forwards the
+URL and exits, which is why forwarding is the mechanism here rather than a
+backstop.
+
+Amended 8 Sep 2026 before landing. As first written this section had both lanes
+declare the product schemes, with the selected lane calling
+`LSSetDefaultHandlerForURLScheme` on every launch. That was dropped for two
+reasons: `scripts/audit-dev.sh` already asserts the Dev bundle owns only
+`tbdev`, and claiming a handler rewrites a system-wide association for every
+app on the Mac as a side effect of starting a development build. Forwarding
+already makes the simpler arrangement correct, at the cost of one short-lived
+process per click while a non-Prod lane is selected.
 
 Discuss resolves the requested id against both stored Stops and live sessions.
 Its routing policy is a pure Core function with regression tests for all three
