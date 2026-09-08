@@ -18,10 +18,15 @@ read_dev() { /usr/libexec/PlistBuddy -c "Print :$1" "$DEV/Contents/Info.plist" 2
 [ "$(read_dev TBUpdatesEnabled)" = "false" ] || fail "updates are enabled"
 [ "$(read_dev SUEnableAutomaticChecks)" = "false" ] || fail "automatic checks are enabled"
 [ "$(read_dev SUAutomaticallyUpdate)" = "false" ] || fail "automatic install is enabled"
-[ "$(read_dev CFBundleURLTypes:0:CFBundleURLSchemes:0)" = "tbdev" ] || fail "wrong URL scheme"
-if /usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes:0:CFBundleURLSchemes:1" \
+[ "$(read_dev CFBundleURLTypes:0:CFBundleURLSchemes:0)" = "tranquilitybase" ] \
+  || fail "durable tranquilitybase URL scheme is absent"
+[ "$(read_dev CFBundleURLTypes:0:CFBundleURLSchemes:1)" = "voicedispatch" ] \
+  || fail "durable voicedispatch URL scheme is absent"
+[ "$(read_dev CFBundleURLTypes:0:CFBundleURLSchemes:2)" = "tbdev" ] \
+  || fail "development-only tbdev URL scheme is absent"
+if /usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes:0:CFBundleURLSchemes:3" \
    "$DEV/Contents/Info.plist" >/dev/null 2>&1; then
-  fail "Dev claims more than its tbdev URL scheme"
+  fail "Dev claims an unexpected fourth URL scheme"
 fi
 codesign --verify --deep --strict "$DEV" 2>/dev/null || fail "signature does not verify"
 DEV_SIGNING=$(codesign -dv --verbose=2 "$DEV" 2>&1 || true)
