@@ -105,7 +105,8 @@ public enum SessionLauncher {
     /// start this. I told you to start the session. Start the session." The
     /// consent happened at the button press; the prompt is asking permission
     /// for the thing the user just commanded. The scope is surgical and stays
-    /// that way: ONLY the pane this call just created (addressed by its tty),
+    /// that way: ONLY the pane this call just created (addressed by its unique
+    /// tmux session name),
     /// ONLY the known trust prompt, ONLY within thirty seconds of launch. The
     /// dispatcher's rule — never type into unregistered sessions — is intact
     /// everywhere else; this pane is not "some session", it is our own launch.
@@ -113,7 +114,8 @@ public enum SessionLauncher {
     /// Blocks while watching for the prompt — ~4s in the common case (two
     /// settled polls), up to ~30s if the session never looks started; call
     /// off-main.
-    /// Returns the new pane's tty, so a caller can watch exactly this session.
+    /// Returns the new pane's full address, so delayed callers never have to
+    /// rediscover identity through its recyclable tty.
     ///
     /// Nothing is activated or brought forward — the pane exists on the app's
     /// own tmux server with no window anywhere until someone asks for one
@@ -137,7 +139,7 @@ public enum SessionLauncher {
         directory: String = defaultDirectory,
         launch: HarnessLaunch = .settingsDefault,
         acceptTrustPrompt: Bool = true
-    ) -> Result<String, ScriptError> {
+    ) -> Result<TmuxPaneAddress, ScriptError> {
         // Ruled 21 Aug: no flags, no parallel launch paths. A launch is a
         // detached tmux session on the app's own server, full stop — the
         // opt-in this replaced (`tbase tmux on`, 19-21 Aug) is gone along
@@ -169,7 +171,7 @@ public enum SessionLauncher {
         directory: String,
         launch: HarnessLaunch,
         acceptTrustPrompt: Bool
-    ) -> Result<String, ScriptError> {
+    ) -> Result<TmuxPaneAddress, ScriptError> {
         let command = launch.command
         let adapter = launch.adapter
         let name = "tb-" + String(UUID().uuidString.prefix(8)).lowercased()
@@ -191,8 +193,8 @@ public enum SessionLauncher {
                 + "before launching — user-commanded launch")
         }
 
-        // `-P -F` prints the new pane's tty as part of THIS command's own
-        // output, atomically with creation — not a separate query run
+        // `-P -F` prints the new pane's full address as part of THIS command's
+        // own output, atomically with creation — not a separate query run
         // afterward. That second query used to be a `display-message` call
         // here, and it raced: measured live, 23 Aug, on a real machine
         // straight out of a reboot, the FIRST pane this socket directory
@@ -203,10 +205,10 @@ public enum SessionLauncher {
         // pane's tty in the same breath that creates it without the tty
         // already existing — so this removes the failure mode at its root
         // instead of retrying around it.
-        let tty: String
+        let pane: TmuxPaneAddress
         switch Tmux.run([
             "new-session", "-d", "-s", name, "-x", "220", "-y", "50",
-            "-c", directory, "-P", "-F", "#{pane_tty}",
+            "-c", directory, "-P", "-F", "#{pane_id}\t#{session_name}\t#{pane_tty}",
             "-e", "PATH=\(path)",
             "-e", "LANG=en_US.UTF-8",
             // PATH is exported INSIDE the command, not only through `-e`.
@@ -249,17 +251,16 @@ public enum SessionLauncher {
             Self.trace?("newSession(tmux) FAILED: \(error.message)")
             return .failure(error)
         case .success(let printed):
-            let trimmed = printed.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
+            guard let launched = Self.launchedPane(from: printed, socket: Tmux.socketName) else {
                 // Never measured, but the same guard the retry-based fix
                 // had: a session with no addressable tty is worse than none
                 // at all (TmuxOwnership.pane(forTty:) can never find it
                 // again either), so it gets torn down rather than orphaned.
                 Tmux.run(["kill-session", "-t", name], socket: Tmux.socketName)
                 return .failure(ScriptError(
-                    message: "tmux session \(name) reported no pane tty — killed it"))
+                    message: "tmux session \(name) reported no complete pane address — killed it"))
             }
-            tty = trimmed
+            pane = launched
         }
         // Server posture, set AFTER new-session because a server only exists
         // once it hosts something — `set -s` against no server fails silently
@@ -271,7 +272,7 @@ public enum SessionLauncher {
         Tmux.run(["set", "-t", name, "mouse", "on"], socket: Tmux.socketName)
 
         Self.trace?("newSession: launched `\(command)` in \(directory) "
-            + "(tmux \(name), tty \(tty))")
+            + "(tmux \(pane.sessionName), pane \(pane.paneId), tty \(pane.paneTty))")
 
         // A launch is not a launch until the pane is still there. Ruled 24
         // Aug: the panel spoke "RESUMED" over four corpses in six minutes,
@@ -288,7 +289,7 @@ public enum SessionLauncher {
         // 24 Aug diagnosis needed the dead pane's exit status and its one
         // line of stderr, and neither exists without it. Disarmed on the
         // success path so live panes never linger as corpses.
-        if let failure = Self.survivalFailure(session: name, tty: tty) {
+        if let failure = Self.survivalFailure(session: pane.sessionName, tty: pane.paneTty) {
             Tmux.run(["kill-session", "-t", name], socket: Tmux.socketName)
             Self.trace?("newSession: \(name) died on launch — \(failure.reason)")
             return .failure(ScriptError(message: failure.reason,
@@ -296,8 +297,8 @@ public enum SessionLauncher {
         }
         Tmux.run(["set", "-t", name, "remain-on-exit", "off"], socket: Tmux.socketName)
 
-        if acceptTrustPrompt { watchForTrustPrompt(tty: tty, adapter: adapter) }
-        return .success(tty)
+        if acceptTrustPrompt { watchForTrustPrompt(pane: pane, adapter: adapter) }
+        return .success(pane)
     }
 
     /// Resume any adaptable session in a fresh detached tmux pane — the one
@@ -330,7 +331,7 @@ public enum SessionLauncher {
         launch: HarnessLaunch,
         acceptTrustPrompt: Bool = true,
         exemptFromGuard: Set<Int> = []
-    ) -> Result<String, ScriptError> {
+    ) -> Result<TmuxPaneAddress, ScriptError> {
         let adapter = launch.adapter
         let command = launch.command
         let resumeArgs = adapter.resumeArguments(sessionId: sessionId)
@@ -415,6 +416,18 @@ public enum SessionLauncher {
             !arg.isEmpty && arg.unicodeScalars.allSatisfy(plain.contains) ? arg : shellQuoted(arg)
         }
         return (["cd \(shellQuoted(directory)) &&", command] + args).joined(separator: " ")
+    }
+
+    /// Decode the atomic `new-session -P -F` receipt. All three fields are
+    /// required: accepting the old tty-only shape would immediately discard
+    /// the durable identity this launch boundary exists to preserve.
+    static func launchedPane(from output: String, socket: String?) -> TmuxPaneAddress? {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fields = trimmed.split(separator: "\t", maxSplits: 2,
+                                   omittingEmptySubsequences: false).map(String.init)
+        guard fields.count == 3, fields.allSatisfy({ !$0.isEmpty }) else { return nil }
+        return TmuxPaneAddress(socketName: socket, paneId: fields[0],
+                               sessionName: fields[1], paneTty: fields[2])
     }
 
     /// What the pane's shell is actually asked to run. Pulled out of the argv
@@ -768,16 +781,14 @@ public enum SessionLauncher {
             }
             let resumed = resumeTmux(sessionId: sessionId, directory: resolvedDirectory,
                                      launch: launch, exemptFromGuard: endedPid)
-            guard case .success(let tty) = resumed else {
+            guard case .success(let pane) = resumed else {
                 guard case .failure(let error) = resumed else {
                     return failed("could not start a tmux pane to resume into")
                 }
                 return failed("could not start a tmux pane to resume into — \(error.message)",
                               worthRetrying: error.worthRetrying)
             }
-            spawnedTty = tty
-            guard let pane = TmuxOwnership.pane(forTty: tty)
-            else { return failed("the resumed pane (\(tty)) is not on any live tmux server") }
+            spawnedTty = pane.paneTty
             guard let pid = (agents.sessions() ?? []).first(where: { $0.sessionId == sessionId })?.pid
             else { return failed("resumed under tmux but hasn't reappeared in agents --json yet") }
             return .moved(pane: pane, pid: pid)
@@ -1028,7 +1039,7 @@ public enum SessionLauncher {
                           acceptTrustPrompt: false) {
         case .failure(let error):
             return .failure(error)
-        case .success(let tty):
+        case .success(let pane):
             /// What a fast death MEANS, decided on evidence rather than on
             /// the death itself. Codex's conflict text is the first-class
             /// answer; a holder the guard can actually see is the second;
@@ -1052,14 +1063,6 @@ public enum SessionLauncher {
                 return .success(.exitedWithoutResuming(lastScreen: lastScreen))
             }
 
-            guard let pane = TmuxOwnership.pane(forTty: tty) else {
-                // Already gone before we even looked — the fastest possible
-                // shape of the same signal phase one polls for below. Nothing
-                // was ever on screen for us to have read, so the guard is the
-                // only evidence there can be.
-                return verdictForDeath(nil, "had no pane immediately after spawn")
-            }
-
             // Phase one: does the pane survive the grace window at all?
             //
             // The screen is captured on EVERY tick, not read once at the end:
@@ -1070,7 +1073,7 @@ public enum SessionLauncher {
             for _ in 0..<deathCheckCount {
                 usleep(UInt32(deathCheckInterval * 1_000_000))
                 if case .success(let text) = Tmux.run(
-                    ["capture-pane", "-p", "-t", pane.paneId],
+                    ["capture-pane", "-p", "-t", pane.stableTarget],
                     socket: pane.socketName, timeout: 2),
                    !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     lastScreen = text
@@ -1088,7 +1091,8 @@ public enum SessionLauncher {
             for _ in 0..<settleMaxPolls {
                 usleep(UInt32(settlePollInterval * 1_000_000))
                 guard case .success(let text) = Tmux.run(
-                    ["capture-pane", "-p", "-t", pane.paneId], socket: pane.socketName, timeout: 3)
+                    ["capture-pane", "-p", "-t", pane.stableTarget],
+                    socket: pane.socketName, timeout: 3)
                 else {
                     // Exited late, past the fast-death window checked above.
                     // It still gets asked for evidence rather than assumed:
@@ -1132,7 +1136,7 @@ public enum SessionLauncher {
                     // whose pid this function does not actually trust is
                     // exactly what `verifiedCurrent` exists to refuse later
                     // anyway, so there is no point writing one now.
-                    if let pid = ProcessProbe.pid(onTty: tty, containing: sessionId) {
+                    if let pid = ProcessProbe.pid(onTty: pane.paneTty, containing: sessionId) {
                         ownership.record(SessionOwnershipRecord(
                             sessionId: sessionId, harness: adapter.id, pid: pid,
                             paneId: pane.paneId, socketName: pane.socketName,
@@ -1140,14 +1144,15 @@ public enum SessionLauncher {
                             cwd: directory))
                     } else {
                         Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) attached but "
-                            + "its real pid could not be found on \(tty) — pane recorded, "
+                            + "its real pid could not be found on \(pane.paneTty) — pane recorded, "
                             + "pid-based liveness checks on this record will fail closed")
                     }
                     Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) attached")
-                    return .success(.attached(tty: tty))
+                    return .success(.attached(tty: pane.paneTty))
                 case .inconclusive:
                     if let spec, spec.promptNeedles.contains(where: { text.contains($0) }) {
-                        Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
+                        Tmux.run(["send-keys", "-t", pane.stableTarget, "Enter"],
+                                 socket: pane.socketName)
                         Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) accepted the "
                             + "trust prompt on resume")
                     }
@@ -1202,7 +1207,7 @@ public enum SessionLauncher {
         directory: String,
         launch: HarnessLaunch,
         acceptTrustPrompt: Bool = true
-    ) -> Result<String, ScriptError> {
+    ) -> Result<TmuxPaneAddress, ScriptError> {
         // The tty travels back out, where it used to be dropped here.
         //
         // A caller that cannot name the pane cannot ask it anything, and the
@@ -1212,8 +1217,8 @@ public enum SessionLauncher {
         // shape `launchTmux` and `resumeTmux` already return.
         switch resumeTmux(sessionId: sessionId, directory: directory, launch: launch,
                           acceptTrustPrompt: acceptTrustPrompt) {
-        case .success(let tty):
-            return .success(tty)
+        case .success(let pane):
+            return .success(pane)
         case .failure(let error):
             Self.trace?("revive FAILED for \(sessionId.prefix(8)): \(error.message)")
             return .failure(error)
@@ -1255,20 +1260,23 @@ public enum SessionLauncher {
     /// is a fact rather than a reading. This is the same rule the give-up
     /// branch in `TrustPromptWatcher` already states about itself: a line
     /// naming only its expectation is unfalsifiable.
-    public static func paneTail(tty: String) -> String {
-        guard let pane = TmuxOwnership.pane(forTty: tty),
-              case .success(let text) = Tmux.run(
-                ["capture-pane", "-p", "-t", pane.paneId],
-                socket: pane.socketName, timeout: 3)
+    /// Read the pane a launch actually created, without resolving its tty
+    /// again. A delayed registration callback may run after that tty has been
+    /// recycled; the stable session target then fails closed instead of
+    /// returning the next agent's screen.
+    public static func paneTail(pane: TmuxPaneAddress) -> String {
+        guard case .success(let text) = Tmux.run(
+            ["capture-pane", "-p", "-t", pane.stableTarget],
+            socket: pane.socketName, timeout: 3)
         else { return "" }
         return TrustPromptWatcher.meaningfulTail(text)
     }
 
-    public static func paneState(tty: String, adapter: any HarnessAdapter) -> PaneState {
+    public static func paneState(pane: TmuxPaneAddress,
+                                 adapter: any HarnessAdapter) -> PaneState {
         guard let spec = adapter.trustPrompt,
-              let pane = TmuxOwnership.pane(forTty: tty),
               case .success(let text) = Tmux.run(
-                ["capture-pane", "-p", "-t", pane.paneId],
+                ["capture-pane", "-p", "-t", pane.stableTarget],
                 socket: pane.socketName, timeout: 3)
         else { return .unknown }
         return classifyPaneScreen(text, spec: spec)
@@ -1292,47 +1300,31 @@ public enum SessionLauncher {
     /// ("starting an agent is a background act", `launch`'s own comment). The
     /// instant it stops needing that description, the reason evaporates:
     /// detached while it is progressing, attached the moment it is not.
+    /// Open only the tmux session captured at launch. If it has exited, its
+    /// unique name no longer resolves and no unrelated pane is opened.
     @discardableResult
-    public static func showPane(tty: String, why: String) -> Bool {
-        guard let pane = TmuxOwnership.pane(forTty: tty),
+    public static func showPane(pane: TmuxPaneAddress, why: String) -> Bool {
+        guard case .success = Tmux.run(
+                ["has-session", "-t", pane.stableTarget],
+                socket: pane.socketName, timeout: 2),
               let binary = Tmux.resolveBinary(),
               let script = TerminalTabFocus.attachScript(
                 binary: binary, socket: pane.socketName,
                 tmuxTmpDir: Tmux.socketDirectory.path, sessionName: pane.sessionName)
         else {
-            Self.trace?("showPane: \(tty) — \(why), but no window could be opened for it")
+            Self.trace?("showPane: \(pane.sessionName) on \(pane.paneTty) — \(why), "
+                + "but no window could be opened for it")
             return false
         }
         if case .failure(let error) = AppleScript.run(script: script) {
-            Self.trace?("showPane: \(tty) — \(why), but opening a window failed: \(error.message)")
+            Self.trace?("showPane: \(pane.sessionName) on \(pane.paneTty) — \(why), "
+                + "but opening a window failed: \(error.message)")
             return false
         }
-        Self.trace?("showPane: opened a window on \(tty) — \(why)")
+        Self.trace?("showPane: opened \(pane.sessionName) on \(pane.paneTty) — \(why)")
         return true
     }
 
-
-    /// Resolves `tty` to its tmux pane and watches that — a thin
-    /// convenience for the two callers (`launchTmux`, and the app's own
-    /// post-launch greeting task) that have a tty in hand from a launch
-    /// they just made, not a second implementation. Before the
-    /// single-transport cut (23 Aug) this fell back to an AppleScript
-    /// watcher over a Terminal.app tab when the tty wasn't tmux-owned; that
-    /// branch is deleted, not merely dead-code-flagged, because it no
-    /// longer CAN be reached — `launchTmux` is the only launch path left,
-    /// and every tty it produces is tmux-owned by construction. See
-    /// `watchForTrustPrompt(pane:)` for the one remaining watch loop.
-    public static func watchForTrustPrompt(
-        tty: String, adapter: any HarnessAdapter = ClaudeCodeAdapter(),
-        onNeedsHuman: (@Sendable (String) -> Void)? = nil
-    ) {
-        guard let pane = TmuxOwnership.pane(forTty: tty) else {
-            Self.trace?("newSession: \(tty) has no resolvable tmux pane — trust watcher has "
-                + "nothing to watch")
-            return
-        }
-        watchForTrustPrompt(pane: pane, adapter: adapter, onNeedsHuman: onNeedsHuman)
-    }
 
     /// Watch a just-launched pane; if the harness's trust prompt renders,
     /// press Return once and STOP. The single press and immediate return
@@ -1368,10 +1360,10 @@ public enum SessionLauncher {
     /// folder" screen read cleanly through capture-pane and a single
     /// send-keys Enter accepted it, with registration correctly absent
     /// until it did. Before 23 Aug this loop had a second implementation
-    /// (`watchForTrustPrompt(tty:)`'s own AppleScript read/press over a
+    /// (the old watcher's own AppleScript read/press over a
     /// Terminal.app tab, one hand-copied 40-line pair for the transport
     /// that no longer exists) — deleted, not merely superseded, once the
-    /// tty-based overload above stopped being reachable through anything
+    /// Terminal-tab overload stopped being reachable through anything
     /// but this one.
     /// `onNeedsHuman` is the panel's half of the same event, added 27 Aug.
     /// Opening the window is necessary and was never sufficient: a launch you
@@ -1381,7 +1373,7 @@ public enum SessionLauncher {
     /// window is the place to ANSWER; the card is the place to find out there
     /// is something to answer. Optional, so `tbase` and the tests keep the
     /// window-only behaviour they had.
-    static func watchForTrustPrompt(
+    public static func watchForTrustPrompt(
         pane: TmuxPaneAddress, adapter: any HarnessAdapter = ClaudeCodeAdapter(),
         onNeedsHuman: (@Sendable (String) -> Void)? = nil
     ) {
@@ -1390,7 +1382,7 @@ public enum SessionLauncher {
             spec: spec,
             read: {
                 guard case .success(let text) = Tmux.run(
-                    ["capture-pane", "-p", "-t", pane.paneId],
+                    ["capture-pane", "-p", "-t", pane.stableTarget],
                     socket: pane.socketName, timeout: 3) else { return nil }
                 return text
             },
@@ -1401,10 +1393,12 @@ public enum SessionLauncher {
                 // drops a repeat under load loses one row of travel here and
                 // the whole keystroke sequence there.
                 for _ in 0..<abs(steps) {
-                    Tmux.run(["send-keys", "-t", pane.paneId, steps > 0 ? "Down" : "Up"],
+                    Tmux.run(["send-keys", "-t", pane.stableTarget,
+                              steps > 0 ? "Down" : "Up"],
                              socket: pane.socketName)
                 }
-                Tmux.run(["send-keys", "-t", pane.paneId, "Enter"], socket: pane.socketName)
+                Tmux.run(["send-keys", "-t", pane.stableTarget, "Enter"],
+                         socket: pane.socketName)
             },
             trace: Self.trace, label: pane.sessionName,
             onNeedsHuman: { question in

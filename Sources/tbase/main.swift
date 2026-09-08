@@ -805,7 +805,8 @@ case "reconcile":
                                     .filter { $0.cwd == dir }.map(\.sessionId))
         switch SessionLauncher.launch(
             directory: dir, launch: HarnessLaunch(adapter: adapter, command: command)) {
-        case .success(let tty):
+        case .success(let pane):
+            let tty = pane.paneTty
             print("detached tmux session (attach on demand): `\(command)` in \(dir)")
             print("waiting for it to register…")
             let sessionId = useCodex
@@ -829,11 +830,10 @@ case "reconcile":
             // the same question the panel's announce/sweep pipeline asks.
             if args.contains("--wait-live") {
                 if useCodex, let pid = ProcessProbe.pid(onTty: tty, containing: command) {
-                    let pane = TmuxOwnership.pane(forTty: tty)
                     FileSessionOwnershipStore.shared.record(SessionOwnershipRecord(
                         sessionId: sessionId, harness: CodexAdapter().id, pid: pid,
-                        paneId: pane?.paneId, socketName: pane?.socketName,
-                        sessionName: pane?.sessionName, paneTty: tty, cwd: dir))
+                        paneId: pane.paneId, socketName: pane.socketName,
+                        sessionName: pane.sessionName, paneTty: pane.paneTty, cwd: dir))
                     print("ownership recorded: pid \(pid)")
                 }
                 try LaunchGreeting.record(sessionId: sessionId, directory: dir,

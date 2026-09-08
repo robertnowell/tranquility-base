@@ -175,6 +175,15 @@ public struct TmuxPaneAddress: Sendable, Equatable {
         self.sessionName = sessionName
         self.paneTty = paneTty
     }
+
+    /// The tmux target safe to retain across asynchronous work.
+    ///
+    /// A tty is recycled as soon as its pane exits, and a pane id may be
+    /// reused when a server restarts. The session name is minted uniquely by
+    /// the launcher and names the object we actually created, so a delayed
+    /// callback either reaches that session or reaches nothing — never the
+    /// next agent that happened to inherit its tty.
+    public var stableTarget: String { sessionName }
 }
 
 public enum TmuxOwnership {

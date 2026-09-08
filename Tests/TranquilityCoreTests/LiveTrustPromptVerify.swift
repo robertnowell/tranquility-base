@@ -41,7 +41,7 @@ final class LiveTrustPromptVerify: XCTestCase {
         // trace above is what says which row it decided to land on.
         let result = SessionLauncher.launch(directory: dir, launch: launch,
                                             acceptTrustPrompt: true)
-        guard case .success(let tty) = result else {
+        guard case .success(let pane) = result else {
             return XCTFail("launch failed: \(result)")
         }
 
@@ -49,7 +49,7 @@ final class LiveTrustPromptVerify: XCTestCase {
         // registers until trust is granted, so this assertion IS the assertion
         // that the right row was pressed — a declined launch cannot reach it.
         let sid = LaunchGreeting.awaitRegistration(directory: dir, excluding: [])
-        XCTAssertNotNil(sid, "no session registered for \(dir) (pane tty \(tty)) — the "
+        XCTAssertNotNil(sid, "no session registered for \(dir) (pane tty \(pane.paneTty)) — the "
             + "shipped watcher did not get through the trust prompt")
 
         // Never leave a live agent behind, on either verdict.

@@ -16,6 +16,35 @@ import XCTest
 /// redundant. This test is here to say so.
 final class SessionLauncherPaneCommandTests: XCTestCase {
 
+    /// The 7 Sep false alert, reduced to its identity boundary: an old revive
+    /// lost its pane, a new Codex launch inherited the same tty, and the old
+    /// callback read the new pane's warnings. The launch receipt must retain
+    /// the unique tmux session name as well as the recyclable tty.
+    func testLaunchReceiptCarriesDurablePaneIdentity() throws {
+        let pane = try XCTUnwrap(SessionLauncher.launchedPane(
+            from: "%14\ttb-old-revive\t/dev/ttys014\n", socket: "tb"))
+
+        XCTAssertEqual(pane.paneId, "%14")
+        XCTAssertEqual(pane.stableTarget, "tb-old-revive")
+        XCTAssertEqual(pane.paneTty, "/dev/ttys014")
+        XCTAssertEqual(pane.socketName, "tb")
+    }
+
+    func testTtyOnlyReceiptIsRefusedInsteadOfLosingIdentity() {
+        XCTAssertNil(SessionLauncher.launchedPane(from: "/dev/ttys014\n", socket: "tb"))
+    }
+
+    func testRecycledTtyDoesNotRetargetADelayedCallback() {
+        let old = TmuxPaneAddress(socketName: "tb", paneId: "%14",
+                                  sessionName: "tb-old-revive", paneTty: "/dev/ttys014")
+        let replacement = TmuxPaneAddress(socketName: "tb", paneId: "%29",
+                                          sessionName: "tb-new-codex", paneTty: "/dev/ttys014")
+
+        XCTAssertEqual(old.paneTty, replacement.paneTty, "the device was recycled")
+        XCTAssertNotEqual(old.stableTarget, replacement.stableTarget,
+                          "the old callback must still target only the session it launched")
+    }
+
     func testThePaneExportsItsOwnPathRatherThanTrustingTheSessionEnvironment() {
         let command = SessionLauncher.paneCommand(
             path: "/Users/x/.local/bin:/usr/bin:/bin",
