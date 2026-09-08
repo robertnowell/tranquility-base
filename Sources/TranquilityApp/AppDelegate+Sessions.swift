@@ -30,6 +30,25 @@ extension AppDelegate {
     /// only ever OPENS the microphone with the panel visibly listening — nothing
     /// records silently, and nothing sends without the usual undo window.
     func application(_ application: NSApplication, open urls: [URL]) {
+        // LaunchServices may choose the installed Prod bundle while a Dev build
+        // owns the shared app lock (or vice versa). `application(open:)` arrives
+        // BEFORE `applicationDidFinishLaunching`, so acting here made the doomed
+        // newcomer draw a card and then exit 50ms later. Queue first. The owner
+        // handles these directly; a rejected newcomer forwards them to it before
+        // exiting (see main.swift).
+        pendingDeepLinks.append(contentsOf: urls)
+        drainPendingDeepLinksIfReady()
+    }
+
+    /// Act only in the process that owns the panel, hotkey and queue.
+    func drainPendingDeepLinksIfReady() {
+        guard deepLinksReady, !pendingDeepLinks.isEmpty else { return }
+        let urls = pendingDeepLinks
+        pendingDeepLinks.removeAll()
+        handleDeepLinks(urls)
+    }
+
+    private func handleDeepLinks(_ urls: [URL]) {
         for url in urls {
             // Parsing lives in Core, where it is tested. This layer only acts.
             let parsed = DeepLink.parse(url)
@@ -149,34 +168,50 @@ extension AppDelegate {
 
     /// "Discuss with agent", from a page that agent wrote.
     ///
-    /// Two outcomes and no third: either the agent is here, in which case you
-    /// land on it exactly as if you had clicked its row in the grid, or it is
-    /// not, in which case you are offered one. The second is not an error path
-    /// — it is what EVERY page does eventually, and what every page does
-    /// immediately on a machine that is not the one that made it.
+    /// Three outcomes and no silent fourth: a completed turn opens the card; a
+    /// live first turn opens its terminal (the same rule as a blue grid row);
+    /// an absent agent offers an invitation or explains why it cannot.
     func discuss(session: String?, ref: String?) {
         // Sweep first, for the same reason `reply` now does: a page can be
         // clicked before its own session has been filed.
         _ = try? coordinator?.intake()
+        let liveSessions = (ClaudeAgentsCLI().sessions() ?? [])
+            + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
         // A footer may name the 8-character slug rather than the full session
-        // id: a page under agents/<slug>/ is claimed by its path, and a path
-        // carries nothing longer. Try it as given, then as a prefix.
+        // id. Resolve against liveness as well as stored Stops: a report can be
+        // written during an agent's first turn, before any Stop exists.
+        let live: LiveSession? = session.flatMap { id in
+            if let exact = liveSessions.first(where: { $0.sessionId == id }) {
+                return exact
+            }
+            let prefixed = liveSessions.filter { $0.sessionId.hasPrefix(id) }
+            return prefixed.count == 1 ? prefixed[0] : nil
+        }
         let resolved: String? = session.flatMap { id in
+            if let live { return live.sessionId }
             if ((try? store?.latestStop(for: id)) ?? nil) != nil { return id }
             return (try? store?.sessionId(matching: id)) ?? nil
         }
         let known = resolved.flatMap { id in try? store?.latestStop(for: id) } ?? nil
-        guard let session = resolved, known != nil else {
+        switch DeepLink.discussDestination(hasCompletedTurn: known != nil,
+                                           isLive: live != nil) {
+        case .conversationCard:
+            guard let session = resolved else { return }
+            // The grid row's own move: raise the panel, then read that session's
+            // last summary onto the stage. `announceNext(only:)` is deliberately
+            // outside the unheard filter, so this answers however many times you
+            // click it.
+            showPanel()
+            announceNext(only: session)
+        case .agentTerminal:
+            guard let session = live?.sessionId else { return }
+            Permissions.log("deeplink: discuss, \(session.prefix(8)) is mid-turn — opening terminal")
+            Track.record("discuss_routed", ["agent_id": Track.hash(session), "to": "terminal"])
+            goToSession(session)
+        case .invitation:
             Permissions.log("deeplink: discuss, no agent for \(session?.prefix(8) ?? "-")")
             inviteNewSession(for: ref)
-            return
         }
-        // The grid row's own move: raise the panel, then read that session's
-        // last summary onto the stage. `announceNext(only:)` is deliberately
-        // outside the unheard filter, so this answers however many times you
-        // click it.
-        showPanel()
-        announceNext(only: session)
     }
 
     /// The invitation. Without a `ref` there is nothing to open with and

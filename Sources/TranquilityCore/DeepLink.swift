@@ -16,8 +16,10 @@ import Foundation
 ///    are safe: you can hear what happened and you can see who asked. Opening a
 ///    microphone from a URL is a page deciding you had something to say, and the
 ///    browser's consent sheet is consent to open an app, not consent to be
-///    recorded. `discuss` resolves to speech. `reply` ARMS — it puts the target
-///    in front of you and waits for a gesture you make yourself (ruled 11 Aug).
+///    recorded. `discuss` resolves to speech when the agent has a finished turn;
+///    a live agent still writing its first turn resolves to its terminal, because
+///    there is no honest card to read yet. `reply` ARMS — it puts the target in
+///    front of you and waits for a gesture you make yourself (ruled 11 Aug).
 ///    Neither ever opens the microphone.
 /// 2. **A page's strings never reach a shell.** The invitation builds a command
 ///    out of the subject the page names, which arrives from the URL. It is
@@ -34,6 +36,25 @@ import Foundation
 /// cannot be checked for existence, so it is constrained by shape instead:
 /// https only, no credentials, no forbidden characters, and a length cap.
 public enum DeepLink {
+
+    /// Where "Discuss with agent" can honestly land.
+    ///
+    /// The order is the rule: a completed turn wins even when its process is
+    /// still live, so Discuss keeps opening the conversational card after the
+    /// first turn. The terminal is only the blue-row case — the named process
+    /// is here and working, but no finished turn exists to put on a card yet.
+    public enum DiscussDestination: Equatable {
+        case conversationCard
+        case agentTerminal
+        case invitation
+    }
+
+    public static func discussDestination(hasCompletedTurn: Bool,
+                                          isLive: Bool) -> DiscussDestination {
+        if hasCompletedTurn { return .conversationCard }
+        if isLive { return .agentTerminal }
+        return .invitation
+    }
 
     public enum Action: Equatable {
         /// The action a generated page carries: put me in front of the agent
