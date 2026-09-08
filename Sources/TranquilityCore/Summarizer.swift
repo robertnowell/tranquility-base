@@ -143,11 +143,12 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
     public var isConfigured: Bool { Secrets.has(.anthropicAPIKey) }
 
-    // The tuned prompt, ported verbatim from tools/replay/prompts/vnext-a.txt
-    // (three replay rounds plus a 50-record generalization pass against real
-    // history). The pre-tuning baseline is preserved at
-    // tools/replay/prompts/current.txt — every wording difference between the two
-    // is a measured decision, not style.
+    // The tuned prompt began at tools/replay/prompts/vnext-a.txt (three replay
+    // rounds plus a 50-record generalization pass against real history), then
+    // gained the rationale, ladder, page-header, and carried-goal contracts.
+    // The pre-tuning baseline is preserved at tools/replay/prompts/current.txt.
+    // Production's complete publication contract lives here; replay prompts are
+    // the measured lineage and candidate workspace, not a second source of truth.
     //
     // The template's slots map to the user message built in `brief(for:)`:
     // {project_label} {notification_block} {branch_block} {opening_block}
@@ -219,8 +220,10 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
     static func systemPrompt(projectLabel: String) -> String { """
         You are the dispatcher for a developer running many coding-agent sessions at \
-        once. One just finished a turn. You write the ONE spoken update they will hear \
-        about it, in loop discipline: callsign first, short, exact, one decision.
+        once. One just finished a turn. You compose ONE user-facing briefing, revealed \
+        in stages: a short message now, a card beside it, an on-demand ladder for \
+        depth, and a page header. Keep the whole briefing short, exact, and oriented \
+        around one decision.
 
         Reply with ONLY a JSON object, no prose and no code fence:
 
@@ -239,6 +242,27 @@ public struct AnthropicSummaryProvider: SummaryProvider {
           "headline": "the agent's page headline: the FINDING, not the topic, 12 words max, or null",
           "deck":     "the page's standfirst: where things stand and what is left, 25 words max, or null"
         }
+
+
+        ── ONE BRIEFING, REVEALED IN STAGES ──
+
+        You are constructing one message for the user, not filling unrelated database \
+        fields. It is published in this order:
+
+        1. MESSAGE NOW — "recap" + "proposal" are spoken immediately.
+        2. CARD — "topic", "goal", "happened", "nextStep", "question", and \
+        "risk" are displayed beside the message.
+        3. LADDER ON REQUEST — "goal", "findings", "solution", "rationale", then \
+        the original message are spoken as the user asks for depth.
+        4. PAGE — "headline" + "deck" introduce the durable report.
+
+        Write with that disclosure order in mind. Before returning JSON, compare every \
+        non-null field. If two fields would be text-identical, keep the required one \
+        and set the optional duplicate to null. If both are required, rewrite each for \
+        its distinct job. Apply the same editorial rule to close paraphrases: every \
+        optional field must add information, not merely restate another field. Never \
+        invent detail just to make fields different. A carried goal is authoritative \
+        state and stays verbatim; omit an optional field that would only echo it.
 
 
         ── "recap": 12 words max, one sentence ──
@@ -293,9 +317,10 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         - Flowing speech, dense but plain. No lists, no labels, no headings. \
         Speakability applies with full force: no paths, no symbols, no hashes — this \
         is speech.
-        - Every sentence must add a fact the recap and proposal did not carry. \
+        - Every sentence must add a fact the earlier stages did not carry. \
         Repeating them is the failure mode this field exists to fix.
-        - null only when the turn is trivial and closed, with nothing behind it.
+        - null when no new reason remains after the earlier stages. Never restate \
+        them merely to satisfy the template.
 
         ── "findings": 40 words MAX, spoken only on request ──
 

@@ -172,6 +172,33 @@ extension GoalRungTests {
 }
 
 extension GoalRungTests {
+    /// The JSON fields are publication stages of one briefing, not independent
+    /// columns to fill. This is a prompt-level editorial rule deliberately: the
+    /// model can recognize an empty paraphrase, while a string matcher can only
+    /// grow special cases after each duplicate reaches the user.
+    func testThePromptBuildsOneStagedBriefingAndOmitsRepetition() {
+        let system = AnthropicSummaryProvider.systemPrompt(projectLabel: "tranquility base")
+        let stages = [
+            "1. MESSAGE NOW",
+            "2. CARD",
+            "3. LADDER ON REQUEST",
+            "4. PAGE",
+        ]
+
+        var cursor = system.startIndex
+        for stage in stages {
+            guard let found = system.range(of: stage, range: cursor..<system.endIndex) else {
+                return XCTFail("missing or out of order: \(stage)")
+            }
+            cursor = found.upperBound
+        }
+        XCTAssertTrue(system.contains("not filling unrelated database fields"))
+        XCTAssertTrue(system.contains("compare every non-null field"))
+        XCTAssertTrue(system.contains("set the optional duplicate to null"))
+        XCTAssertTrue(system.contains("close paraphrases"))
+        XCTAssertTrue(system.contains("A carried goal is authoritative state"))
+    }
+
     /// The template, pinned. "In project X, we are solving problem Y" — both
     /// halves, because a goal naming only the problem leaves the operator
     /// asking which of ten sessions is talking, and one naming only the project
