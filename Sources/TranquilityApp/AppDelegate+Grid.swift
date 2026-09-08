@@ -461,11 +461,13 @@ extension AppDelegate {
         let image: NSImage?
         if let symbol = appearance.symbol {
             image = NSImage(systemSymbolName: symbol,
-                            accessibilityDescription: "Tranquility Base")
+                            accessibilityDescription: AppIdentity.displayName)
             image?.isTemplate = true
         } else {
-            image = SiteMark.templateImage(filled: appearance.filled)
-            image?.accessibilityDescription = "Tranquility Base"
+            image = SiteMark.templateImage(
+                filled: appearance.filled,
+                developmentBadge: AppIdentity.channel == .development)
+            image?.accessibilityDescription = AppIdentity.displayName
         }
         button.image = image
         // The annunciator at rest (WS-B, ruled): the waiting count rides next to

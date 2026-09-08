@@ -1693,6 +1693,10 @@ extension StatusHUD {
         let markHollowInk = SiteMark.inkForTesting(size: 16, filled: false)
         let markFilledInk = SiteMark.inkForTesting(size: 16, filled: true)
         let markIsTemplate = SiteMark.templateImage().isTemplate
+        let developmentMarkInk = SiteMark.inkForTesting(
+            size: 16, filled: false, developmentBadge: true)
+        let developmentMarkIsTemplate = SiteMark.templateImage(
+            developmentBadge: true).isTemplate
         // Solid says something wants you, hollow says nothing new — the same
         // rule the grid draws. If the two ever render the same, the menu bar
         // has quietly stopped saying anything.
@@ -1702,12 +1706,14 @@ extension StatusHUD {
         // dark tile with a rumour on it.
         let iconInk16 = SiteMark.iconMarkInkForTesting(pixels: 16)
         let iconReadsAt16 = iconInk16 > 12
+        let developmentMarkDiffers = developmentMarkInk > markHollowInk + 2
         Permissions.log("mark drill: hollow=\(markHollowInk) filled=\(markFilledInk)"
-            + " template=\(markIsTemplate) icon16=\(iconInk16)")
+            + " dev=\(developmentMarkInk) template=\(markIsTemplate) icon16=\(iconInk16)")
         SelfTest.report("mark", [
             ("templateForTheMenuBar", markIsTemplate),
             ("readsAtSixteenPoints", markReadsAt16),
             ("solidAndHollowDiffer", markStatesDiffer),
+            ("developmentMarkIsDistinct", developmentMarkDiffers && developmentMarkIsTemplate),
             ("appIconShowsTheMarkAtSixteen", iconReadsAt16),
         ])
 
