@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1121</title>
+      <sparkle:version>1121</sparkle:version>
+      <sparkle:shortVersionString>0.3.1121</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Tue, 08 Sep 2026 02:15:48 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1121-1a592bafa/TranquilityBase-0.3.1121.dmg" type="application/octet-stream" length="13616253" sparkle:edSignature="VSQF53JHv/O/DOv82Rzb0Iza2MtcnGyZK9pleZRg6ox5kV2TycjlbdMunxyh1HhJAzFaNSrBCXhygKBjimG7Bw==" />
+    </item>
+    <item>
       <title>Version 0.3.1120</title>
       <sparkle:version>1120</sparkle:version>
       <sparkle:shortVersionString>0.3.1120</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Mon, 07 Sep 2026 21:23:49 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1112-41a2fe306/TranquilityBase-0.3.1112.dmg" type="application/octet-stream" length="13541778" sparkle:edSignature="WQV82GDYkcuqZNUEHxelnicTZan2nnhN3UZd81YdswdHLoe/+auAren9i0kW8I+nDSji4FjxLSOu6JuMcLhZCA==" />
     </item>
-    <item>
-      <title>Version 0.3.1111</title>
-      <sparkle:version>1111</sparkle:version>
-      <sparkle:shortVersionString>0.3.1111</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Mon, 07 Sep 2026 19:50:11 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1111-ebfb51549/TranquilityBase-0.3.1111.dmg" type="application/octet-stream" length="13537726" sparkle:edSignature="7/3qEYDHHVdtuEqI54juyJ3+dJbpk4RiU9oqDAq77bXsaydfIXmfvOiTmlCbb5WFCoJ3mKqLz7DDdMgzrwMEAg==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: RCfPMVjWwKH3JZV9PrbjED077Z9mWQu7SmO/1YGxmFPqn6wlQeXBQ5Kj2DSFJO8ALv5+eyu+sRLfKlyXps+mBg==
+edSignature: pcIgLINX+a7XOHtDR6edyxOB/brxE/pdaZGV6uMA+BTgEzwrGP8EBzCo2o7ue0wMd1uWuIOTo0I3XlP7K2AbCw==
 length: 6457
 -->
