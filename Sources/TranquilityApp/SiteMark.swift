@@ -83,7 +83,11 @@ enum SiteMark {
     /// selected state. It is also why this mark can never carry a lamp colour
     /// up there — ruled already, in
     /// docs/rulings/ruling-an-arrival-does-not-move-the-panel.md.
-    static func templateImage(size: CGFloat = 16, filled: Bool = false) -> NSImage {
+    static func templateImage(
+        size: CGFloat = 16,
+        filled: Bool = false,
+        developmentBadge: Bool = false
+    ) -> NSImage {
         let image = NSImage(size: NSSize(width: size, height: size),
                             flipped: false) { _ in
             let scale = size / grid
@@ -92,6 +96,19 @@ enum SiteMark {
             transform.concat()
             NSColor.black.setFill()
             path(filled: filled).fill()
+            if developmentBadge {
+                // A separate diamond changes Dev's silhouette without changing
+                // the lamp: hollow still means quiet and solid still means a
+                // turn is waiting. Kept inside the 16pt grid so the template
+                // remains crisp in both light and dark menu bars.
+                let badge = NSBezierPath()
+                badge.move(to: NSPoint(x: 14.25, y: 15.6))
+                badge.line(to: NSPoint(x: 15.6, y: 14.25))
+                badge.line(to: NSPoint(x: 14.25, y: 12.9))
+                badge.line(to: NSPoint(x: 12.9, y: 14.25))
+                badge.close()
+                badge.fill()
+            }
             return true
         }
         image.isTemplate = true
@@ -250,8 +267,15 @@ enum SiteMark {
     /// Rendered and counted rather than reasoned about. The 16px app icon
     /// passed every geometric check on its first run and came out a grey blob;
     /// nothing but looking at the pixels catches that, so the drill looks.
-    static func inkForTesting(size: CGFloat, filled: Bool) -> Int {
-        let image = templateImage(size: size, filled: filled)
+    static func inkForTesting(
+        size: CGFloat,
+        filled: Bool,
+        developmentBadge: Bool = false
+    ) -> Int {
+        let image = templateImage(
+            size: size,
+            filled: filled,
+            developmentBadge: developmentBadge)
         guard let tiff = image.tiffRepresentation,
               let rep = NSBitmapImageRep(data: tiff) else { return 0 }
         var ink = 0
