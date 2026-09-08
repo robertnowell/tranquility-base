@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1122</title>
+      <sparkle:version>1122</sparkle:version>
+      <sparkle:shortVersionString>0.3.1122</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Tue, 08 Sep 2026 03:05:21 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1122-a88359e49/TranquilityBase-0.3.1122.dmg" type="application/octet-stream" length="13634164" sparkle:edSignature="Wv5GTIuEkTApQeRCoMm+OZn9JnNEGW1NQAq/GZp/JQFAeaIlSas4eoPJ+/KyR2tAIl1wKfeP56lDVg9kC6tNBQ==" />
+    </item>
+    <item>
       <title>Version 0.3.1121</title>
       <sparkle:version>1121</sparkle:version>
       <sparkle:shortVersionString>0.3.1121</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Mon, 07 Sep 2026 21:37:13 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1113-df293a4da/TranquilityBase-0.3.1113.dmg" type="application/octet-stream" length="13547817" sparkle:edSignature="3703w/VcM3iCf8htqHOcoSx9kIGdZBg1akc0RHl1uzXA/OiXvmRSmenZGoc2SquvyQJ0WY3svyWl2NyGwBfJCQ==" />
     </item>
-    <item>
-      <title>Version 0.3.1112</title>
-      <sparkle:version>1112</sparkle:version>
-      <sparkle:shortVersionString>0.3.1112</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Mon, 07 Sep 2026 21:23:49 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1112-41a2fe306/TranquilityBase-0.3.1112.dmg" type="application/octet-stream" length="13541778" sparkle:edSignature="WQV82GDYkcuqZNUEHxelnicTZan2nnhN3UZd81YdswdHLoe/+auAren9i0kW8I+nDSji4FjxLSOu6JuMcLhZCA==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: pcIgLINX+a7XOHtDR6edyxOB/brxE/pdaZGV6uMA+BTgEzwrGP8EBzCo2o7ue0wMd1uWuIOTo0I3XlP7K2AbCw==
+edSignature: O8MV+f4khu0aQkOOGgPACTnujw0rFC1pokn5D0WyNF1cKKKRQeEe5/2rxlnY/sSssTmDOTsGiwUxYpygLnGpAw==
 length: 6457
 -->
