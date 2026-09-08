@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1123</title>
+      <sparkle:version>1123</sparkle:version>
+      <sparkle:shortVersionString>0.3.1123</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Tue, 08 Sep 2026 03:20:47 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1123-37fa46ced/TranquilityBase-0.3.1123.dmg" type="application/octet-stream" length="13635008" sparkle:edSignature="gi6c3OKpTeKhKhHamGSaruMzaGE5dK9qkwl9dLb5W5XgVsr0bO08xTdTMWP3b6MGZM1O4Ge6LmcTK7oCfc9oAQ==" />
+    </item>
+    <item>
       <title>Version 0.3.1122</title>
       <sparkle:version>1122</sparkle:version>
       <sparkle:shortVersionString>0.3.1122</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Mon, 07 Sep 2026 21:48:44 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1114-241346df8/TranquilityBase-0.3.1114.dmg" type="application/octet-stream" length="13551294" sparkle:edSignature="FR92N1r717CEZjcNojgKxWy1Ol9jkQfycSLUGk8MooNlr0eyqCHNkIAhMZcjpYmZBV69hrecXDjCZo1+97FnBA==" />
     </item>
-    <item>
-      <title>Version 0.3.1113</title>
-      <sparkle:version>1113</sparkle:version>
-      <sparkle:shortVersionString>0.3.1113</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Mon, 07 Sep 2026 21:37:13 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1113-df293a4da/TranquilityBase-0.3.1113.dmg" type="application/octet-stream" length="13547817" sparkle:edSignature="3703w/VcM3iCf8htqHOcoSx9kIGdZBg1akc0RHl1uzXA/OiXvmRSmenZGoc2SquvyQJ0WY3svyWl2NyGwBfJCQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: O8MV+f4khu0aQkOOGgPACTnujw0rFC1pokn5D0WyNF1cKKKRQeEe5/2rxlnY/sSssTmDOTsGiwUxYpygLnGpAw==
+edSignature: yYeVpYYrq6AUZUvTKj9T72SjfbB58FismAANTGQCSB842KYtfuBLSoCKAYG7EjpwJoR8iWyC/NEtoR2ErvnODQ==
 length: 6457
 -->
