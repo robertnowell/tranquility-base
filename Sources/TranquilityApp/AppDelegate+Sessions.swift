@@ -1476,7 +1476,7 @@ extension AppDelegate {
             let launch = HarnessLaunch(harness: fresh.harness)
             switch SessionLauncher.resume(sessionId: sessionId, directory: command.cwd,
                                           launch: launch) {
-            case .success(let revivedTty):
+            case .success(let revivedPane):
                 // The receipt waits for the session to actually come back.
                 // It used to fire here, the instant `resume` returned — which
                 // means only that a command was issued and its pane did not
@@ -1526,12 +1526,12 @@ extension AppDelegate {
                         //
                         // Registration already failed. That is the finding.
                         // Show the pane and quote it, whatever is on it.
-                        let screen = SessionLauncher.paneTail(tty: revivedTty)
+                        let screen = SessionLauncher.paneTail(pane: revivedPane)
                         Permissions.log("revive: \(sessionId.prefix(8)) launched but never "
                             + "registered. Opening a window. Its screen says: "
                             + (screen.isEmpty ? "(nothing readable)" : screen))
                         let opened = SessionLauncher.showPane(
-                            tty: revivedTty,
+                            pane: revivedPane,
                             why: "the revive never registered, and its screen is the only "
                                 + "thing that knows why")
                         // The clipboard rescue survives, but as the FALLBACK
@@ -1779,7 +1779,7 @@ extension AppDelegate {
             let result = SessionLauncher.launch(
                 directory: dir, launch: HarnessLaunch(adapter: adapter, command: command),
                 acceptTrustPrompt: false)
-            guard case .success(let tty) = result else {
+            guard case .success(let pane) = result else {
                 // Every exit from here on releases the promise. A waiter left
                 // hanging is a reply that never lands and never says why, which
                 // is the one outcome worse than the misroute this replaces.
@@ -1811,9 +1811,10 @@ extension AppDelegate {
                 }
                 return
             }
+            let tty = pane.paneTty
             Task.detached(priority: .utility) {
                 SessionLauncher.watchForTrustPrompt(
-                    tty: tty, adapter: adapter, onNeedsHuman: reportQuestion)
+                    pane: pane, adapter: adapter, onNeedsHuman: reportQuestion)
             }
             Track.record("agent_launched", ["harness": .token(adapter.id), "how": "new",
                                             "ms": .int(Int(Date().timeIntervalSince(requestedAt) * 1000))])
@@ -1831,7 +1832,7 @@ extension AppDelegate {
             let sessionIdOrNil = isCodex
                 ? LaunchGreeting.awaitCodexRegistration(
                     excluding: before,
-                    screen: { SessionLauncher.paneTail(tty: tty) })
+                    screen: { SessionLauncher.paneTail(pane: pane) })
                 // The pane goes in so the wait can end the moment the screen
                 // stops moving, rather than paying the whole thirty seconds
                 // for a launch that is sitting on a dialog. See
@@ -1839,7 +1840,7 @@ extension AppDelegate {
                 // slow launch from being called stuck.
                 : LaunchGreeting.awaitRegistration(
                     directory: dir, excluding: before,
-                    screen: { SessionLauncher.paneTail(tty: tty) })
+                    screen: { SessionLauncher.paneTail(pane: pane) })
             guard let sessionId = sessionIdOrNil else {
                 launch?.abandon()
                 if let launch {
@@ -1914,7 +1915,7 @@ extension AppDelegate {
                 // harness nobody here has seen — the correct action is the
                 // same, and that identical outcome is what makes dropping
                 // the question safe rather than merely simpler.
-                let screen = SessionLauncher.paneTail(tty: tty)
+                let screen = SessionLauncher.paneTail(pane: pane)
                 // The ELAPSED time, not the budget. It read "after 30s" for
                 // one evening, which was already false the moment the wait
                 // learned to end early: the first run after that fix reported
@@ -1931,7 +1932,7 @@ extension AppDelegate {
                     + ". Opening a window on it. Its screen says: "
                     + (screen.isEmpty ? "(nothing readable)" : screen))
                 let opened = SessionLauncher.showPane(
-                    tty: tty, why: "it never registered, and its screen is the only thing "
+                    pane: pane, why: "it never registered, and its screen is the only thing "
                         + "that knows why")
                 await MainActor.run { [weak self] in
                     // settleLaunchCard first, for the reason the old branch
@@ -1969,11 +1970,10 @@ extension AppDelegate {
             // same tty (measured live: a codex launch's own child process
             // shares its tty and does not contain this string).
             if isCodex, let pid = ProcessProbe.pid(onTty: tty, containing: command) {
-                let pane = TmuxOwnership.pane(forTty: tty)
                 FileSessionOwnershipStore.shared.record(SessionOwnershipRecord(
                     sessionId: sessionId, harness: CodexAdapter().id, pid: pid,
-                    paneId: pane?.paneId, socketName: pane?.socketName,
-                    sessionName: pane?.sessionName, paneTty: tty, cwd: dir))
+                    paneId: pane.paneId, socketName: pane.socketName,
+                    sessionName: pane.sessionName, paneTty: pane.paneTty, cwd: dir))
             }
 
             // Kept BEFORE the greeting row is written and before the card is
