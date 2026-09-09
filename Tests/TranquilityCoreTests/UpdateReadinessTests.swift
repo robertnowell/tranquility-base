@@ -87,4 +87,54 @@ final class UpdateReadinessTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(UpdateReadiness.recheckInterval, 5)
         XCTAssertLessThanOrEqual(UpdateReadiness.recheckInterval, 60)
     }
+
+    /// Hourly is Sparkle's floor and the ruling. A casual edit back to daily
+    /// has to argue with this, because daily is how a never-quit app ended
+    /// up five releases behind on 09 Sep.
+    func testCheckIntervalIsHourly() {
+        XCTAssertEqual(UpdateReadiness.checkInterval, 3600)
+    }
+
+    // MARK: - The gate
+
+    /// Idle for one poll is an instant, not a juncture: the gate holds.
+    func testOneIdlePollDoesNotInstall() {
+        var gate = UpdateReadiness.InstallGate()
+        XCTAssertFalse(gate.observe(nil))
+    }
+
+    /// Two idle polls in a row is the ruling's "truly at a safe juncture".
+    func testTwoConsecutiveIdlePollsInstall() {
+        var gate = UpdateReadiness.InstallGate()
+        XCTAssertFalse(gate.observe(nil))
+        XCTAssertTrue(gate.observe(nil))
+    }
+
+    /// A busy poll resets the streak. Idle, then a press, then idle again is
+    /// a person using the app, and the install waits for them to stop.
+    func testABusyPollResetsTheStreak() {
+        var gate = UpdateReadiness.InstallGate()
+        XCTAssertFalse(gate.observe(nil))
+        XCTAssertFalse(gate.observe(.panelEngaged))
+        XCTAssertFalse(gate.observe(nil))
+        XCTAssertTrue(gate.observe(nil))
+        XCTAssertEqual(gate.consecutiveIdlePolls, 2)
+    }
+
+    /// The queue counts the same as the panel: a reply dispatching to a
+    /// session with nothing on screen resets the streak too.
+    func testInFlightUtterancesResetTheStreak() {
+        var gate = UpdateReadiness.InstallGate()
+        XCTAssertFalse(gate.observe(nil))
+        XCTAssertFalse(gate.observe(.utterancesInFlight))
+        XCTAssertEqual(gate.consecutiveIdlePolls, 0)
+    }
+
+    /// The required streak, pinned: two polls at ten seconds is twenty
+    /// seconds of nobody there. Zero would install on the first idle instant;
+    /// ten would make a quiet lunch break the only window.
+    func testRequiredIdlePollsIsASmallNumber() {
+        XCTAssertGreaterThanOrEqual(UpdateReadiness.requiredIdlePolls, 2)
+        XCTAssertLessThanOrEqual(UpdateReadiness.requiredIdlePolls, 6)
+    }
 }

@@ -34,6 +34,10 @@ final class Updates: NSObject {
     /// rather than captured by the timer: the timer's block is `@Sendable`, and
     /// a non-Sendable closure cannot cross into it under Swift 6.
     private var pendingInstall: (() -> Void)?
+    /// The idle streak between polls, and the last reason logged so a
+    /// twenty-minute read-back is one line, not a hundred and twenty.
+    private var gate = UpdateReadiness.InstallGate()
+    private var lastReportedBlock: UpdateReadiness.Block?
 
     /// Identity configuration, not a compile-time Dev branch. The published
     /// app exercises this exact implementation; local and TEST identities must
@@ -71,6 +75,16 @@ final class Updates: NSObject {
             startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
         let feed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String
         log("updates: feed \(feed ?? "<absent>")")
+        // Hourly, not daily (ruled 09 Sep). The plist carries the same value
+        // for a fresh install; this line is for the copies already out there,
+        // whose Sparkle defaults were written on first launch under the old
+        // key and would otherwise keep the old cadence for their lifetime.
+        // Sparkle persists it, so this is idempotent.
+        if let updater = controller?.updater,
+           updater.updateCheckInterval != UpdateReadiness.checkInterval {
+            updater.updateCheckInterval = UpdateReadiness.checkInterval
+            log("updates: check interval set to \(Int(UpdateReadiness.checkInterval / 60)) min")
+        }
         // A check at EVERY launch, not only when the daily clock says so.
         // Sparkle's scheduled check fires at last-check plus a day, and a
         // launch inside that day does not check at all: the 7 Sep drill
@@ -130,16 +144,33 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
         return true
     }
 
-    /// Same rule for the quit-time install path, which is the one most people will
-    /// actually hit: Sparkle stages the update and applies it as the app exits.
-    /// Even then a dispatch can still be in flight, so the same question is asked.
+    /// The path a background download actually takes, and the one this file
+    /// got wrong for two days. Sparkle's contract: return `false` and it
+    /// installs on quit, presenting the update itself only after its own
+    /// long "impatient" interval; return `true` and it stalls the cycle until
+    /// we invoke the handler, which installs and relaunches with no UI.
+    ///
+    /// Until 09 Sep this returned `false` whenever the app was idle at the
+    /// moment the download finished, which meant an idle app never updated
+    /// at all: the postpone-then-install path only ran when the app was
+    /// busy. Robert's production app downloaded 0.3.1123 at 10:26 and was
+    /// still on 0.3.1118 at noon, five releases behind, with the
+    /// announcement card showing a hint line deleted two days earlier.
+    ///
+    /// Now every download takes the same road: always `true`, always through
+    /// `waitUntilIdle`, which installs after twenty seconds of continuous
+    /// idle (`UpdateReadiness.requiredIdlePolls`) and otherwise keeps
+    /// waiting. Sparkle still installs on quit as the floor.
     func updater(
         _ updater: SPUUpdater,
         willInstallUpdateOnQuit item: SUAppcastItem,
         immediateInstallationBlock immediateInstallHandler: @escaping () -> Void
     ) -> Bool {
-        guard let block = currentBlock() else { return false }
-        log("updates: quit-time install postponed (\(block.rawValue))")
+        if let block = currentBlock() {
+            stage("install waiting", item, detail: block.rawValue)
+        } else {
+            stage("install waiting", item, detail: "idle, settling")
+        }
         waitUntilIdle(then: immediateInstallHandler)
         return true
     }
@@ -233,19 +264,29 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
     private func waitUntilIdle(then install: @escaping () -> Void) {
         postponeTimer?.invalidate()
         pendingInstall = install
+        gate = UpdateReadiness.InstallGate()
         postponeTimer = Timer.scheduledTimer(
             withTimeInterval: UpdateReadiness.recheckInterval, repeats: true
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                guard self.currentBlock() == nil else { return }
+                let block = self.currentBlock()
+                guard self.gate.observe(block) else {
+                    if let block, block != self.lastReportedBlock {
+                        self.log("updates: still waiting (\(block.rawValue))")
+                    }
+                    self.lastReportedBlock = block
+                    return
+                }
                 self.postponeTimer?.invalidate()
                 self.postponeTimer = nil
+                self.lastReportedBlock = nil
                 let go = self.pendingInstall
                 self.pendingInstall = nil
-                self.log("updates: idle now, installing")
+                self.log("updates: idle for \(Int(UpdateReadiness.recheckInterval) * UpdateReadiness.requiredIdlePolls)s, installing and relaunching")
                 go?()
             }
         }
     }
+
 }
