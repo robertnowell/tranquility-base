@@ -198,7 +198,9 @@ public enum AudioInputDevice {
         /// `loader` is the test seam; production reads the HAL.
         init(maxAge: TimeInterval = 300,
              loader: @escaping @Sendable () -> ([Device], AudioDeviceID) = {
-                (AudioInputDevice.allInputs(), AudioInputDevice.systemDefaultId())
+                AudioSystemHealth.shared.timed("device list") {
+                    (AudioInputDevice.allInputs(), AudioInputDevice.systemDefaultId())
+                }
              }) {
             self.maxAge = maxAge
             self.loader = loader

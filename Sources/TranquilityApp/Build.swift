@@ -233,6 +233,10 @@ extension StatusHUD {
         // read as the same move.
         newSessionButton = quietAction(StateLegend.startSessionTitle,
                                        #selector(newSessionForArtifactTapped))
+        // The wedged-daemon card's one repair. Quiet like the others: the
+        // placard already carries the alarm, and this is the door.
+        restartAudioButton = quietAction(StateLegend.restartAudioTitle,
+                                         #selector(restartAudioTapped))
 
         // A real symbol at a real size. The text glyph was 12pt — visually timid
         // and, worse, a hit target well under the ~24pt a fingertip-sized control
@@ -297,6 +301,7 @@ extension StatusHUD {
         buttons.addView(dontSendButton, in: .leading)
         buttons.addView(micSettingsButton, in: .leading)
         buttons.addView(newSessionButton, in: .leading)
+        buttons.addView(restartAudioButton, in: .leading)
         buttons.addView(cancelTranscriptionButton, in: .leading)
         buttons.addView(retryTranscriptionButton, in: .leading)
         buttons.addView(goButton, in: .trailing)

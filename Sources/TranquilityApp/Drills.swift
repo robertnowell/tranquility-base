@@ -1614,6 +1614,7 @@ extension StatusHUD {
             ("collapse", collapseButton), ("back", backButton),
             ("pastBack", pastBackButton), ("dontSend", dontSendButton),
             ("micSettings", micSettingsButton), ("newSession", newSessionButton),
+            ("restartAudio", restartAudioButton),
             ("cancelTranscription", cancelTranscriptionButton),
             ("retryTranscription", retryTranscriptionButton),
         ]
