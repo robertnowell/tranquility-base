@@ -286,6 +286,22 @@ extension Coordinator {
         }
         guard let session = candidate else { return .nothingWaiting }
 
+        // A pick is an answer to "who am I talking to", before it is a request
+        // to hear anything. Until 09 Sep the target moved only when audio
+        // reached the ear, so a lamp clicked and then spoken over before the
+        // clip started, or clicked outside the fifteen-minute reply window,
+        // left the words going to whoever was heard last, or, with no target
+        // at all, typed into the frontmost app (app.log 09 Sep 22:21, a
+        // relaunch's first dictation landing in Terminal). Robert: "if I click
+        // the blue lamp, that should now be the active agent I'm talking to."
+        // The automatic path keeps its rule, nothing written before the audio,
+        // because a refused or silent ⌃⌥ must not consume a turn; a click
+        // consumes it on purpose.
+        if sessionId != nil {
+            try store.advanceCursor(sessionId: session.sessionId, heardThrough: session.latestId)
+            Coordinator.trace?("pick: \(session.sessionId.prefix(8)) is the reply target")
+        }
+
         if !ignoringGate {
             let decision = gate.evaluate()
             guard decision.allowed else {
