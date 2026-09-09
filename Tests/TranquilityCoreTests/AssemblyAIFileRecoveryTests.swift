@@ -33,6 +33,11 @@ final class AssemblyAIFileRecoveryTests: XCTestCase {
         XCTAssertEqual(AssemblyAIFileRecovery.state(of: ["status": "processing"]), .processing)
     }
 
+    func testMalformedCompletionDoesNotDeclareSilence() {
+        XCTAssertEqual(AssemblyAIFileRecovery.state(of: ["status": "completed"]),
+                       .failed("completed transcript has no text field"))
+    }
+
     func testAnUnknownStatusKeepsPollingRatherThanInventingAnOutcome() {
         // A new server-side status must read as "not terminal yet", never as
         // success or failure — the poll ceiling bounds the wait either way.
@@ -45,11 +50,10 @@ final class AssemblyAIFileRecoveryTests: XCTestCase {
         XCTAssertTrue(AssemblyAIFileRecovery(keyOverride: "k").isConfigured)
     }
 
-    func testDefaultChainOrderIsWhisperThenAssemblyThenTheFloor() {
-        // The 12 Aug lesson encoded as an assertion: three rungs, two vendors
-        // of cloud quality before the on-device floor, so no single vendor's
-        // outage — and no single rung's blind spot — decides a transcript.
+    func testDefaultChainAssessesFilesBeforeTheGenerativeFallback() {
+        // The reported silent captures must get a file assessment from the
+        // primary provider before a generative fallback is asked for text.
         XCTAssertEqual(RecoveryChain().providers.map(\.name),
-                       ["openai", "assemblyai-file", "apple-speech"])
+                       ["assemblyai-file", "openai", "apple-speech"])
     }
 }

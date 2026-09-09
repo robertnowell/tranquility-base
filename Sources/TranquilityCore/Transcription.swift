@@ -659,9 +659,9 @@ public struct OpenAIRecovery: RecoveryTranscriptionProvider {
             throw TranscriptionFailure.providerUnavailable("http \(http.statusCode)")
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let text = (json["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !text.isEmpty
-        else { throw TranscriptionFailure.noSpeechDetected }
+              let text = (json["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        else { throw TranscriptionFailure.providerUnavailable("invalid transcription response") }
+        guard !text.isEmpty else { throw TranscriptionFailure.noSpeechDetected }
 
         return text
     }

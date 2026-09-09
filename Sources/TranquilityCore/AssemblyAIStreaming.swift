@@ -263,6 +263,7 @@ final class AssemblyAIStreamingSession: LiveTranscriptionSession, @unchecked Sen
     /// Callbacks stop for good once the session concludes (final, failure, or
     /// cancel) — a late socket read must never resurrect a closed utterance.
     private var concluded = false
+    private var finalRequested = false
 
     private enum Outbound { case audio(Data), text(String), end }
     private let outbox: AsyncStream<Outbound>.Continuation
@@ -332,6 +333,7 @@ final class AssemblyAIStreamingSession: LiveTranscriptionSession, @unchecked Sen
         lock.lock()
         var tail = pending
         pending = Data()
+        finalRequested = true
         lock.unlock()
         if !tail.isEmpty {
             // A tail shorter than the wire minimum is padded with silence
@@ -383,11 +385,12 @@ final class AssemblyAIStreamingSession: LiveTranscriptionSession, @unchecked Sen
                     provider: providerName)) }
                 return
             case .endedWithoutFinal(let partial):
+                let requested = didRequestFinal()
                 conclude { _ in
                     if let partial, !partial.isEmpty {
                         return .failure(.truncatedNoFinality(partial: partial))
                     }
-                    return .failure(.noSpeechDetected)
+                    return .failure(requested ? .noSpeechDetected : .sessionExpired)
                 }
                 return
             case .serverError(let message):
@@ -402,6 +405,11 @@ final class AssemblyAIStreamingSession: LiveTranscriptionSession, @unchecked Sen
 
     /// Synchronous on purpose — NSLock is not async-safe, so every locked
     /// region lives in a sync function the async loop calls.
+    private func didRequestFinal() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return finalRequested
+    }
+
     private func applyUnlessConcluded(_ text: String) -> AssemblyAITurnReducer.Action? {
         lock.lock()
         defer { lock.unlock() }
@@ -477,6 +485,21 @@ public final class StreamedUtterance: @unchecked Sendable {
         case .failed(.connectionDropped(let hadPartialTranscript)):
             return hadPartialTranscript
         default: return false
+        }
+    }
+
+    /// A completed provider assessment of fed audio, with no recognized text.
+    /// Read after finish(): nil also covers transport failure, timeout, missing
+    /// credentials, and a partial transcript, all of which still need recovery.
+    public var noSpeechProvider: String? {
+        lock.lock(); defer { lock.unlock() }
+        guard bytesFed > 0, partialChars == 0 else { return nil }
+        switch outcome {
+        case .failed(.noSpeechDetected): return provider.name
+        case .final(let result) where result.finality == .explicitEndOfTurn
+            && result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+            return provider.name
+        default: return nil
         }
     }
 
@@ -582,8 +605,8 @@ public final class StreamedUtterance: @unchecked Sendable {
     }
 
     /// Key-up: ask for the final and wait briefly. Returns the transcript only
-    /// on a trustworthy explicit end-of-turn; nil on ANY failure or timeout,
-    /// which the caller answers with the file-based chain. The timeout is the
+    /// on a trustworthy explicit end-of-turn. Nil with `noSpeechProvider` ends
+    /// the capture without recovery; other nil results need the file chain. The timeout is the
     /// cap on how long streaming may delay the reply flow — the fallback path
     /// is never slower than it was before streaming existed, minus this bound.
     public func finish(timeout: TimeInterval = 3.0) async -> TranscriptionResult? {
@@ -608,8 +631,11 @@ public final class StreamedUtterance: @unchecked Sendable {
                     + "end-of-turn (\(result.finality.rawValue)); file chain answers")
                 return nil
             case .failed(let failure):
-                recordFinish("failed", code: failure.diagnosticCode, began: began)
-                Self.trace?("finish: nil — stream failed (\(failure)); file chain answers")
+                recordFinish(noSpeechProvider != nil ? "no_speech_detected" : "failed",
+                             code: failure.diagnosticCode, began: began)
+                Self.trace?(noSpeechProvider != nil
+                    ? "finish: no_speech_detected; no automatic file recovery"
+                    : "finish: nil — stream failed (\(failure)); file chain answers")
                 return nil
             case .pending:
                 if Task.isCancelled {

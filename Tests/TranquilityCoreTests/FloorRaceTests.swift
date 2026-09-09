@@ -88,6 +88,49 @@ final class FloorRaceTests: XCTestCase {
         XCTAssertTrue(outcome.attempts.contains { $0.hasPrefix("floor:") })
     }
 
+    private struct NoSpeech: RecoveryTranscriptionProvider {
+        let name = "no-speech"
+        let isConfigured = true
+        var delay: UInt64 = 0
+        func transcribe(fileAt url: URL) async throws -> TranscriptionResult {
+            if delay > 0 { try await Task.sleep(nanoseconds: delay) }
+            throw TranscriptionFailure.noSpeechDetected
+        }
+    }
+
+    private struct SlowSpeech: RecoveryTranscriptionProvider {
+        let name = "slow-speech"
+        let isConfigured = true
+        func transcribe(fileAt url: URL) async throws -> TranscriptionResult {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            return .init(text: "actual speech", finality: .recoveryForcedFinal, provider: name)
+        }
+    }
+
+    func testOrderedNoSpeechCancelsAStartedFloorWithoutBecomingCancelled() async {
+        let outcome = await RecoveryChain(providers: [NoSpeech(delay: 100_000_000), Stalls()],
+            maxAttemptsPerProvider: 1, floorAfter: 0.01).transcribe(fileAt: file)
+        XCTAssertNil(outcome.result)
+        XCTAssertEqual(outcome.disposition, .noSpeechDetected)
+        XCTAssertTrue(outcome.diagnostics.contains { $0.outcome == "cancelled" })
+    }
+
+    func testNoSpeechFinishesWithoutStartingThePhantomFloor() async {
+        let outcome = await RecoveryChain(
+            providers: [NoSpeech(), Says(name: "floor", text: "Thank you for watching.")],
+            maxAttemptsPerProvider: 1, floorAfter: 30).transcribe(fileAt: file)
+        XCTAssertNil(outcome.result)
+        XCTAssertEqual(outcome.disposition, .noSpeechDetected)
+        XCTAssertEqual(outcome.diagnostics.map(\.provider), ["no-speech"])
+    }
+
+    func testEmptyFloorDoesNotVetoSpeechFromTheOrderedProvider() async {
+        let outcome = await RecoveryChain(providers: [SlowSpeech(), NoSpeech()],
+            maxAttemptsPerProvider: 1, floorAfter: 0.01).transcribe(fileAt: file)
+        XCTAssertEqual(outcome.result?.text, "actual speech")
+        XCTAssertEqual(outcome.disposition, .completed)
+    }
+
     func testNilFloorAfterKeepsTheSequentialLadder() async {
         let chain = RecoveryChain(
             providers: [Fails(name: "first"), Says(name: "second", text: "ladder reached me")],

@@ -1552,6 +1552,9 @@ case "reconcile":
         if let result = outcome.result {
             print("\n[\(result.provider), \(result.finality.rawValue), \(ms)ms]")
             print(result.text)
+        } else if outcome.disposition == .noSpeechDetected {
+            print("\nNo audio detected. The recording is unchanged. [\(ms)ms]")
+            exit(6)
         } else {
             print("\nno provider succeeded — \(outcome.lastFailure.map { "\($0)" } ?? "unknown")")
             print("The audio is untouched; retry with `tbase retry-failed` once a provider is available.")
@@ -1626,6 +1629,10 @@ case "reconcile":
             let waitMs = Int(Date().timeIntervalSince(finalStarted) * 1000)
             print("\n[\(result.provider), \(result.finality.rawValue), final \(waitMs)ms after end-of-audio]")
             print(result.text)
+        } else if let provider = stream.noSpeechProvider {
+            let waitMs = Int(Date().timeIntervalSince(finalStarted) * 1000)
+            print("\n[\(provider), no_speech_detected; final \(waitMs)ms after end-of-audio; no automatic file recovery]")
+            exit(6)
         } else {
             print("\nstream produced no trustworthy final — in the app this utterance")
             print("falls back to the file-based recovery chain (the audio is always saved first).")

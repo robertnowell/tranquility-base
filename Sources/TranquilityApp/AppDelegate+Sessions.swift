@@ -265,9 +265,9 @@ extension AppDelegate {
     ///                      the stage and offers the door out.
     func finishWithoutRecognizedSpeech() {
         hud.endCapture(because: "no speech detected")
-        lastStatusLine = "no speech detected"
+        lastStatusLine = "No audio detected"
         showIdleGrid()
-        hud.flashNotice(StateLegend.noWordsNotice)
+        hud.flashNotice(StateLegend.noWordsNotice, lens: .content)
     }
 
     func reportNothingHeard(because reason: String) {
@@ -294,7 +294,7 @@ extension AppDelegate {
             lastStatusLine = "nothing heard"
             showIdleGrid()
             if held >= Self.notionalUtterance {
-                hud.flashNotice(StateLegend.noWordsNotice)
+                hud.flashNotice(StateLegend.noWordsNotice, lens: .content)
             }
         }
         rebuildMenu()
@@ -376,6 +376,7 @@ extension AppDelegate {
                     let utterance = try await store.captureAndTranscribe(
                         pcm16: pcm, sampleRate: 16_000, chain: RecoveryChain(), eventId: nil,
                         streamed: streamed, streamHadRecognizedText: liveStream?.hasRecognizedText ?? false,
+                        streamNoSpeechProvider: liveStream?.noSpeechProvider,
                         preWritten: capturedFile, utteranceId: attemptId)
                     // Cancelled (or replaced) while transcribing: the words must not
                     // be pasted anywhere. The audio row is durable and stays.
@@ -526,6 +527,7 @@ extension AppDelegate {
                 let outcome = try await coordinator.submitReply(
                     pcm16: pcm, to: spokenTo, streamed: streamed,
                     streamHadRecognizedText: liveStream?.hasRecognizedText ?? false,
+                    streamNoSpeechProvider: liveStream?.noSpeechProvider,
                     preWritten: capturedFile, utteranceId: attemptId)
 
                 // You started saying it again while this was still transcribing.

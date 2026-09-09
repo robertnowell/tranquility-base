@@ -41,7 +41,7 @@ final class TranscriptionDiagnosticsTests: XCTestCase {
         let outcome = await run([Provider(name: "cloud", failure: .noSpeechDetected),
                                  Provider(name: "device", failure: .noSpeechDetected)])
         XCTAssertEqual(outcome.disposition, .noSpeechDetected)
-        XCTAssertEqual(outcome.diagnostics.map(\.errorCode), ["no_speech_detected", "no_speech_detected"])
+        XCTAssertEqual(outcome.diagnostics.map(\.errorCode), ["no_speech_detected"])
     }
 
     private struct CancelledProvider: RecoveryTranscriptionProvider {
@@ -53,10 +53,10 @@ final class TranscriptionDiagnosticsTests: XCTestCase {
         }
     }
 
-    func testCancellationAfterAnEmptyAnswerIsNotNoSpeech() async {
+    func testCancellationBeforeAProviderAssessmentIsNotNoSpeech() async {
         let task = Task {
-            await RecoveryChain(providers: [Provider(name: "empty", failure: .noSpeechDetected),
-                                            CancelledProvider()],
+            await RecoveryChain(providers: [CancelledProvider(),
+                                            Provider(name: "empty", failure: .noSpeechDetected)],
                                 maxAttemptsPerProvider: 1, floorAfter: nil)
                 .transcribe(fileAt: URL(fileURLWithPath: "/unused.wav"))
         }
@@ -83,6 +83,7 @@ final class TranscriptionDiagnosticsTests: XCTestCase {
         let final = await stream.finish()
         XCTAssertNil(final)
         XCTAssertTrue(stream.hasRecognizedText)
+        XCTAssertNil(stream.noSpeechProvider)
         let store = try QueueStore(url: directory.appendingPathComponent("queue.sqlite"))
         let utterance = try await store.captureAndTranscribe(
             pcm16: Data(count: 32000), sampleRate: 16000,
@@ -142,10 +143,12 @@ final class TranscriptionDiagnosticsTests: XCTestCase {
         XCTAssertEqual(events().last?["trigger"] as? String, "retry_failed")
     }
 
-    func testOneNoSpeechAnswerDoesNotEraseAnAuthenticationFailure() async {
+    func testCompletedNoSpeechAssessmentStopsAfterAnEarlierServiceFailure() async {
         let outcome = await run([Provider(name: "cloud", failure: .authenticationFailed),
                                  Provider(name: "device", failure: .noSpeechDetected)])
-        XCTAssertEqual(outcome.disposition, .providerError)
+        XCTAssertEqual(outcome.disposition, .noSpeechDetected)
+        XCTAssertEqual(outcome.diagnostics.first?.errorCode, "authentication_failed",
+                       "the operational failure remains in diagnostics")
     }
 
     func testNoConfiguredProvidersIsNotEvidenceOfSilence() async {
@@ -155,13 +158,46 @@ final class TranscriptionDiagnosticsTests: XCTestCase {
         XCTAssertEqual(outcome.diagnostics.first?.ordinal, 0)
     }
 
-    func testEmptySuccessfulResultDoesNotStopRecovery() async {
+    func testEmptySuccessfulResultStopsBeforePhantomFallbackText() async {
         let outcome = await run([Provider(name: "empty", text: "  \n"),
                                  Provider(name: "fallback", text: "usable words")])
-        XCTAssertEqual(outcome.result?.provider, "fallback")
-        XCTAssertEqual(outcome.disposition, .completed)
+        XCTAssertNil(outcome.result)
+        XCTAssertEqual(outcome.attempts.count, 1)
+        XCTAssertEqual(outcome.disposition, .noSpeechDetected)
         XCTAssertEqual(outcome.diagnostics.first?.errorCode, "no_speech_detected")
         XCTAssertFalse(events().description.contains("usable words"))
+    }
+
+    func testActualSpeechIsNotRemovedByPhraseOrLanguageFilters() async {
+        for text in ["Thank you for watching.", "MBC 뉴스 이덕영입니다."] {
+            let outcome = await run([Provider(name: "speech", text: text)])
+            XCTAssertEqual(outcome.result?.text, text)
+        }
+    }
+
+    func testConflictingStreamTextStillNeedsFileAssessment() async throws {
+        let store = try QueueStore(url: directory.appendingPathComponent("queue.sqlite"))
+        let row = try await store.captureAndTranscribe(
+            pcm16: Data(count: 32000), sampleRate: 16000,
+            audioStore: AudioStore(directory: directory.appendingPathComponent("audio")),
+            chain: RecoveryChain(providers: [Provider(name: "recovery", text: "real speech")], floorAfter: nil),
+            streamHadRecognizedText: true, streamNoSpeechProvider: "stream")
+        XCTAssertEqual(row.transcriptText, "real speech")
+    }
+
+    func testCancelledCaptureCannotBecomeANoSpeechAssessment() async throws {
+        let store = try QueueStore(url: directory.appendingPathComponent("queue.sqlite"))
+        let audioStore = AudioStore(directory: directory.appendingPathComponent("audio"))
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await store.captureAndTranscribe(
+                pcm16: Data(count: 32000), sampleRate: 16000, audioStore: audioStore,
+                chain: RecoveryChain(providers: [Provider(name: "unused", text: "no")], floorAfter: nil),
+                streamNoSpeechProvider: "stream")
+        }
+        let row = try await task.value
+        XCTAssertEqual(row.transcriptionOutcome, "cancelled")
+        XCTAssertNil(row.transcriptText)
     }
 
     func testDetailedFailureTextCannotBecomeRemoteSpeechContent() async {
