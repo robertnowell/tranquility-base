@@ -51,6 +51,11 @@ coalesced until a successful poll or different status arrives.
 Other detailed local error strings remain local
 because they can contain transcript fragments, URLs or credentials.
 
+A live silent-WAV probe on 9 September also returned a terminal file-job
+error saying `language_detection cannot be performed on files with no spoken audio.`
+That specific provider observation maps to `no_speech_detected` without retrying
+the same provider. Other language-detection errors remain service failures.
+
 The final `transcription.outcome` is:
 
 - `completed`: usable nonempty text was returned.
