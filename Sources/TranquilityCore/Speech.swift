@@ -452,6 +452,13 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         let mine = currentGeneration()
         let audioData = clip.audio
         let starts = clip.starts
+        // The speakers wait for the system to stop moving. On 09 Sep this
+        // play() started two audio queues on a default output another app had
+        // swapped ten seconds earlier, inside the minute in which coreaudiod
+        // went from refusing that app's negotiation to answering nobody. A
+        // held clip is queued, never dropped: the generation check after the
+        // wait is what a stop during it turns into.
+        await AudioSystemWatch.shared.settle(trace: { Self.trace?("11labs: \($0)") })
         guard mine == currentGeneration() else { throw SpeechError.interrupted }
 
         // Keep the last N spoken files on disk (Robert, 06 Aug: the first
