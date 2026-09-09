@@ -23,5 +23,6 @@ TB_VERSION="$VERSION" TB_BUILD="$BUILD_NUMBER" TB_SOURCE_COMMIT="$TARGET" \
   VOICE_DISPATCH_SIGN_IDENTITY=- ./scripts/bundle.sh release >/dev/null
 
 [ -d "$APP" ] || { echo "bundle.sh produced no app at $APP" >&2; exit 1; }
+scripts/check-debug-symbols.sh "$APP" "${APP%.app}.dSYM"
 codesign --verify --deep --strict --verbose=2 "$APP"
 echo "✓ assembled unsigned release input: $VERSION ($BUILD_NUMBER) at $TARGET"

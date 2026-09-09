@@ -78,7 +78,7 @@ enum Analytics {
     private static func forward(_ event: TrackEvent) {
         var props: [String: Any] = [:]
         for (k, v) in event.properties { props[k] = v.json }
-        PostHogSDK.shared.capture(event.name, properties: props)
+        PostHogSDK.shared.capture(event.name, properties: props, timestamp: event.at)
     }
 
     /// Facts about the machine and the build, none about the person.

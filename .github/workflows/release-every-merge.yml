@@ -55,7 +55,7 @@ jobs:
           TB_SKIP_LIVE_HARNESS_DRILLS=1 scripts/preflight.sh "$TARGET_COMMIT^"
           scripts/prepare-release-app.sh
           tar -czf .build/unsigned-tranquility-base.tgz \
-            -C .build/bundle/release "Tranquility Base.app"
+            -C .build/bundle/release "Tranquility Base.app" "Tranquility Base.dSYM"
 
       - name: Transfer the source-stamped app to the signing job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -85,6 +85,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Install the debug-symbol uploader
+        run: brew install sentry-cli
+
       - name: Download the prebuilt app
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
@@ -99,6 +102,7 @@ jobs:
       - name: Sign, notarize, audit, and publish
         env:
           GH_TOKEN: ${{ github.token }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           TARGET_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.commit || github.sha }}
           TB_DEVELOPER_ID_P12_BASE64: ${{ secrets.TB_DEVELOPER_ID_P12_BASE64 }}
           TB_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.TB_DEVELOPER_ID_P12_PASSWORD }}

@@ -461,6 +461,28 @@ public final class StreamedUtterance: @unchecked Sendable {
     /// incomplete* final, which is the one failure worse than no stream at all.
     private var preOpenBuffer: [Data] = []
     private var outcome: Outcome = .pending
+    public var diagnosticCaptureID: String?
+    private var bytesFed = 0
+    private var partialChars = 0
+
+    private func observePartial(_ text: String) {
+        lock.lock(); partialChars = max(partialChars, text.count); lock.unlock()
+        onPartial?(text)
+    }
+
+    private func recordFinish(_ outcome: String, code: String? = nil, chars: Int = 0, began: Date) {
+        lock.lock(); let bytes = bytesFed; let partial = partialChars; lock.unlock()
+        var props: [String: TrackValue] = [
+            "provider": Track.token(from: provider.name), "phase": "streaming",
+            "outcome": .token(outcome), "configured": .bool(provider.isConfigured),
+            "audio_bytes": .int(bytes), "partial_chars_max": .int(partial), "chars": .int(chars),
+            "finish_wait_ms": .int(max(0, Int(Date().timeIntervalSince(began) * 1000))),
+            "speech_evidence": chars > 0 || partial > 0 ? "provider_text" : "unknown",
+        ]
+        if let diagnosticCaptureID { props["capture_id"] = Track.hash(diagnosticCaptureID) }
+        if let code { props["error_code"] = .token(code) }
+        Track.record("transcription_attempt", props)
+    }
 
     private enum Outcome {
         case pending
@@ -518,7 +540,7 @@ public final class StreamedUtterance: @unchecked Sendable {
         do {
             let opened = try await provider.startSession(
                 boosting: lexicon,
-                onPartial: { [weak self] text in self?.onPartial?(text) },
+                onPartial: { [weak self] text in self?.observePartial(text) },
                 onFinal: { [weak self] result in self?.resolve(.final(result)) },
                 onFailure: { [weak self] failure in self?.resolve(.failed(failure)) })
             for chunk in adopt(opened) { opened.append(pcm16: chunk) }
@@ -534,6 +556,7 @@ public final class StreamedUtterance: @unchecked Sendable {
     /// Cheap, non-blocking, safe to call before `start` completes.
     public func feed(pcm16: Data) {
         lock.lock()
+        bytesFed += pcm16.count
         if let session {
             lock.unlock()
             session.append(pcm16: pcm16)
@@ -549,6 +572,7 @@ public final class StreamedUtterance: @unchecked Sendable {
     /// cap on how long streaming may delay the reply flow — the fallback path
     /// is never slower than it was before streaming existed, minus this bound.
     public func finish(timeout: TimeInterval = 3.0) async -> TranscriptionResult? {
+        let began = Date()
         let current = currentSession()
         current?.requestFinal()
 
@@ -557,20 +581,32 @@ public final class StreamedUtterance: @unchecked Sendable {
             switch currentOutcome() {
             case .final(let result):
                 if result.finality == .explicitEndOfTurn {
+                    let empty = result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    recordFinish(empty ? "no_speech_detected" : "completed",
+                                 code: empty ? "no_speech_detected" : nil,
+                                 chars: result.text.count, began: began)
                     Self.trace?("finish: final accepted, \(result.text.count) chars")
                     return result
                 }
+                recordFinish("unresolved", code: "missing_finality", chars: result.text.count, began: began)
                 Self.trace?("finish: nil — final arrived without explicit "
                     + "end-of-turn (\(result.finality.rawValue)); file chain answers")
                 return nil
             case .failed(let failure):
+                recordFinish("failed", code: failure.diagnosticCode, began: began)
                 Self.trace?("finish: nil — stream failed (\(failure)); file chain answers")
                 return nil
             case .pending:
+                if Task.isCancelled {
+                    current?.cancel()
+                    recordFinish("cancelled", code: "cancelled", began: began)
+                    return nil
+                }
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
         }
         current?.cancel()
+        recordFinish("unresolved", code: "final_timeout", began: began)
         Self.trace?("finish: nil — no conclusion within \(timeout)s; file chain answers")
         return nil
     }

@@ -110,6 +110,10 @@ public struct TrackEvent: Equatable, Sendable {
 }
 
 public enum Track {
+    @TaskLocal public static var captureID: String?
+    @TaskLocal public static var attemptID: String?
+    nonisolated(unsafe) private static var sequence = 0
+    private static let processID = UUID().uuidString.lowercased()
     /// Where events go once wired to a service. Only `attach` writes it (and
     /// `detach` clears it); nil means local only. Called off the caller's
     /// thread.
@@ -232,6 +236,8 @@ public enum Track {
     /// Record one event. Cheap on the caller's thread.
     public static func record(_ name: String, _ properties: [String: TrackValue] = [:]) {
         let now = Date()
+        let capture = captureID.map { hash($0) }
+        let attempt = attemptID.map { hash($0) }
         lock.lock()
         let suppressed = _suppressed
         let url = storeURL
@@ -253,7 +259,17 @@ public enum Track {
             lock.lock(); _suppressedDrops += 1; lock.unlock()
             return
         }
-        let event = TrackEvent(name: name, at: now, properties: base.merging(properties) { _, new in new })
+        lock.lock()
+        sequence += 1
+        let number = sequence
+        lock.unlock()
+        var enriched = base.merging(properties) { _, new in new }
+        enriched["event_sequence"] = .int(number)
+        enriched["event_process_id"] = .token(processID)
+        enriched["source_time_ms"] = .double(now.timeIntervalSince1970 * 1000)
+        if let capture { enriched["capture_id"] = capture }
+        if let attempt { enriched["attempt_id"] = attempt }
+        let event = TrackEvent(name: name, at: now, properties: enriched)
         queue.async {
             if let url { append(event, to: url) }
             if let sink {

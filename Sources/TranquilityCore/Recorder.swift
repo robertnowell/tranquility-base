@@ -87,9 +87,25 @@ public final class Recorder: @unchecked Sendable {
     public struct Capture: Sendable {
         public let pcm16: Data
         public let fileURL: URL?
+        public let id: String
+        public init(pcm16: Data, fileURL: URL?, id: String = UUID().uuidString) {
+            self.pcm16 = pcm16; self.fileURL = fileURL; self.id = id
+        }
     }
 
     private var liveCapture: LiveAudioCapture?
+    private var diagnosticCaptureID = UUID().uuidString
+    private var reservedCaptureID: String?
+    public func reserveCaptureID() -> String {
+        lock.lock(); defer { lock.unlock() }
+        if openedAt != nil { return diagnosticCaptureID }
+        if reservedCaptureID == nil { reservedCaptureID = UUID().uuidString }
+        return reservedCaptureID!
+    }
+    public var captureID: String {
+        lock.lock(); defer { lock.unlock() }; return diagnosticCaptureID
+    }
+
 
     /// True while capture runs on the built-in mic because the preferred
     /// (Bluetooth) device failed and the heal rung retargeted. Read by the
@@ -412,6 +428,8 @@ public final class Recorder: @unchecked Sendable {
         // Capture bookkeeping, exactly as the engine era did it. Everything
         // here is lock-and-local-disk work — the HAL is not consulted.
         lock.lock()
+        diagnosticCaptureID = reservedCaptureID ?? UUID().uuidString
+        reservedCaptureID = nil
         buffer.removeAll(keepingCapacity: true)
         peakLevel = 0
         tapBuffersDelivered = 0
@@ -420,7 +438,7 @@ public final class Recorder: @unchecked Sendable {
         lastOpenSeconds = 0
         awaitingFirstBuffer = true
         liveCapture = try? LiveAudioCapture(
-            utteranceId: "capture-\(UUID().uuidString)",
+            utteranceId: "capture-\(diagnosticCaptureID)",
             sampleRate: sampleRate,
             directory: QueueStore.audioDirectory)
         if let stale = stream {
@@ -429,6 +447,7 @@ public final class Recorder: @unchecked Sendable {
         }
         if openingStream {
             stream = streamFactory?()
+            stream?.diagnosticCaptureID = diagnosticCaptureID
             if let s = stream { Task { await s.start() } }
         }
         lock.unlock()
@@ -680,6 +699,7 @@ public final class Recorder: @unchecked Sendable {
         }()
         guard live, stream == nil else { lock.unlock(); return }
         let s = streamFactory?()
+        s?.diagnosticCaptureID = diagnosticCaptureID
         if let s, !buffer.isEmpty { s.feed(pcm16: buffer) }
         stream = s
         lock.unlock()
@@ -748,6 +768,9 @@ public final class Recorder: @unchecked Sendable {
         let finishing = liveCapture
         liveCapture = nil
         let captured = buffer
+        let id = diagnosticCaptureID
+        let peak = peakLevel
+        let held = lastOpenSeconds
         let delivered = tapBuffersDelivered
         let kept = tapBuffersKept
         buffer.removeAll(keepingCapacity: false)
@@ -758,8 +781,15 @@ public final class Recorder: @unchecked Sendable {
             format: "capture: %.2fs open, tap delivered %d, kept %d, %d bytes, peak %.4f",
             lastOpenSeconds, delivered, kept, captured.count, peakLevel))
 
+        Track.record("capture_audio_closed", [
+            "capture_id": Track.hash(id), "outcome": captured.count > 1600 ? "recorded" : "no_audio",
+            "open_ms": .int(Int(held * 1000)), "audio_ms": .int(Int(Double(captured.count) / 2 / sampleRate * 1000)),
+            "audio_bytes": .int(captured.count), "buffers_delivered": .int(delivered),
+            "buffers_kept": .int(kept), "peak": .double(Double(peak)),
+            "speech_evidence": "unknown", "audio_saved": .bool(captureURL != nil),
+        ])
         guard captured.count > 1600 else { throw RecorderError.nothingRecorded }  // <50ms
-        return Capture(pcm16: captured, fileURL: captureURL)
+        return Capture(pcm16: captured, fileURL: captureURL, id: id)
     }
 
     /// Stop the unit — unless a newer press has since claimed it.
@@ -801,6 +831,9 @@ public final class Recorder: @unchecked Sendable {
     /// came of it.
     public func abandon() {
         let ended = submit(.captureEnded, because: "abandoned")
+        if ended.accepted {
+            Track.record("capture_audio_closed", ["capture_id": Track.hash(captureID), "outcome": "cancelled"])
+        }
         lock.lock()
         lastOpenSeconds = openedAt.map { Date().timeIntervalSince($0) } ?? 0
         openedAt = nil

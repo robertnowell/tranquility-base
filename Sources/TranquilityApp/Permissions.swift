@@ -507,7 +507,28 @@ struct Permissions {
     /// running, is genuinely "cannot tell" and reads as not-yet-granted rather
     /// than denied: an app that has never been able to check must not accuse
     /// the user of refusing something.
+    private static var automationCached: OSStatus = OSStatus(procNotFound)
+    private static var automationCheckedAt: Date = .distantPast
+    private static var automationProbeRunning = false
+    private static var automationProbeGeneration = 0
+
     private static func automationStatus() -> OSStatus {
+        if !automationProbeRunning, Date().timeIntervalSince(automationCheckedAt) >= 2 {
+            automationProbeRunning = true
+            let generation = automationProbeGeneration
+            Task { @MainActor in
+                let status = await Task.detached(priority: .utility) { probeAutomationStatus() }.value
+                if generation == automationProbeGeneration {
+                    automationCached = status
+                    automationCheckedAt = Date()
+                }
+                automationProbeRunning = false
+            }
+        }
+        return automationCached
+    }
+
+    private nonisolated static func probeAutomationStatus() -> OSStatus {
         // The descriptor owns its AEDesc and disposes it in its own dealloc, so
         // we borrow the pointer and never copy or dispose it ourselves. Copying
         // the struct out and disposing the copy frees the same storage the
@@ -810,7 +831,8 @@ struct Permissions {
             // the ask. Off the main actor because it blocks while the dialog
             // is up.
             automationAskedAt = Date()
-            return await Task.detached { () -> Bool in
+            automationProbeGeneration += 1
+            let granted = await Task.detached { () -> Bool in
                 // Borrowed, never disposed. See automationStatus() for why.
                 let terminal = NSAppleEventDescriptor(bundleIdentifier: "com.apple.Terminal")
                 guard let target = terminal.aeDesc else { return false }
@@ -819,6 +841,9 @@ struct Permissions {
                         target, typeWildCard, typeWildCard, /* askUserIfNeeded: */ true) == noErr
                 }
             }.value
+            automationCached = granted ? noErr : OSStatus(procNotFound)
+            automationCheckedAt = .distantPast
+            return granted
         }
     }
 

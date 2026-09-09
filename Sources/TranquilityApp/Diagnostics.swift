@@ -257,6 +257,7 @@ enum Diagnostics {
             scope.setFingerprint([event.kind.rawValue, event.site])
             scope.setTag(value: event.kind.rawValue, key: "failure.kind")
             scope.setTag(value: event.site, key: "failure.site")
+            if let captureId = event.captureId { scope.setTag(value: captureId, key: "capture.id") }
             if let harness = event.harness { scope.setTag(value: harness, key: "harness") }
             var context: [String: Any] = ["site": event.site, "reason": event.reason]
             if let r = event.reproduction { context["reproduction"] = r }

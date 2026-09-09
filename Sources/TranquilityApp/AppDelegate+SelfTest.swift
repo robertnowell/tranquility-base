@@ -230,4 +230,19 @@ extension AppDelegate {
         }
     }
 
+    @discardableResult
+    func transcriptionNoSpeechDrill() -> Bool {
+        let prior = Track.suppressed
+        Track.suppressed = true
+        defer { Track.suppressed = prior }
+        let failures = Failures.reportedCount
+        hud.showTranscribing("Checking no-speech response", onCancel: {}, onRetry: {})
+        finishWithoutRecognizedSpeech()
+        SelfTest.report("transcriptionNoSpeech", [
+            ("releasedTranscribingStage", hud.state.name == "idle"),
+            ("noFailureReported", Failures.reportedCount == failures),
+        ])
+        return hud.state.name == "idle" && Failures.reportedCount == failures
+    }
+
 }

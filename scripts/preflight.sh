@@ -100,6 +100,7 @@ scripts/test-notary-log-parser.sh
 # there passed; the one that failed was a retry loop that could not retry.
 echo "→ release tag verification"
 scripts/test-release-tag-verification.sh
+scripts/test-debug-symbols.sh
 
 echo "→ building"
 swift build 2>&1 | grep -E "error:|warning: .*never used" || true

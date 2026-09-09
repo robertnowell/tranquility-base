@@ -32,6 +32,9 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
     static let pollInterval: TimeInterval = 3
     static let pollCeiling: TimeInterval = 600
 
+    var session: URLSession = .shared
+    var pollingInterval: TimeInterval = Self.pollInterval
+
     public init() {}
 
     init(keyOverride: String?) {
@@ -76,16 +79,16 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
         upload.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         let uploaded: String
         do {
-            let (data, response) = try await URLSession.shared.upload(for: upload, from: audio)
+            let (data, response) = try await session.upload(for: upload, from: audio)
             guard let http = response as? HTTPURLResponse else {
                 throw TranscriptionFailure.providerUnavailable("upload: no response")
             }
-            if http.statusCode == 401 { throw TranscriptionFailure.authenticationFailed }
+            if http.statusCode == 401 || http.statusCode == 403 { throw TranscriptionFailure.authenticationFailed }
             guard http.statusCode == 200,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let uploadURL = json["upload_url"] as? String
             else {
-                throw TranscriptionFailure.providerUnavailable("upload: http \(http.statusCode)")
+                throw TranscriptionFailure.providerHTTP(status: http.statusCode, stage: "upload")
             }
             uploaded = uploadURL
         } catch let failure as TranscriptionFailure {
@@ -109,11 +112,14 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
         ])
         let transcriptId: String
         do {
-            let (data, response) = try await URLSession.shared.data(for: create)
+            let (data, response) = try await session.data(for: create)
             guard let http = response as? HTTPURLResponse else {
                 throw TranscriptionFailure.providerUnavailable("create: no response")
             }
-            if http.statusCode == 401 { throw TranscriptionFailure.authenticationFailed }
+            if http.statusCode == 401 || http.statusCode == 403 { throw TranscriptionFailure.authenticationFailed }
+            guard (200..<300).contains(http.statusCode) else {
+                throw TranscriptionFailure.providerHTTP(status: http.statusCode, stage: "create")
+            }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let id = json["id"] as? String
             else {
@@ -122,6 +128,8 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
                 throw TranscriptionFailure.providerUnavailable("create: \(reason)")
             }
             transcriptId = id
+            Track.record("transcription_request", ["provider": "assemblyai_file", "phase": "recovery",
+                "provider_request_id": Track.token(from: id)])
         } catch let failure as TranscriptionFailure {
             throw failure
         } catch {
@@ -140,9 +148,15 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
             if Task.isCancelled {
                 throw TranscriptionFailure.providerUnavailable("cancelled while polling")
             }
-            try? await Task.sleep(nanoseconds: UInt64(Self.pollInterval * 1_000_000_000))
-            guard let (data, _) = try? await URLSession.shared.data(for: poll),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            try? await Task.sleep(nanoseconds: UInt64(pollingInterval * 1_000_000_000))
+            guard let (data, response) = try? await session.data(for: poll) else { continue }
+            if let http = response as? HTTPURLResponse {
+                if http.statusCode == 401 || http.statusCode == 403 { throw TranscriptionFailure.authenticationFailed }
+                guard (200..<300).contains(http.statusCode) else {
+                    throw TranscriptionFailure.providerHTTP(status: http.statusCode, stage: "poll")
+                }
+            }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { continue }  // one flaky poll is not a failed transcript
             switch Self.state(of: json) {
             case .processing:

@@ -35,6 +35,7 @@ public enum TranscriptionFailure: Error, Sendable, Equatable {
     case truncatedNoFinality(partial: String)
     case fileUnreadable
     case providerUnavailable(String)
+    case providerHTTP(status: Int, stage: String)
     /// The machine has no route to the provider at all — airplane mode, no
     /// DNS. Distinct from providerUnavailable because retrying is pure
     /// wait: on a plane (14 Aug) the two cloud rungs spent ~40 seconds

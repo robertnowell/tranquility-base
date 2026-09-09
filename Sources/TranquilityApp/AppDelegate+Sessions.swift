@@ -263,11 +263,19 @@ extension AppDelegate {
     ///   5s+, NO signal     a card. The one tier saying it again will not fix:
     ///                      the input is dead, the fix is a setting, so it holds
     ///                      the stage and offers the door out.
+    func finishWithoutRecognizedSpeech() {
+        hud.endCapture(because: "no speech detected")
+        lastStatusLine = "no speech detected"
+        showIdleGrid()
+        hud.flashNotice(StateLegend.noWordsNotice)
+    }
+
     func reportNothingHeard(because reason: String) {
         let held = recorder.lastOpenSeconds
         let signal = recorder.peakLevel > 0
         Track.record("capture_refused", [
             "reason": Track.token(from: reason),
+            "capture_id": Track.hash(recorder.captureID),
             "seconds": .double((Double(held) * 100).rounded() / 100),
             "peak_bucket": .token(recorder.peakLevel < 0.005 ? "silent"
                                   : recorder.peakLevel < 0.05 ? "quiet" : "audible"),
@@ -321,7 +329,7 @@ extension AppDelegate {
             Permissions.log(String(format:
                 "send: refused, silence gate (%.2fs, peak %.4f)", seconds, recorder.peakLevel))
             recordingDestination = nil
-            reportNothingHeard(because: "silence gate")
+            reportNothingHeard(because: seconds < 0.5 ? "too short" : "below signal threshold")
             return
         }
         let mine = replyGeneration
@@ -341,9 +349,12 @@ extension AppDelegate {
         rebuildMenu()
 
         let attempt = Task { @MainActor in
+            await Track.$captureID.withValue(capture.id) {
+            await Track.$attemptID.withValue(attemptId) {
             // The attempt clears its own tracking on the way out — unless a
             // retry already replaced it with a newer attempt's record.
             defer {
+                Track.record("capture_processing_finished", ["outcome": mine == replyGeneration ? "current" : "superseded"])
                 if self.inFlightTranscription?.utteranceId == attemptId {
                     self.inFlightTranscription = nil
                 }
@@ -373,7 +384,12 @@ extension AppDelegate {
                         return
                     }
                     guard let text = utterance.transcriptText, !text.isEmpty else {
-                        Failures.report(.transcriptionProvider, reason: "dictation: empty transcript",
+                        if utterance.transcriptionOutcome == TranscriptionDisposition.noSpeechDetected.rawValue {
+                            Track.record("dictation", ["outcome": "no_speech_detected", "destination": "none"])
+                            finishWithoutRecognizedSpeech()
+                            return
+                        }
+                        Failures.report(.transcriptionProvider, reason: "dictation: \(utterance.transcriptionOutcome ?? "unresolved")",
                                         card: "Couldn't transcribe that. Audio kept.")
                         hud.showResult("Couldn't transcribe that. Audio kept.")
                         return
@@ -600,7 +616,13 @@ extension AppDelegate {
                                        extra: ["readiness": Track.token(from: "\(readiness)")])
                     lastStatusLine = "can't send, \(why); audio kept"
                     hud.showResult("Can't send yet, \(why). Recording kept. Try again shortly.")
-                case .transcriptionFailed:
+                case .transcriptionFailed(let utteranceId):
+                    if let row = try? self.store?.utterance(id: utteranceId),
+                       row.transcriptionOutcome == TranscriptionDisposition.noSpeechDetected.rawValue {
+                        Track.replyOutcome("no_speech_detected", stage: "capture", agent: spokenTo)
+                        finishWithoutRecognizedSpeech()
+                        break
+                    }
                     Track.replyOutcome("transcription_failed", stage: "capture", agent: spokenTo)
                     lastStatusLine = "couldn't transcribe, audio kept"
                     Failures.report(.transcriptionProvider, reason: "transcription failed; audio kept",
@@ -649,6 +671,8 @@ extension AppDelegate {
                 lastStatusLine = "reply failed: \(error)"
             }
             rebuildMenu()
+            }
+            }
         }
         inFlightTranscription?.task = attempt
     }

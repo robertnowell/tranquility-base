@@ -37,6 +37,7 @@ public struct FailureEvent: Codable, Equatable, Sendable {
     public var installId: String
     public var environment: EnvironmentSnapshot?
     public var breadcrumbs: [Breadcrumb]
+    public var captureId: String? = nil
 
     public init(id: String = UUID().uuidString.lowercased(), at: Date = Date(),
                 kind: FailureKind, reason: String, site: String,
@@ -196,6 +197,7 @@ public final class Breadcrumbs: @unchecked Sendable {
         guard let colon = line.firstIndex(of: ":") else { return false }
         let category = String(line[..<colon]).trimmingCharacters(in: .whitespaces)
         guard Self.allowedCategories.contains(category) else { return false }
+        if category == "secrets", line.contains(" -> keys ") { return false }
         for fragment in Self.refusedFragments where line.contains(fragment) { return false }
         var message = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
         if message.count > 240 { message = String(message.prefix(240)) + "…" }
@@ -455,6 +457,7 @@ public enum Failures {
                               file: StaticString = #fileID, line: UInt = #line) {
         let site = "\(file):\(line)"
         let crumbs = Breadcrumbs.shared.recent
+        let captureId = Track.captureID.map { Track.hash($0).tokenString }
         let now = Date()
         lock.lock()
         lastReported = (card ?? reason, now)
@@ -474,11 +477,12 @@ public enum Failures {
         if let session { mirror["agent_id"] = Track.hash(session) }
         Track.record("failure", mirror)
         queue.async {
-            let event = FailureEvent(
+            var event = FailureEvent(
                 at: now, kind: kind, reason: Scrub.text(reason), site: site,
                 reproduction: reproduction.map { Scrub.text($0) }, harness: harness,
                 session: session.map { String($0.prefix(8)) },
                 installId: installId, environment: environment, breadcrumbs: crumbs)
+            event.captureId = captureId
             store?.append(event)
             trace?("\(kind.rawValue) at \(site): \(event.reason.prefix(120))")
             sink?(event)

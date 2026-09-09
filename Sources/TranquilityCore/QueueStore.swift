@@ -505,6 +505,12 @@ public final class QueueStore: Sendable {
                 """)
         }
 
+        m.registerMigration("v19_transcription_outcome") { db in
+            try db.alter(table: "utterances") { t in
+                t.add(column: "transcriptionOutcome", .text)
+                t.add(column: "captureId", .text)
+            }
+        }
         return m
     }
 
@@ -684,6 +690,10 @@ public final class QueueStore: Sendable {
             }
             return try request.fetchAll(db)
         }
+    }
+
+    public func utterance(id: String) throws -> Utterance? {
+        try dbQueue.read { db in try Utterance.fetchOne(db, key: id) }
     }
 
     public func utterances(status: UtteranceStatus? = nil, limit: Int = 50) throws -> [Utterance] {
