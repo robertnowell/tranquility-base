@@ -14,7 +14,10 @@ extension AppDelegate {
     func send(utteranceId: String, label: String, sessionId: String) {
         guard let coordinator else { return }
         let mine = replyGeneration
+        let captureID = (try? store?.utterance(id: utteranceId))?.captureId
         Task { @MainActor in
+            await Track.$captureID.withValue(captureID) {
+            await Track.$attemptID.withValue(utteranceId) {
             // The second half of the delivery window (see DeliveryInFlight):
             // the capture handed it to the countdown, the countdown handed it
             // here, and it closes on the outcome — EXCEPT where the outcome is
@@ -183,6 +186,8 @@ extension AppDelegate {
                 hud.showResult(card, about: (sessionId: sessionId, pid: pid, label: label))
             }
             rebuildMenu()
+            }
+            }
         }
     }
 
@@ -282,7 +287,7 @@ extension AppDelegate {
     /// Adopt a decided destination: paint it, and remember it for the send.
     func beginCapture(to destination: ReplyDestination) {
         recordingDestination = destination
-        var started: [String: TrackValue] = ["face_before": .token(hud.state.name),
+        var started: [String: TrackValue] = ["capture_id": Track.hash(recorder.reserveCaptureID()), "face_before": .token(hud.state.name),
                                              "waiting": .int(waitingNow())]
         switch destination {
         case .session(let id): started["destination"] = "session"; started["agent_id"] = Track.hash(id)

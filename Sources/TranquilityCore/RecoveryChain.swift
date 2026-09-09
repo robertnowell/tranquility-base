@@ -60,6 +60,8 @@ public struct RecoveryChain: Sendable {
         public let result: TranscriptionResult?
         public let attempts: [String]
         public let lastFailure: TranscriptionFailure?
+        public var diagnostics: [TranscriptionAttempt] = []
+        public var disposition: TranscriptionDisposition { TranscriptionAttempt.disposition(of: diagnostics) }
         public var succeeded: Bool { result != nil }
     }
 
@@ -109,14 +111,15 @@ public struct RecoveryChain: Sendable {
                 if lane.outcome?.succeeded == true { group.cancelAll() }
             }
             let attempts = finished.compactMap(\.outcome).flatMap(\.attempts)
+            let diagnostics = finished.compactMap(\.outcome).flatMap(\.diagnostics)
             if let winner = finished.first(where: { $0.outcome?.succeeded == true })?.outcome {
-                return Outcome(result: winner.result, attempts: attempts, lastFailure: nil)
+                return Outcome(result: winner.result, attempts: attempts, lastFailure: nil, diagnostics: diagnostics)
             }
             // Both lanes failed: the ordered lane's failure is the one that
             // names the better provider's reason, so it leads.
             let failure = finished.first { !$0.isFloor }?.outcome?.lastFailure
                 ?? finished.compactMap { $0.outcome?.lastFailure }.first
-            return Outcome(result: nil, attempts: attempts, lastFailure: failure)
+            return Outcome(result: nil, attempts: attempts, lastFailure: failure, diagnostics: diagnostics)
         }
     }
 
@@ -134,29 +137,50 @@ public struct RecoveryChain: Sendable {
     ) async -> Outcome {
         var attempts: [String] = []
         var lastFailure: TranscriptionFailure?
+        var diagnostics: [TranscriptionAttempt] = []
+        func record(_ provider: String, configured: Bool = true, outcome: String,
+                    code: String? = nil, began: Date = Date(), ordinal: Int = 0) {
+            let item = TranscriptionAttempt(provider: provider, configured: configured,
+                outcome: outcome, errorCode: code,
+                durationMs: max(0, Int(Date().timeIntervalSince(began) * 1000)), ordinal: ordinal)
+            diagnostics.append(item)
+            item.record()
+        }
 
         for provider in providers {
             // A cancelled lane lost the race; burning through its remaining
             // rungs would be network work whose answer is already discarded.
             if Task.isCancelled {
                 attempts.append("cancelled before \(provider.name)")
+                record(provider.name, outcome: "cancelled", code: "cancelled")
                 break
             }
             guard provider.isConfigured else {
                 attempts.append("\(provider.name): not configured")
+                record(provider.name, configured: false, outcome: "skipped", code: "not_configured")
                 continue
             }
             for attempt in 0..<maxAttemptsPerProvider {
+                let began = Date()
                 do {
                     let result = try await provider.transcribe(fileAt: url)
+                    guard !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw TranscriptionFailure.noSpeechDetected
+                    }
+                    record(provider.name, outcome: "completed", began: began, ordinal: attempt + 1)
                     attempts.append("\(provider.name): ok")
-                    return Outcome(result: result, attempts: attempts, lastFailure: nil)
+                    return Outcome(result: result, attempts: attempts, lastFailure: nil, diagnostics: diagnostics)
                 } catch let failure as TranscriptionFailure {
                     attempts.append("\(provider.name): \(failure)")
                     lastFailure = failure
+                    record(provider.name, outcome: Task.isCancelled ? "cancelled" : "failed",
+                           code: Task.isCancelled ? "cancelled" : failure.diagnosticCode,
+                           began: began, ordinal: attempt + 1)
                     // Retrying a bad key, an empty recording, or a machine
                     // with no network route accomplishes nothing.
                     switch failure {
+                    case .providerHTTP(let status, _) where (400..<500).contains(status) && status != 429:
+                        break
                     case .authenticationFailed, .notConfigured, .fileUnreadable,
                          .noSpeechDetected, .offline:
                         break
@@ -171,11 +195,14 @@ public struct RecoveryChain: Sendable {
                 } catch {
                     attempts.append("\(provider.name): \(error)")
                     lastFailure = .providerUnavailable("\(error)")
+                    record(provider.name, outcome: Task.isCancelled ? "cancelled" : "failed",
+                           code: Task.isCancelled ? "cancelled" : "provider_unavailable",
+                           began: began, ordinal: attempt + 1)
                     break
                 }
             }
         }
-        return Outcome(result: nil, attempts: attempts, lastFailure: lastFailure)
+        return Outcome(result: nil, attempts: attempts, lastFailure: lastFailure, diagnostics: diagnostics)
     }
 }
 
@@ -234,12 +261,14 @@ extension QueueStore {
         chain: RecoveryChain = RecoveryChain(),
         eventId: String? = nil,
         streamed: TranscriptionResult? = nil,
+        streamHadRecognizedText: Bool = false,
         preWritten: URL? = nil,
         utteranceId: String? = nil
     ) async throws -> Utterance {
         var utterance = Utterance(id: utteranceId ?? UUID().uuidString,
                                   eventId: eventId, status: .recorded)
 
+        utterance.captureId = Track.captureID
         // ── durability floor ──────────────────────────────────────────────
         // `preWritten` is a capture that was written to disk AS IT WAS SPOKEN
         // (LiveAudioCapture, via Recorder). The bytes are already there under a
@@ -269,12 +298,14 @@ extension QueueStore {
             utterance.transcriptProvider = streamed.provider
             utterance.transcriptFinality = streamed.finality
             utterance.status = .transcribed
+            utterance.transcriptionOutcome = TranscriptionDisposition.completed.rawValue
             try update(utterance: utterance)
             Track.record("transcription", [
                 "outcome": "completed", "streamed": true,
                 "provider": Track.token(from: streamed.provider),
                 "finality": Track.token(from: "\(streamed.finality)"),
-                "latency_ms": 0, "audio_ms": .int(Int(stored.durationMs)),
+                "audio_ms": .int(Int(stored.durationMs)),
+                "speech_evidence": "provider_text", "latency_scope": "see_stream_attempt",
                 "chars": .int(streamed.text.count), "words": .int(Track.wordCount(streamed.text)),
             ])
             return utterance
@@ -285,6 +316,11 @@ extension QueueStore {
 
         let began = Date()
         let outcome = await chain.transcribe(fileAt: stored.url)
+        let hadText = streamHadRecognizedText
+            || !(streamed?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+        // Conflicting recognizer evidence cannot quietly dismiss a capture.
+        let disposition: TranscriptionDisposition = outcome.disposition == .noSpeechDetected && hadText
+            ? .unresolved : outcome.disposition
         var transcription: [String: TrackValue] = [
             "streamed": .bool(streamed != nil),
             "latency_ms": .int(Int(Date().timeIntervalSince(began) * 1000)),
@@ -298,8 +334,11 @@ extension QueueStore {
             transcription["chars"] = .int(result.text.count)
             transcription["words"] = .int(Track.wordCount(result.text))
         } else {
-            transcription["outcome"] = "failed"
+            transcription["outcome"] = .token(disposition.rawValue)
         }
+        transcription["speech_evidence"] = outcome.result != nil || hadText ? "provider_text" : "unknown"
+        transcription["latency_scope"] = "recovery"
+        utterance.transcriptionOutcome = disposition.rawValue
         Track.record("transcription", transcription)
 
         if let result = outcome.result {
@@ -315,6 +354,25 @@ extension QueueStore {
         return utterance
     }
 
+    private func transcribeSavedUtterance(
+        _ utterance: Utterance, at path: String, chain: RecoveryChain, trigger: String
+    ) async -> RecoveryChain.Outcome {
+        await Track.$captureID.withValue(utterance.captureId) {
+            await Track.$attemptID.withValue(UUID().uuidString) {
+                let began = Date()
+                let outcome = await chain.transcribe(fileAt: URL(fileURLWithPath: path))
+                Track.record("transcription", [
+                    "outcome": .token(outcome.disposition.rawValue), "trigger": .token(trigger),
+                    "streamed": false, "latency_scope": "recovery",
+                    "latency_ms": .int(Int(Date().timeIntervalSince(began) * 1000)),
+                    "speech_evidence": outcome.result == nil ? "unknown" : "provider_text",
+                    "attempts": .int(outcome.attempts.count),
+                ])
+                return outcome
+            }
+        }
+    }
+
     /// Re-run the chain over ONE utterance's saved audio, whatever its
     /// current status — the manual retry behind the recent-audio pane, and
     /// deliberately nothing more. Ruled 13 Aug: the machine does not retry
@@ -325,7 +383,7 @@ extension QueueStore {
     /// `transcribed`; a row that already moved past transcription (confirmed,
     /// discarded, mid-dispatch) keeps its status — the retry improves the
     /// record, it must never rewind a lifecycle. On failure only `lastError`
-    /// is touched. Nothing is ever dispatched from here.
+    /// and the latest diagnostic outcome change. Nothing is dispatched here.
     ///
     /// Nil when the utterance does not exist or its audio file is gone —
     /// "nothing to retry", which the caller surfaces as such.
@@ -338,7 +396,8 @@ extension QueueStore {
             FileManager.default.fileExists(atPath: path)
         else { return nil }
 
-        let outcome = await chain.transcribe(fileAt: URL(fileURLWithPath: path))
+        let outcome = await transcribeSavedUtterance(utterance, at: path, chain: chain, trigger: "manual_retry")
+        utterance.transcriptionOutcome = outcome.disposition.rawValue
         if let result = outcome.result {
             utterance.transcriptText = result.text
             utterance.transcriptProvider = result.provider
@@ -375,8 +434,13 @@ extension QueueStore {
         for var utterance in try utterances(status: .transcriptionFailed) {
             guard let path = utterance.audioPath,
                   FileManager.default.fileExists(atPath: path) else { continue }
-            let outcome = await chain.transcribe(fileAt: URL(fileURLWithPath: path))
-            guard let result = outcome.result else { continue }
+            let outcome = await transcribeSavedUtterance(utterance, at: path, chain: chain, trigger: "retry_failed")
+            utterance.transcriptionOutcome = outcome.disposition.rawValue
+            guard let result = outcome.result else {
+                utterance.lastError = outcome.attempts.joined(separator: "; ")
+                try update(utterance: utterance)
+                continue
+            }
             utterance.transcriptText = result.text
             utterance.transcriptProvider = result.provider
             utterance.transcriptFinality = result.finality

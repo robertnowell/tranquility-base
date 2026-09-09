@@ -1445,6 +1445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--selftest-hud") {
             refreshIsCheapDrill()
             permissionSurfacesDrill()
+            transcriptionNoSpeechDrill()
             hud.selfTest()
             // Before selfTestPendingSend: that one holds the panel for five more
             // seconds and releases the drill hold when it is done.
@@ -1757,6 +1758,16 @@ if let flag = CommandLine.arguments.firstIndex(of: "--write-iconset"),
             Data("could not write iconset: \(error)\n".utf8))
         exit(1)
     }
+}
+
+// Isolated UI regression: no application delegate, hotkey, microphone or ownership lock.
+if CommandLine.arguments.contains("--selftest-capture-diagnostics") {
+    _ = NSApplication.shared
+    let probe = AppDelegate()
+    let passed = probe.transcriptionNoSpeechDrill()
+    Permissions.flushLog()
+    print(passed ? "capture diagnostics UI: PASS" : "capture diagnostics UI: FAIL")
+    exit(passed ? 0 : 1)
 }
 
 // Product choices lived in the production bundle's defaults before Dev had a

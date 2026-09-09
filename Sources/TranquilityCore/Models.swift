@@ -216,6 +216,8 @@ public struct Utterance: Codable, FetchableRecord, PersistableRecord, Identifiab
     public var transcriptText: String?
     public var transcriptProvider: String?
     public var transcriptFinality: TranscriptFinality?
+    public var transcriptionOutcome: String? = nil
+    public var captureId: String? = nil
 
     // Dispatch target, captured at record time and re-resolved at dispatch time.
     public var targetKind: TransportKind?
