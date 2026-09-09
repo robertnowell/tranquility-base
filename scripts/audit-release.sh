@@ -88,6 +88,8 @@ read_plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$INFO" 2>/dev/null || tru
   || fail "release automatic update checks are disabled"
 [ "$(read_plist SUAutomaticallyUpdate)" = "true" ] \
   || fail "release automatic installation is disabled"
+[ "$(read_plist SUScheduledCheckInterval)" = "3600" ] \
+  || fail "release update check interval is $(read_plist SUScheduledCheckInterval), expected 3600 (hourly)"
 if [ -n "$EXPECTED_COMMIT" ]; then
   [ "$(read_plist TBSourceCommit)" = "$EXPECTED_COMMIT" ] \
     || fail "bundle source commit does not match $EXPECTED_COMMIT"
