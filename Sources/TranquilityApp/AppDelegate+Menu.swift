@@ -283,10 +283,19 @@ extension AppDelegate {
         // row is disabled on purpose — it is a fact, not an action — and it
         // sits directly above Check for Updates because the two questions are
         // asked in that order.
+        // "Version 0.3.1127 · installed Sep 9, 1:29 PM". The build number is
+        // the last component of every release version (release.sh stamps
+        // 0.3.<build>), so repeating it in parentheses said the same thing
+        // twice; it appears only when the two disagree, which is a local
+        // build. The install time answers the question the row is for,
+        // "did the fix reach you", without opening app.log: it is the
+        // bundle's own modification date, which Sparkle and a drag-install
+        // both set at the moment the bytes landed. Ruled 09 Sep.
         let info = Bundle.main.infoDictionary ?? [:]
         let short = info["CFBundleShortVersionString"] as? String ?? "?"
         let build = info["CFBundleVersion"] as? String ?? "?"
-        let stamp = NSMenuItem(title: "Version \(short) (\(build))",
+        let stamp = NSMenuItem(title: VersionStamp.line(short: short, build: build,
+                                                        installedAt: VersionStamp.installedAt()),
                                action: nil, keyEquivalent: "")
         stamp.isEnabled = false
         menu.addItem(stamp)
