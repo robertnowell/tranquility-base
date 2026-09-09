@@ -8,6 +8,7 @@ final class TranscriptionTransportDiagnosticsTests: XCTestCase {
         nonisolated(unsafe) static var failuresRemaining: Int?
         nonisolated(unsafe) static var requests: [String] = []
         nonisolated(unsafe) static var completedText = ""
+        nonisolated(unsafe) static var pollResponse: String?
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
         override func startLoading() {
@@ -17,7 +18,7 @@ final class TranscriptionTransportDiagnosticsTests: XCTestCase {
             if failed, let remaining = Self.failuresRemaining { Self.failuresRemaining = remaining - 1 }
             let body = path == "/v2/upload" ? #"{"upload_url":"https://fixture.invalid/audio"}"#
                 : path == "/v2/transcript" ? #"{"id":"00000000-0000-0000-0000-000000000001"}"#
-                : "{\"status\":\"completed\",\"text\":\"\(Self.completedText)\"}"
+                : Self.pollResponse ?? "{\"status\":\"completed\",\"text\":\"\(Self.completedText)\"}"
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: failed ? Self.status : 200,
                 httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: Data(body.utf8))
@@ -27,9 +28,11 @@ final class TranscriptionTransportDiagnosticsTests: XCTestCase {
     }
 
     private func transcribe(failingStage: String, status: Int, failures: Int? = nil,
-                            completedText: String = "") async throws -> TranscriptionResult {
+                            completedText: String = "", pollResponse: String? = nil,
+                            throughChain: Bool = false) async throws -> TranscriptionResult {
         Stub.failingStage = failingStage; Stub.status = status
         Stub.failuresRemaining = failures; Stub.requests = []; Stub.completedText = completedText
+        Stub.pollResponse = pollResponse
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [Stub.self]
         var provider = AssemblyAIFileRecovery(keyOverride: "fixture-key")
@@ -39,6 +42,11 @@ final class TranscriptionTransportDiagnosticsTests: XCTestCase {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
         try Data(count: 32000).write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
+        if throughChain {
+            let outcome = await RecoveryChain(providers: [provider], floorAfter: nil).transcribe(fileAt: file)
+            if let result = outcome.result { return result }
+            throw outcome.lastFailure ?? .providerUnavailable("fixture returned no result")
+        }
         return try await provider.transcribe(fileAt: file)
     }
 
@@ -59,6 +67,17 @@ final class TranscriptionTransportDiagnosticsTests: XCTestCase {
     func testCompletedEmptyTranscriptMeansProviderDetectedNoSpeech() async {
         do { _ = try await transcribe(failingStage: "/never", status: 400); XCTFail("expected no-speech observation") }
         catch { XCTAssertEqual(error as? TranscriptionFailure, .noSpeechDetected) }
+    }
+
+    func testSilentAudioLanguageDetectionErrorDoesNotUploadAgain() async {
+        do {
+            _ = try await transcribe(failingStage: "/never", status: 400,
+                pollResponse: #"{"status":"error","error":"language_detection cannot be performed on files with no spoken audio."}"#,
+                throughChain: true)
+            XCTFail("expected no-speech observation")
+        } catch { XCTAssertEqual(error as? TranscriptionFailure, .noSpeechDetected) }
+        XCTAssertEqual(Stub.requests.filter { $0 == "/v2/upload" }.count, 1)
+        XCTAssertEqual(Stub.requests.filter { $0 == "/v2/transcript" }.count, 1)
     }
 
     private func assertTransientPollKeepsItsJob(status: Int) async throws {

@@ -46,6 +46,7 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
     enum TranscriptState: Equatable {
         case processing
         case completed(String)
+        case noSpeechDetected
         case failed(String)
     }
 
@@ -59,7 +60,15 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return .completed(text)
         case "error":
-            return .failed((json["error"] as? String) ?? "unspecified")
+            let reason = (json["error"] as? String) ?? "unspecified"
+            // Measured with a silent WAV on 09 Sep: language detection returns
+            // this terminal error instead of a completed empty transcript.
+            // Match that observation narrowly; other detection errors remain failures.
+            if reason.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                == "language_detection cannot be performed on files with no spoken audio." {
+                return .noSpeechDetected
+            }
+            return .failed(reason)
         default:
             return .processing
         }
@@ -174,6 +183,8 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
             switch Self.state(of: json) {
             case .processing:
                 continue
+            case .noSpeechDetected:
+                throw TranscriptionFailure.noSpeechDetected
             case .failed(let reason):
                 throw TranscriptionFailure.providerUnavailable("transcript error: \(reason)")
             case .completed(let text):

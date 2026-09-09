@@ -18,6 +18,16 @@ final class AssemblyAIFileRecoveryTests: XCTestCase {
             .failed("download failed"))
     }
 
+    func testObservedSilentAudioErrorIsANoSpeechObservation() {
+        XCTAssertEqual(AssemblyAIFileRecovery.state(of: ["status": "error",
+            "error": "language_detection cannot be performed on files with no spoken audio."]), .noSpeechDetected)
+    }
+
+    func testOtherLanguageDetectionFailuresAreNotTreatedAsSilence() {
+        let reason = "detected language confidence is below the requested confidence threshold"
+        XCTAssertEqual(AssemblyAIFileRecovery.state(of: ["status": "error", "error": reason]), .failed(reason))
+    }
+
     func testQueuedAndProcessingAreTheSameNonAnswer() {
         XCTAssertEqual(AssemblyAIFileRecovery.state(of: ["status": "queued"]), .processing)
         XCTAssertEqual(AssemblyAIFileRecovery.state(of: ["status": "processing"]), .processing)
