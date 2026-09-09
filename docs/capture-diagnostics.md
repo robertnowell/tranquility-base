@@ -13,6 +13,10 @@ It joins `capture_started`, `capture_audio_closed`, streaming and recovery
 application delivery outcomes. A retry keeps its capture ID but gets its own
 `attempt_id`. The raw capture ID is kept locally with the durable utterance;
 remote events and failure attachments contain only the hash.
+Saved-audio retries update the latest diagnostic outcome and emit a final
+`transcription` event with `trigger=manual_retry` or `trigger=retry_failed`.
+Older recordings without a capture ID remain uncorrelated rather than borrowing
+the ID of an unrelated active capture.
 
 Each accepted product event also contains `event_process_id`, a monotonically
 increasing `event_sequence` within that process, and `source_time_ms`.
@@ -40,20 +44,27 @@ partial is evidence that a recognizer found text, not independent ground truth.
 File-transcription requests record the provider's request ID, so its server
 record can be inspected directly. HTTP errors preserve both stage and status;
 an unauthorized poll now exits immediately rather than being treated as an
-unfinished job for ten minutes. Other detailed local error strings remain local
+unfinished job for ten minutes. Temporary poll errors (408, 429 and 5xx) retain
+the existing job and record `transcription_poll` observations instead of
+immediately re-uploading the recording. Repeated identical poll errors are
+coalesced until a successful poll or different status arrives.
+Other detailed local error strings remain local
 because they can contain transcript fragments, URLs or credentials.
 
 The final `transcription.outcome` is:
 
 - `completed`: usable nonempty text was returned.
-- `no_speech_detected`: all executed recovery providers reported no speech.
+- `no_speech_detected`: all executed recovery providers reported no speech,
+  no recovery attempt was cancelled, and no streaming text was observed.
   This is their observation, not a claim about what the person did. The UI
   returns to the grid with a notice and keeps the audio without reporting an
   error card.
 - `provider_error`: a configuration/service/transport error prevents classifying
   the result as a clean no-speech observation. This does not prove lost speech.
 - `cancelled`: the work was cancelled.
-- `unresolved`: there is insufficient evidence to classify the empty result.
+- `unresolved`: there is insufficient evidence to classify the empty result,
+  including streaming text followed by empty recovery results. This keeps the
+  visible failure path and audio; it cannot quietly dismiss recognized speech.
 
 Older records labelled `failed` cannot be reclassified from their empty output.
 Do not count them as confirmed lost spoken messages. An existing retryable
@@ -77,9 +88,11 @@ reasons or supply the matching symbols for a historical binary rebuilt different
 ## Verification
 
 `scripts/test.sh` runs both test frameworks. The transcription diagnostics tests
-cover silence versus service failure, fallback after an empty response, durable
-audio/diagnosis, privacy and concurrent correlation. Transport fixtures exercise
-empty completion, rejected creation and unauthorized polling without network calls.
+cover silence versus service failure, cancellation, conflicting streaming text,
+fallback after an empty response, durable audio/diagnosis, saved-audio retries,
+privacy and concurrent correlation. Transport fixtures exercise empty completion,
+rejected creation, unauthorized/missing-job polling, and recovery from temporary
+poll errors without creating a second job. These fixtures make no network calls.
 `scripts/test-debug-symbols.sh` checks mismatches, missing inputs and upload failure.
 The `--selftest-capture-diagnostics` executable mode runs the no-speech UI drill
 without registering the normal app delegate, hotkey, microphone or instance lock;

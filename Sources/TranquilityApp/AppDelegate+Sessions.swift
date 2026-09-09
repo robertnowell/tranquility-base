@@ -375,7 +375,8 @@ extension AppDelegate {
                     let streamed = await liveStream?.finish()
                     let utterance = try await store.captureAndTranscribe(
                         pcm16: pcm, sampleRate: 16_000, chain: RecoveryChain(), eventId: nil,
-                        streamed: streamed, preWritten: capturedFile, utteranceId: attemptId)
+                        streamed: streamed, streamHadRecognizedText: liveStream?.hasRecognizedText ?? false,
+                        preWritten: capturedFile, utteranceId: attemptId)
                     // Cancelled (or replaced) while transcribing: the words must not
                     // be pasted anywhere. The audio row is durable and stays.
                     guard mine == replyGeneration else {
@@ -524,6 +525,7 @@ extension AppDelegate {
                 let streamed = await liveStream?.finish()
                 let outcome = try await coordinator.submitReply(
                     pcm16: pcm, to: spokenTo, streamed: streamed,
+                    streamHadRecognizedText: liveStream?.hasRecognizedText ?? false,
                     preWritten: capturedFile, utteranceId: attemptId)
 
                 // You started saying it again while this was still transcribing.

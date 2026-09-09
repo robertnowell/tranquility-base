@@ -82,7 +82,8 @@ extension Coordinator {
     /// supersedes it mid-transcription.
     public func submitReply(
         pcm16: Data, sampleRate: Double = 16000, to sessionId: String? = nil,
-        streamed: TranscriptionResult? = nil, preWritten: URL? = nil,
+        streamed: TranscriptionResult? = nil, streamHadRecognizedText: Bool = false,
+        preWritten: URL? = nil,
         utteranceId: String? = nil
     ) async throws -> ReplyOutcome {
         let target: WaitingSession?
@@ -96,7 +97,8 @@ extension Coordinator {
 
         var utterance = try await store.captureAndTranscribe(
             pcm16: pcm16, sampleRate: sampleRate, chain: recovery, eventId: nil,
-            streamed: streamed, preWritten: preWritten, utteranceId: utteranceId)
+            streamed: streamed, streamHadRecognizedText: streamHadRecognizedText,
+            preWritten: preWritten, utteranceId: utteranceId)
 
         guard utterance.status == .transcribed, let text = utterance.transcriptText else {
             return .transcriptionFailed(utteranceId: utterance.id)

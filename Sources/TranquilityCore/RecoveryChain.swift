@@ -261,6 +261,7 @@ extension QueueStore {
         chain: RecoveryChain = RecoveryChain(),
         eventId: String? = nil,
         streamed: TranscriptionResult? = nil,
+        streamHadRecognizedText: Bool = false,
         preWritten: URL? = nil,
         utteranceId: String? = nil
     ) async throws -> Utterance {
@@ -315,6 +316,11 @@ extension QueueStore {
 
         let began = Date()
         let outcome = await chain.transcribe(fileAt: stored.url)
+        let hadText = streamHadRecognizedText
+            || !(streamed?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+        // Conflicting recognizer evidence cannot quietly dismiss a capture.
+        let disposition: TranscriptionDisposition = outcome.disposition == .noSpeechDetected && hadText
+            ? .unresolved : outcome.disposition
         var transcription: [String: TrackValue] = [
             "streamed": .bool(streamed != nil),
             "latency_ms": .int(Int(Date().timeIntervalSince(began) * 1000)),
@@ -328,11 +334,11 @@ extension QueueStore {
             transcription["chars"] = .int(result.text.count)
             transcription["words"] = .int(Track.wordCount(result.text))
         } else {
-            transcription["outcome"] = .token(outcome.disposition.rawValue)
+            transcription["outcome"] = .token(disposition.rawValue)
         }
-        transcription["speech_evidence"] = outcome.result == nil ? "unknown" : "provider_text"
+        transcription["speech_evidence"] = outcome.result != nil || hadText ? "provider_text" : "unknown"
         transcription["latency_scope"] = "recovery"
-        utterance.transcriptionOutcome = outcome.disposition.rawValue
+        utterance.transcriptionOutcome = disposition.rawValue
         Track.record("transcription", transcription)
 
         if let result = outcome.result {
@@ -348,6 +354,25 @@ extension QueueStore {
         return utterance
     }
 
+    private func transcribeSavedUtterance(
+        _ utterance: Utterance, at path: String, chain: RecoveryChain, trigger: String
+    ) async -> RecoveryChain.Outcome {
+        await Track.$captureID.withValue(utterance.captureId) {
+            await Track.$attemptID.withValue(UUID().uuidString) {
+                let began = Date()
+                let outcome = await chain.transcribe(fileAt: URL(fileURLWithPath: path))
+                Track.record("transcription", [
+                    "outcome": .token(outcome.disposition.rawValue), "trigger": .token(trigger),
+                    "streamed": false, "latency_scope": "recovery",
+                    "latency_ms": .int(Int(Date().timeIntervalSince(began) * 1000)),
+                    "speech_evidence": outcome.result == nil ? "unknown" : "provider_text",
+                    "attempts": .int(outcome.attempts.count),
+                ])
+                return outcome
+            }
+        }
+    }
+
     /// Re-run the chain over ONE utterance's saved audio, whatever its
     /// current status — the manual retry behind the recent-audio pane, and
     /// deliberately nothing more. Ruled 13 Aug: the machine does not retry
@@ -358,7 +383,7 @@ extension QueueStore {
     /// `transcribed`; a row that already moved past transcription (confirmed,
     /// discarded, mid-dispatch) keeps its status — the retry improves the
     /// record, it must never rewind a lifecycle. On failure only `lastError`
-    /// is touched. Nothing is ever dispatched from here.
+    /// and the latest diagnostic outcome change. Nothing is dispatched here.
     ///
     /// Nil when the utterance does not exist or its audio file is gone —
     /// "nothing to retry", which the caller surfaces as such.
@@ -371,7 +396,8 @@ extension QueueStore {
             FileManager.default.fileExists(atPath: path)
         else { return nil }
 
-        let outcome = await chain.transcribe(fileAt: URL(fileURLWithPath: path))
+        let outcome = await transcribeSavedUtterance(utterance, at: path, chain: chain, trigger: "manual_retry")
+        utterance.transcriptionOutcome = outcome.disposition.rawValue
         if let result = outcome.result {
             utterance.transcriptText = result.text
             utterance.transcriptProvider = result.provider
@@ -408,8 +434,13 @@ extension QueueStore {
         for var utterance in try utterances(status: .transcriptionFailed) {
             guard let path = utterance.audioPath,
                   FileManager.default.fileExists(atPath: path) else { continue }
-            let outcome = await chain.transcribe(fileAt: URL(fileURLWithPath: path))
-            guard let result = outcome.result else { continue }
+            let outcome = await transcribeSavedUtterance(utterance, at: path, chain: chain, trigger: "retry_failed")
+            utterance.transcriptionOutcome = outcome.disposition.rawValue
+            guard let result = outcome.result else {
+                utterance.lastError = outcome.attempts.joined(separator: "; ")
+                try update(utterance: utterance)
+                continue
+            }
             utterance.transcriptText = result.text
             utterance.transcriptProvider = result.provider
             utterance.transcriptFinality = result.finality

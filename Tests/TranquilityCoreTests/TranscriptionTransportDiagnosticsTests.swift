@@ -5,14 +5,19 @@ final class TranscriptionTransportDiagnosticsTests: XCTestCase {
     private final class Stub: URLProtocol, @unchecked Sendable {
         nonisolated(unsafe) static var failingStage = "/v2/transcript"
         nonisolated(unsafe) static var status = 400
+        nonisolated(unsafe) static var failuresRemaining: Int?
+        nonisolated(unsafe) static var requests: [String] = []
+        nonisolated(unsafe) static var completedText = ""
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
         override func startLoading() {
             let path = request.url!.path
-            let failed = path == Self.failingStage
+            Self.requests.append(path)
+            let failed = path == Self.failingStage && (Self.failuresRemaining == nil || Self.failuresRemaining! > 0)
+            if failed, let remaining = Self.failuresRemaining { Self.failuresRemaining = remaining - 1 }
             let body = path == "/v2/upload" ? #"{"upload_url":"https://fixture.invalid/audio"}"#
                 : path == "/v2/transcript" ? #"{"id":"00000000-0000-0000-0000-000000000001"}"#
-                : #"{"status":"completed","text":""}"#
+                : "{\"status\":\"completed\",\"text\":\"\(Self.completedText)\"}"
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: failed ? Self.status : 200,
                 httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: Data(body.utf8))
@@ -21,8 +26,10 @@ final class TranscriptionTransportDiagnosticsTests: XCTestCase {
         override func stopLoading() {}
     }
 
-    private func transcribe(failingStage: String, status: Int) async throws -> TranscriptionResult {
+    private func transcribe(failingStage: String, status: Int, failures: Int? = nil,
+                            completedText: String = "") async throws -> TranscriptionResult {
         Stub.failingStage = failingStage; Stub.status = status
+        Stub.failuresRemaining = failures; Stub.requests = []; Stub.completedText = completedText
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [Stub.self]
         var provider = AssemblyAIFileRecovery(keyOverride: "fixture-key")
@@ -52,5 +59,29 @@ final class TranscriptionTransportDiagnosticsTests: XCTestCase {
     func testCompletedEmptyTranscriptMeansProviderDetectedNoSpeech() async {
         do { _ = try await transcribe(failingStage: "/never", status: 400); XCTFail("expected no-speech observation") }
         catch { XCTAssertEqual(error as? TranscriptionFailure, .noSpeechDetected) }
+    }
+
+    private func assertTransientPollKeepsItsJob(status: Int) async throws {
+        let poll = "/v2/transcript/00000000-0000-0000-0000-000000000001"
+        let result = try await transcribe(failingStage: poll, status: status, failures: 1, completedText: "recovered")
+        XCTAssertEqual(result.text, "recovered")
+        XCTAssertEqual(Stub.requests.filter { $0 == "/v2/upload" }.count, 1)
+        XCTAssertEqual(Stub.requests.filter { $0 == "/v2/transcript" }.count, 1)
+        XCTAssertEqual(Stub.requests.filter { $0 == poll }.count, 2)
+    }
+
+    func testServerErrorPollRetriesExistingJobWithoutAnotherUpload() async throws {
+        try await assertTransientPollKeepsItsJob(status: 503)
+    }
+
+    func testRateLimitedPollRetriesExistingJobWithoutAnotherUpload() async throws {
+        try await assertTransientPollKeepsItsJob(status: 429)
+    }
+
+    func testPermanentlyMissingJobStopsPolling() async {
+        do {
+            _ = try await transcribe(failingStage: "/v2/transcript/00000000-0000-0000-0000-000000000001", status: 404)
+            XCTFail("expected missing-job error")
+        } catch { XCTAssertEqual(error as? TranscriptionFailure, .providerHTTP(status: 404, stage: "poll")) }
     }
 }

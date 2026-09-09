@@ -141,6 +141,7 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
         var poll = URLRequest(
             url: URL(string: "https://api.assemblyai.com/v2/transcript/\(transcriptId)")!)
         poll.setValue(key, forHTTPHeaderField: "Authorization")
+        var lastPollHTTPStatus: Int?
         while Date() < deadline {
             // Under cancellation (this rung lost the chain's floor race) both
             // awaits below throw INSTANTLY, and their try? turns that into
@@ -152,9 +153,21 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
             guard let (data, response) = try? await session.data(for: poll) else { continue }
             if let http = response as? HTTPURLResponse {
                 if http.statusCode == 401 || http.statusCode == 403 { throw TranscriptionFailure.authenticationFailed }
+                // A transient poll failure does not invalidate the existing job.
+                // Keep polling it instead of uploading the same recording again.
+                if http.statusCode == 408 || http.statusCode == 429 || (500..<600).contains(http.statusCode) {
+                    if lastPollHTTPStatus != http.statusCode {
+                        Track.record("transcription_poll", ["provider": "assemblyai_file",
+                            "provider_request_id": Track.token(from: transcriptId), "outcome": "retrying",
+                            "error_code": Track.token(from: "poll_http_\(http.statusCode)")])
+                    }
+                    lastPollHTTPStatus = http.statusCode
+                    continue
+                }
                 guard (200..<300).contains(http.statusCode) else {
                     throw TranscriptionFailure.providerHTTP(status: http.statusCode, stage: "poll")
                 }
+                lastPollHTTPStatus = nil
             }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { continue }  // one flaky poll is not a failed transcript
@@ -169,6 +182,9 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
                 return TranscriptionResult(
                     text: text, finality: .recoveryForcedFinal, provider: name)
             }
+        }
+        if let lastPollHTTPStatus {
+            throw TranscriptionFailure.providerHTTP(status: lastPollHTTPStatus, stage: "poll")
         }
         throw TranscriptionFailure.providerUnavailable(
             "transcript \(transcriptId) not terminal after \(Int(Self.pollCeiling))s")

@@ -465,6 +465,21 @@ public final class StreamedUtterance: @unchecked Sendable {
     private var bytesFed = 0
     private var partialChars = 0
 
+    /// A recognizer observed text, even if finality failed. No text leaves here.
+    public var hasRecognizedText: Bool {
+        lock.lock(); defer { lock.unlock() }
+        if partialChars > 0 { return true }
+        switch outcome {
+        case .final(let result):
+            return !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .failed(.truncatedNoFinality(let partial)):
+            return !partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .failed(.connectionDropped(let hadPartialTranscript)):
+            return hadPartialTranscript
+        default: return false
+        }
+    }
+
     private func observePartial(_ text: String) {
         lock.lock(); partialChars = max(partialChars, text.count); lock.unlock()
         onPartial?(text)
@@ -477,7 +492,7 @@ public final class StreamedUtterance: @unchecked Sendable {
             "outcome": .token(outcome), "configured": .bool(provider.isConfigured),
             "audio_bytes": .int(bytes), "partial_chars_max": .int(partial), "chars": .int(chars),
             "finish_wait_ms": .int(max(0, Int(Date().timeIntervalSince(began) * 1000))),
-            "speech_evidence": chars > 0 || partial > 0 ? "provider_text" : "unknown",
+            "speech_evidence": chars > 0 || hasRecognizedText ? "provider_text" : "unknown",
         ]
         if let diagnosticCaptureID { props["capture_id"] = Track.hash(diagnosticCaptureID) }
         if let code { props["error_code"] = .token(code) }

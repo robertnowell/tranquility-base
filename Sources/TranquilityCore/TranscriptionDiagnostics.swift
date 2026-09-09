@@ -29,11 +29,12 @@ public struct TranscriptionAttempt: Equatable, Sendable {
 
     public static func disposition(of attempts: [Self]) -> TranscriptionDisposition {
         if attempts.contains(where: { $0.outcome == "completed" }) { return .completed }
+        // An interrupted provider never finished assessing the recording.
+        if attempts.contains(where: { $0.outcome == "cancelled" }) { return .cancelled }
         let executed = attempts.filter { $0.configured && $0.outcome != "cancelled" }
         if !executed.isEmpty && executed.allSatisfy({ $0.errorCode == "no_speech_detected" }) {
             return .noSpeechDetected
         }
-        if attempts.contains(where: { $0.outcome == "cancelled" }) { return .cancelled }
         if attempts.contains(where: { $0.errorCode != nil && $0.errorCode != "no_speech_detected" }) {
             return .providerError
         }
