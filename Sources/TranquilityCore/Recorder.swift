@@ -171,6 +171,18 @@ public final class Recorder: @unchecked Sendable {
 
     public init(sampleRate: Double = 16000) {
         self.sampleRate = sampleRate
+        // The daemon restart, measured 09 Sep at 10:59:44 with a capture
+        // open: AUHAL noticed "Device 133 died", found the built-in mic again
+        // by itself 2.2 s later, and the capture lost about that much audio.
+        // That fallback chooses any usable input, so it could as easily have
+        // landed on AirPods; hearing the restart here makes the rebuild ask
+        // the preference instead, deferred under a live capture exactly as
+        // a device config change is.
+        AudioSystemWatch.shared.start()
+        AudioSystemWatch.shared.subscribe { [weak self] kind in
+            guard kind == .serviceRestarted, let self else { return }
+            self.audioQueue.async { self.handleConfigChange(because: "audio daemon restarted") }
+        }
     }
 
     // MARK: - Authorization (unchanged)
@@ -271,7 +283,11 @@ public final class Recorder: @unchecked Sendable {
             Recorder.trace?("mic: prepare skipped — not authorized")
             return false
         }
-        guard let deviceID = resolveDeviceID(preferring: override) else {
+        // Under the health watchdog: on 09 Sep this read blocked for 178 s
+        // (six Mach timeouts) and nothing said so until it failed.
+        guard let deviceID = AudioSystemHealth.shared.timed("mic device resolve", {
+            resolveDeviceID(preferring: override)
+        }) else {
             Recorder.trace?("mic: prepare failed — no input device resolvable")
             return false
         }
@@ -282,8 +298,10 @@ public final class Recorder: @unchecked Sendable {
         }
         teardownUnit()
         do {
-            let built = try CaptureUnit(deviceID: deviceID) { [weak self] pcmBuffer in
-                self?.deliver(pcmBuffer)
+            let built = try AudioSystemHealth.shared.timed("mic unit build") {
+                try CaptureUnit(deviceID: deviceID) { [weak self] pcmBuffer in
+                    self?.deliver(pcmBuffer)
+                }
             }
             unit = built
             installListeners(on: deviceID)
@@ -332,7 +350,7 @@ public final class Recorder: @unchecked Sendable {
         // observer's data race (queue: nil, mutating a flag from the posting
         // thread) is unrepresentable here.
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.handleConfigChange()
+            self?.handleConfigChange(because: "device config changed")
         }
         listenerBlock = block
         // StreamConfiguration listens on the INPUT scope — that is the side
@@ -371,11 +389,11 @@ public final class Recorder: @unchecked Sendable {
     /// change calibration (2s); the shorter default-change delay (300ms)
     /// applies only to a default-tracking preference, which installs no
     /// listener today — noted so the constant isn't mistaken for dead code.
-    private func handleConfigChange() {
+    private func handleConfigChange(because reason: String) {
         lock.lock()
         let state = machine.state
         lock.unlock()
-        Recorder.trace?("mic: device config changed (state=\(state.name)); "
+        Recorder.trace?("mic: \(reason) (state=\(state.name)); "
             + "rebuild in \(Int(Self.rebuildAfterFormatChange * 1000))ms")
         switch state {
         case .capturing, .opening:
@@ -384,11 +402,11 @@ public final class Recorder: @unchecked Sendable {
             // when the capture ends.
             lock.lock(); discardAfterCapture = true; lock.unlock()
         case .cold, .warm, .wedged:
-            _ = submit(.unitDiscarded, because: "device config changed")
+            _ = submit(.unitDiscarded, because: reason)
             teardownUnit()
             audioQueue.asyncAfter(deadline: .now() + Self.rebuildAfterFormatChange) { [weak self] in
                 guard let self else { return }
-                self.prepareUnit(preferring: nil, because: "rebuild after config change")
+                self.prepareUnit(preferring: nil, because: "rebuild after \(reason)")
             }
         }
     }

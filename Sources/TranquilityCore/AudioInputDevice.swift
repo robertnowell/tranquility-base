@@ -162,7 +162,23 @@ public enum AudioInputDevice {
     /// device instead of blanking for one tick. Call it off the main thread.
     public static func primeCache() { deviceCache.refreshNow() }
 
-    private static let deviceCache = DeviceCache()
+    /// Invalidated by the system watch rather than by age: the 15-second
+    /// expiry this shipped with (18 Aug) meant an idle app walked every input
+    /// device four times a minute, about fifty round trips to `coreaudiod`
+    /// each time, for a menu nobody had opened. After 09 Sep the rule is that
+    /// an idle app makes no HAL call at all. The five-minute safety age stays
+    /// only against a notification the HAL never sent.
+    private static let deviceCache: DeviceCache = {
+        let cache = DeviceCache()
+        AudioSystemWatch.shared.start()
+        AudioSystemWatch.shared.subscribe { kind in
+            switch kind {
+            case .devices, .defaultInput, .serviceRestarted: cache.invalidate()
+            case .defaultOutput: break
+            }
+        }
+        return cache
+    }()
     private static var cachedDefaultId: AudioDeviceID { deviceCache.currentDefaultId() }
 
     /// Stale-while-revalidate with a single in-flight refresh, copied in shape
@@ -173,12 +189,27 @@ public enum AudioInputDevice {
     final class DeviceCache: @unchecked Sendable {
         private let lock = NSLock()
         private let maxAge: TimeInterval
+        private let loader: @Sendable () -> ([Device], AudioDeviceID)
         private var devices: [Device] = []
         private var defaultId = AudioDeviceID(0)
         private var stamp: Date?
         private var refreshing = false
 
-        init(maxAge: TimeInterval = 15) { self.maxAge = maxAge }
+        /// `loader` is the test seam; production reads the HAL.
+        init(maxAge: TimeInterval = 300,
+             loader: @escaping @Sendable () -> ([Device], AudioDeviceID) = {
+                AudioSystemHealth.shared.timed("device list") {
+                    (AudioInputDevice.allInputs(), AudioInputDevice.systemDefaultId())
+                }
+             }) {
+            self.maxAge = maxAge
+            self.loader = loader
+        }
+
+        /// Something changed under the snapshot; the next reader refreshes it.
+        func invalidate() {
+            lock.lock(); stamp = nil; lock.unlock()
+        }
 
         func current() -> [Device] {
             lock.lock()
@@ -189,8 +220,7 @@ public enum AudioInputDevice {
             lock.unlock()
             if claimed {
                 DispatchQueue.global(qos: .utility).async { [self] in
-                    let loaded = AudioInputDevice.allInputs()
-                    let id = AudioInputDevice.systemDefaultId()
+                    let (loaded, id) = loader()
                     lock.lock()
                     devices = loaded; defaultId = id; stamp = Date(); refreshing = false
                     lock.unlock()
@@ -206,8 +236,7 @@ public enum AudioInputDevice {
 
         /// Synchronous, for the launch prime. The only caller that may block.
         func refreshNow() {
-            let loaded = AudioInputDevice.allInputs()
-            let id = AudioInputDevice.systemDefaultId()
+            let (loaded, id) = loader()
             lock.lock()
             devices = loaded; defaultId = id; stamp = Date(); refreshing = false
             lock.unlock()

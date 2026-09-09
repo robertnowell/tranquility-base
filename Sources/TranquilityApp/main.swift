@@ -64,6 +64,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         log: { Permissions.log($0) })
 
     var lastStatusLine = "starting…"
+
+    /// A wedge has been shown; the recovery notice is owed when it clears.
+
+    var audioWedgeNoticed = false
     var isBusy = false
 
     /// The menu-bar badge's waiting count, sampled OFF the main thread.
@@ -481,6 +485,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.rebuildMenu()
             }
         }
+        // The daemon itself, as distinct from this app's capture stack: when
+        // coreaudiod stops answering, every app's audio is gone and the panel
+        // says so within seconds of the first blocked call, with the one
+        // repair on the card. When it answers again, the card says that too.
+        // Ruled 09 Sep, after three minutes of silence on a wedged machine.
+        AudioSystemHealth.shared.watchMutations()
+        AudioSystemHealth.shared.subscribe { [weak self] health in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    switch health {
+                    case .wedged:
+                        self.audioWedgeNoticed = true
+                        self.lastStatusLine = "macOS audio not answering; every app affected"
+                        self.hud.showAudioWedged()
+                    case .answering:
+                        guard self.audioWedgeNoticed else { return }
+                        self.audioWedgeNoticed = false
+                        self.lastStatusLine = ""
+                        if self.hud.state == .result, self.hud.face.offersAudioRestart {
+                            self.hud.showResult(StateLegend.audioRestartedMessage)
+                        }
+                    }
+                    self.rebuildMenu()
+                }
+            }
+        }
 
         // The recogniser was the one unobservable stage — a fallback transcript
         // quietly missing its first nineteen seconds looked identical to a short
@@ -748,6 +779,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // opening on the tab that is not first is the kind of small lie that
         // makes a tab bar feel decorative.
         hud.onOpenSettings = { [weak self] in self?.hud.showAgentSettings() }
+        // The wedged card's door. The password sheet blocks the thread that
+        // asks, so the ask is detached and only the outcome comes back here.
+        hud.onRestartAudio = { [weak self] in
+            Permissions.log("audio-health: restart requested from the card")
+            Task.detached(priority: .userInitiated) {
+                let outcome = AudioSystemRecovery.restartDaemon()
+                await MainActor.run {
+                    guard let self else { return }
+                    switch outcome {
+                    case .restarted:
+                        Permissions.log("audio-health: coreaudiod restarted from the card")
+                        // The health monitor confirms and the card follows.
+                        AudioSystemHealth.shared.probe(because: "restart from the card")
+                    case .declined:
+                        Permissions.log("audio-health: restart declined at the password sheet")
+                        self.hud.showResult(StateLegend.audioRestartDeclinedMessage)
+                    case .failed(let why):
+                        Permissions.log("audio-health: restart failed: \(why)")
+                        self.hud.showResult(StateLegend.audioRestartFailedMessage(why))
+                    }
+                }
+            }
+        }
         // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
@@ -1228,6 +1282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SessionOwnershipReconciliation.trace = { Permissions.log($0) }
         SessionLauncher.trace = { Permissions.log("launcher: \($0)") }
         Recorder.trace = { Permissions.log($0) }
+        AudioSystemHealth.trace = { Permissions.log($0) }
         Recorder.onListeningAcknowledged = { Earcons.acknowledge(.listening) }
         SessionTermination.trace = { Permissions.log($0) }
         Secrets.trace = { Permissions.log("secrets: \($0)") }
