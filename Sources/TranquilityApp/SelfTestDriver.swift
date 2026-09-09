@@ -1977,6 +1977,7 @@ extension StatusHUD {
             ("actions", actionRow), ("go", goButton),
             ("dontSend", dontSendButton), ("micSettings", micSettingsButton),
             ("newSession", newSessionButton), ("openPage", openPageButton),
+            ("restartAudio", restartAudioButton),
             ("voices", voiceList),
             ("gear", gearButton), ("back", backButton), ("rows", waitingRows),
             // `sticky` is in the matrix precisely BECAUSE it is hover-driven:

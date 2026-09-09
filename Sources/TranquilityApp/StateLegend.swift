@@ -745,6 +745,28 @@ enum StateLegend {
     static let noAudioPlacard = "\(Glyph.needsYou) No audio"
     static let micSettingsTitle = "Microphone settings"
 
+    // MARK: - The wedged daemon (ruled 09 Sep)
+
+    /// coreaudiod stopped answering. This is about the machine, not the mic:
+    /// every app's audio is gone, Zoom's included, and the one repair is a
+    /// daemon restart behind the password sheet. The card says so in that
+    /// order, because on 09 Sep the user learned it from Zoom's empty device
+    /// picker while this app sat silent for three minutes.
+    static let audioWedgedPlacard = "\(Glyph.needsYou) Audio stopped"
+    static let restartAudioTitle = "Restart audio"
+    static let audioWedgedMessage =
+        "macOS audio has stopped responding. Every app is affected, not just "
+        + "this one. Restarting the audio system fixes it in about a second; "
+        + "macOS will ask for your password."
+    static let audioRestartedMessage =
+        "The audio system restarted. Reconnect AirPods if they dropped."
+    static let audioRestartDeclinedMessage =
+        "The restart needs your password. Until then, audio stays down for "
+        + "every app; in Terminal, sudo killall coreaudiod does the same thing."
+    static func audioRestartFailedMessage(_ why: String) -> String {
+        "The restart did not go through (\(why)). In Terminal: sudo killall coreaudiod."
+    }
+
     // MARK: - The invitation (ruled 10 Aug)
 
     /// A page outlives the agent that wrote it — after `/clear`, after the tab

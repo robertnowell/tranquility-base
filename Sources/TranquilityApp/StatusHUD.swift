@@ -39,6 +39,7 @@ final class StatusHUD: NSObject {
     var dontSendButton: ConsoleButton!
     var micSettingsButton: ConsoleButton!
     var newSessionButton: ConsoleButton!
+    var restartAudioButton: ConsoleButton!
     var openPageButton: ConsoleButton!
     var hintLabel: NSTextField!
     /// The capture strip's own label, and the hairline that separates it from
@@ -1441,6 +1442,32 @@ final class StatusHUD: NSObject {
         render()
     }
 
+    /// coreaudiod stopped answering (`AudioSystemHealth`). Same two counts as
+    /// the device fault, and the same shape: no title, because it is about
+    /// the machine; amber, because everything is broken; one door, because
+    /// there is exactly one repair. Idempotent: the health monitor may say
+    /// "wedged" from more than one blocked call, and the card is one card.
+    func showAudioWedged() {
+        if state == .result, face.offersAudioRestart { return }
+        guard transition(to: .result, because: "audio daemon not answering")
+        else { return }
+        face = Face(body: StateLegend.audioWedgedMessage,
+                    placardOverride: StateLegend.audioWedgedPlacard,
+                    offersAudioRestart: true)
+        render()
+    }
+
+    /// The wedged card's button. Set by the app; the restart itself runs
+    /// detached, because the password sheet blocks whatever thread asks.
+    var onRestartAudio: (() -> Void)?
+
+    @objc nonisolated func restartAudioTapped() {
+        MainActor.assumeIsolated {
+            Track.record("placard_clicked", ["which": "restart_audio", "face": .token(state.name)])
+            onRestartAudio?()
+        }
+    }
+
     /// A page arrived asking for an agent that is not there — the deep link
     /// names a session this Mac has no record of, or whose terminal tab is gone.
     ///
@@ -1946,6 +1973,9 @@ final class StatusHUD: NSObject {
         var lens: StateLegend.Lens = .fault
         /// The invitation's door: start a fresh agent holding this artifact.
         var offersNewSession = false
+        /// The wedged-daemon card's door: restart coreaudiod behind the
+        /// password sheet. The one card whose fix is outside this app.
+        var offersAudioRestart = false
         /// The empty room has been empty long enough to teach the first press
         /// instead of describing itself. A face of idle, not a state of its own:
         /// nothing about what the panel ADMITS changes, only what it says.
@@ -2106,6 +2136,7 @@ final class StatusHUD: NSObject {
         dontSendButton.isHidden = true
         micSettingsButton.isHidden = true
         newSessionButton.isHidden = true
+        restartAudioButton.isHidden = true
         countdownBar.isHidden = true; meter.isHidden = true
         // The strip belongs to the capture arms alone. Both the label AND its
         // rule are baselined — a rule left behind is the residue class this
@@ -2302,6 +2333,7 @@ final class StatusHUD: NSObject {
             // The invitation's door out is a door IN: it starts the agent that
             // this page no longer has.
             newSessionButton.isHidden = !face.offersNewSession
+            restartAudioButton.isHidden = !face.offersAudioRestart
 
         case .pastAgents:
             // Built on OPEN and never repainted while you read it. That is not
@@ -2609,6 +2641,7 @@ final class StatusHUD: NSObject {
         // with no buttons but a Controls word still has a bottom line.
         actionRow.isHidden = [goButton, openPageButton, dontSendButton,
                               micSettingsButton, newSessionButton,
+                              restartAudioButton,
                               cancelTranscriptionButton, retryTranscriptionButton,
                               cardControls]
             .allSatisfy { $0?.isHidden ?? true }

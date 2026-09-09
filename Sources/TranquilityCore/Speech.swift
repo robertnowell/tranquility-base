@@ -470,10 +470,15 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         // was heard, and a prefetched clip nobody listened to is not that.
         SpokenAudioArchive.keep(audioData, label: text.text)
 
-        let audio = try AVAudioPlayer(data: audioData)
+        // Both under the health watchdog: creating the player asks coreaudiod
+        // for the default output, and play() starts an IO context on it. On
+        // 09 Sep "player refused to start" was the app's only word about a
+        // daemon that had been dead for two minutes.
+        let audio = try AudioSystemHealth.shared.timed("player create") { try AVAudioPlayer(data: audioData) }
         player = audio
         audio.prepareToPlay()
-        guard audio.play() else { throw SpeechError.synthesisFailed("player refused to start") }
+        guard AudioSystemHealth.shared.timed("player start", { audio.play() })
+        else { throw SpeechError.synthesisFailed("player refused to start") }
 
         // play() returns before isPlaying flips. Without this the polling loop below
         // exits on its first test and the audio is reported as having stopped at 0s.

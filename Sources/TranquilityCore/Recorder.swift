@@ -267,7 +267,11 @@ public final class Recorder: @unchecked Sendable {
             Recorder.trace?("mic: prepare skipped — not authorized")
             return false
         }
-        guard let deviceID = resolveDeviceID(preferring: override) else {
+        // Under the health watchdog: on 09 Sep this read blocked for 178 s
+        // (six Mach timeouts) and nothing said so until it failed.
+        guard let deviceID = AudioSystemHealth.shared.timed("mic device resolve", {
+            resolveDeviceID(preferring: override)
+        }) else {
             Recorder.trace?("mic: prepare failed — no input device resolvable")
             return false
         }
@@ -278,8 +282,10 @@ public final class Recorder: @unchecked Sendable {
         }
         teardownUnit()
         do {
-            let built = try CaptureUnit(deviceID: deviceID) { [weak self] pcmBuffer in
-                self?.deliver(pcmBuffer)
+            let built = try AudioSystemHealth.shared.timed("mic unit build") {
+                try CaptureUnit(deviceID: deviceID) { [weak self] pcmBuffer in
+                    self?.deliver(pcmBuffer)
+                }
             }
             unit = built
             installListeners(on: deviceID)
