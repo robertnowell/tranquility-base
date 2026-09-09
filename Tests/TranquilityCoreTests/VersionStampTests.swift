@@ -16,8 +16,14 @@ struct VersionStampTests {
         #expect(line == "Version 0.1.0+abc1234 (1130)")
     }
 
+    /// Anchored at local noon so "an hour ago" is the same day in every
+    /// timezone CI might run in; a fixed epoch straddled midnight in UTC.
+    private var noonToday: Date {
+        Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!
+    }
+
     @Test func installTimeTodayIsJustTheTime() {
-        let now = Date(timeIntervalSince1970: 1_789_000_000)
+        let now = noonToday
         let installed = now.addingTimeInterval(-3600)
         let line = VersionStamp.line(short: "0.3.1127", build: "1127", installedAt: installed, now: now, locale: en)
         #expect(line.hasPrefix("Version 0.3.1127 \u{00B7} installed today "))
@@ -25,7 +31,7 @@ struct VersionStampTests {
     }
 
     @Test func installTimeAnotherDayCarriesTheDate() {
-        let now = Date(timeIntervalSince1970: 1_789_000_000)
+        let now = noonToday
         let installed = now.addingTimeInterval(-3 * 86400)
         let line = VersionStamp.line(short: "0.3.1127", build: "1127", installedAt: installed, now: now, locale: en)
         #expect(line.contains("installed "))
