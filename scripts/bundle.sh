@@ -276,12 +276,14 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>SUPublicEDKey</key><string>$TB_PUBLIC_ED_KEY</string>
   <key>SUVerifyUpdateBeforeExtraction</key><true/>
   <key>SURequireSignedFeed</key><true/>
-  <!-- Updates land as soon as possible (ruled 7 Sep): no permission prompt
-       on the second launch, a check at launch and every day, the download
-       in the background, and the install the moment nothing is in motion
-       (Updates.swift postpones the relaunch until then) or on quit. -->
+  <!-- Updates land as soon as possible (ruled 7 Sep, sharpened 9 Sep): no
+       permission prompt, a check at launch and every hour (every merge is a
+       release, and the app is never quit), the download in the background,
+       and the install after twenty seconds of a truly idle panel
+       (Updates.swift, willInstallUpdateOnQuit) or on quit as the floor. -->
   <key>SUEnableAutomaticChecks</key>$UPDATES_BOOL_XML
   <key>SUAutomaticallyUpdate</key>$UPDATES_BOOL_XML
+  <key>SUScheduledCheckInterval</key><integer>3600</integer>
   <!-- tranquilitybase:// deep links, so any local HTML page can carry buttons
        that open the agent that made it. The browser confirms before launching
        an external scheme, which is the drive-by guard.

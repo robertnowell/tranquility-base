@@ -82,4 +82,38 @@ public enum UpdateReadiness {
     /// finished session installs promptly and long enough that a machine left
     /// recording for an hour is not doing this thousands of times.
     public static let recheckInterval: TimeInterval = 10
+
+    /// How often a running app asks the feed. Every merge is a release, and
+    /// the app is never quit (Robert, 09 Sep: "I don't really close
+    /// Tranquility Base, nor should I"), so the daily check that shipped on
+    /// 7 Sep, which the 09 Sep log actually showed as weekly, left a running
+    /// app five releases behind. One hour is Sparkle's floor.
+    public static let checkInterval: TimeInterval = 3600
+
+    /// How many consecutive idle polls an install waits for. One idle poll is
+    /// an instant; the grid is idle for a moment between a read-back ending
+    /// and the next press. Two polls, twenty seconds apart, is a person who
+    /// has actually stepped away from the panel, and the relaunch that
+    /// follows lands on nobody. Ruled 09 Sep: "truly at a safe juncture".
+    public static let requiredIdlePolls = 2
+
+    /// The install gate, as a value the delegate carries between polls.
+    ///
+    /// `observe` is fed the block (or nil) on every poll and answers whether
+    /// the install may go now. A busy poll resets the streak, so idle time
+    /// must be continuous: an app that flickers busy every few seconds never
+    /// installs, which is the right answer for an app somebody is using.
+    public struct InstallGate: Equatable, Sendable {
+        public private(set) var consecutiveIdlePolls = 0
+        public init() {}
+
+        public mutating func observe(_ block: Block?) -> Bool {
+            if block == nil {
+                consecutiveIdlePolls += 1
+            } else {
+                consecutiveIdlePolls = 0
+            }
+            return consecutiveIdlePolls >= UpdateReadiness.requiredIdlePolls
+        }
+    }
 }
