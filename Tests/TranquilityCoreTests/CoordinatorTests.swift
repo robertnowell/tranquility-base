@@ -1025,6 +1025,38 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(sent, "old")
     }
 
+    /// A lamp click is an answer to "who am I talking to" before it is a
+    /// request to hear anything (ruled 09 Sep). The words that follow a pick
+    /// go to the picked session even when its clip never made a sound.
+    func testAPickIsTheReplyTargetEvenWhenNothingPlays() async throws {
+        let speech = SilentSpeech()
+        let coordinator = try makeCoordinator(speech: speech)
+        try append(.stop, session: "old", at: 1_000, message: "the one you click")
+        try append(.stop, session: "sess-1", at: 2_000, message: "the one you heard")
+        _ = try await coordinator.announceNext()   // hears sess-1
+        XCTAssertEqual(try coordinator.replyTarget()?.sessionId, "sess-1")
+
+        speech.fail = true
+        guard case .interrupted(let failure) = try await coordinator.announceNext(only: "old")
+        else { return XCTFail("expected the failed clip to be reported") }
+        XCTAssertNotNil(failure)
+        XCTAssertEqual(try coordinator.replyTarget()?.sessionId, "old",
+                       "the click chose the target; the silence did not un-choose it")
+    }
+
+    /// Same rule under the gate: a veto delays the reading, not the choice.
+    func testAPickHeldByTheGateIsStillTheReplyTarget() async throws {
+        let coordinator = try makeCoordinator(
+            gate: InterruptGate(
+                minimumIdleSeconds: 8,
+                signals: .init(idleSeconds: { 0 }, frontmostApp: { nil }, screenLocked: { false })))
+        try append()
+        guard case .held = try await coordinator.announceNext(only: "sess-1") else {
+            return XCTFail("expected the gate to hold it")
+        }
+        XCTAssertEqual(try coordinator.replyTarget()?.sessionId, "sess-1")
+    }
+
     /// An unknown session id refuses rather than falling back to the derived
     /// target — a stale page must not route words into whatever you heard last.
     func testTargetedReplyToUnknownSessionRefuses() async throws {
