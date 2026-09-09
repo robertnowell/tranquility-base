@@ -59,13 +59,14 @@ the same provider. Other language-detection errors remain service failures.
 The final `transcription.outcome` is:
 
 - `completed`: usable nonempty text was returned.
-- `no_speech_detected`: all executed recovery providers reported no speech,
-  no recovery attempt was cancelled, and no streaming text was observed.
-  This is their observation, not a claim about what the person did. The UI
-  returns to the grid with a notice and keeps the audio without reporting an
-  error card.
-- `provider_error`: a configuration/service/transport error prevents classifying
-  the result as a clean no-speech observation. This does not prove lost speech.
+- `no_speech_detected`: a provider completed an empty assessment with no
+  conflicting streaming text. A clean empty live termination skips file recovery;
+  a completed empty file result stops the chain. Earlier service errors and
+  cancellation of a losing race lane stay in diagnostics without turning that
+  completed assessment into a capture failure. The UI says “No audio detected”
+  in neutral text, without a warning glyph, and preserves the audio for manual retry.
+- `provider_error`: no provider completed an assessment and a configuration,
+  service or transport error occurred. This does not prove lost speech.
 - `cancelled`: the work was cancelled.
 - `unresolved`: there is insufficient evidence to classify the empty result,
   including streaming text followed by empty recovery results. This keeps the
@@ -76,8 +77,15 @@ Do not count them as confirmed lost spoken messages. An existing retryable
 utterance status is retained internally; `transcriptionOutcome` persists the
 more precise observation without discarding the audio or changing recovery.
 
-The default provider order is unchanged: the live stream is tried first; file
-recovery tries the configured cloud providers and then on-device speech.
+The default provider order is live streaming, then (only if recovery is needed)
+AssemblyAI file, OpenAI file, and on-device speech. On 9 September, real room-silence
+captures of 1.2–2.5 seconds received empty streaming assessments, then the old
+OpenAI-first file chain generated “Thank you”, an outro, and Korean news text.
+Another empty capture traversed all providers for about ten seconds before an
+on-device error replaced the no-speech observations. This measurement supersedes
+the former all-providers-must-be-empty rule. Timeouts, unexpected early stream
+termination, partial text, malformed responses and transport failures still recover;
+no phrase or language blacklist removes legitimate dictated words.
 
 ## Release diagnostics
 

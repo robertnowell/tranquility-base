@@ -378,7 +378,7 @@ enum StateLegend {
         case guidance
         /// Calls to action: state-green controls (accent = state, ruled).
         case action
-        /// Something needs you. The amber channel — the silence gate's notice.
+        /// Something needs you. The amber channel for actionable failures.
         case fault
         /// News you may ignore. MIL-STD-411's advisory channel: not red, not
         /// green, nothing for you to do. The held-hail notice lives here, and
@@ -718,7 +718,7 @@ enum StateLegend {
     /// classification of the agent — "Needs you" is our internal reading of a
     /// session's condition, and no session's condition changed. The triangle
     /// stays: it is the one mark that earns the amber.
-    static let noWordsNotice = "\(Glyph.needsYou) No words detected, try again"
+    static let noWordsNotice = "No audio detected"
 
     /// What a tap on a row that cannot be reopened says back.
     ///

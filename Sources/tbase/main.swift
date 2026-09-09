@@ -1626,6 +1626,10 @@ case "reconcile":
             let waitMs = Int(Date().timeIntervalSince(finalStarted) * 1000)
             print("\n[\(result.provider), \(result.finality.rawValue), final \(waitMs)ms after end-of-audio]")
             print(result.text)
+        } else if let provider = stream.noSpeechProvider {
+            let waitMs = Int(Date().timeIntervalSince(finalStarted) * 1000)
+            print("\n[\(provider), no_speech_detected; final \(waitMs)ms after end-of-audio; no automatic file recovery]")
+            exit(6)
         } else {
             print("\nstream produced no trustworthy final — in the app this utterance")
             print("falls back to the file-based recovery chain (the audio is always saved first).")

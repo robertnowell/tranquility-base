@@ -201,10 +201,57 @@ final class AssemblyAIStreamingTests: XCTestCase {
         defer { session.cancel() }
 
         socket.emit(#"{"type":"Begin","id":"abc"}"#)
+        session.requestFinal()
         socket.emit(#"{"type":"Termination"}"#)
 
         await fulfillment(of: [sink.concluded], timeout: 2)
         XCTAssertEqual(sink.failure, .noSpeechDetected)
+    }
+
+    func testUnexpectedEmptyTerminationStillRequiresRecovery() async throws {
+        let socket = FakeSocket()
+        let sink = Sink()
+        let session = try await openSession(socket: socket, sink: sink)
+        defer { session.cancel() }
+        socket.emit(#"{"type":"Termination"}"#)
+        await fulfillment(of: [sink.concluded], timeout: 2)
+        XCTAssertEqual(sink.failure, .sessionExpired)
+    }
+
+    func testCleanEmptyStreamKeepsAudioAndNeverAsksAProviderForPhantomWords() async throws {
+        let socket = FakeSocket()
+        let provider = AssemblyAIStreaming(keyOverride: "test-key", socketFactory: { _ in socket })
+        let stream = StreamedUtterance(provider: provider)
+        await stream.start()
+        stream.feed(pcm16: silence())
+        let finish = Task { await stream.finish(timeout: 2) }
+        for _ in 0..<100 where !socket.sentTexts.contains(where: { $0.contains("Terminate") }) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        socket.emit(#"{"type":"Termination"}"#)
+        let final = await finish.value
+        XCTAssertNil(final)
+        XCTAssertEqual(stream.noSpeechProvider, "assemblyai-streaming")
+        let row = try await store.captureAndTranscribe(
+            pcm16: silence(), sampleRate: 16000,
+            audioStore: AudioStore(directory: tmpDir.appendingPathComponent("audio")),
+            chain: RecoveryChain(providers: [MustNotRecover()], floorAfter: nil),
+            streamed: final, streamHadRecognizedText: stream.hasRecognizedText,
+            streamNoSpeechProvider: stream.noSpeechProvider)
+        XCTAssertNil(row.transcriptText)
+        XCTAssertEqual(row.transcriptionOutcome, "no_speech_detected")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(row.audioPath)))
+        XCTAssertEqual(try store.utterance(id: row.id)?.transcriptionOutcome, "no_speech_detected")
+    }
+
+    private struct MustNotRecover: RecoveryTranscriptionProvider {
+        let name = "phantom-words"
+        let isConfigured = true
+        func transcribe(fileAt url: URL) async throws -> TranscriptionResult {
+            XCTFail("a clean empty stream must not invoke file recovery")
+            return .init(text: "MBC 뉴스 이덕영입니다. Thank you for watching.",
+                         finality: .recoveryForcedFinal, provider: name)
+        }
     }
 
     func testSocketErrorMapsToConnectionDroppedWithPartialFlag() async throws {
@@ -429,13 +476,14 @@ final class AssemblyAIStreamingTests: XCTestCase {
 
         let streamed = await stream.finish(timeout: 2)
         XCTAssertNil(streamed, "a dead stream must yield nil, never a suspect transcript")
+        XCTAssertNil(stream.noSpeechProvider)
 
         let utterance = try await store.captureAndTranscribe(
             pcm16: silence(), sampleRate: 16000,
             audioStore: AudioStore(directory: tmpDir.appendingPathComponent("audio")),
             chain: RecoveryChain(providers: [FixedRecovery()],
                                  maxAttemptsPerProvider: 1, backoff: [0]),
-            streamed: streamed)
+            streamed: streamed, streamNoSpeechProvider: stream.noSpeechProvider)
         XCTAssertEqual(utterance.transcriptText, "recovered from file",
                        "the fallback is transparent: same outcome as before streaming existed")
     }

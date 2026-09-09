@@ -241,8 +241,12 @@ extension AppDelegate {
         SelfTest.report("transcriptionNoSpeech", [
             ("releasedTranscribingStage", hud.state.name == "idle"),
             ("noFailureReported", Failures.reportedCount == failures),
+            ("plainNoAudioNotice", hud.notice == "No audio detected"),
+            ("neutralNotice", hud.noticeLens.color == StateLegend.Lens.content.color),
         ])
         return hud.state.name == "idle" && Failures.reportedCount == failures
+            && hud.notice == "No audio detected"
+            && hud.noticeLens.color == StateLegend.Lens.content.color
     }
 
 }

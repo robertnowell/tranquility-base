@@ -56,9 +56,10 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
     static func state(of json: [String: Any]) -> TranscriptState {
         switch json["status"] as? String {
         case "completed":
-            let text = ((json["text"] as? String) ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return .completed(text)
+            guard let text = json["text"] as? String else {
+                return .failed("completed transcript has no text field")
+            }
+            return .completed(text.trimmingCharacters(in: .whitespacesAndNewlines))
         case "error":
             let reason = (json["error"] as? String) ?? "unspecified"
             // Measured with a silent WAV on 09 Sep: language detection returns

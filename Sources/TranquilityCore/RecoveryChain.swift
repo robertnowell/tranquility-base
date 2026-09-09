@@ -39,17 +39,14 @@ public struct RecoveryChain: Sendable {
         lexicon: [String] = [],
         floorAfter: TimeInterval? = 30
     ) {
-        // Cloud first for quality, on-device last because it can never be
-        // unavailable — and a second, independent cloud vendor between them,
-        // because on 12 Aug the two-rung chain's rungs failed for unrelated
-        // reasons on the same recording and the floor's mistake became the
-        // transcript. A7: the shared lexicon reaches the Whisper `prompt` and
-        // the Apple floor's contextualStrings; the AssemblyAI rung takes none
-        // (its file API's vocabulary params are unverified — see its header).
-        // All ignored when explicit providers are passed, which own their own
-        // config.
+        // 09 Sep: real silent captures passed a clean empty live assessment to
+        // the generative file fallback, which returned news/outro boilerplate.
+        // Saved-file recovery now asks the primary provider first as well.
+        // A valid empty assessment stops the chain; actual service failures
+        // retain independent cloud and on-device recovery. Lexicon context
+        // still reaches the providers that support it.
         self.providers = providers
-            ?? [OpenAIRecovery(lexicon: lexicon), AssemblyAIFileRecovery(),
+            ?? [AssemblyAIFileRecovery(), OpenAIRecovery(lexicon: lexicon),
                 AppleSpeechRecovery(lexicon: lexicon)]
         self.maxAttemptsPerProvider = maxAttemptsPerProvider
         self.backoff = backoff
@@ -61,7 +58,12 @@ public struct RecoveryChain: Sendable {
         public let attempts: [String]
         public let lastFailure: TranscriptionFailure?
         public var diagnostics: [TranscriptionAttempt] = []
-        public var disposition: TranscriptionDisposition { TranscriptionAttempt.disposition(of: diagnostics) }
+        // The winning assessment excludes cancellation of the losing race lane.
+        var assessment: TranscriptionDisposition? = nil
+        public var disposition: TranscriptionDisposition {
+            assessment ?? TranscriptionAttempt.disposition(of: diagnostics)
+        }
+        var concluded: Bool { succeeded || disposition == .noSpeechDetected }
         public var succeeded: Bool { result != nil }
     }
 
@@ -89,7 +91,7 @@ public struct RecoveryChain: Sendable {
         return await withTaskGroup(of: Lane.self) { group in
             group.addTask {
                 let outcome = await run(ordered, fileAt: url)
-                if !outcome.succeeded { ladderSpent.spend() }
+                if !outcome.concluded { ladderSpent.spend() }
                 return Lane(isFloor: false, outcome: outcome)
             }
             group.addTask {
@@ -101,19 +103,31 @@ public struct RecoveryChain: Sendable {
                 if Task.isCancelled { return Lane(isFloor: true, outcome: nil) }
                 return Lane(isFloor: true, outcome: await run([floor], fileAt: url))
             }
-            // First success cancels the other lane; the group still drains it,
+            // A usable transcript or the ordered lane's no-speech assessment
+            // cancels the other lane; the group still drains it,
             // which is why every rung must unwind promptly under cancellation
             // (URLSession throws, the poll loops check, the recogniser's task
             // is cancelled by recognizePass's cancellation handler).
             var finished: [Lane] = []
+            var winner: Outcome?
             while let lane = await group.next() {
                 finished.append(lane)
-                if lane.outcome?.succeeded == true { group.cancelAll() }
+                // An empty floor does not veto an ordered provider still working.
+                if winner == nil, let outcome = lane.outcome,
+                   outcome.succeeded || (!lane.isFloor && outcome.concluded) {
+                    winner = outcome
+                    group.cancelAll()
+                }
             }
             let attempts = finished.compactMap(\.outcome).flatMap(\.attempts)
             let diagnostics = finished.compactMap(\.outcome).flatMap(\.diagnostics)
-            if let winner = finished.first(where: { $0.outcome?.succeeded == true })?.outcome {
-                return Outcome(result: winner.result, attempts: attempts, lastFailure: nil, diagnostics: diagnostics)
+            if Task.isCancelled {
+                return Outcome(result: nil, attempts: attempts, lastFailure: nil,
+                               diagnostics: diagnostics, assessment: .cancelled)
+            }
+            if let winner = winner ?? finished.compactMap(\.outcome).first(where: { $0.concluded }) {
+                return Outcome(result: winner.result, attempts: attempts, lastFailure: winner.lastFailure,
+                               diagnostics: diagnostics, assessment: winner.disposition)
             }
             // Both lanes failed: the ordered lane's failure is the one that
             // names the better provider's reason, so it leads.
@@ -173,9 +187,17 @@ public struct RecoveryChain: Sendable {
                 } catch let failure as TranscriptionFailure {
                     attempts.append("\(provider.name): \(failure)")
                     lastFailure = failure
-                    record(provider.name, outcome: Task.isCancelled ? "cancelled" : "failed",
+                    record(provider.name, outcome: Task.isCancelled ? "cancelled"
+                               : failure == .noSpeechDetected ? "no_speech_detected" : "failed",
                            code: Task.isCancelled ? "cancelled" : failure.diagnosticCode,
                            began: began, ordinal: attempt + 1)
+                    if failure == .noSpeechDetected, !Task.isCancelled {
+                        // A completed empty assessment is a result. Asking another
+                        // recognizer to invent text created the observed silent-capture
+                        // artifacts on 09 Sep. Keep the file for explicit user retry.
+                        return Outcome(result: nil, attempts: attempts, lastFailure: failure,
+                                       diagnostics: diagnostics, assessment: .noSpeechDetected)
+                    }
                     // Retrying a bad key, an empty recording, or a machine
                     // with no network route accomplishes nothing.
                     switch failure {
@@ -262,6 +284,7 @@ extension QueueStore {
         eventId: String? = nil,
         streamed: TranscriptionResult? = nil,
         streamHadRecognizedText: Bool = false,
+        streamNoSpeechProvider: String? = nil,
         preWritten: URL? = nil,
         utteranceId: String? = nil
     ) async throws -> Utterance {
@@ -311,13 +334,27 @@ extension QueueStore {
             return utterance
         }
 
+        let hadText = streamHadRecognizedText
+            || !(streamed?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+        if let provider = streamNoSpeechProvider, !hadText, !Task.isCancelled {
+            utterance.status = .transcriptionFailed  // existing durable, manually retryable row
+            utterance.transcriptionOutcome = TranscriptionDisposition.noSpeechDetected.rawValue
+            utterance.transcriptProvider = provider
+            try update(utterance: utterance)
+            Track.record("transcription", [
+                "outcome": "no_speech_detected", "streamed": true,
+                "provider": Track.token(from: provider), "audio_ms": .int(Int(stored.durationMs)),
+                "speech_evidence": "provider_no_speech", "latency_scope": "see_stream_attempt",
+                "attempts": 0,
+            ])
+            return utterance
+        }
+
         utterance.status = .transcribing
         try update(utterance: utterance)
 
         let began = Date()
         let outcome = await chain.transcribe(fileAt: stored.url)
-        let hadText = streamHadRecognizedText
-            || !(streamed?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
         // Conflicting recognizer evidence cannot quietly dismiss a capture.
         let disposition: TranscriptionDisposition = outcome.disposition == .noSpeechDetected && hadText
             ? .unresolved : outcome.disposition

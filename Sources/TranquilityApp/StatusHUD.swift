@@ -1536,7 +1536,7 @@ final class StatusHUD: NSObject {
 
     // MARK: - The grid notice (ruled 08 Aug)
 
-    /// A few seconds of amber in the grid's own strip, where the AGENTS placard
+    /// A brief notice in the grid's own strip, where the AGENTS placard
     /// sits — the whole surface for a refusal that is not a failure.
     ///
     /// The silence gate used to paint the full `.result` face: the "Needs you"
@@ -1560,7 +1560,7 @@ final class StatusHUD: NSObject {
     /// is worse than no notice: amber trains the eye to check, and spending that
     /// on "nothing is wrong, we just stayed quiet" blunts it for the cases that
     /// do need checking.
-    private var noticeLens: StateLegend.Lens = .fault
+    private(set) var noticeLens: StateLegend.Lens = .fault
     var noticeExpiry: DispatchWorkItem?
 
     func flashNotice(_ text: String, lens: StateLegend.Lens = .fault,
