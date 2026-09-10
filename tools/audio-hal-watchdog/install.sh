@@ -32,13 +32,20 @@ else
   echo "sudoers rule did not take"; exit 1
 fi
 
-# 2. launchd agent
+# 2. the script itself, copied to the state directory. launchd runs it from
+#    there, so the checkout this was installed from can be a worktree that
+#    is removed tomorrow, or a /private/tmp build that is reaped next week,
+#    and the agent keeps working. Re-run install.sh to update the copy.
+install -m 0755 "$HERE/watchdog.sh" "$STATE/watchdog.sh"
+echo "script:  $STATE/watchdog.sh"
+
+# 3. launchd agent
 PLIST="$HOME/Library/LaunchAgents/com.tranquilitybase.audio-hal-watchdog.plist"
-sed -e "s|__WATCHDOG__|$HERE/watchdog.sh|g" -e "s|__HOME__|$HOME|g" \
+sed -e "s|__WATCHDOG__|$STATE/watchdog.sh|g" -e "s|__HOME__|$HOME|g" \
   "$HERE/com.tranquilitybase.audio-hal-watchdog.plist" > "$PLIST"
 launchctl bootout "gui/$(id -u)/com.tranquilitybase.audio-hal-watchdog" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 echo "launchd: com.tranquilitybase.audio-hal-watchdog loaded (every 20s, capture only)"
 echo "log:     $STATE/watchdog.log"
-echo "test:    DRY_RUN=1 PROBE_TIMEOUT=0 bash $HERE/watchdog.sh && tail -3 \"$STATE/watchdog.log\""
+echo "test:    DRY_RUN=1 PROBE_TIMEOUT=0 bash \"$STATE/watchdog.sh\" && tail -3 \"$STATE/watchdog.log\""
 echo "remove:  launchctl bootout gui/$(id -u)/com.tranquilitybase.audio-hal-watchdog; sudo rm /etc/sudoers.d/audio-hal-watchdog"
