@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1135</title>
+      <sparkle:version>1135</sparkle:version>
+      <sparkle:shortVersionString>0.3.1135</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Thu, 10 Sep 2026 04:47:19 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1135-67015d672/TranquilityBase-0.3.1135.dmg" type="application/octet-stream" length="13803413" sparkle:edSignature="jQNdfFi8Ijlb5+2lJ6H3fKYGSq9paB+Qtg0O71aKsbc4CWf5IJe6XOm7HeYXYVVs9RXr6dhRej0uXLp59GsyBQ==" />
+    </item>
+    <item>
       <title>Version 0.3.1134</title>
       <sparkle:version>1134</sparkle:version>
       <sparkle:shortVersionString>0.3.1134</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Wed, 09 Sep 2026 18:59:05 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1125-453b42873/TranquilityBase-0.3.1125.dmg" type="application/octet-stream" length="13696568" sparkle:edSignature="scZr7Pfl5u92ALVQl9zxOafmP31D7WzqxDSALtJHLOt0DJXkFwQdRudVJTIIi4ZzOxMVEW9f/vxGEGHlt9i0AQ==" />
     </item>
-    <item>
-      <title>Version 0.3.1124</title>
-      <sparkle:version>1124</sparkle:version>
-      <sparkle:shortVersionString>0.3.1124</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Wed, 09 Sep 2026 18:46:34 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1124-12c3efa8b/TranquilityBase-0.3.1124.dmg" type="application/octet-stream" length="13654960" sparkle:edSignature="ThcKNQwfjcHx9dbGe8B/TMjWBr2+/TzyqIrzENqR++YtEcdW12EJsZd1chNHYHsanDX6CFFeUUS+S2lun7XvCA==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 9G50oK5719gFn/Gy4vMAdLU0Qs9uo4ZXWEzpkNz7Q3uAKz66r9fG4YM2bAgN5kCi0TDuzDiwq91Quhqmb1LHAg==
+edSignature: HjIuhZSN3Jngl8EZCM6HLzLZbEShHbBqdXZP139ivTnWki9hVlJ4M4ypBx8mNgPOmPSjAGd3I/UVZW6hxUD9BQ==
 length: 6457
 -->
