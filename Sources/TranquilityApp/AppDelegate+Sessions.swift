@@ -1371,13 +1371,33 @@ extension AppDelegate {
             }
 
             let outcome = await TerminalTabFocus.focus(tty: tty, sessionId: sessionId)
+            // Ruled 10 Sep: a row waiting at the agent view lands on the
+            // CONVERSATION, not on the agent view. Raising the tab alone put
+            // Robert in front of "describe a task for a new session" with no
+            // word about what to press ("it's not actionable"). The screen's
+            // own text says "esc returns to it", and 6:16 this morning showed
+            // exactly that. So when the pane is verifiably showing the agent
+            // view, press Esc for them; when it is showing anything else,
+            // type nothing, because Esc at a running turn would interrupt it.
+            // Off-main: a pane read and a tmux call are subprocesses.
+            var escaped = false
+            if case .focused = outcome, live.waitingFor == Readiness.agentView, let owned,
+               SessionLauncher.paneTail(pane: owned).contains(Readiness.agentViewPrompt) {
+                _ = Tmux.run(["send-keys", "-t", owned.paneId, "Escape"],
+                             socket: owned.socketName)
+                escaped = true
+                Permissions.log("goTo: \(sessionId.prefix(8)) was showing the agent view; pressed Esc")
+                report("focused_and_left_agent_view")
+            }
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 switch outcome {
                 case .focused:
                     Permissions.log("goTo: focused \(tty)")
-                    report(owned == nil ? "focused_after_transfer" : "focused")
-                    self.hud.finishGoToSession(nil)
+                    if !escaped { report(owned == nil ? "focused_after_transfer" : "focused") }
+                    self.hud.finishGoToSession(escaped
+                        ? "Its tab was showing Claude Code's agent view. Pressed Esc to bring the conversation back."
+                        : nil)
                 case .tabGone:
                     Permissions.log("goTo: tab not found for \(tty)")
                     report("tab_gone")

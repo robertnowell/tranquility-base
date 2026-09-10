@@ -1709,31 +1709,55 @@ public extension HomeBase {
         // in a tree the hub of hubs lists: "sess-1" and "codex-1" got hubs and
         // rows (6 Sep 2026) because nothing here said no.
         guard ArtifactStore.isPlausibleSession(sessionId) else { return nil }
-        let briefs = try store.briefs(for: sessionId)
+        // One conversation, one hub (ruled 10 Sep). A session that Claude Code
+        // continued under a new id (the left arrow does this) writes its
+        // ORIGIN's hub, with every member's turns and pages together, and its
+        // own directory becomes a link to it. Before this, "Hub design and
+        // organization" had days of history under one id and one turn under
+        // another, same name, and read as a session that had lost everything.
+        let family = SessionLineage.family(of: sessionId)
+        let origin = family.first ?? sessionId
+        // Newest first across the whole family: `briefs(for:)` returns newest
+        // first per member, and the page renders in the order it is given.
+        let briefs = try family.flatMap { try store.briefs(for: $0) }
+            .sorted { $0.atMs > $1.atMs }
         // Read once and reuse: the model needs it and the guard needs it, and
         // this is a bounded file read, not a free property.
         // Enough to cover every turn the page prints, not just the full ones:
         // a line-tier turn that produced a report still wants its words under it.
-        let transcript = TurnText.forSession(sessionId, limit: fullTurns + lineTurns)
-        guard !briefs.isEmpty || !transcript.isEmpty else { return nil }
-        let latest = try store.latestStop(for: sessionId)
-        // Agents that ran before the hook existed have pages the store never
-        // saw. Cheap, idempotent, and only ever adds.
-        if let transcript = latest?.transcriptPath {
-            ArtifactStore.backfill(session: sessionId, transcriptPath: transcript,
-                                   root: QueueStore.supportDirectory.path)
+        // The transcript is the newest member's that has one: a continuation
+        // holds the conversation's latest words, and its origin the earlier.
+        var transcript: [TurnText.Turn] = []
+        for member in family.reversed() {
+            transcript = TurnText.forSession(member, limit: fullTurns + lineTurns)
+            if !transcript.isEmpty { break }
         }
-        let here = live.first { $0.sessionId == sessionId }
+        guard !briefs.isEmpty || !transcript.isEmpty else { return nil }
+        // The newest member's Stop, walking back through the family.
+        var latest: WaitingSession? = nil
+        for member in family.reversed() {
+            if let stop = try store.latestStop(for: member) { latest = stop; break }
+        }
+        // Agents that ran before the hook existed have pages the store never
+        // saw. Cheap, idempotent, and only ever adds. Every member, so a page
+        // a continuation wrote is found under the conversation it belongs to.
+        for member in family {
+            if let path = try store.latestStop(for: member)?.transcriptPath {
+                ArtifactStore.backfill(session: member, transcriptPath: path,
+                                       root: QueueStore.supportDirectory.path)
+            }
+        }
+        let here = live.first { family.contains($0.sessionId) }
         // A Codex session keeps its cwd in the rollout rather than in a stored
         // event, and a session that predates the Codex hooks has no event at
         // all to read one from.
         let codexCwd = briefs.isEmpty
-            ? CodexRollout.parse(sessionId: sessionId)?.meta?.cwd : nil
+            ? CodexRollout.parse(sessionId: origin)?.meta?.cwd : nil
         let title = Self.title(
-            sessionId: sessionId, transcriptPath: latest?.transcriptPath, live: here,
+            sessionId: origin, transcriptPath: latest?.transcriptPath, live: here,
             firstPrompt: transcript.first?.prompt, topic: briefs.first?.topic)
         let model = Model(
-            sessionId: sessionId,
+            sessionId: origin,
             title: title,
             callsign: briefs.first?.callsign ?? latest?.callsign,
             cwd: latest?.cwd ?? here?.cwd ?? codexCwd,
@@ -1749,10 +1773,12 @@ public extension HomeBase {
                      findings: $0.findings, solution: $0.solution,
                      rationale: $0.rationale, branch: $0.branch)
             },
-            pages: ArtifactStore.history(for: sessionId,
-                                         root: QueueStore.supportDirectory.path),
-            receipts: PullRequestStore.history(for: sessionId,
-                                               root: QueueStore.supportDirectory.path),
+            pages: family.flatMap {
+                ArtifactStore.history(for: $0, root: QueueStore.supportDirectory.path)
+            }.sorted { $0.at < $1.at },
+            receipts: family.flatMap {
+                PullRequestStore.history(for: $0, root: QueueStore.supportDirectory.path)
+            },
             // Read here rather than in `render`, which stays pure over the
             // model. Bounded to the turns the page shows in full, so this is a
             // 2 MB tail and a JSON parse per line of it, not a walk of a 139 MB
@@ -1783,7 +1809,46 @@ public extension HomeBase {
         // wrote and sometimes guesses wrong.
         HubReconcile.run(sessionId: model.sessionId, title: model.title,
                          dir: dir, turns: model.turns)
+        // Every continuation's directory points at this one, so a page a
+        // continuation writes lands in the conversation's hub and a link that
+        // names the continuation opens the same page.
+        for member in family.dropFirst() {
+            aliasContinuation(member, toOrigin: origin)
+        }
         return file
+    }
+
+    /// Make a continuation's hub directory a link to its origin's.
+    ///
+    /// A directory the app itself made (an index.html and nothing else) is
+    /// replaced by the link. A directory with anything else in it is
+    /// somebody's pages and stays; its index becomes a pointer page instead,
+    /// so nothing a person wrote is ever moved or deleted here.
+    static func aliasContinuation(_ id: String, toOrigin origin: String,
+                                  root: URL = HomeBase.root) {
+        let fm = FileManager.default
+        let name = slug(forSessionId: id)
+        let target = slug(forSessionId: origin)
+        guard name != target else { return }
+        let link = root.appendingPathComponent(name, isDirectory: true)
+        guard !isSymlink(link) else { return }
+        var isDir: ObjCBool = false
+        if fm.fileExists(atPath: link.path, isDirectory: &isDir) {
+            guard isDir.boolValue else { return }
+            let contents = ((try? fm.contentsOfDirectory(atPath: link.path)) ?? [])
+                .filter { $0 != "index.html" && $0 != ".DS_Store" }
+            guard contents.isEmpty else {
+                let pointer = "<!doctype html><html><head><meta charset=\"utf-8\">"
+                    + "<meta http-equiv=\"refresh\" content=\"0; url=../\(target)/index.html\">"
+                    + "<title>Continued</title></head><body><p>This conversation continues at "
+                    + "<a href=\"../\(target)/index.html\">its hub</a>.</p></body></html>\n"
+                try? pointer.write(to: link.appendingPathComponent("index.html"),
+                                   atomically: true, encoding: .utf8)
+                return
+            }
+            try? fm.removeItem(at: link)
+        }
+        try? fm.createSymbolicLink(atPath: link.path, withDestinationPath: target)
     }
 
     /// Write each page's turn into the page.

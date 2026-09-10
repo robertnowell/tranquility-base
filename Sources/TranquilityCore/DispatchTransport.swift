@@ -150,6 +150,11 @@ public enum Readiness: Sendable, Equatable {
     /// session with the words: the same hazard as a dialog, refused the same
     /// way.
     public static let agentView = "agent view"
+    /// The agent view's own prompt, verbatim from the screen. A pane whose
+    /// tail contains it is showing the agent view; that is the only state in
+    /// which the app presses Esc on the reader's behalf (Go to Agent, ruled
+    /// 10 Sep), because Esc anywhere else could interrupt a running turn.
+    public static let agentViewPrompt = "describe a task for a new session"
 
     private static let dialogLikeValues: Set<String> = [
         dialogOpen, permissionPrompt, sandboxRequest, workerRequest, agentView,
