@@ -21,7 +21,7 @@ granted() {
   # Captured to a file, never piped: `| head` closes the pipe early, spindump
   # takes SIGPIPE, and pipefail reports the rule as broken when it works.
   local out; out=$(mktemp)
-  sudo -n /usr/sbin/spindump coreaudiod 1 -stdout > "$out" 2>/dev/null
+  sudo -n /usr/sbin/spindump coreaudiod 3 -stdout > "$out" 2>/dev/null
   local ok=1; [ -s "$out" ] && ok=0
   rm -f "$out"; return $ok
 }
@@ -38,7 +38,7 @@ S
   sudo install -o root -g wheel -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/audio-hal-watchdog
   rm -f "$SUDOERS_TMP"
   echo "sudoers: /etc/sudoers.d/audio-hal-watchdog installed ($CMDS)"
-  # Prove the rule works on a healthy daemon: one second of stacks to a file.
+  # Prove the rule works on a healthy daemon: three seconds of stacks to a file, the exact command the rule names.
   if granted; then echo "sudoers: passwordless spindump verified"
   else echo "sudoers rule did not take"; exit 1; fi
 fi
