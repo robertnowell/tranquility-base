@@ -168,48 +168,76 @@ extension AppDelegate {
 
     /// "Discuss with agent", from a page that agent wrote.
     ///
-    /// Three outcomes and no silent fourth: a completed turn opens the card; a
-    /// live first turn opens its terminal (the same rule as a blue grid row);
-    /// an absent agent offers an invitation or explains why it cannot.
+    /// The same thing as tapping that agent's row in the grid (ruled 9 Sep,
+    /// on a report whose Codex agent had finished and exited: the button
+    /// opened a card, spoke it, and left the agent dead, while the grid's tap
+    /// on that row would have revived it). So the rows are built HERE, by the
+    /// one builder the grid and Past Agents share, the session's row is found
+    /// in them, and the row's own verb runs through the same three calls
+    /// `sessionRowTapped` makes. No second routing table to drift.
+    ///
+    /// Every outcome logs which way it went, including the card. The old
+    /// card branch was the only one of three that wrote nothing, which is
+    /// why tonight's click read as "it did nothing" when it had done exactly
+    /// what it was told.
     func discuss(session: String?, ref: String?) {
         // Sweep first, for the same reason `reply` now does: a page can be
         // clicked before its own session has been filed.
         _ = try? coordinator?.intake()
-        let liveSessions = (ClaudeAgentsCLI().sessions() ?? [])
-            + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
+        let rows = sessionRowsNow()
         // A footer may name the 8-character slug rather than the full session
-        // id. Resolve against liveness as well as stored Stops: a report can be
-        // written during an agent's first turn, before any Stop exists.
-        let live: LiveSession? = session.flatMap { id in
-            if let exact = liveSessions.first(where: { $0.sessionId == id }) {
-                return exact
-            }
-            let prefixed = liveSessions.filter { $0.sessionId.hasPrefix(id) }
+        // id: an exact row wins, then a unique prefix.
+        let row: SessionRow? = session.flatMap { id in
+            if let exact = rows.first(where: { $0.id == id }) { return exact }
+            let prefixed = rows.filter { $0.id.hasPrefix(id) }
             return prefixed.count == 1 ? prefixed[0] : nil
         }
-        let resolved: String? = session.flatMap { id in
-            if let live { return live.sessionId }
+        // No row: the store may still know it (out of the scan window, or a
+        // headless session that never gets a row), and a recorded turn is a
+        // card worth reading.
+        let resolved: String? = row?.id ?? session.flatMap { id in
             if ((try? store?.latestStop(for: id)) ?? nil) != nil { return id }
             return (try? store?.sessionId(matching: id)) ?? nil
         }
         let known = resolved.flatMap { id in try? store?.latestStop(for: id) } ?? nil
-        switch DeepLink.discussDestination(hasCompletedTurn: known != nil,
-                                           isLive: live != nil) {
+        let action = row.map { SessionRow.action(for: $0) }
+        let destination = DeepLink.discussDestination(rowAction: action,
+                                                      hasCompletedTurn: known != nil)
+        let who = resolved?.prefix(8) ?? session?.prefix(8) ?? "-"
+        Permissions.log("deeplink: discuss, \(who) row="
+            + (row.map { "\($0.lamp)" + ($0.revivable ? " revivable" : "") } ?? "none")
+            + " turn=\(known != nil) -> \(destination)")
+        var routed: [String: TrackValue] = ["to": Track.token(from: "\(destination)"),
+                                            "has_row": .bool(row != nil)]
+        if let resolved { routed["agent_id"] = Track.hash(resolved) }
+        Track.record("discuss_routed", routed)
+        switch destination {
         case .conversationCard:
-            guard let session = resolved else { return }
-            // The grid row's own move: raise the panel, then read that session's
-            // last summary onto the stage. `announceNext(only:)` is deliberately
-            // outside the unheard filter, so this answers however many times you
-            // click it.
+            guard let resolved else { return }
+            // The green row's own move: raise the panel, then read that
+            // session's last summary onto the stage. `announceNext(only:)` is
+            // deliberately outside the unheard filter, so this answers however
+            // many times you click it.
             showPanel()
-            announceNext(only: session)
+            announceNext(only: resolved)
         case .agentTerminal:
-            guard let session = live?.sessionId else { return }
-            Permissions.log("deeplink: discuss, \(session.prefix(8)) is mid-turn — opening terminal")
-            Track.record("discuss_routed", ["agent_id": Track.hash(session), "to": "terminal"])
-            goToSession(session)
+            guard let resolved else { return }
+            goToSession(resolved)
+        case .revive:
+            guard let row else { return }
+            // `revive` speaks the stored brief first and resumes behind it, so
+            // the card you would have got anyway appears, with the agent coming
+            // back under it. The panel is raised first: a row tap already has
+            // the grid on stage, a link click may not.
+            showPanel()
+            revive(row.id, name: row.name)
+        case .refused:
+            guard let row else { return }
+            // The grid's own refusal: unlit and unproven, or its directory is
+            // gone. Said on the panel rather than swallowed.
+            showPanel()
+            hud.refuseRowTap(row.id)
         case .invitation:
-            Permissions.log("deeplink: discuss, no agent for \(session?.prefix(8) ?? "-")")
             inviteNewSession(for: ref)
         }
     }

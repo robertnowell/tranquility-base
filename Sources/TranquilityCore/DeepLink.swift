@@ -16,11 +16,12 @@ import Foundation
 ///    are safe: you can hear what happened and you can see who asked. Opening a
 ///    microphone from a URL is a page deciding you had something to say, and the
 ///    browser's consent sheet is consent to open an app, not consent to be
-///    recorded. `discuss` resolves to speech when the agent has a finished turn;
-///    a live agent still writing its first turn resolves to its terminal, because
-///    there is no honest card to read yet. `reply` ARMS — it puts the target in
-///    front of you and waits for a gesture you make yourself (ruled 11 Aug).
-///    Neither ever opens the microphone.
+///    recorded. `discuss` does exactly what a tap on that agent's grid row
+///    does (ruled 9 Sep): a green row is read aloud, a live row opens its
+///    terminal, a dead row is revived. None of those record, send, or type.
+///    `reply` ARMS: it puts the target in front of you and waits for a
+///    gesture you make yourself (ruled 11 Aug). Neither ever opens the
+///    microphone.
 /// 2. **A page's strings never reach a shell.** The invitation builds a command
 ///    out of the subject the page names, which arrives from the URL. It is
 ///    interpolated through AppleScript INTO a shell, so two quoting layers have
@@ -39,21 +40,40 @@ public enum DeepLink {
 
     /// Where "Discuss with agent" can honestly land.
     ///
-    /// The order is the rule: a completed turn wins even when its process is
-    /// still live, so Discuss keeps opening the conversational card after the
-    /// first turn. The terminal is only the blue-row case — the named process
-    /// is here and working, but no finished turn exists to put on a card yet.
+    /// The page's button is the grid row's tap, reached from a different
+    /// surface (ruled 9 Sep). The 7 Sep rule before it routed on "has a
+    /// completed turn" before it ever read liveness, so a report whose agent
+    /// had finished and exited opened a card with no way back to the agent:
+    /// no GO TO AGENT (no pid), no revive (the card has no such door), and a
+    /// reply that failed after the readiness grace. Tapping the same row in
+    /// the grid revived it. Two verbs for one intent, and the page's was the
+    /// one that could not finish the job.
+    ///
+    /// So the row decides. `SessionRow.action(for:)` is the grid's own rule,
+    /// and this maps its answer onto the deep link's outcomes one for one:
+    /// green announces, every other live lamp opens the terminal, a proven-
+    /// dead row with its directory still there revives, and an unlit row the
+    /// probe could not vouch for refuses out loud, exactly as the grid's tap
+    /// does. A session with no row at all (out of the scan window, headless,
+    /// or never on this Mac) keeps the 7 Sep fallback: a recorded turn is
+    /// still a card worth reading, and nothing recorded is the invitation.
     public enum DiscussDestination: Equatable {
         case conversationCard
         case agentTerminal
+        case revive
+        case refused
         case invitation
     }
 
-    public static func discussDestination(hasCompletedTurn: Bool,
-                                          isLive: Bool) -> DiscussDestination {
-        if hasCompletedTurn { return .conversationCard }
-        if isLive { return .agentTerminal }
-        return .invitation
+    public static func discussDestination(rowAction: SessionRow.RowAction?,
+                                          hasCompletedTurn: Bool) -> DiscussDestination {
+        switch rowAction {
+        case .announce:  return .conversationCard
+        case .goToAgent: return .agentTerminal
+        case .revive:    return .revive
+        case .none?:     return .refused
+        case nil:        return hasCompletedTurn ? .conversationCard : .invitation
+        }
     }
 
     public enum Action: Equatable {
