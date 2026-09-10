@@ -1,5 +1,9 @@
 # Tranquility Base
 
+https://www.youtube.com/watch?v=GsTQljjuwdY
+
+manage a team of claude code and codex agents with two keys, your ears, and your voice.
+
 A macOS menu-bar app that turns a fleet of terminal coding agents into a voice
 loop. When a Claude Code session finishes a turn it **hails you by name** — a
 chime and its own callsign, in its own voice — and then waits. Press ⌃⌥ and it
