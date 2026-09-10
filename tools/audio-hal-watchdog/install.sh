@@ -1,24 +1,36 @@
 #!/bin/bash
-# Install the audio HAL watchdog: a launchd agent every 20s plus the two sudo rules it
-# needs to act. Run as yourself; it asks for your password once, for the sudoers file.
+# Install the audio HAL watchdog: a launchd agent every 20s plus the ONE sudo rule
+# it needs to capture a spindump of coreaudiod. Run as yourself; it asks for your
+# password once, for the sudoers file.
+#
+#   install.sh                 capture only (default)
+#   install.sh --with-restart  also allow `killall coreaudiod` for WATCHDOG_RESTART=1
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 USER_NAME="$(id -un)"
 STATE="$HOME/Library/Application Support/VoiceDispatch/audio-watchdog"
 mkdir -p "$STATE"
+WITH_RESTART=0; [ "${1:-}" = "--with-restart" ] && WITH_RESTART=1
 
-# 1. sudoers: exactly two commands, nothing else. visudo -c validates before it lands.
+# 1. sudoers: exact commands, no wildcards. visudo -c validates before it lands.
+CMDS="/usr/sbin/spindump coreaudiod 3 -stdout"
+[ "$WITH_RESTART" = 1 ] && CMDS="$CMDS, /usr/bin/killall coreaudiod"
 SUDOERS_TMP=$(mktemp)
 cat > "$SUDOERS_TMP" <<S
-# audio-hal-watchdog (tranquility-base/tools/audio-hal-watchdog): restart a wedged coreaudiod
-# and capture its spindump first. Nothing else.
-$USER_NAME ALL=(root) NOPASSWD: /usr/sbin/spindump coreaudiod *, /usr/bin/killall coreaudiod
+# audio-hal-watchdog (tranquility-base/tools/audio-hal-watchdog): capture a spindump of a
+# wedged coreaudiod. Exact commands only; the dump goes to stdout and is redirected as the user.
+$USER_NAME ALL=(root) NOPASSWD: $CMDS
 S
 sudo visudo -c -f "$SUDOERS_TMP" >/dev/null
 sudo install -o root -g wheel -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/audio-hal-watchdog
 rm -f "$SUDOERS_TMP"
-echo "sudoers: /etc/sudoers.d/audio-hal-watchdog installed"
-sudo -n /usr/bin/killall -0 coreaudiod 2>/dev/null && echo "sudoers: passwordless killall verified" || { echo "sudoers rule did not take"; exit 1; }
+echo "sudoers: /etc/sudoers.d/audio-hal-watchdog installed ($CMDS)"
+# Prove the rule works on a healthy daemon: three seconds of stacks to stdout.
+if sudo -n /usr/sbin/spindump coreaudiod 3 -stdout 2>/dev/null | head -c 200 | grep -q .; then
+  echo "sudoers: passwordless spindump verified"
+else
+  echo "sudoers rule did not take"; exit 1
+fi
 
 # 2. launchd agent
 PLIST="$HOME/Library/LaunchAgents/com.tranquilitybase.audio-hal-watchdog.plist"
@@ -26,6 +38,7 @@ sed -e "s|__WATCHDOG__|$HERE/watchdog.sh|g" -e "s|__HOME__|$HOME|g" \
   "$HERE/com.tranquilitybase.audio-hal-watchdog.plist" > "$PLIST"
 launchctl bootout "gui/$(id -u)/com.tranquilitybase.audio-hal-watchdog" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
-echo "launchd: com.tranquilitybase.audio-hal-watchdog loaded (every 20s)"
+echo "launchd: com.tranquilitybase.audio-hal-watchdog loaded (every 20s, capture only)"
 echo "log:     $STATE/watchdog.log"
 echo "test:    DRY_RUN=1 PROBE_TIMEOUT=0 bash $HERE/watchdog.sh && tail -3 \"$STATE/watchdog.log\""
+echo "remove:  launchctl bootout gui/$(id -u)/com.tranquilitybase.audio-hal-watchdog; sudo rm /etc/sudoers.d/audio-hal-watchdog"

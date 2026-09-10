@@ -1,46 +1,48 @@
 # audio-hal-watchdog
 
-Detects a wedged `coreaudiod` (Apple's audio daemon) and restarts it, after saving a
-spindump that names the thread holding the lock.
+Developer diagnostics for one machine: notice a wedged `coreaudiod` and save the
+one artefact no incident has produced, a spindump of the daemon at the moment of
+the deadlock. Capture only; the app's own "Audio stopped" card does the restart.
 
 ## The failure it covers
 
 Three times (28 Aug, 03 Sep, 09 Sep 2026) macOS audio died system-wide while
 AirPods Pro were connected and Zoom activated its virtual "share computer sound"
-device. The unified log shows the exact moment on 09 Sep:
+device with Voice Isolation on. coreaudiod logs `Negotiate response failed` on
+every such click; on one click in three it then deadlocks, and every CoreAudio
+call from every process times out at 30 s. Since 09 Sep the app detects that within
+five seconds and offers the restart behind the password sheet. What is still
+unknown is who holds the lock, and whether this app is ever part of it. Only a
+spindump of coreaudiod taken while it is wedged answers that.
 
-    09:58:14.818 coreaudiod HALS_MutationItinerary.cpp:41 Negotiate response failed
-    09:58:14.820 coreaudiod >>> NEGOTIATE [us.zoom.xos]  devices: AirPods (blue), zoom.us.zoomaudiodevice.001 (virt)
+## Safety
 
-From then on every CoreAudio call from every process timed out at 30 s
-(`0x10004003` = `MACH_RCV_TIMED_OUT`). Zoom's picker showed no audio devices,
-Tranquility Base lost its microphone and voice, `say -a ?` and `system_profiler`
-hung. Nothing recovered by itself; `sudo killall coreaudiod` fixed it in one second.
-The daemon and the Bluetooth stack are Apple's; the deadlock cannot be patched from
-here. It can be made cheap.
+- One sudoers line, one exact command, no wildcard:
+  `/usr/sbin/spindump coreaudiod 3 -stdout`. The dump goes to stdout and this
+  script redirects it as the user, so the rule cannot write a file anywhere as root.
+- No automated privileged restart by default. `install.sh --with-restart` adds
+  `killall coreaudiod` and `WATCHDOG_RESTART=1` uses it; not recommended on a
+  machine somebody is sitting at, because a false positive would cut a live call.
+- The probe (`say -a ?` every 20 s, 8 s timeout, confirmed 5 s later) is one HAL
+  read; it makes no changes and has no false positives under a Bluetooth
+  renegotiation, which takes about 2 s.
+- Removal is two commands, printed by install.sh.
 
 ## Install
 
     bash tools/audio-hal-watchdog/install.sh
 
-Asks for your password once, to write `/etc/sudoers.d/audio-hal-watchdog` (two
-commands only: `spindump coreaudiod *` and `killall coreaudiod`). Loads a launchd
-agent that probes every 20 s.
+Asks for your password once and proves the rule on the spot with a three-second
+dump of the healthy daemon.
 
-## What it does when it fires
+## What it saves when it fires
 
-1. Probe `say -a ?` with an 8 s timeout. Hung → wait 5 s → probe again. Both hung = wedged.
-2. Save `processes.txt`, a 5-minute unified-log slice, and `coreaudiod.spindump.txt`
-   under `~/Library/Application Support/VoiceDispatch/audio-watchdog/incidents/<stamp>/`.
-3. `killall coreaudiod`. launchd relaunches it in ~1 s. Re-probe, notify.
-
-Detection to recovery: under 20 s. AirPods may need reconnecting afterwards.
+Under `~/Library/Application Support/VoiceDispatch/audio-watchdog/incidents/<stamp>/`:
+`coreaudiod.spindump.txt` (root, the point of the tool), `TranquilityApp.sample.txt`
+and `zoom.us.sample.txt` (no root needed), `processes.txt`, and a five-minute
+unified-log slice. Plus a macOS notification telling you to use the app's Restart
+audio button.
 
 ## Test without acting
 
     DRY_RUN=1 PROBE_TIMEOUT=0 bash tools/audio-hal-watchdog/watchdog.sh
-
-## Not a substitute for
-
-Avoiding the trigger. Until Apple or Zoom fix it: share computer sound from the
-built-in speakers, or take AirPods off before pressing Share.
