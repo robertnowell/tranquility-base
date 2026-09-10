@@ -257,20 +257,20 @@ extension AppDelegate {
     ///   under 2s           nothing at all. You tapped the key or changed your
     ///                      mind. You did not make an error, and a screen that
     ///                      appears for a slip teaches you to fear the key.
-    ///   2s+, some signal   one amber line in the grid's strip, on its own
-    ///                      clock. You meant to speak, the room was quiet, and
-    ///                      saying it again fixes it — so nothing to dismiss.
+    ///   2s+, some signal   a neutral notice beneath the same card, on its own
+    ///                      clock. The microphone closes; the card stays.
     ///   5s+, NO signal     a card. The one tier saying it again will not fix:
     ///                      the input is dead, the fix is a setting, so it holds
     ///                      the stage and offers the door out.
     func finishWithoutRecognizedSpeech() {
-        // A card, not the grid with a strip line. Robert, 09 Sep, on the
-        // strip #336 shipped: "it should just go to the card: no speech
-        // detected." The recording is kept and nothing is reported as a
-        // failure, which is the part of #336 that stands.
-        hud.endCapture(because: "no speech detected")
+        // Robert, 09 Sep: "you should still be on the same card." The
+        // recording is kept; only the capture controls leave the card.
+        if !hud.endCaptureKeepingCard(because: "no speech detected") {
+            showIdleGrid()
+        }
         lastStatusLine = "No speech detected"
-        hud.showNoSpeech()
+        hud.flashNotice(StateLegend.noWordsNotice, lens: .content,
+                        seconds: 3, underCard: true)
     }
 
     func reportNothingHeard(because reason: String) {
@@ -285,9 +285,7 @@ extension AppDelegate {
         ])
         Permissions.log(String(format: "nothing heard (%@): held %.2fs, peak %.4f",
                                reason, held, recorder.peakLevel))
-        // Home first, through the user door: the capture state owns the stage,
-        // so a plain idle repaint is (correctly) refused from it.
-        hud.endCapture(because: reason)
+        let keptCard = hud.endCaptureKeepingCard(because: reason)
         if held >= Self.deviceFaultHold, !signal {
             let device = AudioInputDevice.resolve()
             lastStatusLine = "\(StateLegend.Glyph.needsYou) no audio from "
@@ -295,9 +293,10 @@ extension AppDelegate {
             hud.showDeviceFault(StateLegend.noAudioMessage(device: device))
         } else {
             lastStatusLine = "nothing heard"
-            showIdleGrid()
+            if !keptCard { showIdleGrid() }
             if held >= Self.notionalUtterance {
-                hud.flashNotice(StateLegend.noWordsNotice, lens: .content)
+                hud.flashNotice(StateLegend.noWordsNotice, lens: .content,
+                                seconds: 3, underCard: true)
             }
         }
         rebuildMenu()

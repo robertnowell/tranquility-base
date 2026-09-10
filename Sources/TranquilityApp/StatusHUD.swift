@@ -378,6 +378,14 @@ final class StatusHUD: NSObject {
     /// Consumed by revertArming; invalidated by any entry into listening
     /// (the upgrade path no longer needs it).
     private var stashBeforeArming: (state: PanelState, face: Face)?
+    /// The card's state before the capture strip took the stage. Its content
+    /// stays in `face`; a capture begun on the grid has no card to return to.
+    private var cardBeforeCapture: PanelState?
+
+    private func rememberCaptureCard(from prior: PanelState) {
+        guard !prior.ownsStage else { return }
+        cardBeforeCapture = face.hasCard ? prior : nil
+    }
 
     /// The arming face (instant-arm, docs/instant-arm.md): the listening
     /// pill's geometry in the faint treatment — flat meter, faint dot,
@@ -389,6 +397,7 @@ final class StatusHUD: NSObject {
     func showArming(target: String?) -> Bool {
         let prior = (state: state, face: face)
         guard transition(to: .arming, because: "arm window opened") else { return false }
+        rememberCaptureCard(from: prior.state)
         stashBeforeArming = prior
         beginCaptureFace(target: target ?? "")
         render()
@@ -517,8 +526,10 @@ final class StatusHUD: NSObject {
     }
 
     func showListening(level: @escaping () -> Float) {
+        let prior = state
         guard transition(to: .listening(eventId: currentEventId), because: "recording started")
         else { return }
+        rememberCaptureCard(from: prior)
         // An armed face that upgraded no longer has anything to revert to.
         stashBeforeArming = nil
         levelSource = level
@@ -1294,9 +1305,11 @@ final class StatusHUD: NSObject {
     func showTranscribing(_ message: String,
                           onCancel: @escaping () -> Void,
                           onRetry: @escaping () -> Void) {
+        let prior = state
         guard transition(to: .transcribing(startedAt: Date()),
                          because: "transcription started")
         else { return }
+        rememberCaptureCard(from: prior)
         // A capture phase like the others: the card stays and the strip says
         // what is happening to your words. Without this the card survived the
         // microphone and then died on the way to the transcript, which is the
@@ -1468,16 +1481,22 @@ final class StatusHUD: NSObject {
         }
     }
 
-    /// The transcriber came back with no words. A card, not a strip line
-    /// (ruled 09 Sep): the strip is the microphone's channel, and this is a
-    /// result about what was said. Quiet like the invitation, because nothing
-    /// is broken; no title, because it is about the recording, not an agent.
-    func showNoSpeech() {
-        guard transition(to: .result, because: "no speech in the recording") else { return }
-        face = Face(body: StateLegend.noSpeechMessage,
-                    placardOverride: StateLegend.noSpeechPlacard,
-                    lens: .advisory)
+    /// Sending nothing closes the capture, leaving the original card in place.
+    /// The caller paints the grid only if the capture had no card underneath.
+    @discardableResult
+    func endCaptureKeepingCard(because reason: String) -> Bool {
+        let returnTo = cardBeforeCapture
+        endCapture(because: reason)
+        guard let returnTo else { return state.isCardOnStage && face.hasCard }
+        face.transcription = nil
+        face.captureNote = nil
+        face.captureFault = nil
+        face.readback = nil
+        face.listeningTarget = ""
+        face.countdownSeconds = 0
+        forceTransition(to: returnTo, because: "empty capture returned to its card")
         render()
+        return true
     }
 
     /// A page arrived asking for an agent that is not there — the deep link
@@ -1560,9 +1579,9 @@ final class StatusHUD: NSObject {
     /// do; there is none here but to speak again.
     ///
     /// So: no state, no transition, no dismissal. The notice is a decoration on
-    /// idle that expires on its own clock, and it cannot exist anywhere else —
-    /// if the panel has moved to a card, whatever that card is about outranks a
-    /// stale word about the microphone.
+    /// idle that expires on its own clock. An empty capture may explicitly put
+    /// a neutral notice beneath its restored card. Leaving that card retires
+    /// the notice so it cannot appear under a different agent's message.
     /// Readable outside this file so a drill can assert the strip actually
     /// spoke; written only here, because the expiry timer below is the only
     /// thing entitled to take it away again.
@@ -1573,16 +1592,19 @@ final class StatusHUD: NSObject {
     /// on "nothing is wrong, we just stayed quiet" blunts it for the cases that
     /// do need checking.
     private(set) var noticeLens: StateLegend.Lens = .fault
+    private var noticeUnderCard = false
     var noticeExpiry: DispatchWorkItem?
 
     func flashNotice(_ text: String, lens: StateLegend.Lens = .fault,
-                     seconds: TimeInterval = 5) {
-        guard case .idle = state else {
+                     seconds: TimeInterval = 5, underCard: Bool = false) {
+        let onCard = underCard && state.isCardOnStage && face.hasCard
+        guard state.name == "idle" || onCard else {
             Permissions.log("notice: refused in \(state.name): \(text)")
             return
         }
         Track.record("notice_flashed", ["notice": Track.phrase(text), "text": .prose(text)])
         noticeLens = lens
+        noticeUnderCard = onCard
         noticeExpiry?.cancel()
         notice = text
         Permissions.log("notice: \(text)")
@@ -1608,6 +1630,7 @@ final class StatusHUD: NSObject {
         noticeExpiry?.cancel()
         noticeExpiry = nil
         notice = nil
+        noticeUnderCard = false
     }
 
     /// When the room went empty, and the clock that turns it into a lesson.
@@ -1733,15 +1756,15 @@ final class StatusHUD: NSObject {
     /// asymmetry — the paint work item re-checks `.preparing` before it draws —
     /// but a rule with one door out of two is not a rule.
     private func entered(_ next: PanelState) {
+        if !next.ownsStage { cardBeforeCapture = nil }
         // Leaving Preparing cancels its pending paint wherever that happens, so
         // no path has to remember to. A card that arrives 250ms after the thing
         // it was covering for is worse than one that never arrived.
         if case .preparing = next {} else {
             preparingPaint?.cancel(); preparingPaint = nil
         }
-        // Same discipline for the grid notice: it belongs to idle alone, and it
-        // is retired HERE — in the one place state changes — so render() never
-        // has to write to the thing it is painting, and no path has to remember.
+        // Notices survive idle repaints, but a new card or capture retires
+        // them here. The empty-capture notice is added after its card returns.
         // The hide/show leak this closes: `.hidden` returns out of render before
         // its body runs, so a notice cleared down there survived a dismiss and
         // came back up with the panel.
@@ -2429,15 +2452,17 @@ final class StatusHUD: NSObject {
             }
         }
 
-        // The notice owns the strip while it lives. It can only exist on idle at
-        // all — the two transition doors retire it on the way out — so this is a
-        // read, and render() stays the pure projection it claims to be.
+        // A card's notice uses the strip beneath it; a grid notice uses the
+        // otherwise empty placard. Neither changes the card's own identity.
         if let notice {
-            // Unhidden explicitly: the empty room's face switches the strip off,
-            // and a notice with nowhere to land is feedback the user never gets.
-            stateLabel.isHidden = false
-            stateLabel.textColor = noticeLens.color
-            stateLabel.attributedStringValue = Widgets.placardText(notice, color: noticeLens.color)
+            if noticeUnderCard {
+                renderCaptureStrip(Widgets.placardText(notice, color: noticeLens.color))
+            } else {
+                // The grid has no card placard to preserve.
+                stateLabel.isHidden = false
+                stateLabel.textColor = noticeLens.color
+                stateLabel.attributedStringValue = Widgets.placardText(notice, color: noticeLens.color)
+            }
         }
 
         // The message tray's chips, derived rather than stored: whatever Core
