@@ -44,29 +44,56 @@ final class DeepLinkTests: XCTestCase {
 
     // MARK: - Discuss routing
 
-    /// A finished turn is the normal Discuss promise, whether the process has
-    /// since stopped or is already busy writing the next turn.
-    func testDiscussPrefersTheConversationCardWhenATurnExists() {
-        XCTAssertEqual(
-            DeepLink.discussDestination(hasCompletedTurn: true, isLive: true),
-            .conversationCard)
-        XCTAssertEqual(
-            DeepLink.discussDestination(hasCompletedTurn: true, isLive: false),
-            .conversationCard)
+    /// The page's button is the grid row's tap (ruled 9 Sep). The row's own
+    /// verb maps onto the deep link one for one, whatever the store says
+    /// about completed turns.
+    func testDiscussDoesWhatTheRowTapDoes() {
+        for hasTurn in [true, false] {
+            XCTAssertEqual(
+                DeepLink.discussDestination(rowAction: .announce, hasCompletedTurn: hasTurn),
+                .conversationCard)
+            XCTAssertEqual(
+                DeepLink.discussDestination(rowAction: .goToAgent, hasCompletedTurn: hasTurn),
+                .agentTerminal)
+            XCTAssertEqual(
+                DeepLink.discussDestination(rowAction: .revive, hasCompletedTurn: hasTurn),
+                .revive)
+            XCTAssertEqual(
+                DeepLink.discussDestination(rowAction: RowActionNone.value,
+                                            hasCompletedTurn: hasTurn),
+                .refused)
+        }
     }
 
-    /// The incident case: an agent wrote a report during its first turn, so it
-    /// was live but had no Stop event from which a card could be made.
-    func testDiscussOpensTheTerminalForALiveFirstTurn() {
+    /// The 9 Sep incident: a finished Codex agent, exited, directory still
+    /// there. Its row is unlit and revivable, so Discuss revives it. Under the
+    /// 7 Sep rule this opened a card with no way back to the agent.
+    func testDiscussRevivesAFinishedAgentWhoseProcessIsGone() {
+        let row = SessionRow(id: "01a08325-f673-7a93-b788-cd6ea74317f4",
+                             name: "Run Paseo", aux: "01a08325",
+                             lamp: .unlit, revivable: true)
+        XCTAssertEqual(SessionRow.action(for: row), .revive)
         XCTAssertEqual(
-            DeepLink.discussDestination(hasCompletedTurn: false, isLive: true),
-            .agentTerminal)
+            DeepLink.discussDestination(rowAction: SessionRow.action(for: row),
+                                        hasCompletedTurn: true),
+            .revive)
     }
 
-    func testDiscussOffersAnInvitationOnlyWhenTheAgentIsAbsent() {
+    /// No row at all keeps the 7 Sep fallback: a recorded turn is still a
+    /// card worth reading; nothing recorded is the invitation.
+    func testDiscussWithoutARowFallsBackOnTheStore() {
         XCTAssertEqual(
-            DeepLink.discussDestination(hasCompletedTurn: false, isLive: false),
+            DeepLink.discussDestination(rowAction: nil, hasCompletedTurn: true),
+            .conversationCard)
+        XCTAssertEqual(
+            DeepLink.discussDestination(rowAction: nil, hasCompletedTurn: false),
             .invitation)
+    }
+
+    /// `RowAction.none` is a real case and Swift's `Optional.none` is a
+    /// different one; spelled out so the test cannot silently pass nil.
+    private enum RowActionNone {
+        static let value: SessionRow.RowAction? = .some(SessionRow.RowAction.none)
     }
 
     // MARK: - The artifact, which is where a shell is downstream

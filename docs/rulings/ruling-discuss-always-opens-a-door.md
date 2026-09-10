@@ -43,3 +43,28 @@ by its private `tbdev` scheme, with no unreviewed fourth registration.
 Discuss resolves the requested id against both stored Stops and live sessions.
 Its routing policy is a pure Core function with regression tests for all three
 destinations.
+
+## Amended 9 Sep 2026: Discuss is the row's tap
+
+Measured on `paseo-cloud.html`, 9 Sep 20:55. The report's Codex agent had
+finished on 8 Sep and exited. Discuss found a completed turn, opened the card,
+spoke it, and stopped: no GO TO AGENT (no pid), no revive (the card has no such
+door), and a reply from that card would have failed after the 12 s readiness
+grace. Tapping the same row in the grid revives the agent. The 7 Sep rule read
+"completed turn" before it read liveness, so the process was never consulted.
+
+**Discuss does exactly what tapping that agent's row in the grid does.**
+
+- The deep link builds the same rows the grid and Past Agents are built from,
+  finds the session's row, and runs `SessionRow.action(for:)` through the same
+  calls a row tap makes: green announces, every other live lamp opens the
+  terminal, a proven-dead revivable row revives, an unproven unlit row refuses
+  out loud.
+- A session with no row (out of the scan window, headless, never on this Mac)
+  keeps the 7 Sep fallback: a recorded turn is a card, nothing recorded is the
+  invitation.
+- Every outcome logs which way it went. The card branch used to be the only
+  silent one, which is why a correct outcome read as "it did nothing".
+
+The deep-link rule stands: nothing here records, sends, or types. A revive
+starts a process in a pane, which the grid's tap already does on one click.
