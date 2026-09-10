@@ -264,10 +264,13 @@ extension AppDelegate {
     ///                      the input is dead, the fix is a setting, so it holds
     ///                      the stage and offers the door out.
     func finishWithoutRecognizedSpeech() {
+        // A card, not the grid with a strip line. Robert, 09 Sep, on the
+        // strip #336 shipped: "it should just go to the card: no speech
+        // detected." The recording is kept and nothing is reported as a
+        // failure, which is the part of #336 that stands.
         hud.endCapture(because: "no speech detected")
-        lastStatusLine = "No audio detected"
-        showIdleGrid()
-        hud.flashNotice(StateLegend.noWordsNotice, lens: .content)
+        lastStatusLine = "No speech detected"
+        hud.showNoSpeech()
     }
 
     func reportNothingHeard(because reason: String) {

@@ -63,7 +63,7 @@ The final `transcription.outcome` is:
   conflicting streaming text. A clean empty live termination skips file recovery;
   a completed empty file result stops the chain. Earlier service errors and
   cancellation of a losing race lane stay in diagnostics without turning that
-  completed assessment into a capture failure. The UI says “No audio detected”
+  completed assessment into a capture failure. The UI says “No speech detected”
   in neutral text, without a warning glyph, and preserves the audio for manual retry.
 - `provider_error`: no provider completed an assessment and a configuration,
   service or transport error occurred. This does not prove lost speech.
