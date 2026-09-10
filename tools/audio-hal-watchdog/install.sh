@@ -13,23 +13,34 @@ mkdir -p "$STATE"
 WITH_RESTART=0; [ "${1:-}" = "--with-restart" ] && WITH_RESTART=1
 
 # 1. sudoers: exact commands, no wildcards. visudo -c validates before it lands.
+#    Skipped, and no password asked, when the rule is already in force: a
+#    re-run to update the script must not cost a password.
 CMDS="/usr/sbin/spindump coreaudiod 3 -stdout"
 [ "$WITH_RESTART" = 1 ] && CMDS="$CMDS, /usr/bin/killall coreaudiod"
-SUDOERS_TMP=$(mktemp)
-cat > "$SUDOERS_TMP" <<S
+granted() {
+  # Captured to a file, never piped: `| head` closes the pipe early, spindump
+  # takes SIGPIPE, and pipefail reports the rule as broken when it works.
+  local out; out=$(mktemp)
+  sudo -n /usr/sbin/spindump coreaudiod 1 -stdout > "$out" 2>/dev/null
+  local ok=1; [ -s "$out" ] && ok=0
+  rm -f "$out"; return $ok
+}
+if [ "$WITH_RESTART" = 0 ] && granted; then
+  echo "sudoers: already granted, leaving /etc/sudoers.d/audio-hal-watchdog as it is"
+else
+  SUDOERS_TMP=$(mktemp)
+  cat > "$SUDOERS_TMP" <<S
 # audio-hal-watchdog (tranquility-base/tools/audio-hal-watchdog): capture a spindump of a
 # wedged coreaudiod. Exact commands only; the dump goes to stdout and is redirected as the user.
 $USER_NAME ALL=(root) NOPASSWD: $CMDS
 S
-sudo visudo -c -f "$SUDOERS_TMP" >/dev/null
-sudo install -o root -g wheel -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/audio-hal-watchdog
-rm -f "$SUDOERS_TMP"
-echo "sudoers: /etc/sudoers.d/audio-hal-watchdog installed ($CMDS)"
-# Prove the rule works on a healthy daemon: three seconds of stacks to stdout.
-if sudo -n /usr/sbin/spindump coreaudiod 3 -stdout 2>/dev/null | head -c 200 | grep -q .; then
-  echo "sudoers: passwordless spindump verified"
-else
-  echo "sudoers rule did not take"; exit 1
+  sudo visudo -c -f "$SUDOERS_TMP" >/dev/null
+  sudo install -o root -g wheel -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/audio-hal-watchdog
+  rm -f "$SUDOERS_TMP"
+  echo "sudoers: /etc/sudoers.d/audio-hal-watchdog installed ($CMDS)"
+  # Prove the rule works on a healthy daemon: one second of stacks to a file.
+  if granted; then echo "sudoers: passwordless spindump verified"
+  else echo "sudoers rule did not take"; exit 1; fi
 fi
 
 # 2. the script itself, copied to the state directory. launchd runs it from
