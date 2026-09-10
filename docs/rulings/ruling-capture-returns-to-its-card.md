@@ -19,6 +19,24 @@ below cites `app.log`.
 One sentence: **the card you were on is where a capture returns when nothing was
 sent** — same rung, same ink — and no outcome silently reopens the microphone.
 
+## Reaffirmed 09 Sep 2026: no speech keeps the original card
+
+The 21:01 screenshot showed “No audio detected” over the grid. #339 replaced
+that with a new no-speech result card. Robert clarified: “it should just close
+the mic” and “you should still be on the same card.” A replacement result card
+does not satisfy this rule.
+
+Both an early short/quiet capture and a completed no-speech assessment now end
+the capture controls and restore the original card's state. Its text, agent,
+placard, read position, and actions remain. A brief neutral “No speech detected”
+notice may appear underneath and expires without dismissing the card. A capture
+started from the grid still returns to the grid. Genuine device faults retain
+their existing settings remedy.
+
+The capture-diagnostics UI drill exercises the early and completed paths, checks
+the original card and addressing, checks notice expiry, and verifies the grid
+case does not retain the temporary transcription text as a fake card.
+
 ## Incident 1 — the ⌥⌥ that read as a crash (20:21:28)
 
 Reported as a crash. It was not one: pid 31906 spans the whole window, the log is

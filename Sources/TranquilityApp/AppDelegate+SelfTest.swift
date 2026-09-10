@@ -236,19 +236,57 @@ extension AppDelegate {
         Track.suppressed = true
         defer { Track.suppressed = prior }
         let failures = Failures.reportedCount
+        let body = "Keep this agent's findings on this card."
+        func showCard() {
+            hud.endCapture(because: "reset no-speech drill")
+            _ = hud.showAnnouncement(
+                spoken: SpokenTextSanitizer().sanitize(body),
+                sessionId: "no-speech-agent", pid: nil, project: "Original agent",
+                cwd: nil, eventId: "no-speech-event", placard: "FINDINGS")
+            hud.face.spokenUpTo = 7
+            hud.render()
+        }
+        func sameCard() -> Bool {
+            hud.state == .speaking(eventId: "no-speech-event")
+                && hud.face.body == body && hud.face.title == "Original agent"
+                && hud.face.placardOverride == "FINDINGS"
+                && hud.face.spokenUpTo == 7
+                && hud.currentTarget?.sessionId == "no-speech-agent"
+        }
+        showCard()
+        _ = hud.showArming(target: "Original agent")
+        hud.showListening(level: { 0 })
         hud.showTranscribing("Checking no-speech response", onCancel: {}, onRetry: {})
         finishWithoutRecognizedSpeech()
-        let isCard = hud.state.name == "result"
-        let saysSpeech = hud.face.body.hasPrefix("No speech detected")
-        let quiet = hud.face.lens.color == StateLegend.Lens.advisory.color
-        SelfTest.report("transcriptionNoSpeech", [
-            ("noSpeechIsACard", isCard),
+        var checks: [(String, Bool)] = [
+            ("originalCardAndAgentPreserved", sameCard()),
+            ("captureControlsClosed", !hud.state.ownsStage
+                && hud.face.transcription == nil && hud.face.captureNote == nil),
             ("noFailureReported", Failures.reportedCount == failures),
-            ("cardSaysSpeechNotAudio", saysSpeech),
-            ("quietNotAmber", quiet),
-        ])
+            ("briefSpeechNotice", hud.notice == "No speech detected"),
+            ("neutralNotice", hud.noticeLens.color == StateLegend.Lens.content.color),
+        ]
+        hud.noticeExpiry?.perform()
+        checks.append(("expiryKeepsTheCard", sameCard() && hud.notice == nil))
+
+        // The early short/quiet recording route must keep the card too.
+        showCard()
+        hud.showListening(level: { 0 })
+        reportNothingHeard(because: "no-speech drill: short recording")
+        checks.append(("earlySilenceKeepsTheCard", sameCard() && !hud.state.ownsStage))
+
+        // With no card underneath, return to the grid rather than retain the
+        // temporary "Transcribing" body as if it were an agent's message.
+        hud.showIdle(rows: [])
+        hud.showListening(level: { 0 })
+        hud.showTranscribing("Temporary transcription text", onCancel: {}, onRetry: {})
+        finishWithoutRecognizedSpeech()
+        checks.append(("gridOriginReturnsToGrid", hud.state.name == "idle"
+            && hud.face.body != "Temporary transcription text"))
+        checks.append(("allEmptyPathsRemainNonFailures", Failures.reportedCount == failures))
+        SelfTest.report("transcriptionNoSpeech", checks)
         hud.dismiss()
-        return isCard && Failures.reportedCount == failures && saysSpeech && quiet
+        return checks.allSatisfy(\.1)
     }
 
 }
