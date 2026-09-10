@@ -83,8 +83,26 @@ extension AppDelegate {
                 .filter(\.isRequired).filter { Permissions.state($0) != .active }
             Permissions.log("permissions: \(confirmed.map(\.title)) confirmed missing — "
                 + "back to onboarding")
-            self.onboarding.show { [weak self] in self?.refresh() }
+            self.onboarding.show { [weak self] in self?.finishOnboarding() }
         }
+    }
+
+    /// Every way out of onboarding ends on the grid.
+    ///
+    /// Four places opened the checklist and only the launch path showed the
+    /// grid when it closed; the other three refreshed the menu and left the
+    /// panel wherever it was, which for a first-run user is nowhere. Robert,
+    /// 09 Sep, on a fresh install whose relaunch had landed mid-grant and so
+    /// come back through the permissions path: "once I click Start using
+    /// Tranquility Base, it should start with the grid open. These persons
+    /// have never used Tranquility Base before. Currently it starts
+    /// minimized. Nobody knows where it is." The close is already refused
+    /// while a required permission is missing (OnboardingWindow), so by the
+    /// time this runs the grid can hear and dispatch.
+    func finishOnboarding() {
+        refresh()
+        Permissions.log("onboarding: done — showing the grid")
+        showIdleGrid()
     }
 
     func startPermissionPolling() {

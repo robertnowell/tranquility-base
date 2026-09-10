@@ -1611,10 +1611,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // launch observable.
             showIdleGrid()
         } else {
-            onboarding.show { [weak self] in
-                self?.refresh()
-                self?.showIdleGrid()
-            }
+            onboarding.show { [weak self] in self?.finishOnboarding() }
         }
         deepLinksReady = true
         drainPendingDeepLinksIfReady()
