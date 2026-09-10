@@ -71,15 +71,38 @@ final class ParkedSessionTests: XCTestCase {
         XCTAssertEqual(standIn.startedAt, 1788713739259)
         XCTAssertEqual(traced.count, 1)
         XCTAssertTrue(traced[0].contains("standing in for job 54acd236"))
+        // The stand-in knows where the conversation actually is, so the tap
+        // can bring it back: the job's 8-char id for `claude stop`, its full
+        // id for `--resume`, and its status to know whether it is mid-turn.
+        XCTAssertEqual(standIn.parkedJob?.jobId, "54acd236")
+        XCTAssertEqual(standIn.parkedJob?.sessionId, "54acd236-0133-4866-bfee-905a9dc00e2c")
+        XCTAssertEqual(standIn.parkedJob?.status, "busy")
+        XCTAssertEqual(standIn.parkedJob?.startedAt, 1789011279271)
+        XCTAssertEqual(standIn.parkedJob?.cwd, "/Users/robertnowell/Projects/tranquility-base")
     }
 
     /// Tonight's second state: the job has already gone, the session is still
-    /// parked and still hidden. It stands in all the same.
+    /// parked and still hidden. It stands in all the same, and still names the
+    /// job from the job's own registry file, with no status because the CLI
+    /// no longer lists it.
     func testAParkedSessionWhoseJobIsGoneStillStandsIn() {
         let out = SessionRegistry.standingInForParkedJobs(
-            [other()], entries: [parent], isAlive: { _ in true })
+            [other()], entries: [parent, job], isAlive: { _ in true })
         XCTAssertEqual(out.map { String($0.sessionId.prefix(8)) }, ["aaaaaaaa", "0d04e845"])
         XCTAssertEqual(out[1].waitingFor, Readiness.agentView)
+        XCTAssertEqual(out[1].parkedJob?.jobId, "54acd236")
+        XCTAssertEqual(out[1].parkedJob?.sessionId, "54acd236-0133-4866-bfee-905a9dc00e2c")
+        XCTAssertNil(out[1].parkedJob?.status)
+    }
+
+    /// No registry file for the job either: the 8-char id from the parent is
+    /// still enough to stop it; the full id is honestly unknown.
+    func testAParkedSessionWithNoJobFileStillNamesTheJob() {
+        let out = SessionRegistry.standingInForParkedJobs(
+            [], entries: [parent], isAlive: { _ in true })
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].parkedJob?.jobId, "54acd236")
+        XCTAssertNil(out[0].parkedJob?.sessionId)
     }
 
     // MARK: - The rule stops where the evidence stops

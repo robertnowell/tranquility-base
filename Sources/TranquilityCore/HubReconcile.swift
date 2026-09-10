@@ -68,6 +68,10 @@ public enum HubReconcile {
         guard !files.isEmpty else { return result }
 
         let known = Set(ArtifactStore.history(for: sessionId, root: root).map(\.path))
+        // One conversation, one hub (10 Sep): a page a continuation wrote
+        // into this directory names the continuation, and that is this
+        // agent, not somebody else's.
+        let family = SessionLineage.family(of: sessionId).map { HomeBase.slug(forSessionId: $0) }
         for file in files.sorted(by: { $0.path < $1.path }) {
             result.scanned += 1
             let at = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?
@@ -81,7 +85,8 @@ public enum HubReconcile {
             //    do exactly what the old path rule did — assert the wrong
             //    author, and put the page on two hubs. It is left alone and
             //    reported by `tbase doctor` instead.
-            if !ArtifactStore.belongs(page: file.path, to: full) {
+            if !ArtifactStore.belongs(page: file.path, to: full),
+               !family.contains(where: { ArtifactStore.belongs(page: file.path, to: $0) }) {
                 result.foreign += 1
                 continue
             }

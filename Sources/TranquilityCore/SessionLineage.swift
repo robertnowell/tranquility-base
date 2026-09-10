@@ -56,6 +56,43 @@ public enum SessionLineage {
         return nil
     }
 
+    /// Does this transcript carry conversation from before `since`?
+    ///
+    /// The question recovery has to answer before it resumes anything. A
+    /// background job's transcript starts as a header (title, mode, a few
+    /// hundred bytes) and receives the whole history on the job's first use;
+    /// from then on it is the conversation. A job stopped before that never
+    /// gets it, and then the origin holds the only copy. Resuming the wrong
+    /// one forks the conversation (measured 10 Sep: `--resume <origin>` on a
+    /// properly continued session answered from the old branch and grew the
+    /// old file), so this is read from the file rather than assumed.
+    ///
+    /// True when a user or assistant message stamped more than a minute
+    /// before `since` appears in the first `headBytes`. The copied history
+    /// leads the file, so the head is enough.
+    public static func carriesHistory(transcript: URL, before since: Date,
+                                      headBytes: Int = 262_144) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: transcript) else { return false }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: headBytes),
+              let text = String(data: data, encoding: .utf8)
+        else { return false }
+        let cutoff = since.addingTimeInterval(-60)
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        for line in text.split(separator: "\n") {
+            guard line.contains("\"timestamp\":"),
+                  line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\""),
+                  let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let stamp = obj["timestamp"] as? String,
+                  let at = iso.date(from: stamp) ?? plain.date(from: stamp)
+            else { continue }
+            return at < cutoff
+        }
+        return false
+    }
+
     /// Every link on disk. Only Claude Code writes these, so only its
     /// project tree is walked.
     public static func scan(projects: URL = TranscriptArchive.projectsDirectory) -> Map {

@@ -150,11 +150,6 @@ public enum Readiness: Sendable, Equatable {
     /// session with the words: the same hazard as a dialog, refused the same
     /// way.
     public static let agentView = "agent view"
-    /// The agent view's own prompt, verbatim from the screen. A pane whose
-    /// tail contains it is showing the agent view; that is the only state in
-    /// which the app presses Esc on the reader's behalf (Go to Agent, ruled
-    /// 10 Sep), because Esc anywhere else could interrupt a running turn.
-    public static let agentViewPrompt = "describe a task for a new session"
 
     private static let dialogLikeValues: Set<String> = [
         dialogOpen, permissionPrompt, sandboxRequest, workerRequest, agentView,
@@ -589,6 +584,34 @@ public struct LiveSession: Sendable, Decodable {
     public var startedAtDate: Date? {
         startedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
     }
+
+    /// The background job a parked conversation is living in.
+    ///
+    /// Set only by `SessionRegistry.standingInForParkedJobs`, on the session
+    /// it puts in the job's place. Measured 10 Sep on a scratch session: after
+    /// the left arrow the conversation IS the job (typing in the original
+    /// terminal writes to the job's transcript, which receives the whole
+    /// history on first use), and the original process is only its window.
+    /// So the row is the session people know, and this is where the words
+    /// actually are. Go to Agent uses it to bring the conversation back.
+    public struct ParkedJob: Sendable, Equatable {
+        /// The 8-character id `claude stop` and `claude attach` take.
+        public var jobId: String
+        /// The job's full session id, when its registry file was found; nil
+        /// when the job is already gone and only the parent still names it.
+        public var sessionId: String?
+        /// "busy" / "idle" as the CLI reported the job, or nil when the CLI
+        /// no longer lists it.
+        public var status: String?
+        public var startedAt: Double?
+        public var cwd: String?
+        public init(jobId: String, sessionId: String?, status: String?,
+                    startedAt: Double?, cwd: String?) {
+            self.jobId = jobId; self.sessionId = sessionId; self.status = status
+            self.startedAt = startedAt; self.cwd = cwd
+        }
+    }
+    public var parkedJob: ParkedJob? = nil
 
     /// `harness` is deliberately absent: it is OURS, not the CLI's, and a
     /// synthesized `Decodable` demands a key for every stored property even

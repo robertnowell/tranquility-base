@@ -82,4 +82,41 @@ final class SessionLineageTests: XCTestCase {
         let family = SessionLineage.family(of: a, in: map)
         XCTAssertEqual(Set(family), Set([a, b]))
     }
+
+    // MARK: - Which id carries the conversation
+
+    private func transcript(_ lines: [String]) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lineage-\(UUID().uuidString).jsonl")
+        try (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    /// The scratch job of 10 Sep after first use: its file opens with the
+    /// copied history, stamped hours before the job started.
+    func testAJobThatReceivedTheHistoryCarriesIt() throws {
+        let started = ISO8601DateFormatter().date(from: "2026-09-10T14:39:44Z")!
+        let url = try transcript([
+            #"{"type":"ai-title","aiTitle":"probe"}"#,
+            #"{"type":"user","timestamp":"2026-09-10T03:34:00.000Z","message":{"content":"Remember the word pineapple."}}"#,
+            #"{"type":"assistant","timestamp":"2026-09-10T03:34:05.000Z","message":{"content":"OK"}}"#,
+        ])
+        XCTAssertTrue(SessionLineage.carriesHistory(transcript: url, before: started))
+    }
+
+    /// Robert's job of 10 Sep, killed before first use and restarted fresh:
+    /// title only, then messages from after its own start. It carries
+    /// nothing, and the origin must be resumed instead.
+    func testAJobStoppedBeforeFirstUseCarriesNothing() throws {
+        let started = ISO8601DateFormatter().date(from: "2026-09-10T03:34:38Z")!
+        let url = try transcript([
+            #"{"type":"ai-title","aiTitle":"Hub design and organization"}"#,
+            #"{"type":"user","timestamp":"2026-09-10T13:17:22.995Z","message":{"content":"Done. Three rulings…"}}"#,
+        ])
+        XCTAssertFalse(SessionLineage.carriesHistory(transcript: url, before: started))
+        let bare = try transcript([#"{"type":"ai-title","aiTitle":"x"}"#])
+        XCTAssertFalse(SessionLineage.carriesHistory(transcript: bare, before: started))
+        XCTAssertFalse(SessionLineage.carriesHistory(
+            transcript: URL(fileURLWithPath: "/nonexistent/\(UUID().uuidString).jsonl"), before: started))
+    }
 }

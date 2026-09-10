@@ -35,11 +35,26 @@ comes from its own file. The lamp is amber with "backgrounded in the agent
 view"; a typed reply is refused, because the terminal is showing the agent
 view's task box and the words would start a new session.
 
-**Go to Agent lands on the conversation, not on the agent view.** When the row
-is waiting at the agent view, Go to Agent raises the session's own tab and, if
-the pane is showing the agent view, presses Esc there, which Claude Code's own
-screen text says returns to the conversation. The card says what it did. If the
-screen is not the agent view, nothing is typed.
+**Tapping a parked row brings the conversation back as a normal session.**
+(Ruled 10 Sep, second pass, after measuring the first: "when I click on an
+Amber row that's been backgrounded, I want it to be foregrounded.") Measured on
+a scratch session: after the left arrow the conversation IS the background job.
+Typing in the original terminal after Esc writes to the job's transcript, which
+receives the whole history on the job's first use; the original file is closed
+at its `continued-in` record. `claude --resume <original id>` still works and
+silently forks a stale branch. `claude stop <8-char job id>` then
+`claude --resume <job id>` keeps every word and yields one ordinary process.
+
+So Go to Agent on a row waiting at the agent view does that, in order, and the
+rest of the app never learns a special case: if the job is busy, raise the
+window and say it is working; otherwise stop the job, end the original's empty
+agent-view shell (Ctrl+C twice, SIGTERM if ignored, a refusal card if it
+survives), and resume through the ordinary revive path, under the app's own
+tmux pane. The id resumed is the job when its transcript carries the history,
+the origin when it does not (a job stopped before first use, which is what the
+hand fix of 10 Sep 6:10 did to 54acd236). The first cut of this rule pressed
+Esc on the agent view instead; it worked and left the app on a background
+session it would never type into, so it was replaced.
 
 **A continuation is the same conversation.** Claude Code writes
 `{"type":"continued-in","continuedInSessionId":…}` at the end of the old
@@ -47,10 +62,10 @@ transcript. The app follows it (`SessionLineage`): the origin's directory is the
 hub, a continuation's directory is a symlink to it, and the hub lists every
 member's turns and pages together. The grid shows one row for the family.
 
-**The app never ends, restarts, or types into a session on its own initiative.**
-It shows what is running, takes you to it, and does the one keystroke the screen
-itself asks for. Killing a helper, sending `/exit`, and raising a tab by hand
-were all done this morning before the rule existed; none of them is the rule.
+**The app never ends, restarts, or types into a session unasked.** The tap on a
+parked row is the ask, and what it does is written above. Killing a helper,
+sending `/exit`, and raising a tab by hand were all done this morning before the
+rule existed; none of them is the rule.
 
 ## Facts that decided it
 

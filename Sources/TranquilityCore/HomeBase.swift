@@ -1725,12 +1725,11 @@ public extension HomeBase {
         // this is a bounded file read, not a free property.
         // Enough to cover every turn the page prints, not just the full ones:
         // a line-tier turn that produced a report still wants its words under it.
-        // The transcript is the newest member's that has one: a continuation
-        // holds the conversation's latest words, and its origin the earlier.
-        var transcript: [TurnText.Turn] = []
-        for member in family.reversed() {
-            transcript = TurnText.forSession(member, limit: fullTurns + lineTurns)
-            if !transcript.isEmpty { break }
+        // Every member's words. The page pairs words with turns by time, so a
+        // union is safe; taking only the newest member's file (the first cut
+        // of this, 10 Sep) left the origin's recent turns without their words.
+        let transcript = family.flatMap {
+            TurnText.forSession($0, limit: fullTurns + lineTurns)
         }
         guard !briefs.isEmpty || !transcript.isEmpty else { return nil }
         // The newest member's Stop, walking back through the family.

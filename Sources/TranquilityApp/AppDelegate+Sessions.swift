@@ -1291,6 +1291,23 @@ extension AppDelegate {
                 return
             }
 
+            // Ruled 10 Sep ("recovery on tap"): a row waiting at the agent
+            // view is a conversation that Claude Code moved into a background
+            // job when the left arrow was pressed. Raising its window lands
+            // on the agent view, and the app keeps refusing to type into a
+            // background job. Robert: "when I click on an Amber row that's
+            // been backgrounded, I want it to be foregrounded." Measured the
+            // same morning on a scratch session: the job's transcript carries
+            // the conversation, `claude stop <job>` then `--resume <job>`
+            // keeps every word, and resuming the ORIGINAL id instead silently
+            // forks a stale branch. So the tap brings the conversation back as
+            // an ordinary session under this app's own pane, and the rest of
+            // this function never sees it.
+            if live.waitingFor == Readiness.agentView, let job = live.parkedJob {
+                await self?.recoverParkedSession(sessionId, live: live, job: job, report: report)
+                return
+            }
+
             // Already in a pane? Then this is only a matter of raising a
             // window. Registry first — a tty is two stale hops from the truth.
             let owned = TmuxOwnership.pane(forSessionId: sessionId, pid: live.pid)
@@ -1371,33 +1388,13 @@ extension AppDelegate {
             }
 
             let outcome = await TerminalTabFocus.focus(tty: tty, sessionId: sessionId)
-            // Ruled 10 Sep: a row waiting at the agent view lands on the
-            // CONVERSATION, not on the agent view. Raising the tab alone put
-            // Robert in front of "describe a task for a new session" with no
-            // word about what to press ("it's not actionable"). The screen's
-            // own text says "esc returns to it", and 6:16 this morning showed
-            // exactly that. So when the pane is verifiably showing the agent
-            // view, press Esc for them; when it is showing anything else,
-            // type nothing, because Esc at a running turn would interrupt it.
-            // Off-main: a pane read and a tmux call are subprocesses.
-            var escaped = false
-            if case .focused = outcome, live.waitingFor == Readiness.agentView, let owned,
-               SessionLauncher.paneTail(pane: owned).contains(Readiness.agentViewPrompt) {
-                _ = Tmux.run(["send-keys", "-t", owned.paneId, "Escape"],
-                             socket: owned.socketName)
-                escaped = true
-                Permissions.log("goTo: \(sessionId.prefix(8)) was showing the agent view; pressed Esc")
-                report("focused_and_left_agent_view")
-            }
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 switch outcome {
                 case .focused:
                     Permissions.log("goTo: focused \(tty)")
-                    if !escaped { report(owned == nil ? "focused_after_transfer" : "focused") }
-                    self.hud.finishGoToSession(escaped
-                        ? "Its tab was showing Claude Code's agent view. Pressed Esc to bring the conversation back."
-                        : nil)
+                    report(owned == nil ? "focused_after_transfer" : "focused")
+                    self.hud.finishGoToSession(nil)
                 case .tabGone:
                     Permissions.log("goTo: tab not found for \(tty)")
                     report("tab_gone")
@@ -1414,6 +1411,117 @@ extension AppDelegate {
                 }
             }
         }
+    }
+
+    /// Bring a parked conversation back as an ordinary session.
+    ///
+    /// The steps, in order, each of them a documented CLI command or the
+    /// app's own revive path, and each measured on a scratch session on
+    /// 10 Sep before this was written:
+    ///
+    ///   1. A busy job is mid-turn; stopping it would lose the turn. Raise
+    ///      the window and say so. Nothing else happens.
+    ///   2. Decide which id carries the conversation. The job does, once
+    ///      Claude Code has copied the history into its transcript (on first
+    ///      use). A job killed before that has a bare transcript, and then the
+    ///      origin is the only copy of the history. Resuming the wrong one
+    ///      forks the conversation, which is the measured failure mode, so
+    ///      this is decided from the file, never assumed.
+    ///   3. `claude stop <8-char job id>`. A job that is already gone answers
+    ///      "No job matching", which is fine.
+    ///   4. End the original's shell. It is showing the agent view and holds
+    ///      no conversation. Ctrl+C twice, which is what its own screen says
+    ///      quits; SIGTERM if it ignores that; and a refusal card if it
+    ///      survives even that, with nothing else changed.
+    ///   5. Resume the chosen id through `revive`, which speaks the brief,
+    ///      launches under this app's tmux, records ownership, and puts GO TO
+    ///      AGENT on the card. From here on it is a session like any other.
+    ///
+    /// Off-main throughout: every step is a subprocess or a wait. The panel
+    /// is touched only through `MainActor.run`.
+    nonisolated func recoverParkedSession(_ sessionId: String, live: LiveSession,
+                                          job: LiveSession.ParkedJob,
+                                          report: @Sendable (String) -> Void) async {
+        let short = String(sessionId.prefix(8))
+        let name = GridAssembler.tabDisplayName(live: live, callsign: nil)
+        let pane = TmuxOwnership.pane(forSessionId: sessionId, pid: live.pid)
+
+        if job.status == "busy" {
+            Permissions.log("recover: \(short) is parked and its job \(job.jobId) is busy; raising the window only")
+            report("parked_busy")
+            if let pane { _ = await TerminalTabFocus.focus(tty: pane.paneTty, sessionId: sessionId) }
+            await MainActor.run {
+                self.hud.finishGoToSession("\(name) is still working in the background. "
+                    + "Tap again when it goes idle and it will come back as a normal session.")
+            }
+            return
+        }
+        await MainActor.run { self.hud.showReceipt(.reviving(name)) }
+
+        var resumeId = SessionLineage.origin(of: sessionId)
+        if let jobFull = job.sessionId, let cwd = job.cwd ?? live.cwd {
+            let path = TranscriptTitles.defaultPath(cwd: cwd, sessionId: jobFull)
+            let since = job.startedAt.map { Date(timeIntervalSince1970: $0 / 1000) } ?? .distantFuture
+            if SessionLineage.carriesHistory(transcript: URL(fileURLWithPath: path), before: since) {
+                resumeId = jobFull
+            } else {
+                Permissions.log("recover: job \(job.jobId) never received the history "
+                    + "(stopped before first use?); resuming the origin \(resumeId.prefix(8)) instead")
+            }
+        }
+
+        if let binary = ClaudeAgentsCLI.resolveBinary() {
+            switch Subprocess.run(binary, ["stop", job.jobId], timeout: 20) {
+            case .success(let out):
+                Permissions.log("recover: claude stop \(job.jobId): "
+                    + out.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
+            case .failure(let error):
+                Permissions.log("recover: claude stop \(job.jobId) failed: \(error.message.prefix(160))")
+            }
+        }
+        if let jobFull = job.sessionId {
+            var tries = 0
+            while tries < 20, !ResumeGuard.check(sessionId: jobFull).holders.isEmpty {
+                try? await Task.sleep(nanoseconds: 500_000_000); tries += 1
+            }
+            if !ResumeGuard.check(sessionId: jobFull).holders.isEmpty {
+                Permissions.log("recover: job \(job.jobId) still has a process after stop; the resume guard will refuse")
+            }
+        }
+
+        if ProcessProbe.isAlive(live.pid) {
+            if let pane {
+                _ = Tmux.run(["send-keys", "-t", pane.paneId, "C-c"], socket: pane.socketName)
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                _ = Tmux.run(["send-keys", "-t", pane.paneId, "C-c"], socket: pane.socketName)
+            }
+            var tries = 0
+            while tries < 16, ProcessProbe.isAlive(live.pid) {
+                try? await Task.sleep(nanoseconds: 500_000_000); tries += 1
+            }
+            if ProcessProbe.isAlive(live.pid) {
+                Permissions.log("recover: shell pid \(live.pid) ignored ctrl+c twice; sending SIGTERM")
+                kill(pid_t(live.pid), SIGTERM)
+                tries = 0
+                while tries < 10, ProcessProbe.isAlive(live.pid) {
+                    try? await Task.sleep(nanoseconds: 500_000_000); tries += 1
+                }
+            }
+            if ProcessProbe.isAlive(live.pid) {
+                Permissions.log("recover: shell pid \(live.pid) would not exit; stopping here")
+                report("shell_would_not_exit")
+                await MainActor.run {
+                    self.hud.showReceipt(.notRevived(
+                        "the old shell (pid \(live.pid)) would not exit; nothing else was changed"))
+                }
+                return
+            }
+        }
+
+        Permissions.log("recover: \(short): job \(job.jobId) stopped, shell \(live.pid) ended, "
+            + "resuming \(resumeId.prefix(8))")
+        report(resumeId == sessionId ? "recovered_origin" : "recovered_job")
+        await MainActor.run { self.revive(resumeId, name: name) }
     }
 
     func revive(_ sessionId: String, name: String) {
