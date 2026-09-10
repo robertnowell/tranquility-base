@@ -718,7 +718,19 @@ enum StateLegend {
     /// classification of the agent — "Needs you" is our internal reading of a
     /// session's condition, and no session's condition changed. The triangle
     /// stays: it is the one mark that earns the amber.
-    static let noWordsNotice = "No audio detected"
+    static let noWordsNotice = "No speech detected"
+
+    /// The transcriber finished and found no words (ruled 09 Sep, over the
+    /// strip that #336 had put this on). A completed assessment is a result,
+    /// and a result is a card: the strip is for the microphone, and this is
+    /// not about the microphone. Quiet channel, not amber: nothing is broken,
+    /// the recording is kept, and saying it again is the whole remedy.
+    /// "Speech", not "audio" or "utterance": audio arrived, it just had no
+    /// words in it, and nobody outside this codebase says utterance.
+    static let noSpeechPlacard = "\(Glyph.quiet) No speech"
+    static let noSpeechMessage =
+        "No speech detected in that recording. It is kept; say it again, "
+        + "or retry it from the menu."
 
     /// What a tap on a row that cannot be reopened says back.
     ///

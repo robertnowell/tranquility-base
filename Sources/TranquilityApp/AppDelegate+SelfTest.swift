@@ -238,15 +238,17 @@ extension AppDelegate {
         let failures = Failures.reportedCount
         hud.showTranscribing("Checking no-speech response", onCancel: {}, onRetry: {})
         finishWithoutRecognizedSpeech()
+        let isCard = hud.state.name == "result"
+        let saysSpeech = hud.face.body.hasPrefix("No speech detected")
+        let quiet = hud.face.lens.color == StateLegend.Lens.advisory.color
         SelfTest.report("transcriptionNoSpeech", [
-            ("releasedTranscribingStage", hud.state.name == "idle"),
+            ("noSpeechIsACard", isCard),
             ("noFailureReported", Failures.reportedCount == failures),
-            ("plainNoAudioNotice", hud.notice == "No audio detected"),
-            ("neutralNotice", hud.noticeLens.color == StateLegend.Lens.content.color),
+            ("cardSaysSpeechNotAudio", saysSpeech),
+            ("quietNotAmber", quiet),
         ])
-        return hud.state.name == "idle" && Failures.reportedCount == failures
-            && hud.notice == "No audio detected"
-            && hud.noticeLens.color == StateLegend.Lens.content.color
+        hud.dismiss()
+        return isCard && Failures.reportedCount == failures && saysSpeech && quiet
     }
 
 }

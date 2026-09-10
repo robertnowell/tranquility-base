@@ -1468,6 +1468,18 @@ final class StatusHUD: NSObject {
         }
     }
 
+    /// The transcriber came back with no words. A card, not a strip line
+    /// (ruled 09 Sep): the strip is the microphone's channel, and this is a
+    /// result about what was said. Quiet like the invitation, because nothing
+    /// is broken; no title, because it is about the recording, not an agent.
+    func showNoSpeech() {
+        guard transition(to: .result, because: "no speech in the recording") else { return }
+        face = Face(body: StateLegend.noSpeechMessage,
+                    placardOverride: StateLegend.noSpeechPlacard,
+                    lens: .advisory)
+        render()
+    }
+
     /// A page arrived asking for an agent that is not there — the deep link
     /// names a session this Mac has no record of, or whose terminal tab is gone.
     ///

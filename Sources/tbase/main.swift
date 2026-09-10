@@ -1553,7 +1553,7 @@ case "reconcile":
             print("\n[\(result.provider), \(result.finality.rawValue), \(ms)ms]")
             print(result.text)
         } else if outcome.disposition == .noSpeechDetected {
-            print("\nNo audio detected. The recording is unchanged. [\(ms)ms]")
+            print("\nNo speech detected. The recording is unchanged. [\(ms)ms]")
             exit(6)
         } else {
             print("\nno provider succeeded — \(outcome.lastFailure.map { "\($0)" } ?? "unknown")")
