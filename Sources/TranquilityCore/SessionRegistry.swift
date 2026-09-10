@@ -147,9 +147,21 @@ public enum SessionRegistry {
         var out = live
         for parent in parked {
             guard let job = parent.parkedJobId, !job.isEmpty else { continue }
-            let before = out.count
+            // The job as the CLI saw it (status, start time) and as its own
+            // registry file names it (full id). Either may be missing: the
+            // CLI drops a stopped job, and a job killed before it wrote its
+            // file has no file. The parent's parkedJobId is the one fact that
+            // is always there.
+            let jobRows = out.filter { $0.isBackground && $0.sessionId.hasPrefix(job) }
+            let jobFile = entries.first { $0.kind == "bg" && ($0.jobId == job || $0.sessionId.hasPrefix(job)) }
+            let parked = LiveSession.ParkedJob(
+                jobId: job,
+                sessionId: jobRows.first?.sessionId ?? jobFile?.sessionId,
+                status: jobRows.first?.status,
+                startedAt: jobRows.first?.startedAt ?? jobFile?.startedAt,
+                cwd: jobRows.first?.cwd ?? jobFile?.cwd)
             out.removeAll { $0.isBackground && $0.sessionId.hasPrefix(job) }
-            let dropped = before - out.count
+            let dropped = jobRows.count
             if out.contains(where: { $0.sessionId == parent.sessionId }) {
                 if dropped > 0 {
                     trace?("liveness: dropped job \(job) parked by \(parent.sessionId.prefix(8)), "
@@ -157,10 +169,12 @@ public enum SessionRegistry {
                 }
                 continue
             }
-            out.append(LiveSession(pid: parent.pid, sessionId: parent.sessionId,
-                                   cwd: parent.cwd, status: "waiting", name: nil,
-                                   waitingFor: Readiness.agentView, kind: "interactive",
-                                   startedAt: parent.startedAt))
+            var standIn = LiveSession(pid: parent.pid, sessionId: parent.sessionId,
+                                      cwd: parent.cwd, status: "waiting", name: nil,
+                                      waitingFor: Readiness.agentView, kind: "interactive",
+                                      startedAt: parent.startedAt)
+            standIn.parkedJob = parked
+            out.append(standIn)
             trace?("liveness: \(parent.sessionId.prefix(8)) is parked in the agent view; "
                    + "standing in for job \(job) (\(dropped) row(s) dropped)")
         }

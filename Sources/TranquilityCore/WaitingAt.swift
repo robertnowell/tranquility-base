@@ -112,9 +112,10 @@ public enum WaitingAt: Equatable, Sendable {
                 + "happen until you answer it in the terminal."
         case .agentView:
             return "This session was sent to the background with the left arrow, "
-                + "and its terminal is showing Claude Code's agent view. Press Enter "
-                + "in its tab to return to it. Typed replies would start a new "
-                + "session from the agent view, so the panel will not send to it."
+                + "and its terminal is showing Claude Code's agent view. Tap the row "
+                + "and it comes back as a normal session in its own tab. Until then "
+                + "the panel will not send to it: typed words would start a new "
+                + "session from the agent view."
         }
     }
 
