@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1134</title>
+      <sparkle:version>1134</sparkle:version>
+      <sparkle:shortVersionString>0.3.1134</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Thu, 10 Sep 2026 04:36:41 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1134-0fc763d68/TranquilityBase-0.3.1134.dmg" type="application/octet-stream" length="13795822" sparkle:edSignature="IqrBBiOW1lubYAiuhL9xmrEqvTOShqRkF1rOiZCpWYGb0SWeRE1eF3XZn5rDN8TAGMN2zv8v+zsTskCYJMrxBg==" />
+    </item>
+    <item>
       <title>Version 0.3.1133</title>
       <sparkle:version>1133</sparkle:version>
       <sparkle:shortVersionString>0.3.1133</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Wed, 09 Sep 2026 18:46:34 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1124-12c3efa8b/TranquilityBase-0.3.1124.dmg" type="application/octet-stream" length="13654960" sparkle:edSignature="ThcKNQwfjcHx9dbGe8B/TMjWBr2+/TzyqIrzENqR++YtEcdW12EJsZd1chNHYHsanDX6CFFeUUS+S2lun7XvCA==" />
     </item>
-    <item>
-      <title>Version 0.3.1123</title>
-      <sparkle:version>1123</sparkle:version>
-      <sparkle:shortVersionString>0.3.1123</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Tue, 08 Sep 2026 03:20:47 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1123-37fa46ced/TranquilityBase-0.3.1123.dmg" type="application/octet-stream" length="13635008" sparkle:edSignature="gi6c3OKpTeKhKhHamGSaruMzaGE5dK9qkwl9dLb5W5XgVsr0bO08xTdTMWP3b6MGZM1O4Ge6LmcTK7oCfc9oAQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: MrirtHFRLmSQDKIit+7YvSneOAqEK71xOlgei+6HwIUjwdV82erz2KgricH4CAKFn8pMaECdJdhsdVzgLMFKDQ==
+edSignature: 9G50oK5719gFn/Gy4vMAdLU0Qs9uo4ZXWEzpkNz7Q3uAKz66r9fG4YM2bAgN5kCi0TDuzDiwq91Quhqmb1LHAg==
 length: 6457
 -->
