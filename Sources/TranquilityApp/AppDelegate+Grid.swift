@@ -265,6 +265,15 @@ extension AppDelegate {
         for found in (SessionDiscovery.discoverIfScanned()?.sessions ?? [])
         where !placed.contains(found.sessionId) && found.liveness != .live {
             placed.insert(found.sessionId)
+            // One conversation, one row (ruled 10 Sep). A session Claude Code
+            // continued under a new id (the left arrow does this) is the same
+            // agent; when any other member of its family already has a row,
+            // this transcript is that agent's earlier or later half, not a
+            // second agent with the same name.
+            if SessionLineage.family(of: found.sessionId)
+                .contains(where: { $0 != found.sessionId && placed.contains($0) }) {
+                continue
+            }
             rows.append(SessionRow(
                 id: found.sessionId,
                 name: GridAssembler.tabDisplayName(
