@@ -143,9 +143,16 @@ public enum Readiness: Sendable, Equatable {
     /// added to `dialogLikeValues` below; it takes the same path `.question`
     /// always has, unchanged.
     public static let inputNeeded = "input needed"
+    /// Not a CLI value. The app's own word for a session that was sent to the
+    /// background with the left arrow and now stands in for its job in the
+    /// live list (`SessionRegistry.standingInForParkedJobs`). Its terminal is
+    /// showing the agent view's task box, so typing here would start a new
+    /// session with the words: the same hazard as a dialog, refused the same
+    /// way.
+    public static let agentView = "agent view"
 
     private static let dialogLikeValues: Set<String> = [
-        dialogOpen, permissionPrompt, sandboxRequest, workerRequest,
+        dialogOpen, permissionPrompt, sandboxRequest, workerRequest, agentView,
     ]
 
     /// Whether this state is a session sitting at a dialog, whatever route it
@@ -708,7 +715,14 @@ public struct ClaudeAgentsCLI: ClaudeAgentsReading {
             Self.trace?("liveness: \(error.timedOut ? "deadline" : "probe failed"): \(error.message.prefix(160))")
             return nil
         case .success(let out):
-            guard let sessions = Self.decodeSessions(out, trace: Self.trace) else { return nil }
+            guard let decoded = Self.decodeSessions(out, trace: Self.trace) else { return nil }
+            // The CLI hides a session that was sent to the background with
+            // the left arrow and lists its job instead. The session's own
+            // registry file says otherwise, and it is read here, once, so
+            // every caller sees the session and none sees the job.
+            let sessions = SessionRegistry.standingInForParkedJobs(
+                decoded, entries: SessionRegistry.all(),
+                isAlive: ProcessProbe.isAlive, trace: Self.trace)
             Self.cache.put(sessions)
             return sessions
         }

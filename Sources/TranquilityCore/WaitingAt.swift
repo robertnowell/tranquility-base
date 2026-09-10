@@ -46,6 +46,13 @@ public enum WaitingAt: Equatable, Sendable {
     case dialog
     /// A modal on a process that has not heard a word yet: the resume prompt.
     case resumePrompt
+    /// The session was sent to the background with the left arrow and its
+    /// terminal is showing Claude Code's agent view. Not a CLI value: the app
+    /// says this itself when a parked session stands in for its job (see
+    /// `SessionRegistry.standingInForParkedJobs`). NOT answerable from here:
+    /// the prompt on screen is the agent view's "describe a task for a new
+    /// session", and typed words would start a new session with them.
+    case agentView
 
     /// Nil when the process is not waiting at all. Takes the two CLI fields and
     /// the one fact the CLI cannot supply, so every caller classifies the same
@@ -67,6 +74,8 @@ public enum WaitingAt: Equatable, Sendable {
             return resumed ? .resumePrompt : .dialog
         case Readiness.permissionPrompt, Readiness.sandboxRequest, Readiness.workerRequest:
             return .permission
+        case Readiness.agentView:
+            return .agentView
         default:
             return .question
         }
@@ -79,6 +88,7 @@ public enum WaitingAt: Equatable, Sendable {
         case .permission: return "waiting on a permission"
         case .dialog: return "waiting at a dialog"
         case .resumePrompt: return "waiting at the resume prompt"
+        case .agentView: return "backgrounded in the agent view"
         }
     }
 
@@ -100,6 +110,11 @@ public enum WaitingAt: Equatable, Sendable {
             return "Claude Code is asking whether to resume this session from a "
                 + "summary or in full. It has not started yet, and nothing will "
                 + "happen until you answer it in the terminal."
+        case .agentView:
+            return "This session was sent to the background with the left arrow, "
+                + "and its terminal is showing Claude Code's agent view. Press Enter "
+                + "in its tab to return to it. Typed replies would start a new "
+                + "session from the agent view, so the panel will not send to it."
         }
     }
 

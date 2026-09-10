@@ -39,6 +39,22 @@ public enum SessionRegistry {
         public let name: String?
         /// When the session last rewrote this file (epoch ms).
         public let updatedAt: Double?
+        /// "interactive" for a person's terminal session, "bg" for a job the
+        /// daemon hosts on a pty of its own. The CLI's `--json` spells the
+        /// second one "background"; the file spells it "bg". Both are read.
+        public var kind: String? = nil
+        /// Set on an interactive session that was sent to the background with
+        /// the left arrow (Claude Code's agent view): the 8-character id of the
+        /// job now standing where the session was. While this is set the CLI
+        /// lists the job and hides the session, which is how a working session
+        /// vanished from the grid and a blue row with no window took its place
+        /// (10 Sep, 6:01 AM).
+        public var parkedJobId: String? = nil
+        /// The job's own side of that link: an 8-character id equal to the
+        /// parent's `parkedJobId`.
+        public var jobId: String? = nil
+        /// When the process came up (epoch ms), as the file records it.
+        public var startedAt: Double? = nil
 
         /// Just the `%17` — the only part any tmux command needs, and the
         /// part that is stable while a window is renamed or moved.
@@ -91,7 +107,64 @@ public enum SessionRegistry {
                      tmux: obj["tmux"] as? String,
                      messagingSocketPath: obj["messagingSocketPath"] as? String,
                      name: obj["name"] as? String,
-                     updatedAt: (obj["updatedAt"] as? NSNumber)?.doubleValue)
+                     updatedAt: (obj["updatedAt"] as? NSNumber)?.doubleValue,
+                     kind: obj["kind"] as? String,
+                     parkedJobId: obj["parkedJobId"] as? String,
+                     jobId: obj["jobId"] as? String,
+                     startedAt: (obj["startedAt"] as? NSNumber)?.doubleValue)
+    }
+
+    /// A session sent to the background is still that session.
+    ///
+    /// Pressing the left arrow on an empty prompt backgrounds a Claude Code
+    /// session and opens its agent view. From then on `claude agents --json`
+    /// lists the background JOB (kind "background", busy, blocked, wearing the
+    /// session's name) and omits the SESSION, whose process is still alive in
+    /// its own tmux pane with its own registry file. Taken at face value that
+    /// list put a blue row with no window on the grid: Go to Agent looked for
+    /// the job's pane, found none, tried to move it under tmux, and the guard
+    /// refused because the job's pty host already held the id. Robert, 10 Sep:
+    /// "it says it's already running somewhere ... either restart it, go to
+    /// it." The right answer was the pane his session had been in all along.
+    ///
+    /// So the list is corrected here, at the decode boundary, from the files
+    /// the harness itself writes: every job that a live interactive session
+    /// has parked is dropped, and if the CLI omitted that session, the session
+    /// stands in for it, reported as waiting at the agent view. Its pane comes
+    /// from its own registry file, so Go to Agent raises the tab it has always
+    /// had; a typed reply is refused, because the terminal is showing the
+    /// agent view's task box and the words would land there.
+    ///
+    /// Only a parent whose pid is alive counts. A job with no live parent is
+    /// left exactly as the CLI reported it: that is somebody's dispatched
+    /// background session, and this rule has nothing to say about it.
+    public static func standingInForParkedJobs(
+        _ live: [LiveSession], entries: [Entry], isAlive: (Int) -> Bool,
+        trace: ((String) -> Void)? = nil
+    ) -> [LiveSession] {
+        let parked = entries.filter { $0.parkedJobId != nil && $0.kind != "bg" && isAlive($0.pid) }
+        guard !parked.isEmpty else { return live }
+        var out = live
+        for parent in parked {
+            guard let job = parent.parkedJobId, !job.isEmpty else { continue }
+            let before = out.count
+            out.removeAll { $0.isBackground && $0.sessionId.hasPrefix(job) }
+            let dropped = before - out.count
+            if out.contains(where: { $0.sessionId == parent.sessionId }) {
+                if dropped > 0 {
+                    trace?("liveness: dropped job \(job) parked by \(parent.sessionId.prefix(8)), "
+                           + "which the CLI still lists")
+                }
+                continue
+            }
+            out.append(LiveSession(pid: parent.pid, sessionId: parent.sessionId,
+                                   cwd: parent.cwd, status: "waiting", name: nil,
+                                   waitingFor: Readiness.agentView, kind: "interactive",
+                                   startedAt: parent.startedAt))
+            trace?("liveness: \(parent.sessionId.prefix(8)) is parked in the agent view; "
+                   + "standing in for job \(job) (\(dropped) row(s) dropped)")
+        }
+        return out
     }
 
     /// The entry for one session id, newest first when a stale file for a
