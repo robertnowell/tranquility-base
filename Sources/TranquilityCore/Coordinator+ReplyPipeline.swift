@@ -95,8 +95,16 @@ extension Coordinator {
         }
         guard let target else { return .noTarget }
 
+        // The turn this reply answers, bound NOW. The target is the session's
+        // latest event at the moment the user spoke; a newer turn can land
+        // during the undo window and move `latestId`, and the quote the agent
+        // receives (`HeardContext`) must be of the turn the user heard, not of
+        // one they have not. Text key, not rowid: `eventId` is a foreign key
+        // onto `events.id`. Nil when the rowid has no row, which only a
+        // fixture can arrange; the note is then simply absent.
+        let heardEventId = try store.eventId(forRowid: target.latestId)
         var utterance = try await store.captureAndTranscribe(
-            pcm16: pcm16, sampleRate: sampleRate, chain: recovery, eventId: nil,
+            pcm16: pcm16, sampleRate: sampleRate, chain: recovery, eventId: heardEventId,
             streamed: streamed, streamHadRecognizedText: streamHadRecognizedText,
             streamNoSpeechProvider: streamNoSpeechProvider, preWritten: preWritten, utteranceId: utteranceId)
 
@@ -129,7 +137,7 @@ extension Coordinator {
         }
         return .readyToSend(
             utteranceId: utterance.id,
-            text: AttachmentTray.compose(transcript: text, fragments: carrying),
+            text: outgoingText(for: utterance, transcript: text, fragments: carrying),
             // The name the grid shows, not the folder the session happens to
             // sit in. `projectLabel` is the raw last path component of the
             // cwd, so a session in `.claude/worktrees/arc-work` was announced
@@ -177,8 +185,9 @@ extension Coordinator {
         try enrolment.enrol(sessionId: target.sessionId)
         // Same composition as readyToSend showed, from the same riding set —
         // the user confirms exactly the text that dispatches.
-        let outgoing = AttachmentTray.compose(
-            transcript: text, fragments: attachments.riding(utteranceId: utteranceId))
+        let outgoing = outgoingText(
+            for: utterance, transcript: text,
+            fragments: attachments.riding(utteranceId: utteranceId))
 
         // Own the utterance before dispatch does any process probing or session
         // adoption. Those are preflight from the transport's perspective, but
@@ -226,7 +235,37 @@ extension Coordinator {
         else { return nil }
         let fragments = attachments.absorbStaged(
             session: sessionId, utteranceId: utteranceId)
-        return AttachmentTray.compose(transcript: transcript, fragments: fragments)
+        return outgoingText(for: utterance, transcript: transcript, fragments: fragments)
+    }
+
+    // MARK: - What was heard
+
+    /// The note quoting what Tranquility Base spoke for the turn this reply
+    /// answers (`HeardContext`), or nil when that turn has no brief. Read from
+    /// the utterance's OWN event, bound in `submitReply`, never from the
+    /// session's current latest event. Best-effort by design: a store read
+    /// failing here degrades the agent's context, never the send.
+    func heardNote(for utterance: Utterance) -> String? {
+        guard let eventId = utterance.eventId,
+              let sessionId = utterance.targetSessionId
+        else { return nil }
+        guard let brief = try? store.storedBrief(sessionId: sessionId, eventId: eventId)
+        else {
+            Coordinator.trace?("heard-context: no brief for event \(eventId.prefix(8)); "
+                + "reply goes bare")
+            return nil
+        }
+        return HeardContext.note(recap: brief.recap, proposal: brief.proposal)
+    }
+
+    /// The one composition every send and every readback goes through: the
+    /// tray's fragments, the transcript, then the heard note. Three callers
+    /// (`submitReply`'s readback, `refreshPendingSend`, `confirmAndSend`) and
+    /// one function, so the text the undo window shows is the text typed.
+    func outgoingText(for utterance: Utterance, transcript: String, fragments: [String]) -> String {
+        HeardContext.compose(
+            message: AttachmentTray.compose(transcript: transcript, fragments: fragments),
+            note: heardNote(for: utterance))
     }
 
     /// `dispatch`'s Codex twin for `preferringTmuxOwned` — same question

@@ -304,6 +304,75 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertTrue(try coordinator.waiting().map(\.sessionId).contains("human"))
     }
 
+    // MARK: - What was heard rides the reply (HeardContext, 11 Sep)
+
+    /// The user answers what Tranquility Base SPOKE, not what the agent
+    /// wrote; the agent used to get the answer with the question stripped
+    /// off. The reply now carries the spoken recap and proposal, after the
+    /// user's own words, and the undo window's text is the text typed.
+    func testAReplyCarriesWhatWasSpoken() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
+        try append()
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, let shown, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+        XCTAssertTrue(shown.hasPrefix("yes go ahead\n\n"), "the user's words lead: \(shown)")
+        XCTAssertTrue(shown.contains(HeardContext.opener))
+        XCTAssertTrue(shown.contains(
+            "\u{201C}Fixing the export pipeline. Tests pass. Run the migration next. Proceed?\u{201D}"),
+            "the FixedSummary's recap then proposal, verbatim: \(shown)")
+
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected a dispatch") }
+        XCTAssertEqual(transport.sent, [shown], "the disclosure IS the message")
+        // The record of what was heard is untouched: the note is composed,
+        // never written into the transcript.
+        XCTAssertEqual(try store.utterance(id: utteranceId)?.transcriptText, "yes go ahead")
+    }
+
+    /// A turn nothing was spoken for has nothing to quote. A deep-linked reply
+    /// to a session whose latest turn was never announced dispatches the
+    /// transcript byte-identical to before the note existed.
+    func testAReplyToAnUnspokenTurnGoesBare() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
+        try append()
+
+        guard case .readyToSend(let utteranceId, let shown, _, _) =
+            try await coordinator.submitReply(pcm16: silence(), to: "sess-1")
+        else { return XCTFail("expected a pending send") }
+        XCTAssertEqual(shown, "yes go ahead")
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected a dispatch") }
+        XCTAssertEqual(transport.sent, ["yes go ahead"])
+    }
+
+    /// The quote is of the turn the user HEARD. A newer turn landing during
+    /// the undo window moves the session's latest event; it must not move the
+    /// note, which is bound to the utterance's own event at capture.
+    func testANewerTurnDuringTheUndoWindowDoesNotSwapTheQuote() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
+        try append(at: 1_000, message: "first turn")
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, let shown, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+        // The next turn lands, unannounced and with no brief, before the send.
+        try append(at: 2_000, message: "second turn")
+
+        let refreshed = try coordinator.refreshPendingSend(utteranceId: utteranceId, sessionId: "sess-1")
+        XCTAssertEqual(refreshed, shown, "the readback does not change under a newer turn")
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected a dispatch") }
+        XCTAssertEqual(transport.sent, [shown])
+        XCTAssertTrue(shown.contains("Run the migration next. Proceed?"))
+    }
+
     /// The fuller proof: being counted as "waiting" (above) is necessary but
     /// not sufficient — `dispatch`'s OWN readiness resolution is a second,
     /// independent call to `agents.sessions()` (Coordinator+ReplyPipeline.

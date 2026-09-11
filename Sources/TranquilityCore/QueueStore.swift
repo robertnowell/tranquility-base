@@ -1047,6 +1047,30 @@ public final class QueueStore: Sendable {
         }
     }
 
+    /// The text id of one event, from the rowid the announce path keys on.
+    /// A reply binds to the event it answers through `Utterance.eventId`,
+    /// which is the text key (a foreign key onto `events.id`), while briefs
+    /// and cursors key on the rowid; this is the one crossing.
+    public func eventId(forRowid rowid: Int64) throws -> String? {
+        try dbQueue.read { db in
+            try String.fetchOne(db, sql: "SELECT id FROM events WHERE rowid = ?",
+                                arguments: [rowid])
+        }
+    }
+
+    /// The brief for an event addressed by its text id: what Tranquility Base
+    /// spoke for the turn a reply answers (`HeardContext`). Read at compose
+    /// time from the utterance's own bound event, so a newer turn landing
+    /// during the undo window cannot swap the quote.
+    public func storedBrief(sessionId: String, eventId: String) throws -> StoredBrief? {
+        try dbQueue.read { db in
+            try StoredBrief.fetchOne(db, sql: """
+                SELECT b.* FROM brief b JOIN events e ON e.rowid = b.eventRowid
+                WHERE e.id = ? AND b.sessionId = ?
+                """, arguments: [eventId, sessionId])
+        }
+    }
+
     /// One session's briefs, newest first — the home base's whole content.
     ///
     /// This is the "future retention read" the brief table's comment named. It
