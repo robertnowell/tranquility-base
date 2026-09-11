@@ -285,17 +285,27 @@ public enum SessionLauncher {
         // always was.
         //
         // `remain-on-exit` was armed by the `new-session` request itself so
-        // a failure leaves its own reason behind rather than vanishing — the
+        // a failure leaves its own reason behind rather than vanishing: the
         // 24 Aug diagnosis needed the dead pane's exit status and its one
-        // line of stderr, and neither exists without it. Disarmed on the
-        // success path so live panes never linger as corpses.
+        // line of stderr, and neither exists without it. It now stays armed
+        // for the pane's whole life (see below the check).
         if let failure = Self.survivalFailure(session: pane.sessionName, tty: pane.paneTty) {
             Tmux.run(["kill-session", "-t", name], socket: Tmux.socketName)
             Self.trace?("newSession: \(name) died on launch — \(failure.reason)")
             return .failure(ScriptError(message: failure.reason,
                                         worthRetrying: failure.worthRetrying))
         }
-        Tmux.run(["set", "-t", name, "remain-on-exit", "off"], socket: Tmux.socketName)
+        // Left ARMED for the pane's whole life (it was disarmed here until 10
+        // Sep). A live pane is never a corpse, but a pane that dies LATER, from
+        // a crash, `/exit`, an OTA update, or a mid-turn restart, now leaves
+        // its screen and exit status behind for `ExitWatch` to read and
+        // report: the same evidence a launch death already leaves, which until
+        // now was thrown away the instant the launch succeeded. The cost is
+        // that a corpse must be reaped, which `ExitWatch` does after reading
+        // it, and that a DELIBERATE end must not look like a death nobody
+        // asked for, which `disarmRemainOnExit` (called by the row-menu
+        // Terminate before it signals) prevents by turning this back off so
+        // the pane self-closes and leaves nothing to find.
 
         if acceptTrustPrompt { watchForTrustPrompt(pane: pane, adapter: adapter) }
         return .success(pane)
@@ -583,6 +593,41 @@ public enum SessionLauncher {
         return out.split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .last(where: { !$0.isEmpty && !$0.hasPrefix("Pane is dead") }) ?? ""
+    }
+
+    /// A dead pane's exit status and last line, or `nil` when the session is
+    /// gone or its pane is still alive. The corpse only exists because
+    /// `remain-on-exit` stays armed for the pane's whole life; a session torn
+    /// down deliberately disarms it first (`disarmRemainOnExit`) and so returns
+    /// `nil` here, which is exactly how `ExitWatch` tells a spontaneous death
+    /// from a Terminate the user asked for. Blocks on tmux; call it off-main.
+    public static func postMortem(session name: String)
+        -> (status: String, tail: String)? {
+        guard case .success(let out) = Tmux.run(
+            ["list-panes", "-t", name, "-F", "#{pane_dead}\t#{pane_dead_status}"],
+            socket: Tmux.socketName, timeout: 3),
+            let line = out.split(separator: "\n").first
+        else { return nil }   // session gone: reaped, or was never a tmux pane.
+        let parts = line.split(separator: "\t", maxSplits: 1,
+                               omittingEmptySubsequences: false).map(String.init)
+        // Same flag discipline as `survivalFailure`: alive is read off a
+        // rendered `pane_dead`, and only "1" is dead. A mangled row ("0_%1")
+        // is neither and reads as still-alive, which is the safe default (no
+        // report, no reap) for a line we cannot trust.
+        guard let flag = parts.first, flag == "1" else { return nil }
+        let status = (parts.count > 1 && !parts[1].isEmpty) ? parts[1] : "unknown"
+        return (status: status, tail: Self.lastLine(ofPane: name))
+    }
+
+    /// Turn `remain-on-exit` OFF for a session about to be ended on purpose,
+    /// so its pane closes with the process and the session vanishes instead of
+    /// lingering as a corpse. Idempotent, and a harmless no-op if the session
+    /// is already gone. This is the whole of the double-report guard: a
+    /// deliberately ended agent leaves nothing for `ExitWatch` to find, so it
+    /// is never reported as a death nobody asked for. Blocks on tmux; call it
+    /// off-main.
+    public static func disarmRemainOnExit(session name: String) {
+        Tmux.run(["set", "-t", name, "remain-on-exit", "off"], socket: Tmux.socketName)
     }
 
     static func shellQuoted(_ s: String) -> String {

@@ -60,6 +60,13 @@ public enum FailureKind: String, Codable, CaseIterable, Sendable {
     case microphone = "microphone"
     case permissions = "permissions"
     case panelLostTrack = "panel_lost_track"
+    /// An agent's process exited on its own with a non-zero status: a crash,
+    /// a kill, an OTA update pulling it down, a harness giving up mid-turn.
+    /// Filed by `ExitWatch` from the dead pane's exit status and last line,
+    /// and only for spontaneous deaths: a Terminate the user asked for
+    /// self-closes its pane and leaves nothing to report. A clean self-exit
+    /// (status 0) is recorded as `agent_ended`, not here, so it never pages.
+    case agentExited = "agent_exited"
     case notice = "notice"
 }
 
