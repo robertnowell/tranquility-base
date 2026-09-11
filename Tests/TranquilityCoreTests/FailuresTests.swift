@@ -33,6 +33,27 @@ final class FailuresTests: XCTestCase {
         super.tearDown()
     }
 
+    /// The product mirror used to carry only kind and site, so a failure was a
+    /// count with no cause off the user's machine. It now carries the reason
+    /// too (scrubbed, bounded), which is what makes a failing self-update
+    /// debuggable from telemetry.
+    func testTheProductMirrorCarriesTheReasonNotJustTheKind() {
+        Track.resetForTesting()
+        Track.configure(directory: dir, installId: "install-x")
+        let got = expectation(description: "failure mirror")
+        let seen = Box<TrackEvent?>(nil)
+        Track.attach { e in if e.name == "failure" { seen.update { $0 = e }; got.fulfill() } }
+        Failures.report(.updateFailed,
+                        reason: "update check failed: cannot verify feed signature [SUError 5]")
+        wait(for: [got], timeout: 2)
+        Track.detach()
+        XCTAssertEqual(seen.value?.properties["kind"], .token("update_failed"))
+        guard case .prose(let text)? = seen.value?.properties["reason"] else {
+            return XCTFail("the failure mirror must carry a prose reason")
+        }
+        XCTAssertTrue(text.contains("cannot verify feed signature"), text)
+    }
+
     private func records() -> [FailureEvent] {
         Failures.flush()
         guard let url = Failures.storeURL, let text = try? String(contentsOf: url, encoding: .utf8)

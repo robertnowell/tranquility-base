@@ -706,6 +706,10 @@ extension AppDelegate {
                 }
             } catch {
                 Track.replyOutcome("threw", stage: "capture")
+                // File the reason, the way the confirm-stage twin already does.
+                // Without this the exception lived only in a local status
+                // string, invisible remotely.
+                Failures.report(.deliveryFailed, reason: "capture stage threw: \(error)")
                 lastStatusLine = "reply failed: \(error)"
             }
             rebuildMenu()
