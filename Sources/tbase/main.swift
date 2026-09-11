@@ -1178,7 +1178,10 @@ case "reconcile":
                 // dispatch is refused — floorHeld, permanently, on an
                 // otherwise-idle composer. See classifyPromptLine's doc
                 // comment.
-                idlePlaceholder: CodexAdapter().trustPrompt?.settledBannerNeedle)
+                idlePlaceholder: CodexAdapter().trustPrompt?.settledBannerNeedle,
+                // Same refusal the app's own dispatch makes (11 Sep): a pane
+                // on Codex's update chooser is never typed into.
+                blockingPrompts: CodexAdapter().trustPrompt?.neverAutoAcceptNeedles ?? [])
             report(await TmuxTransport().send(text: text, to: target))
             break
         }

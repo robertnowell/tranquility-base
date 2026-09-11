@@ -46,8 +46,11 @@ extension StatusHUD {
             // The background half paints its outcome over whatever the
             // cleanup left up; a deploy's selftest must not strand that on
             // the live panel. The wording follows the one implementation now
-            // — the drill's fixture session does not exist, so the answer is
-            // "isn't running any more".
+            // — the drill's fixture session does not exist anywhere, not even
+            // on disk, so the answer is "isn't running any more, and I can't
+            // find its history". (A dead session that IS on disk gets revived
+            // instead, since 11 Sep; the fixture is chosen so this drill never
+            // launches anything.)
             if self.bodyLabel.stringValue.contains("isn't running any more")
                 || self.bodyLabel.stringValue.contains("Couldn't find a terminal") {
                 self.showIdle(rows: [])

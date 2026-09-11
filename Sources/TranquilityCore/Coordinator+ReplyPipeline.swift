@@ -459,7 +459,13 @@ extension Coordinator {
             readinessSource: isCodex ? .rolloutTail : .claudeAgents,
             promptGlyph: isCodex ? CodexAdapter().capabilities.promptGlyph : "❯",
             idlePlaceholder: isCodex ? CodexAdapter().trustPrompt?.settledBannerNeedle : nil,
-            pasteChip: isCodex ? CodexAdapter().capabilities.pasteChipPrefix : "[Pasted text #")
+            pasteChip: isCodex ? CodexAdapter().capabilities.pasteChipPrefix : "[Pasted text #",
+            // The screens this harness's launcher refuses to press through
+            // are the screens this dispatch refuses to type into. Same list,
+            // one owner (11 Sep: a reply typed into Codex's update chooser
+            // chose "Update now").
+            blockingPrompts: (isCodex ? CodexAdapter().trustPrompt : ClaudeCodeAdapter().trustPrompt)?
+                .neverAutoAcceptNeedles ?? [])
 
         utterance.targetKind = dispatchTarget.kind
         utterance.targetSessionId = target.sessionId
