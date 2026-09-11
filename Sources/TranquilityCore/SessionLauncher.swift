@@ -170,7 +170,11 @@ public enum SessionLauncher {
     static func launchTmux(
         directory: String,
         launch: HarnessLaunch,
-        acceptTrustPrompt: Bool
+        acceptTrustPrompt: Bool,
+        // True when this launch is a REVIVE (called through `resumeTmux`).
+        // The only difference it makes: the trust watcher also answers the
+        // resume-depth prompt, which a fresh launch never shows.
+        resuming: Bool = false
     ) -> Result<TmuxPaneAddress, ScriptError> {
         let command = launch.command
         let adapter = launch.adapter
@@ -307,7 +311,9 @@ public enum SessionLauncher {
         // Terminate before it signals) prevents by turning this back off so
         // the pane self-closes and leaves nothing to find.
 
-        if acceptTrustPrompt { watchForTrustPrompt(pane: pane, adapter: adapter) }
+        if acceptTrustPrompt {
+            watchForTrustPrompt(pane: pane, adapter: adapter, answerResumePrompt: resuming)
+        }
         return .success(pane)
     }
 
@@ -387,7 +393,8 @@ public enum SessionLauncher {
         let fullCommand = ([command] + quotedArgs).joined(separator: " ")
         return launchTmux(directory: directory,
                           launch: HarnessLaunch(adapter: adapter, command: fullCommand),
-                          acceptTrustPrompt: acceptTrustPrompt)
+                          acceptTrustPrompt: acceptTrustPrompt,
+                          resuming: true)
     }
 
     /// Single-quote wrapping, the shell's own escape for "trust nothing
@@ -1420,6 +1427,7 @@ public enum SessionLauncher {
     /// window-only behaviour they had.
     public static func watchForTrustPrompt(
         pane: TmuxPaneAddress, adapter: any HarnessAdapter = ClaudeCodeAdapter(),
+        answerResumePrompt: Bool = false,
         onNeedsHuman: (@Sendable (String) -> Void)? = nil
     ) {
         guard let spec = adapter.trustPrompt else { return }
@@ -1446,6 +1454,7 @@ public enum SessionLauncher {
                          socket: pane.socketName)
             },
             trace: Self.trace, label: pane.sessionName,
+            answerResumePrompt: answerResumePrompt,
             onNeedsHuman: { question in
                 // The panel first, the window second — on purpose. Opening a
                 // window is an AppleScript round trip that can take a second
