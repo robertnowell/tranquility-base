@@ -61,6 +61,20 @@ public struct DispatchTarget: Sendable, Equatable {
     /// `promptGlyph` above, so every existing construction site keeps
     /// meaning what it always has.
     public var pasteChip: String?
+    /// Screens the transport must never type into: the harness's own
+    /// `neverAutoAcceptNeedles`, carried to the one place that presses
+    /// Return on a pane it did not read first. Empty means "no such screen
+    /// is known for this target", which is what every construction site
+    /// that predates 11 Sep gets, unchanged.
+    ///
+    /// The case this exists for: a Codex pane sitting on its update chooser
+    /// ("› 1. Update now (runs `curl … | sh`)"). The floor check reads the
+    /// glyph row as a composer holding somebody's text, joins ours after it,
+    /// and presses Return, and on that screen Return is "install". Measured
+    /// 11 Sep 09:00: the installer ran, the process exited, and a dictation
+    /// went nowhere. The readiness probe could not have caught it, because
+    /// Codex's rollout says nothing about a menu; only the screen does.
+    public var blockingPrompts: [TrustPromptSpec.RecognizedPrompt]
 
     public init(
         kind: TransportKind = .tmux,
@@ -73,7 +87,8 @@ public struct DispatchTarget: Sendable, Equatable {
         readinessSource: ReadinessSource = .claudeAgents,
         promptGlyph: String = "❯",
         idlePlaceholder: String? = nil,
-        pasteChip: String? = "[Pasted text #"
+        pasteChip: String? = "[Pasted text #",
+        blockingPrompts: [TrustPromptSpec.RecognizedPrompt] = []
     ) {
         self.kind = kind
         self.sessionId = sessionId
@@ -86,6 +101,7 @@ public struct DispatchTarget: Sendable, Equatable {
         self.promptGlyph = promptGlyph
         self.idlePlaceholder = idlePlaceholder
         self.pasteChip = pasteChip
+        self.blockingPrompts = blockingPrompts
     }
 }
 

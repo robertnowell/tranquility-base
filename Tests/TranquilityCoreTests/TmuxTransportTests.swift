@@ -257,6 +257,53 @@ final class TmuxTransportTests: XCTestCase {
         XCTAssertEqual(DispatchTarget(sessionId: "s").promptGlyph, "❯")
     }
 
+    // MARK: a screen on a never-press question is never typed into (11 Sep)
+
+    /// The 11 Sep chooser, as the floor check would otherwise read it: a `›`
+    /// row holding text, so "join ours after it and press Return", and on
+    /// this screen Return is "install". The guard runs before the floor and
+    /// answers with the harness's own sentence.
+    func testTheUpdateChooserIsRefusedBeforeAnythingIsTyped() {
+        let screen = """
+        ✨ Update available! 0.153.4 -> 0.154.0
+        Release notes: https://github.com/openai/codex/releases/latest
+        › 1. Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh'`)
+          2. Skip
+          3. Skip until next version
+        """
+        let prompts = CodexAdapter().trustPrompt!.neverAutoAcceptNeedles
+        let blocking = TmuxTransport.blockingPrompt(on: screen, prompts: prompts)
+        XCTAssertEqual(blocking?.needle, "1. Update now")
+        XCTAssertEqual(TmuxTransport.blockedOnPromptWording(blocking!),
+                       "a question in its tab. Codex is asking whether to update itself before it starts.")
+        // And the floor check WOULD have typed into it, which is why the guard
+        // has to come first.
+        XCTAssertEqual(TmuxTransport.classifyPromptLine(
+            screen: screen, payload: "Great. Proceed with the next experiment.", glyph: "›",
+            placeholder: "Ask Codex to do anything"), .holds(ours: false))
+    }
+
+    func testAnIdleCodexComposerIsNotRefused() {
+        let screen = "› Ask Codex to do anything\n\n  gpt-6-astra high · ~/Projects"
+        XCTAssertNil(TmuxTransport.blockingPrompt(
+            on: screen, prompts: CodexAdapter().trustPrompt!.neverAutoAcceptNeedles))
+    }
+
+    /// Claude Code's resume-depth question is the same class: a Return there
+    /// spends usage limits on the human's behalf.
+    func testClaudeCodesResumeDepthQuestionIsRefused() {
+        let screen = "Resuming the full session will consume a substantial portion of your usage limits\n› 1. Resume from summary"
+        XCTAssertEqual(TmuxTransport.blockingPrompt(
+            on: screen, prompts: ClaudeCodeAdapter().trustPrompt!.neverAutoAcceptNeedles)?.needle,
+            "Resuming the full session will consume")
+    }
+
+    func testDispatchTargetDefaultBlockingPromptsIsEmpty() {
+        // Every construction site that predates the guard keeps meaning what
+        // it always has; only a site that passes the list gets the refusal.
+        XCTAssertTrue(DispatchTarget(sessionId: "s").blockingPrompts.isEmpty)
+    }
+
     func testDispatchTargetDefaultIdlePlaceholderIsNil() {
         // Same co-existence guarantee: no caller constructing a target
         // today passes idlePlaceholder, so the floor check's new behavior

@@ -139,6 +139,33 @@ final class AgentDefaultsTests: XCTestCase {
             AgentDefaults.load(for: codex).contains("--dangerously-bypass-hook-trust"))
     }
 
+    // MARK: - The update-check upgrade (11 Sep)
+
+    /// The 28 Aug default, verbatim, is a machine that inherited it, and it
+    /// lands on the current default: with Codex's start-up update check off.
+    /// This is the machine that lost a session on 11 Sep: `codex resume`
+    /// stopped on the update chooser, the revive adopted the waiting process
+    /// as RESUMED, and the next dictation's Return chose "Update now".
+    func testThe28AugCodexDefaultGainsTheUpdateCheckSwitch() throws {
+        let stored = """
+        {"byHarness":{"codex":{"command":"\(AgentDefaults.codexFallbackBeforeUpdateCheck)"}},\
+        "defaultHarness":"codex"}
+        """
+        try stored.write(to: AgentDefaults.fileURL, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(AgentDefaults.load(for: codex), AgentDefaults.codexFallback)
+        XCTAssertTrue(AgentDefaults.load(for: codex).contains("-c check_for_update_on_startup=false"))
+    }
+
+    /// The current default itself carries the switch, so a fresh machine never
+    /// meets the chooser either. Pinned as text because it IS text: the
+    /// command string is what a pane's shell runs.
+    func testTheCodexDefaultSwitchesOffTheStartupUpdateCheck() {
+        XCTAssertTrue(AgentDefaults.codexFallback.hasSuffix("-c check_for_update_on_startup=false"))
+        XCTAssertTrue(AgentDefaults.codexFallback.contains("--dangerously-bypass-hook-trust"),
+                      "the update switch is added to the 28 Aug default, not in place of it")
+    }
+
     /// And the guard that keeps the upgrade from being a rewrite of somebody's
     /// decision. A user who deleted the flag, pinned a path, or added their own
     /// typed something that is not the old default, and keeps every word of it.
