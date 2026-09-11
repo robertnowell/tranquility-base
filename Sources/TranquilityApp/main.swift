@@ -1378,6 +1378,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Track.record("hooks_state", ["state": "healthy"])
         }
 
+        // Fix stale Write() permission rules to Edit() before they matter. A
+        // deep-research install left these in a remote user's settings, printed
+        // twice on every claude launch. The user is non-technical, so the app
+        // rewrites them and logs what it changed rather than showing a warning
+        // or asking anyone to run a command (ruled 10 Sep).
+        let rulesFixed = ClaudeConfigRepair.repairStaleWriteRules(
+            settingsURL: ClaudeConfigRepair.userSettingsURL,
+            trace: { Permissions.log($0) })
+        if rulesFixed > 0 {
+            Track.record("config_repaired",
+                         ["kind": "write_to_edit", "count": .int(rulesFixed)])
+        }
+
         // Look at the checklist without launching a second live instance.
         //   TranquilityApp --dump-onboarding /tmp/gate.png
         if let i = CommandLine.arguments.firstIndex(of: "--dump-onboarding"),
