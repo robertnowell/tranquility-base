@@ -29,7 +29,7 @@ cd "$(dirname "$0")/.."
 
 # Raise these when the suite grows. They exist so that "the tests stopped being
 # compiled in" cannot look like "the tests passed".
-FLOOR_XCTEST=1532
+FLOOR_XCTEST=1538
 FLOOR_SWIFT_TESTING=61
 
 # Apple Silicon hardware under a translated shell: re-exec the test run native.

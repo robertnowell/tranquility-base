@@ -1573,6 +1573,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     ("autoArmOpen", self.recorder.allowsAutoArm),
                 ])
             }
+
+            // The keep-audio data path (ruling-an-open-microphone-is-a-promise),
+            // on a throwaway store so it needs neither the mic nor the real
+            // audio directory and cannot collide with anyone using the machine.
+            // Off-main: it does filesystem and GRDB work (rule 9).
+            Task.detached(priority: .utility) { runKeepAudioDrill() }
         }
 
         // Instant-arm evals E2/E4/E5 (docs/instant-arm.md), driven through the

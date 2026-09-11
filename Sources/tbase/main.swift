@@ -777,6 +777,17 @@ case "reconcile":
         print("rows whose audio vanished   \(r.missingAudio.count)")
         for id in r.needsDeliveryCheck { print("  ambiguous: \(id)") }
 
+    case "keepdrill":
+        // The keep-audio data path on a throwaway store (no mic, no real store).
+        var anyFailed = false
+        for group in try KeepAudioDrill.run() {
+            let failed = group.checks.filter { !$0.passed }.map(\.name)
+            anyFailed = anyFailed || !failed.isEmpty
+            print("\(group.name): \(failed.isEmpty ? "PASS" : "FAIL(\(failed.joined(separator: ",")))")")
+            for c in group.checks { print("  \(c.passed ? "\u{2713}" : "\u{2717}") \(c.name)") }
+        }
+        if anyFailed { exit(1) }
+
     case "reap":
         let hours = args.count > 1 ? Double(args[1]) ?? 72 : 72
         let n = try store.reapAudio(olderThan: hours * 3600)
