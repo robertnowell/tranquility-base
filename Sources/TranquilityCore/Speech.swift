@@ -770,6 +770,30 @@ public struct SpeechChain: Sendable {
         public var heardAny: Bool = false
     }
 
+    /// A voice failure in one short clause, for the hint line under the card.
+    ///
+    /// The contract is the important part and it is one sentence: NOTHING that
+    /// reaches `degraded` may be a raw error, a response body, or an id the user
+    /// has no way to look up. The hint is a single truncating line with no
+    /// tooltip, so anything longer than a clause is the same as saying nothing —
+    /// worse, because it looks like the app malfunctioning rather than reporting.
+    ///
+    /// An HTTP status is kept when there is one: "ElevenLabs returned 500" is
+    /// short, it is the difference between their outage and this machine's
+    /// network, and it is the only number in the raw body worth a human's time.
+    static func plainly(_ error: Error) -> String {
+        let text = "\(error)"
+        if case SpeechError.synthesisFailed(let reason) = error,
+           let status = reason.firstMatch(of: /http (\d{3})/)?.1 {
+            return "ElevenLabs returned \(status)."
+        }
+        if text.contains("NSURLError") || text.contains("offline")
+            || text.contains("timed out") {
+            return "Could not reach ElevenLabs."
+        }
+        return "ElevenLabs could not render it."
+    }
+
     @discardableResult
     public func speak(
         _ text: SanitizedSpokenText, voice: String? = nil,
@@ -860,6 +884,17 @@ public struct SpeechChain: Sendable {
             } catch SpeechError.synthesisFailed(let reason) where reason.contains("401") {
                 ElevenLabsSpeechProvider.trace?("chain: 401 from elevenlabs: \(reason)")
                 degraded = "ElevenLabs returned 401"
+            } catch SpeechError.synthesisFailed(let reason)
+                        where reason.contains("voice_not_found") {
+                // The one failure the user can actually act on, so it is the one
+                // that names a thing rather than a number. `load()` drops the id
+                // from the roster on its own, but this session keeps its stored
+                // assignment until something re-mints it — so the sentence has to
+                // stand on its own for at least one more read.
+                ElevenLabsSpeechProvider.trace?(
+                    "chain: voice gone from the account: \(cloudVoice ?? "—") \(reason)")
+                degraded = "\(VoiceCatalog.spokenName(for: cloudVoice)) "
+                    + "is no longer on your ElevenLabs account."
             } catch is CancellationError {
                 // Cancellation is not a voice failure. Treating it as one read a
                 // cancelled announcement aloud in the system voice (app.log
@@ -868,7 +903,20 @@ public struct SpeechChain: Sendable {
                 ElevenLabsSpeechProvider.trace?("chain: cancelled; staying silent")
                 return Spoken(provider: "none", completed: false, heardAny: heardAny)
             } catch {
-                degraded = "\(error)"
+                // A SENTENCE, never the error.
+                //
+                // This was `"\(error)"`, and on 11 Sep it put a 240-character
+                // Swift error description — the whole ElevenLabs 404 body,
+                // braces, escaped quotes and request id — onto a one-line hint
+                // that truncates in the middle and has no tooltip. The user's
+                // report was "it was read in a system voice, strangely enough…
+                // I can't even see it": the app had diagnosed itself correctly
+                // and then said so in a form nobody could read.
+                //
+                // The detail is not lost, it is just addressed properly — the
+                // trace below is where a raw error belongs, and it is already
+                // in app.log with the response body beside it.
+                degraded = Self.plainly(error)
                 ElevenLabsSpeechProvider.trace?("chain: \(preferred.name) failed: \(error)")
                 // fall through to the system voice for this utterance only
             }

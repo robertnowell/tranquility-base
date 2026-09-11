@@ -27,7 +27,16 @@ public enum VoiceRoster {
         "mZ8K1MPRiT5wDQaasg3i",  // Alexander Kensington — studio quality
         "NFG5qt843uXKj4pFvR7C",  // Adam Stone — smooth, deep
         "ZF6FPAbjXT4488VcRRnw",  // Amelia — the narrator, by request
-        "EGxJIQ5TF187oclOp8aT",  // Kay — cloned, added by request
+        // Kay (EGxJIQ5TF187oclOp8aT) was here — a CLONED voice, added by
+        // request 05 Aug and deleted from the ElevenLabs account some time
+        // before 11 Sep. A cloned id is the one kind that can disappear from
+        // under a hardcoded list, and this one did: the seed kept minting it to
+        // new sessions, every announcement took an HTTP 404 for it, and the
+        // roster pane could not show the row to uncheck (see `rebuildVoiceRows`
+        // — a roster id the catalogue does not list has no row). Removed from
+        // the seed rather than only from the file, or a fresh install would
+        // resurrect it. `load()` now filters the class, so a voice deleted
+        // AFTER this ships needs no second edit here.
     ]
 
     /// How many system voices the roster seeds with.
@@ -72,7 +81,32 @@ public enum VoiceRoster {
         // identifier is not a cloud voice, and returning one here is what sent
         // `com.apple.ttsbundle.siri_Nicky_en-US_premium` to ElevenLabs as a
         // voice id and took an HTTP 400 for it every five seconds.
-        return stored.filter { !SystemVoiceCatalog.isSystemVoice($0) }
+        return onAccount(stored.filter { !SystemVoiceCatalog.isSystemVoice($0) })
+    }
+
+    /// Drop ids the ElevenLabs account no longer carries.
+    ///
+    /// Same shape and same reason as the system-identifier filter above, one
+    /// class along: that one caught an id that could never have worked, this one
+    /// catches an id that USED to. A cloned voice deleted on the account stays in
+    /// the roster forever otherwise — it is minted to new sessions in round-robin
+    /// order, 404s on every single announcement, and cannot be unchecked in the
+    /// roster pane because a voice the catalogue does not list has no row there.
+    /// Measured 11 Sep: one such id, 76 failed renders in seven minutes, and a
+    /// raw 404 body on the hint line where a sentence belonged.
+    ///
+    /// The catalogue is EVIDENCE, not authority — it is a cache of the last
+    /// successful fetch, so it is empty before the first one and stale after a
+    /// network blip. Filtering on an empty or unfetched catalogue would silence
+    /// every agent at once, which is far worse than the fault being fixed. So
+    /// the filter only applies when the catalogue actually says something, and
+    /// never returns nothing: if every roster id is unknown the catalogue is
+    /// what is wrong, not the roster.
+    static func onAccount(_ ids: [String]) -> [String] {
+        let known = Set(VoiceCatalog.cached().map(\.id))
+        guard !known.isEmpty else { return ids }
+        let kept = ids.filter { known.contains($0) }
+        return kept.isEmpty ? ids : kept
     }
 
     public static func save(_ ids: [String]) {

@@ -2709,6 +2709,14 @@ final class StatusHUD: NSObject {
 
     private func syncHintVisibility() {
         hintLabel.isHidden = hintLabel.stringValue.isEmpty
+        // The hint is ONE line and it truncates, so a sentence that outgrows the
+        // panel is currently unreadable by any means — "I can't even see it.
+        // It's not like hoverable or whatever" (11 Sep, on a hint carrying a
+        // 240-character error). `plainly()` is the real fix and keeps these
+        // short; the tooltip is the floor under it, so a long hint is never
+        // again a dead end. Set from the same place visibility is, so the two
+        // cannot disagree about what the line is currently saying.
+        hintLabel.toolTip = hintLabel.stringValue.isEmpty ? nil : hintLabel.stringValue
     }
 
     /// The grid's content width: the 380 panel minus the stack's 14pt insets.
