@@ -77,4 +77,40 @@ final class BrowserFocusTests: XCTestCase {
         let page = URL(fileURLWithPath: "/tmp/agents/abc/index.html")
         XCTAssertFalse(BrowserFocus.script(for: page, reloading: false).contains("reload"))
     }
+
+    // MARK: - The hub app's one tab
+
+    private let app = URL(string: "https://hq.example.test")!
+    private let door = URL(string: "https://hq.example.test/open?session=abc&slug=plan")!
+
+    /// The door's address is never a tab's address (it redirects), so the
+    /// match is on the app, not the page: any tab on the app is sent there.
+    func testAnAppAddressReusesWhateverTabIsOnTheApp() {
+        let script = BrowserFocus.navigateScript(to: door, within: app)
+        XCTAssertTrue(script.contains("if u starts with \"https://hq.example.test/\""))
+        XCTAssertTrue(script.contains("set URL of tab t of window w to \"https://hq.example.test/open?session=abc&slug=plan\""))
+        XCTAssertFalse(script.contains("reload"), "the navigation is the reload")
+        XCTAssertTrue(script.hasPrefix("if application \"Google Chrome\" is running"))
+    }
+
+    /// The prefix carries its slash so "https://hq.example.test.evil" is not the app.
+    func testThePrefixEndsAtTheOrigin() {
+        let script = BrowserFocus.navigateScript(to: door, within: app)
+        XCTAssertTrue(script.contains("starts with \"https://hq.example.test/\""))
+    }
+
+    func testRevealRoutesAppAddressesToTheAppTabAndFilesToTheirOwn() {
+        var seen: [String] = []
+        let run: (String) -> Result<String, ScriptError> = { seen.append($0); return .success("true") }
+        XCTAssertEqual(BrowserFocus.reveal(door, app: app, run: run), .focused)
+        XCTAssertTrue(seen[0].contains("set URL of tab"))
+        XCTAssertEqual(BrowserFocus.reveal(page, app: app, run: run), .focused)
+        XCTAssertTrue(seen[1].contains("reload tab t of window w"))
+        XCTAssertFalse(seen[1].contains("set URL of tab"))
+    }
+
+    func testNoAppTabFallsBack() {
+        XCTAssertEqual(BrowserFocus.reveal(door, app: app) { _ in .success("false") }, .notFound)
+        XCTAssertEqual(BrowserFocus.reveal(door, app: nil) { _ in .success("false") }, .notFound)
+    }
 }

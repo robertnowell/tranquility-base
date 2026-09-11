@@ -928,7 +928,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // door lands on it there, at an address that works from any
             // device. Without an app, the file, as before. Ruled 10 Sep.
             let url = HubApp.openURL(forReportPath: page) ?? URL(fileURLWithPath: page)
-            if BrowserFocus.focusExistingTab(url) == .notFound {
+            if BrowserFocus.reveal(url, app: HubApp.baseURL) == .notFound {
                 NSWorkspace.shared.open(url)
             }
         }

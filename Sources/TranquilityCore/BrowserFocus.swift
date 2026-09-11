@@ -76,6 +76,74 @@ public enum BrowserFocus {
         """
     }
 
+    /// The hub app is one tab, not one tab per page.
+    ///
+    /// The exact-URL walk above is right for a file the app rewrote: the tab
+    /// that has it is the tab to raise. The hub app is different. Its doors
+    /// point at `/open?session=…&slug=…`, an address that answers with a
+    /// redirect, so no tab ever carries it and the exact match never fires;
+    /// every click made tab twenty-nine, which is what Robert saw on 10 Sep.
+    /// Any tab already on the app IS the app, so the first one found is sent
+    /// to the new address and raised. No reload: the navigation is the reload.
+    ///
+    /// Same three silent declines as above, and the same fallback.
+    static func navigateScript(to url: URL, within base: URL) -> String {
+        let target = escaped(url.absoluteString)
+        let prefix = escaped(base.absoluteString.hasSuffix("/") ? base.absoluteString
+                                                                : base.absoluteString + "/")
+        return """
+        if application "Google Chrome" is running then
+          tell application "Google Chrome"
+            set matched to false
+            repeat with w from 1 to (count of windows)
+              set urls to URL of tabs of window w
+              repeat with t from 1 to (count of urls)
+                set u to item t of urls
+                if u starts with "\(prefix)" then
+                  set index of window w to 1
+                  set active tab index of window w to t
+                  set URL of tab t of window w to "\(target)"
+                  set matched to true
+                  exit repeat
+                end if
+              end repeat
+              if matched then exit repeat
+            end repeat
+            if matched then activate
+            return matched
+          end tell
+        else
+          return false
+        end if
+        """
+    }
+
+    /// Send the tab already on `base` to `url` and raise it, or report that
+    /// there is no such tab. Never opens anything, never launches a browser.
+    @discardableResult
+    public static func navigateExistingTab(to url: URL, within base: URL,
+                                           run: (String) -> Result<String, ScriptError>
+                                               = { AppleScript.run(script: $0) }) -> Outcome {
+        switch run(navigateScript(to: url, within: base)) {
+        case .success(let output):
+            return output.trimmingCharacters(in: .whitespaces) == "true" ? .focused : .notFound
+        case .failure:
+            return .notFound
+        }
+    }
+
+    /// The door: a hub-app address reuses the app's tab; anything else raises
+    /// its exact tab; and with no tab to raise, the caller opens it.
+    @discardableResult
+    public static func reveal(_ url: URL, app base: URL?, reloading: Bool = true,
+                              run: (String) -> Result<String, ScriptError>
+                                  = { AppleScript.run(script: $0) }) -> Outcome {
+        if let base, url.absoluteString.hasPrefix(base.absoluteString) {
+            return navigateExistingTab(to: url, within: base, run: run)
+        }
+        return focusExistingTab(url, reloading: reloading, run: run)
+    }
+
     /// Raise an existing tab for this URL, or report that there wasn't one.
     /// Never opens anything, never launches a browser, never throws.
     ///
