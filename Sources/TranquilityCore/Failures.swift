@@ -67,6 +67,11 @@ public enum FailureKind: String, Codable, CaseIterable, Sendable {
     /// self-closes its pane and leaves nothing to report. A clean self-exit
     /// (status 0) is recorded as `agent_ended`, not here, so it never pages.
     case agentExited = "agent_exited"
+    /// A Sparkle self-update failed: a check that aborted with an error, or a
+    /// download that failed. Carries the underlying error text and NSError
+    /// domain/code, so a client that cannot update itself is debuggable from
+    /// telemetry instead of only from the user's own app.log (11 Sep).
+    case updateFailed = "update_failed"
     case notice = "notice"
 }
 
@@ -476,10 +481,17 @@ public enum Failures {
         if suppressed { _suppressedCount += 1 }
         lock.unlock()
         guard !suppressed else { return }
-        // The product stream sees the same failure as a fact: kind, site,
-        // harness. Enough to join failures to gestures and to retention;
-        // nothing of the reason text.
-        var mirror: [String: TrackValue] = ["kind": .token(kind.rawValue), "site": Track.token(from: site)]
+        // The product stream sees the same failure, now WITH its reason. It
+        // used to carry only kind, site and harness: a failure COUNT with no
+        // recoverable cause anywhere off the user's machine, which is exactly
+        // what left a failing self-update undebuggable from telemetry (11 Sep,
+        // ruled: "we can't just know that something failed"). The reason is the
+        // agent's and the app's own words, scrubbed and bounded by `.prose`,
+        // which the 7 Sep privacy ruling allows; only the user's own speech is
+        // privileged, and none of it is on this path.
+        var mirror: [String: TrackValue] = [
+            "kind": .token(kind.rawValue), "site": Track.token(from: site),
+            "reason": .prose(reason)]
         if let harness { mirror["harness"] = .token(harness) }
         if let session { mirror["agent_id"] = Track.hash(session) }
         Track.record("failure", mirror)

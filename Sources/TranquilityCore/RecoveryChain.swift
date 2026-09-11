@@ -372,6 +372,14 @@ extension QueueStore {
             transcription["words"] = .int(Track.wordCount(result.text))
         } else {
             transcription["outcome"] = .token(disposition.rawValue)
+            // The attempts are "<provider>: <error>" lines (an HTTP status, an
+            // auth failure, a dropped connection), never the transcript, which
+            // exists only on the success branch above. On failure this is the
+            // one thing that says WHICH provider failed and why, instead of a
+            // bare disposition. Scrubbed and bounded by `.prose`.
+            if !outcome.attempts.isEmpty {
+                transcription["attempts_detail"] = .prose(outcome.attempts.joined(separator: "; "))
+            }
         }
         transcription["speech_evidence"] = outcome.result != nil || hadText ? "provider_text" : "unknown"
         transcription["latency_scope"] = "recovery"

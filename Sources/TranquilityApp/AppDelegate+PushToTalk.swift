@@ -829,15 +829,23 @@ extension AppDelegate {
                             }
                         } catch {
                             Permissions.log("homebase FAILED: \(error)")
-                            Track.record("hub_written", ["agent_id": Track.hash(spokenSession), "ok": false])
+                            Track.record("hub_written", ["agent_id": Track.hash(spokenSession),
+                                                         "ok": false, "detail": .prose("\(error)")])
                         }
                     }
                     // Ruling 14 reversed (12 Aug): fully spoken dwells. The card
                     // stays until a gesture moves it — the grid is one tap away,
                     // not four seconds away.
                 case .interrupted(let failure):
-                    Track.record("announcement", ["outcome": failure == nil ? "interrupted" : "playback_failed",
-                                                  "via": announceVia, "seconds": .int(seconds)])
+                    // `failure` is the playback error (a dropped connection, a
+                    // TTS provider error), never the spoken text, so it is safe
+                    // to log and is what turns a bare `playback_failed` count
+                    // into a debuggable one.
+                    var announceProps: [String: TrackValue] = [
+                        "outcome": failure == nil ? "interrupted" : "playback_failed",
+                        "via": announceVia, "seconds": .int(seconds)]
+                    if let failure { announceProps["detail"] = .prose("\(failure)") }
+                    Track.record("announcement", announceProps)
                     if let failure {
                         // Nobody asked for this one. Say so, rather than letting a
                         // dropped connection masquerade as something you chose.
@@ -867,7 +875,12 @@ extension AppDelegate {
                 }
             } catch {
                 Permissions.log("announce: threw \(error)")
-                Track.record("announcement", ["outcome": "threw", "via": announceVia])
+                // The exception is the announce pipeline's own error, never the
+                // spoken text. Carry it, and file a Failure so it is not
+                // invisible remotely.
+                Track.record("announcement", ["outcome": "threw", "via": announceVia,
+                                              "detail": .prose("\(error)")])
+                Failures.report(.deliveryFailed, reason: "announce threw: \(error)")
                 lastStatusLine = "announce failed: \(error)"
             }
             rebuildMenu()

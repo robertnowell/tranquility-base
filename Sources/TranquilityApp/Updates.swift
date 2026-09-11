@@ -219,6 +219,10 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
         stage("download_failed", item, detail: error.localizedDescription)
+        // The stage event's detail is truncated to a phrase; file the full
+        // reason so a download that keeps failing is debuggable remotely.
+        Failures.report(.updateFailed,
+                        reason: "update download failed: \(error.localizedDescription)")
     }
 
     func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
@@ -241,12 +245,24 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
         // Sparkle reports "no update found" through this path too. It is not a
         // failure and must not read like one in the log.
-        let quiet = (error as NSError).code == Int(SUError.noUpdateError.rawValue)
-        let text = quiet
-            ? "updates: already current"
-            : "updates: check failed, \(error.localizedDescription)"
-        log(text)
-        Track.record("update_check_result", ["result": quiet ? "current" : "failed"])
+        let ns = error as NSError
+        guard ns.code != Int(SUError.noUpdateError.rawValue) else {
+            log("updates: already current")
+            Track.record("update_check_result", ["result": "current"])
+            return
+        }
+        // A real check failure. The reason used to reach app.log only, so a
+        // client that could not update itself was an opaque count in telemetry
+        // (11 Sep: this is exactly why a remote user stuck on an old build was
+        // undebuggable). Carry the error text, domain and code, and file a
+        // Failure so it reaches the alert stream too.
+        let why = error.localizedDescription
+        log("updates: check failed, \(why)")
+        Track.record("update_check_result", [
+            "result": "failed", "detail": .prose(why),
+            "domain": Track.token(from: ns.domain), "code": .int(ns.code)])
+        Failures.report(.updateFailed,
+                        reason: "update check failed: \(why) [\(ns.domain) \(ns.code)]")
     }
 
     // MARK: - Waiting
