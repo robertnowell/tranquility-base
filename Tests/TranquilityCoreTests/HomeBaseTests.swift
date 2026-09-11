@@ -489,7 +489,24 @@ extension HomeBaseTests {
         XCTAssertFalse(HomeBase.favicon().contains("fill:#"),
                        "an unescaped # silently produces no icon")
     }
+    // MARK: - Open in HQ
+
+    /// A local hub reaches the cloud hub when one is configured, from the
+    /// plate and from the footer, at the agent's own address there; and says
+    /// nothing about a hub when there is none. Injected, so the machine's
+    /// hq.json never decides a test.
+    func testOpenInHQAppearsOnlyWithAnApp() {
+        let m = model(turns: [turn(1)])
+        let with = HomeBase.render(m, hubApp: URL(string: "https://hq.example.test")!)
+        let href = "href=\"https://hq.example.test/open?session=489b4804-8d64-4a91-a63c-5e493141c772\""
+        XCTAssertEqual(with.components(separatedBy: "Open in HQ").count - 1, 2, "plate and footer")
+        XCTAssertTrue(with.contains(href))
+        let without = HomeBase.render(m, hubApp: nil)
+        XCTAssertFalse(without.contains("Open in HQ"))
+        XCTAssertTrue(without.contains("Discuss with agent"))
+    }
 }
+
 
 /// THE INDEX: everything the agent has made, filed by the subjects the pages
 /// declare about themselves.
