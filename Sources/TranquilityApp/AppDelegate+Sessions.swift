@@ -160,8 +160,12 @@ extension AppDelegate {
             Permissions.log("openHub: no briefs for \(session.prefix(8))")
             return false
         }
-        if BrowserFocus.focusExistingTab(file) == .notFound {
-            NSWorkspace.shared.open(file)
+        // The local hub is still written (it is the offline export and what
+        // the file:// footers reach); the door itself opens the agent in the
+        // hub app when one is configured.
+        let target = HubApp.openURL(session: session) ?? file
+        if BrowserFocus.focusExistingTab(target) == .notFound {
+            NSWorkspace.shared.open(target)
         }
         return true
     }

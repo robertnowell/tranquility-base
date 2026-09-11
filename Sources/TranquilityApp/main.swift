@@ -923,7 +923,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = self?.openHub(session: session)
         }
         hud.onOpenReport = { page in
-            let url = URL(fileURLWithPath: page)
+            // The report is read in the hub app when one is configured
+            // (hq.json app.base_url): the app already holds the page, so the
+            // door lands on it there, at an address that works from any
+            // device. Without an app, the file, as before. Ruled 10 Sep.
+            let url = HubApp.openURL(forReportPath: page) ?? URL(fileURLWithPath: page)
             if BrowserFocus.focusExistingTab(url) == .notFound {
                 NSWorkspace.shared.open(url)
             }
