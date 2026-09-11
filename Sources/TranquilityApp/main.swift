@@ -322,6 +322,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// What each agent's lamp looked like on the last tick, for the
     /// `agent_lamp_changed` spine (Core `LampWatch`).
     var lampWatch = LampWatch()
+    /// Which agents were live on the last tick, for the exit-reason spine
+    /// (Core `ExitWatch`). When one leaves the live set its tmux corpse, if it
+    /// left one, is read for why it died and then reaped. See `observeExits`.
+    var exitWatch = ExitWatch()
+    /// The tmux session name for each live agent, resolved once when it is
+    /// first seen and kept so the name is still in hand after the agent is
+    /// gone from the registry and can no longer be looked up.
+    var paneNameById: [String: String] = [:]
     let launchedAt = Date()
     /// Which sessions were already waiting on the previous tick.
     ///
@@ -637,6 +645,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }) {
                     Track.record(event.name, event.properties)
                 }
+                // The exit-reason spine, beside the lamp spine and fed from the
+                // same tick: an agent that left the grid on its own gets its
+                // dead pane read for why, then reaped.
+                self.observeExits()
                 let waiting = rows.filter { $0.lamp == .ready }.count
                 // The menu-bar annunciator refreshes every tick, so its count can
                 // never go stale even while the panel stays hidden.
@@ -836,6 +848,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Track.record("agent_ended", ["agent_id": Track.hash(id), "outcome": "already_gone"])
                     await MainActor.run { self?.refreshGridAfterTerminate() }
                     return
+                }
+                // Ending on purpose: disarm remain-on-exit first so the pane
+                // closes with the process and the tmux session vanishes,
+                // exactly as it did before that option was left armed for the
+                // pane's life. A deliberately ended agent thus leaves no
+                // corpse, so ExitWatch never reads it as a death nobody asked
+                // for. Set BEFORE the signal, so there is no window in which
+                // the process dies while the option is still armed.
+                if let paneName = TmuxOwnership.pane(
+                    forSessionId: id, pid: live.pid)?.sessionName {
+                    SessionLauncher.disarmRemainOnExit(session: paneName)
                 }
                 // The tty the session was seen on, handed to the ladder as the
                 // second half of its identity guard.

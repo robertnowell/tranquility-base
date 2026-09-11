@@ -26,6 +26,60 @@ extension AppDelegate {
     /// session is waiting on you; quiet when it is merely alive. Dead sessions
     /// appear nowhere. Identity is the minted callsign with the project label
     /// (or live session name) as fallback until minted.
+    /// The exit-reason spine. Runs each tick beside the lamp spine: for every
+    /// agent that was live last tick and is gone now, read its tmux corpse (if
+    /// it left one) for why it died, record it, and reap the corpse. A death
+    /// the user asked for disarmed remain-on-exit first and left no corpse, so
+    /// it is silently skipped here (see `onTerminateSession` and `postMortem`).
+    func observeExits() {
+        let liveSessions = (ClaudeAgentsCLI().sessions() ?? [])
+            + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
+        // Resolve and cache each agent's tmux session name the first time it
+        // is seen alive: once it is gone from the registry it can no longer be
+        // looked up, so the name has to be captured while it is still here.
+        for session in liveSessions where paneNameById[session.sessionId] == nil {
+            if let name = TmuxOwnership.pane(
+                forSessionId: session.sessionId, pid: session.pid)?.sessionName {
+                paneNameById[session.sessionId] = name
+            }
+        }
+        let live = liveSessions.map {
+            (id: $0.sessionId, harness: $0.harness, sessionName: paneNameById[$0.sessionId])
+        }
+        for vanished in exitWatch.observe(live) {
+            paneNameById[vanished.id] = nil
+            guard let name = vanished.sessionName else { continue }
+            let id = vanished.id
+            let harness = vanished.harness
+            let alive = vanished.secondsAlive
+            // tmux blocks, so the read, the record and the reap all go off-main.
+            Task.detached {
+                guard let postMortem = SessionLauncher.postMortem(session: name) else { return }
+                if postMortem.status == "0" {
+                    // A clean self-exit (a finished run, a typed `/exit`).
+                    // Recorded so the grid's disappearance has a cause, but it
+                    // is not a failure and never pages.
+                    Track.record("agent_ended", [
+                        "agent_id": Track.hash(id), "harness": .token(harness),
+                        "outcome": "exited", "via": "left_the_grid",
+                        "seconds_alive": .int(alive)])
+                } else {
+                    // A non-zero exit: a crash, a kill, an update pulling it
+                    // down mid-turn. This is the death worth surfacing, and it
+                    // rides the same failure path a launch death does, so it
+                    // reaches Sentry with the full last line and the Slack
+                    // route with the count.
+                    let reason = "agent exited (status \(postMortem.status))"
+                        + (postMortem.tail.isEmpty ? "" : ": \(postMortem.tail)")
+                    Failures.report(.agentExited, reason: reason, harness: harness, session: id)
+                }
+                // Reap either way: the pane has done its one job, and a corpse
+                // left on the socket is a leak.
+                Tmux.run(["kill-session", "-t", name], socket: Tmux.socketName)
+            }
+        }
+    }
+
     func sessionRowsNow() -> [SessionRow] {
         guard let coordinator else { return [] }
         let waiting = (try? coordinator.waiting()) ?? []
