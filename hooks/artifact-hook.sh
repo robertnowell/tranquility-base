@@ -716,6 +716,19 @@ who = ("Created by <b>{title}</b> &middot; session {short} &middot; {today}"
 # itself at the same 860px the pages use puts it under the column whether it
 # lands inside the wrapper or after it, and no side padding keeps it flush with
 # the text in the inside case.
+# "Open hub" reaches the agent in the hub app when hq.json names one
+# (app.base_url, 10 Sep 2026); the local file otherwise. Mirrors
+# HubApp.openURL in TranquilityCore, the other copy of this contract.
+hub_href = "file://" + hub
+try:
+    import os
+    with open(os.path.expanduser("~/.claude/hq.json")) as _f:
+        _base = ((json.load(_f).get("app") or {}).get("base_url") or "").rstrip("/ ")
+    if _base.startswith("http"):
+        from urllib.parse import quote
+        hub_href = _base + "/open?session=" + quote(session, safe="")
+except Exception:
+    pass
 snippet = (
     '<footer data-tb-agent="{owner}" style="box-sizing:border-box;'
     'max-width:860px;margin:64px auto 0;padding:20px 0 0;'
@@ -723,7 +736,7 @@ snippet = (
     'font:12.5px/1.5 ui-monospace,Menlo,monospace;color:inherit;'
     'display:flex;flex-wrap:wrap;gap:10px;align-items:center">\n'
     '  <div style="flex:1;min-width:220px">{who}</div>\n'
-    '  <a href="file://{hub}" '
+    '  <a href="{hub_href}" '
     'style="text-decoration:none;color:inherit;border:1px solid rgba(128,128,128,.5);'
     'padding:7px 13px;border-radius:7px;font-weight:640">Open hub</a>\n'
     '  <a href="tranquilitybase://discuss?session={session}&amp;ref={path}" '
@@ -731,7 +744,7 @@ snippet = (
     'border-radius:7px;font-weight:640">Discuss with agent</a>\n'
     '</footer>'
 ).format(who=who, short=short, owner=owner, today=today, session=session, path=path,
-         hub=hub)
+         hub=hub, hub_href=hub_href)
 
 context = (
     "You just wrote an HTML file: {path}\n\n"

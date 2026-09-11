@@ -104,6 +104,15 @@ fi
 python3 - "$DIR" "$WHOSE" "${AGENT:-<your session id>}" <<'PYCTX' 2>/dev/null || true
 import json, sys
 directory, whose, agent = sys.argv[1], sys.argv[2], sys.argv[3]
+hub_open_hint = "<app.base_url>/open?session=" + agent + "&slug=<slug>"
+try:
+    import os as _os
+    with open(_os.path.expanduser("~/.claude/hq.json")) as _f:
+        _base = ((json.load(_f).get("app") or {}).get("base_url") or "").rstrip("/ ")
+    if _base.startswith("http"):
+        hub_open_hint = _base + "/open?session=" + agent + "&slug=<slug>"
+except Exception:
+    pass
 text = (
     "The user runs Tranquility Base: they hear sessions by voice and are usually "
     "NOT looking at this terminal. TREAT THE TERMINAL AS INVISIBLE. Anything you "
@@ -127,9 +136,11 @@ text = (
     "back to assuming whoever owns the directory wrote it, which is how reports "
     "have ended up on the wrong agent's hub with the wrong Discuss button.\n\n"
     "ALWAYS ALL THREE STEPS: (1) write " + directory + "/<slug>.html, self-contained "
-    "-- inline CSS/SVG, no external assets, and a favicon; (2) run `open` on it; (3) "
-    "leave the terminal a one-line pointer at what opened, nothing more. Writing "
-    "without opening is a failure -- they will never find it.\n\n"
+    "-- inline CSS/SVG, no external assets, and a favicon; (2) do NOT run `open` on it: "
+    "the hub app mirrors the file within a minute and announces it in its own window, "
+    "and a browser tab opened from a session steals the reader's place (ruled 10 Sep 2026); "
+    "(3) leave the terminal a one-line pointer at the page's hub address, "
+    + hub_open_hint + ", nothing more.\n\n"
     "If the page is also going OUTSIDE -- to a customer or a prospect -- build it "
     "with the share-as-page skill instead, which deploys it, and still write or link "
     "it under your agent directory so it is on your hub.\n\n"

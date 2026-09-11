@@ -168,6 +168,10 @@ public enum HubReconcile {
         // id; only the sentence a person reads keeps the short one.
         let owner = HomeBase.slug(forSessionId: session)
         let hub = NSString(string: "~/Documents/agents/\(owner)/index.html").expandingTildeInPath
+        // "Open hub" reaches the agent in the hub app when one is configured,
+        // which works from a phone; the local file otherwise. Same contract,
+        // one address.
+        let hubHref = HubApp.openURL(session: session)?.absoluteString ?? "file://\(hub)"
         let footer = """
         <footer data-tb-agent="\(owner)" style="box-sizing:border-box;\
         max-width:860px;margin:64px auto 0;padding:20px 0 0;\
@@ -175,7 +179,7 @@ public enum HubReconcile {
         font:12.5px/1.5 ui-monospace,Menlo,monospace;color:inherit;\
         display:flex;flex-wrap:wrap;gap:10px;align-items:center">
           <div style="flex:1;min-width:220px">\(who)</div>
-          <a href="file://\(hub)" \
+          <a href="\(hubHref)" \
         style="text-decoration:none;color:inherit;border:1px solid rgba(128,128,128,.5);\
         padding:7px 13px;border-radius:7px;font-weight:640">Open hub</a>
           <a href="tranquilitybase://discuss?session=\(session)&amp;ref=\(path)" \
