@@ -1270,9 +1270,30 @@ extension AppDelegate {
     /// follow-up; until it happens, a change to this verb has to be made
     /// twice, and this comment is the warning that it does.
     ///
+    /// Ask claude itself why a launch could not come up, off the main thread,
+    /// and log the verdict so we can tell for sure. Not shown to the user
+    /// (non-technical, ruled 10 Sep): the app repairs what it safely can and
+    /// this is the record for us. Fire-and-forget, so a failure card is never
+    /// delayed by the probe's deadline. Claude-only: the probe is a claude
+    /// startup, so it is skipped for other harnesses.
+    nonisolated func diagnoseClaudeHealth(adapter: any HarnessAdapter, because reason: String) {
+        guard adapter.id == ClaudeCodeAdapter().id else { return }
+        Task.detached {
+            let verdict = ClaudeHealth.check()
+            Permissions.log("claude-health (\(reason)): \(verdict.kind.rawValue): "
+                + verdict.summary
+                + (verdict.evidence.isEmpty ? "" : " :: " + verdict.evidence))
+            Track.record("claude_health", [
+                "kind": .token(verdict.kind.rawValue),
+                "because": .token(reason),
+                "detail": .prose(verdict.summary
+                    + (verdict.evidence.isEmpty ? "" : ", " + verdict.evidence))])
+        }
+    }
+
     /// And every outcome speaks. Four of the five exits used to be a log line
     /// and a silent return, which on a control you just pressed is
-    /// indistinguishable from the app being broken — the exact complaint.
+    /// indistinguishable from the app being broken, the exact complaint.
     func goToSession(_ sessionId: String) {
         let began = Date()
         let report: @Sendable (String) -> Void = { outcome in
@@ -2026,6 +2047,7 @@ extension AppDelegate {
                         + "To see it yourself, run in a terminal: \(byHand)"
                     Failures.report(.launchFailed, reason: error.message, card: card,
                                     reproduction: byHand, harness: adapter.id)
+                    self?.diagnoseClaudeHealth(adapter: adapter, because: "launch_failed")
                     // The harness may have just changed under us (an update, a
                     // reinstall); the next record should describe it as it is now.
                     await MainActor.run { [weak self] in
