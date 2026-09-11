@@ -51,9 +51,17 @@ extension StatusHUD {
             // find its history". (A dead session that IS on disk gets revived
             // instead, since 11 Sep; the fixture is chosen so this drill never
             // launches anything.)
-            if self.bodyLabel.stringValue.contains("isn't running any more")
-                || self.bodyLabel.stringValue.contains("Couldn't find a terminal") {
-                self.showIdle(rows: [])
+            // Twice, because the answer now arrives AFTER the guard drops:
+            // the guard comes down at once and the discovery walk that
+            // decides "nothing on disk" can take 5 s on a cold cache at
+            // launch (measured 11 Sep). One sweep at 3 s caught the guard;
+            // a second at 9 s catches the card.
+            for _ in 0..<2 {
+                if self.bodyLabel.stringValue.contains("isn't running any more")
+                    || self.bodyLabel.stringValue.contains("Couldn't find a terminal") {
+                    self.showIdle(rows: [])
+                }
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
             }
         }
     }
