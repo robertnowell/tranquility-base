@@ -140,8 +140,9 @@ public final class HotkeyMonitor: @unchecked Sendable {
 
     /// Mutated only from the tap callback, which runs on the main run loop.
     public private(set) var isPressed = false
-    /// One log line per committed hold for stray input, not one per key.
-    private var interferenceLogged = false
+    /// One log line and one event per committed hold for input while
+    /// listening, not one per key.
+    private var inputWhileListeningLogged = false
 
     /// Translate the machine's effects into transitions, in order. Runs on
     /// the main run loop (tap callback or a main-queue timer), like every
@@ -166,7 +167,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
         seenFlags = flags
         pressStartedAt = Date()
         sawOtherInput = false
-        interferenceLogged = false
+        inputWhileListeningLogged = false
         perform(machine.apply(.began(isReply: flags == bindings.reply)))
 
         // The arm window (instant-arm): scheduled only for the reply chord —
@@ -402,26 +403,36 @@ public final class HotkeyMonitor: @unchecked Sendable {
         // arm window was open, the machine aborts it HERE, immediately: the
         // user is typing and must not stare at an arming face until key-up.
         //
-        // Once the hold has COMMITTED, the same keystroke means nothing to the
-        // gesture: the machine ignores it and the release ends the reply
-        // normally. It is logged once per hold, because the 10 Sep loss was
-        // invisible — the keystroke that condemned 5m08s of speech wrote no
-        // line, so the log could prove a key was pressed but never which, or
-        // when. A hold this long being interfered with is rare enough to
-        // deserve its line; ⇧ held while typing capitals is not, and never
-        // reaches the log because the machine is not in a reply phase.
+        // Once the hold has COMMITTED, the same keystroke is not interference
+        // at all: it is input while the microphone is listening, the machine
+        // ignores it, and the release ends the reply normally. It is logged
+        // and tracked once per hold, because the 10 Sep loss was invisible —
+        // the keystroke that condemned 5m08s of speech wrote no line, so the
+        // log could prove a key was pressed but never which, or when. The
+        // event is what makes the week after the change measurable: a key
+        // while listening followed by a Don't-send is the regret this rule
+        // could cause, and it has to be a query, not a grep of one machine.
+        // ⇧ held while typing capitals never reaches either, because the
+        // machine is not in a reply phase.
         if type == .keyDown || type == .leftMouseDown || type == .rightMouseDown {
             if let started = pressStartedAt {
                 let phase = machine.phase
-                if phase == .armed || (phase == .replying && !interferenceLogged) {
-                    interferenceLogged = phase == .replying
-                    let what = type == .keyDown
-                        ? "keyDown \(event.getIntegerValueField(.keyboardEventKeycode))"
-                        : "click"
+                if phase == .armed || (phase == .replying && !inputWhileListeningLogged) {
+                    inputWhileListeningLogged = phase == .replying
+                    let keycode = type == .keyDown
+                        ? Int(event.getIntegerValueField(.keyboardEventKeycode)) : nil
+                    let what = keycode.map { "keyDown \($0)" } ?? "click"
                     let elapsed = Int(Date().timeIntervalSince(started) * 1000)
-                    Permissions.log("hotkey: \(what) during \(phase == .armed ? "arm window" : "committed hold")"
+                    let outcome = phase == .armed ? "arm_reverted" : "ignored"
+                    Permissions.log("hotkey: \(what) while \(phase == .armed ? "arming" : "listening")"
                         + " at +\(elapsed)ms — "
                         + (phase == .armed ? "arm reverted" : "ignored, the hold keeps its speech"))
+                    Track.record("input_while_listening", [
+                        "kind": keycode == nil ? "click" : "key",
+                        "keycode": .int(keycode ?? -1),
+                        "phase": phase == .armed ? "arming" : "listening",
+                        "elapsed_ms": .int(elapsed), "outcome": .token(outcome),
+                    ])
                 }
                 sawOtherInput = true
                 perform(machine.apply(.sawOtherInput))
