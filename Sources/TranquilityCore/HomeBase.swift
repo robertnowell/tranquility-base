@@ -897,8 +897,16 @@ public enum HomeBase {
         """
     }
 
-    public static func render(_ model: Model, now: Date = Date()) -> String {
+    /// `hubApp` is where the cloud hub lives (hq.json app.base_url), injected
+    /// so a test never reads the machine's config. With one, the plate and
+    /// the footer carry "Open in HQ", the agent's own page there: a local
+    /// hub had no path to the cloud hub at all (11 Sep), while every card
+    /// door and page footer already did.
+    public static func render(_ model: Model, now: Date = Date(),
+                              hubApp: URL? = HubApp.baseURL) -> String {
         let e = escape
+        let hq = HubApp.openURL(session: model.sessionId, base: hubApp)
+            .map { "<a class=\"hq\" href=\"\(e($0.absoluteString))\">Open in HQ</a>" } ?? ""
         // READ THE CATALOG ONCE PER RENDER, NOT ONCE PER CALL.
         //
         // `publishedURLs()` was a DEFAULT ARGUMENT on both pageItems and
@@ -989,7 +997,7 @@ public enum HomeBase {
             let plate = nameplate(brand: theme.nameplate, project: project)
             let dateline = model.lastActive.map { dayStamp.string(from: $0) } ?? ""
             head = """
-                <header class="plate"><span>\(e(plate))</span><span>\(e(dateline))</span></header>
+                <header class="plate"><span>\(e(plate))</span>\(hq)<span>\(e(dateline))</span></header>
                 <p class="kicker">Agent</p>
                 <h1>\(e(name))</h1>
                 <p class="latest">\(e(n.headline ?? n.topic))</p>
@@ -1279,6 +1287,11 @@ public enum HomeBase {
                  font-family:var(--sans);font-size:12px;font-weight:600;
                  letter-spacing:.12em;text-transform:uppercase;color:var(--brand)}
           .plate span:last-child{color:var(--faint);font-weight:500;white-space:nowrap}
+          .plate a.hq{margin-left:auto;margin-right:16px;text-decoration:none;color:var(--accent);
+                      letter-spacing:.12em;white-space:nowrap}
+          footer .hq{margin-left:auto;text-decoration:none;color:var(--accent);font-weight:600;
+                     border:1px solid var(--rule);padding:7px 13px;border-radius:7px}
+          footer .hq + .discuss{margin-left:0}
           .kicker{font-family:var(--sans);font-size:12px;font-weight:700;letter-spacing:.12em;
                   text-transform:uppercase;color:var(--accent);margin:34px 0 10px}
           h1{font-size:44px;line-height:1.06;letter-spacing:-.022em;font-weight:600;
@@ -1447,6 +1460,7 @@ public enum HomeBase {
         \(pages)
         <footer>Created by <b>\(e(model.title ?? "—"))</b> &middot;
         session \(e(String(model.sessionId.prefix(8))))
+        \(hq)
         <a class="discuss" href="tranquilitybase://discuss?session=\(e(model.sessionId))">Discuss with agent</a>
         </footer></div>
         <div id="card" role="tooltip"></div>
