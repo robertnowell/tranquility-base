@@ -1304,7 +1304,17 @@ extension AppDelegate {
     /// And every outcome speaks. Four of the five exits used to be a log line
     /// and a silent return, which on a control you just pressed is
     /// indistinguishable from the app being broken, the exact complaint.
-    func goToSession(_ sessionId: String) {
+    ///
+    /// `reviveIfGone`: a dead agent is revived and then opened, in that order,
+    /// rather than reported. Ruled 11 Sep, after the card said "That agent
+    /// isn't running any more. Revive it from Past Agents." to a person who
+    /// had just watched it die: *"Well no shit it's no longer running. Like,
+    /// restart it if it's no longer running. What the fuck is that supposed
+    /// to do?"* The verb is GO TO AGENT; an agent that has to be brought
+    /// back first gets brought back first. `false` on the hop the revive
+    /// itself makes afterwards, so a session that came back without a
+    /// findable process is said so once, never chased in a loop.
+    func goToSession(_ sessionId: String, reviveIfGone: Bool = true) {
         let began = Date()
         let report: @Sendable (String) -> Void = { outcome in
             Track.record("go_to_agent", ["agent_id": Track.hash(sessionId), "outcome": .token(outcome),
@@ -1317,11 +1327,42 @@ extension AppDelegate {
             guard let live = ((ClaudeAgentsCLI().sessions() ?? [])
                 + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                 .first(where: { $0.sessionId == sessionId }) else {
-                Permissions.log("goTo: \(sessionId.prefix(8)) is not live any more")
+                let short = sessionId.prefix(8)
+                // The card's guard comes down HERE, before anything else is
+                // looked up. The 12 Aug contract is that the button never
+                // blocks on a walk, and the walk below is a discovery scan:
+                // 5 s on a cold cache at launch, measured 11 Sep by the
+                // launch self-test, whose 3 s round trip failed on the first
+                // deploy of this branch. Whatever follows paints for itself:
+                // the revive its receipt, the refusal its own result card.
+                await MainActor.run { [weak self] in self?.hud.finishGoToSession(nil) }
+                // Not running, but on disk and revivable: bring it back, then
+                // come back here with `reviveIfGone: false` to open it.
+                if reviveIfGone,
+                   let known = SessionDiscovery.discover().sessions
+                       .first(where: { $0.sessionId == sessionId }),
+                   known.revivable {
+                    let name = known.title
+                        ?? CodexThreadNames.all()[sessionId]
+                        ?? short.uppercased()
+                    Permissions.log("goTo: \(short) is not live any more — reviving \(name) "
+                        + "first, then opening it")
+                    report("not_live_reviving")
+                    await MainActor.run { [weak self] in
+                        self?.revive(sessionId, name: name, thenGoTo: true)
+                    }
+                    return
+                }
+                Permissions.log("goTo: \(short) is not live any more"
+                    + (reviveIfGone ? ", and nothing on disk can bring it back"
+                                    : ", even after its revive"))
                 report("not_live")
                 await MainActor.run { [weak self] in
-                    self?.hud.finishGoToSession("That agent isn't running any more. "
-                                         + "Revive it from Past Agents.")
+                    self?.hud.finishGoToSession(reviveIfGone
+                        ? "That agent isn't running any more, and I can't find its history "
+                          + "to bring it back from."
+                        : "That agent came back, but I can't find its process to open. "
+                          + "Try again in a moment.")
                 }
                 return
             }
@@ -1559,7 +1600,11 @@ extension AppDelegate {
         await MainActor.run { self.revive(resumeId, name: name) }
     }
 
-    func revive(_ sessionId: String, name: String) {
+    /// `thenGoTo`: GO TO AGENT on a dead row lands here, and once the session
+    /// is confirmed live it goes on to open it (11 Sep). Only on a CONFIRMED
+    /// pid: a revive whose process never registered has nothing to open, and
+    /// says so instead of hopping.
+    func revive(_ sessionId: String, name: String, thenGoTo: Bool = false) {
         Track.record("agent_revive_requested", ["agent_id": Track.hash(sessionId)])
         hud.showReceipt(.reviving(name))
         Task.detached {
@@ -1616,12 +1661,39 @@ extension AppDelegate {
                     Permissions.log("revive: attached codex \(sessionId.prefix(8))")
                     // The same finish as Claude's branch, by the same call: the
                     // card that says RESUMED needs the pid to grow its door.
-                    if await self.confirmRevivedPid(sessionId: sessionId) == nil {
+                    let pid = await self.confirmRevivedPid(sessionId: sessionId)
+                    if pid == nil {
                         Permissions.log("revive: codex \(sessionId.prefix(8)) attached but "
                             + "never showed up as a live process — the card keeps its "
                             + "receipt and loses its door")
                     }
-                    await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
+                    await MainActor.run { [weak self] in
+                        self?.hud.showReceipt(.revived(name))
+                        if thenGoTo, pid != nil { self?.goToSession(sessionId, reviveIfGone: false) }
+                    }
+                    return
+                }
+                // The pane came up and STOPPED on a screen only a person
+                // answers (the hooks-review consent, the update chooser). It
+                // is alive, it is ours, and it is not resumed. Until 11 Sep
+                // this was a `.failure`, which fell through to the adoption
+                // below: the process on the chooser was adopted as RESUMED,
+                // the next dictation was typed into the menu, and its Return
+                // chose "Update now". Show the pane and say what it asks;
+                // never adopt it.
+                if case .success(.stoppedOnPrompt(let says, let screen, let pane)) = outcome {
+                    Permissions.log("revive: codex \(sessionId.prefix(8)) is waiting on a "
+                        + "question, not resumed. Its screen says: " + screen)
+                    let opened = SessionLauncher.showPane(
+                        pane: pane,
+                        why: "the revive stopped on a question only a person answers")
+                    await MainActor.run { [weak self] in
+                        self?.hud.showResult(
+                            "\(name) is waiting for you. \(says)"
+                            + (opened ? " I opened its terminal."
+                                      : " I couldn't open its terminal; it is in tmux pane "
+                                        + pane.paneId + "."))
+                    }
                     return
                 }
                 // Both remaining answers mean "already running", and BOTH of
@@ -1639,8 +1711,11 @@ extension AppDelegate {
                     // finds the pid on its first look — but it is the same call
                     // either way, because two ways to finish a revive is how
                     // one of them ends up missing a door.
-                    await self.confirmRevivedPid(sessionId: sessionId)
-                    await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
+                    let pid = await self.confirmRevivedPid(sessionId: sessionId)
+                    await MainActor.run { [weak self] in
+                        self?.hud.showReceipt(.revived(name))
+                        if thenGoTo, pid != nil { self?.goToSession(sessionId, reviveIfGone: false) }
+                    }
                     return
                 }
                 switch outcome {
@@ -1757,6 +1832,7 @@ extension AppDelegate {
                     guard let self else { return }
                     if registered {
                         self.hud.showReceipt(.revived(name))
+                        if thenGoTo { self.goToSession(sessionId, reviveIfGone: false) }
                     } else {
                         // It launched and it is not answering. Say so, and
                         // hand over the line that does not need us — the same

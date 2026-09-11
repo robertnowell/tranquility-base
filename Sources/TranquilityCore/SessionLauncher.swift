@@ -882,6 +882,24 @@ public enum SessionLauncher {
         /// resume that merely died fast is `.exitedWithoutResuming` — see
         /// its doc comment for what that distinction cost.
         case alreadyLive
+        /// The resume came up and STOPPED on a screen TB will never press
+        /// through (`CodexAdapter.neverAutoAcceptNeedles`: the hooks-review
+        /// consent, the update chooser). The process is alive, the pane is
+        /// TB's, and the session is not resumed: it is waiting for a human.
+        ///
+        /// A first-class answer since 11 Sep, when it was a `.failure` and
+        /// the caller could not tell it from a launch that never started.
+        /// Measured that morning: `revive()` treated any non-attached answer
+        /// as "already running somewhere, adopt it", adopted the process
+        /// sitting on the update chooser, said "✓ RESUMED", and the next
+        /// dictation was typed into the menu. Its Return chose "1. Update
+        /// now", the installer ran, and the session died with the words in
+        /// it. A pane waiting on a question is not a session to adopt, and
+        /// this case is how the caller knows.
+        ///
+        /// `says` is the written sentence for the human (never lifted from
+        /// the screen); `screen` is the pane's meaningful tail, the evidence.
+        case stoppedOnPrompt(says: String, screen: String, pane: TmuxPaneAddress)
         /// The resume process ended on its own and nothing said the session
         /// was live elsewhere. `lastScreen` is the last non-empty capture of
         /// its pane, which is normally Codex's own error, verbatim.
@@ -950,6 +968,14 @@ public enum SessionLauncher {
             .joined(separator: " ")
         guard joined.count > limit else { return joined }
         return joined.prefix(limit).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
+    /// The screen this launcher must never press through, if the pane is on
+    /// one. Pure, so the verdict can be pinned against a captured screen:
+    /// the 11 Sep chooser is in the tests verbatim.
+    public static func blockingPrompt(on screen: String, spec: TrustPromptSpec)
+        -> TrustPromptSpec.RecognizedPrompt? {
+        spec.neverAutoAcceptNeedles.first { screen.contains($0.needle) }
     }
 
     static func classifyCodexResumeScreen(_ text: String, settledNeedle: String?) -> CodexResumePoll {
@@ -1160,19 +1186,24 @@ public enum SessionLauncher {
                 // difference is an hour of diagnosis. The 29 Aug hang reported
                 // only that it never settled, which sent the first reading of it
                 // to a load hypothesis that was wrong twice over.
-                if let spec, let blocking = spec.neverAutoAcceptNeedles
-                    .first(where: { text.contains($0.needle) }) {
+                if let spec, let blocking = Self.blockingPrompt(on: text, spec: spec) {
                     // The needle names the screen for the log; the written
                     // sentence is what a person gets. Same split as the launch
                     // watcher, and this is the fourth call site that had it
                     // backwards: a resume that stops on Codex's hooks-review
                     // dialog is the SAME dialog a launch stops on, so it must
                     // not be described in a different, worse way.
+                    //
+                    // A SUCCESS with a name, not a failure. The pane is up and
+                    // it is ours; what it is not is resumed. Returned as
+                    // `.failure` until 11 Sep, which read to the caller as
+                    // "not attached, so adopt whatever is running", and what
+                    // was running was the update chooser.
+                    let tail = TrustPromptWatcher.meaningfulTail(text)
                     Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) stopped on "
                         + "\"\(blocking.needle)\" and only you can answer it; standing down. "
-                        + "Its screen says: " + TrustPromptWatcher.meaningfulTail(text))
-                    return .failure(ScriptError(
-                        message: "\(blocking.says) Answer it in the pane, or in Codex once."))
+                        + "Its screen says: " + tail)
+                    return .success(.stoppedOnPrompt(says: blocking.says, screen: tail, pane: pane))
                 }
                 switch Self.classifyCodexResumeScreen(text, settledNeedle: spec?.settledBannerNeedle) {
                 case .alreadyLive:

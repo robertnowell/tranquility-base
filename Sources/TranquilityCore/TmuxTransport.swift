@@ -652,6 +652,20 @@ public struct TmuxTransport: DispatchTransport {
         let payload = DispatchText.flatten(text)
         guard !payload.isEmpty else { return .failed(.injectionFailed("empty text")) }
 
+        // A pane on a screen we will never press through is not a pane to
+        // type into, whatever the readiness probe said: the probe reads the
+        // harness's own record of its turns, and a menu that appeared before
+        // the first turn leaves no record. Read the screen once, here, before
+        // anything is pasted, and refuse in the words the harness gave us.
+        // Deferred rather than failed, because it is exactly the "can't take
+        // this yet, your words are kept" case, and the words ARE kept.
+        if !target.blockingPrompts.isEmpty, let text = screen(pane),
+           let blocking = Self.blockingPrompt(on: text, prompts: target.blockingPrompts) {
+            Self.trace?("dispatch: \(target.sessionId.prefix(8)) refused — its screen is on "
+                + "\"\(blocking.needle)\", which only a person answers")
+            return .deferred(.waiting(Self.blockedOnPromptWording(blocking)))
+        }
+
         // Serialised per pane from here to the end, across processes. Taken
         // AFTER the cheap refusals so a malformed send never queues behind a
         // real one.
@@ -1130,6 +1144,21 @@ public struct TmuxTransport: DispatchTransport {
         return Self.classifyPromptLine(screen: text, payload: payload, glyph: glyph,
                                        placeholder: placeholder, chip: chip,
                                        ourChips: ourChips)
+    }
+
+    /// The screen this transport must never type into, if the pane is on
+    /// one. Pure, pinned against the 11 Sep chooser verbatim.
+    static func blockingPrompt(on screen: String,
+                               prompts: [TrustPromptSpec.RecognizedPrompt])
+        -> TrustPromptSpec.RecognizedPrompt? {
+        prompts.first { screen.contains($0.needle) }
+    }
+
+    /// What `Readiness.waiting` carries for a refused screen. The card reads
+    /// "can't take this yet, it's waiting on …", so this is the object of
+    /// that sentence: the question, in the harness's written words.
+    static func blockedOnPromptWording(_ prompt: TrustPromptSpec.RecognizedPrompt) -> String {
+        "a question in its tab. " + prompt.says
     }
 
     /// Pure half, testable against captured screens. `glyph` defaults to
