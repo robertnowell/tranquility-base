@@ -660,7 +660,9 @@ public struct TmuxTransport: DispatchTransport {
         // Deferred rather than failed, because it is exactly the "can't take
         // this yet, your words are kept" case, and the words ARE kept.
         if !target.blockingPrompts.isEmpty, let text = screen(pane),
-           let blocking = Self.blockingPrompt(on: text, prompts: target.blockingPrompts) {
+           let blocking = Self.blockingPrompt(on: text, prompts: target.blockingPrompts,
+                                             glyph: target.promptGlyph,
+                                             placeholder: target.idlePlaceholder) {
             Self.trace?("dispatch: \(target.sessionId.prefix(8)) refused — its screen is on "
                 + "\"\(blocking.needle)\", which only a person answers")
             return .deferred(.waiting(Self.blockedOnPromptWording(blocking)))
@@ -1148,10 +1150,29 @@ public struct TmuxTransport: DispatchTransport {
 
     /// The screen this transport must never type into, if the pane is on
     /// one. Pure, pinned against the 11 Sep chooser verbatim.
+    ///
+    /// A needle on the screen is not enough. Measured the same afternoon,
+    /// two hours after the guard shipped: the pane of the session that
+    /// wrote it showed "1. Update now" in a tool call's echo, with a bare
+    /// idle `❯` composer under it, and the guard would have refused every
+    /// reply to that session as "waiting on a question in its tab". Any
+    /// agent that greps this repository, or talks about Codex updates, puts
+    /// the needle in its own scrollback. What tells a menu from a transcript
+    /// is the composer: a modal REPLACES it (the chooser's selected row sits
+    /// on the glyph row itself, so the box reads "1. Update now (runs …)"),
+    /// while output scrolls above an idle one. So a needle blocks only when
+    /// the box is not visibly idle: no glyph row at all, or a glyph row
+    /// holding something other than nothing or the harness's placeholder.
     static func blockingPrompt(on screen: String,
-                               prompts: [TrustPromptSpec.RecognizedPrompt])
+                               prompts: [TrustPromptSpec.RecognizedPrompt],
+                               glyph: String, placeholder: String?)
         -> TrustPromptSpec.RecognizedPrompt? {
-        prompts.first { screen.contains($0.needle) }
+        guard let hit = prompts.first(where: { screen.contains($0.needle) }) else { return nil }
+        if let rows = boxRows(screen: screen, glyph: glyph) {
+            let content = collapsed(rows.joined(separator: " "))
+            if content.isEmpty || content == placeholder { return nil }
+        }
+        return hit
     }
 
     /// What `Readiness.waiting` carries for a refused screen. The card reads

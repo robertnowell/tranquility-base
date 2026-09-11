@@ -272,7 +272,8 @@ final class TmuxTransportTests: XCTestCase {
           3. Skip until next version
         """
         let prompts = CodexAdapter().trustPrompt!.neverAutoAcceptNeedles
-        let blocking = TmuxTransport.blockingPrompt(on: screen, prompts: prompts)
+        let blocking = TmuxTransport.blockingPrompt(on: screen, prompts: prompts, glyph: "›",
+                                                    placeholder: "Ask Codex to do anything")
         XCTAssertEqual(blocking?.needle, "1. Update now")
         XCTAssertEqual(TmuxTransport.blockedOnPromptWording(blocking!),
                        "a question in its tab. Codex is asking whether to update itself before it starts.")
@@ -286,16 +287,64 @@ final class TmuxTransportTests: XCTestCase {
     func testAnIdleCodexComposerIsNotRefused() {
         let screen = "› Ask Codex to do anything\n\n  gpt-6-astra high · ~/Projects"
         XCTAssertNil(TmuxTransport.blockingPrompt(
-            on: screen, prompts: CodexAdapter().trustPrompt!.neverAutoAcceptNeedles))
+            on: screen, prompts: CodexAdapter().trustPrompt!.neverAutoAcceptNeedles,
+            glyph: "›", placeholder: "Ask Codex to do anything"))
     }
 
     /// Claude Code's resume-depth question is the same class: a Return there
-    /// spends usage limits on the human's behalf.
+    /// spends usage limits on the human's behalf. Its selected row sits on
+    /// the glyph row, so the box is not idle.
     func testClaudeCodesResumeDepthQuestionIsRefused() {
-        let screen = "Resuming the full session will consume a substantial portion of your usage limits\n› 1. Resume from summary"
+        let screen = "Resuming the full session will consume a substantial portion of your usage limits\n❯ 1. Resume from summary\n  2. Resume full session as-is"
         XCTAssertEqual(TmuxTransport.blockingPrompt(
-            on: screen, prompts: ClaudeCodeAdapter().trustPrompt!.neverAutoAcceptNeedles)?.needle,
+            on: screen, prompts: ClaudeCodeAdapter().trustPrompt!.neverAutoAcceptNeedles,
+            glyph: "❯", placeholder: nil)?.needle,
             "Resuming the full session will consume")
+    }
+
+    /// The false positive found live two hours after the guard shipped: the
+    /// pane of the session that wrote it, showing the needle in a tool call's
+    /// echo above a bare idle composer. Captured shape, not a paraphrase: the
+    /// box is `❯` alone between rule lines, the status line below it.
+    func testANeedleInTheTranscriptAboveAnIdleClaudeComposerIsNotRefused() {
+        let screen = """
+        ⏺ Bash(for n in "1. Update now" "Hooks need review"; do grep -qF "$n" …)
+          ⎿  Tip: Use /memory to view and manage Claude memory
+        ──────────────────────────────────────────────────────
+        ❯
+        ──────────────────────────────────────────────────────
+          ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent
+        """
+        XCTAssertNil(TmuxTransport.blockingPrompt(
+            on: screen, prompts: ClaudeCodeAdapter().trustPrompt!.neverAutoAcceptNeedles
+                + CodexAdapter().trustPrompt!.neverAutoAcceptNeedles,
+            glyph: "❯", placeholder: nil))
+    }
+
+    /// The same for Codex: an agent that talks about updating itself, at an
+    /// idle composer, is at its prompt and takes the reply.
+    func testANeedleInTheTranscriptAboveAnIdleCodexComposerIsNotRefused() {
+        // The blank row between the composer and the status line is real
+        // (captured 11 Sep from a live pane) and is what ends the box.
+        let screen = """
+        • I found the string "1. Update now" in HarnessAdapter.swift; it names the chooser row.
+
+        › Ask Codex to do anything
+
+          gpt-6-astra high · ~/Projects · Summarize AssemblyAI onboarding · Main [default]
+        """
+        XCTAssertNil(TmuxTransport.blockingPrompt(
+            on: screen, prompts: CodexAdapter().trustPrompt!.neverAutoAcceptNeedles,
+            glyph: "›", placeholder: "Ask Codex to do anything"))
+    }
+
+    /// And a needle with NO composer on screen at all is still a menu: the
+    /// hooks-review dialog draws no glyph row.
+    func testANeedleWithNoComposerIsRefused() {
+        let screen = "Hooks need review\n  Trust all and continue\n  Review each hook"
+        XCTAssertEqual(TmuxTransport.blockingPrompt(
+            on: screen, prompts: CodexAdapter().trustPrompt!.neverAutoAcceptNeedles,
+            glyph: "›", placeholder: "Ask Codex to do anything")?.needle, "Hooks need review")
     }
 
     func testDispatchTargetDefaultBlockingPromptsIsEmpty() {
