@@ -1306,9 +1306,15 @@ extension AppDelegate {
     /// findable process is said so once, never chased in a loop.
     func goToSession(_ sessionId: String, reviveIfGone: Bool = true) {
         let began = Date()
-        let report: @Sendable (String) -> Void = { outcome in
-            Track.record("go_to_agent", ["agent_id": Track.hash(sessionId), "outcome": .token(outcome),
-                                         "ms": .int(Int(Date().timeIntervalSince(began) * 1000))])
+        // `detail` is the transfer failure's reason (the app's own words, an
+        // AppleScript error, why a resume did not restart), never the user's,
+        // and until now it reached app.log only. Scrubbed and bounded by .prose.
+        let report: @Sendable (String, String?) -> Void = { outcome, detail in
+            var props: [String: TrackValue] = [
+                "agent_id": Track.hash(sessionId), "outcome": .token(outcome),
+                "ms": .int(Int(Date().timeIntervalSince(began) * 1000))]
+            if let detail { props["detail"] = .prose(detail) }
+            Track.record("go_to_agent", props)
         }
         Task.detached { [weak self] in
             // `agents` alone made GO TO AGENT a permanent no-op for every
@@ -1331,7 +1337,7 @@ extension AppDelegate {
                         ?? short.uppercased()
                     Permissions.log("goTo: \(short) is not live any more — reviving \(name) "
                         + "first, then opening it")
-                    report("not_live_reviving")
+                    report("not_live_reviving", nil)
                     await MainActor.run { [weak self] in
                         self?.hud.finishGoToSession(nil)
                         self?.revive(sessionId, name: name, thenGoTo: true)
@@ -1341,7 +1347,7 @@ extension AppDelegate {
                 Permissions.log("goTo: \(short) is not live any more"
                     + (reviveIfGone ? ", and nothing on disk can bring it back"
                                     : ", even after its revive"))
-                report("not_live")
+                report("not_live", nil)
                 await MainActor.run { [weak self] in
                     self?.hud.finishGoToSession(reviveIfGone
                         ? "That agent isn't running any more, and I can't find its history "
@@ -1390,7 +1396,7 @@ extension AppDelegate {
                     case .endedButNotRestarted(let why, _, let manual):
                         Permissions.log("goTo: transfer ended but did not restart "
                             + "\(sessionId.prefix(8)) — \(why)")
-                        report("transfer_ended_not_restarted")
+                        report("transfer_ended_not_restarted", why)
                         await MainActor.run {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(manual, forType: .string)
@@ -1419,7 +1425,7 @@ extension AppDelegate {
                             let outcome = await TerminalTabFocus.focus(
                                 tty: pane.paneTty, sessionId: sessionId)
                             if case .focused = outcome {
-                                report("focused_other_holder")
+                                report("focused_other_holder", nil)
                                 await MainActor.run { [weak self] in
                                     self?.hud.finishGoToSession(nil)
                                 }
@@ -1438,7 +1444,7 @@ extension AppDelegate {
                     case .moved:
                         message = ""
                     }
-                    report("transfer_refused")
+                    report("transfer_refused", message)
                     await MainActor.run { [weak self] in self?.hud.finishGoToSession(message) }
                     return
                 }
@@ -1454,20 +1460,20 @@ extension AppDelegate {
                 switch outcome {
                 case .focused:
                     Permissions.log("goTo: focused \(tty)")
-                    report(owned == nil ? "focused_after_transfer" : "focused")
+                    report(owned == nil ? "focused_after_transfer" : "focused", nil)
                     self.hud.finishGoToSession(nil)
                 case .tabGone:
                     Permissions.log("goTo: tab not found for \(tty)")
-                    report("tab_gone")
+                    report("tab_gone", nil)
                     self.hud.finishGoToSession("That agent's window isn't open any more.")
                 case .timedOut(let seconds):
                     Permissions.log("goTo TIMEOUT after \(seconds)s for \(tty)")
-                    report("timed_out")
+                    report("timed_out", nil)
                     self.hud.finishGoToSession("Terminal didn't answer within \(seconds) seconds. "
                                         + "The session is fine. Try again in a moment.")
                 case .failed(let message):
                     Permissions.log("goTo FAILED: \(message)")
-                    report("failed")
+                    report("failed", nil)
                     self.hud.finishGoToSession("Couldn't control Terminal: \(message)")
                 }
             }
@@ -1502,14 +1508,14 @@ extension AppDelegate {
     /// is touched only through `MainActor.run`.
     nonisolated func recoverParkedSession(_ sessionId: String, live: LiveSession,
                                           job: LiveSession.ParkedJob,
-                                          report: @Sendable (String) -> Void) async {
+                                          report: @Sendable (String, String?) -> Void) async {
         let short = String(sessionId.prefix(8))
         let name = GridAssembler.tabDisplayName(live: live, callsign: nil)
         let pane = TmuxOwnership.pane(forSessionId: sessionId, pid: live.pid)
 
         if job.status == "busy" {
             Permissions.log("recover: \(short) is parked and its job \(job.jobId) is busy; raising the window only")
-            report("parked_busy")
+            report("parked_busy", nil)
             if let pane { _ = await TerminalTabFocus.focus(tty: pane.paneTty, sessionId: sessionId) }
             await MainActor.run {
                 self.hud.finishGoToSession("\(name) is still working in the background. "
@@ -1570,7 +1576,7 @@ extension AppDelegate {
             }
             if ProcessProbe.isAlive(live.pid) {
                 Permissions.log("recover: shell pid \(live.pid) would not exit; stopping here")
-                report("shell_would_not_exit")
+                report("shell_would_not_exit", nil)
                 await MainActor.run {
                     self.hud.showReceipt(.notRevived(
                         "the old shell (pid \(live.pid)) would not exit; nothing else was changed"))
@@ -1581,7 +1587,7 @@ extension AppDelegate {
 
         Permissions.log("recover: \(short): job \(job.jobId) stopped, shell \(live.pid) ended, "
             + "resuming \(resumeId.prefix(8))")
-        report(resumeId == sessionId ? "recovered_origin" : "recovered_job")
+        report(resumeId == sessionId ? "recovered_origin" : "recovered_job", nil)
         await MainActor.run { self.revive(resumeId, name: name) }
     }
 
