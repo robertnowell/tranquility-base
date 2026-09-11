@@ -17,6 +17,17 @@ import Foundation
 /// may fire ONLY when the reply modifier has been down alone, undisturbed,
 /// for the whole grace — a keyDown, a click, or a second modifier before the
 /// grace elapses means nothing ever shows.
+///
+/// The second invariant, ruled 10 Sep 2026 against a five-minute loss
+/// (docs/rulings/ruling-an-open-microphone-is-a-promise.md): **once a hold
+/// has committed, nothing on the keyboard can condemn it.** Interference is
+/// evidence about a press that has not yet earned anything — it arrives
+/// within tens of milliseconds of key-down and means "this is a chord". Four
+/// minutes into a committed recording it is evidence of nothing, and treating
+/// it as a verdict deleted 5m08s of speech under a pill that still said
+/// Listening. So `disqualified` is set only in `pending` and `armed`, and a
+/// release from `replying` is always `endReply`: the words go through the
+/// ordinary path, readback and Don't-send included, and the user decides.
 public struct ReplyGestureMachine: Sendable {
     /// Where the gesture currently stands. `pending` is a press that has not
     /// yet earned anything; `armed` is the open arm window; `replying` is a
@@ -29,8 +40,9 @@ public struct ReplyGestureMachine: Sendable {
         /// A modifier press began. `isReply` — the held flags are exactly the
         /// reply chord (bare ⌥).
         case began(isReply: Bool)
-        /// Another key or a click landed while the modifiers were down: this
-        /// is a real shortcut, not one of ours.
+        /// Another key or a click landed while the modifiers were down. Before
+        /// the hold commits this is a real shortcut, not one of ours; after it
+        /// commits it is a stray keystroke and means nothing to the gesture.
         case sawOtherInput
         /// The held flags changed (a second modifier joined). Mirrors the
         /// monitor's `formUnion`: once flags grow past the reply chord,
@@ -45,9 +57,10 @@ public struct ReplyGestureMachine: Sendable {
     }
 
     /// What the monitor must do in response. Effects arrive in order; a
-    /// release that concludes a reply produces exactly one of
-    /// `endReply`/`abortReply`, and an armed gesture that dies produces
-    /// exactly one `abortArm`.
+    /// release that concludes a reply produces exactly one `endReply`, and
+    /// an armed gesture that dies produces exactly one `abortArm`. There is
+    /// deliberately no "abort reply" effect: a committed recording has only
+    /// one way out of this machine, and it is the path that keeps the words.
     public enum Effect: Equatable, Sendable {
         /// Bare ⌥ survived the grace untouched: show the arming face, open
         /// the microphone optimistically.
@@ -57,14 +70,13 @@ public struct ReplyGestureMachine: Sendable {
         case abortArm
         case beginReply
         case endReply
-        case abortReply
     }
 
     public private(set) var phase: Phase = .idle
     /// Whether the gesture's flags are still exactly the reply chord.
     private var isReply = false
-    /// Other input was seen: the gesture can never arm or begin a reply, and
-    /// a reply already begun ends as an abort.
+    /// Other input was seen before the hold committed: the gesture can never
+    /// arm or begin a reply. Never set once `replying` — see the header.
     private var disqualified = false
 
     public init() {}
@@ -78,7 +90,9 @@ public struct ReplyGestureMachine: Sendable {
             return []
 
         case .sawOtherInput:
-            guard phase != .idle else { return [] }
+            // A committed hold is deaf to the keyboard. The microphone is
+            // open and the pill says Listening; both stay true until release.
+            guard phase == .pending || phase == .armed else { return [] }
             disqualified = true
             if phase == .armed {
                 // Revert IMMEDIATELY, not at key release: the user is typing
@@ -116,7 +130,9 @@ public struct ReplyGestureMachine: Sendable {
             defer { phase = .idle; isReply = false; disqualified = false }
             switch phase {
             case .replying:
-                return [disqualified ? .abortReply : .endReply]
+                // Always. Whatever the keyboard did during the hold, the
+                // recording was committed and the words are the user's.
+                return [.endReply]
             case .armed:
                 // A clean tap: the arm dies first, then the monitor's own tap
                 // classification (⌥ tapped, ⌃⌃, …) runs as it always has.

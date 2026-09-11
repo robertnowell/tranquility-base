@@ -42,8 +42,9 @@ import Foundation
 ///   the length of an utterance instead of the length of a write.
 public final class LiveAudioCapture: @unchecked Sendable {
     /// Live recordings carry this while they are still being spoken. A file
-    /// with this extension in the audio directory means a process died holding
-    /// a microphone open — see `LiveAudioCapture.interrupted(in:)`.
+    /// with this extension in the audio directory means a capture ended and no
+    /// row claimed it: a process died holding a microphone open, or an
+    /// abandon kept speech — see `LiveAudioCapture.interrupted(in:)`.
     public static let liveExtension = "live"
 
     public let utteranceId: String
@@ -175,27 +176,57 @@ public final class LiveAudioCapture: @unchecked Sendable {
             durationMs: Int64((Double(frameBytes) / 2.0 / sampleRate) * 1000))
     }
 
-    /// Give up on this recording and remove the file.
+    /// How a capture that was given up on ended: the file is gone, or the
+    /// file is still on disk as `.wav.live` because it held speech.
+    public enum Ending: Equatable, Sendable {
+        case removed
+        case kept(URL)
+    }
+
+    /// A capture at least this long is never deleted by `abandon`, whatever
+    /// the caller thinks it was. Ruled 10 Sep 2026: "we shouldn't throw away
+    /// the audio, especially if it's longer than 10 seconds or has speech."
+    public static let keepAfterSeconds: Double = 10
+
+    /// Give up on this recording. Removes the file when the capture was a
+    /// slip; keeps it when it was speech.
     ///
     /// For the arm-window discard (docs/instant-arm.md), where the capture was
-    /// optimistic and the user never committed to it. Distinct from a process
-    /// dying: that one deliberately leaves the file behind to be found.
-    public func abandon() {
+    /// optimistic and the user never committed to it, and for a press that
+    /// died before anything came of it. Those are milliseconds of room tone
+    /// and the file goes.
+    ///
+    /// **Deletion needs a reason, and "the caller said abandon" is not one.**
+    /// On 10 Sep 2026 a committed five-minute hold was abandoned because a
+    /// stray keystroke had disqualified the gesture, and this method unlinked
+    /// 5m08s of speech on the spot — the only copy, since the row is written
+    /// at key-up. So the file is kept, still `.wav.live`, when it runs past
+    /// `keepAfterSeconds` or the caller has evidence of speech (`hadSpeech`,
+    /// the recorder's peak against its silence floor). A kept file is exactly
+    /// what a process death leaves behind, and the boot sweep adopts it into
+    /// Recents the same way (`QueueStore.reconcileOnBoot`).
+    @discardableResult
+    public func abandon(hadSpeech: Bool = false) -> Ending {
         lock.lock(); defer { lock.unlock() }
-        guard !closed else { return }
+        guard !closed else { return .removed }
+        let seconds = Double(frameBytes) / 2.0 / sampleRate
+        let keep = seconds >= Self.keepAfterSeconds || hadSpeech
+        if keep { try? rewriteSizes() }
         try? handle.close()
         closed = true
+        if keep { return .kept(url) }
         try? FileManager.default.removeItem(at: url)
+        return .removed
     }
 
     // MARK: - Recovery
 
     /// Recordings a previous process left open, newest first.
     ///
-    /// A `.wav.live` file in the audio directory can only mean one thing: a
-    /// process held a microphone and did not come back. Nothing writes this
-    /// extension except an in-progress capture, and every ordinary ending —
-    /// `finish` or `abandon` — removes it.
+    /// A `.wav.live` file in the audio directory means a capture ended with
+    /// no row claiming it: a process held a microphone and did not come back,
+    /// or `abandon` kept the file because it held speech. Nothing writes this
+    /// extension except an in-progress capture, and `finish` removes it.
     public static func interrupted(in directory: URL) -> [Interrupted] {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(

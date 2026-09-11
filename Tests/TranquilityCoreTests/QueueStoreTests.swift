@@ -216,6 +216,65 @@ final class QueueStoreTests: XCTestCase {
         XCTAssertNotNil(row?.discardedReason, "loss must be auditable, never silent")
     }
 
+    // MARK: - Kept captures reach Recents (ruled 10 Sep 2026)
+
+    /// A `.wav.live` file with no row is what `Recorder.abandon` leaves when
+    /// the capture held speech, and what a process death leaves. Before this,
+    /// both sat invisible until the 72h reap deleted them.
+    func testAKeptLiveCaptureIsAdoptedIntoARowAtBoot() throws {
+        let audio = tmpDir.appendingPathComponent("audio", isDirectory: true)
+        let capture = try LiveAudioCapture(utteranceId: "capture-kept", sampleRate: 16000, directory: audio)
+        try capture.append(pcm16: Data(count: Int(LiveAudioCapture.keepAfterSeconds * 16000) * 2 + 3200))
+        XCTAssertNotEqual(capture.abandon(), .removed)
+        let spoken = Date().addingTimeInterval(-120)
+        try FileManager.default.setAttributes([.modificationDate: spoken], ofItemAtPath: capture.url.path)
+
+        let report = try store.reconcileOnBoot(audioDirectory: audio)
+
+        XCTAssertEqual(report.adoptedAudio, ["capture-kept"])
+        XCTAssertTrue(report.orphanedAudio.isEmpty, "adopted means claimed")
+        let row = try XCTUnwrap(try store.utterance(id: "capture-kept"))
+        XCTAssertEqual(row.status, .recorded, "recorded, never transcribed unasked")
+        XCTAssertNil(row.transcriptText)
+        XCTAssertEqual(row.audioDurationMs, 10_100)
+        XCTAssertEqual(row.audioPath.map { URL(fileURLWithPath: $0).pathExtension }, "wav",
+                       "promoted to a plain recording the retry path can read")
+        XCTAssertEqual(Double(row.createdAtMs) / 1000, spoken.timeIntervalSince1970, accuracy: 1,
+                       "dated by when it was spoken, not by this boot")
+        XCTAssertTrue(LiveAudioCapture.interrupted(in: audio).isEmpty)
+
+        // Idempotent: the next boot finds a claimed file and does nothing.
+        XCTAssertTrue(try store.reconcileOnBoot(audioDirectory: audio).adoptedAudio.isEmpty)
+    }
+
+    func testAShortOrphanLiveCaptureIsLeftForTheReap() throws {
+        // A press that died in the arm window: milliseconds, no speech.
+        // Offering it back would be worse than silence.
+        let audio = tmpDir.appendingPathComponent("audio", isDirectory: true)
+        let capture = try LiveAudioCapture(utteranceId: "capture-slip", sampleRate: 16000, directory: audio)
+        try capture.append(pcm16: Data(count: 16000 * 2))   // one second
+        try capture.close()
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-120)],
+                                              ofItemAtPath: capture.url.path)
+
+        let report = try store.reconcileOnBoot(audioDirectory: audio)
+
+        XCTAssertTrue(report.adoptedAudio.isEmpty)
+        XCTAssertEqual(report.orphanedAudio, ["capture-slip"], "still reported, still reapable")
+        XCTAssertNil(try store.utterance(id: "capture-slip"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: capture.url.path))
+    }
+
+    func testAFileStillBeingWrittenIsNotAdopted() throws {
+        let audio = tmpDir.appendingPathComponent("audio", isDirectory: true)
+        let capture = try LiveAudioCapture(utteranceId: "capture-live", sampleRate: 16000, directory: audio)
+        try capture.append(pcm16: Data(count: Int(LiveAudioCapture.keepAfterSeconds * 16000) * 2))
+        // No close, no abandon, modified just now: a writer may still own it.
+
+        XCTAssertTrue(try store.reconcileOnBoot(audioDirectory: audio).adoptedAudio.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: capture.url.path))
+    }
+
     // MARK: - Spool
 
     func testSpoolDrainInsertsDedupesAndSurvivesMalformedLines() throws {

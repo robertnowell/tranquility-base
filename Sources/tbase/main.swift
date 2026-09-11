@@ -772,6 +772,7 @@ case "reconcile":
         let r = try store.reconcileOnBoot()
         print("requeued for transcription  \(r.requeuedForTranscription.count)")
         print("needs delivery check        \(r.needsDeliveryCheck.count)   <- never auto-resent")
+        print("kept captures adopted       \(r.adoptedAudio.count)")
         print("orphaned audio files        \(r.orphanedAudio.count)")
         print("rows whose audio vanished   \(r.missingAudio.count)")
         for id in r.needsDeliveryCheck { print("  ambiguous: \(id)") }

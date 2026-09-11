@@ -355,7 +355,7 @@ extension AppDelegate {
         // noise floor is refused before any model touches it: hallucinated words
         // in a real terminal are worse than asking you to speak again.
         let seconds = Double(pcm.count) / 2.0 / 16_000.0
-        if !isRetry, seconds < 0.5 || recorder.peakLevel < 0.005 {
+        if !isRetry, seconds < 0.5 || recorder.peakLevel < Recorder.silenceFloor {
             Permissions.log(String(format:
                 "send: refused, silence gate (%.2fs, peak %.4f)", seconds, recorder.peakLevel))
             recordingDestination = nil

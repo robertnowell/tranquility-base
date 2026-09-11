@@ -845,22 +845,46 @@ public final class Recorder: @unchecked Sendable {
         }
     }
 
+    /// The peak below which a capture is treated as silence: the send path's
+    /// gate, and the evidence `abandon` uses to keep a short recording.
+    public static let silenceFloor: Float = 0.005
+
     /// Abandon without returning audio — a press cancelled before anything
     /// came of it.
+    ///
+    /// The file is not necessarily gone afterwards. A capture that ran past
+    /// `LiveAudioCapture.keepAfterSeconds`, or a shorter one whose peak
+    /// cleared the silence floor, stays on disk as `.wav.live` for the boot
+    /// sweep to adopt (ruled 10 Sep 2026). The tap-abort that instant-arm was
+    /// built on is milliseconds of room tone and is removed as before.
     public func abandon() {
         let ended = submit(.captureEnded, because: "abandoned")
-        if ended.accepted {
-            Track.record("capture_audio_closed", ["capture_id": Track.hash(captureID), "outcome": "cancelled"])
-        }
         lock.lock()
         lastOpenSeconds = openedAt.map { Date().timeIntervalSince($0) } ?? 0
         openedAt = nil
         awaitingFirstBuffer = false
         let discarding = liveCapture
         liveCapture = nil
+        let seconds = Double(buffer.count) / 2.0 / sampleRate
+        let peak = peakLevel
+        let id = diagnosticCaptureID
         buffer.removeAll(keepingCapacity: false)
         lock.unlock()
-        discarding?.abandon()
+        let hadSpeech = seconds >= 0.5 && peak >= Self.silenceFloor
+        let ending = discarding?.abandon(hadSpeech: hadSpeech) ?? .removed
+        if ended.accepted {
+            var fields: [String: TrackValue] = [
+                "capture_id": Track.hash(id),
+                "outcome": ending == .removed ? "cancelled" : "cancelled_kept",
+                "audio_ms": .int(Int(seconds * 1000)), "peak": .double(Double(peak)),
+            ]
+            if case .kept = ending { fields["audio_saved"] = .bool(true) }
+            Track.record("capture_audio_closed", fields)
+        }
+        if case .kept(let url) = ending {
+            Recorder.trace?(String(format: "capture: abandoned but KEPT — %.1fs, peak %.4f, ",
+                                   seconds, peak) + url.lastPathComponent)
+        }
         verification?.cancel(); verification = nil
         if ended.accepted {
             // Async for the same reason stop() is: no gesture waits on the HAL.
