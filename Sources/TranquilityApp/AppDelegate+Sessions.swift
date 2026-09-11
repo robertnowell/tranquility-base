@@ -1324,10 +1324,16 @@ extension AppDelegate {
                 + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                 .first(where: { $0.sessionId == sessionId }) else {
                 let short = sessionId.prefix(8)
+                // The card's guard comes down HERE, before anything else is
+                // looked up. The 12 Aug contract is that the button never
+                // blocks on a walk, and the walk below is a discovery scan:
+                // 5 s on a cold cache at launch, measured 11 Sep by the
+                // launch self-test, whose 3 s round trip failed on the first
+                // deploy of this branch. Whatever follows paints for itself:
+                // the revive its receipt, the refusal its own result card.
+                await MainActor.run { [weak self] in self?.hud.finishGoToSession(nil) }
                 // Not running, but on disk and revivable: bring it back, then
-                // come back here with `reviveIfGone: false` to open it. The
-                // card's guard is dropped first, because the revive paints
-                // its own receipt and the card must not stay locked under it.
+                // come back here with `reviveIfGone: false` to open it.
                 if reviveIfGone,
                    let known = SessionDiscovery.discover().sessions
                        .first(where: { $0.sessionId == sessionId }),
@@ -1339,7 +1345,6 @@ extension AppDelegate {
                         + "first, then opening it")
                     report("not_live_reviving", nil)
                     await MainActor.run { [weak self] in
-                        self?.hud.finishGoToSession(nil)
                         self?.revive(sessionId, name: name, thenGoTo: true)
                     }
                     return
