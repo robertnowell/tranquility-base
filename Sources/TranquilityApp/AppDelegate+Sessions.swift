@@ -655,15 +655,21 @@ extension AppDelegate {
                     lastStatusLine = "can't send, \(why); audio kept"
                     hud.showResult("Can't send yet, \(why). Recording kept. Try again shortly.")
                 case .transcriptionFailed(let utteranceId):
-                    if let row = try? self.store?.utterance(id: utteranceId),
-                       row.transcriptionOutcome == TranscriptionDisposition.noSpeechDetected.rawValue {
+                    // The disposition is a fixed enum value (no_speech_detected,
+                    // provider_error, authentication_failed, ...), never the
+                    // transcript, so it is safe to log and is the one thing that
+                    // says WHY the transcription failed instead of a bare count.
+                    let disposition = (try? self.store?.utterance(id: utteranceId))?
+                        .transcriptionOutcome
+                    if disposition == TranscriptionDisposition.noSpeechDetected.rawValue {
                         Track.replyOutcome("no_speech_detected", stage: "capture", agent: spokenTo)
                         finishWithoutRecognizedSpeech()
                         break
                     }
                     Track.replyOutcome("transcription_failed", stage: "capture", agent: spokenTo)
                     lastStatusLine = "couldn't transcribe, audio kept"
-                    Failures.report(.transcriptionProvider, reason: "transcription failed; audio kept",
+                    Failures.report(.transcriptionProvider,
+                                    reason: "transcription failed (\(disposition ?? "unknown")); audio kept",
                                     card: "Couldn't transcribe that. The audio is saved. Retry from the menu.",
                                     session: spokenTo)
                     hud.showResult("Couldn't transcribe that. The audio is saved. Retry from the menu.")
