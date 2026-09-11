@@ -164,7 +164,7 @@ extension AppDelegate {
         // the file:// footers reach); the door itself opens the agent in the
         // hub app when one is configured.
         let target = HubApp.openURL(session: session) ?? file
-        if BrowserFocus.focusExistingTab(target) == .notFound {
+        if BrowserFocus.reveal(target, app: HubApp.baseURL) == .notFound {
             NSWorkspace.shared.open(target)
         }
         return true
