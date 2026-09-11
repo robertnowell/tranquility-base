@@ -109,10 +109,47 @@ final class LiveAudioCaptureTests: XCTestCase {
     func testAbandonRemovesTheFileEntirely() throws {
         let capture = try LiveAudioCapture(utteranceId: "u7", sampleRate: 16000, directory: dir)
         try capture.append(pcm16: pcm(frames: 640))   // an arm-window discard
-        capture.abandon()
+        XCTAssertEqual(capture.abandon(), .removed)
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: capture.url.path))
         XCTAssertTrue(LiveAudioCapture.interrupted(in: dir).isEmpty)
+    }
+
+    // MARK: - Deletion needs a reason (ruled 10 Sep 2026)
+
+    func testAbandonKeepsACaptureThatRanPastTheThreshold() throws {
+        // The 10 Sep loss: a committed hold abandoned at release unlinked
+        // 5m08s of speech. Ten seconds is the ruled floor — past it the
+        // caller's reason for abandoning is irrelevant.
+        let capture = try LiveAudioCapture(utteranceId: "u10", sampleRate: 16000, directory: dir)
+        try capture.append(pcm16: pcm(frames: Int(LiveAudioCapture.keepAfterSeconds * 16000)))
+        let ending = capture.abandon()
+
+        XCTAssertEqual(ending, .kept(capture.url))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: capture.url.path))
+        let file = try AVAudioFile(forReading: capture.url)
+        XCTAssertEqual(file.length, Int64(LiveAudioCapture.keepAfterSeconds * 16000),
+                       "kept means every frame, with the header sizes finalised")
+        XCTAssertEqual(LiveAudioCapture.interrupted(in: dir).map(\.utteranceId), ["u10"],
+                       "a kept capture is found by the same sweep that finds a process death")
+    }
+
+    func testAbandonKeepsAShortCaptureThatHadSpeech() throws {
+        // "...or has speech." The recorder passes its own evidence; the file
+        // does not get to overrule it by being short.
+        let capture = try LiveAudioCapture(utteranceId: "u11", sampleRate: 16000, directory: dir)
+        try capture.append(pcm16: pcm(frames: 16000))   // one second
+        XCTAssertEqual(capture.abandon(hadSpeech: true), .kept(capture.url))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: capture.url.path))
+    }
+
+    func testAbandonStillRemovesAShortSilentCapture() throws {
+        // The tap-abort instant-arm was built on (E2): milliseconds of room
+        // tone leave nothing behind.
+        let capture = try LiveAudioCapture(utteranceId: "u12", sampleRate: 16000, directory: dir)
+        try capture.append(pcm16: pcm(frames: 4800))   // 300ms
+        XCTAssertEqual(capture.abandon(hadSpeech: false), .removed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: capture.url.path))
     }
 
     func testAppendAfterAnEndingIsIgnoredRatherThanCorrupting() throws {

@@ -551,6 +551,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self.coordinator = Coordinator(store: store)
             let report = try store.reconcileOnBoot()
+            if !report.adoptedAudio.isEmpty {
+                // Speech a previous process left unclaimed — a death, or an
+                // abandon that kept it — is in Recents now, not on the reap.
+                Permissions.log("boot: \(report.adoptedAudio.count) kept capture(s) adopted into Recents")
+                Track.record("audio_adopted_at_boot", ["count": .int(report.adoptedAudio.count)])
+            }
             lastStatusLine = report.needsDeliveryCheck.isEmpty
                 ? "ready"
                 : "\(report.needsDeliveryCheck.count) reply/replies need checking"

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 
@@ -1257,9 +1258,12 @@ public final class QueueStore: Sendable {
         public var needsDeliveryCheck: [String] = []
         public var orphanedAudio: [String] = []
         public var missingAudio: [String] = []
+        /// Live captures no row claimed that held speech, now rows of their
+        /// own so Recents can play and retry them.
+        public var adoptedAudio: [String] = []
     }
 
-    public func reconcileOnBoot() throws -> ReconciliationReport {
+    public func reconcileOnBoot(audioDirectory: URL = QueueStore.audioDirectory) throws -> ReconciliationReport {
         var report = ReconciliationReport()
 
         try dbQueue.write { db in
@@ -1326,15 +1330,66 @@ public final class QueueStore: Sendable {
             }
         }
 
-        report.orphanedAudio = try orphanedAudioFiles()
+        report.adoptedAudio = try adoptKeptLiveCaptures(in: audioDirectory)
+        report.orphanedAudio = try orphanedAudioFiles(in: audioDirectory)
         return report
     }
 
+    /// Nothing claimed this audio, and it is speech: give it a row.
+    ///
+    /// A `.wav.live` file with no row is what two endings leave behind — a
+    /// process that died holding the microphone, and `Recorder.abandon` when
+    /// the capture held speech (ruled 10 Sep 2026, after a five-minute hold
+    /// was unlinked at release). Both used to sit invisible until the 72h
+    /// reap deleted them: the durable copy existed and nothing could reach
+    /// it, which is loss with extra steps. `LiveAudioCapture.adopt` says the
+    /// decision to offer audio back is the app's; this is that decision, and
+    /// the rule is the recorder's own — at least `keepAfterSeconds` of audio.
+    /// Shorter orphans are a press that died, and stay with the reap.
+    ///
+    /// The row is `.recorded`, never transcribed unasked (13 Aug ruling: the
+    /// machine does not spend on failed rows without a human). It lands in
+    /// the recent-audio pane as a row without a transcript, with Play and
+    /// Retry, dated by the file rather than by this boot.
+    ///
+    /// A file modified in the last few seconds may still be under a writer —
+    /// the app is single-instance, but the guard costs nothing and a capture
+    /// in progress appends every ~64ms — so those wait for the next boot.
+    @discardableResult
+    func adoptKeptLiveCaptures(in directory: URL, now: Date = Date()) throws -> [String] {
+        let known = Set(try dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT id FROM utterances")
+        })
+        let floorMs = Int64(LiveAudioCapture.keepAfterSeconds * 1000)
+        var adopted: [String] = []
+        for interrupted in LiveAudioCapture.interrupted(in: directory) {
+            guard !known.contains(interrupted.utteranceId) else { continue }
+            guard interrupted.durationMs() >= floorMs else { continue }
+            guard now.timeIntervalSince(interrupted.modifiedAt) > 5 else { continue }
+            guard let url = try? LiveAudioCapture.adopt(interrupted) else { continue }
+            let data = (try? Data(contentsOf: url)) ?? Data()
+            var row = Utterance(
+                id: interrupted.utteranceId,
+                createdAtMs: Int64(interrupted.modifiedAt.timeIntervalSince1970 * 1000),
+                status: .recorded,
+                audioPath: url.path,
+                audioBytes: Int64(data.count),
+                audioSha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+                audioDurationMs: interrupted.durationMs())
+            row.transcriptionOutcome = "adopted_at_boot"
+            try update(utterance: row)
+            adopted.append(row.id)
+            Self.trace?("boot: adopted kept capture \(row.id.prefix(16)) "
+                + "(\(interrupted.durationMs() / 1000)s) into Recents")
+        }
+        return adopted
+    }
+
     /// Audio files on disk with no row pointing at them.
-    private func orphanedAudioFiles() throws -> [String] {
+    private func orphanedAudioFiles(in directory: URL) throws -> [String] {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(
-            at: Self.audioDirectory, includingPropertiesForKeys: nil) else { return [] }
+            at: directory, includingPropertiesForKeys: nil) else { return [] }
         let known = Set(try dbQueue.read { db in try String.fetchAll(db, sql: "SELECT id FROM utterances") })
         return files
             // Through AudioStore, not by hand: a bare deletingPathExtension turns

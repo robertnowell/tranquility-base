@@ -8,7 +8,8 @@ import XCTest
 /// the exact synthetic sequences the design was ruled against: time never
 /// appears because the timers ARE the clock, and their firings arrive as
 /// events — "⌥-down, keyDown at +40ms" is simply `began` then `sawOtherInput`
-/// before `graceElapsed`.
+/// before `graceElapsed`. Since 10 Sep 2026 the same eval also holds the
+/// guard's other edge shut: a keystroke AFTER the hold commits is inert.
 ///
 /// E6 — first-syllable fix: audio captured during the arm window reaches the
 /// live stream (backlog fed before the socket opens rides the pre-open
@@ -102,9 +103,14 @@ final class InstantArmTests: XCTestCase {
                        "the abort happens at the disqualifying keystroke, once")
     }
 
-    func testOtherInputDuringReplyAbortsAtRelease() {
-        // Disqualification after the hold resolved keeps today's meaning:
-        // the recording is thrown away at release, not mid-hold.
+    func testOtherInputDuringACommittedHoldIsIgnored() {
+        // Ruled 10 Sep 2026 (docs/rulings/ruling-an-open-microphone-is-a-promise.md).
+        // This exact timeline used to end in `.abortReply`, and did, at
+        // 17:36:43 PDT, on 5m08s of speech: one keystroke somewhere on the
+        // system while ⌥ was held condemned the whole recording, silently,
+        // under a pill that still said Listening. A committed hold is deaf to
+        // the keyboard; release ends the reply and the words go through the
+        // ordinary path, readback and Don't-send included.
         let effects = drive([
             .began(isReply: true),
             .graceElapsed,
@@ -112,7 +118,40 @@ final class InstantArmTests: XCTestCase {
             .sawOtherInput,
             .released,
         ])
-        XCTAssertEqual(effects, [.openArmWindow, .beginReply, .abortReply])
+        XCTAssertEqual(effects, [.openArmWindow, .beginReply, .endReply],
+                       "a keystroke during a committed hold must never destroy the recording")
+    }
+
+    func testAFiveMinuteHoldSurvivesAnyAmountOfInterference() {
+        // The 10 Sep shape, exaggerated: keys, clicks and a second modifier
+        // joining and leaving, all after the hold committed. Exactly one
+        // effect at release, and it is the one that keeps the words.
+        let effects = drive([
+            .began(isReply: true),
+            .graceElapsed,
+            .holdElapsed,
+            .sawOtherInput, .sawOtherInput, .sawOtherInput,
+            .flagsChanged(isReply: false),
+            .sawOtherInput,
+            .flagsChanged(isReply: true),
+            .released,
+        ])
+        XCTAssertEqual(effects, [.openArmWindow, .beginReply, .endReply])
+    }
+
+    func testOtherInputBeforeTheHoldCommitsStillKillsIt() {
+        // The guard is bounded, not removed: interference in the arm window
+        // is still a typing chord, and the hold timer firing afterwards
+        // still begins nothing.
+        let effects = drive([
+            .began(isReply: true),
+            .graceElapsed,
+            .sawOtherInput,
+            .holdElapsed,
+            .released,
+        ])
+        XCTAssertEqual(effects, [.openArmWindow, .abortArm],
+                       "before commit a keystroke is still a real shortcut")
     }
 
     func testNonReplyChordNeverArmsOrReplies() {

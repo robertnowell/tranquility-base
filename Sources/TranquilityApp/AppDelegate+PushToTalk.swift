@@ -595,8 +595,13 @@ extension AppDelegate {
 
         case .replyAborted:
             Analytics.gesture("option", phase: "hold_aborted", decision: "reply_aborted", face: hud.state)
-            // The hold turned out to be part of a real shortcut. Drop the audio
-            // rather than transcribing whatever happened to be in the room.
+            // No gesture reaches here any more. A committed hold used to be
+            // condemned by any keystroke during it and abandoned at release —
+            // which on 10 Sep 2026 unlinked a five-minute dictation under a
+            // pill that said Listening. `ReplyGestureMachine` now ends every
+            // committed hold as `.replyEnded`; this leg survives for the
+            // self-test's E4 abort drill, and `recorder.abandon()` itself now
+            // keeps any capture that held speech.
             isBusy = false
             hud.recordingEnded()
             recorder.abandon()

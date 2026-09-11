@@ -51,7 +51,10 @@ public final class HotkeyMonitor: @unchecked Sendable {
         /// Option, held past the threshold.
         case replyBegan
         case replyEnded
-        /// The hold turned out to be part of a real shortcut. Throw the audio away.
+        /// A reply that must end without its audio being sent. No gesture
+        /// produces this any more (ruled 10 Sep 2026: a committed hold keeps
+        /// its speech, whatever the keyboard did); it remains as the abort leg
+        /// of the launch self-test's E4 drill, which drives it by hand.
         case replyAborted
         /// Bare ⌥ survived the arm grace (~80ms) with no other input: the
         /// instant-arm window opened (docs/instant-arm.md). The app shows the
@@ -137,6 +140,8 @@ public final class HotkeyMonitor: @unchecked Sendable {
 
     /// Mutated only from the tap callback, which runs on the main run loop.
     public private(set) var isPressed = false
+    /// One log line per committed hold for stray input, not one per key.
+    private var interferenceLogged = false
 
     /// Translate the machine's effects into transitions, in order. Runs on
     /// the main run loop (tap callback or a main-queue timer), like every
@@ -153,8 +158,6 @@ public final class HotkeyMonitor: @unchecked Sendable {
                 onTransition(.replyBegan)
             case .endReply:
                 onTransition(.replyEnded)
-            case .abortReply:
-                onTransition(.replyAborted)
             }
         }
     }
@@ -163,6 +166,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
         seenFlags = flags
         pressStartedAt = Date()
         sawOtherInput = false
+        interferenceLogged = false
         perform(machine.apply(.began(isReply: flags == bindings.reply)))
 
         // The arm window (instant-arm): scheduled only for the reply chord —
@@ -203,9 +207,9 @@ public final class HotkeyMonitor: @unchecked Sendable {
 
         let effects = machine.apply(.released)
         perform(effects)
-        // A concluded reply (ended or aborted) was the gesture's whole
-        // meaning; the tap classification below must not also run.
-        if effects.contains(.endReply) || effects.contains(.abortReply) { return }
+        // A concluded reply was the gesture's whole meaning; the tap
+        // classification below must not also run.
+        if effects.contains(.endReply) { return }
         guard !interfered, duration < holdThreshold else { return }
         switch flags {
         case bindings.next: onTransition(.next)
@@ -397,8 +401,28 @@ public final class HotkeyMonitor: @unchecked Sendable {
         // shortcut — Shift-A, Control-C, Option-drag — not one of ours. If the
         // arm window was open, the machine aborts it HERE, immediately: the
         // user is typing and must not stare at an arming face until key-up.
+        //
+        // Once the hold has COMMITTED, the same keystroke means nothing to the
+        // gesture: the machine ignores it and the release ends the reply
+        // normally. It is logged once per hold, because the 10 Sep loss was
+        // invisible — the keystroke that condemned 5m08s of speech wrote no
+        // line, so the log could prove a key was pressed but never which, or
+        // when. A hold this long being interfered with is rare enough to
+        // deserve its line; ⇧ held while typing capitals is not, and never
+        // reaches the log because the machine is not in a reply phase.
         if type == .keyDown || type == .leftMouseDown || type == .rightMouseDown {
-            if pressStartedAt != nil {
+            if let started = pressStartedAt {
+                let phase = machine.phase
+                if phase == .armed || (phase == .replying && !interferenceLogged) {
+                    interferenceLogged = phase == .replying
+                    let what = type == .keyDown
+                        ? "keyDown \(event.getIntegerValueField(.keyboardEventKeycode))"
+                        : "click"
+                    let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+                    Permissions.log("hotkey: \(what) during \(phase == .armed ? "arm window" : "committed hold")"
+                        + " at +\(elapsed)ms — "
+                        + (phase == .armed ? "arm reverted" : "ignored, the hold keeps its speech"))
+                }
                 sawOtherInput = true
                 perform(machine.apply(.sawOtherInput))
             }
