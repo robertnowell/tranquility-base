@@ -879,21 +879,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     expectedCommand: KnownHarnesses.adapter(for: live.harness)
                         .processCommandFragment)
                 let ended: String
+                // The reason a termination refused or wedged used to reach
+                // app.log only, so a stuck End was an opaque token remotely.
+                // It is the app's own words (a guard refusal, a kernel-wedged
+                // process), never the user's, so it is safe to carry.
+                var endDetail: String?
                 switch outcome {
                 case .refused(let why):
-                    Permissions.log("terminate: \(name) NOT ended — \(why)")
-                    ended = "refused"
+                    Permissions.log("terminate: \(name) NOT ended: \(why)")
+                    ended = "refused"; endDetail = why
                 case .survived:
                     Permissions.log("terminate: \(name) (pid \(live.pid)) survived "
                         + "SIGTERM and SIGKILL, it is wedged, and nothing else can be sent")
                     ended = "survived"
+                    endDetail = "survived SIGTERM and SIGKILL; wedged in the kernel"
                 case .alreadyGone:
                     ended = "already_gone"   // SessionTermination.trace has already said it
                 case .died:
                     ended = "died"
                 }
-                Track.record("agent_ended", ["agent_id": Track.hash(id), "outcome": .token(ended),
-                                             "harness": .token(live.harness), "via": "row_menu"])
+                var endedProps: [String: TrackValue] = [
+                    "agent_id": Track.hash(id), "outcome": .token(ended),
+                    "harness": .token(live.harness), "via": "row_menu"]
+                if let endDetail { endedProps["detail"] = .prose(endDetail) }
+                Track.record("agent_ended", endedProps)
                 await MainActor.run { self?.refreshGridAfterTerminate() }
             }
         }
@@ -1362,9 +1371,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                  "rewired": .int(rewired), "added": .int(added)])
                     repairedHarnesses.append(harness.label)
                 case .unavailable(let reason):
-                    Permissions.log("startup: \(harness.id) hooks NOT repaired — \(reason)")
+                    Permissions.log("startup: \(harness.id) hooks NOT repaired: \(reason)")
+                    // `.prose`, not `Track.phrase`: phrase kept only the clause
+                    // before the first colon, so "settings.json unreadable:
+                    // permission denied" lost "permission denied". The reason
+                    // is a file or permission error, scrubbed and bounded by
+                    // .prose, never user text.
                     Track.record("hooks_state", ["harness": .token(harness.id), "state": "not_repaired",
-                                                 "reason": Track.phrase(reason)])
+                                                 "reason": .prose(reason)])
                     hud.note("\(harness.label) hooks need attention: \(reason)")
                 }
             }
