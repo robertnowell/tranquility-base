@@ -290,3 +290,20 @@ extension AppDelegate {
     }
 
 }
+
+// MARK: - Keep-audio drill (ruling-an-open-microphone-is-a-promise)
+
+/// Runs the keep-audio data-path drill (Core's `KeepAudioDrill`) and reports
+/// each group through `SelfTest`. The logic lives in Core so `tbase keepdrill`
+/// runs the same checks; this is only the reporting shim. No mic, no real
+/// store, no global input — see `KeepAudioDrill`.
+func runKeepAudioDrill() {
+    do {
+        for group in try KeepAudioDrill.run() {
+            SelfTest.report(group.name, group.checks.map { ($0.name, $0.passed) })
+        }
+    } catch {
+        SelfTest.report("keepAudio", [("drillRan", false)])
+        Permissions.log("selftest keepAudio: FAIL — \(error)")
+    }
+}
