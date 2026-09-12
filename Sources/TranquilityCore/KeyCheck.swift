@@ -104,6 +104,12 @@ public enum KeyCheck {
     static func request(for key: Secrets.Key, value: String) -> URLRequest? {
         var request: URLRequest
         switch key {
+        case .hubToken:
+            // The hub lists this Mac's own devices: read-only, tenant-scoped,
+            // and a 401 is exactly "this token is not yours any more".
+            let base = HubApp.baseURL ?? URL(string: "https://hq.tranquilitybase.dev")!
+            request = URLRequest(url: base.appendingPathComponent("api/devices"))
+            request.setValue("Bearer " + value, forHTTPHeaderField: "Authorization")
         case .anthropicAPIKey:
             guard let url = URL(string: "https://api.anthropic.com/v1/models") else { return nil }
             request = URLRequest(url: url)

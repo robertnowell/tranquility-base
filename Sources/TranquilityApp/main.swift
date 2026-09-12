@@ -550,6 +550,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return StreamedUtterance(provider: AssemblyAIStreaming(), lexicon: terms)
             }
             self.coordinator = Coordinator(store: store)
+            // The mirror: every page and turn into the hub, while the panel
+            // runs. Nil until this Mac is connected; nothing else changes.
+            if let mirror = HubMirror.fromMachine(store: store) {
+                HubMirror.shared = mirror
+                mirror.start()
+                Permissions.log("hub: mirroring to \(HubApp.baseURL?.host ?? "?") as \(mirror.device)")
+            }
             let report = try store.reconcileOnBoot()
             if !report.adoptedAudio.isEmpty {
                 // Speech a previous process left unclaimed — a death, or an
@@ -1315,6 +1322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.rebuildMenu()
         }
         Coordinator.trace = { Permissions.log("routing: \($0)") }
+        HubMirror.trace = { Permissions.log("hub: \($0)") }
         TmuxTransport.trace = { Permissions.log($0) }
         // The ownership lookup's own evidence. Without it, a session killed
         // for being "hand-started" leaves only the conclusion in the log and

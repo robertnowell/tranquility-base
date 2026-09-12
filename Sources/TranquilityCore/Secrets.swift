@@ -24,6 +24,10 @@ public enum Secrets {
         case elevenLabsAPIKey = "elevenlabs-api-key"
         case assemblyAIAPIKey = "assemblyai-api-key"
         case openAIAPIKey = "openai-api-key"
+        /// The hub's device token: this Mac's credential for the mirror,
+        /// minted by the hub when the Mac was connected. Not a key a person
+        /// pastes, so no console URL.
+        case hubToken = "hub-token"
 
         /// The provider's name, as a person would say it.
         public var provider: String {
@@ -32,6 +36,7 @@ public enum Secrets {
             case .elevenLabsAPIKey: return "ElevenLabs"
             case .assemblyAIAPIKey: return "AssemblyAI"
             case .openAIAPIKey: return "OpenAI"
+            case .hubToken: return "Tranquility Knowledge Base"
             }
         }
 
@@ -42,6 +47,7 @@ public enum Secrets {
             case .elevenLabsAPIKey: return "the voice; without it, the system one"
             case .assemblyAIAPIKey: return "the live transcript while you speak"
             case .openAIAPIKey: return "Whisper, the durable transcript when streaming fails"
+            case .hubToken: return "the mirror: every page and turn, in the hub"
             }
         }
 
@@ -57,6 +63,7 @@ public enum Secrets {
             case .elevenLabsAPIKey: return URL(string: "https://elevenlabs.io/app/settings/api-keys")
             case .assemblyAIAPIKey: return URL(string: "https://www.assemblyai.com/dashboard/api-keys")
             case .openAIAPIKey: return URL(string: "https://platform.openai.com/api-keys")
+            case .hubToken: return nil
             }
         }
     }
