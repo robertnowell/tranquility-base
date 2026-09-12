@@ -137,4 +137,41 @@ final class UpdateReadinessTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(UpdateReadiness.requiredIdlePolls, 2)
         XCTAssertLessThanOrEqual(UpdateReadiness.requiredIdlePolls, 6)
     }
+    // MARK: - Offline (data) vs a real update-check failure (alert)
+
+    /// The transport errors the scheduled timer trips over on a sleeping or
+    /// disconnected Mac. On 1152 these fired hourly, fleet-wide, on Apple
+    /// Silicon too; routing them to the alert stream would have stormed Slack,
+    /// so they must classify as offline and stay data-only.
+    func testTransportErrorsClassifyAsOffline() {
+        for code in [NSURLErrorNotConnectedToInternet, NSURLErrorTimedOut,
+                     NSURLErrorNetworkConnectionLost, NSURLErrorCannotFindHost,
+                     NSURLErrorDNSLookupFailed, NSURLErrorCannotConnectToHost] {
+            let e = NSError(domain: NSURLErrorDomain, code: code)
+            XCTAssertTrue(UpdateReadiness.isOffline(e), "URL code \(code) is offline")
+        }
+    }
+
+    /// Sparkle nests the URL error under its own domain; a wrapped transport
+    /// error still reads as offline.
+    func testWrappedTransportErrorIsOffline() {
+        let inner = NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+        let outer = NSError(domain: "SUSparkleErrorDomain", code: 2001,
+                            userInfo: [NSUnderlyingErrorKey: inner])
+        XCTAssertTrue(UpdateReadiness.isOffline(outer))
+    }
+
+    /// A check that REACHED the feed and still failed is not offline, so it
+    /// alerts: a bad signature, a malformed appcast, an HTTP status. These are
+    /// ours to fix and must reach the failure stream, not be swallowed as data.
+    func testFeedAndSignatureErrorsAreNotOffline() {
+        let signature = NSError(domain: "SUSparkleErrorDomain", code: 4001)
+        let appcast = NSError(domain: "SUSparkleErrorDomain", code: 1001)
+        let http = NSError(domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse)
+        let tls = NSError(domain: NSURLErrorDomain, code: NSURLErrorSecureConnectionFailed)
+        XCTAssertFalse(UpdateReadiness.isOffline(signature), "a bad signature is actionable")
+        XCTAssertFalse(UpdateReadiness.isOffline(appcast), "a parse error is actionable")
+        XCTAssertFalse(UpdateReadiness.isOffline(http), "an HTTP status means the feed answered")
+        XCTAssertFalse(UpdateReadiness.isOffline(tls), "a TLS failure could be a cert problem")
+    }
 }
