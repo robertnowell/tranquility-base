@@ -1098,6 +1098,15 @@ public final class QueueStore: Sendable {
         }
     }
 
+    /// Briefs in arrival order past a cursor: the mirror's cursor is the last
+    /// event row it shipped, so this is exactly what it has not sent.
+    public func briefs(after cursor: Int64, limit: Int = 100) throws -> [StoredBrief] {
+        try dbQueue.read { db in
+            try StoredBrief.filter(Column("eventRowid") > cursor)
+                .order(Column("eventRowid")).limit(limit).fetchAll(db)
+        }
+    }
+
     // MARK: - Session voices (v8)
 
     /// The session's durable voice, assigning one round-robin on first ask.

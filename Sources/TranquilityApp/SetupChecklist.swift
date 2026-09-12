@@ -324,6 +324,13 @@ final class SetupChecklistView: NSStackView {
 
         case .anthropicKey, .elevenLabsKey, .assemblyAIKey:
             promptForKey(item)
+
+        case .hub:
+            // The browser is where sign-in happens; the app never asks for a
+            // password or a code. The token hand-back is the connect flow's
+            // job (hq-app-xst); until it lands, the door opens the front door.
+            let base = HubApp.baseURL ?? URL(string: "https://hq.tranquilitybase.dev")!
+            NSWorkspace.shared.open(base.appendingPathComponent("sign-in"))
         }
     }
 
