@@ -368,6 +368,14 @@ extension AppDelegate {
                 // that is exactly the moment a machine-wide default voice would
                 // make it a stranger.
                 let rungVoices = coordinator.voices(for: announcement.event.sessionId)
+                // The pull is on record before the audio starts: a reply
+                // quotes everything the user heard of this turn, and a rung
+                // stopped part-way was still heard (the same rule the
+                // announcement's own cursor uses, 13 Aug).
+                coordinator.recordRungHeard(
+                    sessionId: announcement.event.sessionId,
+                    eventRowid: announcement.event.latestId,
+                    kind: rung.kind, spoken: rung.spoken.text)
                 let spoken = await coordinator.speech.speak(
                     rung.spoken,
                     voice: rungVoices.cloud,

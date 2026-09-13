@@ -332,6 +332,43 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(try store.utterance(id: utteranceId)?.transcriptText, "yes go ahead")
     }
 
+    /// The ⌃⌃ rungs the user pulled are part of what they heard, so they are
+    /// part of the quote: in ladder order whatever order they were pulled,
+    /// once each however many times the walk wrapped, never the MESSAGE
+    /// rung (the announcement re-heard), and never another event's rungs.
+    func testPulledRungsRideTheReplyInLadderOrder() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
+        try append(at: 1_000, message: "first turn")
+        try append(at: 2_000, message: "second turn")
+        _ = try await coordinator.announceNext()
+        let event = try XCTUnwrap(try store.latestStop(for: "sess-1")).latestId
+
+        // Pulled out of ladder order, WHY twice, plus MESSAGE and a stray
+        // rung on the OLDER event.
+        coordinator.recordRungHeard(sessionId: "sess-1", eventRowid: event,
+                                    kind: .why, spoken: "We propose the migration because the schema moved.")
+        coordinator.recordRungHeard(sessionId: "sess-1", eventRowid: event,
+                                    kind: .findings, spoken: "Tests pass; two warnings remain.")
+        coordinator.recordRungHeard(sessionId: "sess-1", eventRowid: event,
+                                    kind: .why, spoken: "We propose the migration because the schema moved.")
+        coordinator.recordRungHeard(sessionId: "sess-1", eventRowid: event,
+                                    kind: .message, spoken: "the announcement again")
+        coordinator.recordRungHeard(sessionId: "sess-1", eventRowid: event - 1,
+                                    kind: .goal, spoken: "an older turn's goal")
+
+        guard case .readyToSend(let utteranceId, let shown, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+        XCTAssertEqual(shown,
+            "[assistant]: Fixing the export pipeline. Tests pass. Run the migration next. Proceed? "
+            + "Tests pass; two warnings remain. We propose the migration because the schema moved."
+            + "\n\n[user]: yes go ahead")
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected a dispatch") }
+        XCTAssertEqual(transport.sent, [shown])
+    }
+
     /// A turn nothing was spoken for has nothing to quote. A deep-linked reply
     /// to a session whose latest turn was never announced dispatches the
     /// transcript byte-identical to before the note existed.

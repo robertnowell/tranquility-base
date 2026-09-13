@@ -512,6 +512,24 @@ public final class QueueStore: Sendable {
                 t.add(column: "captureId", .text)
             }
         }
+        // Which ⌃⌃ rungs were SPOKEN for an event, with the exact text. A
+        // fact about the user, like the cursor, not about the brief: the reply
+        // that answers a turn quotes everything the user heard of it
+        // (`HeardContext`), and until 13 Sep pulls left no record, so the
+        // quote stopped at the announcement while the user had walked the
+        // whole ladder. Ruled 13 Sep: "rung 0 through rung n, concatenated
+        // into a paragraph." Stored as spoken, not recomposed from the brief
+        // at reply time, so the quote cannot drift from what was said.
+        m.registerMigration("v20_ladder_heard") { db in
+            try db.create(table: "ladder_heard") { t in
+                t.column("eventRowid", .integer).notNull()
+                t.column("sessionId", .text).notNull()
+                t.column("kind", .text).notNull()
+                t.column("spoken", .text).notNull()
+                t.column("atMs", .integer).notNull()
+                t.primaryKey(["eventRowid", "kind"])
+            }
+        }
         return m
     }
 
@@ -1068,6 +1086,38 @@ public final class QueueStore: Sendable {
                 SELECT b.* FROM brief b JOIN events e ON e.rowid = b.eventRowid
                 WHERE e.id = ? AND b.sessionId = ?
                 """, arguments: [eventId, sessionId])
+        }
+    }
+
+    // MARK: - Ladder rungs heard (v20)
+
+    /// A ⌃⌃ rung was spoken for this event. Idempotent per (event, kind): a
+    /// walk that wraps and re-hears FINDINGS records it once, with the text
+    /// spoken most recently.
+    public func recordRungHeard(
+        sessionId: String, eventRowid: Int64, kind: String, spoken: String,
+        at: Date = Date()
+    ) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO ladder_heard (eventRowid, sessionId, kind, spoken, atMs)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(eventRowid, kind) DO UPDATE SET
+                    spoken = excluded.spoken, atMs = excluded.atMs
+                """, arguments: [eventRowid, sessionId, kind, spoken,
+                                  Int64(at.timeIntervalSince1970 * 1000)])
+        }
+    }
+
+    /// The rungs spoken for one event, as (kind, spoken) in the order they
+    /// were first heard. The caller puts them in ladder order.
+    public func rungsHeard(sessionId: String, eventRowid: Int64) throws -> [(kind: String, spoken: String)] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT kind, spoken FROM ladder_heard
+                WHERE eventRowid = ? AND sessionId = ? ORDER BY atMs, rowid
+                """, arguments: [eventRowid, sessionId])
+            .map { (kind: $0["kind"] as String, spoken: $0["spoken"] as String) }
         }
     }
 
