@@ -81,6 +81,13 @@ public final class HubMirror: @unchecked Sendable {
     }
 
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+    /// What to do with the first page this Mac ever mirrors, if anything.
+    ///
+    /// A closure rather than a call, because raising a browser tab needs a
+    /// window server and this type is tested without one. The app installs
+    /// the door it already uses for every other "show me that page"; a test
+    /// installs a recorder; nil does nothing at all.
+    public nonisolated(unsafe) static var revealFirstReport: (@Sendable (URL) -> Void)?
     /// The one the app runs. Nil until the machine is connected.
     public nonisolated(unsafe) static var shared: HubMirror?
 
@@ -88,6 +95,13 @@ public final class HubMirror: @unchecked Sendable {
     public let agentsRoot: String
     public let stateURL: URL
     public let device: String
+    /// The hub this mirror is actually sending to, for the one place that
+    /// needs to build an address rather than a request: the first report's
+    /// reveal. Read from hq.json when the mirror is built for this machine,
+    /// and injected in tests, which have no hq.json and must not depend on
+    /// whether the machine running them happens to have one. CI found that:
+    /// the test passed on a connected Mac and failed everywhere else.
+    public var hubBase: URL?
     public let store: QueueStore?
     /// Where the artifact hook's records live (first-write times for pages).
     public let artifactRoot: String?
@@ -140,13 +154,15 @@ public final class HubMirror: @unchecked Sendable {
         }
         guard let token else { trace?("no hub token; not mirroring"); return nil }
         let support = QueueStore.supportDirectory
-        return HubMirror(
+        let mirror = HubMirror(
             transport: URLSessionTransport(base: base, token: token),
             agentsRoot: NSString(string: "~/Documents/agents").expandingTildeInPath,
             stateURL: support.appendingPathComponent("hub-mirror-state.json"),
             device: deviceName(),
             store: store,
             artifactRoot: support.path)
+        mirror.hubBase = base
+        return mirror
     }
 
     /// The same spelling the script used, so the hub keeps one row per Mac.
@@ -301,6 +317,13 @@ public final class HubMirror: @unchecked Sendable {
                 }
                 sync { state.sent.insert(c.hash) }
                 report.documents += 1
+                // The first page this Mac ever mirrors comes forward by
+                // itself, once. See FirstReport for why once and never again.
+                if FirstReport.pending, let show = Self.revealFirstReport,
+                   let at = HubApp.openURL(session: c.session, slug: slug, base: hubBase) {
+                    FirstReport.spent()
+                    show(at)
+                }
             } catch { report.failed += 1; report.note = "ingest \(slug): \(error.localizedDescription)" }
         }
     }
