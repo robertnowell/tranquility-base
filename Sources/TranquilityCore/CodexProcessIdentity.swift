@@ -97,10 +97,37 @@ public enum CodexProcessIdentity {
                        recordedId: recordedId, meta: meta)
     }
 
+    /// A thread that FORKED from the recorded one holds a lock of its own.
+    ///
+    /// The fast path believes the recorded id because its lock file is still
+    /// there, and a file is not a holder: nothing here has asked whether this
+    /// pid is the process behind it. On the pane that found the fork bug
+    /// Codex had dropped the parent's lock, which is what made that trade
+    /// sound — but "Codex always drops it" is an observation of one release,
+    /// not a guarantee, and if it ever stops being true the fast path
+    /// silently serves a dead id again.
+    ///
+    /// This is the cheap half of the proof. `lsof` can say which lock a pid
+    /// holds and costs a subprocess; a directory listing plus the memoized
+    /// fork map can say that the conversation has a child holding a lock,
+    /// which is evidence enough to stop trusting the file and go ask
+    /// properly. It answers false for the overwhelmingly common case (no
+    /// fork), so the normal path still performs no subprocess work.
+    static func conversationMovedOn(from recordedId: String, locks: URL,
+                                    lineage: SessionLineage.Map) -> Bool {
+        guard !lineage.isEmpty else { return false }
+        return CodexRollout.liveThreadIds(locks: locks).contains { id in
+            id.caseInsensitiveCompare(recordedId) != .orderedSame
+                && SessionLineage.origin(of: id, in: lineage)
+                    .caseInsensitiveCompare(recordedId) == .orderedSame
+        }
+    }
+
     public static func activeThreadId(
         for record: SessionOwnershipRecord,
         locks: URL = CodexRollout.threadWriterLocksDirectory,
-        sessions: URL = CodexRollout.sessionsDirectory
+        sessions: URL = CodexRollout.sessionsDirectory,
+        lineage: () -> SessionLineage.Map = { CodexLineage.scan() }
     ) -> String? {
         guard record.harness == CodexAdapter().id,
               UUID(uuidString: record.sessionId) != nil,
@@ -108,7 +135,8 @@ public enum CodexProcessIdentity {
         else { return nil }
 
         let recordedLock = locks.appendingPathComponent(record.sessionId.lowercased() + ".lock")
-        if FileManager.default.fileExists(atPath: recordedLock.path) {
+        if FileManager.default.fileExists(atPath: recordedLock.path),
+           !conversationMovedOn(from: record.sessionId, locks: locks, lineage: lineage()) {
             return record.sessionId
         }
 
