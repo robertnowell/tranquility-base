@@ -140,10 +140,12 @@ public enum Prerequisites {
         /// there for why.
         public var isRequired: Bool {
             switch self {
-            case .tmux, .hooks, .anthropicKey: return true
-            // Required once the connect flow exists (a Setup row that signs
-            // you in). Until then a new machine could not satisfy it.
-            case .hub, .elevenLabsKey, .assemblyAIKey: return false
+            // The hub joined the required rows on 13 Sep, when the connect
+            // flow landed and a new machine could finally satisfy it by
+            // pressing the button on the row. Before that it was optional for
+            // an honest reason: nothing on this screen could make it green.
+            case .tmux, .hooks, .anthropicKey, .hub: return true
+            case .elevenLabsKey, .assemblyAIKey: return false
             }
         }
 
@@ -226,6 +228,19 @@ public enum Prerequisites {
 
     /// Injected so the detectors are testable without a keychain, a real
     /// settings.json, or tmux on the machine running the tests.
+    /// What this Mac's hub connection amounts to: whether it is connected,
+    /// and the one line the row prints. Two fields rather than one string,
+    /// because "connected as mini, synced 2m ago" and "mini, not connected:
+    /// this Mac's key was revoked" are both details and only one of them is a
+    /// green lamp.
+    public struct HubState: Sendable, Equatable {
+        public var connected: Bool
+        public var detail: String
+        public init(connected: Bool, detail: String) {
+            self.connected = connected; self.detail = detail
+        }
+    }
+
     public struct Probes: Sendable {
         public var tmuxPath: @Sendable () -> String?
         /// nil when every hook is wired and reachable, matching `HookManifest`.
@@ -243,8 +258,12 @@ public enum Prerequisites {
         /// never asked. A row that reports a refusal in its text and a green
         /// lamp beside it is the state this closes.
         public var keyVerdict: @Sendable (Secrets.Key) -> KeyCheck.Outcome?
-        /// The hub's state for this Mac: a detail line when connected, nil when not.
-        public var hubStatus: @Sendable () -> String? = { nil }
+        /// The hub's state for this Mac, or nil when it has never been
+        /// connected. `connected` is separate from the text because a Mac
+        /// whose key was revoked has plenty to say and is not connected: one
+        /// string cannot carry both, and when it tried, a revoked token kept
+        /// a green lamp.
+        public var hubStatus: @Sendable () -> HubState? = { nil }
 
         public init(
             tmuxPath: @escaping @Sendable () -> String?,
@@ -253,7 +272,7 @@ public enum Prerequisites {
             keyVerdict: @escaping @Sendable (Secrets.Key) -> KeyCheck.Outcome? = { _ in nil },
             harnesses: @escaping @Sendable () -> [String]
                 = { HookManifest.detected().map(\.id) },
-            hubStatus: @escaping @Sendable () -> String? = { nil }
+            hubStatus: @escaping @Sendable () -> HubState? = { nil }
         ) {
             self.tmuxPath = tmuxPath
             self.hooksProblem = hooksProblem
@@ -291,11 +310,19 @@ public enum Prerequisites {
             hubStatus: {
                 guard HubApp.baseURL != nil, Secrets.read(.hubToken) != nil else { return nil }
                 let device = HubMirror.deviceName()
-                guard let beat = HubMirror.shared?.lastHeartbeat else { return "connected as \(device)" }
+                guard let beat = HubMirror.shared?.lastHeartbeat else {
+                    return HubState(connected: true, detail: "connected as \(device)")
+                }
                 let ago = Int(Date().timeIntervalSince(beat.at) / 60)
                 let when = ago < 1 ? "just now" : "\(ago)m ago"
-                return beat.note.hasPrefix("ok") ? "connected as \(device) · synced \(when)"
-                                                 : "connected as \(device) · \(beat.note)"
+                if beat.note.hasPrefix("ok") {
+                    return HubState(connected: true, detail: "connected as \(device) · synced \(when)")
+                }
+                // The mirror's own words. "not connected" in the note is the
+                // hub having refused this Mac's key, which is a red row with
+                // the button back, not a green one with bad news in the text.
+                return HubState(connected: !beat.note.hasPrefix("not connected"),
+                                detail: "\(device) · \(beat.note)")
             })
     }
 
@@ -361,8 +388,9 @@ public enum Prerequisites {
                 }
                 return State(item: item, satisfied: true, detail: "wired")
             case .hub:
-                if let status = probes.hubStatus() {
-                    return State(item: item, satisfied: true, detail: status)
+                if let hub = probes.hubStatus() {
+                    return State(item: item, satisfied: hub.connected, detail: hub.detail,
+                                 attention: !hub.connected)
                 }
                 return State(item: item, satisfied: false,
                              detail: "not connected. Sign in and your agents' pages and turns appear in the hub")

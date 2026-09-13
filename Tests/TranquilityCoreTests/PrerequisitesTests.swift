@@ -19,13 +19,15 @@ final class PrerequisitesTests: XCTestCase {
         tmux: String? = "/opt/homebrew/bin/tmux",
         hooks: String? = nil,
         secrets: Set<Secrets.Key> = Set(Secrets.Key.allCases),
-        harnesses: [String] = bothHarnesses
+        harnesses: [String] = bothHarnesses,
+        hub: Prerequisites.HubState? = Prerequisites.HubState(connected: true, detail: "connected as test-mac")
     ) -> Prerequisites.Probes {
         Prerequisites.Probes(
             tmuxPath: { tmux },
             hooksProblem: { _ in hooks },
             hasSecret: { secrets.contains($0) },
-            harnesses: { harnesses })
+            harnesses: { harnesses },
+            hubStatus: { hub })
     }
 
     /// The Claude Code row, which `probes()` always supplies. Named rather
@@ -48,6 +50,8 @@ final class PrerequisitesTests: XCTestCase {
         let required = Prerequisites.items(harnesses: Self.bothHarnesses).filter(\.isRequired)
         XCTAssertTrue(required.contains(.tmux))
         XCTAssertTrue(required.contains(.anthropicKey))
+        // Joined them 13 Sep, when the row could finally fix itself.
+        XCTAssertTrue(required.contains(.hub))
         XCTAssertFalse(required.contains(.elevenLabsKey))
         XCTAssertFalse(required.contains(.assemblyAIKey))
     }
@@ -109,6 +113,43 @@ final class PrerequisitesTests: XCTestCase {
         XCTAssertFalse(state(states, .anthropicKey).satisfied)
         XCTAssertFalse(Prerequisites.allRequiredSatisfied(states),
                        "without it the readout is the deterministic floor")
+    }
+
+    // MARK: - the hub
+
+    /// The hub is where the work goes now, and the row can fix itself since
+    /// the connect flow landed, so an unconnected Mac does not finish setup.
+    func testAnUnconnectedHubHoldsTheDoor() {
+        let states = Prerequisites.snapshot(probes(hub: nil))
+        let row = state(states, .hub)
+        XCTAssertFalse(row.satisfied)
+        XCTAssertTrue(row.detail.contains("not connected"), row.detail)
+        XCTAssertFalse(Prerequisites.allRequiredSatisfied(states),
+                       "first run is not finished on a Mac that mirrors nowhere")
+    }
+
+    /// A revoked key is not a green row with bad news in its text.
+    ///
+    /// The probe used to answer with one string, so "connected as mini" and
+    /// "connected as mini, not connected: key revoked" were the same kind of
+    /// answer and both lit the lamp. Whether this Mac is connected is now its
+    /// own field, and the mirror's refusal sets it.
+    func testARevokedKeyIsARedHubRow() {
+        let hub = Prerequisites.HubState(connected: false,
+                                         detail: "mini · " + HubMirror.refusal(401))
+        let states = Prerequisites.snapshot(probes(hub: hub))
+        let row = state(states, .hub)
+        XCTAssertFalse(row.satisfied)
+        XCTAssertTrue(row.attention)
+        XCTAssertTrue(row.detail.contains("revoked"), row.detail)
+    }
+
+    func testAConnectedHubIsGreenAndSaysWhichMac() {
+        let states = Prerequisites.snapshot(probes())
+        let row = state(states, .hub)
+        XCTAssertTrue(row.satisfied)
+        XCTAssertEqual(row.detail, "connected as test-mac")
+        XCTAssertEqual(Prerequisites.Item.hub.fixLabel, "Sign in")
     }
 
     // MARK: - what the rows say

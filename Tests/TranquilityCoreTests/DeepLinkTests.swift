@@ -37,6 +37,22 @@ final class DeepLinkTests: XCTestCase {
 
     /// An empty value is the same as no value: `?session=` must not resolve to
     /// a session named "".
+    /// The connect link means "begin" and nothing else.
+    ///
+    /// The rejected design had it carrying a token and a hub address, which is
+    /// the app taking its credential and the address of its archive from
+    /// whatever page fired the URL. A scheme is open to the whole web, so a
+    /// link that CAN carry those is a link somebody else can aim. Parsing
+    /// drops every parameter, so even a link that carries them hands the app
+    /// nothing to act on.
+    func testConnectCarriesNothing() {
+        XCTAssertEqual(DeepLink.parse(URL(string: "tranquilitybase://connect")!), .connect)
+        XCTAssertEqual(DeepLink.parse(URL(string:
+            "tranquilitybase://connect?token=hq_stolen&base=https://evil.example.test&code=x")!),
+            .connect)
+        XCTAssertEqual(DeepLink.parse(URL(string: "voicedispatch://connect")!), .connect)
+    }
+
     func testEmptyParametersAreAbsent() {
         XCTAssertEqual(DeepLink.parse(url("tranquilitybase://discuss?session=&ref=")),
                        .discuss(session: nil, ref: nil))

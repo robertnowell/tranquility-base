@@ -222,7 +222,11 @@ final class FirstRunInstallTests: XCTestCase {
             tmuxPath: { "/opt/homebrew/bin/tmux" },
             hooksProblem: { broken.contains($0) ? "5 pointing at a missing file" : nil },
             hasSecret: { _ in true },
-            harnesses: { harnesses })
+            harnesses: { harnesses },
+            // These tests are about hooks, and the hub row is required since
+            // 13 Sep: a machine with no hub would fail the gate here for a
+            // reason none of them is asking about.
+            hubStatus: { Prerequisites.HubState(connected: true, detail: "connected as test-mac") })
     }
 
     /// The half that worked is the half that was never printed.

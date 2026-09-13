@@ -87,6 +87,20 @@ public enum DeepLink {
         case hear(session: String?)
         case reply(session: String?)
         case show
+        /// "Start connecting this Mac to the hub."
+        ///
+        /// It carries NO parameters, and that is the design rather than an
+        /// omission. The obvious shape for this verb was a token and a hub
+        /// address in the link, which would have been the app taking both its
+        /// credential and the address of its archive from whatever page
+        /// happened to fire the URL. A scheme is open to the entire web and
+        /// cannot be owned (LaunchServices picks among every app that claims
+        /// it), so that link is a pointer somebody else gets to aim.
+        ///
+        /// This one means only "begin". The app supplies its own code and its
+        /// own host, and the hand-back happens over HTTPS between the app and
+        /// the hub, where no page can reach it. See `HubPairing`.
+        case connect
         case unknown(String)
     }
 
@@ -106,6 +120,7 @@ public enum DeepLink {
         case "hear":    return .hear(session: value("session"))
         case "reply":   return .reply(session: value("session"))
         case "show":    return .show
+        case "connect": return .connect
         case let other: return .unknown(other)
         }
     }
