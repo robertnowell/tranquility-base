@@ -518,6 +518,21 @@ do {
             failures += problems.count
         }
 
+        // Pages on disk that no record names — the other direction from the
+        // check above, and advisory for the same reason the fork survey below
+        // is: the repair is a hub rewrite, not a code change, and a deploy
+        // must not be held over one.
+        let unrecorded = HubIntegrity.unrecordedPages()
+        if unrecorded.isEmpty {
+            print("page records: every page on disk is recorded")
+        } else {
+            for problem in unrecorded.prefix(10) {
+                print("\(problem.session): \(problem.detail)")
+            }
+            print("\(unrecorded.count) unrecorded page(s) — "
+                  + "`tbase homebase <id>` reconciles that agent's directory")
+        }
+
         // Transcript forks. Read-only, and DELIBERATELY NOT A GATE.
         //
         // relaunch.sh runs this command on every deploy. The forked transcripts

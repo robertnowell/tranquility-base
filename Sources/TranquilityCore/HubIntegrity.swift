@@ -64,6 +64,65 @@ public enum HubIntegrity {
     /// and a test should be able to state that relationship without a
     /// filesystem — especially since every temp directory is (correctly)
     /// excluded from ever being an artifact.
+    /// Pages that exist in an agent's own directory and that NO record names.
+    ///
+    /// `check` asks whether every recorded page reaches its hub. This asks the
+    /// other direction — whether every page on disk was ever recorded at all —
+    /// and it is the direction that had no detector on 13 Sep, when a page
+    /// written eleven minutes after a Codex fork sat in the child's directory,
+    /// listed nowhere, while every existing check passed.
+    ///
+    /// Advisory, never a gate: `doctor` runs on the deploy path, and a page
+    /// whose hub has not been rewritten yet is a lag, not damage. The repair
+    /// is `tbase homebase <id>`, which reconciles the directory.
+    ///
+    /// Symlinked directories are skipped, exactly as in `check`: the
+    /// compatibility link at the old eight-character name would otherwise
+    /// report every page in the archive a second time under a path no record
+    /// uses.
+    public static func unrecordedPages(
+        artifactRoot: String = QueueStore.supportDirectory.path,
+        agentsRoot: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/agents", isDirectory: true)
+    ) -> [Problem] {
+        var recorded = Set<String>()
+        for session in recordedSessions(root: artifactRoot) {
+            for page in ArtifactStore.history(for: session, root: artifactRoot) {
+                recorded.insert(URL(fileURLWithPath: page.path)
+                    .resolvingSymlinksInPath().path)
+            }
+        }
+        var problems: [Problem] = []
+        for dir in (try? FileManager.default.contentsOfDirectory(
+            at: agentsRoot, includingPropertiesForKeys: nil)) ?? [] {
+            let slug = dir.lastPathComponent
+            guard SessionIdentity.isDirectoryName(slug),
+                  (try? dir.resourceValues(forKeys: [.isSymbolicLinkKey]))?
+                      .isSymbolicLink != true
+            else { continue }
+            for page in (try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil)) ?? []
+            where page.pathExtension == "html" && page.lastPathComponent != "index.html" {
+                // The same resolution the recorder does, or a build input
+                // reads as a missing page: `x.fragment.html` IS recorded, as
+                // the `x.html` beside it, and a fragment with nothing built
+                // yet is mid-build and has nothing to show either way.
+                guard !ArtifactStore.excluded(page.path),
+                      let rendering = ArtifactStore.faithfulRendering(of: page.path)
+                else { continue }
+                let resolved = URL(fileURLWithPath: rendering)
+                    .resolvingSymlinksInPath().path
+                guard !recorded.contains(resolved),
+                      ArtifactStore.belongs(page: page.path, to: slug) else { continue }
+                problems.append(Problem(
+                    session: slug,
+                    detail: "\(page.lastPathComponent) exists but no record names it "
+                          + "— it is on no hub"))
+            }
+        }
+        return problems
+    }
+
     public static func check(
         artifactRoot: String = QueueStore.supportDirectory.path,
         hubRoot: URL = HomeBase.root,
