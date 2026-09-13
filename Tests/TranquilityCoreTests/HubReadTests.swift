@@ -107,3 +107,60 @@ final class HubReadTests: XCTestCase {
                         "a hub invitation must start holding its page, not blank")
     }
 }
+
+/// The redirect chain. Measured against the live hub on 13 Sep: `/d/<id>`
+/// answered 200 with the token and `/open?session=&slug=` answered 401,
+/// because URLSession drops `Authorization` when it follows a redirect and
+/// `/open` is nothing BUT a redirect. Every page footer in the archive
+/// carries the `/open` shape.
+extension HubReadTests {
+
+    private func reply(_ req: URLRequest, _ status: Int, location: String? = nil,
+                       body: String = "") -> (Data, URLResponse) {
+        (Data(body.utf8),
+         HTTPURLResponse(url: req.url!, statusCode: status, httpVersion: nil,
+                         headerFields: location.map { ["location": $0] })!)
+    }
+
+    func testTheOpenShapeIsFollowedWithTheTokenStillOn() async {
+        let hub = URL(string: "https://hq.tranquilitybase.dev")!
+        var hops: [(String, String?)] = []
+        let r = await HubRead.fetch(
+            "https://hq.tranquilitybase.dev/open?session=abc&slug=plan",
+            base: hub, token: "sekret",
+            send: { req in
+                hops.append((req.url!.path, req.value(forHTTPHeaderField: "authorization")))
+                return req.url!.path == "/open"
+                    ? self.reply(req, 302, location: "/d/cf2833fa-e988-4bcd-bbef-1e1dc0f9a6b7")
+                    : self.reply(req, 200, body: "<h1>the plan</h1>")
+            })
+        XCTAssertEqual(r, .success("<h1>the plan</h1>"))
+        XCTAssertEqual(hops.map(\.0), ["/open", "/d/cf2833fa-e988-4bcd-bbef-1e1dc0f9a6b7"])
+        XCTAssertEqual(hops.map(\.1), ["Bearer sekret", "Bearer sekret"],
+                       "the credential must survive the hop, which is the whole bug")
+    }
+
+    func testARedirectOffTheHubNeverCarriesTheToken() async {
+        let hub = URL(string: "https://hq.tranquilitybase.dev")!
+        var paths: [String] = []
+        let r = await HubRead.fetch("cf2833fa-e988-4bcd-bbef-1e1dc0f9a6b7", base: hub, token: "t",
+                                    send: { req in
+            paths.append(req.url!.absoluteString)
+            return self.reply(req, 302, location: "https://evil.example/collect")
+        })
+        XCTAssertEqual(r, .failure(.notTheHub("https://evil.example/collect")))
+        XCTAssertEqual(paths.count, 1, "the second request is never made")
+    }
+
+    func testARedirectLoopStopsRatherThanSpinning() async {
+        let hub = URL(string: "https://hq.tranquilitybase.dev")!
+        var calls = 0
+        let r = await HubRead.fetch("cf2833fa-e988-4bcd-bbef-1e1dc0f9a6b7", base: hub, token: "t",
+                                    send: { req in
+            calls += 1
+            return self.reply(req, 302, location: "/d/cf2833fa-e988-4bcd-bbef-1e1dc0f9a6b7")
+        })
+        XCTAssertEqual(r, .failure(.http(310)))
+        XCTAssertEqual(calls, HubRead.maxHops)
+    }
+}

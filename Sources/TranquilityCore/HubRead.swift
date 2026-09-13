@@ -57,26 +57,59 @@ public enum HubRead {
         return url
     }
 
-    /// Fetch it as this Mac. `session` is injectable so a test never opens a socket.
+    /// How many hops a read will follow. `/open?session=&slug=` is one
+    /// redirect to `/d/<id>`; anything past a couple is a loop.
+    static let maxHops = 5
+
+    /// Fetch it as this Mac. `send` is injectable so a test never opens a socket.
+    ///
+    /// Redirects are followed HERE rather than by URLSession, for two reasons
+    /// and one of them was measured. URLSession strips `Authorization` when it
+    /// follows a redirect, so `/open?session=&slug=` — the address every page
+    /// footer in the archive carries — answered 401 while `/d/<id>` answered
+    /// 200. And following it ourselves means `resolve` runs again on every
+    /// hop, so a redirect that leaves the hub cannot carry the token with it.
     public static func fetch(
         _ arg: String,
         base: URL? = HubApp.baseURL,
         token: String? = Secrets.read(.hubToken),
-        send: (URLRequest) async throws -> (Data, URLResponse) = { try await URLSession.shared.data(for: $0) }
+        send: (URLRequest) async throws -> (Data, URLResponse) = { try await NoRedirect.send($0) }
     ) async -> Result<String, Failure> {
         guard let base, let token, !token.isEmpty else { return .failure(.notConnected) }
-        guard let url = resolve(arg, base: base) else { return .failure(.notTheHub(arg)) }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 30
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
-        do {
-            let (data, response) = try await send(req)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard var url = resolve(arg, base: base) else { return .failure(.notTheHub(arg)) }
+        for _ in 0..<maxHops {
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 30
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
+            let data: Data, response: URLResponse
+            do { (data, response) = try await send(req) }
+            catch { return .failure(.transport(error.localizedDescription)) }
+            let http = response as? HTTPURLResponse
+            let status = http?.statusCode ?? 0
+            if (300..<400).contains(status) {
+                guard let location = http?.value(forHTTPHeaderField: "location"),
+                      let next = URL(string: location, relativeTo: url)?.absoluteURL,
+                      let checked = resolve(next.absoluteString, base: base)
+                else { return .failure(.notTheHub(http?.value(forHTTPHeaderField: "location") ?? "")) }
+                url = checked
+                continue
+            }
             guard (200..<300).contains(status) else { return .failure(.http(status)) }
             return .success(String(decoding: data, as: UTF8.self))
-        } catch {
-            return .failure(.transport(error.localizedDescription))
         }
+        return .failure(.http(310))
+    }
+
+    /// A session that hands every redirect back rather than following it.
+    /// Its whole job is to stop URLSession dropping the credential mid-chain.
+    public final class NoRedirect: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        public static let shared = NoRedirect()
+        public static func send(_ req: URLRequest) async throws -> (Data, URLResponse) {
+            try await URLSession.shared.data(for: req, delegate: shared)
+        }
+        public func urlSession(_ session: URLSession, task: URLSessionTask,
+                               willPerformHTTPRedirection response: HTTPURLResponse,
+                               newRequest request: URLRequest) async -> URLRequest? { nil }
     }
 
     /// The page with its markup taken off, for a caller that wants the prose.
