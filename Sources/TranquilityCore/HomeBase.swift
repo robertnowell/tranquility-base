@@ -1769,6 +1769,20 @@ public extension HomeBase {
         let title = Self.title(
             sessionId: origin, transcriptPath: latest?.transcriptPath, live: here,
             firstPrompt: transcript.first?.prompt, topic: briefs.first?.topic)
+        // BEFORE the pages are gathered, not after the page is rendered.
+        //
+        // Reconciliation is what records a continuation's pages, and `pages:`
+        // below is read from the records — so running it after the render
+        // listed a forked agent's page one hub write LATE, and never at all
+        // for a conversation that had stopped writing hubs. Measured 13 Sep
+        // repairing `credits-launch-plan.html`: the first `tbase homebase`
+        // recorded it and rendered without it; the second listed it.
+        //
+        // The origin's own directory is still reconciled after the render,
+        // where it has always been: its pages are recorded by the hook as
+        // they are written, so it has nothing to catch up on, and the
+        // directory it scans does not exist yet at this point on a first write.
+        reconcileMembers(family, origin: origin, title: title)
         let model = Model(
             sessionId: origin,
             title: title,
@@ -1840,8 +1854,6 @@ public extension HomeBase {
         // A member whose directory is already a symlink to this one is
         // skipped: reconciling that is reconciling THIS directory a second
         // time under a second id, which would record every page here twice.
-        reconcileMembers(family, origin: model.sessionId, title: model.title,
-                         turns: model.turns, root: root)
         // Every continuation's directory points at this one, so a page a
         // continuation writes lands in the conversation's hub and a link that
         // names the continuation opens the same page.
