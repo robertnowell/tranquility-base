@@ -123,11 +123,30 @@ public enum CodexProcessIdentity {
         }
     }
 
+    /// The entry point every caller uses, with the signature it has always
+    /// had.
+    ///
+    /// Kept as its own function rather than folded into the one below with a
+    /// defaulted argument, because a defaulted argument RENAMES the symbol:
+    /// cross-module optimisation emits this default into its callers, so the
+    /// app target linked against `(for:locks:sessions:)` and an incremental
+    /// build that did not recompile it failed with an undefined symbol at
+    /// the very last step. `swift test` never saw it — only the app bundle
+    /// links. One overload costs nothing and cannot do that to anybody.
     public static func activeThreadId(
         for record: SessionOwnershipRecord,
         locks: URL = CodexRollout.threadWriterLocksDirectory,
-        sessions: URL = CodexRollout.sessionsDirectory,
-        lineage: () -> SessionLineage.Map = { CodexLineage.scan() }
+        sessions: URL = CodexRollout.sessionsDirectory
+    ) -> String? {
+        activeThreadId(for: record, locks: locks, sessions: sessions,
+                       lineage: { CodexLineage.scan() })
+    }
+
+    static func activeThreadId(
+        for record: SessionOwnershipRecord,
+        locks: URL,
+        sessions: URL,
+        lineage: () -> SessionLineage.Map
     ) -> String? {
         guard record.harness == CodexAdapter().id,
               UUID(uuidString: record.sessionId) != nil,
