@@ -265,6 +265,93 @@ final class CodexProcessIdentityTests: XCTestCase {
         XCTAssertNil(CodexProcessIdentity.threadId(lsofOutput: output, locks: locks))
     }
 
+    /// The bug of 13 Sep, in the shape the machine actually had it.
+    ///
+    /// pid 91395 held seven writer locks: the fork Robert had just made by
+    /// editing one prompt, and six sub-agents — three of them spawned two
+    /// days earlier and never released. Under "exactly one lock or nothing"
+    /// this was ambiguity, the pane kept its dead parent id, and the live
+    /// conversation appeared nowhere.
+    func testSubagentLocksDoNotMakeAForkAmbiguous() {
+        let subagents = ["01a0913c-d842-7f72-9950-69956d57d943",
+                         "01a09153-c702-7203-b5ab-84fb6da37be0",
+                         "01a09153-fa52-7621-817c-2bfd57537bb5",
+                         "01a09b8e-9cdd-7d80-9788-0a4c6beb2f7c",
+                         "01a09b8e-b24f-7a52-ac5f-5d7013b23bd9",
+                         "01a09b8e-c80c-7341-a9a6-653e4d5a1be0"]
+        let fork = "01a09b8d-c39b-7111-815c-6a09d382b46a"
+        let output = (subagents + [fork])
+            .map { "n/Users/test/.codex/thread-writer-locks/\($0).lock" }
+            .joined(separator: "\n")
+        let meta = { (id: String) -> CodexRollout.SessionMeta? in
+            subagents.contains(id)
+                ? CodexRollout.SessionMeta(sessionId: id, threadSource: "subagent",
+                                           forkedFromId: self.parent)
+                : CodexRollout.SessionMeta(sessionId: id, threadSource: "user",
+                                           forkedFromId: self.parent)
+        }
+        XCTAssertEqual(CodexProcessIdentity.threadId(lsofOutput: output, locks: locks,
+                                                     recordedId: parent, meta: meta), fork)
+    }
+
+    /// A sub-agent excludes itself only by SAYING so. A candidate whose
+    /// rollout has not been written yet is still a candidate, because the
+    /// alternative is dropping a thread for being new.
+    func testAThreadWithNoRolloutYetIsStillACandidate() {
+        let output = "n/Users/test/.codex/thread-writer-locks/\(child).lock"
+        XCTAssertEqual(CodexProcessIdentity.threadId(lsofOutput: output, locks: locks,
+                                                     recordedId: parent,
+                                                     meta: { _ in nil }), child)
+    }
+
+    /// Two live conversations in one pid stays ambiguity: the fork chain
+    /// decides, and when neither candidate descends from the recorded id
+    /// there is nothing to decide with.
+    func testTwoUnrelatedConversationsInOnePidRemainAmbiguous() {
+        let other = "01a09b8f-1111-7000-8000-aaaaaaaaaaaa"
+        let output = [child, other]
+            .map { "n/Users/test/.codex/thread-writer-locks/\($0).lock" }
+            .joined(separator: "\n")
+        let meta = { (id: String) -> CodexRollout.SessionMeta? in
+            CodexRollout.SessionMeta(sessionId: id, threadSource: "user")
+        }
+        XCTAssertNil(CodexProcessIdentity.threadId(lsofOutput: output, locks: locks,
+                                                   recordedId: parent, meta: meta))
+    }
+
+    /// Editing two prompts back forks twice, so the live thread is the
+    /// recorded id's GRANDCHILD. The chain is walked, not just the link.
+    func testForkOfAForkIsStillTheSameConversation() {
+        let middle = "01a09b8e-2222-7000-8000-bbbbbbbbbbbb"
+        let output = [child, "01a09b90-3333-7000-8000-cccccccccccc"]
+            .map { "n/Users/test/.codex/thread-writer-locks/\($0).lock" }
+            .joined(separator: "\n")
+        let meta = { (id: String) -> CodexRollout.SessionMeta? in
+            switch id {
+            case self.child:
+                return CodexRollout.SessionMeta(sessionId: id, threadSource: "user",
+                                                forkedFromId: middle)
+            case middle:
+                return CodexRollout.SessionMeta(sessionId: id, threadSource: "user",
+                                                forkedFromId: self.parent)
+            default:
+                return CodexRollout.SessionMeta(sessionId: id, threadSource: "user")
+            }
+        }
+        XCTAssertEqual(CodexProcessIdentity.threadId(lsofOutput: output, locks: locks,
+                                                     recordedId: parent, meta: meta), child)
+    }
+
+    /// A `forked_from_id` cycle is not something Codex writes, and must not
+    /// be something this spins on.
+    func testAForkCycleTerminates() {
+        let meta = { (id: String) -> CodexRollout.SessionMeta? in
+            CodexRollout.SessionMeta(sessionId: id, threadSource: "user",
+                                     forkedFromId: id == self.child ? self.parent : self.child)
+        }
+        XCTAssertFalse(CodexProcessIdentity.descends(child, from: "nobody", meta: meta))
+    }
+
     func testTtyNormalizationTreatsDevPrefixAsPresentationOnly() {
         XCTAssertEqual(CodexProcessIdentity.normalizedTty("/dev/ttys014"), "ttys014")
         XCTAssertEqual(CodexProcessIdentity.normalizedTty("ttys014"), "ttys014")
