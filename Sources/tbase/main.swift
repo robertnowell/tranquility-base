@@ -559,7 +559,8 @@ do {
         let minor = all.filter { $0.unreachable < TranscriptForks.significantUnreachable }
         for s in significant {
             print("\(s.sessionId.prefix(8))  \(s.leaves) branches  "
-                  + "\(s.unreachable) of \(s.linked) records unreachable")
+                  + "\(s.unreachable) of \(s.linked) records unreachable"
+                  + (s.retryOnly ? "  (an API retry won every branch point, not a second writer)" : ""))
         }
         if !minor.isEmpty {
             let n = minor.reduce(0) { $0 + $1.unreachable }
@@ -570,8 +571,15 @@ do {
         }
         if !significant.isEmpty {
             print("")
-            print("\(significant.count) transcript(s) lost conversation to a second writer. "
-                  + "Nothing is deleted and every branch is still on disk; a resume follows "
+            // Two claims, and the old sentence made only the first while
+            // asserting the second. Six of eleven on this Mac are retries.
+            let retries = significant.filter(\.retryOnly).count
+            print("\(significant.count) transcript(s) cannot resume their whole history"
+                  + (retries > 0
+                     ? " — \(retries) of them because a failed API request's retry record was "
+                       + "written last and won the branch point, which is one process, not two"
+                     : "")
+                  + ". Nothing is deleted and every branch is still on disk; a resume follows "
                   + "the branch written LAST, so export before resuming.")
             exit(1)
         }

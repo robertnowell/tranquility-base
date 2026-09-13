@@ -10,8 +10,9 @@ import XCTest
 final class TranscriptForksTests: XCTestCase {
 
     private func rec(_ uuid: String, _ parent: String?, sidechain: Bool = false,
-                     type: String = "user") -> String {
+                     type: String = "user", retry: Bool = false) -> String {
         var o = "{\"uuid\":\"\(uuid)\",\"type\":\"\(type)\""
+        if retry { o += ",\"retryAttempt\":1,\"retryInMs\":2000" }
         o += parent.map { ",\"parentUuid\":\"\($0)\"" } ?? ",\"parentUuid\":null"
         o += ",\"isSidechain\":\(sidechain)}"
         return o
@@ -189,6 +190,39 @@ extension TranscriptForksTests {
         let s = TranscriptForks.survey(text: text, sessionId: "sess")!
         XCTAssertEqual(s.unreachable, 1, "the assistant record below the attachment")
         XCTAssertTrue(s.isForked)
+    }
+
+    /// A failed API request writes a `system` record carrying `retryAttempt`,
+    /// parented on whatever was current when the REQUEST started and flushed
+    /// at the END of the run — so it wins the branch point and the work done
+    /// while the request was in flight becomes the abandoned side. The loss is
+    /// real and stays reported; the CAUSE is one process, and saying "a second
+    /// writer" was simply false for six of the eleven on this Mac.
+    func testARetryRecordWinningIsNotASecondWriter() {
+        let text = [
+            rec("a", nil), rec("ask", "a", type: "user"),
+            rec("said", "ask", type: "assistant"), rec("more", "said", type: "assistant"),
+            rec("retry", "ask", type: "system", retry: true),   // back-dated, written last
+            rec("after", "retry", type: "assistant"),
+        ].joined(separator: "\n")
+        let s = TranscriptForks.survey(text: text, sessionId: "sess")!
+        XCTAssertEqual(s.unreachable, 2, "the two assistant records still count as loss")
+        XCTAssertTrue(s.retryOnly)
+    }
+
+    /// And a real divergence is still called one, even in a file that also
+    /// had a retry.
+    func testOneRealDivergenceOutweighsTheRetries() {
+        let text = [
+            rec("a", nil), rec("ask", "a", type: "user"),
+            rec("said", "ask", type: "assistant"),
+            rec("retry", "ask", type: "system", retry: true),
+            rec("b", "retry", type: "user"),
+            rec("x1", "b", type: "assistant"), rec("x2", "x1", type: "assistant"),
+            rec("y1", "b", type: "assistant"),          // written last, wins on its own merit
+        ].joined(separator: "\n")
+        let s = TranscriptForks.survey(text: text, sessionId: "sess")!
+        XCTAssertFalse(s.retryOnly, "a conversation record won a branch point here")
     }
 
     func testMinorForksAreBelowTheReportingThreshold() {

@@ -73,6 +73,9 @@ public enum TranscriptForks {
         /// compaction and nothing has diverged. Kept because "14 branches" is
         /// still the most legible way to say how chopped-up a file is.
         public let leaves: Int
+        /// Every branch point that abandoned something was won by an API-retry
+        /// record. One process and a failed request, not two writers.
+        public let retryOnly: Bool
 
         public var unreachable: Int { max(0, linked - reachable) }
 
@@ -88,11 +91,13 @@ public enum TranscriptForks {
         /// worth.
         public var isForked: Bool { unreachable > 0 }
 
-        public init(sessionId: String, linked: Int, reachable: Int, leaves: Int) {
+        public init(sessionId: String, linked: Int, reachable: Int, leaves: Int,
+                    retryOnly: Bool = false) {
             self.sessionId = sessionId
             self.linked = linked
             self.reachable = reachable
             self.leaves = leaves
+            self.retryOnly = retryOnly
         }
     }
 
@@ -174,7 +179,7 @@ public enum TranscriptForks {
     /// be mid-append, and half a record is not a record. Unparseable lines are
     /// skipped for the same reason rather than failing the whole survey.
     public static func survey(text: String, sessionId: String) -> Survey? {
-        var records: [(uuid: String, parent: String?, sidechain: Bool, type: String)] = []
+        var records: [(uuid: String, parent: String?, sidechain: Bool, type: String, retry: Bool)] = []
         var byUuid: Set<String> = []
         // `omittingEmptySubsequences` keeps a trailing newline from producing a
         // phantom record; a final line with no newline is still parsed, and is
@@ -186,7 +191,8 @@ public enum TranscriptForks {
             else { continue }
             records.append((uuid, obj["parentUuid"] as? String,
                             (obj["isSidechain"] as? Bool) ?? false,
-                            (obj["type"] as? String) ?? ""))
+                            (obj["type"] as? String) ?? "",
+                            obj["retryAttempt"] != nil || obj["retryInMs"] != nil))
             byUuid.insert(uuid)
         }
         guard !records.isEmpty else { return nil }
@@ -346,16 +352,38 @@ public enum TranscriptForks {
             }
             return out
         }
+        // WHAT WON also says what happened, and for six of the eleven
+        // transcripts left on this Mac the answer is not "a second writer".
+        //
+        // When an API call fails, Claude Code writes a `system` record carrying
+        // `retryAttempt` and `retryInMs`. It is parented on whatever record was
+        // current when the REQUEST started and back-dated to then, but it is
+        // flushed to the file at the END of the run. Written last, so by the
+        // measured resume rule it wins the branch point, and the real
+        // conversation that happened while the request was in flight becomes
+        // the abandoned side: dd02c0f0 loses 119 of 172 records to one 5xx.
+        //
+        // The loss is real -- a resume would follow the retry branch -- so this
+        // is not silenced. But the count and the cause are different claims and
+        // the report made only one of them, out loud, wrongly.
         var abandonedUuids: Set<String> = []
+        var retryWon = 0, conversationWon = 0
+        let retryUuids = Set(records.filter(\.retry).map(\.uuid))
         for r in linked where (childrenOf[r.uuid]?.count ?? 0) > 1 {
             let subtrees = (childrenOf[r.uuid] ?? []).map { ($0, subtree($0)) }
             guard let survivor = subtrees.max(by: { a, b in
                 (a.1.compactMap { orderOf[$0] }.max() ?? -1)
                     < (b.1.compactMap { orderOf[$0] }.max() ?? -1)
             })?.0 else { continue }
+            var abandonedHere = false
             for (child, nodes) in subtrees where child != survivor {
+                if nodes.contains(where: { node in
+                    records.first(where: { $0.uuid == node })?.type != "attachment"
+                }) { abandonedHere = true }
                 abandonedUuids.formUnion(nodes)
             }
+            guard abandonedHere else { continue }
+            if retryUuids.contains(survivor) { retryWon += 1 } else { conversationWon += 1 }
         }
         // AN ATTACHMENT IS NOT CONVERSATION, and counting one as loss is the
         // third time this number has been wrong in the same direction.
@@ -389,6 +417,7 @@ public enum TranscriptForks {
         return Survey(sessionId: sessionId,
                       linked: linked.count,
                       reachable: linked.count - abandoned,
-                      leaves: leaves.count)
+                      leaves: leaves.count,
+                      retryOnly: retryWon > 0 && conversationWon == 0)
     }
 }
