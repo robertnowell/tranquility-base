@@ -237,17 +237,47 @@ final class ManagedSummaryTests: XCTestCase {
                 throw URLError(.networkConnectionLost)
             }
         }
-        let first = ManagedSummaryClient(accountId: account, transport: LoseReply(transport), outbox: try outbox())
-        do { _ = try await first.summarize(source: source, request: request); XCTFail("deliberately lost reply") }
-        catch { XCTAssertEqual(error as? ManagedSummaryFailure, .outcomeUnknown(operationId: source.operationId(accountId: account))) }
-        let restarted = ManagedSummaryClient(accountId: account, transport: transport, outbox: try outbox())
-        let op = try await restarted.summarize(source: source, request: request)
-        XCTAssertEqual(op.state, .succeeded); XCTAssertEqual(op.receipt?.chargedMicros, "20000")
-        XCTAssertEqual(op.receipt?.balanceAfter.availableMicros, "9980000")
-        let otherDevice = ManagedSummaryClient(accountId: account, transport: transport, outbox: try outbox("other-device"))
-        let replay = try await otherDevice.summarize(source: source, request: request)
-        XCTAssertEqual(replay, op)
-        let balance = try await restarted.balance()
+        let queueURL = directory.appendingPathComponent("queue.sqlite")
+        let queue = try QueueStore(url: queueURL)
+        let event = QueuedEvent(id: source.turnId, createdAtMs: Int64(Date().timeIntervalSince1970 * 1000),
+                                hookEvent: .stop, sessionId: source.taskId, promptId: source.turnId,
+                                lastAssistantMessage: request.lastAssistantMessage)
+        try queue.insert(event: event, summarySource: source)
+        let row = try XCTUnwrap(queue.waitingSessions().first)
+        func coordinator(_ store: QueueStore, _ http: any GatewayTransport, _ name: String = "outbox") throws -> Coordinator {
+            let client = ManagedSummaryClient(accountId: account, transport: http, outbox: try outbox(name))
+            let speech = CreditedCoordinatorTests.SilentSpeech(fails: false)
+            return Coordinator(store: store, summarizer: SummarizerChain(managed: ManagedSummaryProvider(client: client)),
+                speech: SpeechChain(preferred: speech, fallback: speech),
+                gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+                enrolment: EnrolmentRegistry(url: directory.appendingPathComponent("enrolled.json")),
+                agents: CreditedCoordinatorTests.Agents(),
+                recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
+        }
+        try await coordinator(queue, LoseReply(transport)).prepareNext()
+        XCTAssertNil(try queue.storedBrief(sessionId: row.sessionId, eventRowid: row.latestId))
+        let reopened = try QueueStore(url: queueURL)
+        try await coordinator(reopened, transport).prepareNext()
+        let receipt = try XCTUnwrap(reopened.storedSummary(sessionId: row.sessionId, eventRowid: row.latestId)?.receipt)
+        XCTAssertEqual(receipt.operationId, source.operationId(accountId: account))
+        XCTAssertEqual(receipt.chargedMicros, "20000"); XCTAssertEqual(receipt.balanceAfter.availableMicros, "9980000")
+        XCTAssertFalse(try XCTUnwrap(reopened.waitingSessions().first).heard)
+        let offline = Transport([])
+        guard case .spoke(let announcement) = try await coordinator(try QueueStore(url: queueURL), offline).announceNext() else {
+            return XCTFail("expected offline receipt-bearing announcement")
+        }
+        XCTAssertEqual(announcement.managedReceipt, receipt); XCTAssertNil(announcement.managedFailure)
+        let offlineCalls = await offline.methods; XCTAssertTrue(offlineCalls.isEmpty)
+        // Independent queue and outbox model another viewing device. Imported
+        // source is unchanged, while local rowids differ. No actual second Mac.
+        let other = try QueueStore(url: directory.appendingPathComponent("other-queue.sqlite"))
+        try other.insert(event: QueuedEvent(createdAtMs: 0, hookEvent: .userPromptSubmit, sessionId: "unrelated"))
+        try other.insert(event: event, summarySource: source)
+        let otherRow = try XCTUnwrap(other.waitingSessions().first)
+        XCTAssertNotEqual(otherRow.latestId, row.latestId)
+        try await coordinator(other, transport, "other-device").prepareNext()
+        XCTAssertEqual(try other.storedSummary(sessionId: otherRow.sessionId, eventRowid: otherRow.latestId)?.receipt, receipt)
+        let balance = try await ManagedSummaryClient(accountId: account, transport: transport, outbox: try outbox()).balance()
         XCTAssertEqual(balance.availableMicros, "9980000"); XCTAssertEqual(balance.reservedMicros, "0")
     }
 }

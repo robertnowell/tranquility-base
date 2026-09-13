@@ -35,12 +35,7 @@ extension Coordinator {
         // A stored brief for this exact event (written before a restart) is the
         // same summary this call would regenerate — load it instead of paying
         // for a model call twice.
-        let summary: Summary
-        if let restored = restoredSummary(for: session) {
-            summary = restored
-        } else {
-            summary = await summarize(session)
-        }
+        let summary = await resolveSummary(for: session)
         await prepared.put(summary, for: session.sessionId, latest: session.latestId)
         // Text AND audio, both before the press (ruled 08 Aug). Writing the
         // summary ahead of time already removed the model call from the critical
@@ -235,6 +230,8 @@ extension Coordinator {
         /// carrying the reason. A downgrade the user cannot see is a downgrade they
         /// will assume is just how the app sounds now.
         public var degraded: String?
+        public var managedReceipt: GatewayReceipt? = nil
+        public var managedFailure: ManagedSummaryFailure? = nil
 
         /// A2 hail, Core half. DORMANT twice over now: `announceNext` never
         /// spoke this, the app's spoken hail died on 10 Aug ("it never once
@@ -318,10 +315,7 @@ extension Coordinator {
         // Prepared miss — usually a restart. The brief for this exact event may
         // be durable (v6), in which case catch-up needs no model call and the
         // card fields survive. Only a genuine store miss re-summarizes.
-        if let restored = restoredSummary(for: session) {
-            return try await speak(restored, for: session, onWillSpeak: onWillSpeak, onWord: onWord)
-        }
-        let summary = await summarize(session)
+        let summary = await resolveSummary(for: session)
         return try await speak(summary, for: session, onWillSpeak: onWillSpeak, onWord: onWord)
     }
 
@@ -346,6 +340,24 @@ extension Coordinator {
     public func voices(for sessionId: String) -> (cloud: String?, system: String?) {
         (try? store.voices(for: sessionId, roster: VoiceRoster.load(),
                            systemRoster: VoiceRoster.loadSystem())) ?? (nil, nil)
+    }
+
+    private func resolveSummary(for event: WaitingSession) async -> Summary {
+        // A shared task is intentionally not cancelled by an individual audio
+        // caller. Do not create that task if this caller was already cancelled.
+        guard !Task.isCancelled else {
+            return Summary(spoken: summarizer.sanitizer.sanitize(""),
+                           brief: SessionBrief(topic: event.projectLabel, happened: ""),
+                           provider: "none", latencyMs: 0)
+        }
+        if summarizer.providers.contains(where: { $0.usesManagedCredits }) {
+            return await managedPreparations.value(for: event.latestId) {
+                if let restored = restoredSummary(for: event) { return restored }
+                return await summarize(event)
+            }
+        }
+        if let restored = restoredSummary(for: event) { return restored }
+        return await summarize(event)
     }
 
     private func summarize(_ event: WaitingSession) async -> Summary {
@@ -388,7 +400,8 @@ extension Coordinator {
             gitBranch: Coordinator.branch(transcript: context?.gitBranch, cwd: event.cwd),
             cwd: event.cwd,
             hookEvent: event.hookEvent,
-            notificationMatcher: event.notificationMatcher),
+            notificationMatcher: event.notificationMatcher,
+            managedSource: try? store.summarySource(eventRowid: event.latestId)),
             lexicon: lexicon.allowlistTerms)
 
         if summary.provider == "empty-source" {
@@ -416,7 +429,8 @@ extension Coordinator {
             try store.saveBrief(
                 summary.brief, sessionId: event.sessionId, eventRowid: event.latestId,
                 provider: summary.provider,
-                callsign: event.callsign ?? ((try? store.callsign(for: event.sessionId)) ?? nil))
+                callsign: event.callsign ?? ((try? store.callsign(for: event.sessionId)) ?? nil),
+                managedReceipt: summary.managedReceipt)
             // The hub catches up the moment the brief exists, not the moment a
             // turn is SPOKEN. Riding the announcement path alone meant a
             // session whose turns were read but never played kept a stale hub
@@ -446,8 +460,26 @@ extension Coordinator {
     /// announcement is distinguishable from a fresh one. Nil when the store has
     /// nothing for this event, in which case the caller summarizes as before.
     private func restoredSummary(for event: WaitingSession) -> Summary? {
-        guard let stored = try? store.storedBrief(
-            sessionId: event.sessionId, eventRowid: event.latestId) else { return nil }
+        let managed = summarizer.providers.contains(where: { $0.usesManagedCredits })
+        let cached: (brief: StoredBrief, receipt: GatewayReceipt?)
+        var invalidReceipt = false
+        do {
+            guard let value = try store.storedSummary(sessionId: event.sessionId, eventRowid: event.latestId) else { return nil }
+            cached = value
+        } catch {
+            // In direct mode, metadata corruption is not authority to pay a
+            // personal provider to regenerate already-delivered content.
+            guard !managed, let brief = try? store.storedBrief(sessionId: event.sessionId, eventRowid: event.latestId)
+            else { return nil }
+            cached = (brief, nil)
+            invalidReceipt = true
+        }
+        let stored = cached.brief
+        // Never silently restore a paid brief with its receipt lost. Managed
+        // composition recovers through the same outbox/key; BYOK preserves the
+        // available content with an explicit metadata failure, no extra charge.
+        let missingReceipt = invalidReceipt || (stored.provider.hasPrefix("tranquility-gateway") && cached.receipt == nil)
+        if missingReceipt && managed { return nil }
         let brief = stored.brief
 
         // Same allowlist recipe as a fresh summarize, so a lexicon-established
@@ -466,7 +498,9 @@ extension Coordinator {
             labels,
             from: summarizer.sanitizer.sanitize(brief.spokenText(), allowing: speakable))
         return Summary(spoken: spoken, brief: brief,
-                       provider: stored.provider + "+stored", latencyMs: 0)
+                       provider: stored.provider + "+stored", latencyMs: 0,
+                       managedReceipt: cached.receipt,
+                       managedFailure: missingReceipt ? .invalidResponse : nil)
     }
 
     // MARK: - Attribution
@@ -550,7 +584,8 @@ extension Coordinator {
         // let an interrupt handler write a stale copy back over a dismissal.
         let announcement = Announcement(
             event: session, brief: summary.brief, spoken: summary.spoken,
-            via: speech.fallback.name)
+            via: speech.fallback.name,
+            managedReceipt: summary.managedReceipt, managedFailure: summary.managedFailure)
         // The stage has to be TAKEN before anything is spoken into it.
         //
         // This callback used to return Void, so a refusal was invisible from here
@@ -608,7 +643,8 @@ extension Coordinator {
         }
         return .spoke(Announcement(
             event: session, brief: summary.brief, spoken: summary.spoken,
-            via: spoken.provider, degraded: spoken.degraded))
+            via: spoken.provider, degraded: spoken.degraded,
+            managedReceipt: summary.managedReceipt, managedFailure: summary.managedFailure))
     }
 
     /// "HEAD" is not a branch — it is what git reports for a detached checkout

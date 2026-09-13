@@ -7,6 +7,9 @@ import Foundation
 public struct Coordinator: Sendable {
     public let store: QueueStore
     public let summarizer: SummarizerChain
+    /// Stable producing-installation identity, explicitly supplied by managed
+    /// composition. Nil keeps legacy intake unchanged; never generate per launch.
+    public let localSummaryOriginId: UUID?
     public let speech: SpeechChain
     public let gate: InterruptGate
     /// The one dispatch transport (single-transport cut, 23 Aug — the
@@ -86,6 +89,7 @@ public struct Coordinator: Sendable {
     public init(
         store: QueueStore,
         summarizer: SummarizerChain = SummarizerChain(),
+        localSummaryOriginId: UUID? = nil,
         speech: SpeechChain = SpeechChain(),
         gate: InterruptGate = InterruptGate(),
         tmuxTransport: any DispatchTransport = TmuxTransport(),
@@ -117,6 +121,7 @@ public struct Coordinator: Sendable {
         self.store = store
         self.prepared = PreparedSummaries()
         self.summarizer = summarizer
+        self.localSummaryOriginId = localSummaryOriginId
         self.speech = speech
         self.gate = gate
         self.tmuxTransport = tmuxTransport
@@ -140,7 +145,7 @@ public struct Coordinator: Sendable {
 
     @discardableResult
     public func intake() throws -> SpoolDrainer.DrainResult {
-        try SpoolDrainer(store: store).drain()
+        try SpoolDrainer(store: store, summaryOriginId: localSummaryOriginId).drain()
     }
 
     /// Summaries computed in memory, ahead of being asked for.
@@ -163,6 +168,10 @@ public struct Coordinator: Sendable {
         private var bySession: [String: (latestId: Int64, summary: Summary)] = [:]
         func has(_ id: String, latest: Int64) -> Bool { bySession[id]?.latestId == latest }
         func put(_ summary: Summary, for id: String, latest: Int64) {
+            // A pending/free floor is observable, but not a permanent cache hit:
+            // the next preparation must GET the same durable operation again.
+            guard summary.managedFailure == nil, summary.provider != "none" else { return }
+            guard bySession[id].map({ $0.latestId <= latest }) ?? true else { return }
             bySession[id] = (latest, summary)
         }
         /// Read WITHOUT consuming — for warming the audio of something already
@@ -182,4 +191,19 @@ public struct Coordinator: Sendable {
     }
 
     let prepared: PreparedSummaries
+    let managedPreparations = ManagedPreparations()
+
+    /// Share overlapping prepare/announce work, including its receipt. A caller
+    /// abandoning audio must not cancel paid work another caller is awaiting.
+    actor ManagedPreparations {
+        private var pending: [Int64: Task<Summary, Never>] = [:]
+        func value(for event: Int64, build: @escaping @Sendable () async -> Summary) async -> Summary {
+            if let task = pending[event] { return await task.value }
+            let task = Task { await build() }
+            pending[event] = task
+            let result = await task.value
+            pending[event] = nil
+            return result
+        }
+    }
 }

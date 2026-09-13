@@ -12,6 +12,18 @@ public struct GatewaySource: Codable, Sendable, Equatable {
         self.namespace = namespace; self.taskId = taskId; self.turnId = turnId; self.intentId = intentId
     }
 
+    /// Only for a locally produced hook event, at ingestion. The origin UUID
+    /// belongs to the producing installation and must survive upgrades. Imported
+    /// events carry their original source unchanged, never the viewing Mac's ID.
+    public static func localHook(_ event: QueuedEvent, originId: UUID) -> GatewaySource {
+        GatewaySource(namespace: "local:\(originId.uuidString.lowercased())",
+                      taskId: event.sessionId, turnId: event.id)
+    }
+
+    var isValid: Bool {
+        [namespace, taskId, turnId, intentId].allSatisfy { (1...256).contains($0.unicodeScalars.count) }
+    }
+
     /// Hashes identity, NOT content. See contracts/gateway/v1 for byte framing.
     public func operationId(accountId: UUID) -> String {
         var bytes = Data("tb.summary.v1\0".utf8)
@@ -136,6 +148,7 @@ enum GatewayContract {
 /// A free fallback must not erase these actionable financial/transport outcomes.
 public enum ManagedSummaryFailure: Error, Sendable, Equatable {
     case missingSourceIdentity
+    case sourceIdentityConflict
     case correctiveRetryNotAllowed
     case refused(code: String, operationId: String?)
     case pending(operationId: String, state: GatewayOperation.State)
