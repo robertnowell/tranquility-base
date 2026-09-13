@@ -60,7 +60,7 @@ extension AppDelegate {
             case let .home(s, r):    session = s; ref = r
             case let .hear(s):       session = s; ref = nil
             case let .reply(s):      session = s; ref = nil
-            case .show, .unknown:    session = nil; ref = nil
+            case .show, .connect, .unknown: session = nil; ref = nil
             }
             Permissions.log("deeplink: \(action) session=\(session?.prefix(8) ?? "-")")
             var link: [String: TrackValue] = ["action": Track.token(from: action),
@@ -124,6 +124,16 @@ extension AppDelegate {
                 }
             case "show":
                 showPanel()
+            case "connect":
+                // "Begin", and nothing else: the link carries no token and no
+                // address, so this is the same flow the Setup row starts. The
+                // panel comes up because the phrase to compare is on it.
+                showPanel()
+                HubConnect.shared.onChange = { [weak self] in
+                    if let note = HubConnect.shared.note { self?.hud.note(note) }
+                }
+                HubConnect.shared.begin()
+                if let note = HubConnect.shared.note { hud.note(note) }
             default:
                 Permissions.log("deeplink: unknown action \(action)")
             }

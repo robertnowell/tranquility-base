@@ -145,4 +145,50 @@ final class HubMirrorTests: XCTestCase {
         let same = HubMirror.changedNames(sessions: [s], live: [:], previous: [session: "promotions rebuild"])
         XCTAssertTrue(same.isEmpty)
     }
+
+    // MARK: - Stopping, and being refused
+
+    /// A refused Mac says so.
+    ///
+    /// The heartbeat used to throw its status away, so the one request that
+    /// runs on every sweep could not report the one thing it is in a position
+    /// to know. A revoked token wrote "ok: 0 documents, 0 turns" onto the
+    /// Setup row on every pass, and the row stayed green over a mirror the hub
+    /// had been rejecting for a week.
+    func testA401IsReportedNotSwallowed() async {
+        final class Refusing: HubMirror.Transport, @unchecked Sendable {
+            func post(_ path: String, json: [String: Any]) async throws -> (status: Int, body: Data) {
+                path == "api/heartbeat" ? (401, Data("{}".utf8))
+                                        : (200, Data(#"{"known":[]}"#.utf8))
+            }
+        }
+        let m = HubMirror(transport: Refusing(), agentsRoot: tmp.appendingPathComponent("agents").path,
+                          stateURL: tmp.appendingPathComponent("state.json"), device: "test-mac",
+                          store: nil, artifactRoot: nil)
+        m.liveSessions = { [:] }
+        let report = await m.run(docs: false, turns: false)
+        XCTAssertTrue(report.unauthorized)
+        XCTAssertTrue(report.note.contains("revoked"), report.note)
+        XCTAssertEqual(m.lastHeartbeat?.note, HubMirror.refusal(401),
+                       "the row reads this, so it cannot say ok")
+    }
+
+    /// A timer nobody cancels is a leak with opinions: a reconnect used to
+    /// leave the previous sweep running against the previous token.
+    func testStopEndsTheTimer() async throws {
+        let hub = FakeHub()
+        let m = mirror(hub)
+        m.start(every: 0.05, docsEvery: 0.05)
+        var waited = 0.0
+        while hub.count("api/heartbeat") == 0, waited < 6 {
+            try await Task.sleep(nanoseconds: 50_000_000); waited += 0.05
+        }
+        XCTAssertGreaterThan(hub.count("api/heartbeat"), 0, "it never started")
+        m.stop()
+        // Whatever pass was in flight may still land; nothing after that.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let settled = hub.count("api/heartbeat")
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(hub.count("api/heartbeat"), settled, "the sweep kept going after stop()")
+    }
 }

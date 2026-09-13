@@ -54,4 +54,40 @@ final class HubAppTests: XCTestCase {
         try #"{"roots":{}}"#.write(to: cfg, atomically: true, encoding: .utf8)
         XCTAssertNil(HubApp.baseURL(config: cfg))
     }
+
+    /// hq.json belongs to everything that writes pages, not to this app. The
+    /// connect flow is the first time the panel writes it at all, and a
+    /// serialise-what-I-know writer would have quietly deleted the roots the
+    /// skills read and the keys the indexer sets.
+    func testWritingTheBaseURLPreservesUnknownKeys() throws {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("tranquility-tests/hubwrite-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cfg = dir.appendingPathComponent("hq.json")
+        try #"{"roots":{"agents":"~/Documents/agents"},"app":{"base_url":"https://old.example.test","theme":"archive"},"version":3}"#
+            .write(to: cfg, atomically: true, encoding: .utf8)
+
+        try HubApp.setBaseURL(URL(string: "https://new.example.test/")!, config: cfg)
+
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(
+            with: Data(contentsOf: cfg)) as? [String: Any])
+        XCTAssertEqual((obj["roots"] as? [String: Any])?["agents"] as? String, "~/Documents/agents")
+        XCTAssertEqual(obj["version"] as? Int, 3)
+        let app = try XCTUnwrap(obj["app"] as? [String: Any])
+        XCTAssertEqual(app["theme"] as? String, "archive", "a key this app knows nothing about")
+        XCTAssertEqual(app["base_url"] as? String, "https://new.example.test",
+                       "and no trailing slash, so every path built on it is one slash")
+        XCTAssertEqual(HubApp.baseURL(config: cfg)?.absoluteString, "https://new.example.test")
+    }
+
+    /// A machine that has never had one: the file is created, not required.
+    func testWritingTheBaseURLIntoNothingCreatesIt() throws {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("tranquility-tests/hubwrite-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cfg = dir.appendingPathComponent("nested/hq.json")
+        try HubApp.setBaseURL(URL(string: "https://fresh.example.test")!, config: cfg)
+        XCTAssertEqual(HubApp.baseURL(config: cfg)?.absoluteString, "https://fresh.example.test")
+    }
 }

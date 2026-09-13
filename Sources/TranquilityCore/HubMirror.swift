@@ -71,6 +71,12 @@ public final class HubMirror: @unchecked Sendable {
     public struct Report: Sendable, Equatable {
         public var documents = 0, turns = 0, renamed = 0, images = 0
         public var failed = 0
+        /// The hub refused this Mac's token. Kept apart from `failed` because
+        /// it is not a bad run, it is a machine that is no longer connected:
+        /// nothing here will work again until somebody connects it, and the
+        /// Setup row has to say so rather than showing a green lamp over a
+        /// mirror that has been rejected on every sweep since a revoke.
+        public var unauthorized = false
         public var note: String = ""
     }
 
@@ -166,7 +172,18 @@ public final class HubMirror: @unchecked Sendable {
             Task { _ = await self.run(names: full) }
         }
         t.resume()
-        timer = t
+        sync { timer = t }
+    }
+
+    /// Put the sweep down.
+    ///
+    /// `start()` kept its DispatchSourceTimer in a field nothing ever
+    /// cancelled, so a second mirror (a reconnect, or a test) left the first
+    /// one running against the old token forever. A timer that cannot be
+    /// stopped is a leak with opinions.
+    public func stop() {
+        let t: DispatchSourceTimer? = sync { let t = timer; timer = nil; return t }
+        t?.cancel()
     }
 
     /// Run soon. Coalesces: a burst of briefs is one pass, and a pass that is
@@ -196,7 +213,11 @@ public final class HubMirror: @unchecked Sendable {
         report.note = report.failed == 0
             ? "ok: \(report.documents) documents, \(report.turns) turns"
             : "failed: \(report.failed) request(s); last: \(report.note)"
-        await heartbeat(report.note)
+        let status = await heartbeat(report.note)
+        if status == 401 || status == 403 {
+            report.unauthorized = status == 401
+            report.note = Self.refusal(status)
+        }
         save()
         Self.trace?(report.note + (report.images > 0 ? " · \(report.images) image(s)" : ""))
         return report
@@ -533,11 +554,36 @@ public final class HubMirror: @unchecked Sendable {
 
     // MARK: - Heartbeat and state
 
-    func heartbeat(_ note: String) async {
+    /// The heartbeat, and what the hub said back.
+    ///
+    /// This used to discard the status, which meant the one request that runs
+    /// on every sweep could not tell anyone it had been refused: a revoked
+    /// token recorded "ok: 0 documents, 0 turns" on the Setup row forever,
+    /// because a 401 body and a 200 body are both just bytes to a caller that
+    /// never looks. The status is the whole point of asking.
+    @discardableResult
+    func heartbeat(_ note: String) async -> Int {
         do {
-            _ = try await transport.post("api/heartbeat", json: ["device": device, "note": String(note.prefix(200))])
-            sync { state.lastHeartbeatAt = Date(); state.lastHeartbeatNote = note }
-        } catch { Self.trace?("heartbeat: \(error.localizedDescription)") }
+            let (status, _) = try await transport.post(
+                "api/heartbeat", json: ["device": device, "note": String(note.prefix(200))])
+            let recorded = status == 200 ? note : Self.refusal(status)
+            if status != 200 { Self.trace?("heartbeat: HTTP \(status)") }
+            sync { state.lastHeartbeatAt = Date(); state.lastHeartbeatNote = recorded }
+            return status
+        } catch {
+            Self.trace?("heartbeat: \(error.localizedDescription)")
+            return 0
+        }
+    }
+
+    /// What a refused sweep says on the Setup row. Never a bare status code:
+    /// the row is read by somebody deciding whether their Mac is connected.
+    static func refusal(_ status: Int) -> String {
+        switch status {
+        case 401: return "not connected: this Mac's key was revoked. Connect it again"
+        case 403: return "refused by the hub"
+        default:  return "the hub answered \(status)"
+        }
     }
 
     /// For the Setup row: when this Mac last spoke to the hub, and what it said.
