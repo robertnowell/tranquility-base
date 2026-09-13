@@ -52,6 +52,22 @@ public enum Prerequisites {
         case elevenLabsKey
         /// The live transcript while you speak.
         case assemblyAIKey
+        /// Whisper, the durable transcript when streaming fails.
+        ///
+        /// MISSING UNTIL 13 SEP, and that omission is #326. `openAIAPIKey` had
+        /// been in `Secrets.Key` for weeks, so every part of the app that USES
+        /// it worked, and the only thing that did not exist was anywhere to
+        /// type it. The root cause is worth stating because it is about to be
+        /// repeated: this enum is hand-written and does NOT derive from
+        /// `Secrets.Key.allCases`, so adding a credential is two edits and the
+        /// second one has no compiler forcing it. `KeyCheck.request(for:)` is
+        /// an exhaustive switch and therefore does force its half, which is
+        /// exactly why that half was never missed.
+        case openAIKey
+        /// A cloud agent provider: one row per provider, carrying
+        /// `AgentProvider.id`, the same way `hooks` carries `HarnessAdapter.id`
+        /// rather than inventing a second vocabulary.
+        case provider(id: String)
 
         /// Stable, and stable across harnesses: "hooks.codex" is not
         /// "hooks.claude-code". Used for button identifiers and log lines.
@@ -63,6 +79,8 @@ public enum Prerequisites {
             case .anthropicKey: return "anthropicKey"
             case .elevenLabsKey: return "elevenLabsKey"
             case .assemblyAIKey: return "assemblyAIKey"
+            case .openAIKey: return "openAIKey"
+            case .provider(let id): return "provider." + id
             }
         }
 
@@ -73,7 +91,12 @@ public enum Prerequisites {
             case "anthropicKey": self = .anthropicKey
             case "elevenLabsKey": self = .elevenLabsKey
             case "assemblyAIKey": self = .assemblyAIKey
+            case "openAIKey": self = .openAIKey
             default:
+                if id.hasPrefix("provider.") {
+                    self = .provider(id: String(id.dropFirst("provider.".count)))
+                    return
+                }
                 guard id.hasPrefix("hooks.") else { return nil }
                 self = .hooks(harness: String(id.dropFirst("hooks.".count)))
             }
@@ -96,6 +119,8 @@ public enum Prerequisites {
             case .anthropicKey: return "Anthropic"
             case .elevenLabsKey: return "ElevenLabs"
             case .assemblyAIKey: return "AssemblyAI"
+            case .openAIKey: return "OpenAI"
+            case .provider(let id): return Secrets.credential(forProvider: id)?.provider ?? id
             }
         }
 
@@ -116,6 +141,8 @@ public enum Prerequisites {
             case .anthropicKey: return "spoken summaries, about a tenth of a cent each"
             case .elevenLabsKey: return "the voice; without it, the system one"
             case .assemblyAIKey: return "the live transcript while you speak"
+            case .openAIKey: return "the transcript that survives a streaming failure"
+            case .provider: return "that provider's agents, as rows you can answer"
             }
         }
 
@@ -145,7 +172,13 @@ public enum Prerequisites {
             // pressing the button on the row. Before that it was optional for
             // an honest reason: nothing on this screen could make it green.
             case .tmux, .hooks, .anthropicKey, .hub: return true
-            case .elevenLabsKey, .assemblyAIKey: return false
+            // OpenAI and the providers are optional for the same honest reason
+            // ElevenLabs is: without OpenAI a streaming failure costs the
+            // transcript rather than the app, and a machine that drives no
+            // cloud provider is a machine using the product as it has always
+            // worked. Neither one is the Anthropic case, where the fallback is
+            // "a floor, not a product".
+            case .elevenLabsKey, .assemblyAIKey, .openAIKey, .provider: return false
             }
         }
 
@@ -157,6 +190,8 @@ public enum Prerequisites {
             case .anthropicKey: return .anthropicAPIKey
             case .elevenLabsKey: return .elevenLabsAPIKey
             case .assemblyAIKey: return .assemblyAIAPIKey
+            case .openAIKey: return .openAIAPIKey
+            case .provider(let id): return Secrets.credential(forProvider: id)
             }
         }
 
@@ -177,7 +212,8 @@ public enum Prerequisites {
             // repairs every harness this machine has.
             case .hooks: return "Wire them"
             case .hub: return "Sign in"
-            case .anthropicKey, .elevenLabsKey, .assemblyAIKey: return "Paste key"
+            case .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey,
+                 .provider: return "Paste key"
             }
         }
     }
@@ -199,11 +235,26 @@ public enum Prerequisites {
     /// test that only passes on the developer's Mac is the same defect as the
     /// path that only breaks off it, which is what this whole branch is about.
     public static func items(
-        harnesses: [String] = HookManifest.detected().map(\.id)
+        harnesses: [String] = HookManifest.detected().map(\.id),
+        providers: [String] = ProviderConfig.configured()
     ) -> [Item] {
         [.tmux]
             + harnesses.map { Item.hooks(harness: $0) }
-            + [.hub, .anthropicKey, .elevenLabsKey, .assemblyAIKey]
+            + [.hub, .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey]
+            // A provider gets a row once this machine has an ADDRESS for it,
+            // the same way a harness gets a hooks row once it is detected.
+            // Listing every provider the app can drive would tell someone
+            // their crobot credential is missing on a machine that has never
+            // heard of crobot, which is what `Harness.isPresent` has always
+            // existed to prevent.
+            // A provider with no KNOWN CREDENTIAL gets no row. Its `secret` is
+            // nil, so `promptForKey` would return silently and the row would
+            // render a "Paste key" button that does nothing at all: the one
+            // outcome worse than no row, because it looks like a thing you can
+            // fix. `Secrets.credential(forProvider:)` is the single place that
+            // mapping lives, so this cannot drift from what the sheet can open.
+            + providers.filter { Secrets.credential(forProvider: $0) != nil }
+                .map { Item.provider(id: $0) }
     }
 
     public struct State: Sendable, Equatable {
@@ -253,6 +304,16 @@ public enum Prerequisites {
         /// "what is installed" is exactly the kind of question a test needs to
         /// answer for itself.
         public var harnesses: @Sendable () -> [String]
+        /// Which cloud providers this machine has an ADDRESS for, by
+        /// `AgentProvider.id`. A probe for the same reason `harnesses` is one.
+        ///
+        /// Added 13 Sep because it was missing, and missing here does not fail
+        /// loudly: `items(harnesses:providers:)` defaults `providers` to
+        /// `ProviderConfig.configured()`, and `snapshot` passed `harnesses:`
+        /// and not `providers:`, so half the rows read the real `~/.claude/hq.json`
+        /// straight through the seam built to stop exactly that. The demo
+        /// mode's own comment says it "reads nothing, writes nothing"; it read.
+        public var providers: @Sendable () -> [String]
         public var hasSecret: @Sendable (Secrets.Key) -> Bool
         /// What the provider last said about a stored key, or nil if it was
         /// never asked. A row that reports a refusal in its text and a green
@@ -272,9 +333,15 @@ public enum Prerequisites {
             keyVerdict: @escaping @Sendable (Secrets.Key) -> KeyCheck.Outcome? = { _ in nil },
             harnesses: @escaping @Sendable () -> [String]
                 = { HookManifest.detected().map(\.id) },
+            // Defaults to NOTHING CONFIGURED, not to reading the disk. A test
+            // that forgets this gets a machine with no providers, which is a
+            // deterministic answer; defaulting it to `ProviderConfig.configured()`
+            // would reintroduce exactly the bypass this field exists to close.
+            providers: @escaping @Sendable () -> [String] = { [] },
             hubStatus: @escaping @Sendable () -> HubState? = { nil }
         ) {
             self.tmuxPath = tmuxPath
+            self.providers = providers
             self.hooksProblem = hooksProblem
             self.harnesses = harnesses
             self.hasSecret = hasSecret
@@ -307,6 +374,9 @@ public enum Prerequisites {
             },
             hasSecret: { Secrets.read($0) != nil },
             keyVerdict: { KeyVerdict.last(for: $0) },
+            // The live value reads the config; every other Probes does not,
+            // because the parameter defaults to none configured.
+            providers: { ProviderConfig.configured() },
             hubStatus: {
                 guard HubApp.baseURL != nil, Secrets.read(.hubToken) != nil else { return nil }
                 let device = HubMirror.deviceName()
@@ -346,7 +416,7 @@ public enum Prerequisites {
     /// hooks audit parses a file, a keychain read is a round trip, and the tmux
     /// fallback spawns a login shell. None of that belongs on a 1 Hz UI timer.
     public static func snapshot(_ probes: Probes = .live) -> [State] {
-        items(harnesses: probes.harnesses()).map { item in
+        items(harnesses: probes.harnesses(), providers: probes.providers()).map { item in
             if let secret = item.secret {
                 guard probes.hasSecret(secret) else {
                     return State(item: item, satisfied: false, detail: missingDetail(item))
@@ -407,6 +477,12 @@ public enum Prerequisites {
         case .anthropicKey: return "without it, a plain first-sentence readout"
         case .elevenLabsKey: return "without it, the macOS system voice"
         case .assemblyAIKey: return "without it, transcription after you stop"
+        case .openAIKey: return "without it, a streaming failure loses the transcript"
+        case .provider: return "without it, that provider's agents do not appear"
+        // `missing` is the last resort and it is deliberately NOT reachable for
+        // a credential row: `testEveryMissingKeyNamesWhatIsLost` walks every
+        // row with a secret and refuses a bare word, which is how the two rows
+        // added on 13 Sep were caught before they shipped.
         default: return "missing"
         }
     }

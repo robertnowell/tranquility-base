@@ -101,7 +101,16 @@ public enum KeyCheck {
     /// Read-only on purpose: verifying a key must never create, spend, or
     /// transcribe anything. A summarize call would have proved the same thing and
     /// billed for it.
-    static func request(for key: Secrets.Key, value: String) -> URLRequest? {
+    /// `providerBase` is injectable for one reason, and the reason is a test
+    /// that would otherwise pass vacuously: a provider-backed key produces no
+    /// request on a machine with no address configured for it, so
+    /// `testEveryProviderHasAReadOnlyRequest` would have skipped the two keys
+    /// added on 13 Sep while appearing to cover every case. A seam here lets
+    /// the invariant be asserted against a configured provider instead of
+    /// against nil.
+    static func request(for key: Secrets.Key, value: String,
+                        providerBase: (String) -> URL? = { ProviderConfig.baseURL($0) })
+        -> URLRequest? {
         var request: URLRequest
         switch key {
         case .hubToken:
@@ -146,6 +155,31 @@ public enum KeyCheck {
             guard let url = URL(string: "https://api.openai.com/v1/models") else { return nil }
             request = URLRequest(url: url)
             request.setValue("Bearer \(value)", forHTTPHeaderField: "Authorization")
+        case .crobotAPIKey:
+            // `/api/auth/me`, because it is the ONLY route crobot calls with
+            // this key and the only one the key is minted for. Verifying
+            // against a permission the product does not use is not
+            // verification, it is a second thing to get wrong: that is the
+            // whole ElevenLabs lesson above, where a perfectly good
+            // text-to-speech key was reported rejected by an endpoint wanting
+            // `user_read`.
+            //
+            // Nil when no base URL is configured, which `verify` turns into
+            // `.unreachable` -- the honest verdict, since an unconfigured
+            // provider says nothing about the credential. It is NOT
+            // `.rejected`, and the difference is somebody rotating a key that
+            // was fine.
+            guard let base = providerBase("crobot") else { return nil }
+            request = URLRequest(url: base.appendingPathComponent("api/auth/me"))
+            request.setValue("Bearer " + value, forHTTPHeaderField: "Authorization")
+        case .openCodePassword:
+            // A local server, and its own liveness is most of what a check
+            // here can prove. `/app` is OpenCode's cheapest authenticated
+            // read; unreachable means the server is not running, which is the
+            // thing a person actually needs to be told.
+            guard let base = providerBase("opencode") else { return nil }
+            request = URLRequest(url: base.appendingPathComponent("app"))
+            request.setValue("Bearer " + value, forHTTPHeaderField: "Authorization")
         }
         request.httpMethod = "GET"
         // Short: this runs while somebody watches a row. A check that hangs for

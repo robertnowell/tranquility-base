@@ -88,9 +88,15 @@ final class KeyCheckTests: XCTestCase {
 
     // MARK: - the requests
 
+    /// Every provider-backed key is checked against a CONFIGURED provider.
+    /// Without this the two keys added on 13 Sep would produce nil on any
+    /// machine with no address for them, and this loop would report full
+    /// coverage while asserting nothing about either.
+    private let configured: (String) -> URL? = { _ in URL(string: "https://provider.example.test") }
+
     func testEveryProviderHasAReadOnlyRequest() {
         for key in Secrets.Key.allCases {
-            let request = KeyCheck.request(for: key, value: "probe")
+            let request = KeyCheck.request(for: key, value: "probe", providerBase: configured)
             XCTAssertNotNil(request, "\(key) has no verification request")
             // Verifying a key must never create, spend, or transcribe anything.
             XCTAssertEqual(request?.httpMethod, "GET", "\(key) is not read-only")
@@ -102,7 +108,7 @@ final class KeyCheckTests: XCTestCase {
     /// reports every valid key as rejected.
     func testEachProviderGetsItsOwnHeaderShape() {
         func header(_ key: Secrets.Key, _ field: String) -> String? {
-            KeyCheck.request(for: key, value: "probe")?
+            KeyCheck.request(for: key, value: "probe", providerBase: configured)?
                 .value(forHTTPHeaderField: field)
         }
         XCTAssertEqual(header(.anthropicAPIKey, "x-api-key"), "probe")
@@ -111,18 +117,40 @@ final class KeyCheckTests: XCTestCase {
         // Raw, no "Bearer" -- AssemblyAIFileRecovery says so in its own comment.
         XCTAssertEqual(header(.assemblyAIAPIKey, "Authorization"), "probe")
         XCTAssertEqual(header(.openAIAPIKey, "Authorization"), "Bearer probe")
+        XCTAssertEqual(header(.crobotAPIKey, "Authorization"), "Bearer probe")
+        XCTAssertEqual(header(.openCodePassword, "Authorization"), "Bearer probe")
+    }
+
+    /// An unconfigured provider yields NO request, which `verify` turns into
+    /// `.unreachable`. That is the honest verdict: an address nobody has set
+    /// says nothing about the credential, and reporting it as `.rejected`
+    /// would send somebody to rotate a key that was fine.
+    func testAnUnconfiguredProviderIsUnreachableRatherThanRejected() {
+        let none: (String) -> URL? = { _ in nil }
+        XCTAssertNil(KeyCheck.request(for: .crobotAPIKey, value: "probe", providerBase: none))
+        XCTAssertNil(KeyCheck.request(for: .openCodePassword, value: "probe", providerBase: none))
+    }
+
+    /// The one route crobot's key is minted for, and the only one crobot calls
+    /// with it. Checking anything else already cost a day on ElevenLabs.
+    func testCrobotVerifiesAgainstTheRouteItsKeyIsMintedFor() {
+        let url = KeyCheck.request(for: .crobotAPIKey, value: "probe",
+                                   providerBase: configured)?.url?.path
+        XCTAssertEqual(url, "/api/auth/me")
     }
 
     func testTheKeyNeverAppearsInTheURL() {
         for key in Secrets.Key.allCases {
-            let url = KeyCheck.request(for: key, value: "SECRETVALUE")?.url?.absoluteString ?? ""
+            let url = KeyCheck.request(for: key, value: "SECRETVALUE",
+                                       providerBase: configured)?.url?.absoluteString ?? ""
             XCTAssertFalse(url.contains("SECRETVALUE"), "\(key) puts the key in the URL")
         }
     }
 
     func testTheCheckIsBounded() {
         for key in Secrets.Key.allCases {
-            let timeout = KeyCheck.request(for: key, value: "probe")?.timeoutInterval ?? .infinity
+            let timeout = KeyCheck.request(for: key, value: "probe",
+                                           providerBase: configured)?.timeoutInterval ?? .infinity
             // Somebody is watching a row while this runs.
             XCTAssertLessThanOrEqual(timeout, 15, "\(key) check can hang too long")
         }

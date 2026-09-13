@@ -575,7 +575,7 @@ final class OwnershipDoesNotInventAStatusTests: XCTestCase {
         let evidence = SessionActivity.Evidence(
             activity: .working, observedAt: Date(), modifiedAt: Date())
         let lamp = GridAssembler.lampAndReason(
-            for: evidence, sessionId: "01a05dc7", live: live)
+            for: evidence, sessionId: "01a05dc7", live: live, isInFlight: false)
         XCTAssertEqual(lamp.lamp, .working)
     }
 
@@ -585,7 +585,7 @@ final class OwnershipDoesNotInventAStatusTests: XCTestCase {
         let evidence = SessionActivity.Evidence(
             activity: .stalled(reason: "silent for 3h"), observedAt: Date(), modifiedAt: Date())
         let lamp = GridAssembler.lampAndReason(
-            for: evidence, sessionId: "01a05dc7", live: live)
+            for: evidence, sessionId: "01a05dc7", live: live, isInFlight: false)
         XCTAssertEqual(lamp.lamp, .fault)
     }
 
@@ -596,7 +596,7 @@ final class OwnershipDoesNotInventAStatusTests: XCTestCase {
         let evidence = SessionActivity.Evidence(
             activity: .working, observedAt: Date(), modifiedAt: Date())
         let lamp = GridAssembler.lampAndReason(
-            for: evidence, sessionId: "01a05dc7", live: live)
+            for: evidence, sessionId: "01a05dc7", live: live, isInFlight: false)
         XCTAssertEqual(lamp.lamp, .running)
     }
 }
