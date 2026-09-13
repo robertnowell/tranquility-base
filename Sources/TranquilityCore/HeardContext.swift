@@ -29,16 +29,24 @@ import Foundation
 /// wrong (proposed 12 Sep, refused 13 Sep): a guard sentence on every send is a gate
 /// on a model error, and the repair for those is the summariser's context.
 ///
+/// The framing is two labels and nothing else, ruled 13 Sep after the first
+/// live bracket ("[Tranquility Base read the user this summary of your
+/// previous turn, by voice: ... They replied:]") was heard back: "that's too
+/// much. We can just put assistant, colon, in brackets." So: `[assistant]:`
+/// then what was spoken, `[user]:` then what they said. The user label is
+/// there because the blank line between the two paragraphs arrives as a
+/// single space through Claude Code's composer (measured 13 Sep, transcript
+/// bytes), so without it the boundary between the paraphrase and the reply
+/// would be unmarked.
+///
 /// Pure functions. The brief they quote is read by the Coordinator from the
 /// utterance's OWN event, bound at capture, never from the session's current
 /// latest event, which can move during the undo window.
 public enum HeardContext {
-    /// The bracket's opening. Names the speaker so an agent does not mistake
-    /// the quote for its own words or for the user's.
-    public static let opener =
-        "[Tranquility Base read the user this summary of your previous turn, by voice:"
-    /// The bracket's close: what the words after it are.
-    public static let closer = "They replied:]"
+    /// The label on what was spoken. Bare, on purpose.
+    public static let assistantLabel = "[assistant]:"
+    /// The label on what they said. Present only when there is a note.
+    public static let userLabel = "[user]:"
 
     /// The note, or nil when there is nothing spoken to quote. An event with
     /// no brief (a launch greeting, a summariser floor, a turn the user was
@@ -50,14 +58,15 @@ public enum HeardContext {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
         guard !spoken.isEmpty else { return nil }
-        return opener + " \u{201C}" + spoken + "\u{201D} " + closer
+        return assistantLabel + " " + spoken
     }
 
-    /// The note, then the message. `message` is already the tray's
+    /// The note, then the labelled message. `message` is already the tray's
     /// composition (fragments, then transcript): everything the user is
-    /// sending, after the one paragraph saying what they are answering.
+    /// sending. No note, no label: the bare message, byte-identical to
+    /// before any of this existed.
     public static func compose(note: String?, message: String) -> String {
         guard let note else { return message }
-        return message.isEmpty ? note : note + "\n\n" + message
+        return message.isEmpty ? note : note + "\n\n" + userLabel + " " + message
     }
 }
