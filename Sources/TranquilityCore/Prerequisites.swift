@@ -451,6 +451,12 @@ public enum Prerequisites {
         case .anthropicKey: return "without it, a plain first-sentence readout"
         case .elevenLabsKey: return "without it, the macOS system voice"
         case .assemblyAIKey: return "without it, transcription after you stop"
+        case .openAIKey: return "without it, a streaming failure loses the transcript"
+        case .provider: return "without it, that provider's agents do not appear"
+        // `missing` is the last resort and it is deliberately NOT reachable for
+        // a credential row: `testEveryMissingKeyNamesWhatIsLost` walks every
+        // row with a secret and refuses a bare word, which is how the two rows
+        // added on 13 Sep were caught before they shipped.
         default: return "missing"
         }
     }
