@@ -468,23 +468,43 @@ public final class HubMirror: @unchecked Sendable {
         var cursor = sync { state.turnCursor }
         while true {
             guard let batch = try? store.briefs(after: cursor, limit: 100), !batch.isEmpty else { break }
-            let turns: [[String: Any]] = batch.map { b in
-                Self.turnPayload(b, session: sessions[b.sessionId], live: live[b.sessionId])
+            let turns: [[String: Any]] = batch.compactMap { b in
+                guard !Self.isRobot(sessions[b.sessionId]) else { return nil }
+                return Self.turnPayload(b, session: sessions[b.sessionId], live: live[b.sessionId])
             }
-            do {
-                let (status, body) = try await transport.post("api/ingest/turns", json: ["turns": turns, "device": device])
-                guard (200..<300).contains(status) else {
-                    report.failed += 1
-                    report.note = "turns: HTTP \(status) \(String(decoding: body.prefix(120), as: UTF8.self))"
-                    return
-                }
-            } catch { report.failed += 1; report.note = "turns: \(error.localizedDescription)"; return }
+            if !turns.isEmpty {
+                do {
+                    let (status, body) = try await transport.post("api/ingest/turns", json: ["turns": turns, "device": device])
+                    guard (200..<300).contains(status) else {
+                        report.failed += 1
+                        report.note = "turns: HTTP \(status) \(String(decoding: body.prefix(120), as: UTF8.self))"
+                        return
+                    }
+                } catch { report.failed += 1; report.note = "turns: \(error.localizedDescription)"; return }
+            }
             cursor = batch.last!.eventRowid
             sync { state.turnCursor = cursor }
-            report.turns += batch.count
+            report.turns += turns.count
             save()
             if batch.count < 100 { break }
         }
+    }
+
+    /// A machine's own run, which the hub is not for.
+    ///
+    /// The grid has never shown these: `AppDelegate+Grid` drops them at both
+    /// of its entry points and the announcer never reads them aloud, all
+    /// through `SessionDiscovery.isHeadless`. The mirror was the one consumer
+    /// of that rule that never got it, so a `claude -p` fleet run, a cron and
+    /// every voter subagent arrived in the hub as a first-class agent beside
+    /// the conversations Robert is actually having -- 126 of the 316
+    /// classifiable sessions holding a brief on this Mac, measured 13 Sep.
+    ///
+    /// Fails open, exactly as the grid's does: no session row, no transcript,
+    /// or an entrypoint Claude Code invents later, and the turn is yours. A
+    /// stray robot row costs one glance; a hidden conversation costs the work.
+    static func isRobot(_ session: WaitingSession?) -> Bool {
+        SessionDiscovery.isHeadless(transcriptPath: session?.transcriptPath)
     }
 
     /// One turn, in the shape the hub keys on: `source_key` is the session and
@@ -546,6 +566,9 @@ public final class HubMirror: @unchecked Sendable {
     static func changedNames(sessions: [WaitingSession], live: [String: LiveSession],
                              previous: [String: String]) -> [(String, String)] {
         sessions.compactMap { s in
+            // Same rule as the turns pass: a session the hub will never show
+            // has no name worth sending.
+            guard !isRobot(s) else { return nil }
             let title = GridAssembler.tabDisplayName(for: s, live: live[s.sessionId])
             guard !title.isEmpty, previous[s.sessionId] != title else { return nil }
             return (s.sessionId, title)

@@ -957,6 +957,41 @@ case "reconcile":
             _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: [top.path])
         }
 
+    // Read one page back out of the hub, as this Mac.
+    //
+    // A fresh agent started from a hub page is handed an https address and
+    // nothing else, and that address answers 401 to anyone without a session.
+    // This is how the agent gets the page: the mirror's own token, pointed at
+    // the read path, never through a prompt and never through an argument.
+    case "read":
+        guard args.count > 1 else {
+            print("usage: tbase read <hub url | document id> [--text]")
+            print("  prints the page as this Mac. The token only ever goes to "
+                  + (HubApp.baseURL?.host ?? "the configured hub") + ".")
+            break
+        }
+        switch await HubRead.fetch(args[1]) {
+        case .success(let html):
+            print(args.contains("--text") ? HubRead.text(html) : html)
+        case .failure(.notConnected):
+            print("this Mac is not connected to a hub — Setup ▸ Connect your Mac")
+            exit(1)
+        case .failure(.notTheHub(let arg)):
+            // Said as a refusal, not as a failure to fetch. The difference
+            // matters: one is a network problem, the other is a page asking
+            // for this Mac's credential to be sent somewhere it does not belong.
+            print("refused: \(arg) is not an address on "
+                  + (HubApp.baseURL?.host ?? "this Mac's hub"))
+            exit(1)
+        case .failure(.http(let code)):
+            print("hub answered HTTP \(code)"
+                  + (code == 404 ? " — no such page, or it belongs to another account" : ""))
+            exit(1)
+        case .failure(.transport(let why)):
+            print("could not reach the hub: \(why)")
+            exit(1)
+        }
+
     case "turns":
         guard args.count > 1 else { print("usage: tbase turns <sessionId>"); break }
         let id = args[1]
