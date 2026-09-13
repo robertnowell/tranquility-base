@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1161</title>
+      <sparkle:version>1161</sparkle:version>
+      <sparkle:shortVersionString>0.3.1161</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Sun, 13 Sep 2026 18:01:46 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1161-3a4569275/TranquilityBase-0.3.1161.dmg" type="application/octet-stream" length="14271067" sparkle:edSignature="EuQAakFXgRMpqWhSFI8t4/6nmMaxDwIiM+3NjyCOo6ziLvam87cFokW059TJJqtR2/prNtqCDAcBWj7zZJPXDg==" />
+    </item>
+    <item>
       <title>Version 0.3.1160</title>
       <sparkle:version>1160</sparkle:version>
       <sparkle:shortVersionString>0.3.1160</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Fri, 11 Sep 2026 19:25:28 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1152-63ae1424d/TranquilityBase-0.3.1152.dmg" type="application/octet-stream" length="13977734" sparkle:edSignature="ZJ4RkDgU2+FMirmzLyUEwk5rr6adGTEc9sgYm1RqKrrEejieycHdDSKmR+vp07/+C919WAT7aUfMfmGrgZW2Bw==" />
     </item>
-    <item>
-      <title>Version 0.3.1151</title>
-      <sparkle:version>1151</sparkle:version>
-      <sparkle:shortVersionString>0.3.1151</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Fri, 11 Sep 2026 17:49:14 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1151-9d69be81b/TranquilityBase-0.3.1151.dmg" type="application/octet-stream" length="13977214" sparkle:edSignature="Amf/h/HXlEJFH6E4yrAlvxTjUulSk43jGgTt7mkMUywC/N2g5lvtZFnsyTqJVaEPWjEl/YTjDcUBxwlEMDTKCA==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: zSQYKVrR57oR12ZFoGt2eP+vtCsiPaBDVegn6b89n4jRK7WZu+m5YN1+ArQ19Y06mTT2kJoxu4NjkkiusgTLAg==
+edSignature: 3c+GkfuDh53MphRaYU0IjKJCWkjMQroNaK4T5dW3mn5tjVH3QK5VMn6R6nJK1o0Ph5b8/U898EWGhktoXMxvAA==
 length: 6457
 -->
