@@ -7,6 +7,11 @@ of integer **millionths of a dollar**, never a JSON floating-point amount.
 
 ## Authority
 
+**One onboarding sign-in covers the app, free Hub and managed credits.** The
+Gateway exchange is background authorization from that same app session, never
+a second login or account signup. See [AUTHORIZATION.md](AUTHORIZATION.md) for
+the shared-session, onboarding, refresh/revocation and acceptance requirements.
+
 All routes require a Gateway-audience bearer, verified on every request for
 issuer, signature (or opaque-token lookup), expiry and device revocation. The
 trusted verifier supplies immutable `userId`, `deviceId`, audience

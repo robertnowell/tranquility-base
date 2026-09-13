@@ -1,5 +1,22 @@
 # Credits launch: credited Coordinator built; next is Hub authority
 
+## Onboarding alignment — latest user requirement, 13 September 2026
+
+**One “Sign in to Tranquility Base” flow covers the app, Hub and managed
+credits.** Hub authorization is not a separate account experience. Use the
+existing browser session and device pairing; resolve the personal credit account
+and refresh limited Gateway authority behind the scenes. No Gateway login,
+Gateway token paste, personal API key or payment card is required to start in
+managed mode. Payment/recharge consent remains a later, separate action.
+
+The shared-session requirements and concrete integration/acceptance checklist
+are now recorded in [AUTHORIZATION.md](../../contracts/gateway/v1/AUTHORIZATION.md).
+This is the controlling requirement for the next Hub authority implementation
+and the app onboarding work, not a claim that either has shipped. A credit
+outage/empty balance must not look like sign-out; sign-out or account change
+must invalidate the corresponding cached Gateway authority. Existing mirror-only
+tokens do not silently acquire spending scopes.
+
 ## Continuation update — 13 September 2026
 
 **No product decision or new login was needed for this step.** The remaining
