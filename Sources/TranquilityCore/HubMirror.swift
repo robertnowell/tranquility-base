@@ -81,6 +81,13 @@ public final class HubMirror: @unchecked Sendable {
     }
 
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
+    /// What to do with the first page this Mac ever mirrors, if anything.
+    ///
+    /// A closure rather than a call, because raising a browser tab needs a
+    /// window server and this type is tested without one. The app installs
+    /// the door it already uses for every other "show me that page"; a test
+    /// installs a recorder; nil does nothing at all.
+    public nonisolated(unsafe) static var revealFirstReport: (@Sendable (URL) -> Void)?
     /// The one the app runs. Nil until the machine is connected.
     public nonisolated(unsafe) static var shared: HubMirror?
 
@@ -301,6 +308,13 @@ public final class HubMirror: @unchecked Sendable {
                 }
                 sync { state.sent.insert(c.hash) }
                 report.documents += 1
+                // The first page this Mac ever mirrors comes forward by
+                // itself, once. See FirstReport for why once and never again.
+                if FirstReport.pending, let show = Self.revealFirstReport,
+                   let at = HubApp.openURL(session: c.session, slug: slug) {
+                    FirstReport.spent()
+                    show(at)
+                }
             } catch { report.failed += 1; report.note = "ingest \(slug): \(error.localizedDescription)" }
         }
     }

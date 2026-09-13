@@ -554,6 +554,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // runs. Nil until this Mac is connected; nothing else changes.
             if let mirror = HubMirror.fromMachine(store: store) {
                 HubMirror.shared = mirror
+                // The first page this Mac ever mirrors comes forward on its
+                // own, through the same one-tab door every other reveal uses.
+                // Once, ever: see FirstReport.
+                HubMirror.revealFirstReport = { url in
+                    DispatchQueue.main.async {
+                        Permissions.log("hub: revealing the first report")
+                        if BrowserFocus.reveal(url, app: HubApp.baseURL) == .notFound {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
                 mirror.start()
                 Permissions.log("hub: mirroring to \(HubApp.baseURL?.host ?? "?") as \(mirror.device)")
             }
