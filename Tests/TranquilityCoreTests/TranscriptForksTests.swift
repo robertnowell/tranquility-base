@@ -155,6 +155,42 @@ extension TranscriptForksTests {
     /// Routine parallel-agent branching must not be reported as a failure.
     /// Measured: 36 such transcripts held 293 stranded records between them,
     /// while the seven real ones held 1,256 apiece and up.
+    // MARK: - Attachments
+
+    /// THE SHAPE CLAUDE CODE STARTED WRITING IN SEPTEMBER. An `attachment`
+    /// record is parented on the assistant record that caused it and lands
+    /// about 100 ms BEFORE the real tool_result, so it is a sibling that
+    /// loses the branch point every single time. Sixteen of the twenty-nine
+    /// transcripts over the threshold on 13 Sep were nothing else.
+    func testAnAbandonedAttachmentIsNotLostConversation() {
+        let text = [
+            rec("a", nil), rec("asst", "a", type: "assistant"),
+            rec("att", "asst", type: "attachment"),      // written first, loses
+            rec("res", "asst", type: "user"),            // the real continuation
+            rec("next", "res", type: "assistant"),
+        ].joined(separator: "\n")
+        let s = TranscriptForks.survey(text: text, sessionId: "sess")!
+        XCTAssertEqual(s.unreachable, 0, "an attachment is metadata, not a turn")
+        XCTAssertFalse(s.isForked)
+    }
+
+    /// And the other half of the rule: an attachment stays in the GRAPH, so
+    /// real conversation hanging off one is still counted when it is
+    /// abandoned. Dropping the node would strand its descendants and invent
+    /// the loss it is meant to stop reporting.
+    func testConversationBelowAnAttachmentStillCounts() {
+        let text = [
+            rec("a", nil), rec("asst", "a", type: "assistant"),
+            rec("att", "asst", type: "attachment"),
+            rec("said", "att", type: "assistant"),       // real work, abandoned with it
+            rec("res", "asst", type: "user"),
+            rec("next", "res", type: "assistant"),
+        ].joined(separator: "\n")
+        let s = TranscriptForks.survey(text: text, sessionId: "sess")!
+        XCTAssertEqual(s.unreachable, 1, "the assistant record below the attachment")
+        XCTAssertTrue(s.isForked)
+    }
+
     func testMinorForksAreBelowTheReportingThreshold() {
         var lines = ["{\"uuid\":\"a\",\"parentUuid\":null,\"isSidechain\":false}"]
         // one main chain, plus a few stray tool-result siblings off the root

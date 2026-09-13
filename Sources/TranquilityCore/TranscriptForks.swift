@@ -174,7 +174,7 @@ public enum TranscriptForks {
     /// be mid-append, and half a record is not a record. Unparseable lines are
     /// skipped for the same reason rather than failing the whole survey.
     public static func survey(text: String, sessionId: String) -> Survey? {
-        var records: [(uuid: String, parent: String?, sidechain: Bool)] = []
+        var records: [(uuid: String, parent: String?, sidechain: Bool, type: String)] = []
         var byUuid: Set<String> = []
         // `omittingEmptySubsequences` keeps a trailing newline from producing a
         // phantom record; a final line with no newline is still parsed, and is
@@ -185,7 +185,8 @@ public enum TranscriptForks {
                   let uuid = obj["uuid"] as? String
             else { continue }
             records.append((uuid, obj["parentUuid"] as? String,
-                            (obj["isSidechain"] as? Bool) ?? false))
+                            (obj["isSidechain"] as? Bool) ?? false,
+                            (obj["type"] as? String) ?? ""))
             byUuid.insert(uuid)
         }
         guard !records.isEmpty else { return nil }
@@ -356,7 +357,34 @@ public enum TranscriptForks {
                 abandonedUuids.formUnion(nodes)
             }
         }
-        let abandoned = linked.filter { abandonedUuids.contains($0.uuid) }.count
+        // AN ATTACHMENT IS NOT CONVERSATION, and counting one as loss is the
+        // third time this number has been wrong in the same direction.
+        //
+        // Since early September Claude Code writes `attachment` records: a
+        // sibling of the real tool_result, parented on the same assistant
+        // record and written about 100 ms before it. Every one of them is, by
+        // this measurement, an abandoned branch. They are not. Nothing was
+        // said and nothing was lost; a file read got its own row.
+        //
+        // Measured across the whole archive on 13 Sep 2026: 12,025 of roughly
+        // 19,500 abandoned records are attachments, 62% of the headline. Of the
+        // 29 transcripts over the threshold, 16 are attachments and nothing
+        // else -- d419c9f3 reports 931 abandoned and has 26; 547f77bc reports
+        // 1,217 and has 12. Excluding them leaves 8 sessions, which is the real
+        // population and small enough to read one by one.
+        //
+        // They stay in the GRAPH. Real conversation hangs off them (400 user
+        // and 466 assistant records across a 400-file sample), so deleting the
+        // node would strand its descendants and invent the loss it is trying
+        // to stop reporting. Only the tally changes.
+        //
+        // Same lesson as compaction on 28 Aug and as the leaves>1 test before
+        // it: a detector whose headline is dominated by a benign class is one
+        // people learn to scroll past, and this one is wired into the deploy
+        // gate's output.
+        let abandoned = linked.filter {
+            abandonedUuids.contains($0.uuid) && $0.type != "attachment"
+        }.count
 
         return Survey(sessionId: sessionId,
                       linked: linked.count,
