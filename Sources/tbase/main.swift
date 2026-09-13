@@ -518,6 +518,21 @@ do {
             failures += problems.count
         }
 
+        // Pages on disk that no record names — the other direction from the
+        // check above, and advisory for the same reason the fork survey below
+        // is: the repair is a hub rewrite, not a code change, and a deploy
+        // must not be held over one.
+        let unrecorded = HubIntegrity.unrecordedPages()
+        if unrecorded.isEmpty {
+            print("page records: every page on disk is recorded")
+        } else {
+            for problem in unrecorded.prefix(10) {
+                print("\(problem.session): \(problem.detail)")
+            }
+            print("\(unrecorded.count) unrecorded page(s) — "
+                  + "`tbase homebase <id>` reconciles that agent's directory")
+        }
+
         // Transcript forks. Read-only, and DELIBERATELY NOT A GATE.
         //
         // relaunch.sh runs this command on every deploy. The forked transcripts
@@ -559,7 +574,8 @@ do {
         let minor = all.filter { $0.unreachable < TranscriptForks.significantUnreachable }
         for s in significant {
             print("\(s.sessionId.prefix(8))  \(s.leaves) branches  "
-                  + "\(s.unreachable) of \(s.linked) records unreachable")
+                  + "\(s.unreachable) of \(s.linked) records unreachable"
+                  + (s.retryOnly ? "  (an API retry won every branch point, not a second writer)" : ""))
         }
         if !minor.isEmpty {
             let n = minor.reduce(0) { $0 + $1.unreachable }
@@ -570,8 +586,15 @@ do {
         }
         if !significant.isEmpty {
             print("")
-            print("\(significant.count) transcript(s) lost conversation to a second writer. "
-                  + "Nothing is deleted and every branch is still on disk; a resume follows "
+            // Two claims, and the old sentence made only the first while
+            // asserting the second. Six of eleven on this Mac are retries.
+            let retries = significant.filter(\.retryOnly).count
+            print("\(significant.count) transcript(s) cannot resume their whole history"
+                  + (retries > 0
+                     ? " — \(retries) of them because a failed API request's retry record was "
+                       + "written last and won the branch point, which is one process, not two"
+                     : "")
+                  + ". Nothing is deleted and every branch is still on disk; a resume follows "
                   + "the branch written LAST, so export before resuming.")
             exit(1)
         }
@@ -955,6 +978,41 @@ case "reconcile":
         print(top.path)
         if !args.contains("--print") {
             _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: [top.path])
+        }
+
+    // Read one page back out of the hub, as this Mac.
+    //
+    // A fresh agent started from a hub page is handed an https address and
+    // nothing else, and that address answers 401 to anyone without a session.
+    // This is how the agent gets the page: the mirror's own token, pointed at
+    // the read path, never through a prompt and never through an argument.
+    case "read":
+        guard args.count > 1 else {
+            print("usage: tbase read <hub url | document id> [--text]")
+            print("  prints the page as this Mac. The token only ever goes to "
+                  + (HubApp.baseURL?.host ?? "the configured hub") + ".")
+            break
+        }
+        switch await HubRead.fetch(args[1]) {
+        case .success(let html):
+            print(args.contains("--text") ? HubRead.text(html) : html)
+        case .failure(.notConnected):
+            print("this Mac is not connected to a hub — Setup ▸ Connect your Mac")
+            exit(1)
+        case .failure(.notTheHub(let arg)):
+            // Said as a refusal, not as a failure to fetch. The difference
+            // matters: one is a network problem, the other is a page asking
+            // for this Mac's credential to be sent somewhere it does not belong.
+            print("refused: \(arg) is not an address on "
+                  + (HubApp.baseURL?.host ?? "this Mac's hub"))
+            exit(1)
+        case .failure(.http(let code)):
+            print("hub answered HTTP \(code)"
+                  + (code == 404 ? " — no such page, or it belongs to another account" : ""))
+            exit(1)
+        case .failure(.transport(let why)):
+            print("could not reach the hub: \(why)")
+            exit(1)
         }
 
     case "turns":

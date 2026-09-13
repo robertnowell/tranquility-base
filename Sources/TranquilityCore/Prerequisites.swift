@@ -44,6 +44,8 @@ public enum Prerequisites {
         /// payload is `HarnessAdapter.id`, so this never becomes a second
         /// vocabulary for the same thing.
         case hooks(harness: String)
+        /// The cloud hub. Sign in once in the browser; the app keeps the token.
+        case hub
         /// Spoken summaries. The product.
         case anthropicKey
         /// The voice. Falls back to the system voice, audibly.
@@ -57,6 +59,7 @@ public enum Prerequisites {
             switch self {
             case .tmux: return "tmux"
             case .hooks(let harness): return "hooks." + harness
+            case .hub: return "hub"
             case .anthropicKey: return "anthropicKey"
             case .elevenLabsKey: return "elevenLabsKey"
             case .assemblyAIKey: return "assemblyAIKey"
@@ -66,6 +69,7 @@ public enum Prerequisites {
         public init?(id: String) {
             switch id {
             case "tmux": self = .tmux
+            case "hub": self = .hub
             case "anthropicKey": self = .anthropicKey
             case "elevenLabsKey": self = .elevenLabsKey
             case "assemblyAIKey": self = .assemblyAIKey
@@ -88,6 +92,7 @@ public enum Prerequisites {
             // "Claude Code hooks", "Codex hooks". Naming the harness in the
             // row is the whole point of there being two of them.
             case .hooks: return (harness?.label ?? "Agent") + " hooks"
+            case .hub: return "Your hub"
             case .anthropicKey: return "Anthropic"
             case .elevenLabsKey: return "ElevenLabs"
             case .assemblyAIKey: return "AssemblyAI"
@@ -100,6 +105,7 @@ public enum Prerequisites {
             switch self {
             case .tmux: return "the only way a reply reaches a session"
             case .hooks: return "finished turns, and results as pages you can open"
+            case .hub: return "everything your agents write, in one place, on every device"
             // "a tenth of a cent", not "$0.001". Same number, and it is the
             // phrasing the onboarding body already uses. The currency sign is
             // also a MARK by `ChromeType.isMark`, and this row renders inside
@@ -134,7 +140,11 @@ public enum Prerequisites {
         /// there for why.
         public var isRequired: Bool {
             switch self {
-            case .tmux, .hooks, .anthropicKey: return true
+            // The hub joined the required rows on 13 Sep, when the connect
+            // flow landed and a new machine could finally satisfy it by
+            // pressing the button on the row. Before that it was optional for
+            // an honest reason: nothing on this screen could make it green.
+            case .tmux, .hooks, .anthropicKey, .hub: return true
             case .elevenLabsKey, .assemblyAIKey: return false
             }
         }
@@ -143,7 +153,7 @@ public enum Prerequisites {
         /// not credentials at all.
         public var secret: Secrets.Key? {
             switch self {
-            case .tmux, .hooks: return nil
+            case .tmux, .hooks, .hub: return nil
             case .anthropicKey: return .anthropicAPIKey
             case .elevenLabsKey: return .elevenLabsAPIKey
             case .assemblyAIKey: return .assemblyAIAPIKey
@@ -166,6 +176,7 @@ public enum Prerequisites {
             // 1 Sep); only the reporting splits. Pressing it on either row
             // repairs every harness this machine has.
             case .hooks: return "Wire them"
+            case .hub: return "Sign in"
             case .anthropicKey, .elevenLabsKey, .assemblyAIKey: return "Paste key"
             }
         }
@@ -192,7 +203,7 @@ public enum Prerequisites {
     ) -> [Item] {
         [.tmux]
             + harnesses.map { Item.hooks(harness: $0) }
-            + [.anthropicKey, .elevenLabsKey, .assemblyAIKey]
+            + [.hub, .anthropicKey, .elevenLabsKey, .assemblyAIKey]
     }
 
     public struct State: Sendable, Equatable {
@@ -217,6 +228,19 @@ public enum Prerequisites {
 
     /// Injected so the detectors are testable without a keychain, a real
     /// settings.json, or tmux on the machine running the tests.
+    /// What this Mac's hub connection amounts to: whether it is connected,
+    /// and the one line the row prints. Two fields rather than one string,
+    /// because "connected as mini, synced 2m ago" and "mini, not connected:
+    /// this Mac's key was revoked" are both details and only one of them is a
+    /// green lamp.
+    public struct HubState: Sendable, Equatable {
+        public var connected: Bool
+        public var detail: String
+        public init(connected: Bool, detail: String) {
+            self.connected = connected; self.detail = detail
+        }
+    }
+
     public struct Probes: Sendable {
         public var tmuxPath: @Sendable () -> String?
         /// nil when every hook is wired and reachable, matching `HookManifest`.
@@ -234,6 +258,12 @@ public enum Prerequisites {
         /// never asked. A row that reports a refusal in its text and a green
         /// lamp beside it is the state this closes.
         public var keyVerdict: @Sendable (Secrets.Key) -> KeyCheck.Outcome?
+        /// The hub's state for this Mac, or nil when it has never been
+        /// connected. `connected` is separate from the text because a Mac
+        /// whose key was revoked has plenty to say and is not connected: one
+        /// string cannot carry both, and when it tried, a revoked token kept
+        /// a green lamp.
+        public var hubStatus: @Sendable () -> HubState? = { nil }
 
         public init(
             tmuxPath: @escaping @Sendable () -> String?,
@@ -241,13 +271,15 @@ public enum Prerequisites {
             hasSecret: @escaping @Sendable (Secrets.Key) -> Bool,
             keyVerdict: @escaping @Sendable (Secrets.Key) -> KeyCheck.Outcome? = { _ in nil },
             harnesses: @escaping @Sendable () -> [String]
-                = { HookManifest.detected().map(\.id) }
+                = { HookManifest.detected().map(\.id) },
+            hubStatus: @escaping @Sendable () -> HubState? = { nil }
         ) {
             self.tmuxPath = tmuxPath
             self.hooksProblem = hooksProblem
             self.harnesses = harnesses
             self.hasSecret = hasSecret
             self.keyVerdict = keyVerdict
+            self.hubStatus = hubStatus
         }
 
         public static let live = Probes(
@@ -274,7 +306,24 @@ public enum Prerequisites {
                     .flatMap { HookManifest.problem(for: $0) }
             },
             hasSecret: { Secrets.read($0) != nil },
-            keyVerdict: { KeyVerdict.last(for: $0) })
+            keyVerdict: { KeyVerdict.last(for: $0) },
+            hubStatus: {
+                guard HubApp.baseURL != nil, Secrets.read(.hubToken) != nil else { return nil }
+                let device = HubMirror.deviceName()
+                guard let beat = HubMirror.shared?.lastHeartbeat else {
+                    return HubState(connected: true, detail: "connected as \(device)")
+                }
+                let ago = Int(Date().timeIntervalSince(beat.at) / 60)
+                let when = ago < 1 ? "just now" : "\(ago)m ago"
+                if beat.note.hasPrefix("ok") {
+                    return HubState(connected: true, detail: "connected as \(device) · synced \(when)")
+                }
+                // The mirror's own words. "not connected" in the note is the
+                // hub having refused this Mac's key, which is a red row with
+                // the button back, not a green one with bad news in the text.
+                return HubState(connected: !beat.note.hasPrefix("not connected"),
+                                detail: "\(device) · \(beat.note)")
+            })
     }
 
     /// The canonical install locations, checked WITHOUT `Tmux.resolveBinary`'s memo.
@@ -338,6 +387,13 @@ public enum Prerequisites {
                     return State(item: item, satisfied: false, detail: problem)
                 }
                 return State(item: item, satisfied: true, detail: "wired")
+            case .hub:
+                if let hub = probes.hubStatus() {
+                    return State(item: item, satisfied: hub.connected, detail: hub.detail,
+                                 attention: !hub.connected)
+                }
+                return State(item: item, satisfied: false,
+                             detail: "not connected. Sign in and your agents' pages and turns appear in the hub")
             default:
                 return State(item: item, satisfied: true, detail: "")
             }

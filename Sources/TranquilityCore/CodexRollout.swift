@@ -52,6 +52,19 @@ public enum CodexRollout {
         /// a sub-agent's `name` in Codex's own database is EMPTY, so this is
         /// the only human-readable thing about one — see `isSubagent`.
         public var agentNickname: String?
+        /// `forked_from_id` — the thread this one CONTINUES.
+        ///
+        /// Editing an earlier prompt in the Codex TUI does not rewrite the
+        /// rollout: it opens a new thread, with a new id, in the same
+        /// process, and the only record that the two are one conversation is
+        /// this field on the child. The inverse of Claude Code's
+        /// `continued-in`, which is written on the parent — and the easier
+        /// direction, because the child is the file you are already holding.
+        ///
+        /// Present on both a fork and a sub-agent spawn (a sub-agent also
+        /// carries `parent_thread_id`), so it is never a claim about WHICH
+        /// kind of child this is: `threadSource` answers that.
+        public var forkedFromId: String?
 
         /// A thread spawned by another thread, not by a person.
         ///
@@ -68,6 +81,17 @@ public enum CodexRollout {
         /// about three sessions that did not exist. Eleven of the twenty
         /// -seven rollouts written in the week to 1 Sep are these.
         public var isSubagent: Bool { threadSource == "subagent" }
+
+        public init(sessionId: String, cwd: String? = nil, cliVersion: String? = nil,
+                    threadSource: String? = nil, agentNickname: String? = nil,
+                    forkedFromId: String? = nil) {
+            self.sessionId = sessionId
+            self.cwd = cwd
+            self.cliVersion = cliVersion
+            self.threadSource = threadSource
+            self.agentNickname = agentNickname
+            self.forkedFromId = forkedFromId
+        }
     }
 
     /// One completed turn's ground truth. `lastAgentMessage` needs no
@@ -172,7 +196,8 @@ public enum CodexRollout {
             return .meta(SessionMeta(sessionId: id, cwd: payload["cwd"] as? String,
                                      cliVersion: payload["cli_version"] as? String,
                                      threadSource: payload["thread_source"] as? String,
-                                     agentNickname: payload["agent_nickname"] as? String))
+                                     agentNickname: payload["agent_nickname"] as? String,
+                                     forkedFromId: payload["forked_from_id"] as? String))
 
         case "event_msg":
             guard let kind = payload["type"] as? String else { return .ignored }
@@ -464,6 +489,42 @@ public enum CodexRollout {
             return url.path
         }
         return nil
+    }
+
+    /// Enough of a rollout to hold its `session_meta` line, which is always
+    /// the first record. The largest on this machine is 22,668 bytes (the
+    /// whole Codex system prompt travels inside it), so this is an order of
+    /// magnitude of headroom rather than a guess.
+    static let metaHeadBytes = 256 * 1024
+
+    /// One thread's identity WITHOUT reading its conversation.
+    ///
+    /// `parse(sessionId:)` reads the entire rollout, which is the right cost
+    /// for a walk that wants messages and turns, and an absurd one for the
+    /// question "is this thread a sub-agent, and what did it fork from" asked
+    /// of every writer lock a process holds. This reads the head and decodes
+    /// the first line only.
+    public static func meta(sessionId id: String,
+                            sessions: URL = sessionsDirectory) -> SessionMeta? {
+        guard let path = rolloutPath(forSessionId: id, sessions: sessions)
+        else { return nil }
+        return meta(rollout: URL(fileURLWithPath: path))
+    }
+
+    /// The same read when the file is already in hand — a walk over the
+    /// archive holds the URL and must not pay `rolloutPath`'s search to get
+    /// back to it.
+    public static func meta(rollout url: URL) -> SessionMeta? {
+        guard let handle = try? FileHandle(forReadingFrom: url)
+        else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: metaHeadBytes),
+              let text = String(data: data, encoding: .utf8),
+              let first = text.split(separator: "\n", maxSplits: 1,
+                                     omittingEmptySubsequences: true).first,
+              case .meta(let found) = record(first)
+        else { return nil }
+        return found
     }
 
     /// Read and parse the rollout for one thread id in one call — nil when

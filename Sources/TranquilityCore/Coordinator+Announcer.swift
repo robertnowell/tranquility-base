@@ -432,6 +432,8 @@ extension Coordinator {
                 Coordinator.trace?("homebase at persist failed for "
                     + "\(event.sessionId.prefix(8)): \(error)")
             }
+            // And the cloud hub, the same moment.
+            HubMirror.shared?.kick()
         } catch {
             Coordinator.trace?("brief persist failed for event \(event.latestId): \(error)")
         }

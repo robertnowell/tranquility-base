@@ -93,8 +93,9 @@ public enum SessionLineage {
         return false
     }
 
-    /// Every link on disk. Only Claude Code writes these, so only its
-    /// project tree is walked.
+    /// Every `continued-in` link on disk. Only Claude Code writes these, so
+    /// only its project tree is walked; Codex's own equivalent is
+    /// `CodexLineage.scan`, and `current` merges the two.
     public static func scan(projects: URL = TranscriptArchive.projectsDirectory) -> Map {
         let fm = FileManager.default
         guard let projectNames = try? fm.contentsOfDirectory(atPath: projects.path) else { return [:] }
@@ -120,7 +121,15 @@ public enum SessionLineage {
     public static func current(maxAge: TimeInterval = 15) -> Map {
         lock.lock(); defer { lock.unlock() }
         if let cached, Date().timeIntervalSince(cached.at) < maxAge { return cached.map }
-        let map = scan()
+        // Both harnesses continue a conversation under a new id, by opposite
+        // records in opposite files — Claude Code's `continued-in` on the
+        // parent's tail, Codex's `forked_from_id` on the child's head. One
+        // map, because every consumer here asks the same question ("is this
+        // the same conversation?") and none of them should have to know which
+        // harness wrote the row. Ids are UUIDs from two independent sources;
+        // a collision between them is not a thing to design against.
+        var map = scan()
+        for (child, parent) in CodexLineage.scan() { map[child] = parent }
         cached = (Date(), map)
         return map
     }

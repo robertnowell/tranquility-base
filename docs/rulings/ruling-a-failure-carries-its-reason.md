@@ -44,3 +44,25 @@ provider and its HTTP code, a disposition enum, a pane's last line. Never the
 transcript, never the spoken message. `.prose` scrubs and bounds every reason
 as a backstop, but the discipline is at the source: log the why, never the
 words.
+
+
+## Addendum, 12 Sep 2026: two more edges
+
+Two things the first pass did not say, both learned while closing the class.
+
+**A refusal is not a failure.** A by-design guard that declines to act (the mic
+is already live, a second timer was refused, a revive was declined because the
+agent is live elsewhere) is a progress note, not a failure. It stays a local
+`Permissions.log` line. Elevating refusals to `Failures.report` floods the
+alert stream with non-events. The test is whether something *broke*: a revive
+that *failed* reports; a revive that was *refused* does not.
+
+**A high-frequency benign error must not reach the alert stream.** Every
+`Failures.report` becomes a Sentry capture and a Slack alert; there is no
+severity filter. So a failure that fires often and benignly is recorded as DATA
+(a `Track.record` with its reason), not through `Failures.report`. The update
+check is the case that taught this: on the scheduled timer it errors on every
+asleep or offline tick, hourly, on every install. That is classified `offline`
+(`UpdateReadiness.isOffline`) and kept to PostHog; only a check that reached the
+feed and still failed alerts. Before routing a new failure through
+`Failures.report`, ask how often it fires when nothing is actually wrong.

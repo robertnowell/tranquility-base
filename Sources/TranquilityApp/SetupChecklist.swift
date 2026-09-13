@@ -324,6 +324,22 @@ final class SetupChecklistView: NSStackView {
 
         case .anthropicKey, .elevenLabsKey, .assemblyAIKey:
             promptForKey(item)
+
+        case .hub:
+            // The browser is where signing in happens; the app never asks for
+            // a password or a code and never receives a token through a link.
+            // This Mac invents a secret, shows the phrase derived from it on
+            // this row, and collects the key itself once somebody who is
+            // signed in confirms that the phrase in the browser matches the
+            // one here. See HubConnect and Core's HubPairing.
+            HubConnect.shared.onChange = { [weak self] in
+                guard let self else { return }
+                self.prereqNote[.hub] = HubConnect.shared.note
+                self.renderPrerequisites()
+            }
+            HubConnect.shared.begin()
+            prereqNote[.hub] = HubConnect.shared.note
+            renderPrerequisites()
         }
     }
 

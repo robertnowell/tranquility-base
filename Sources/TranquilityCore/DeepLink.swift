@@ -87,6 +87,20 @@ public enum DeepLink {
         case hear(session: String?)
         case reply(session: String?)
         case show
+        /// "Start connecting this Mac to the hub."
+        ///
+        /// It carries NO parameters, and that is the design rather than an
+        /// omission. The obvious shape for this verb was a token and a hub
+        /// address in the link, which would have been the app taking both its
+        /// credential and the address of its archive from whatever page
+        /// happened to fire the URL. A scheme is open to the entire web and
+        /// cannot be owned (LaunchServices picks among every app that claims
+        /// it), so that link is a pointer somebody else gets to aim.
+        ///
+        /// This one means only "begin". The app supplies its own code and its
+        /// own host, and the hand-back happens over HTTPS between the app and
+        /// the hub, where no page can reach it. See `HubPairing`.
+        case connect
         case unknown(String)
     }
 
@@ -106,6 +120,7 @@ public enum DeepLink {
         case "hear":    return .hear(session: value("session"))
         case "reply":   return .reply(session: value("session"))
         case "show":    return .show
+        case "connect": return .connect
         case let other: return .unknown(other)
         }
     }
@@ -203,9 +218,31 @@ public enum DeepLink {
     /// What the new session opens holding. Built from a path that has already
     /// passed `artifact(from:exists:)`; passing anything else is a programming
     /// error, so this asserts rather than sanitizing twice.
-    public static func openingPrompt(for subject: Subject) -> String {
-        "Read \(subject.reference) — I want to talk about it. "
-        + "Start by telling me what it is and where it stands."
+    public static func openingPrompt(for subject: Subject,
+                                     hubHost: String? = HubApp.baseURL?.host) -> String {
+        // A hub page is behind a sign-in, so "read this URL" on its own sends
+        // the agent to a 401 and the session opens by reporting that it could
+        // not read the thing it was started for. The Mac holds the credential
+        // already; `tbase read` is how it reaches it without the token
+        // passing through this prompt. Named only for the hub's own host,
+        // because for any other page a plain fetch is the right instruction
+        // and naming a local command would be noise.
+        let how: String
+        if case .page(let url) = subject, let hubHost, !hubHost.isEmpty,
+           URL(string: url)?.host?.lowercased() == hubHost.lowercased() {
+            // No backticks, and nothing else from `forbidden`. This string is
+            // single-quoted into a shell inside a double-quoted AppleScript
+            // literal, and openingCommand refuses the whole prompt if one
+            // appears: the session would still open, silently blank, with the
+            // prompt only on the clipboard. A quoting slip here does not fail
+            // loudly, it degrades.
+            how = "Run: tbase read \(url)  (the page is behind a sign-in, and "
+                + "that is how this Mac reads it.) Then: "
+        } else {
+            how = "Read \(subject.reference) — "
+        }
+        return how + "I want to talk about it. "
+            + "Start by telling me what it is and where it stands."
     }
 
     /// The launch command, single-quoted for the shell. Nil is not a failure:

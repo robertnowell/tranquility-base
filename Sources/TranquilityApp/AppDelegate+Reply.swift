@@ -362,6 +362,7 @@ extension AppDelegate {
             return url.path
         } catch {
             Permissions.log("drop: write failed — \(error)")
+            Failures.report(.persistFailed, reason: "dropped-image write failed: \(error)")
             return nil
         }
     }

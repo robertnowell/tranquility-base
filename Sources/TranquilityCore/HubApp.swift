@@ -24,7 +24,7 @@ public enum HubApp {
     /// the machine's config.
     public static var baseURL: URL? { baseURL(config: configPath) }
 
-    static let configPath = FileManager.default.homeDirectoryForCurrentUser
+    public static let configPath = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".claude/hq.json")
 
     static func baseURL(config: URL) -> URL? {
@@ -36,6 +36,36 @@ public enum HubApp {
               url.scheme == "https" || url.scheme == "http"
         else { return nil }
         return url
+    }
+
+    /// Write the app's address, and leave everything else exactly as it was.
+    ///
+    /// `hq.json` is not this app's file. The page-writing skills read it, the
+    /// indexer reads it, and both put their own keys in it; the panel had
+    /// never written it at all before the connect flow needed to. So this is a
+    /// read, a merge and an atomic replace, not a serialisation of what this
+    /// type happens to know about: every top-level key survives, and so does
+    /// every key inside `app` other than the one being set. Clobbering a
+    /// config file somebody else owns is the kind of thing that is discovered
+    /// weeks later, by a tool that stopped finding its own setting.
+    public static func setBaseURL(_ url: URL, config: URL = configPath) throws {
+        var obj: [String: Any] = [:]
+        if let data = try? Data(contentsOf: config),
+           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            obj = existing
+        }
+        var app = (obj["app"] as? [String: Any]) ?? [:]
+        var address = url.absoluteString
+        while address.hasSuffix("/") { address.removeLast() }
+        app["base_url"] = address
+        obj["app"] = app
+        let data = try JSONSerialization.data(withJSONObject: obj,
+                                              options: [.prettyPrinted, .sortedKeys])
+        try FileManager.default.createDirectory(
+            at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // Atomic: a half-written hq.json is a machine that has lost its hub
+        // address AND whatever else the file held.
+        try data.write(to: config, options: .atomic)
     }
 
     /// The page for `slug` in `session`, or the agent when `slug` is nil.
