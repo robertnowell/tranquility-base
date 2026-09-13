@@ -72,6 +72,8 @@ public enum FailureKind: String, Codable, CaseIterable, Sendable {
     /// domain/code, so a client that cannot update itself is debuggable from
     /// telemetry instead of only from the user's own app.log (11 Sep).
     case updateFailed = "update_failed"
+    case reviveFailed = "revive_failed"
+    case persistFailed = "persist_failed"
     case notice = "notice"
 }
 

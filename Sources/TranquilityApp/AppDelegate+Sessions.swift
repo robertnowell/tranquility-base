@@ -1447,6 +1447,8 @@ extension AppDelegate {
                                 return
                             }
                             Permissions.log("goTo: could not raise \(pane.paneTty) — \(outcome)")
+                            Failures.report(.deliveryFailed,
+                                            reason: "goTo: could not raise \(pane.paneTty): \(outcome)")
                         }
                         // Copy per the house rule: no em dashes on a card
                         // (`scripts/check-house-copy.sh`, landed with the
@@ -1559,6 +1561,9 @@ extension AppDelegate {
                     + out.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
             case .failure(let error):
                 Permissions.log("recover: claude stop \(job.jobId) failed: \(error.message.prefix(160))")
+                Failures.report(.reviveFailed,
+                                reason: "recover: claude stop \(job.jobId) failed: \(error.message.prefix(160))",
+                                session: job.sessionId)
             }
         }
         if let jobFull = job.sessionId {
@@ -1750,6 +1755,9 @@ extension AppDelegate {
                     }
                 case .failure(let error):
                     Permissions.log("revive: failed codex \(sessionId.prefix(8)) — \(error.message)")
+                    Failures.report(.reviveFailed,
+                                    reason: "revive failed (codex): \(error.message)",
+                                    harness: "codex", session: sessionId)
                     await MainActor.run { [weak self] in
                         self?.hud.showReceipt(.notRevived("couldn't attach"))
                     }
@@ -1901,6 +1909,8 @@ extension AppDelegate {
                 // where every in-app launch died and this line worked all
                 // morning — and a retry offer only when a retry could differ.
                 Permissions.log("revive: failed \(sessionId.prefix(8)) — \(error.message)")
+                Failures.report(.reviveFailed,
+                                reason: "revive failed: \(error.message)", session: sessionId)
                 let manual = SessionLauncher.manualRevival(
                     sessionId: sessionId, directory: command.cwd, launch: launch)
                 await MainActor.run { [weak self] in

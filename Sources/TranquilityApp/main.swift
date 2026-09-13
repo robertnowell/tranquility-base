@@ -822,6 +822,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.hud.showResult(StateLegend.audioRestartDeclinedMessage)
                     case .failed(let why):
                         Permissions.log("audio-health: restart failed: \(why)")
+                        Failures.report(.microphone, reason: "audio restart failed: \(why)")
                         self.hud.showResult(StateLegend.audioRestartFailedMessage(why))
                     }
                 }

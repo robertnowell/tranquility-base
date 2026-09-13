@@ -90,6 +90,33 @@ public enum UpdateReadiness {
     /// app five releases behind. One hour is Sparkle's floor.
     public static let checkInterval: TimeInterval = 3600
 
+    /// Whether an update-check error means the feed was never reached: no
+    /// network, DNS, a timeout, a lost connection. These fire on every asleep
+    /// or offline install each time the scheduled timer ticks, so the updater
+    /// records them as data and NEVER alerts on them; routing the offline case
+    /// to the failure stream would storm the alert channel fleet-wide, on
+    /// Apple Silicon too (ruled 12 Sep). A check that reached the feed and
+    /// still failed (a bad signature, a malformed appcast, an HTTP status) is a
+    /// real failure and is not offline. Sparkle sometimes wraps the transport
+    /// error under its own, so the underlying error is inspected as well.
+    public static func isOffline(_ error: NSError) -> Bool {
+        func transportOffline(_ e: NSError) -> Bool {
+            guard e.domain == NSURLErrorDomain else { return false }
+            switch e.code {
+            case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost,
+                 NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost,
+                 NSURLErrorDNSLookupFailed, NSURLErrorTimedOut:
+                return true
+            default:
+                return false
+            }
+        }
+        if transportOffline(error) { return true }
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError,
+           transportOffline(underlying) { return true }
+        return false
+    }
+
     /// How many consecutive idle polls an install waits for. One idle poll is
     /// an instant; the grid is idle for a moment between a read-back ending
     /// and the next press. Two polls, twenty seconds apart, is a person who
