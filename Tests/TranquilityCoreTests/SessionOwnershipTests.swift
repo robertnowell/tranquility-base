@@ -380,7 +380,8 @@ final class CodexProcessIdentityTests: XCTestCase {
         // No tty on the record, so the lsof path refuses too: the assertion
         // that matters is that the stale parent is NOT the answer.
         XCTAssertNil(CodexProcessIdentity.activeThreadId(
-            for: record, locks: dir, lineage: { [self.child: self.parent] }))
+            for: record, locks: dir, sessions: CodexRollout.sessionsDirectory,
+            lineage: { [self.child: self.parent] }))
     }
 
     /// The overwhelmingly common shape — a pane that never forked — still
@@ -398,7 +399,7 @@ final class CodexProcessIdentityTests: XCTestCase {
 
         // `child` holds a lock but forked from somebody else entirely.
         XCTAssertEqual(CodexProcessIdentity.activeThreadId(
-            for: record, locks: dir,
+            for: record, locks: dir, sessions: CodexRollout.sessionsDirectory,
             lineage: { [self.child: "01a09c00-0000-7000-8000-000000000000"] }),
                        parent)
     }
@@ -419,8 +420,9 @@ final class CodexProcessIdentityTests: XCTestCase {
             sessionId: parent, harness: CodexAdapter().id,
             pid: Int(ProcessInfo.processInfo.processIdentifier), paneTty: nil)
 
-        XCTAssertEqual(CodexProcessIdentity.activeThreadId(for: record, locks: dir,
-                                                           lineage: { [:] }), parent)
+        XCTAssertEqual(CodexProcessIdentity.activeThreadId(
+            for: record, locks: dir, sessions: CodexRollout.sessionsDirectory,
+            lineage: { [:] }), parent)
     }
 }
 
