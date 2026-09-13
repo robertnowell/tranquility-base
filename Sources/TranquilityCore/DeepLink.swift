@@ -218,9 +218,31 @@ public enum DeepLink {
     /// What the new session opens holding. Built from a path that has already
     /// passed `artifact(from:exists:)`; passing anything else is a programming
     /// error, so this asserts rather than sanitizing twice.
-    public static func openingPrompt(for subject: Subject) -> String {
-        "Read \(subject.reference) — I want to talk about it. "
-        + "Start by telling me what it is and where it stands."
+    public static func openingPrompt(for subject: Subject,
+                                     hubHost: String? = HubApp.baseURL?.host) -> String {
+        // A hub page is behind a sign-in, so "read this URL" on its own sends
+        // the agent to a 401 and the session opens by reporting that it could
+        // not read the thing it was started for. The Mac holds the credential
+        // already; `tbase read` is how it reaches it without the token
+        // passing through this prompt. Named only for the hub's own host,
+        // because for any other page a plain fetch is the right instruction
+        // and naming a local command would be noise.
+        let how: String
+        if case .page(let url) = subject, let hubHost, !hubHost.isEmpty,
+           URL(string: url)?.host?.lowercased() == hubHost.lowercased() {
+            // No backticks, and nothing else from `forbidden`. This string is
+            // single-quoted into a shell inside a double-quoted AppleScript
+            // literal, and openingCommand refuses the whole prompt if one
+            // appears: the session would still open, silently blank, with the
+            // prompt only on the clipboard. A quoting slip here does not fail
+            // loudly, it degrades.
+            how = "Run: tbase read \(url)  (the page is behind a sign-in, and "
+                + "that is how this Mac reads it.) Then: "
+        } else {
+            how = "Read \(subject.reference) — "
+        }
+        return how + "I want to talk about it. "
+            + "Start by telling me what it is and where it stands."
     }
 
     /// The launch command, single-quoted for the shell. Nil is not a failure:
