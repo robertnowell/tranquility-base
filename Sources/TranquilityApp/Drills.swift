@@ -1985,3 +1985,81 @@ extension AppDelegate {
         ])
     }
 }
+
+extension StatusHUD {
+
+    /// The slate's backstop: whatever a drill leaves on the panel, the slate
+    /// hands it back on the grid (`handBackTheStage`, #396).
+    ///
+    /// Written because the repair had no drill of its own, and the deploy that
+    /// shipped it could not have run one. The race it covers is won or lost by
+    /// milliseconds: on #396's own launch the go-to refusal landed 117 ms after
+    /// the cleanup it used to collide with, so the backstop never fired and the
+    /// slate proved nothing about it. A drill that waits for a cold discovery
+    /// cache would assert nothing on most nights. This drives the repair
+    /// directly instead, so it is checked on every launch rather than on the
+    /// launches that happen to lose the race.
+    ///
+    /// The PARTITION is the assertion, not the restore. Two faces must be
+    /// handed back, and for two different reasons: one that OWNS the stage,
+    /// because it refuses whatever arrives next (the 08 Aug incident, where a
+    /// drill fixture answered `announce: refused, reply flow on stage` to every
+    /// press with ten drills reporting PASS above it), and a `.result`, because
+    /// `Failures.suppressed` holds for the whole window so a failure card here
+    /// cannot be a real one. One face must NOT be touched: a spoken card, since
+    /// a real announcement can take the stage mid-slate and the slate running
+    /// out is not a reason to pull it off. A backstop that cleared everything
+    /// would pass the first two checks and be a worse bug than the one it fixed.
+    func slateHandsBackDrill() {
+        let realHome = onBreadcrumbHome
+        let realTarget = currentTarget
+        defer { onBreadcrumbHome = realHome; currentTarget = realTarget }
+        var wentHome = 0
+        // The real closure paints the REAL grid through AppDelegate. The drill
+        // only needs to know it was pulled, and to leave a grid behind.
+        onBreadcrumbHome = { [weak self] in
+            wentHome += 1
+            self?.showIdle(rows: [])
+        }
+
+        // 1. A capture face. It owns the stage, so it refuses the next arrival.
+        endCapture(because: "slateHandsBack setup")
+        showIdle(rows: [])
+        currentTarget = ("slate-hands-back", 1, "drill")
+        showPendingSend(utteranceId: "slate-hands-back",
+                        text: "words that should never be sent", label: "drill",
+                        seconds: 4, send: {}, cancel: { _ in })
+        let stageWasOwned = state.ownsStage
+        handBackTheStage()
+        let ownedFaceHandedBack = wentHome == 1 && !state.ownsStage
+
+        // 2. A result card. It admits what follows, so it strands nothing, but
+        //    it is a red failure about a session that never existed and it sat
+        //    on the panel for 61 minutes on 13 Sep.
+        showResult("Drill failure that nobody should be left looking at.")
+        let resultWasUp = state == .result
+        handBackTheStage()
+        let resultHandedBack = wentHome == 2 && state != .result
+
+        // 3. And the face the backstop must keep its hands off.
+        _ = showAnnouncement(spoken: SpokenTextSanitizer().sanitize("Slate drill card."),
+                             sessionId: "slate-hands-back", pid: nil,
+                             project: "slate-hands-back", cwd: nil,
+                             eventId: "slate-hands-back")
+        let spokenWasUp = state.isSpeaking
+        handBackTheStage()
+        let spokenCardSurvives = wentHome == 2 && state.isSpeaking
+
+        SelfTest.report("slateHandsBack", [
+            ("aCaptureFaceOwnsTheStage", stageWasOwned),
+            ("anOwnedFaceIsHandedBack", ownedFaceHandedBack),
+            ("aResultCardIsUp", resultWasUp),
+            ("aResultCardIsHandedBack", resultHandedBack),
+            ("aSpokenCardIsUp", spokenWasUp),
+            ("aSpokenCardIsLeftAlone", spokenCardSurvives),
+        ])
+
+        endCapture(because: "slateHandsBack cleanup")
+        showIdle(rows: [])
+    }
+}
