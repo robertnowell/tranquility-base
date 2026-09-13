@@ -322,7 +322,10 @@ final class SetupChecklistView: NSStackView {
                 }
             }
 
-        case .anthropicKey, .elevenLabsKey, .assemblyAIKey:
+        // Every credential row, and they all behave identically: a sheet, a
+        // sanitized paste, a verification call. Listed rather than defaulted so
+        // a future row that is NOT a paste-a-key row has to say so here.
+        case .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey, .provider:
             promptForKey(item)
 
         case .hub:

@@ -28,6 +28,18 @@ public enum Secrets {
         /// minted by the hub when the Mac was connected. Not a key a person
         /// pastes, so no console URL.
         case hubToken = "hub-token"
+        /// crobot, through Jarvis. Minted in Jarvis under user settings, API
+        /// Keys tab, with NO permissions: crobot only calls `/api/auth/me`
+        /// with it and that route enforces no scope. Jarvis refuses an empty
+        /// scope list, so tick one harmless box and choose specific
+        /// organizations, never all, and never a `coframe-integration:*`
+        /// scope. It does not expire and is revocable from the same screen.
+        case crobotAPIKey = "crobot-api-key"
+        /// Local OpenCode's server password, when its server has one. Genuinely
+        /// optional: a server started without `--password` accepts
+        /// unauthenticated requests from localhost, so the absence of this is a
+        /// configuration, not a fault.
+        case openCodePassword = "opencode-password"
 
         /// The provider's name, as a person would say it.
         public var provider: String {
@@ -37,6 +49,8 @@ public enum Secrets {
             case .assemblyAIAPIKey: return "AssemblyAI"
             case .openAIAPIKey: return "OpenAI"
             case .hubToken: return "Tranquility Knowledge Base"
+            case .crobotAPIKey: return "crobot"
+            case .openCodePassword: return "OpenCode"
             }
         }
 
@@ -48,6 +62,8 @@ public enum Secrets {
             case .assemblyAIAPIKey: return "the live transcript while you speak"
             case .openAIAPIKey: return "Whisper, the durable transcript when streaming fails"
             case .hubToken: return "the mirror: every page and turn, in the hub"
+            case .crobotAPIKey: return "your crobot agents, as rows you can answer"
+            case .openCodePassword: return "a local OpenCode server that asks for one"
             }
         }
 
@@ -64,7 +80,34 @@ public enum Secrets {
             case .assemblyAIAPIKey: return URL(string: "https://www.assemblyai.com/dashboard/api-keys")
             case .openAIAPIKey: return URL(string: "https://platform.openai.com/api-keys")
             case .hubToken: return nil
+            // Jarvis mints it, under user settings. No stable deep link to that
+            // tab exists, so the console root is the honest answer rather than
+            // a guessed fragment that 404s.
+            case .crobotAPIKey: return URL(string: "https://jarvis.coframe.com/settings")
+            // Nothing to sign up for: it is whatever password the user passed
+            // to their own `opencode serve`. A console URL here would point at
+            // a product page and teach them nothing.
+            case .openCodePassword: return nil
             }
+        }
+    }
+
+    /// The credential a cloud agent provider authenticates with, or nil for a
+    /// provider that needs none.
+    ///
+    /// The one place the mapping lives, so a checklist row, a key check and a
+    /// provider adapter cannot disagree about which secret a provider uses.
+    /// Keyed by `AgentProvider.id`, deliberately NOT by a string built from
+    /// the raw value: "crobot" and "crobot-api-key" are two vocabularies and
+    /// deriving one from the other is how they drift.
+    /// NOT named `provider`: `Key` already has an instance property by that
+    /// name (the provider's name, as a person would say it), and a static
+    /// function sharing it reads as the same concept from the wrong side.
+    public static func credential(forProvider id: String) -> Key? {
+        switch id {
+        case "crobot": return .crobotAPIKey
+        case "opencode": return .openCodePassword
+        default: return nil
         }
     }
 
