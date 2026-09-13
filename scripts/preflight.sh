@@ -87,6 +87,14 @@ python3 scripts/check-house-copy.sh
 echo "→ borrowed descriptors"
 python3 scripts/check-borrowed-descriptors.sh
 
+# And the provider seam's rule 3 (13 Sep, docs/rulings/ruling-the-provider-seam.md):
+# every compatibility shim carries a dated removal comment. Same shape as the
+# three above, and the only one of the ten rules a grep can answer -- rule 5,
+# "every declared capability is read by production code", is a test instead
+# because it has to read Swift rather than comment text.
+echo "→ compat comments"
+python3 scripts/check-compat-comments.sh
+
 echo "→ notarization log parser"
 # Anything that decides WHO WROTE A PAGE runs against the adversarial set
 # first. Both attribution regressions of 03 Sep would have died here in seconds;
