@@ -110,6 +110,16 @@ sessions the user started by hand.
 | 3 | `scripts/check-compat-comments.sh` — every `COMPAT(` must name itself and carry a parseable removal date, and a date in the past fails the build | `scripts/preflight.sh`, beside the other source checks |
 | 5 | `CapabilityLivenessTests` — a declared capability no production file reads fails the suite | `Tests/TranquilityCoreTests` |
 
+Rule 5's check carries a debt list that may only SHRINK: a listed field that
+becomes live fails the suite too, so the list cannot quietly describe a past
+that is no longer true. It was written expecting one entry, for the field whose
+documentation confesses to being unread. **It found four.** `echoesPaste`,
+`queuesInputMidTurn` and `hasHooks` are measured facts about a harness that no
+production code consults, and the last of those is the one most likely to be a
+genuine bug rather than dead weight: a harness without hooks would still get a
+hooks row today, because `HookManifest` answers that question by another route.
+All three carry a 2026-12-01 date.
+
 Rule 3 is a grep because it is about comment text. Rule 5 is a test because it
 is about whether code reads a field, which grep cannot answer without reading
 Swift. Neither is a convention anyone has to remember.

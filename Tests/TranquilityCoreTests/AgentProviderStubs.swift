@@ -185,3 +185,51 @@ struct StreamingStub: AgentProvider, Sendable {
     /// A local server has no page to open, and nil is the honest answer.
     func url(for id: AgentSession.ID) -> URL? { nil }
 }
+
+// MARK: - Minimal
+
+/// Stands in for GitHub Copilot's coding agent, which is not a degenerate case
+/// invented to pad the suite: it genuinely has **no follow-up endpoint at all**.
+/// You comment on the draft pull request, and the pull request is the
+/// checkpoint. There is no message verb to call.
+///
+/// It exists here because the conformance suite's refusal branches are most of
+/// what it checks, and a suite where every provider can do everything proves
+/// nothing about refusal. `testTheStubsBetweenThemExerciseBothSidesOfEveryCapability`
+/// is what found that gap, with three stubs that all declared `canSend`.
+struct MinimalStub: AgentProvider, Sendable {
+    let id = "minimal-stub"
+    /// Everything false but the one thing it does: produce a pull request.
+    var can = Capabilities(canStart: true, canSend: false, canAnswer: false,
+                           canCancel: false, sendWhileWorking: false,
+                           listIsCallerScoped: true, carriesPullRequest: true)
+
+    static let session = AgentSession(
+        id: "6512bd43-d9ca-4e6e-a1b0-8d35d6b5e7c0", provider: "minimal-stub",
+        title: "open a PR and wait", state: .working,
+        updatedAt: Date(timeIntervalSince1970: 1_757_000_400),
+        repository: "acme/site",
+        pullRequest: URL(string: "https://github.com/acme/site/pull/4"))
+
+    func changes() -> AsyncStream<AgentEvent>? { nil }
+    func mine() async throws -> [AgentSession] { [Self.session] }
+    func refine(_ id: AgentSession.ID) async throws -> AgentSession { Self.session }
+    /// Nothing to fetch: this provider never blocks on a question, it blocks on
+    /// a review, which is a pull request rather than a prompt.
+    func request(_ id: AgentSession.ID) async throws -> PendingRequest? { nil }
+    func transcript(_ id: AgentSession.ID) async throws -> [Turn] { [] }
+
+    /// REFUSES. There is no endpoint to call, and `.unsupported` is a sentence
+    /// the panel can say out loud. Throwing would make the panel apologise for
+    /// a failure that did not happen.
+    func send(_ text: String, to id: AgentSession.ID) async throws -> SendOutcome { .unsupported }
+    func respond(to request: PendingRequest, with response: Response) async throws -> SendOutcome {
+        .unsupported
+    }
+    func start(_ brief: Brief) async throws -> AgentSession.ID {
+        AgentSession.id("minimal-\(brief.prompt.count)", provider: id)
+    }
+    func url(for id: AgentSession.ID) -> URL? {
+        URL(string: "https://github.com/acme/site/pull/4")
+    }
+}
