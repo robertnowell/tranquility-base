@@ -319,11 +319,10 @@ final class CoordinatorTests: XCTestCase {
         guard case .readyToSend(let utteranceId, let shown, _, _) =
             try await coordinator.submitReply(pcm16: silence())
         else { return XCTFail("expected a pending send") }
-        XCTAssertTrue(shown.hasPrefix(HeardContext.opener), "what was heard leads: \(shown)")
-        XCTAssertTrue(shown.hasSuffix("\n\nyes go ahead"), "then what they said: \(shown)")
-        XCTAssertTrue(shown.contains(
-            "\u{201C}Fixing the export pipeline. Tests pass. Run the migration next. Proceed?\u{201D}"),
-            "the FixedSummary's recap then proposal, verbatim: \(shown)")
+        XCTAssertEqual(shown,
+            "[assistant]: Fixing the export pipeline. Tests pass. Run the migration next. Proceed?"
+            + "\n\n[user]: yes go ahead",
+            "what was heard, then what they said, two labels and nothing else")
 
         guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
         else { return XCTFail("expected a dispatch") }
