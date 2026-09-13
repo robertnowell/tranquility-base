@@ -45,22 +45,33 @@ extension StatusHUD {
             ])
             // The background half paints its outcome over whatever the
             // cleanup left up; a deploy's selftest must not strand that on
-            // the live panel. The wording follows the one implementation now
-            // — the drill's fixture session does not exist anywhere, not even
-            // on disk, so the answer is "isn't running any more, and I can't
-            // find its history". (A dead session that IS on disk gets revived
-            // instead, since 11 Sep; the fixture is chosen so this drill never
-            // launches anything.)
+            // the live panel. The fixture session does not exist anywhere, not
+            // even on disk, so the answer is always the refusal. (A dead
+            // session that IS on disk gets revived instead, since 11 Sep; the
+            // fixture is chosen so this drill never launches anything.)
             // Twice, because the answer now arrives AFTER the guard drops:
             // the guard comes down at once and the discovery walk that
             // decides "nothing on disk" can take 5 s on a cold cache at
             // launch (measured 11 Sep). One sweep at 3 s caught the guard;
             // a second at 9 s catches the card.
+            //
+            // Asked of the STATE, not of the body text. The text check here
+            // could never fire once the drills began to overlap (11 Sep, #357
+            // and #359): the refusal now lands while `selfTestPendingSend`'s
+            // card owns the stage, and `showResult` routes a failure that
+            // arrives during a capture to the amber strip (`face.captureFault`)
+            // instead of the body. `bodyLabel` therefore never held the
+            // message, the sweep matched nothing on either pass, and the red
+            // card was left on the panel: measured 12 to 13 Sep, seven of ten
+            // launches, the worst of them for 61 minutes.
+            //
+            // `.result` cannot be anything but this drill's own fixture for as
+            // long as the slate is running, because `Failures.suppressed` is
+            // true for the whole window. The late pass can outlive the slate on
+            // a cold cache, which is exactly why it stays: `endDrills` has
+            // already handed the stage back by then and cannot see this one.
             for _ in 0..<2 {
-                if self.bodyLabel.stringValue.contains("isn't running any more")
-                    || self.bodyLabel.stringValue.contains("Couldn't find a terminal") {
-                    self.showIdle(rows: [])
-                }
+                if case .result = self.state { self.showIdle(rows: []) }
                 try? await Task.sleep(nanoseconds: 6_000_000_000)
             }
         }
