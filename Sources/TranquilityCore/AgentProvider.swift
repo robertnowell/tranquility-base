@@ -83,15 +83,18 @@ public protocol AgentProvider: Sendable {
     /// because there is no id to hand back when it did not happen.
     func start(_ brief: Brief) async throws -> AgentSession.ID
 
+    /// Stop an agent. Gated by `can.canCancel`.
+    ///
+    /// Added 13 Sep, because `canCancel` shipped in the first draft with no
+    /// method to act on it. A capability that can never be consulted is how the
+    /// previous capability struct reached four dead fields, and declaring one
+    /// on day one of a seam written to prevent exactly that would have been a
+    /// poor start.
+    func cancel(_ id: AgentSession.ID) async throws -> SendOutcome
+
     /// Where a person looks at this agent in the provider's own interface, or
     /// nil for a provider with no such place (a local server has none).
     func url(for id: AgentSession.ID) -> URL?
-}
-
-public extension AgentProvider {
-    /// Whether this provider pushes. Named so a call site reads as the question
-    /// it is asking rather than as a nil check on a stream it is discarding.
-    var pushes: Bool { changes() != nil }
 }
 
 /// The providers this machine can drive.

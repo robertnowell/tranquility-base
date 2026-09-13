@@ -87,6 +87,10 @@ struct PolledStub: AgentProvider, Sendable {
         return AgentSession.id("started-\(brief.prompt.count)", provider: id)
     }
 
+    func cancel(_ id: AgentSession.ID) async throws -> SendOutcome {
+        can.canCancel ? .accepted : .unsupported
+    }
+
     func url(for id: AgentSession.ID) -> URL? {
         URL(string: "https://polled.example.test/tasks/\(id)")
     }
@@ -182,6 +186,10 @@ struct StreamingStub: AgentProvider, Sendable {
         AgentSession.id("stream-\(brief.prompt.count)", provider: id)
     }
 
+    func cancel(_ id: AgentSession.ID) async throws -> SendOutcome {
+        can.canCancel ? .accepted : .unsupported
+    }
+
     /// A local server has no page to open, and nil is the honest answer.
     func url(for id: AgentSession.ID) -> URL? { nil }
 }
@@ -229,6 +237,10 @@ struct MinimalStub: AgentProvider, Sendable {
     func start(_ brief: Brief) async throws -> AgentSession.ID {
         AgentSession.id("minimal-\(brief.prompt.count)", provider: id)
     }
+
+    /// Refuses, like everything else it cannot do. Copilot's answer to "stop
+    /// that" is to close the pull request, which is not this verb.
+    func cancel(_ id: AgentSession.ID) async throws -> SendOutcome { .unsupported }
     func url(for id: AgentSession.ID) -> URL? {
         URL(string: "https://github.com/acme/site/pull/4")
     }

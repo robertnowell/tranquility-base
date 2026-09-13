@@ -123,12 +123,26 @@ final class AgentSessionTests: XCTestCase {
             .done)
     }
 
-    /// An unreachable provider's agents are quiet, never done and never
-    /// working. Guessing either way is the failed-poll bug in another costume.
-    func testUnknownIsQuietRatherThanAGuess() {
+    /// An unreachable provider's agents are UNREACHABLE, not quiet. Folding
+    /// the two together made a captive portal render as a grid of calm agents,
+    /// with every lamp lying by omission.
+    func testUnknownIsItsOwnBucketAndNotIdle() {
         XCTAssertEqual(
             AgentPresentation.bucket(state: .unknown, hasPendingRequest: false, hasUnread: false),
-            .idle)
+            .unreachable)
+        XCTAssertNotEqual(
+            AgentPresentation.bucket(state: .unknown, hasPendingRequest: false, hasUnread: false),
+            AgentPresentation.bucket(state: .completed, hasPendingRequest: false,
+                                     hasUnread: false),
+            "silence must not read as finished")
+    }
+
+    /// Something it said before we lost contact is still something you have
+    /// not read, and silence since does not retract it.
+    func testLosingContactDoesNotRetractAnUnreadResult() {
+        XCTAssertEqual(
+            AgentPresentation.bucket(state: .unknown, hasPendingRequest: false, hasUnread: true),
+            .unread)
     }
 
     /// There is deliberately nowhere to PUT a bucket. A bucket enum has no

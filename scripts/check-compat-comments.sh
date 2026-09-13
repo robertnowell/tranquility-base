@@ -31,13 +31,20 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-# The marker, its name, and whatever follows on the same line.
-MARKER = re.compile(r"COMPAT\(([^)]*)\)\s*:?(.*)")
-# ISO first because it sorts and cannot be read two ways. `remove after` is
-# the phrase the ruling prints, but the date is what is actually required --
-# a check that insisted on the exact sentence would fail a correct comment
-# for its wording.
-DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+
+# The WORD, not the word-plus-paren. `COMPAT(name` with an unclosed paren and
+# `COMPAT name:` without one both read as the marker to a person and both
+# escaped the first version of this check, which looked for the literal
+# "COMPAT(". The ruling's claim is that grepping the marker is the whole
+# cleanup backlog, and a marker the checker cannot see is worse than no marker:
+# it looks tracked.
+MARKER = re.compile(r"\bCOMPAT\b(.*)")
+NAMED = re.compile(r"^\(([^)\n]*)\)")
+# ANCHORED to "remove after", never just the first date on the line. A shim
+# that records when the vendor broke it -- "broken since 2020-01-01, remove
+# after 2027-01-01" -- read as expired under the first version, which is the
+# failure that makes a checker something people route around.
+DUE = re.compile(r"remove\s+after\s+(\d{4})-(\d{2})-(\d{2})")
 
 # Everything a human wrote. Docs included: the ruling itself carries the
 # literal form, and a shim documented in prose and never written in code is
@@ -61,17 +68,30 @@ for glob in GLOBS:
         except (UnicodeDecodeError, OSError):
             continue
         for n, line in enumerate(lines, 1):
+            # Prose ABOUT the marker is not a marker, and the two are
+            # genuinely hard to tell apart from the outside: a doc comment
+            # explaining the form contains the form. Same escape hatch
+            # check-key-names.sh already uses, so an exemption is a decision
+            # somebody made rather than a hole in the pattern.
+            if "compat:exempt" in line:
+                continue
             match = MARKER.search(line)
             if not match:
                 continue
             seen += 1
-            name, rest = match.group(1).strip(), match.group(2)
+            rest = match.group(1)
+            named = NAMED.match(rest)
+            if not named:
+                bad.append((rel, n, "COMPAT marker is not COMPAT(name): ...", line.strip()))
+                continue
+            name = named.group(1).strip()
             if not name:
                 bad.append((rel, n, "COMPAT marker has no name", line.strip()))
                 continue
-            found = DATE.search(rest)
+            found = DUE.search(rest)
             if not found:
-                bad.append((rel, n, f"COMPAT({name}) has no removal date (YYYY-MM-DD)",
+                bad.append((rel, n,
+                            f"COMPAT({name}) has no 'remove after YYYY-MM-DD'",
                             line.strip()))
                 continue
             try:
@@ -82,7 +102,7 @@ for glob in GLOBS:
                 continue
             if due < today:
                 bad.append((rel, n,
-                            f"COMPAT({name}) expired {found.group(0)} -- delete the shim "
+                            f"COMPAT({name}) expired {due.isoformat()} -- delete the shim "
                             f"or move the date deliberately",
                             line.strip()))
 

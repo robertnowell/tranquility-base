@@ -142,6 +142,40 @@ final class ProviderConfigTests: XCTestCase {
             .contains { $0.id == "provider.crobot" })
     }
 
+    /// A row whose fix button cannot do anything is worse than no row: it
+    /// looks like a thing you can fix. `promptForKey` guards on `item.secret`
+    /// and returns silently when it is nil.
+    func testAProviderWithNoKnownCredentialGetsNoRowAtAll() {
+        let rows = Prerequisites.items(harnesses: [],
+                                       providers: ["crobot", "some-future-thing"])
+        XCTAssertTrue(rows.contains { $0.id == "provider.crobot" })
+        XCTAssertFalse(rows.contains { $0.id == "provider.some-future-thing" },
+                       "a row with no credential renders a button that does nothing")
+        for row in rows where row.id.hasPrefix("provider.") {
+            XCTAssertNotNil(row.secret, "\(row.id) offers Paste key with nothing to paste into")
+        }
+    }
+
+    /// The setup checklist must not read the machine's real config through a
+    /// defaulted argument. `Probes` exists to stop exactly that, and it was
+    /// bypassed for the provider rows until 13 Sep.
+    func testTheChecklistReadsProvidersFromItsProbesAndNotFromDisk() {
+        let probes = Prerequisites.Probes(
+            tmuxPath: { "/usr/bin/tmux" }, hooksProblem: { _ in nil },
+            hasSecret: { _ in false }, harnesses: { [] },
+            providers: { ["crobot"] })
+        let rows = Prerequisites.snapshot(probes).map(\.item.id)
+        XCTAssertTrue(rows.contains("provider.crobot"),
+                      "the probe's providers never reached the rows")
+
+        let none = Prerequisites.Probes(
+            tmuxPath: { "/usr/bin/tmux" }, hooksProblem: { _ in nil },
+            hasSecret: { _ in false }, harnesses: { [] })
+        XCTAssertFalse(Prerequisites.snapshot(none).contains { $0.item.id.hasPrefix("provider.") },
+                       "a Probes with no providers produced provider rows, so something "
+                           + "read the real hq.json")
+    }
+
     func testAProviderRowSurvivesTheRoundTripThroughItsIdentifier() {
         let item = Prerequisites.Item.provider(id: "crobot")
         XCTAssertEqual(item.id, "provider.crobot")

@@ -247,7 +247,14 @@ public enum Prerequisites {
             // their crobot credential is missing on a machine that has never
             // heard of crobot, which is what `Harness.isPresent` has always
             // existed to prevent.
-            + providers.map { Item.provider(id: $0) }
+            // A provider with no KNOWN CREDENTIAL gets no row. Its `secret` is
+            // nil, so `promptForKey` would return silently and the row would
+            // render a "Paste key" button that does nothing at all: the one
+            // outcome worse than no row, because it looks like a thing you can
+            // fix. `Secrets.credential(forProvider:)` is the single place that
+            // mapping lives, so this cannot drift from what the sheet can open.
+            + providers.filter { Secrets.credential(forProvider: $0) != nil }
+                .map { Item.provider(id: $0) }
     }
 
     public struct State: Sendable, Equatable {
@@ -297,6 +304,16 @@ public enum Prerequisites {
         /// "what is installed" is exactly the kind of question a test needs to
         /// answer for itself.
         public var harnesses: @Sendable () -> [String]
+        /// Which cloud providers this machine has an ADDRESS for, by
+        /// `AgentProvider.id`. A probe for the same reason `harnesses` is one.
+        ///
+        /// Added 13 Sep because it was missing, and missing here does not fail
+        /// loudly: `items(harnesses:providers:)` defaults `providers` to
+        /// `ProviderConfig.configured()`, and `snapshot` passed `harnesses:`
+        /// and not `providers:`, so half the rows read the real `~/.claude/hq.json`
+        /// straight through the seam built to stop exactly that. The demo
+        /// mode's own comment says it "reads nothing, writes nothing"; it read.
+        public var providers: @Sendable () -> [String]
         public var hasSecret: @Sendable (Secrets.Key) -> Bool
         /// What the provider last said about a stored key, or nil if it was
         /// never asked. A row that reports a refusal in its text and a green
@@ -316,9 +333,15 @@ public enum Prerequisites {
             keyVerdict: @escaping @Sendable (Secrets.Key) -> KeyCheck.Outcome? = { _ in nil },
             harnesses: @escaping @Sendable () -> [String]
                 = { HookManifest.detected().map(\.id) },
+            // Defaults to NOTHING CONFIGURED, not to reading the disk. A test
+            // that forgets this gets a machine with no providers, which is a
+            // deterministic answer; defaulting it to `ProviderConfig.configured()`
+            // would reintroduce exactly the bypass this field exists to close.
+            providers: @escaping @Sendable () -> [String] = { [] },
             hubStatus: @escaping @Sendable () -> HubState? = { nil }
         ) {
             self.tmuxPath = tmuxPath
+            self.providers = providers
             self.hooksProblem = hooksProblem
             self.harnesses = harnesses
             self.hasSecret = hasSecret
@@ -351,6 +374,9 @@ public enum Prerequisites {
             },
             hasSecret: { Secrets.read($0) != nil },
             keyVerdict: { KeyVerdict.last(for: $0) },
+            // The live value reads the config; every other Probes does not,
+            // because the parameter defaults to none configured.
+            providers: { ProviderConfig.configured() },
             hubStatus: {
                 guard HubApp.baseURL != nil, Secrets.read(.hubToken) != nil else { return nil }
                 let device = HubMirror.deviceName()
@@ -390,7 +416,7 @@ public enum Prerequisites {
     /// hooks audit parses a file, a keychain read is a round trip, and the tmux
     /// fallback spawns a login shell. None of that belongs on a 1 Hz UI timer.
     public static func snapshot(_ probes: Probes = .live) -> [State] {
-        items(harnesses: probes.harnesses()).map { item in
+        items(harnesses: probes.harnesses(), providers: probes.providers()).map { item in
             if let secret = item.secret {
                 guard probes.hasSecret(secret) else {
                     return State(item: item, satisfied: false, detail: missingDetail(item))

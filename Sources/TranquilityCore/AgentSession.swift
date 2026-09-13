@@ -161,6 +161,16 @@ public enum AgentPresentation: Sendable, Equatable {
     case idle
     /// Unlit. Finished, however it finished.
     case done
+    /// **Nobody can say.** A failed poll, or a state this app does not
+    /// recognise. Separated from `idle` on 13 Sep because folding the two
+    /// together made a captive portal render as a grid of calm agents: the
+    /// lamps went quiet and every one of them was a lie by omission.
+    ///
+    /// The row holds its last known state with its age visible rather than
+    /// asserting a new one. That is the same rule the local grid already
+    /// keeps for an unreadable transcript, where the answer is the old quiet
+    /// lamp and never a guess.
+    case unreachable
 
     /// **A blocking request outranks everything**, which is the same precedence
     /// the local grid already holds: a process saying it cannot go on alone is
@@ -173,6 +183,10 @@ public enum AgentPresentation: Sendable, Equatable {
         if hasPendingRequest || state.isBlocked { return .needsYou }
         if state.isFinished { return hasUnread ? .unread : .done }
         if hasUnread { return .unread }
+        // Unknown is checked AFTER unread, deliberately: something it said
+        // before we lost contact is still something you have not read, and
+        // silence since does not retract it.
+        if state == .unknown { return .unreachable }
         return state == .working || state == .submitted ? .working : .idle
     }
 }

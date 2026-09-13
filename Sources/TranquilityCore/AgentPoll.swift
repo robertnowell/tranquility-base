@@ -73,4 +73,43 @@ public enum AgentPoll {
         }
         return (events, digests)
     }
+
+    /// What one poll produced.
+    ///
+    /// `unreachable` exists so the failure has somewhere to go that is not a
+    /// state. A provider that could not be reached has told us nothing about
+    /// its agents, and the two wrong answers are symmetrical: calling them
+    /// finished loses a result, and calling them idle loses a question.
+    public enum Outcome: Sendable, Equatable {
+        case polled(events: [AgentEvent], digests: [AgentSession.ID: String])
+        /// Carries its reason (ruling, 11 Sep), and the agents whose state is
+        /// now `.unknown` because nobody can say otherwise.
+        case unreachable(reason: String, stale: [AgentSession.ID])
+    }
+
+    /// Poll a provider once, and turn a thrown error into `.unknown` rather
+    /// than into a state.
+    ///
+    /// **This is where "a failed poll yields unknown and never idle" is
+    /// actually enforced**, and it has to be a function rather than a
+    /// convention: a convention is what every caller is one mistake away from
+    /// breaking, and the mistake is invisible because the grid still renders.
+    ///
+    /// The previously-known ids come back as `stale` rather than as synthesised
+    /// sessions, because inventing an `AgentSession` here would mean inventing
+    /// a title and a timestamp for something nobody has heard from. The caller
+    /// holds the last-known session and marks it unknown, which is how a row
+    /// keeps its last state with its age visible instead of going quiet.
+    public static func refresh(_ provider: any AgentProvider,
+                               from digests: [AgentSession.ID: String],
+                               at: Date = Date()) async -> Outcome {
+        do {
+            let sessions = try await provider.mine()
+            let (events, next) = events(from: digests, to: sessions, at: at)
+            return .polled(events: events, digests: next)
+        } catch {
+            return .unreachable(reason: String(describing: error),
+                                stale: digests.keys.sorted())
+        }
+    }
 }

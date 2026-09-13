@@ -27,9 +27,15 @@ final class CapabilityLivenessTests: XCTestCase {
     /// the suite, and a field in here that becomes live ALSO fails, so the list
     /// cannot quietly describe a past that no longer exists.
     ///
-    /// It was expected to hold one entry. Writing the detector found six, which
-    /// is the finding rather than an inconvenience: `HarnessCapabilities` has
-    /// four dead fields and not the one its documentation confesses to.
+    /// It was expected to hold one entry. Writing the detector found FOUR,
+    /// which is the finding rather than an inconvenience: `HarnessCapabilities`
+    /// has four dead fields and not the one its documentation confesses to.
+    ///
+    /// **Every entry carries a real marker**, so the expiry checker  compat:exempt
+    /// this branch also ships can see it. The first draft wrote the dates in
+    /// plain prose, which meant the debt created by the ruling was not governed
+    /// by the ruling's own machinery. That is the precise failure the ruling
+    /// was written to end, committed in the same pull request.
     private static let knownDead: [String: String] = [
         // The 21 Aug measurement, kept as a measurement. Coordinator's adoption
         // logic stopped branching on it on 23 Aug when the dual-live premise
@@ -39,7 +45,7 @@ final class CapabilityLivenessTests: XCTestCase {
         // is the whole reason it is not consulted. Deleting it would delete the
         // finding: 8,443 records stranded on unreachable branches, 3,982 in one
         // session. The one entry here that is arguably correct as it stands.
-        // Review after 2027-03-01.
+        // COMPAT(allowsConcurrentResume): kept measurement, remove after 2027-03-01
         "allowsConcurrentResume": "a kept measurement, deliberately not a switch",
 
         // The next three are NOT deliberate, and were not known before this
@@ -51,17 +57,21 @@ final class CapabilityLivenessTests: XCTestCase {
         // Measured live 23 Aug on both harnesses and consulted nowhere. The
         // landing checks that care about paste echo read `pasteChipPrefix`
         // instead, which IS live, so this is the half of a two-part
-        // measurement that got left behind. Resolve or delete by 2026-12-01.
+        // measurement that got left behind.
+        // COMPAT(echoesPaste): superseded by pasteChipPrefix, remove after 2026-12-01
         "echoesPaste": "measured, superseded in practice by pasteChipPrefix",
         // Whether a harness queues input typed mid-turn. The reply pipeline
         // decides this by waiting rather than by asking, so the flag records
-        // an answer nothing needs yet. Resolve or delete by 2026-12-01.
+        // an answer nothing needs yet.
+        // COMPAT(queuesInputMidTurn): pipeline waits instead, remove after 2026-12-01
         "queuesInputMidTurn": "recorded, and the pipeline decides by waiting instead",
         // Whether a harness has hooks at all. `HookManifest` enumerates
         // harnesses directly and `Prerequisites.Item.hooks` carries the id, so
         // both routes bypass the capability. This is the one most likely to be
         // a genuine bug rather than dead weight: a harness WITHOUT hooks would
-        // still get a hooks row today. Resolve or delete by 2026-12-01.
+        // still get a hooks row today. FILED AS #394 rather than left here: a
+        // finding recorded only in a test allowlist is a finding nobody reads.
+        // COMPAT(hasHooks): see #394, remove after 2026-12-01
         "hasHooks": "declared, and HookManifest answers the same question another way",
     ]
 
@@ -71,8 +81,12 @@ final class CapabilityLivenessTests: XCTestCase {
     /// the two are different states and merging them would let genuine rot hide
     /// among work that has not happened yet.
     ///
-    /// **This list must be empty when the checkpoint lands.** That is the
-    /// mechanism by which the new struct cannot repeat the old one's history.
+    /// **This list must be empty when the checkpoint lands**, and it carries a
+    /// date so that is enforced rather than remembered. The first draft left it
+    /// undated, which would have made it the one debt list in this file with no
+    /// expiry at all.
+    ///
+    /// COMPAT(pendingCapabilities): consumed by #368-#374, remove after 2026-11-15
     private static let pendingUntilTheCheckpoint: Set<String> = [
         "canStart", "canSend", "canAnswer", "canCancel",
         "sendWhileWorking", "listIsCallerScoped", "carriesPullRequest",

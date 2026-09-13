@@ -175,24 +175,6 @@ extension AppDelegate {
         return verdict.rows
     }
 
-    /// The lamp/reason/name derivations moved to Core (App-lane P8, 24 Aug
-    /// — `GridAssembler`, see its own doc comment): `blockedOnYou`,
-    /// `lampAndReason`, `tabTitle`, `tabDisplayName` all depended on
-    /// nothing but Core types, so the app layer was just where they
-    /// happened to be written. `sessionRowsNow` below still calls them —
-    /// through `GridAssembler.` now — and stays app-side itself,
-    /// deliberately: it owns `lastSeenLive` and reads `delivering`, two
-    /// pieces of AppDelegate's own state that would need a real stateful
-    /// Core type to carry, which is a bigger redesign than this pass.
-    func lampAndReason(for evidence: SessionActivity.Evidence?, sessionId: String,
-                               live: LiveSession?,
-                               boundary: SessionActivity.TurnBoundary? = nil,
-                               pickedUp: Bool = false) -> (lamp: Lamp, reason: String?, detail: String?) {
-        GridAssembler.lampAndReason(for: evidence, sessionId: sessionId, live: live,
-                                    boundary: boundary, pickedUp: pickedUp,
-                                    isInFlight: delivering.isInFlight(sessionId))
-    }
-
     /// See `GridAssembler.tabDisplayName` — this is the thin AppDelegate-side
     /// name for the same call, kept so the many call sites elsewhere in the
     /// app don't all need to say `GridAssembler.` themselves.

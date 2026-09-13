@@ -53,6 +53,7 @@ struct ConformanceStub: AgentProvider, Sendable {
     func start(_ brief: Brief) async throws -> AgentSession.ID {
         AgentSession.id("conf-\(brief.prompt.count)", provider: id)
     }
+    func cancel(_ id: AgentSession.ID) async throws -> SendOutcome { .accepted }
     func url(for id: AgentSession.ID) -> URL? {
         URL(string: "https://conformance.example.test/\(id)")
     }
@@ -66,9 +67,12 @@ final class AgentProviderConformanceTests: XCTestCase {
         [ConformanceStub(), PolledStub(), StreamingStub(), MinimalStub()]
     }
 
+    /// `egress: true` because these are fixtures, which is exactly the case
+    /// the default is written to distinguish from. Against a live provider the
+    /// mutating half stays off unless somebody says otherwise in writing.
     func testEveryProviderConforms() async throws {
         for provider in all {
-            try await AgentProviderConformance.run(provider)
+            try await AgentProviderConformance.run(provider, egress: true)
         }
     }
 
@@ -78,8 +82,8 @@ final class AgentProviderConformanceTests: XCTestCase {
     func testTheStubsBetweenThemExerciseBothSidesOfEveryCapability() {
         let caps = all.map(\.can)
         for path in [\Capabilities.canSend, \Capabilities.canAnswer,
-                     \Capabilities.sendWhileWorking, \Capabilities.listIsCallerScoped,
-                     \Capabilities.carriesPullRequest] {
+                     \Capabilities.canCancel, \Capabilities.sendWhileWorking,
+                     \Capabilities.listIsCallerScoped, \Capabilities.carriesPullRequest] {
             XCTAssertTrue(caps.contains { $0[keyPath: path] },
                           "no stub declares this capability true")
             XCTAssertTrue(caps.contains { !$0[keyPath: path] },
@@ -90,8 +94,11 @@ final class AgentProviderConformanceTests: XCTestCase {
     /// One polled, one pushing, at minimum. Two request-response providers
     /// would not have exercised the half that matters.
     func testTheStubsCoverBothIngressShapes() {
-        XCTAssertTrue(all.contains { $0.pushes }, "no stub streams")
-        XCTAssertTrue(all.contains { !$0.pushes }, "no stub is polled")
+        // `changes()` called once each, and the result kept. It is not a
+        // predicate: for a real provider it opens a subscription.
+        let streams = all.map { $0.changes() }
+        XCTAssertTrue(streams.contains { $0 != nil }, "no stub streams")
+        XCTAssertTrue(streams.contains { $0 == nil }, "no stub is polled")
     }
 
     /// A blocking inbound request must be expressible as an EVENT, not only as

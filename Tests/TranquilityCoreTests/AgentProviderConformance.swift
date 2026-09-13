@@ -22,18 +22,27 @@ import XCTest
 /// beside it, so the tested path is the shipped path minus the network.
 enum AgentProviderConformance {
 
-    /// Run every rule against one provider. Called from
-    /// `AgentProviderConformanceTests` once per provider.
-    static func run(_ provider: any AgentProvider, file: StaticString = #filePath,
-                    line: UInt = #line) async throws {
+    /// Run every rule against one provider.
+    ///
+    /// **`egress` defaults to false, and that default is the safety rule.** The
+    /// mutating assertions genuinely call `send`, `respond` and `cancel`.
+    /// Against a stub that is nothing; against a live provider it posts a
+    /// message to somebody's agent and stops their work. A suite whose default
+    /// is "harmless because of what we happen to be running it against" is one
+    /// configuration change away from not being harmless, so the guard is the
+    /// default rather than a note.
+    static func run(_ provider: any AgentProvider, egress: Bool = false,
+                    file: StaticString = #filePath, line: UInt = #line) async throws {
         try await idsAreAddressable(provider, file: file, line: line)
-        try await capabilitiesRefuseRatherThanThrow(provider, file: file, line: line)
         try await theIngressIsExactlyOneOfTwoShapes(provider, file: file, line: line)
         try await aSnapshotIsAlwaysAvailable(provider, file: file, line: line)
         try await questionsAreFetchedSeparately(provider, file: file, line: line)
         try await anUnchangedDigestSaysNothing(provider, file: file, line: line)
         try await aFailedPollIsUnknownAndNeverIdle(provider, file: file, line: line)
+        guard egress else { return }
+        try await capabilitiesRefuseRatherThanThrow(provider, file: file, line: line)
         try await structuralAnswersNameARealOption(provider, file: file, line: line)
+        try await everyCapabilityHasAMethodThatConsultsIt(provider, file: file, line: line)
     }
 
     // MARK: - Ids
@@ -103,12 +112,11 @@ enum AgentProviderConformance {
     /// stream nobody reads.
     static func theIngressIsExactlyOneOfTwoShapes(_ p: any AgentProvider,
                                                   file: StaticString, line: UInt) async throws {
-        guard let stream = p.changes() else {
-            XCTAssertFalse(p.pushes, "\(p.id): nil stream but pushes is true",
-                           file: file, line: line)
-            return
-        }
-        XCTAssertTrue(p.pushes, file: file, line: line)
+        // ONE call. `changes()` is not a predicate: for a real provider it
+        // opens a subscription, and the first draft of this suite asked
+        // "does it push?" through a computed property that built a stream and
+        // discarded it, twice per run.
+        guard let stream = p.changes() else { return }
         var count = 0
         for await event in stream {
             count += 1
@@ -198,19 +206,88 @@ enum AgentProviderConformance {
     /// captive portal looks like on the grid.
     static func aFailedPollIsUnknownAndNeverIdle(_ p: any AgentProvider,
                                                  file: StaticString, line: UInt) async throws {
-        // The state a caller must fall back to when `mine()` throws. Asserted
-        // as a property of the model rather than by breaking the provider,
-        // because a provider cannot be asked to fail on demand without a seam
-        // that ships in production purely to be broken.
-        let fallback = AgentSessionState.unknown
-        XCTAssertFalse(fallback.isFinished,
-                       "unknown must never read as finished", file: file, line: line)
-        XCTAssertFalse(fallback.isBlocked,
-                       "unknown must never read as blocked", file: file, line: line)
+        // DRIVEN THROUGH A PROVIDER THAT ACTUALLY FAILS, not asserted about an
+        // enum case. The first draft did the latter and said so in its own
+        // comment: "a provider cannot be asked to fail on demand without a seam
+        // that ships in production purely to be broken." That reasoning is
+        // wrong, and the audit was right to call it the one rule the suite was
+        // asked to enforce hardest. The stubs are fixtures in the test target;
+        // a provider whose `mine()` throws ships nowhere. As written, a
+        // provider mapping a network failure to `.completed` passed the rule
+        // named for catching precisely that.
+        let opening = AgentPoll.events(from: [:], to: try await p.mine())
+        let outcome = await AgentPoll.refresh(FailingProxy(p), from: opening.digests)
+
+        guard case .unreachable(let reason, let stale) = outcome else {
+            return XCTFail("\(p.id): a throwing poll produced a state instead of a failure",
+                           file: file, line: line)
+        }
+        XCTAssertFalse(reason.isEmpty,
+                       "\(p.id): a failure must carry its reason", file: file, line: line)
+        XCTAssertEqual(Set(stale), Set(opening.digests.keys),
+                       "\(p.id): every agent we knew about must be marked unknown",
+                       file: file, line: line)
+
+        // And the state those agents take is unknown, which is neither of the
+        // two wrong answers: finished loses a result, idle loses a question.
+        let unknown = AgentSessionState.unknown
+        XCTAssertFalse(unknown.isFinished, file: file, line: line)
+        XCTAssertFalse(unknown.isBlocked, file: file, line: line)
         XCTAssertEqual(
-            AgentPresentation.bucket(state: fallback, hasPendingRequest: false, hasUnread: false),
-            .idle, "an unreachable provider's agents are quiet, never done",
-            file: file, line: line)
+            AgentPresentation.bucket(state: unknown, hasPendingRequest: false, hasUnread: false),
+            .unreachable,
+            "\(p.id): silence must not render as a calm agent", file: file, line: line)
+    }
+
+    /// Every capability has a method that can act on it.
+    ///
+    /// `canCancel` shipped in the first draft with no `cancel` to call, which
+    /// is how the previous capability struct reached four dead fields. This is
+    /// the runtime half of `CapabilityLivenessTests`: that one asks whether
+    /// production READS a flag, and this one asks whether a provider declaring
+    /// it can actually do the thing.
+    static func everyCapabilityHasAMethodThatConsultsIt(_ p: any AgentProvider,
+                                                        file: StaticString,
+                                                        line: UInt) async throws {
+        guard let any = try await p.mine().first else { return }
+        let outcome = try await p.cancel(any.id)
+        if p.can.canCancel {
+            XCTAssertNotEqual(outcome, .unsupported,
+                              "\(p.id): declares canCancel and refuses to cancel",
+                              file: file, line: line)
+        } else {
+            XCTAssertEqual(outcome, .unsupported,
+                           "\(p.id): canCancel is false, so cancel must refuse rather than throw",
+                           file: file, line: line)
+        }
+    }
+
+    /// Wraps a provider so its poll fails, and nothing else changes.
+    ///
+    /// A fixture rather than a production seam, which is the whole point the
+    /// first draft missed.
+    private struct FailingProxy: AgentProvider {
+        let inner: any AgentProvider
+        init(_ inner: any AgentProvider) { self.inner = inner }
+        struct Unreachable: Error, CustomStringConvertible {
+            var description: String { "the network went away" }
+        }
+        var id: String { inner.id }
+        var can: Capabilities { inner.can }
+        func changes() -> AsyncStream<AgentEvent>? { nil }
+        func mine() async throws -> [AgentSession] { throw Unreachable() }
+        func refine(_ id: AgentSession.ID) async throws -> AgentSession { throw Unreachable() }
+        func request(_ id: AgentSession.ID) async throws -> PendingRequest? { throw Unreachable() }
+        func transcript(_ id: AgentSession.ID) async throws -> [Turn] { throw Unreachable() }
+        func send(_ text: String, to id: AgentSession.ID) async throws -> SendOutcome {
+            throw Unreachable()
+        }
+        func respond(to r: PendingRequest, with response: Response) async throws -> SendOutcome {
+            throw Unreachable()
+        }
+        func start(_ brief: Brief) async throws -> AgentSession.ID { throw Unreachable() }
+        func cancel(_ id: AgentSession.ID) async throws -> SendOutcome { throw Unreachable() }
+        func url(for id: AgentSession.ID) -> URL? { inner.url(for: id) }
     }
 
     /// A structural answer must name an option the request actually offered, so

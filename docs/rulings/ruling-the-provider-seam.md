@@ -118,7 +118,11 @@ documentation confesses to being unread. **It found four.** `echoesPaste`,
 production code consults, and the last of those is the one most likely to be a
 genuine bug rather than dead weight: a harness without hooks would still get a
 hooks row today, because `HookManifest` answers that question by another route.
-All three carry a 2026-12-01 date.
+All three carry a 2026-12-01 date, as real `COMPAT` markers rather than as
+prose, so the checker above can see them: debt created by this ruling is
+governed by this ruling's own machinery, which was not true of the first
+draft. `hasHooks` is also filed as #394, because a finding recorded only in a
+test allowlist is a finding nobody reads.
 
 Rule 3 is a grep because it is about comment text. Rule 5 is a test because it
 is about whether code reads a field, which grep cannot answer without reading

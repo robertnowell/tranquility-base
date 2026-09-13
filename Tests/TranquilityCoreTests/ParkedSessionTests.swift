@@ -161,7 +161,7 @@ final class ParkedSessionTests: XCTestCase {
         let standIn = SessionRegistry.standingInForParkedJobs(
             [], entries: [parent], isAlive: { _ in true })[0]
         let lamp = GridAssembler.lampAndReason(for: nil, sessionId: standIn.sessionId,
-                                               live: standIn)
+                                               live: standIn, isInFlight: false)
         XCTAssertEqual(lamp.lamp, .fault)
         XCTAssertEqual(lamp.reason, "backgrounded in the agent view")
         let row = SessionRow(id: standIn.sessionId, name: "Hub design and organization",
