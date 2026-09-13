@@ -104,6 +104,17 @@ through to a personal API key, or describe a local floor as a paid success.
 
 ## Release boundary
 
+The native integration now persists source bindings at ingestion and copies a
+validated receipt alongside each successful cached brief. See
+[COORDINATOR-VALIDATION.md](COORDINATOR-VALIDATION.md) for the current evidence;
+[VALIDATION.md](VALIDATION.md) preserves the earlier client-only drill.
+Local producers use `local:<stable-origin-installation-UUID>`, original session
+ID and original event UUID. Imported events MUST preserve that source, not
+re-enter the local-hook mapper. An unset origin or unproven legacy source is a
+managed refusal, not a reason to mint new provenance. App activation remains
+separate. Historical receipt copies do not confer current spending authority
+and must not be presented as a current wallet balance.
+
 This freeze enables C0, C1 and C2 locally. Real Hub-to-Gateway authority exchange,
 provider credentials/prices, panel/onboarding composition, retention, operational
 reconciliation and payment flows are NOT proven by fixtures. No public launch

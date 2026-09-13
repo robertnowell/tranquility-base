@@ -1,4 +1,81 @@
-# Credits launch: contract frozen; credited-summary foundation built
+# Credits launch: credited Coordinator built; next is Hub authority
+
+## Continuation update — 13 September 2026
+
+**No product decision or new login was needed for this step.** The remaining
+C2 core wiring is implemented on `feature/credited-summary`, still not enabled
+in the shipped app. The earlier implementation and investigation below are
+historical snapshots; this section supersedes their next-step wording.
+
+### Completed in this continuation
+
+- Source provenance is stored with the event, before networking. Explicit local
+  hook intake uses a stable producing-installation UUID and original session/event
+  IDs. Imported/remote events carry their original `GatewaySource` unchanged.
+  Missing provenance refuses managed work; it is not guessed from a rowid,
+  current fork, viewing device, poll digest or changed text. Legacy events are
+  not blindly backfilled. Re-fired hooks retain the first stored binding.
+- Coordinator now supplies this source to the existing FULL-sync outbox/client.
+  Overlapping managed preparations share one task. Pending/failure floors do
+  not become permanent cache hits, and an already-cancelled preparation cannot
+  create a new uncancelled paid task.
+- Successful brief and receipt copy commit together in the queue cache. The
+  association is validated against source/account/operation; a generic brief
+  writer cannot silently erase it. Failed cache writes recover from the durable
+  outbox. A stored result can be announced offline with its receipt intact.
+- `Announcement` carries the typed managed failure or receipt before audio and
+  after successful playback. This makes UI wiring possible; it is not evidence
+  that the current panel displays those fields. Audio failure leaves the receipt
+  intact. Existing free/BYOK/greeting briefs are not retroactively charged.
+- The local HTTP/PostgreSQL drill now runs through Coordinator, not just the
+  client. It loses a committed response, reopens queue and outbox, recovers by
+  GET, restores an offline announcement, then imports the same source into an
+  independent queue/outbox with different rowids. The service counts invocations.
+
+### Main moved again, and is included
+
+Rebased onto `82824903d03ca76ac4088949685d00d0425fee69`. This includes both
+`a9d61e0` (reply heard-context/event text-ID lookup) and `#391` (provider seam,
+agent events/turns, polling, config, grid assembly and conformance tests).
+Only the test-count floor required conflict resolution. No app-layer files
+were edited by this credits work; no running app was replaced.
+
+The new agent-provider capability protocol is not the paid Gateway protocol.
+It remains capability-driven and tolerant of unknown state. Gateway monetary
+operations retain the frozen v1 contract and fail closed on unknown outcomes.
+For remote narration, the future #372 ingress must carry provider-stable
+`Turn.id`, raw task identity and stable installation/tenant namespace into
+`GatewaySource`, after ownership filtering. `AgentSession.id` is an app address;
+`AgentPoll.digest` is change detection. Neither substitutes for billing provenance.
+This continuation tests Crobot/OpenCode-shaped sources; it does not ship their
+real adapters, task filtering or cloud execution billing.
+
+### Next, without another approval loop
+
+1. **Next engineering milestone: real Hub-to-Gateway authority.** Implement the
+   short-lived, audience/scoped, device-revocable exchange behind the existing
+   Hub sign-in, with local verifier/exchange tests. Existing mirror credentials
+   still do not automatically authorize spending. Continue private worker/usage
+   foundation tests independently; no provider credential is needed for those.
+2. **C2/C3 app activation, one app-layer owner:** persist the local origin UUID
+   across upgrades; compose managed versus direct mode; wire real ingress and
+   account/balance/historical receipt/error UI; reconcile the new provider-aware
+   prerequisites with managed onboarding; run actual panel drills. Do not turn
+   current mirror/grid events into paid requests by default. Receipt `balanceAfter`
+   is a historical snapshot, never the current wallet balance.
+3. **Before any remote/deployment/live-provider action:** resolve the private
+   repository owner/location, secret placement, provider/pricebook and bounded
+   test budget. Ask for a human step only if these are not already authorized
+   and available. No such action was needed or taken for this local continuation.
+4. **Then C4 payments**, followed by C5 premium speech/file recovery and C6 live
+   audio. The frozen 24-session audio evidence and R1–R6 gates are unchanged.
+
+Verification and limits for this continuation are recorded in
+[COORDINATOR-VALIDATION.md](../../contracts/gateway/v1/COORDINATOR-VALIDATION.md).
+The self-contained result/roadmap page is:
+https://hq.tranquilitybase.dev/open?session=01a09b8d-c39b-7111-815c-6a09d382b46a&slug=credited-summary-coordinator
+
+---
 
 ## Implementation update — 13 September 2026
 
