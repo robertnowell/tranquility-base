@@ -170,6 +170,52 @@ extension StatusHUD {
         Permissions.log("selftest: drills released the panel; sinks: "
             + "failures \(Failures.hasSink ? "attached" : "none"), "
             + "track \(Track.hasSink ? "attached" : "none")")
+        handBackTheStage()
+    }
+
+    /// The slate hands the panel back, once, at the end: a backstop under
+    /// every drill's own cleanup rather than a replacement for them.
+    ///
+    /// Each drill stands its own fixture down, and each of those cleanups is
+    /// conditional on what THAT drill left up. None of them can know what the
+    /// drill after it will leave, and on 11 Sep two changes made the drills
+    /// overlap for the first time: #357 put a `SessionDiscovery` scan in Go to
+    /// Agent's not-live branch (5 s on a cold cache at launch) and #359 dropped
+    /// the in-flight guard before it, so the go-to fixture's REFUSAL now lands
+    /// several seconds later, inside the five-second window
+    /// `selfTestPendingSend`'s card owns. Both cleanups then miss it:
+    /// pendingSend's bails on `guard case .pendingSend` because the refusal has
+    /// already taken the stage, and `goToSessionDrill`'s sweep reads
+    /// `bodyLabel`, which no longer holds the message (a failure arriving while
+    /// a capture owns the stage goes to the amber strip, `face.captureFault`,
+    /// not the body).
+    ///
+    /// Measured in app.log, 12 to 13 Sep: seven of ten launches ended on that
+    /// red card instead of the grid (55 s, 1m37, 1m41, 8m30, 61m14, one never
+    /// cleared), and every single one was cleared by Robert pressing ⌃⌥ home.
+    ///
+    /// Narrow on purpose. Two kinds of face are restored, and they are the two
+    /// that are WRONG to leave up rather than merely untidy:
+    ///
+    ///   - anything that owns the stage, because it refuses the next real
+    ///     arrival. This is the 08 Aug incident: `announce: refused, reply flow
+    ///     on stage` to every press, with ten drills reporting PASS above it.
+    ///   - `.result`, because `Failures.suppressed` was true for the whole
+    ///     window, so a failure card here cannot be a real one.
+    ///
+    /// A `.speaking`, `.settings` or `.pastAgents` face is left alone: those
+    /// admit what comes next, and a real announcement CAN take the stage
+    /// mid-slate (the drill hold suspends ambient surfacing, not transitions).
+    private func handBackTheStage() {
+        guard state.ownsStage || state == .result else { return }
+        Permissions.log("selftest: slate over with \(state.name) on stage, "
+            + "handing the panel back to the grid")
+        // Through the user door: a capture state does not admit idle by
+        // design, so a bare repaint would log REFUSED and change nothing.
+        endCapture(because: "selftest slate over")
+        // The breadcrumb, not `showIdle(rows: [])`: this one goes through
+        // AppDelegate and comes back with the REAL rows on it.
+        onBreadcrumbHome?()
     }
 
     /// Prove that LEAVING the read-back stops the send — not just pressing the
