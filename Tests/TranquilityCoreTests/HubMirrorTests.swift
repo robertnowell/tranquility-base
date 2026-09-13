@@ -213,6 +213,46 @@ final class HubMirrorTests: XCTestCase {
                        "the row reads this, so it cannot say ok")
     }
 
+    // MARK: - The first report
+
+    /// The one report allowed to take the screen, and only the one.
+    ///
+    /// A person who has just connected a Mac does not know reports exist, so
+    /// the first has to be seen. The second must not be: a thing that steals
+    /// focus twice is a thing people learn to resent.
+    func testTheFirstPageEverMirroredComesForwardOnceOnly() async {
+        let store = UserDefaults(suiteName: "first-report-\(UUID().uuidString)")!
+        FirstReport.defaults = store
+        defer { FirstReport.defaults = .standard }
+
+        final class Shown: @unchecked Sendable {
+            private let lock = NSLock(); private var urls: [URL] = []
+            func add(_ u: URL) { lock.withLock { urls.append(u) } }
+            var all: [URL] { lock.withLock { urls } }
+        }
+        let shown = Shown()
+        HubMirror.revealFirstReport = { [weak shown] in shown?.add($0) }
+        defer { HubMirror.revealFirstReport = nil }
+
+        let hub = FakeHub()
+        _ = write("first.html", "<html><head><title>The first one</title></head><body>a</body></html>")
+        let m = mirror(hub)
+        // Named here, not read from the machine: a test that asks this Mac
+        // where its hub is passes on a connected Mac and fails on every
+        // other, which is exactly how CI caught it.
+        m.hubBase = URL(string: "https://hub.example.test")
+        _ = await m.run(docs: true, turns: false)
+        XCTAssertEqual(shown.all.count, 1, "the first page did not come forward")
+        XCTAssertEqual(shown.all.first?.path, "/open")
+        XCTAssertTrue(shown.all.first?.query?.contains("slug=first") ?? false,
+                      shown.all.first?.absoluteString ?? "no url")
+        XCTAssertFalse(FirstReport.pending, "it must not be able to fire twice")
+
+        _ = write("second.html", "<html><head><title>The second</title></head><body>b</body></html>")
+        _ = await m.run(docs: true, turns: false)
+        XCTAssertEqual(shown.all.count, 1, "a later report took the screen")
+    }
+
     /// A timer nobody cancels is a leak with opinions: a reconnect used to
     /// leave the previous sweep running against the previous token.
     func testStopEndsTheTimer() async throws {
