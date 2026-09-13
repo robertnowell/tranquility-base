@@ -506,8 +506,16 @@ public enum CodexRollout {
     /// the first line only.
     public static func meta(sessionId id: String,
                             sessions: URL = sessionsDirectory) -> SessionMeta? {
-        guard let path = rolloutPath(forSessionId: id, sessions: sessions),
-              let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+        guard let path = rolloutPath(forSessionId: id, sessions: sessions)
+        else { return nil }
+        return meta(rollout: URL(fileURLWithPath: path))
+    }
+
+    /// The same read when the file is already in hand — a walk over the
+    /// archive holds the URL and must not pay `rolloutPath`'s search to get
+    /// back to it.
+    public static func meta(rollout url: URL) -> SessionMeta? {
+        guard let handle = try? FileHandle(forReadingFrom: url)
         else { return nil }
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: metaHeadBytes),
