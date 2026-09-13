@@ -521,7 +521,8 @@ extension Coordinator {
         let labels = [event.projectLabel, liveName, stored].compactMap { $0 }
         let spoken = summarizer.sanitizer.strippingLeadingLabels(labels, from: summary.spoken)
         return Summary(spoken: spoken, brief: summary.brief,
-                       provider: summary.provider, latencyMs: summary.latencyMs)
+                       provider: summary.provider, latencyMs: summary.latencyMs,
+                       managedReceipt: summary.managedReceipt, managedFailure: summary.managedFailure)
     }
 
     private func speak(

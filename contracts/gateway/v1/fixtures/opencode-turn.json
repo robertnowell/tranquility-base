@@ -1,0 +1,16 @@
+{
+  "version": "1",
+  "source": {
+    "namespace": "opencode:server-fixture",
+    "taskId": "session-42",
+    "turnId": "message-7",
+    "intentId": "summary.v1"
+  },
+  "input": {
+    "lastAssistantMessage": "The export is ready. All tests passed.",
+    "projectLabel": "Export",
+    "hookEvent": "Stop",
+    "previousGoal": "Ship the export",
+    "gitBranch": "feature/export"
+  }
+}

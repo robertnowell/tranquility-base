@@ -32,6 +32,8 @@ public struct SummaryRequest: Sendable {
     /// names the ungrounded number(s) so the model can remove or correct them.
     /// Never set on a first attempt.
     public var correctiveNote: String?
+    /// Required only by managed composition. Never inferred from a rowid/fork.
+    public var managedSource: GatewaySource?
 
     public init(
         lastAssistantMessage: String,
@@ -42,7 +44,8 @@ public struct SummaryRequest: Sendable {
         cwd: String? = nil,
         hookEvent: HookEventKind = .stop,
         notificationMatcher: String? = nil,
-        correctiveNote: String? = nil
+        correctiveNote: String? = nil,
+        managedSource: GatewaySource? = nil
     ) {
         self.lastAssistantMessage = lastAssistantMessage
         self.projectLabel = projectLabel
@@ -53,6 +56,7 @@ public struct SummaryRequest: Sendable {
         self.hookEvent = hookEvent
         self.notificationMatcher = notificationMatcher
         self.correctiveNote = correctiveNote
+        self.managedSource = managedSource
     }
 }
 
@@ -61,12 +65,35 @@ public struct Summary: Sendable {
     public let brief: SessionBrief
     public let provider: String
     public let latencyMs: Int
+    public let managedReceipt: GatewayReceipt?
+    public let managedFailure: ManagedSummaryFailure?
+
+    public init(spoken: SanitizedSpokenText, brief: SessionBrief, provider: String, latencyMs: Int,
+                managedReceipt: GatewayReceipt? = nil, managedFailure: ManagedSummaryFailure? = nil) {
+        self.spoken = spoken; self.brief = brief; self.provider = provider; self.latencyMs = latencyMs
+        self.managedReceipt = managedReceipt; self.managedFailure = managedFailure
+    }
+}
+
+public struct SummaryDelivery: Sendable {
+    public let brief: SessionBrief
+    public let receipt: GatewayReceipt?
+    public init(brief: SessionBrief, receipt: GatewayReceipt? = nil) { self.brief = brief; self.receipt = receipt }
 }
 
 public protocol SummaryProvider: Sendable {
     var name: String { get }
     var isConfigured: Bool { get }
+    var usesManagedCredits: Bool { get }
     func brief(for request: SummaryRequest) async throws -> SessionBrief
+    func delivery(for request: SummaryRequest) async throws -> SummaryDelivery
+}
+
+public extension SummaryProvider {
+    var usesManagedCredits: Bool { false }
+    func delivery(for request: SummaryRequest) async throws -> SummaryDelivery {
+        SummaryDelivery(brief: try await brief(for: request))
+    }
 }
 
 public enum SummaryError: Error, Sendable {
@@ -584,6 +611,9 @@ public struct SummarizerChain: Sendable {
         self.providers = providers ?? [AnthropicSummaryProvider(), DeterministicSummarizer()]
     }
 
+    /// Explicit composition. Managed errors may use the free floor, never BYOK.
+    public init(managed provider: ManagedSummaryProvider) { self.providers = [provider] }
+
     /// Set by the app so grounding retries and empty-source skips explain themselves.
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 
@@ -594,6 +624,8 @@ public struct SummarizerChain: Sendable {
     public func summarize(_ request: SummaryRequest, lexicon: Set<String> = []) async -> Summary {
         let start = Date()
         var produced: (SessionBrief, String)?
+        var managedReceipt: GatewayReceipt?
+        var managedFailure: ManagedSummaryFailure?
 
         // An empty final message never reaches a model. The model correctly refuses
         // to summarize nothing, which burns a call to learn what we already know —
@@ -611,11 +643,18 @@ public struct SummarizerChain: Sendable {
             }
         } else {
             for provider in providers where provider.isConfigured {
-                if let brief = try? await provider.brief(for: request) {
-                    let grounded = await groundDigits(brief, request: request, provider: provider)
+                do {
+                    let delivery = try await provider.delivery(for: request)
+                    let grounded = await groundDigits(delivery.brief, request: request, provider: provider)
                     produced = (grounded.brief,
                                 provider.name + (grounded.scrubbed ? "+digit-scrubbed" : ""))
+                    managedReceipt = delivery.receipt
                     break
+                } catch {
+                    if provider.usesManagedCredits {
+                        managedFailure = (error as? ManagedSummaryFailure) ?? .refused(code: "service_unavailable", operationId: nil)
+                        break
+                    }
                 }
             }
         }
@@ -661,7 +700,8 @@ public struct SummarizerChain: Sendable {
             spoken: sanitizer.sanitize(brief.spokenText(), allowing: speakable),
             brief: brief,
             provider: providerName,
-            latencyMs: Int(Date().timeIntervalSince(start) * 1000))
+            latencyMs: Int(Date().timeIntervalSince(start) * 1000),
+            managedReceipt: managedReceipt, managedFailure: managedFailure)
     }
 
     /// Digit grounding (open issue #9): a number the source never said must not be
@@ -672,6 +712,26 @@ public struct SummarizerChain: Sendable {
         _ brief: SessionBrief, request: SummaryRequest, provider: any SummaryProvider
     ) async -> (brief: SessionBrief, scrubbed: Bool) {
         let pool = DigitGrounding.sourcePool(for: request)
+        if provider.usesManagedCredits {
+            // Paid retries belong inside the Gateway operation. Validate actual
+            // speech locally, including legacy cards without recap and the card
+            // fallback exposed when a scrub removes the entire recap.
+            var safe = brief
+            var scrubbed = false
+            for _ in 0..<2 {
+                var spoken = safe; spoken.recap = safe.spokenText(); spoken.proposal = nil
+                let offending = DigitGrounding.ungroundedTokens(in: spoken, pool: pool)
+                guard !offending.isEmpty else { break }
+                let tokens = Set(offending)
+                safe = DigitGrounding.scrub(safe, tokens: tokens)
+                if safe.recap?.isEmpty != false {
+                    safe.topic = DigitGrounding.scrubText(safe.topic, tokens: tokens)
+                    if safe.topic.isEmpty { safe.topic = request.projectLabel }
+                }
+                scrubbed = true
+            }
+            return (safe, scrubbed)
+        }
         let offending = DigitGrounding.ungroundedTokens(in: brief, pool: pool)
         guard !offending.isEmpty else { return (brief, false) }
 
