@@ -95,6 +95,13 @@ public final class HubMirror: @unchecked Sendable {
     public let agentsRoot: String
     public let stateURL: URL
     public let device: String
+    /// The hub this mirror is actually sending to, for the one place that
+    /// needs to build an address rather than a request: the first report's
+    /// reveal. Read from hq.json when the mirror is built for this machine,
+    /// and injected in tests, which have no hq.json and must not depend on
+    /// whether the machine running them happens to have one. CI found that:
+    /// the test passed on a connected Mac and failed everywhere else.
+    public var hubBase: URL?
     public let store: QueueStore?
     /// Where the artifact hook's records live (first-write times for pages).
     public let artifactRoot: String?
@@ -147,13 +154,15 @@ public final class HubMirror: @unchecked Sendable {
         }
         guard let token else { trace?("no hub token; not mirroring"); return nil }
         let support = QueueStore.supportDirectory
-        return HubMirror(
+        let mirror = HubMirror(
             transport: URLSessionTransport(base: base, token: token),
             agentsRoot: NSString(string: "~/Documents/agents").expandingTildeInPath,
             stateURL: support.appendingPathComponent("hub-mirror-state.json"),
             device: deviceName(),
             store: store,
             artifactRoot: support.path)
+        mirror.hubBase = base
+        return mirror
     }
 
     /// The same spelling the script used, so the hub keeps one row per Mac.
@@ -311,7 +320,7 @@ public final class HubMirror: @unchecked Sendable {
                 // The first page this Mac ever mirrors comes forward by
                 // itself, once. See FirstReport for why once and never again.
                 if FirstReport.pending, let show = Self.revealFirstReport,
-                   let at = HubApp.openURL(session: c.session, slug: slug) {
+                   let at = HubApp.openURL(session: c.session, slug: slug, base: hubBase) {
                     FirstReport.spent()
                     show(at)
                 }

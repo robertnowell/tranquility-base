@@ -237,6 +237,10 @@ final class HubMirrorTests: XCTestCase {
         let hub = FakeHub()
         _ = write("first.html", "<html><head><title>The first one</title></head><body>a</body></html>")
         let m = mirror(hub)
+        // Named here, not read from the machine: a test that asks this Mac
+        // where its hub is passes on a connected Mac and fails on every
+        // other, which is exactly how CI caught it.
+        m.hubBase = URL(string: "https://hub.example.test")
         _ = await m.run(docs: true, turns: false)
         XCTAssertEqual(shown.all.count, 1, "the first page did not come forward")
         XCTAssertEqual(shown.all.first?.path, "/open")
