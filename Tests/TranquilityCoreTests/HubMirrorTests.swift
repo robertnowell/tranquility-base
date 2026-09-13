@@ -135,6 +135,46 @@ final class HubMirrorTests: XCTestCase {
         XCTAssertNil(HubMirror.turnPayload(b, session: nil, live: nil)["agent_title"])
     }
 
+    // MARK: - Robots
+
+    /// A transcript whose first line declares how it was started. `sdk-cli` is
+    /// `claude -p`: a cron, a fleet voter, our own harness.
+    private func transcript(entrypoint: String) -> String {
+        let url = tmp.appendingPathComponent("t-\(UUID().uuidString).jsonl")
+        let line = #"{"type":"summary","entrypoint":"\#(entrypoint)"}"# + "\n"
+        try! line.write(to: url, atomically: true, encoding: .utf8)
+        return url.path
+    }
+
+    private func waiting(_ id: String, transcript: String?) -> WaitingSession {
+        WaitingSession(sessionId: id, latestId: 1, createdAtMs: 0, cwd: "/Users/x/Projects/syndit",
+                       tty: nil, promptId: nil, transcriptPath: transcript, lastAssistantMessage: nil,
+                       notificationMatcher: nil, summaryText: nil, hookEvent: .stop, callsign: "voter")
+    }
+
+    func testAHeadlessRunIsNotAnAgentInTheHub() {
+        XCTAssertTrue(HubMirror.isRobot(waiting(session, transcript: transcript(entrypoint: "sdk-cli"))))
+        XCTAssertFalse(HubMirror.isRobot(waiting(session, transcript: transcript(entrypoint: "cli"))))
+    }
+
+    /// The asymmetry the grid settled on, kept here: excluding on an ABSENCE
+    /// is how real conversations get hidden, so anything unclassifiable is
+    /// yours.
+    func testAnUnclassifiableSessionIsTreatedAsYours() {
+        XCTAssertFalse(HubMirror.isRobot(nil), "no store row")
+        XCTAssertFalse(HubMirror.isRobot(waiting(session, transcript: nil)), "no transcript")
+        XCTAssertFalse(HubMirror.isRobot(waiting(session, transcript: tmp.appendingPathComponent("gone.jsonl").path)))
+        XCTAssertFalse(HubMirror.isRobot(waiting(session, transcript: transcript(entrypoint: "something-new"))),
+                       "an entrypoint Claude Code invents later is not evidence of a robot")
+    }
+
+    func testARobotsNameIsNotSentEither() {
+        let robot = waiting("11111111-1111-1111-1111-111111111111", transcript: transcript(entrypoint: "sdk-cli"))
+        let mine = waiting(session, transcript: transcript(entrypoint: "cli"))
+        let changed = HubMirror.changedNames(sessions: [robot, mine], live: [:], previous: [:])
+        XCTAssertEqual(changed.map(\.0), [session], "the robot never reaches the names call")
+    }
+
     func testOnlyChangedNamesAreSent() {
         let s = WaitingSession(sessionId: session, latestId: 1, createdAtMs: 0, cwd: "/Users/x/Projects/promotions",
                                tty: nil, promptId: nil, transcriptPath: nil, lastAssistantMessage: nil,
