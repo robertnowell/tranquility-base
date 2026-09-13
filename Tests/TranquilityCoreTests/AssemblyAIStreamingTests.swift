@@ -89,6 +89,72 @@ final class AssemblyAIStreamingTests: XCTestCase {
         """
     }
 
+    /// A turn carrying word timings, which is what the coverage guard measures.
+    private func timedTurn(
+        _ transcript: String, order: Int = 0, lastWordEndMs: Int
+    ) -> String {
+        """
+        {"type":"Turn","turn_order":\(order),"transcript":"\(transcript)",\
+        "end_of_turn":true,"turn_is_formatted":true,\
+        "words":[{"start":0,"end":\(lastWordEndMs),"text":"\(transcript)",\
+        "confidence":0.9,"word_is_final":true}]}
+        """
+    }
+
+    // MARK: - Coverage guard
+    //
+    // 13 Sep 2026: universal-3-5-pro transcribed the first turn of a 50s
+    // capture, stopped emitting anything for the remaining 41s, and then closed
+    // with a clean Termination reporting all 50s received. Finality was
+    // perfect, so every existing trust rule passed and the fragment shipped.
+
+    func testEndOfTurnThatStopsShortOfTheAudioIsNotTrusted() async throws {
+        let socket = FakeSocket()
+        let sink = Sink()
+        let session = try await openSession(socket: socket, sink: sink)
+        defer { session.cancel() }
+
+        socket.emit(timedTurn("where was K13 previously referenced", lastWordEndMs: 9_000))
+        socket.emit(#"{"type":"Termination","audio_duration_seconds":50}"#)
+
+        await fulfillment(of: [sink.concluded], timeout: 2)
+        XCTAssertNil(sink.final, "41s of unaccounted audio is not a finished turn")
+        XCTAssertEqual(sink.failure, .coverageShort(
+            partial: "where was K13 previously referenced"),
+            "the fragment survives as a partial for diagnostics, never as a result")
+    }
+
+    func testEndOfTurnThatCoversTheAudioIsStillTrusted() async throws {
+        let socket = FakeSocket()
+        let sink = Sink()
+        let session = try await openSession(socket: socket, sink: sink)
+        defer { session.cancel() }
+
+        // Key-up lands a beat after the last word; that beat is not a truncation.
+        socket.emit(timedTurn("yes go ahead", lastWordEndMs: 9_000))
+        socket.emit(#"{"type":"Termination","audio_duration_seconds":11}"#)
+
+        await fulfillment(of: [sink.concluded], timeout: 2)
+        XCTAssertEqual(try XCTUnwrap(sink.final).text, "yes go ahead")
+        XCTAssertNil(sink.failure)
+    }
+
+    func testCoverageUnmeasurableFallsBackToTrustingFinality() async throws {
+        let socket = FakeSocket()
+        let sink = Sink()
+        let session = try await openSession(socket: socket, sink: sink)
+        defer { session.cancel() }
+
+        // No word timings on the wire: the guard has no numerator and must not
+        // invent one. Behaviour is exactly what it was before the guard existed.
+        socket.emit(turn("yes go ahead", endOfTurn: true))
+        socket.emit(#"{"type":"Termination","audio_duration_seconds":50}"#)
+
+        await fulfillment(of: [sink.concluded], timeout: 2)
+        XCTAssertEqual(try XCTUnwrap(sink.final).text, "yes go ahead")
+        XCTAssertNil(sink.failure)
+    }
+
     // MARK: - Partials accumulate
 
     func testPartialsAccumulateAcrossTurnMessages() async throws {
