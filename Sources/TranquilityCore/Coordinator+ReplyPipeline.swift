@@ -259,13 +259,13 @@ extension Coordinator {
     }
 
     /// The one composition every send and every readback goes through: the
-    /// tray's fragments, the transcript, then the heard note. Three callers
+    /// heard note, then the tray's fragments and the transcript. Three callers
     /// (`submitReply`'s readback, `refreshPendingSend`, `confirmAndSend`) and
     /// one function, so the text the undo window shows is the text typed.
     func outgoingText(for utterance: Utterance, transcript: String, fragments: [String]) -> String {
         HeardContext.compose(
-            message: AttachmentTray.compose(transcript: transcript, fragments: fragments),
-            note: heardNote(for: utterance))
+            note: heardNote(for: utterance),
+            message: AttachmentTray.compose(transcript: transcript, fragments: fragments))
     }
 
     /// `dispatch`'s Codex twin for `preferringTmuxOwned` — same question

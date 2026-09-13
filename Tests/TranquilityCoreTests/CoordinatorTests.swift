@@ -308,7 +308,7 @@ final class CoordinatorTests: XCTestCase {
 
     /// The user answers what Tranquility Base SPOKE, not what the agent
     /// wrote; the agent used to get the answer with the question stripped
-    /// off. The reply now carries the spoken recap and proposal, after the
+    /// off. The reply now opens with the spoken recap and proposal, then the
     /// user's own words, and the undo window's text is the text typed.
     func testAReplyCarriesWhatWasSpoken() async throws {
         let transport = RecordingTransport()
@@ -319,8 +319,8 @@ final class CoordinatorTests: XCTestCase {
         guard case .readyToSend(let utteranceId, let shown, _, _) =
             try await coordinator.submitReply(pcm16: silence())
         else { return XCTFail("expected a pending send") }
-        XCTAssertTrue(shown.hasPrefix("yes go ahead\n\n"), "the user's words lead: \(shown)")
-        XCTAssertTrue(shown.contains(HeardContext.opener))
+        XCTAssertTrue(shown.hasPrefix(HeardContext.opener), "what was heard leads: \(shown)")
+        XCTAssertTrue(shown.hasSuffix("\n\nyes go ahead"), "then what they said: \(shown)")
         XCTAssertTrue(shown.contains(
             "\u{201C}Fixing the export pipeline. Tests pass. Run the migration next. Proceed?\u{201D}"),
             "the FixedSummary's recap then proposal, verbatim: \(shown)")

@@ -12,7 +12,7 @@ final class HeardContextTests: XCTestCase {
         XCTAssertTrue(note.hasPrefix(HeardContext.opener))
         XCTAssertTrue(note.contains(
             "\u{201C}Kopi: the footer bug is fixed. Ship it to production. Go?\u{201D}"))
-        XCTAssertTrue(note.hasSuffix("]"))
+        XCTAssertTrue(note.hasSuffix(HeardContext.closer))
     }
 
     /// A turn with nothing spoken has nothing to quote: the reply goes bare,
@@ -20,7 +20,7 @@ final class HeardContextTests: XCTestCase {
     func testNothingSpokenMeansNoNote() {
         XCTAssertNil(HeardContext.note(recap: nil, proposal: nil))
         XCTAssertNil(HeardContext.note(recap: "", proposal: "  \n"))
-        XCTAssertEqual(HeardContext.compose(message: "go ahead", note: nil), "go ahead")
+        XCTAssertEqual(HeardContext.compose(note: nil, message: "go ahead"), "go ahead")
     }
 
     /// Either half alone is still what was heard.
@@ -31,14 +31,14 @@ final class HeardContextTests: XCTestCase {
         XCTAssertTrue(proposalOnly.contains("\u{201C}Proceed?\u{201D}"))
     }
 
-    /// The user's words lead; the note trails as its own paragraph. The undo
-    /// window shows exactly this string, so the words being checked stay
-    /// first on the card.
-    func testTheNoteTrailsTheMessage() throws {
+    /// What they heard, then what they said (ruled 13 Sep): the note leads as
+    /// its own paragraph and the tray's message follows whole. The undo
+    /// window shows exactly this string, in this order.
+    func testTheNoteLeadsTheMessage() throws {
         let note = try XCTUnwrap(HeardContext.note(recap: "r", proposal: "p"))
-        let composed = HeardContext.compose(message: "\"/a/shot.png\"\n\ngo ahead", note: note)
-        XCTAssertTrue(composed.hasPrefix("\"/a/shot.png\"\n\ngo ahead\n\n["))
-        XCTAssertTrue(composed.hasSuffix(note))
-        XCTAssertEqual(HeardContext.compose(message: "", note: note), note)
+        let composed = HeardContext.compose(note: note, message: "\"/a/shot.png\"\n\ngo ahead")
+        XCTAssertTrue(composed.hasPrefix(note + "\n\n\"/a/shot.png\""))
+        XCTAssertTrue(composed.hasSuffix("\n\ngo ahead"))
+        XCTAssertEqual(HeardContext.compose(note: note, message: ""), note)
     }
 }

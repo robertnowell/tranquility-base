@@ -17,22 +17,28 @@ import Foundation
 /// rungs are a paraphrase of the agent's own turn, which an agent would read
 /// as the user asserting it back.
 ///
-/// The note TRAILS the transcript rather than leading it. The undo window
-/// shows the exact text that dispatches (the disclosure IS the message, see
-/// `Coordinator.confirmAndSend`), and the words the user checks against their
-/// own memory have to stay first; a bracket of Tranquility Base's prose ahead
-/// of them would push the one thing they are checking off the card.
+/// The note LEADS. What they heard, then what they said in reply, in that
+/// order, as one message: "here is what the user heard, here is what they
+/// said." Ruled 13 Sep 2026, reversing the first cut's trailing note, which
+/// was chosen to keep the user's own words first on the undo card. The
+/// ruling: this is a message-layer fact and reads in the order it happened;
+/// the card shows the same order. It is also how the context reaches EVERY
+/// harness. A Codex session gets no Claude Code session-start briefing, and
+/// the bracket has to stand alone there, so it says who spoke and what the
+/// words after it are, and nothing more. No hedge about the summariser being
+/// wrong (proposed 12 Sep, refused 13 Sep): a guard sentence on every send is a gate
+/// on a model error, and the repair for those is the summariser's context.
 ///
 /// Pure functions. The brief they quote is read by the Coordinator from the
 /// utterance's OWN event, bound at capture, never from the session's current
 /// latest event, which can move during the undo window.
 public enum HeardContext {
     /// The bracket's opening. Names the speaker so an agent does not mistake
-    /// the quote for its own words or for the user's, and says what the
-    /// message above it is.
+    /// the quote for its own words or for the user's.
     public static let opener =
-        "[Tranquility Base spoke this summary of your previous turn to the user, "
-        + "by voice. The message above is their answer to it:"
+        "[Tranquility Base read the user this summary of your previous turn, by voice:"
+    /// The bracket's close: what the words after it are.
+    public static let closer = "They replied:]"
 
     /// The note, or nil when there is nothing spoken to quote. An event with
     /// no brief (a launch greeting, a summariser floor, a turn the user was
@@ -44,14 +50,14 @@ public enum HeardContext {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
         guard !spoken.isEmpty else { return nil }
-        return opener + " \u{201C}" + spoken + "\u{201D}]"
+        return opener + " \u{201C}" + spoken + "\u{201D} " + closer
     }
 
-    /// The message, then the note. `message` is already the tray's
-    /// composition (fragments, then transcript); this adds the one trailing
-    /// paragraph and nothing else.
-    public static func compose(message: String, note: String?) -> String {
+    /// The note, then the message. `message` is already the tray's
+    /// composition (fragments, then transcript): everything the user is
+    /// sending, after the one paragraph saying what they are answering.
+    public static func compose(note: String?, message: String) -> String {
         guard let note else { return message }
-        return message.isEmpty ? note : message + "\n\n" + note
+        return message.isEmpty ? note : note + "\n\n" + message
     }
 }
