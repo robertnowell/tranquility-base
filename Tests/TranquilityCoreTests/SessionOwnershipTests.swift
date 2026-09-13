@@ -362,6 +362,53 @@ final class CodexProcessIdentityTests: XCTestCase {
                        ["-p", "63621", "-Fn"])
     }
 
+    /// A lock FILE is not a holder. If Codex ever stops dropping the parent's
+    /// lock on a fork, the fast path would keep serving the dead id — so a
+    /// child of the recorded conversation holding a lock of its own is
+    /// treated as proven drift, and the cheap answer is refused.
+    func testAForkHoldingItsOwnLockRefusesTheStaleFastPath() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-locks-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data().write(to: dir.appendingPathComponent(parent + ".lock"))
+        try Data().write(to: dir.appendingPathComponent(child + ".lock"))
+        let record = SessionOwnershipRecord(
+            sessionId: parent, harness: CodexAdapter().id,
+            pid: Int(ProcessInfo.processInfo.processIdentifier), paneTty: nil)
+
+        // No tty on the record, so the lsof path refuses too: the assertion
+        // that matters is that the stale parent is NOT the answer.
+        XCTAssertNil(CodexProcessIdentity.activeThreadId(
+            for: record, locks: dir, lineage: { [self.child: self.parent] }))
+    }
+
+    /// The overwhelmingly common shape — a pane that never forked — still
+    /// answers from the file alone, with no subprocess and no tty.
+    func testAnUnforkedConversationStillTakesTheFastPath() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-locks-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data().write(to: dir.appendingPathComponent(parent + ".lock"))
+        try Data().write(to: dir.appendingPathComponent(child + ".lock"))
+        let record = SessionOwnershipRecord(
+            sessionId: parent, harness: CodexAdapter().id,
+            pid: Int(ProcessInfo.processInfo.processIdentifier), paneTty: nil)
+
+        // `child` holds a lock but forked from somebody else entirely.
+        XCTAssertEqual(CodexProcessIdentity.activeThreadId(
+            for: record, locks: dir,
+            lineage: { [self.child: "01a09c00-0000-7000-8000-000000000000"] }),
+                       parent)
+    }
+
+    func testDriftIsOnlyProvenByADescendantOfThisConversation() {
+        let dir = URL(fileURLWithPath: "/nonexistent-locks")
+        XCTAssertFalse(CodexProcessIdentity.conversationMovedOn(
+            from: parent, locks: dir, lineage: [:]))
+    }
+
     func testExistingRecordedLockIsTheFastPathWithoutNeedingATty() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-locks-\(UUID().uuidString)")
@@ -372,7 +419,8 @@ final class CodexProcessIdentityTests: XCTestCase {
             sessionId: parent, harness: CodexAdapter().id,
             pid: Int(ProcessInfo.processInfo.processIdentifier), paneTty: nil)
 
-        XCTAssertEqual(CodexProcessIdentity.activeThreadId(for: record, locks: dir), parent)
+        XCTAssertEqual(CodexProcessIdentity.activeThreadId(for: record, locks: dir,
+                                                           lineage: { [:] }), parent)
     }
 }
 
