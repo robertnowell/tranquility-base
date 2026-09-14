@@ -2269,6 +2269,7 @@ final class StatusHUD: NSObject {
         pastBackButton?.isHidden = true
         settingsTabs?.isHidden = true
         harnessPicker?.isHidden = true
+        agentGrid?.isHidden = true
         launchRow?.isHidden = true; directoryRow?.isHidden = true
         // Key status is a widget like any other, and the baseline owns it: any
         // state that is not the list face gives the keyboard back. Written here
@@ -2482,14 +2483,19 @@ final class StatusHUD: NSObject {
 
             switch face.settingsTab {
             case .agents:
-                harnessPicker.isHidden = false
+                // **`agentGrid`, not `harnessPicker`.** Swapping the view in
+                // the STACK and leaving the show/hide targeting the old one is
+                // how this tab came up with neither: the grid sat in the stack
+                // permanently hidden, and the picker was dutifully un-hidden
+                // while no longer being in the stack at all.
+                agentGrid.isHidden = false
                 launchRow.isHidden = false; directoryRow.isHidden = false
                 // Fresh each time the tab opens, to whatever's currently
                 // default — a picker left pointed at Codex from a previous
                 // visit would otherwise silently show the wrong harness's
                 // fields the next time settings open.
                 viewingHarness = AgentDefaults.defaultHarness
-                harnessPicker.update(selected: viewingHarness, defaultHarness: viewingHarness)
+                agentGrid.update(agents: Self.agentTiles(), selected: viewingHarness)
                 showAgentFields(for: viewingHarness)
                 bodyLabel.stringValue = face.body
                 setHint("return to save · choose… picks a folder")
