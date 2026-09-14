@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Open a page without making tab twenty-eight.
@@ -16,15 +17,39 @@ import Foundation
 /// (`better-opn`, `Focus-Tab`) reaches the same conclusion and falls back to a
 /// plain open elsewhere. So does this.
 ///
-/// Three ways it declines, all of them silent:
+/// **And it only runs when Chrome is the default browser.** Ruled 14 Sep 2026,
+/// from a new Mac whose owner lives in Safari: sign-in opened through the
+/// default browser and landed in Safari, and every door after it asked a
+/// running Chrome first, found the hub tab there, and raised it — a browser
+/// that was not signed in, so the sign-in page came back. A door opens the
+/// browser the person chose; the tab-reuse trick is an improvement on top of
+/// that choice, never a substitute for it.
+///
+/// Four ways it declines, all of them silent:
+///   * Chrome is not the default browser — asked of LaunchServices, not the
+///     process list, so a Chrome left open in the background changes nothing.
 ///   * Chrome is not running — `application "X" is running` is used precisely
 ///     because it does not launch anything to find out.
 ///   * The page is not open in any tab.
 ///   * Automation is denied (-1743). macOS stops prompting after the first
 ///     refusal, so this must never surface as a failure the user has to answer.
-/// In all three the caller opens the URL the ordinary way, which is exactly the
+/// In all four the caller opens the URL the ordinary way, which is exactly the
 /// behaviour that existed before this file.
 public enum BrowserFocus {
+
+    /// Whether the browser LaunchServices would hand an https URL to is Chrome.
+    ///
+    /// A static the tests replace, because the answer on the test machine is
+    /// whatever its owner set and the cases here are about the script, not
+    /// the machine. The app never sets it. Exactly `com.google.Chrome`: the
+    /// scripts address the app named "Google Chrome", and Canary and Beta are
+    /// other apps with other names.
+    nonisolated(unsafe) public static var chromeIsDefault: () -> Bool = {
+        guard let probe = URL(string: "https://hq.tranquilitybase.dev/"),
+              let app = NSWorkspace.shared.urlForApplication(toOpen: probe)
+        else { return false }
+        return Bundle(url: app)?.bundleIdentifier == "com.google.Chrome"
+    }
 
     public enum Outcome: Equatable {
         /// An existing tab was raised. Nothing new was opened.
@@ -124,6 +149,7 @@ public enum BrowserFocus {
     public static func navigateExistingTab(to url: URL, within base: URL,
                                            run: (String) -> Result<String, ScriptError>
                                                = { AppleScript.run(script: $0) }) -> Outcome {
+        guard chromeIsDefault() else { return .notFound }
         switch run(navigateScript(to: url, within: base)) {
         case .success(let output):
             return output.trimmingCharacters(in: .whitespaces) == "true" ? .focused : .notFound
@@ -173,6 +199,7 @@ public enum BrowserFocus {
                                         reloading: Bool = true,
                                         run: (String) -> Result<String, ScriptError>
                                             = { AppleScript.run(script: $0) }) -> Outcome {
+        guard chromeIsDefault() else { return .notFound }
         switch run(script(for: url, reloading: reloading)) {
         case .success(let output):
             return output.trimmingCharacters(in: .whitespaces) == "true" ? .focused : .notFound
