@@ -171,6 +171,21 @@ final class SessionRowTests: XCTestCase {
                        "lit rows keep the recency order they arrived in, read or not")
     }
 
+    /// The panel's `quietRowsDrill`, mirrored. That drill shipped red twice on
+    /// 14 Sep because the panel has no unit tests and nobody re-ran it; this
+    /// is the same fixture, so the next drift fails here first.
+    func testTheQuietRowsDrillFixtureHoldsInTheSuite() {
+        func row(_ id: String, _ lamp: Lamp) -> SessionRow {
+            SessionRow(id: id, name: id, aux: id, lamp: lamp)
+        }
+        let mixed = [row("w1", .working), row("i1", .running), row("d1", .unlit),
+                     row("r1", .ready), row("i2", .running), row("d2", .unlit),
+                     row("f1", .fault), row("w2", .working)]
+        let sorted = SessionRow.quietRowsLast(mixed).map(\.id)
+        XCTAssertEqual(sorted, ["w1", "r1", "f1", "w2", "i1", "i2", "d1", "d2"],
+                       "lit rows in arrival order, then quiet, then closed")
+    }
+
     // MARK: - gridRows / shownCount: the grid's own membership
 
     func testShownCountIsAtLeastTheFloorOnAQuietMachine() {
