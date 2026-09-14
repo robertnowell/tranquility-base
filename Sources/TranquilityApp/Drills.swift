@@ -1962,6 +1962,14 @@ extension AppDelegate {
         // that contradicts the app it watches trains you to ignore it.
         let unmeasurableIsNotAlertedOn = Permissions.failingTheGate.isEmpty
         Permissions.previewStates = realStates
+        // ...and the report has to EXIST. Every assertion above interrogates
+        // what the launch event would say, and all of them passed at
+        // `e770131` while the event itself was being dropped: it had been
+        // deferred into a `Task` to await a sharper automation reading, and
+        // landed inside the `Track.suppressed` window this very slate holds.
+        // Drills that only check an event's CONTENT cannot see an event that
+        // was never sent.
+        let launchEventWasRecorded = AppDelegate.launchEventRecorded
 
         // The Automation pane is a generated list of app-to-app pairs. It has
         // no + and no −, so an instruction naming them is an instruction that
@@ -1985,6 +1993,7 @@ extension AppDelegate {
             ("unmeasurableCountsAsDone", unmeasurableCountsAsDone),
             ("unmeasurableIsNotStale", unmeasurableIsNotStale),
             ("unmeasurableIsNotAlertedOn", unmeasurableIsNotAlertedOn),
+            ("launchEventWasRecorded", launchEventWasRecorded),
             ("automationRemedyIsPossible", automationRemedyIsPossible),
             ("automationRouteIsAnchored", automationRouteIsAnchored),
             ("nothingIsOptional", nothingIsOptional),
