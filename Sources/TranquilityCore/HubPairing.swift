@@ -124,6 +124,10 @@ public final class HubPairing: @unchecked Sendable {
     }
     /// Injectable so a test can reach the deadline in three polls.
     var now: @Sendable () -> Date = { Date() }
+    /// This Mac's public key, registered with the pairing it is collecting.
+    /// Nil pairs without spending authority, which is a real and supported
+    /// state rather than a degraded one.
+    public var publicKey: DeviceKey.JWK?
 
     public init(base: URL, device: String = HubMirror.deviceName(),
                 transport: HubMirror.Transport? = nil) {
@@ -155,8 +159,22 @@ public final class HubPairing: @unchecked Sendable {
         var lastError = ""
         while now() < deadline {
             do {
+                // The public half of this Mac's key travels with the claim,
+                // and only here. This is the first and only moment the MACHINE
+                // is talking rather than the browser: the person approving in
+                // the browser has no access to this Mac's Secure Enclave. From
+                // now on the token being collected is inert without a
+                // signature from that key.
+                //
+                // A Mac that sends none is still paired and still mirrors; it
+                // simply cannot be granted spending authority, and the hub
+                // records that as a null thumbprint rather than guessing.
+                var claim: [String: Any] = ["code": session.code]
+                if let key = publicKey {
+                    claim["key"] = ["kty": key.kty, "crv": key.crv, "x": key.x, "y": key.y]
+                }
                 let (status, body) = try await transport.post(
-                    "api/devices/claim", json: ["code": session.code])
+                    "api/devices/claim", json: claim)
                 consecutiveFailures = 0
                 switch status {
                 case 200:

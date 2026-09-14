@@ -84,6 +84,17 @@ public enum DeviceKey {
         public let publicJWK: JWK
         public let storage: Storage = .softwareKey
 
+        /// Reload a stored software key. Nil when the bytes are not one.
+        public init?(storedRepresentation: Data) {
+            guard let key = try? P256.Signing.PrivateKey(rawRepresentation: storedRepresentation)
+            else { return nil }
+            self.init(key: key)
+        }
+
+        /// The private key itself, which is why this fallback is weaker than
+        /// the enclave and why that difference is stated wherever it matters.
+        public var persistable: Data { key.rawRepresentation }
+
         public init(key: P256.Signing.PrivateKey = P256.Signing.PrivateKey()) {
             self.key = key
             // x963 representation is 0x04 ‖ X ‖ Y for an uncompressed point.
