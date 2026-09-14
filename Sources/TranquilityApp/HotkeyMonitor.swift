@@ -211,7 +211,27 @@ public final class HotkeyMonitor: @unchecked Sendable {
         // A concluded reply was the gesture's whole meaning; the tap
         // classification below must not also run.
         if effects.contains(.endReply) { return }
-        guard !interfered, duration < holdThreshold else { return }
+        // A chord of two modifiers counts at any length; a lone modifier is
+        // a tap or nothing (ChordRelease, 14 Sep: three hours of a new Mac
+        // and not one ⌃⌥, because every one was held past 200 ms and
+        // dropped here, silently). The drop now says so.
+        let pressed = [CGEventFlags.maskControl, .maskAlternate, .maskShift, .maskCommand]
+            .filter { flags.contains($0) }
+        let ms = Int(duration * 1000)
+        switch ChordRelease.verdict(modifiers: pressed.count, duration: duration,
+                                    holdThreshold: holdThreshold, interfered: interfered) {
+        case .interfered:
+            return
+        case .heldPastTap:
+            if flags != bindings.reply {
+                Permissions.log("hotkey: \(Self.name(flags)) held \(ms)ms alone: not a tap, nothing to do")
+            }
+            return
+        case .fires:
+            if duration >= holdThreshold {
+                Permissions.log("hotkey: \(Self.name(flags)) held \(ms)ms; a chord counts at any length")
+            }
+        }
         switch flags {
         case bindings.next: onTransition(.next)
         case bindings.pause: onTransition(.pauseToggled)
@@ -238,8 +258,22 @@ public final class HotkeyMonitor: @unchecked Sendable {
                 // is the only transition that is not an instruction.
                 onTransition(.controlRegistered)
             }
-        default: break  // an unassigned combination: no action.
+        default:
+            // An unassigned combination: no action, and a line, so that "I
+            // pressed it and nothing happened" has a record to check.
+            Permissions.log("hotkey: \(Self.name(flags)) released after \(ms)ms: unassigned")
         }
+    }
+
+    /// Modifier names for the log, each glyph paired with its key's name so
+    /// the line can be read aloud (the ⌃ rule, docs/log).
+    static func name(_ flags: CGEventFlags) -> String {
+        let parts: [(CGEventFlags, String)] = [
+            (.maskControl, "⌃ Control"), (.maskAlternate, "⌥ Option"),
+            (.maskShift, "⇧ Shift"), (.maskCommand, "⌘ Command"),
+        ]
+        let names = parts.filter { flags.contains($0.0) }.map { $0.1 }
+        return names.isEmpty ? "no modifier" : names.joined(separator: " + ")
     }
 
     public init(
