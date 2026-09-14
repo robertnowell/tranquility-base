@@ -97,6 +97,50 @@ final class SessionRowTests: XCTestCase {
         XCTAssertFalse(SessionRow.isLive(row(lamp: .unlit, revivable: false)))
     }
 
+    // MARK: - The row menu, as verbs
+
+    /// A local live row carries every verb: the door, the hand-off, the lamp,
+    /// and the one destructive item last.
+    func testALocalLiveRowCarriesEveryVerb() {
+        let local = SessionRow(id: "l", name: "n", aux: "a", lamp: .working,
+                               harness: ClaudeCodeAdapter().id)
+        XCTAssertEqual(SessionRow.verbs(for: local), [
+            .goToAgent,
+            .continueWork(AgentHandoff.destination(for: ClaudeCodeAdapter().id)!),
+            .turnLampOff,
+            .endSession,
+        ])
+    }
+
+    /// A live row with no door keeps the lamp and loses the two verbs that
+    /// need somewhere to go. It is NOT an empty menu: on 14 Sep a local
+    /// OpenCode session asking for a permission wore amber, refused every
+    /// tap as if it were dead, and offered no menu, so there was no verb on
+    /// it anywhere. The lamp is the one it always had.
+    func testARowWithNothingToOpenStillCarriesTheLamp() {
+        let doorless = SessionRow(id: "d", name: "n", aux: "needs you", lamp: .fault,
+                                  harness: "opencode", door: .none)
+        XCTAssertEqual(SessionRow.action(for: doorless), .nothingToOpen)
+        XCTAssertTrue(SessionRow.isLive(doorless), "something is running; it is just not here")
+        XCTAssertEqual(SessionRow.verbs(for: doorless), [.turnLampOff])
+    }
+
+    /// A page is a door, so GO TO AGENT stays; but a page is not a pane of
+    /// ours, so END SESSION does not — `SessionTermination` cannot reach it.
+    func testAPageRowCanBeOpenedButNotEnded() {
+        let url = URL(string: "https://example.test/t/1")!
+        let paged = SessionRow(id: "p", name: "n", aux: "a", lamp: .working,
+                               harness: "crobot", door: .page(url))
+        XCTAssertEqual(SessionRow.verbs(for: paged), [.goToAgent, .turnLampOff])
+    }
+
+    /// Dead rows have no menu, as before: the lamp's verb there is revive,
+    /// and that lives on the lamp and the tap.
+    func testADeadRowHasNoVerbs() {
+        XCTAssertEqual(SessionRow.verbs(for: row(lamp: .unlit, revivable: true)), [])
+        XCTAssertEqual(SessionRow.verbs(for: row(lamp: .unlit, revivable: false)), [])
+    }
+
     // MARK: - LampAction: what a lamp click does
 
     func testLampClickOnGridTurnsOffAnyLitOrQuietRow() {

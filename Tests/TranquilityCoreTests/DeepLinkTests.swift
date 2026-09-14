@@ -95,6 +95,22 @@ final class DeepLinkTests: XCTestCase {
             .revive)
     }
 
+    /// A live agent with no door — a local OpenCode session — has no pane and
+    /// no page, so Discuss opens the card when there is a turn to read and
+    /// otherwise refuses as "nothing to open", never as "no proof it stopped".
+    func testDiscussOnADoorlessLiveAgentOpensTheCardOrSaysNothingToOpen() {
+        let row = SessionRow(id: "0e5a42c405f6b208c9720cc3a0c05d3288c3d7ad",
+                             name: "0e5a42c4", aux: "needs you", lamp: .fault,
+                             harness: "opencode", door: .none)
+        XCTAssertEqual(SessionRow.action(for: row), .nothingToOpen)
+        XCTAssertEqual(
+            DeepLink.discussDestination(rowAction: .nothingToOpen, hasCompletedTurn: true),
+            .conversationCard)
+        XCTAssertEqual(
+            DeepLink.discussDestination(rowAction: .nothingToOpen, hasCompletedTurn: false),
+            .nothingToOpen)
+    }
+
     /// No row at all keeps the 7 Sep fallback: a recorded turn is still a
     /// card worth reading; nothing recorded is the invitation.
     func testDiscussWithoutARowFallsBackOnTheStore() {

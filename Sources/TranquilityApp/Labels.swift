@@ -1,16 +1,20 @@
 import AppKit
 import TranquilityCore
 
-/// The card's identity label, when the identity is also a way back to the tab.
+/// A label that is also a door: the breadcrumb pill on a card, and the grid
+/// footer's signature.
 ///
 /// A click target with no affordance is a secret, and a card that grows a button
 /// for something the eye is already resting on is the detail this pass exists to
 /// remove. The cursor is the whole affordance: nothing changes until the pointer
 /// arrives, and then it says "this opens".
 ///
-/// `isADoor` is false whenever there is no live target — the app's own name on
-/// the empty room rides this same label, and a name that offers to open nothing
-/// is worse than a name that offers nothing.
+/// `isADoor` is false whenever there is nowhere to go — the pill on a face with
+/// no way home rides this same label, and a word that offers to open nothing is
+/// worse than a word that offers nothing.
+///
+/// The card's TITLE used to be one of these (06 Aug to 14 Sep). It is a plain
+/// label now: GO TO AGENT is the door, and the name only says whose card it is.
 final class DoorLabel: NSTextField {
     var isADoor = false {
         didSet {
@@ -73,81 +77,23 @@ final class DoorLabel: NSTextField {
     }
 }
 
-/// The card's prose: selectable by hand, and by hand ONLY.
+/// The card's prose: words to read, and nothing else.
 ///
-/// A selectable `NSTextField` is a valid key view, and a text field that becomes
-/// first responder selects ALL of its text. The two faces that take the keyboard
-/// — the list and the settings pane — hand it to whatever AppKit picks, which
-/// was this label; from then on the field editor stayed installed and every
-/// programmatic `stringValue` arrived pre-selected, so a card would come back
-/// from a turn with its whole body highlighted and nobody had touched it
-/// (screenshot, 16 Aug). The highlight was also unreadable, which is the panel's
-/// appearance and is fixed where the panel is built.
+/// Not selectable, not a responder, not even a hit target (ruled 14 Sep). From
+/// 16 Aug to 14 Sep this was a selectable field with a gate on WHO could start
+/// a selection, because a line quoted out of a card by hand seemed worth the
+/// machinery. Robert, on a launch card: "the name and the spoken text, that's
+/// not actionable, so it doesn't need a cursor. You shouldn't even really be
+/// able to highlight it." So the I-beam goes, the highlight goes, and with them
+/// the field editor that once selected a whole card on its own (the 16 Aug
+/// screenshot this class was written for) — a fault that cannot recur in a
+/// field that has no editor to install.
 ///
-/// Selecting prose off a card is worth keeping — it is how a line gets quoted
-/// into a reply — so this does not switch selection off. It narrows WHO may
-/// start one to a pointer press that lands on these words. Keyboard traversal,
-/// the window's automatic first-responder pick, and a click anywhere else on
-/// the panel are all refused, so a selection means a hand made it.
+/// `hitTest` yields to the surface, so a press on the words is a press on the
+/// card: that is what arms card paste, and it used to need its own hook here
+/// because the selection swallowed the event first.
 final class CardBodyLabel: NSTextField {
-    /// The gate, taking its event as an argument so a drill can ask the
-    /// question without a mouse: `acceptsFirstResponder` reads
-    /// `NSApp.currentEvent`, which no test can set.
-    func acceptsPress(_ event: NSEvent?) -> Bool {
-        guard let event, let window, event.window === window else { return false }
-        switch event.type {
-        case .leftMouseDown, .rightMouseDown, .leftMouseDragged: break
-        default: return false
-        }
-        return bounds.contains(convert(event.locationInWindow, from: nil))
-    }
+    override var acceptsFirstResponder: Bool { false }
 
-    override var acceptsFirstResponder: Bool { acceptsPress(NSApp.currentEvent) }
-
-    /// Card paste: a press on the words is a press on the card. Fired before
-    /// the selection machinery runs, so arming never depends on whether the
-    /// press became a selection.
-    var onPress: (() -> Void)?
-
-    override func mouseDown(with event: NSEvent) {
-        onPress?()
-        super.mouseDown(with: event)
-    }
-
-    /// New words, no selection.
-    ///
-    /// Guarded on the WORDS rather than on the assignment: `paintInk` rewrites
-    /// this label once per spoken word to advance the karaoke ink, and dropping
-    /// a hand-made selection on a repaint that changed only colour would be the
-    /// same bug pointing the other way.
-    override var stringValue: String {
-        get { super.stringValue }
-        set {
-            let changed = newValue != super.stringValue
-            super.stringValue = newValue
-            if changed { dropSelection() }
-        }
-    }
-
-    override var attributedStringValue: NSAttributedString {
-        get { super.attributedStringValue }
-        set {
-            let changed = newValue.string != super.attributedStringValue.string
-            super.attributedStringValue = newValue
-            if changed { dropSelection() }
-        }
-    }
-
-    /// True while a hand-made selection is on screen. The drill's evidence, and
-    /// read from the field editor rather than from a flag we set, because the
-    /// defect is precisely the editor disagreeing with what we think we did.
-    var hasSelection: Bool {
-        guard let editor = currentEditor() else { return false }
-        return editor.selectedRange.length > 0
-    }
-
-    func dropSelection() {
-        guard currentEditor() != nil else { return }
-        window?.makeFirstResponder(nil)
-    }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

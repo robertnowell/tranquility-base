@@ -288,6 +288,17 @@ public struct SessionRow: Equatable, Sendable {
         /// that is actually alive puts two processes under one id, and
         /// that crashed the app twice.
         case none
+        /// Alive, and with no door of its own: a `Door.none` row, which today
+        /// is a local `opencode serve` session. The tap still does nothing,
+        /// but it is NOT `.none`, because the two are opposite facts about
+        /// the row and were being reported as one (14 Sep). An OpenCode
+        /// session that was asking for a permission wore an amber lamp,
+        /// answered every tap with "No proof it stopped, or nowhere to land"
+        /// — a sentence written for a dead row — and, because `isLive` read
+        /// `.none` as dead, offered no menu at all: a live, needs-you row
+        /// with no verb on it anywhere. Its own case, so the tap can say
+        /// what is actually true and the menu can still carry the lamp.
+        case nothingToOpen
     }
 
     public static func action(for row: SessionRow) -> RowAction {
@@ -308,9 +319,45 @@ public struct SessionRow: Equatable, Sendable {
         case .terminal: return .goToAgent
         case .page(let url): return .openPage(url)
         // Offering a door that opens on nothing is worse than offering none:
-        // it reads as broken rather than as absent.
-        case .none: return .none
+        // it reads as broken rather than as absent. Absent is still alive,
+        // though — see `RowAction.nothingToOpen`.
+        case .none: return .nothingToOpen
         }
+    }
+
+    /// The right-click menu, as a list of verbs. Derived here, in Core, for
+    /// the reason `action(for:)` is: a menu built inline in the click handler
+    /// had drifted from the tap twice, and on 14 Sep it hid entirely on a row
+    /// that was alive.
+    ///
+    /// Every verb is gated on the fact that makes it true, never on the lamp:
+    /// GO TO AGENT needs a door, END SESSION needs a pane this Mac owns (the
+    /// only thing `SessionTermination` can end — a remote agent offered that
+    /// item would log "already gone" and do nothing), CONTINUE WORK needs a
+    /// harness with a hand-off destination, and TURN LAMP OFF needs only a
+    /// live row, because the lamp files any lit row and the menu is where the
+    /// row's verbs are listed rather than learned. Order is harmless first,
+    /// destructive last; the app draws the separator.
+    ///
+    /// Empty for a dead row, which is the old `nil` menu: REVIVE is the lamp's
+    /// verb there and the tap's, and the list face carries it.
+    public enum RowVerb: Equatable, Sendable {
+        case goToAgent
+        case continueWork(AgentHandoff.Destination)
+        case turnLampOff
+        case endSession
+    }
+
+    public static func verbs(for row: SessionRow) -> [RowVerb] {
+        guard isLive(row) else { return [] }
+        var verbs: [RowVerb] = []
+        if row.door != .none { verbs.append(.goToAgent) }
+        if let destination = AgentHandoff.destination(for: row.harness) {
+            verbs.append(.continueWork(destination))
+        }
+        if lampAction(for: row, on: .grid) == .turnOff { verbs.append(.turnLampOff) }
+        if row.door == .terminal { verbs.append(.endSession) }
+        return verbs
     }
 
     /// What a click on the LAMP does. The answer depends on WHICH FACE you
@@ -377,6 +424,11 @@ public struct SessionRow: Equatable, Sendable {
         // agent that exists. Listing it here rather than defaulting, because a
         // default is what let the menu and the left-click drift apart before.
         case .announce, .goToAgent, .openPage: return true
+        // Live with nothing to open is still live: something is running, it
+        // is just not somewhere this Mac can put you in front of. The menu
+        // reads `verbs(for:)`, which is where "nothing to open" costs that
+        // row its GO TO AGENT and END SESSION and nothing else.
+        case .nothingToOpen: return true
         case .revive, .none: return false
         }
     }

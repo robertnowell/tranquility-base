@@ -736,6 +736,17 @@ enum StateLegend {
     static let cannotReopenNotice =
         "\(Glyph.needsYou) No proof it stopped, or nowhere to land"
 
+    /// What a tap on a LIVE row with no door says back.
+    ///
+    /// Distinct from the sentence above on purpose (14 Sep). An OpenCode
+    /// session asking for a permission is alive and amber, and its tap was
+    /// answered with "No proof it stopped" — a diagnosis of a dead row,
+    /// delivered about a running one, fourteen times in two minutes. This one
+    /// names the actual condition: there is no page and no pane of ours to
+    /// open, so the row has nowhere to put you. The lamp still files it.
+    static let nothingToOpenNotice =
+        "\(Glyph.needsYou) Nothing to open: no page, no terminal"
+
     // MARK: - The device fault (ruled 08 Aug)
 
     /// The third tier's placard. It names the CONDITION, not a classification:
