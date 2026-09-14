@@ -2048,6 +2048,7 @@ extension StatusHUD {
         trayTeardownChurnDrill()
         cardPasteDrill()
         elasticGridDrill()
+        paintGuardDrill()
         slateHandsBackDrill()
         slateYieldsDrill()
         goToSessionDrill()

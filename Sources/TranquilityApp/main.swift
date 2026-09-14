@@ -318,12 +318,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var task: Task<Void, Never>?
     }
     var inFlightTranscription: InFlightTranscription?
-    /// What the idle grid is currently displaying — row DATA, not counts — so it
-    /// is redrawn on content change rather than on every poll. Counts alone
-    /// missed real changes: a newer turn replacing an older one leaves the count
-    /// identical, and a summary arriving changes a row's topic with no count
-    /// change at all.
-    var lastShownRows: [SessionRow]?
     /// What each agent's lamp looked like on the last tick, for the
     /// `agent_lamp_changed` spine (Core `LampWatch`).
     var lampWatch = LampWatch()
@@ -746,8 +740,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.lastWaitingIds = waitingIds
                 let newlyWaiting = EarconGate.hasNewArrival(waiting: waitingIds, previous: primed)
                 let arrived = turnArrived && waiting > 0
+                // Row DATA, not counts: a newer turn replacing an older one
+                // leaves the count identical, and a summary arriving changes a
+                // topic with no count change at all. Asked of the HUD, which
+                // records every paint whoever made it — the tick's own copy of
+                // "what I last drew" missed every other painter (14 Sep).
                 if self.hud.canSurfaceAmbiently,
-                   arrived || rows != self.lastShownRows {
+                   arrived || self.hud.gridNeedsRepaint(rows) {
                     if arrived {
                         self.surfaceArrival(rows: rows, waiting: waiting,
                                             newlyWaiting: newlyWaiting)
@@ -755,14 +754,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // Currency is not attention. Whatever the attention gates
                     // decided (held, frontmost-skip), lamps that are on screen
                     // must be true — a stale green is the instrument lying. And
-                    // the guard records PAINTS, not computations: a skipped
-                    // paint retries next tick instead of certifying itself
-                    // (the 23:39 lock-in: frontmost-skip threw the rows away
-                    // AFTER the guard had already recorded them). Never raises
-                    // the panel: visible-and-idle only; a decrease stays quiet.
+                    // the guard records PAINTS, not computations: `showIdle`
+                    // records what it drew, so a skipped or refused paint
+                    // retries next tick instead of certifying itself (the
+                    // 23:39 lock-in: frontmost-skip threw the rows away AFTER
+                    // the guard had already recorded them). Never raises the
+                    // panel: visible-and-idle only; a decrease stays quiet.
                     if self.hud.isOnScreen, self.hud.canSurfaceAmbiently {
                         self.hud.showIdle(rows: rows)
-                        self.lastShownRows = rows
                         // The glow lives HERE, with the repaint, not with the
                         // hail — measured 11 Aug, watching a real arrival while
                         // collapsed produce nothing at all.
