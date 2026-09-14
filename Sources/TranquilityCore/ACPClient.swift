@@ -105,31 +105,40 @@ public actor ACPClient {
 
     // MARK: - Asking
 
+    /// **Nothing that is not `Sendable` crosses into the actor**, and the
+    /// waiting happens outside it.
+    ///
+    /// `[String: Any]` is not `Sendable`, so handing one to an actor is a data
+    /// race the compiler is right to refuse. This compiled on arm64 and failed
+    /// on the Intel slice, which is exactly why that job exists: one toolchain
+    /// was stricter and the stricter one was correct. So the dictionary is
+    /// serialised here, on the caller's side, and only `Data` goes in.
+    ///
+    /// The timeout race lives out here too. A task group inside an actor method
+    /// hands closures a `self`-isolated context, which is its own hazard; out
+    /// here the group is ordinary concurrent code and the actor is touched only
+    /// by the one call that needs it.
     @discardableResult
-    public func request(_ method: String, params: [String: Any] = [:]) async throws
+    public nonisolated func request(_ method: String,
+                                    params: [String: Any] = [:]) async throws
         -> ACPWire.Message {
-        let id = nextID
-        nextID += 1
         // `params` is ALWAYS sent, even empty. JSON-RPC 2.0 permits omitting
         // it and a live `opencode acp` 1.18.30 answers `session/list` with
-        // nothing at all when it is absent — no result, no error, just
-        // silence until the request times out. Measured 14 Sep, after the
-        // fixture passed and the real agent returned zero sessions.
-        let body: [String: Any] = [
-            "jsonrpc": "2.0", "id": id, "method": method, "params": params,
-        ]
-        let line = try JSONSerialization.data(withJSONObject: body)
+        // nothing at all when it is absent — no result, no error, just silence
+        // until the request times out. Measured 14 Sep, after the fixture
+        // passed and the real agent returned zero sessions.
+        let encoded = try JSONSerialization.data(withJSONObject: params)
+        let limit = await timeout
 
-        let message: ACPWire.Message = try await withThrowingTaskGroup(of: ACPWire.Message.self) {
-            group in
-            group.addTask { [timeout] in
-                try await Task.sleep(for: timeout)
+        let message: ACPWire.Message = try await withThrowingTaskGroup(
+            of: ACPWire.Message.self
+        ) { group in
+            group.addTask {
+                try await Task.sleep(for: limit)
                 throw ClientError.timedOut(method: method)
             }
-            group.addTask { [self] in
-                try await withCheckedThrowingContinuation { continuation in
-                    Task { await self.enqueue(id: id, continuation: continuation, line: line) }
-                }
+            group.addTask {
+                try await self.deliver(method: method, params: encoded)
             }
             defer { group.cancelAll() }
             guard let first = try await group.next() else {
@@ -143,20 +152,43 @@ public actor ACPClient {
         return message
     }
 
-    private func enqueue(id: Int, continuation: CheckedContinuation<ACPWire.Message, Error>,
-                         line: Data) async {
-        pending[id] = continuation
-        do { try await transport.write(line) } catch {
-            pending.removeValue(forKey: id)?.resume(throwing: error)
+    /// The isolated half: allocate the id, register the waiter, write the line.
+    private func deliver(method: String, params: Data) async throws -> ACPWire.Message {
+        let id = nextID
+        nextID += 1
+        // Assembled as bytes, so the envelope never becomes a dictionary that
+        // would have to cross a boundary to get here.
+        var line = Data(#"{"jsonrpc":"2.0","id":"#.utf8)
+        line.append(Data("\(id)".utf8))
+        line.append(Data(#","method":"#.utf8))
+        line.append(try JSONEncoder().encode(method))
+        line.append(Data(#","params":"#.utf8))
+        line.append(params)
+        line.append(Data("}".utf8))
+
+        return try await withCheckedThrowingContinuation { continuation in
+            pending[id] = continuation
+            Task { [transport] in
+                do { try await transport.write(line) }
+                catch { await self.abandon(id: id, because: error) }
+            }
         }
     }
 
-    /// A reply to a request the AGENT made of us. Carries the agent's id back,
-    /// so it is a response and never a new request.
-    public func respond(to id: Int, result: [String: Any]) async throws {
-        let body: [String: Any] = ["jsonrpc": "2.0", "id": id, "result": result]
-        try await transport.write(try JSONSerialization.data(withJSONObject: body))
+    /// The write itself failed, so nobody will ever answer this id.
+    private func abandon(id: Int, because error: Error) {
+        pending.removeValue(forKey: id)?.resume(throwing: error)
     }
+
+    /// A reply to a request the AGENT made of us. Carries the agent's id back,
+    /// so it is a response and never a new request. Encoded on the caller's
+    /// side for the same reason `request` is.
+    public nonisolated func respond(to id: Int, result: [String: Any]) async throws {
+        let body: [String: Any] = ["jsonrpc": "2.0", "id": id, "result": result]
+        try await write(try JSONSerialization.data(withJSONObject: body))
+    }
+
+    private func write(_ line: Data) async throws { try await transport.write(line) }
 
     // MARK: - The protocol
 
