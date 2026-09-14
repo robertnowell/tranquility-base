@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1185</title>
+      <sparkle:version>1185</sparkle:version>
+      <sparkle:shortVersionString>0.3.1185</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 14 Sep 2026 05:35:26 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1185-f2656060d/TranquilityBase-0.3.1185.dmg" type="application/octet-stream" length="14806637" sparkle:edSignature="FqccFafYix7q6F+yl4B4mB/J8q8HvJ/PsjvnbTo6C/X5SQl2vs5/8XAuwbB45ahN730RfyEsTVbpWGaR8xIuBg==" />
+    </item>
+    <item>
       <title>Version 0.3.1184</title>
       <sparkle:version>1184</sparkle:version>
       <sparkle:shortVersionString>0.3.1184</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Mon, 14 Sep 2026 02:56:37 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1175-d6239c25b/TranquilityBase-0.3.1175.dmg" type="application/octet-stream" length="14424228" sparkle:edSignature="8+FnK/Brkuzdsopbhe2VDQtKj6dF6Wk30gjZ/MzG2Ujlf5VtfN+jk0bgUZBwgKYxUkkPOJrADMazUAtwVUYmAQ==" />
     </item>
-    <item>
-      <title>Version 0.3.1174</title>
-      <sparkle:version>1174</sparkle:version>
-      <sparkle:shortVersionString>0.3.1174</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Mon, 14 Sep 2026 02:41:18 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1174-b5ecdb11b/TranquilityBase-0.3.1174.dmg" type="application/octet-stream" length="14424220" sparkle:edSignature="kPUxG67zPxMtK7i3Sx+iuKRnq41TY/2R4PWd+aBMjxrhNGsH2XOdVm25O30T/nefNuHxORNz/hUCavL/x11sCQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: nSLdhMDmw9I5FEq/vTYkPLpXYRDrlQJEszVlQtFrb1ve3TxUCLGtACBBmYyWqwIWjxgNaePRmTJBkTPgC37LCA==
+edSignature: 0tWmjlA1WYbTlmXI935zuNkZYavJOpwEYr46G0RyHPFX5Kukwk++yajC9WM6teqZljtx0Dyx2ToBKYsZHMnNAg==
 length: 6457
 -->
