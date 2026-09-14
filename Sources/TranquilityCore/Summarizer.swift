@@ -184,6 +184,20 @@ public struct AnthropicSummaryProvider: SummaryProvider {
     /// stale background to ignore — two blocks whose difference is the feature,
     /// and neither was reachable from a test while this lived inside a function
     /// that needs an API key to run.
+    /// The same user half, rendered from the shared template.
+    ///
+    /// Exists so the managed Gateway can produce a byte-identical prompt
+    /// without a second implementation of the conditionals below. Both read
+    /// `contracts/gateway/v1/summary-user-template.json`, and
+    /// `UserPromptTemplateTests` asserts this and `userPrompt(for:)` agree
+    /// across every combination of the optional blocks. When they agree, the
+    /// one below can go; until they do, the shipped path is unchanged.
+    static func userPromptFromTemplate(
+        for request: SummaryRequest, template: UserPromptTemplate = .shared
+    ) -> String {
+        template.render(for: request)
+    }
+
     public static func userPrompt(for request: SummaryRequest) -> String {
         var context = "Project: \(request.projectLabel)"
         if request.hookEvent == .notification {
