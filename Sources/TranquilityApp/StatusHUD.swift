@@ -2208,7 +2208,12 @@ final class StatusHUD: NSObject {
         // keeps its full-dark body exactly as before.
         if let cursor = face.spokenUpTo { paintInk(displayCursor: cursor) }
         hintLabel.stringValue = ""
-        goButton.isHidden = currentTarget?.pid == nil
+        // **A pid is not the only way to have somewhere to go** (14 Sep). This
+        // read `pid == nil` alone, so a remote agent — which has no process on
+        // this Mac and never will — got a card with no Go to Agent on it at
+        // all, while its own row in the grid was carrying the URL the whole
+        // time. The row already knows; the card just never asked.
+        goButton.isHidden = currentTarget?.pid == nil && remoteDoorForCurrentTarget == nil
         // The card's second door. It rides the same rule as "Go to agent" —
         // shown wherever an agent is named. The label follows the destination:
         // a report this turn just wrote, or the hub. Retitled per render
@@ -3476,9 +3481,27 @@ final class StatusHUD: NSObject {
     /// "Opening…" paint, and returning immediately so the panel never blocks
     /// on a tmux call. The app calls `finishGoToSession` when the work ends,
     /// whatever the outcome, which is what drops the guard.
+    /// The page this card's agent lives on, when it lives somewhere else.
+    ///
+    /// Read off the ROW rather than stored beside `currentTarget`, for the
+    /// reason `currentDoor` gives just above it: a second copy of a fact the
+    /// row already carries is a second thing to keep in step, and this one
+    /// changes on every poll.
+    var remoteDoorForCurrentTarget: URL? {
+        guard let target = currentTarget else { return nil }
+        return face.sessionRows.first { $0.id == target.sessionId }?.door.url
+    }
+
     @objc nonisolated func goToSession() {
         MainActor.assumeIsolated {
             guard !goToSessionInFlight else { return }
+            // The remote door first: a session with no pid of ours is not
+            // "no longer running", it is running somewhere this Mac cannot
+            // focus, and saying otherwise is the lie this branch used to tell.
+            if currentTarget?.pid == nil, let page = remoteDoorForCurrentTarget {
+                NSWorkspace.shared.open(page)
+                return
+            }
             guard let target = currentTarget else {
                 bodyLabel.stringValue = "That agent is no longer running, so there's no tab to open."
                 return

@@ -178,6 +178,19 @@ public struct SessionRow: Equatable, Sendable {
         /// `opencode serve` has no web page and no terminal of ours. Go to
         /// Agent has nowhere to go, so it is not offered.
         case none
+
+        /// Opens somewhere that is not a pane this Mac owns.
+        public var isPage: Bool {
+            if case .page = self { return true }
+            return false
+        }
+
+        /// The page, when there is one. The card asks for this to decide
+        /// whether it can offer Go to Agent at all.
+        public var url: URL? {
+            if case .page(let url) = self { return url }
+            return nil
+        }
     }
 
     public init(id: String, name: String, aux: String, lamp: Lamp,
@@ -293,7 +306,19 @@ public struct SessionRow: Equatable, Sendable {
     public static func action(for row: SessionRow) -> RowAction {
         switch row.lamp {
         case .fault, .working, .running: return goTo(row)
-        case .ready: return .announce
+        // **Green consults the door too, since 14 Sep.** Announce reads a
+        // finished turn out of the LOCAL store, so it is the right verb only
+        // for a row that has one. A remote agent has no local transcript and
+        // no local id, so `announceNext(only:)` guarded on a lookup that could
+        // never succeed and returned in silence: the click did nothing at all,
+        // which is worse than a control that refuses.
+        //
+        // Latent until this morning, and then mine. Remote rows used to be
+        // unlit or quiet, so the door was only ever reachable through the
+        // three lamps above; making them green under the three-lamp ruling
+        // stranded it. A row that carries a page has somewhere to go, and that
+        // is true whatever colour it is.
+        case .ready: return row.door.isPage ? goTo(row) : .announce
         case .unlit: return row.revivable ? .revive : .none
         }
     }

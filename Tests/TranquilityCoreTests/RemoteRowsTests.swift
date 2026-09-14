@@ -204,3 +204,47 @@ final class RemoteRowsTests: XCTestCase {
         XCTAssertEqual(out.filter { $0.id == id }.count, 1)
     }
 }
+
+// MARK: - A green remote row is clickable (14 Sep)
+
+extension RemoteRowsTests {
+
+    /// **The no-op.** Announce reads a finished turn out of the LOCAL store,
+    /// so it is the right verb only for a row that has one. A remote agent has
+    /// no local transcript and no local id, so the announce path guarded on a
+    /// lookup that could never succeed and returned in silence: the click did
+    /// nothing at all, which is worse than a control that refuses.
+    ///
+    /// Latent until the three-lamp ruling. Remote rows used to be unlit or
+    /// quiet, so `goTo` was only reachable through the other three lamps;
+    /// making them green stranded the door they were already carrying.
+    func testAGreenRemoteRowOpensItsPageRatherThanAnnouncingNothing() {
+        var agent = remote("a", state: .completed)
+        agent.url = URL(string: "https://crobot.example/task/a")
+        let row = rows(.init(agents: [agent])).first
+        XCTAssertEqual(row?.lamp, .ready)
+        XCTAssertEqual(SessionRow.action(for: row!),
+                       .openPage(URL(string: "https://crobot.example/task/a")!))
+    }
+
+    /// And a green LOCAL row still announces, which is the app's daily loop
+    /// and must not have been traded away for the fix above.
+    func testAGreenLocalRowStillAnnounces() {
+        let local = SessionRow(id: "local", name: "n", aux: "a", lamp: .ready)
+        XCTAssertEqual(SessionRow.action(for: local), .announce)
+    }
+
+    /// A green remote agent with NO page still announces, and that is right
+    /// rather than a leftover: a remote change arrives as a line in
+    /// `spool.jsonl` and drains into the local store like any other, so there
+    /// genuinely is something to read back. Local OpenCode is exactly this
+    /// case — a real agent, no web page, and its results still reach the card.
+    ///
+    /// So the door decides only whether there is somewhere BETTER to go, and
+    /// announce stays the fallback rather than being traded away.
+    func testAGreenRemoteAgentWithNoPageStillAnnounces() {
+        let row = rows(.init(agents: [remote("a", state: .completed)])).first
+        XCTAssertEqual(row?.door, SessionRow.Door.none)
+        XCTAssertEqual(SessionRow.action(for: row!), .announce)
+    }
+}

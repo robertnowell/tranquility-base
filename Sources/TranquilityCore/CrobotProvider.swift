@@ -178,10 +178,40 @@ public struct CrobotProvider: AgentProvider {
     /// already hex and dashes, so this is almost always the identity. It is a
     /// lookup rather than an assumption because "almost always" is how the
     /// next id format change becomes a silent 404.
+    /// The vendor's own id for an agent we hold an addressable id for.
+    ///
+    /// **The mapping is consulted FIRST, and that is the whole fix** (14 Sep
+    /// 2026). This used to open with a shortcut: if the id looked like a
+    /// plausible session and hashing it returned itself, treat it as already
+    /// raw and skip the lookup. That guard is a TAUTOLOGY for any id that is
+    /// already hex, because `AgentSession.id` returns such an id unchanged —
+    /// and every id this type produces for crobot is a 64-character SHA-256
+    /// digest, which is exactly that shape.
+    ///
+    /// So a send posted our own hash to the gateway as though it were a task
+    /// id. Measured against the live gateway: the hash is 64 characters, a
+    /// Kubernetes label value may be 63, so the sandbox lookup came back 400
+    /// and the whole thing surfaced as a 500 with a PVC selector in it.
+    ///
+    /// Invisible against the fake, which accepts whatever id it is handed.
+    /// Only a real gateway with a real Kubernetes behind it could say.
     private func rawID(for id: AgentSession.ID) async throws -> String? {
-        if ArtifactStore.isPlausibleSession(id),
-           AgentSession.id(id, provider: self.id) == id { return id }
-        return try await mine().first { $0.id == id }?.providerID
+        if let known = try await mine().first(where: { $0.id == id })?.providerID {
+            return known
+        }
+        // Nothing known by that id. It may still BE a vendor id — a deep link,
+        // or a task that has aged out of the list — so try it as one rather
+        // than refusing outright. A digest of ours is excluded by name: it can
+        // only ever have come from the branch above.
+        guard ArtifactStore.isPlausibleSession(id), !Self.looksLikeOurDigest(id)
+        else { return nil }
+        return id
+    }
+
+    /// 64 lowercase hex characters and nothing else: the shape
+    /// `AgentSession.id` emits, and a shape no vendor id surveyed has.
+    static func looksLikeOurDigest(_ id: String) -> Bool {
+        id.count == 64 && id.allSatisfy { $0.isHexDigit && !$0.isUppercase }
     }
 
     private func opencode(_ raw: String) -> OpenCodeClient {

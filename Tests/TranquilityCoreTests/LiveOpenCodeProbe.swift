@@ -83,6 +83,39 @@ final class LiveOpenCodeProbe: XCTestCase {
     }
 
     /// The config path, which is how the app actually builds this provider.
+    /// **The end-to-end run**, over the same HTTP path the app uses — not over
+    /// ACP, which is a different client. Start a session, send it a real
+    /// prompt, then READ THE ANSWER BACK, because `.accepted` is the server
+    /// saying it took the request and not the agent having answered.
+    ///
+    /// This is the probe that was missing when OpenCode was called "validated":
+    /// everything before it proved the agent could be LISTED and WATCHED, and
+    /// nothing proved it could be driven.
+    func testAPromptIsAnsweredAndTheAnswerComesBack() async throws {
+        let provider = self.provider()
+        let id = try await provider.start(Brief(prompt: ""))
+        print("LIVE opencode session: \(id.prefix(16))")
+
+        let stamp = "tb\(Int(Date().timeIntervalSince1970) % 100000)"
+        let outcome = try await provider.send(
+            "Reply with exactly this token and nothing else: \(stamp)", to: id)
+        print("LIVE opencode send: \(outcome)")
+        XCTAssertEqual(outcome, .accepted)
+
+        var answered = false
+        for attempt in 1...30 where !answered {
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            let turns = (try? await provider.transcript(id)) ?? []
+            answered = turns.contains { $0.role == .agent && $0.text.contains(stamp) }
+            if attempt % 5 == 0 || answered {
+                print("LIVE opencode read-back \(attempt): \(turns.count) turn(s), "
+                    + "answered: \(answered)")
+            }
+        }
+        XCTAssertTrue(answered,
+                      "the agent accepted a prompt and never answered it")
+    }
+
     func testTheProviderBuildsFromTheMachinesOwnConfig() throws {
         let built = LocalOpenCodeProvider()
         XCTAssertNotNil(built, "hq.json has no providers.opencode.base_url")
