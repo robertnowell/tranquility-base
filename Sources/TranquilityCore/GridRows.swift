@@ -255,6 +255,28 @@ public extension GridAssembler {
         }
 
         // BAND 1: sessions with an unanswered turn.
+        //
+        // **An unanswered turn does not keep a dead process lit** (fixed 14 Sep
+        // 2026). This band read `liveById` three times — for the restart
+        // check, for the dialog check, for the name — and never once asked
+        // whether the session was there at all, so a session whose process
+        // ended weeks ago kept the green lamp for as long as the store
+        // remembered its turn. Measured on the real panel: 201 of 223 green
+        // rows had no live process, and five of the twelve rows actually drawn
+        // were sessions that had ended days earlier.
+        //
+        // That was an omission rather than a policy. The 11 Aug ruling already
+        // says a dead agent keeps its row and loses its lamp, and band 4
+        // implements exactly that; this band simply never joined in, because it
+        // was written when a waiting turn implied a waiting process. Under the
+        // three-lamp ruling it is also incoherent: green means "your turn" and
+        // there is nothing to take a turn.
+        //
+        // Guarded on a NON-EMPTY probe, because "the CLI returned nothing"
+        // and "nothing is running" are the same value and only one of them
+        // should grey the whole panel. `smoothedLive` has already absorbed the
+        // transient misses by the time the rows are built.
+        let livenessKnown = !input.liveById.isEmpty
         var rows = input.waiting.map { (event: WaitingSession) -> SessionRow in
             let evidence = event.transcriptPath.flatMap {
                 input.evidence($0, input.boundaries[event.sessionId])
@@ -275,6 +297,10 @@ public extension GridAssembler {
             // terminal.
             let blocked = GridAssembler.blockedOnYou(input.liveById[event.sessionId],
                                                      resumed: resumed)
+            // The process is gone: the turn is still owed and still on the
+            // row, but nothing is standing there to take it. Revive-and-answer
+            // is one tap, which is what `revivable` is for.
+            let gone = livenessKnown && input.liveById[event.sessionId] == nil
             // Green says "you have not answered this". While a reply to this
             // very turn is in flight that is the most misleading thing the grid
             // can say — the cursor does not advance until the send confirms, so
@@ -290,15 +316,19 @@ public extension GridAssembler {
                 // blocked row spends the column on its reason, like every other
                 // amber row on the panel.
                 aux: blocked?.reason ?? SessionRow.shortId(event.sessionId),
-                lamp: blocked?.lamp
+                lamp: gone ? .unlit : (blocked?.lamp
                     ?? (!resumed
                         && (evidence?.activity == .working
                             || input.supersedesWaiting(event.sessionId, event.latestId))
-                        ? .working : .ready),
+                        ? .working : .ready)),
                 // This band is the only one with a real read state: these rows
                 // HAVE a waiting turn. Everywhere else the answer is `.none`,
                 // which rests at the same intensity as `.opened` (16 Aug) — an
                 // idle session is not asking for you either.
+                // A dead session with an owed turn is the single best case for
+                // the revive tap there is: the answer is already written, it
+                // just has nowhere to land yet.
+                revivable: gone,
                 read: event.heard ? .opened : .unread,
                 // The hover carries the whole sentence, as it does on every
                 // other amber row — the column can only hold a clause.

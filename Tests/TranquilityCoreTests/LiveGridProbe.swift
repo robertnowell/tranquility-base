@@ -107,6 +107,7 @@ final class LiveGridProbe: XCTestCase {
         for row in verdict.rows { hist[String(describing: row.lamp), default: 0] += 1 }
         print("LIVE lamps: " + hist.sorted { $0.value > $1.value }
             .map { "\($0.key)=\($0.value)" }.joined(separator: " "))
+        print("LIVE lit rows: \(verdict.rows.filter { $0.lamp.isLit && !$0.switchedOff }.count)")
         let alive = verdict.rows.filter { $0.lamp != .unlit }
         print("LIVE alive rows (lamp on): \(alive.count); of those, "
             + "quiet=\(alive.filter { $0.lamp == .running }.count) "
