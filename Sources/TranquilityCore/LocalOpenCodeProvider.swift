@@ -203,9 +203,19 @@ public struct HTTPTransport: OpenCodeClient.Transport {
     /// requests from localhost: that absence is a configuration, not a fault.
     public let password: String?
     public var session: URLSession
+    /// Why the stream stopped, when it does.
+    ///
+    /// This existed as an empty `catch {}` for exactly one afternoon, and that
+    /// afternoon is the whole argument for the 11 Sep ruling it violated: the
+    /// subscription failed silently against a live server and there was no way
+    /// to find out why without editing the file. A failure worth recording is
+    /// recorded WITH ITS REASON.
+    public var trace: (@Sendable (String) -> Void)?
 
-    public init(base: URL, password: String?, session: URLSession = .shared) {
+    public init(base: URL, password: String?, session: URLSession = .shared,
+                trace: (@Sendable (String) -> Void)? = nil) {
         self.base = base; self.password = password; self.session = session
+        self.trace = trace
     }
 
     private func authorized(_ request: inout URLRequest) {
@@ -231,6 +241,24 @@ public struct HTTPTransport: OpenCodeClient.Transport {
         return ((response as? HTTPURLResponse)?.statusCode ?? 0, data)
     }
 
+    /// One accumulated line, yielded if it carries a payload.
+    ///
+    /// `\r` is stripped because SSE permits CRLF and a trailing carriage
+    /// return would ride into the JSON decoder and fail it for a reason nobody
+    /// would guess from the error.
+    private static func emit(_ buffer: inout [UInt8],
+                             to continuation: AsyncStream<Data>.Continuation) {
+        defer { buffer.removeAll(keepingCapacity: true) }
+        guard !buffer.isEmpty,
+              let line = String(bytes: buffer, encoding: .utf8)?
+                  .trimmingCharacters(in: CharacterSet(charactersIn: "\r")),
+              line.hasPrefix("data:")
+        else { return }
+        let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+        guard !payload.isEmpty else { return }
+        continuation.yield(Data(payload.utf8))
+    }
+
     public func events() -> AsyncStream<Data>? {
         var request = URLRequest(url: base.appendingPathComponent("event"))
         request.setValue("text/event-stream", forHTTPHeaderField: "accept")
@@ -240,6 +268,7 @@ public struct HTTPTransport: OpenCodeClient.Transport {
         request.timeoutInterval = .infinity
         authorized(&request)
         let session = self.session
+        let trace = self.trace
         // Captured as a `let`: a var crossing into a concurrently-executing
         // closure is a data race the compiler is right to refuse.
         let subscription = request
@@ -252,16 +281,46 @@ public struct HTTPTransport: OpenCodeClient.Transport {
                     // Server-sent events: `data: <json>` lines, blank-line
                     // separated. Only the payload matters here; the client
                     // decides what a frame means.
-                    for try await line in bytes.lines {
-                        guard line.hasPrefix("data:") else { continue }
-                        let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                        guard !payload.isEmpty else { continue }
-                        continuation.yield(Data(payload.utf8))
+                    trace?("opencode stream connected")
+                    // LINES SPLIT BY HAND, from the raw byte stream.
+                    //
+                    // `AsyncBytes.lines` looks like exactly the right tool and
+                    // is unusable here. Measured against a live
+                    // `opencode serve` 1.18.30: iterating `bytes` yields the
+                    // first frame in about ten milliseconds, and iterating
+                    // `bytes.lines` on the same request yields NOTHING for
+                    // eight seconds and then reports only the cancellation that
+                    // ended the wait.
+                    //
+                    // It fails in the worst available shape: no error, no
+                    // throw, just silence, which is indistinguishable from a
+                    // server with nothing to say. The stream had connected, the
+                    // status was 200 and the content type was
+                    // `text/event-stream`, and every one of those facts was
+                    // reassuring and irrelevant.
+                    //
+                    // So: accumulate bytes, split on newline, and keep the
+                    // remainder. Server-sent events are newline-delimited by
+                    // definition, so this is the format's own rule rather than
+                    // a workaround for one server.
+                    var buffer: [UInt8] = []
+                    for try await byte in bytes {
+                        guard byte != UInt8(ascii: "\n") else {
+                            Self.emit(&buffer, to: continuation)
+                            continue
+                        }
+                        buffer.append(byte)
+                        // A frame that never ends is a memory leak with good
+                        // manners. 1 MB is far past any real event and far
+                        // short of a problem.
+                        if buffer.count > 1_000_000 { buffer.removeAll(keepingCapacity: true) }
                     }
+                    Self.emit(&buffer, to: continuation)
                 } catch {
-                    // A dropped stream is not a failure to report here. The
-                    // caller's `mine()` is the catch-up, and that is the whole
-                    // reason it stays mandatory for a streaming provider.
+                    // A dropped stream is not fatal: `mine()` is the catch-up,
+                    // and that is the whole reason it stays mandatory for a
+                    // streaming provider. But it is not silent either.
+                    trace?("opencode stream ended: \(error)")
                 }
                 continuation.finish()
             }

@@ -117,9 +117,67 @@ enum AgentProviderConformance {
         // "does it push?" through a computed property that built a stream and
         // discarded it, twice per run.
         guard let stream = p.changes() else { return }
-        var count = 0
-        for await event in stream {
-            count += 1
+
+        // BOUNDED, because a real stream never ends.
+        //
+        // The first version drained it with a bare `for await` and asserted a
+        // count afterwards. Against the stubs that terminated, so it passed and
+        // looked correct. Against a live `opencode serve` it hangs for ever:
+        // the whole point of a subscription is that it stays open. Found by
+        // running it against a real server, which is the only thing that could
+        // have found it.
+        //
+        // So: take a few events or stop after a few seconds, whichever comes
+        // first, and assert on what arrived. A provider that declares a stream
+        // and says nothing in that window is reported, not waited on.
+        // A RACE between the stream and a clock, which is the only shape that
+        // works: a deadline checked inside the loop is no deadline at all on a
+        // quiet stream, because the check never runs.
+        //
+        // **What is asserted is that the stream does not END, not that it
+        // speaks.** The first version demanded events within six seconds and
+        // failed against a live `opencode serve` that was simply idle, which
+        // is a correct thing for a server to be. Requiring output is requiring
+        // the world to be busy, and a conformance suite that only passes on a
+        // busy system is one that fails for the wrong reason at 3am.
+        //
+        // A stream that finishes immediately with nothing IS broken, and that
+        // is what the race distinguishes: if the drain returns before the
+        // clock, the provider closed its own subscription.
+        enum Outcome: Sendable { case drained([AgentEvent]), timedOut }
+        let outcome = await withTaskGroup(of: Outcome.self) { group -> Outcome in
+            group.addTask {
+                var seen: [AgentEvent] = []
+                for await event in stream {
+                    seen.append(event)
+                    if seen.count >= 3 { break }
+                }
+                return .drained(seen)
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                return .timedOut
+            }
+            let first = await group.next() ?? .timedOut
+            group.cancelAll()
+            return first
+        }
+
+        var collected: [AgentEvent] = []
+        switch outcome {
+        case .timedOut:
+            // Quiet, and quiet is allowed.
+            break
+        case .drained(let seen):
+            collected = seen
+            XCTAssertFalse(seen.isEmpty,
+                           "\(p.id): declares a stream and closed it immediately with nothing",
+                           file: file, line: line)
+        }
+
+        // Whatever DID arrive still has to be well formed, which is the part
+        // worth checking on every provider.
+        for event in collected {
             XCTAssertEqual(event.provider, p.id,
                            "\(p.id): an event must name the provider that emitted it",
                            file: file, line: line)
@@ -127,9 +185,6 @@ enum AgentProviderConformance {
                           "\(p.id): event names an unaddressable session \(event.session)",
                           file: file, line: line)
         }
-        XCTAssertGreaterThan(count, 0,
-                             "\(p.id): declares a stream and yielded nothing at all",
-                             file: file, line: line)
     }
 
     /// **`mine()` is mandatory even for a streaming provider**, because it is
