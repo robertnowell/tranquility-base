@@ -86,7 +86,12 @@ final class CapabilityLivenessTests: XCTestCase {
     /// undated, which would have made it the one debt list in this file with no
     /// expiry at all.
     ///
-    /// Seven on 13 Sep. **Four after the first real provider landed** (#402):
+    /// Seven on 13 Sep, four after the first real provider (#402), **three
+    /// once the reply path landed** (#373): `sendWhileWorking` is consulted by
+    /// `RemoteDispatchTransport`, which defers a mid-turn send rather than
+    /// making a round trip that comes back busy.
+    ///
+    /// Original note:
     /// `canStart`, `canSend` and `canAnswer` are now consulted by
     /// `LocalOpenCodeProvider`, and this test is what made that visible rather
     /// than something anyone had to remember to check.
@@ -96,9 +101,6 @@ final class CapabilityLivenessTests: XCTestCase {
         // No abort route in the client's surface yet, and the provider refuses
         // rather than pretending. #368 or a later pass consumes it.
         "canCancel",
-        // Nothing polls or sends often enough yet to care: #370's poller and
-        // #373's reply path are what read these.
-        "sendWhileWorking",
         // #371 reads this when remote rows are filtered to the user's own work.
         "listIsCallerScoped",
         // #374 reads this when the pull request lands in the hub as a receipt.
@@ -233,7 +235,7 @@ final class CapabilityLivenessTests: XCTestCase {
     func testTheDebtListIsExactlyWhatWeKnowAbout() {
         XCTAssertEqual(Self.knownDead.count, 4,
                        "the known-dead list changed size: \(Self.knownDead.keys.sorted())")
-        XCTAssertEqual(Self.pendingUntilTheCheckpoint.count, 4,
+        XCTAssertEqual(Self.pendingUntilTheCheckpoint.count, 3,
                        "every new capability is consumed by the checkpoint work, and this "
                            + "list must reach zero when it lands")
     }
