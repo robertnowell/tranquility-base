@@ -163,17 +163,31 @@ public enum TerminalTabFocus {
 
     /// Raise a window we opened earlier, by Terminal's own id.
     ///
-    /// No tty, no tab walk, no search. Either the id still names a window or
-    /// it does not, and "notfound" is a fact rather than a near-miss — which
-    /// is exactly what the tty match could never say, because a recycled tty
-    /// on a dead tab looks identical to the live one.
+    /// No tty, no tab walk, no search. Either the id still names a usable
+    /// window or it does not, and "notfound" is a fact rather than a
+    /// near-miss — which is exactly what the tty match could never say,
+    /// because a recycled tty on a dead tab looks identical to a live one.
+    ///
+    /// **`exists` alone is not that fact.** Measured against the real
+    /// Terminal, 14 Sep, minutes after #418 shipped: a window that has been
+    /// CLOSED goes on answering `exists window id N` with true, as a zombie
+    /// object reporting `tabs = 0` and `visible = false`. Raising it succeeds
+    /// silently and shows the reader nothing — the same defect #418 existed
+    /// to remove (a predicate that cannot tell a corpse from the real thing),
+    /// reintroduced one layer up in the fix for it.
+    ///
+    /// A window with no tabs has nothing to show, so the tab count is the
+    /// honest test. `visible` separates the two cases too, but would also
+    /// reject a merely minimised window, which is somebody's real terminal.
     static func raiseScript(windowId: Int) -> String {
         """
         tell application "Terminal"
           if (exists window id \(windowId)) then
-            set index of window id \(windowId) to 1
-            activate
-            return "ok"
+            if (count of tabs of window id \(windowId)) > 0 then
+              set index of window id \(windowId) to 1
+              activate
+              return "ok"
+            end if
           end if
           return "notfound"
         end tell
