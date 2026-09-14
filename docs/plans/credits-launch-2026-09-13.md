@@ -1,5 +1,30 @@
 # Credits launch: credited Coordinator built; next is Hub authority
 
+## Central architecture and work-item tracker — 13 September 2026
+
+The current architecture/process diagrams, dependency order, CL-01–CL-12 work
+items and U01–U10 uncertainty/closure checks now live together here:
+https://hq.tranquilitybase.dev/open?session=01a09b8d-c39b-7111-815c-6a09d382b46a&slug=credits-architecture-tracker
+
+Canonical private tracker data: `tranquility-gateway/docs/credits-program.json`;
+maintenance guide: `tranquility-gateway/docs/credits-program.md`. This is a
+private Hub work-item register, not a live GitHub issue board. No external
+publication or new remote repository was performed. The public native repository
+is not an implicit destination for private pricing/service implementation detail.
+
+Use that central register for current work status and dependencies; preserve
+this document's original C0–C6 design and historical evidence underneath.
+CL-02 (shared authorization) is next and unstarted, not blocked on another
+product approval. Local proof, main landing, deployment and release remain
+different statuses.
+
+Fresh main read: `bc344f9` adds #388 first-report presentation and #395 heard-reply
+wording after the tested `8282490` baseline; this mapping turn did not rebase or
+rerun product tests. Live tracker reads confirm #326 is now closed, and #366's
+foundation issues #367/#375/#376/#381/#387 are closed. The current second provider
+track is ACP client #386 and catalog entry #369, superseding the earlier standalone
+OpenCode-adapter plan. Reuse #366/#372 for cloud ingress; do not create another epic.
+
 ## Onboarding alignment — latest user requirement, 13 September 2026
 
 **One “Sign in to Tranquility Base” flow covers the app, Hub and managed
