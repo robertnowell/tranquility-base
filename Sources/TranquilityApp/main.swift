@@ -1815,7 +1815,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // are ever missing you should show the onboarding screen not the
         // grid because the grid won't work."
         Permissions.logEnvironment()
-        if Permissions.allActive {
+        // `stageTwoOwed`: the restart that stage one demands used to end the
+        // onboarding outright, because this line only ever asked macOS. A
+        // process whose permissions are all active can still owe the keys
+        // screen (14 Sep, Gary Marx's first run). See OnboardingWindow.
+        if Permissions.allActive && !OnboardingWindow.stageTwoOwed {
             // Visible proof of life. A menu-bar-only app with a full menu
             // bar is indistinguishable from a broken one; this makes
             // launch observable.

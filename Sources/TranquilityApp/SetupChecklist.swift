@@ -47,6 +47,9 @@ final class SetupChecklistView: NSStackView {
     private var prereqRows: [Prerequisites.Item: NSView] = [:]
     private var prereqStates: [Prerequisites.State] = []
     private var prereqScanInFlight = false
+    /// A scan asked for while one is running. Single-flighting protects the
+    /// timer; it must not drop the one scan that follows a verdict.
+    private var prereqScanQueued = false
     private var prereqNote: [Prerequisites.Item: String] = [:]
 
     init(frame: NSRect, mode: Mode = .onboarding) {
@@ -377,10 +380,18 @@ final class SetupChecklistView: NSStackView {
     /// a key you can only set during first run is a key you cannot rotate.
     private func promptForKey(_ item: Prerequisites.Item) {
         guard let secret = item.secret else { return }
-        KeySheet.prompt(for: secret) { [weak self] status in
+        KeySheet.prompt(for: secret) { [weak self] status, settled in
             guard let self else { return }
             self.prereqNote[item] = status
             self.renderPrerequisites()
+            // The note reads the paste; the lamp reads the scan. Until 14 Sep
+            // nothing re-scanned after a paste, so three rows on a new Mac
+            // said "checked, working" under an amber lamp until the tab was
+            // reopened (Gary Marx's first run: "checked and working but not
+            // green"). A settled verdict is stored state now, so the scan
+            // can read it, and the row it changes drops the note for the
+            // same words in the lamp's own colour.
+            if settled { self.scanPrerequisites() }
         }
     }
 
@@ -391,7 +402,7 @@ final class SetupChecklistView: NSStackView {
     /// seconds. None of that may sit on a 1 Hz timer. Single-flighted, because a
     /// slow scan on a repeating timer must not stack.
     func scanPrerequisites() {
-        guard !prereqScanInFlight else { return }
+        guard !prereqScanInFlight else { prereqScanQueued = true; return }
         prereqScanInFlight = true
         let demo = ProcessInfo.processInfo.environment["TB_PREREQ_DEMO"] != nil
         Task.detached {
@@ -427,6 +438,12 @@ final class SetupChecklistView: NSStackView {
                 : Prerequisites.snapshot()
             await MainActor.run {
                 self.prereqScanInFlight = false
+                defer {
+                    if self.prereqScanQueued {
+                        self.prereqScanQueued = false
+                        self.scanPrerequisites()
+                    }
+                }
                 guard states != self.prereqStates else { return }
                 // A row that changed has superseded whatever its own button last
                 // said, so the transient note goes.

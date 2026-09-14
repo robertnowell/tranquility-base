@@ -31,6 +31,24 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     enum Stage { case permissions, prerequisites }
     private var stage: Stage = .permissions
 
+    /// Stage two, owed across the restart that stage one demands.
+    ///
+    /// On a fresh Mac, Accessibility and Input Monitoring only reach a process
+    /// that started after they were granted, so the only door out of stage one
+    /// is Restart; Next never enables there. Until 14 Sep the restarted process
+    /// saw every permission active and went straight to the grid, and stage
+    /// two (tmux, the hub, the keys) was a screen no new install could reach.
+    /// Gary Marx's first run: a grid with no hub and no keys, and no idea that
+    /// Settings had the same rows. Robert steered him there by voice.
+    ///
+    /// A fact on disk rather than in memory, because the process that owes it
+    /// is never the process that pays it.
+    static var stageTwoOwed: Bool {
+        get { ProductDefaults.shared.bool(forKey: stageTwoOwedKey) }
+        set { ProductDefaults.shared.set(newValue, forKey: stageTwoOwedKey) }
+    }
+    private static let stageTwoOwedKey = "onboarding.stageTwoOwed"
+
     // Stage two.
     private var prereqProgress: NSTextField?
     private var checklist: SetupChecklistView?
@@ -74,6 +92,10 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         // button: a first run you cannot replay is a first run nobody checks.
         if CommandLine.arguments.contains("--show-prerequisites") {
             stage = .prerequisites
+        }
+        if Self.stageTwoOwed {
+            stage = .prerequisites
+            Permissions.log("onboarding: stage two owed from the last restart")
         }
         window.contentView = stage == .permissions
             ? buildContent() : buildPrerequisitesContent()
@@ -134,6 +156,12 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Stage two closes only through its own door (`windowShouldClose`
+        // refuses it otherwise), so a close here is the debt paid.
+        if stage == .prerequisites, Self.stageTwoOwed {
+            Self.stageTwoOwed = false
+            Permissions.log("onboarding: stage two done, no longer owed")
+        }
         refreshTimer?.invalidate()
         refreshTimer = nil
         window = nil
@@ -687,6 +715,9 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     /// process that starts up holding it. The mechanism lives in `AppRelaunch`
     /// now, so the SETUP tab can offer the same door without a second copy.
     @objc private func restartTapped() {
+        // Written BEFORE the relaunch: the next process reads it at launch.
+        Self.stageTwoOwed = true
+        Permissions.log("onboarding: restarting for permissions; stage two owed")
         AppRelaunch.restart(
             reason: "pick up " + Permissions.pendingRestart.map(\.title).joined(separator: ","))
     }
