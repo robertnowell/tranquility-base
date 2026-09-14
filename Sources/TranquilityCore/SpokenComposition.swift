@@ -11,20 +11,27 @@ import Foundation
 /// "also what the user hears if they ask for the rationale" — this is that path.
 public enum SpokenComposition {
 
-    /// The spoken depth-1 line for an announcement, callsign prefix applied
-    /// exactly once via the same mechanical pass the announcement itself uses.
-    /// Pure function over the announcement — no state, no speaking.
-    public static func depthOneSpokenText(
+    /// The WHY rung: the model-written rationale, or nothing.
+    ///
+    /// Until 14 Sep this fell back to reciting goal, risk and question when
+    /// the rationale was null. Written 5 Aug, before the rationale field and
+    /// before GOAL was a rung of its own (19 Aug); by September it spoke the
+    /// goal twice on thirty-eight percent of ladders. Ruled 14 Sep: no
+    /// fallback. If there is no rationale there is no rationale, and the rung
+    /// is skipped like every other empty rung. Padding a rung to avoid silence
+    /// was a gate on a context problem, and the context is now the prompt's
+    /// job.
+    public static func whyRung(
         for announcement: Coordinator.Announcement,
         sanitizer: SpokenTextSanitizer = SpokenTextSanitizer(),
         allowing allowlist: Set<String> = []
-    ) -> SanitizedSpokenText {
-        depthOneSpokenText(
-            brief: announcement.brief,
-            callsign: announcement.hailText,
-            strippingLabels: [announcement.event.projectLabel],
-            sanitizer: sanitizer,
-            allowing: allowlist)
+    ) -> SanitizedSpokenText? {
+        guard let rationale = announcement.brief.rationale, !rationale.isEmpty else { return nil }
+        let sanitized = sanitizer.sanitize(rationale, allowing: allowlist)
+        // No callsign or label prefix on a pull: the pull answers the agent
+        // that just spoke (ruled 05 Aug). Any echo the model wrote is stripped.
+        return sanitizer.strippingLeadingLabels(
+            [announcement.event.projectLabel, announcement.hailText], from: sanitized)
     }
 
     /// Which rung of the ⌃⌃ ladder a pull is — carried alongside the text so
@@ -55,13 +62,11 @@ public enum SpokenComposition {
 
     /// The ⌃⌃ ladder, in the ruled order of the stack: GOAL (which work this
     /// is), FINDINGS (what the work turned up), SOLUTION (the shape of what is
-    /// proposed), then WHY (the rationale — which alone falls back to the card
-    /// fields for pre-rationale rows). Empty rungs are skipped, never padded: a trivial turn's ladder is
-    /// one rung. Every rung is sanitized, spoken in full — a pull is an
+    /// proposed), then WHY (the rationale, when the model wrote one). Empty
+    /// rungs are skipped, never padded: a trivial turn's ladder is one rung. Every rung is sanitized, spoken in full — a pull is an
     /// explicit ask for depth, so no clamp applies — and speaks
     /// without a callsign — the pull answers the agent that just spoke.
-    /// Guaranteed non-empty: the why rung's fallback bottoms out at
-    /// "No further rationale recorded."
+    /// Guaranteed non-empty: MESSAGE is always the last rung.
     public static func ladderRungs(
         for announcement: Coordinator.Announcement,
         sanitizer: SpokenTextSanitizer = SpokenTextSanitizer(),
@@ -88,62 +93,13 @@ public enum SpokenComposition {
         if let solution = rung(announcement.brief.solution) {
             rungs.append(LadderRung(kind: .solution, spoken: solution))
         }
-        rungs.append(LadderRung(kind: .why, spoken: depthOneSpokenText(
-            for: announcement, sanitizer: sanitizer, allowing: allowlist)))
+        if let why = whyRung(for: announcement, sanitizer: sanitizer, allowing: allowlist) {
+            rungs.append(LadderRung(kind: .why, spoken: why))
+        }
         // Already sanitized at announce time — replayed verbatim, never
         // re-clamped, so the rotation's "message" is exactly what was said.
         rungs.append(LadderRung(kind: .message, spoken: announcement.spoken))
         return rungs
     }
 
-    /// Composition order is goal, then risk, then question: the clamp keeps
-    /// leading sentences, and the question was already spoken at announce time
-    /// (it ends the proposal), so it is the first thing sacrificed here.
-    static func depthOneSpokenText(
-        brief: SessionBrief,
-        callsign: String,
-        strippingLabels labels: [String],
-        sanitizer: SpokenTextSanitizer = SpokenTextSanitizer(),
-        allowing allowlist: Set<String> = []
-    ) -> SanitizedSpokenText {
-        // The model-written briefing is the product: "We propose X because Y.
-        // We need to be careful about Z." — written at announce time in the same
-        // call as everything else, so the pull still costs zero calls.
-        if let rationale = brief.rationale, !rationale.isEmpty {
-            let sanitized = sanitizer.sanitize(
-                rationale, allowing: allowlist)
-            // No callsign prefix on depth-1: the pull answers the agent that just
-            // spoke, so naming it again is redundancy, not attribution (ruled
-            // 05 Aug). Any echo the model wrote is still stripped.
-            return sanitizer.strippingLeadingLabels(labels + [callsign], from: sanitized)
-        }
-
-        // Fallback for briefs generated before the rationale field existed: the
-        // card fields spoken as plain clauses. No "The goal is" glue — template
-        // scaffolding read aloud was the original complaint (user report,
-        // 05 Aug); plain content beats labeled content in the ear.
-        var parts: [String] = []
-        if let goal = brief.goal, !goal.isEmpty { parts.append(sentence(goal)) }
-        if let risk = brief.risk, !risk.isEmpty { parts.append(sentence(risk)) }
-        if let question = brief.question, !question.isEmpty { parts.append(sentence(question)) }
-
-        // Null-safe: a floor brief may carry none of the card fields. Say so
-        // rather than going silent — a pull that answers with nothing at all
-        // reads as the gesture being broken.
-        let composed = parts.isEmpty
-            ? "No further rationale recorded."
-            : parts.joined(separator: " ")
-
-        let sanitized = sanitizer.sanitize(
-            composed, allowing: allowlist)
-        return sanitizer.strippingLeadingLabels(labels + [callsign], from: sanitized)
-    }
-
-    /// Card fields are clauses, not sentences. Terminal punctuation makes each
-    /// one a sentence of its own, so the clamp can drop them independently.
-    private static func sentence(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        guard let last = trimmed.last, ".?!".contains(last) else { return trimmed + "." }
-        return trimmed
-    }
 }

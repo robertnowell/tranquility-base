@@ -370,7 +370,7 @@ extension Coordinator {
                 .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
 
         // One agents probe serves both the lexicon's live names and the label
-        // stripping in `strippingModelLabels` — summarizing must not double the
+        // stripping (dropped 14 Sep with the label instruction); summarizing must not double the
         // subprocess cost it already pays. Codex names, from `ownership`, ride
         // along too (26 Aug) — cosmetic on its own (a name capitalized wrong
         // in speech, not a functional break), fixed anyway since a full audit
@@ -412,7 +412,11 @@ extension Coordinator {
             Coordinator.trace?("digit grounding scrubbed ungrounded number(s): "
                 + "event \(event.latestId) session \(event.sessionId.prefix(8))")
         }
-        let composed = strippingModelLabels(summary, for: event, liveSessions: liveSessions)
+        // No label strip on a fresh summary since 14 Sep: the prompt no longer
+        // asks the model to open with the project label, so there is nothing
+        // to strip. (The restore path below keeps its strip, because rows
+        // written before 14 Sep have the label baked into their recap.)
+        let composed = summary
         persistBrief(composed, for: event)
         return composed
     }
@@ -489,7 +493,7 @@ extension Coordinator {
             .speakableTerms(in: event.lastAssistantMessage ?? "")
             .union(lexicon.allowlistTerms)
 
-        // Same strip as a fresh summary (`strippingModelLabels`) and for the
+        // The one label strip left (the fresh-summary one went 14 Sep): for the
         // same reason: a restored brief is the model's words, and the model
         // opens with a label most of the time. It cannot reach the live-session
         // probe from here, so it strips the two labels it has.
@@ -505,59 +509,6 @@ extension Coordinator {
 
     // MARK: - Attribution
 
-    /// The recap starts with the recap. Ruled 18 Aug 2026.
-    ///
-    /// The spoken callsign is dead — the LAST of its jobs, after the grid took
-    /// its column on 12 Aug and the hub page took its byline on 16 Aug ("on a
-    /// page it read as a third identity competing with the two real ones").
-    /// Two measurements ended it, both the operator's:
-    ///
-    ///  - **The project half names nothing.** Attribution by directory assumes
-    ///    sessions are spread across directories and they are not — 23 of 127
-    ///    minted signs begin "promotions", because that is where the work is.
-    ///  - **The voice already says who.** `session_voice` assigns round-robin
-    ///    from a 14-voice roster, and fewer than fourteen sessions are ever
-    ///    live at once, so the voice is a distinct identity per speaker for
-    ///    every case that actually occurs.
-    ///
-    /// And the topic half was indefensible on its own terms. Nothing chose it:
-    /// the model wrote a topic sentence and `candidateTopicWords` took the
-    /// LONGEST word in it, ties broken by position, as a proxy for
-    /// distinctiveness. That is how a session came to be called "promotions
-    /// stlth". The vowel gate added the same morning does not rescue it — it
-    /// admits "b6y9z" and it admits "stealthy", which is wrong in a way no
-    /// filter can see. A name is a context problem, not a validation problem,
-    /// and the mechanism that would fix it (ask the model for a NAME, telling
-    /// it the name is to be said out loud) is not worth building for a name
-    /// with no remaining listener.
-    ///
-    /// What still has to happen is the STRIP. The tuned prompt asks the model
-    /// to open with the project label and it complies 65/71, so without this
-    /// the recap would open with a label-like prefix on most turns — chosen by
-    /// the model, and wrong on the miss (brand-substitution: "Kopi:" from a
-    /// promotions session whose CONTENT was about Kopi). Prepending is what
-    /// stopped; stripping is what the prepending was hiding.
-    ///
-    /// Nothing is deleted to bring it back: `Callsign` still mints on demand,
-    /// `session_callsign` keeps every name it has, and the stored ones still
-    /// seed the recogniser's lexicon and still name a session in the grid
-    /// until its tab has a title. Re-speaking it is this function again.
-    private func strippingModelLabels(
-        _ summary: Summary, for event: WaitingSession, liveSessions: [LiveSession]?
-    ) -> Summary {
-        let liveName = liveSessions?
-            .first(where: { $0.sessionId == event.sessionId })?.name
-        // The session's own stored callsign is stripped along with the labels:
-        // a sign minted before today can still be echoed back by a model that
-        // saw it in the transcript, and hearing the dead name is worse than
-        // hearing it deliberately.
-        let stored = event.callsign ?? ((try? store.callsign(for: event.sessionId)) ?? nil)
-        let labels = [event.projectLabel, liveName, stored].compactMap { $0 }
-        let spoken = summarizer.sanitizer.strippingLeadingLabels(labels, from: summary.spoken)
-        return Summary(spoken: spoken, brief: summary.brief,
-                       provider: summary.provider, latencyMs: summary.latencyMs,
-                       managedReceipt: summary.managedReceipt, managedFailure: summary.managedFailure)
-    }
 
     private func speak(
         _ summary: Summary, for session: WaitingSession,

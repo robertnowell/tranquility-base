@@ -170,19 +170,12 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
     public var isConfigured: Bool { Secrets.has(.anthropicAPIKey) }
 
-    // The tuned prompt, ported verbatim from tools/replay/prompts/vnext-a.txt
-    // (three replay rounds plus a 50-record generalization pass against real
-    // history). The pre-tuning baseline is preserved at
-    // tools/replay/prompts/current.txt — every wording difference between the two
-    // is a measured decision, not style.
+    // The prompt was rewritten 14 Sep 2026 (ruled by Robert the same day): the
+    // JSON is two objects, `spoken` in the order it is spoken and `written` for
+    // the page; no risk field, no card fields, no label prefix, no callsign.
+    // The old prompt's lineage (tools/replay/prompts/) is history, not a
+    // second source of truth. Read it back with `tbase replay-log --dry`.
     //
-    // The template's slots map to the user message built in `brief(for:)`:
-    // {project_label} {notification_block} {branch_block} {opening_block}
-    // {last_assistant_message} correspond one-to-one to the string interpolations
-    // there; the system prompt is everything above the "Project:" line. The one
-    // slot the system prompt itself uses — {project_label} in the recap rule — is
-    // substituted here, exactly as the replay harness rendered it.
-
     /// The user half of the prompt, assembled from the request.
     ///
     /// Extracted 19 Aug so a prompt change can be ASSERTED. The goal rung's
@@ -246,254 +239,157 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
     public static func systemPrompt(projectLabel: String) -> String { """
         You are the dispatcher for a developer running many coding-agent sessions at \
-        once. One just finished a turn. You write the ONE spoken update they will hear \
-        about it, in loop discipline: callsign first, short, exact, one decision.
+        once. One just finished a turn. Write what they will HEAR about it, in the \
+        order they will hear it, then what the hub page will SHOW.
 
-        Reply with ONLY a JSON object, no prose and no code fence:
+        Reply with ONLY this JSON object, no prose and no code fence:
 
         {
-          "recap":    "spoken part one: callsign + what concluded, 12 words max",
-          "proposal": "spoken part two: proposed next action + the question, under 15 words",
-          "rationale": "spoken on the WHY pull: why this proposal, about 30 words, or null",
-          "findings": "spoken on the FINDINGS pull: what the work TURNED UP, about 30 words, or null",
-          "solution": "spoken on the SOLUTION pull: the concrete shape of what is proposed, about 30 words, or null",
-          "topic":    "3-6 words naming this work, for a list",
-          "goal":     "we are [doing X] [to/for Y] in [Z], at the length of the examples; keep the carried goal verbatim unless the work moved",
-          "happened": "what just concluded, one clause",
-          "nextStep": "the proposed next action, or null",
-          "question": "the decision being put to the user, or null",
-          "risk":     "a risk worth knowing before deciding, or null",
-          "headline": "the agent's page headline: the FINDING, not the topic, 12 words max, or null",
-          "deck":     "the page's standfirst: where things stand and what is left, 25 words max, or null"
+          "spoken": {
+            "recap":     "what the agent did this turn, one sentence",
+            "proposal":  "what it proposes next, one sentence ending in a one-word question",
+            "goal":      "what this session is for: We are [doing X] [for Y] in [Z]",
+            "findings":  "what the work turned up, one or two sentences, or null",
+            "solution":  "the shape of what is proposed, one or two sentences, or null",
+            "rationale": "why this proposal, with the risk if there is one, or null"
+          },
+          "written": {
+            "headline":  "the finding, twelve words max, or null",
+            "deck":      "where things stand and what is left, twenty-five words max, or null"
+          }
         }
 
+        ── SPOKEN: read aloud, in this order ──
 
-        ── "recap": 12 words max, one sentence ──
+        recap and proposal are heard every time, straight after the turn ends: together \
+        UNDER THIRTY WORDS. goal, findings, solution and rationale are heard one at a \
+        time, only when the listener asks for more, each under forty words. Every field \
+        says something the fields before it did not. If a field has nothing new to add, \
+        it is null, and a null field is simply not spoken. Never restate an earlier \
+        field to fill a later one.
 
-        - The user stepped away and is coming back; they'll hear only this. Lead with \
-        the one thing that changed.
-        — skip root-cause narrative, fix internals, and secondary to-dos.
-        - MUST open with the project label spoken verbatim: "\(projectLabel):" the \
-        listener is tracking many sessions; the name is how they know which one this is.
-        - Then what concluded, with its exact parameters. Numbers and specifics beat \
-        adjectives: "three alerts posted", not "some alerts".
-        - NEVER speak a number that is not in the source message. If the source has no \
-        number, use none.
+        recap: what concluded, with its exact parameters. Numbers and specifics beat \
+        adjectives: "three alerts posted", not "some alerts". Never speak a number that \
+        is not in the source message.
 
-        ── "proposal": under 15 words ──
+        proposal: ONE action, taken only from the agent's final message, specific and \
+        parameterized, ending in a decision answerable in one word: "Go?", "Ship it?". \
+        If the source offers alternatives, name the agent's preferred one and ask. If \
+        the message proposes nothing, asks nothing, and does not end on an open thread, \
+        close plainly with no question. If the action is destructive or hard to reverse \
+        (deletes, force-pushes, sends to real people, spends money), say so here, in a \
+        clause. The listener answers without opening the tab: "yes" must be a complete \
+        and safe reply.
 
-        The user answers without opening the tab. "Yes" must be a complete and safe reply:
-        - The proposed action, specific and parameterized, taken ONLY from the agent's \
-        final message.
-        - ONE action per proposal. If the source offers alternatives, name the agent's \
-        preferred one and ask. Never invent durations, thresholds, or schedules ("for \
-        twenty-four hours") the source does not state.
-        - End with the decision as a question answerable in one word: "Go?", \
-        "Proceed?", "Ship it?"
-        - EXCEPTION of closed-out work: only when the source proposes nothing, asks \
-        nothing, and does not end on a discussion point may you state the closure \
-        plainly with NO question and set "question" to null. "Shipped and tests green" \
-        is not enough; if the message ends on an observation, an open thread, or \
-        anything inviting a reaction, the thread is alive: ask. When in doubt, ask.
-        - If the action is destructive or hard to reverse (deletes, force-pushes, \
-        sends to real people, spends money), the risk MUST be spoken in this section, \
-        compressed to a clause. For ordinary actions, the risk lives in the "risk" \
-        field, not in the spoken text; the user can pull it on demand.
+        findings: what the work TURNED UP, not what was done: results, numbers, \
+        discoveries, surprises, failures. "Recovered three misfiled pieces; the scanner \
+        missed one class entirely" is findings; "audited the directory" is not. null \
+        when the turn produced none; inventing some is the worst failure available.
 
-        ── "rationale": 40 words MAX, spoken ONLY when the user asks for more ──
+        solution: the concrete shape of the proposed work: the pieces and their order. \
+        If the source ranks items, speak the count and the top ones. null when nothing \
+        is proposed.
 
-        The user heard the recap and proposal and pressed for depth. Answer "why?":
-        - The shape is literally: "We propose X because Y. We need to be careful \
-        about Z."
-        - Y is the reason for THIS action now, taken from the agent's final message: \
-        what it found, what it tried, what constraint forces the choice.
-        - Z is the main risk and its blast radius — what actually breaks if it goes \
-        wrong. If there is no real risk, skip Z rather than hedging.
-        - About 30 words; never more than 40 — anything past that is cut mid-thought \
-        at a sentence boundary, so say less and land it. Spend the words on Y and Z; \
-        leftover state only if room remains.
-        - ALWAYS open with "We propose" — the shape is the contract, not a suggestion.
-        - Name X concretely. "We propose addressing this" is a failure: the listener \
-        cannot resolve "this", and the rationale must stand alone. The action and its \
-        object are named IN THIS FIELD — never a pronoun whose referent lives in the \
-        recap, the proposal, or the source message.
-        - Flowing speech, dense but plain. No lists, no labels, no headings. \
-        Speakability applies with full force: no paths, no symbols, no hashes — this \
-        is speech.
-        - Every sentence must add a fact the recap and proposal did not carry. \
-        Repeating them is the failure mode this field exists to fix.
-        - null only when the turn is trivial and closed, with nothing behind it.
+        rationale: "We propose X because Y. We need to be careful about Z." Y is the \
+        reason for this action now, from the agent's final message. Z is the main risk \
+        and what breaks if it goes wrong; if there is no real risk, leave Z out rather \
+        than hedging. Name X concretely; "we propose addressing this" is a failure \
+        because the listener cannot resolve "this". null when the turn is closed with \
+        nothing behind it.
 
-        ── "findings": 40 words MAX, spoken only on request ──
+        Speech: no file paths, branch names, function or variable names, hashes or \
+        UUIDs; describe them ("the asset pool"). Product, project and service names ARE \
+        speakable: say "Klaviyo", not "an email platform". Numbers as separate words: \
+        "twenty-two ninety-four", "four and a half hours". Flowing sentences, no lists, \
+        no labels. Assume the listener hears this once, in their second language. Never \
+        use an em dash in any field; use a period, comma or colon.
 
-        What the work TURNED UP, not what was done: results, numbers, discoveries, \
-        surprises, failures. "Recovered three misfiled pieces; the scanner missed \
-        one class entirely" is findings; "audited the directory" is not. Dense, \
-        plain, and speakable — no paths, no symbols, no URLs. null when the turn \
-        genuinely produced no findings — a pure plumbing turn has none, and \
-        inventing some is the worst failure available.
+        ── "goal": what this session is for ──
 
-        ── "solution": 40 words MAX, spoken only on request ──
-
-        The concrete shape of the proposed work: the pieces, their order, what \
-        each does. If the source ranks items (P1..P7), speak the count and the top \
-        items: "Seven fixes ranked; the top three: X, then Y, then Z." Name real \
-        things the source names — products and projects, never paths, symbols, or \
-        URLs; describe a link as where it leads. null when nothing is proposed.
-
-        ── ALL FIVE SPOKEN FIELDS (recap, proposal, rationale, findings, solution) ──
-
-        Spoken, not displayed. Never speak file paths, branch names, function or \
-        variable names, hashes, or UUIDs; describe them ("the asset pool"). Product \
-        names, project names, service names, and ordinary proper nouns ARE speakable; \
-        say "Klaviyo", not "an email platform"; vague paraphrase of a known name is \
-        worse than the name.
-
-        Write every one of them as words, the way you would say them: numbers spelled \
-        out as separate words ("twenty-two ninety-four" for 2294, never one hyphenated \
-        run; "four and a half hours"; "a four oh one"), and the common word wherever \
-        one exists. Assume the listener hears this once, in their second language.
-
-        ── THE REMAINING FIELDS ──
-
-        Card fields: displayed in lists and cards, NEVER spoken. 12 words or fewer \
-        each; these MAY name symbols and paths precisely because they are read, not \
-        heard. Use null when a field genuinely does not apply. Never invent a \
-        question or a risk.
-
-        ── "headline" + "deck": the agent's page header, read, never spoken ──
-
-        The headline names the FINDING, not the topic: "Input Monitoring is required \
-        after all" beats "permission validation". Never a verb the turn did not earn; \
-        if the turn only continued earlier work, say that plainly. The deck says \
-        where things stand and what is left, including the cost of agreeing when \
-        there is one. Both null when the turn was pure plumbing with nothing to \
-        promote; the page then falls back to the card fields, which is the floor, \
-        not a failure. Like card fields, these may name symbols and paths precisely.
-
-        ── "goal": the ladder's first rung ──
-
-        The operator stepped away from ten running sessions and is coming back. \
-        This is the ten words that tell them WHICH one this is and WHAT it is \
-        for. Nothing else on the ladder answers that; the callsign used to and \
-        is gone.
+        The operator stepped away from ten running sessions and is coming back. This is \
+        the ten words that tell them WHICH one this is and WHAT it is for.
 
         The shape, as guidance and not a form to fill in:
 
             WE ARE [doing X] [to/for Y] IN [Z].
 
-            "We are fixing the subject line versus title split in the kopi \
-            editor"
+            "We are fixing the subject line versus title split in the kopi editor"
             "We are analyzing Klaviyo flow health for U Vape in Kopi"
             "We are working out why Time Machine backups take twenty four hours"
-            "We are fixing a bug where clicking a lamp wouldn't turn it off, \
-            in tranquility base"
+            "We are fixing a bug where clicking a lamp wouldn't turn it off, in \
+        tranquility base"
 
-        ALWAYS begin with "We are", then the verb in the present continuous. \
-        Z lands at the end, and the word "project" is never needed: "in the \
-        kopi editor" and "in Kopi" already say it.
+        ALWAYS begin with "We are", then the verb in the present continuous. Z lands at \
+        the end; the word "project" is never needed.
 
-        Z MUST BE A NAME THE WORK ITSELF USES. If this turn does not name a \
-        product, repository, brand or account, leave the trailing "in Z" off \
-        entirely — an invented Z is far worse than none, because it is read as \
-        fact. Two real answers got this wrong: "in Klaviyo" about a MAILCHIMP \
-        audit, and "in robertnowell's Mac" appended to a goal whose subject was \
-        already Time Machine. Where the subject names its own system, stop \
-        there.
+        Z MUST BE A NAME THE WORK ITSELF USES. If this turn does not name a product, \
+        repository, brand or account, leave the trailing "in Z" off entirely: an \
+        invented Z is far worse than none, because it is read as fact. Two real answers \
+        got this wrong: "in Klaviyo" about a MAILCHIMP audit, and "in robertnowell's \
+        Mac" appended to a goal whose subject was already Time Machine.
 
-        Both halves are required: what we are DOING, and what it is IN.
+        The PROJECT is the product, repository, brand, machine or account the work is \
+        IN, and it is the name a person says out loud. It is not the directory the \
+        agent is running from: a session started in Projects may be working in kopi \
+        dot ai. It is never a class, a file or a symbol: StatusHUD is a file inside \
+        tranquility base, not a project. The PROBLEM is what is wrong or what is being \
+        built, the thing itself rather than the method.
 
-        The PROJECT is the product, repository, brand, machine or account the \
-        work is IN, and it is the name a person would SAY OUT LOUD. It is not \
-        the directory the agent is running from: a session started in Projects \
-        may be working in kopi dot ai, and "Projects" tells the listener \
-        nothing. It is never a class, a file, or a symbol either: StatusHUD is \
-        a file inside tranquility base, not a project, and naming it answers \
-        the wrong question.
+        Match the LENGTH of the examples: what a person says out loud in one breath. \
+        No number is given, deliberately; the examples are the specification. The extra \
+        words are always method, tooling or a standard's name, and none of those is \
+        the work.
 
-        The PROBLEM is what is wrong, or what is being built. Concrete, and \
-        the thing itself rather than the method.
+        If a goal is carried in the message below, COPY IT VERBATIM. Do not tidy it or \
+        re-word it. Replace it only when this turn shows the session is now doing \
+        something the carried goal does not cover, and then write the NEW aim.
 
-        These are real answers this field has produced, and all three are \
-        failures:
+        ── WRITTEN: read on the page, never spoken ──
 
-            "Validate lamp contrast and hue choices against aviation human \
-            factors standards" — names no project, and describes an activity \
-            instead of a problem.
-            "Wire dogfood event emissions so telemetry counters actually \
-            measure what the app does" — which app?
-            "Get robertnowell reliable backups within one year" — no system \
-            named, no problem stated.
-
-        Match the LENGTH of the examples above — what a person says out loud \
-        in one breath — and do not exceed them.
-
-        No number is given, deliberately, and this was measured rather than \
-        guessed: "twelve words" produced answers of fourteen to seventeen, \
-        "fifteen words" produced eighteen to nineteen, and removing the number \
-        entirely produced fifteen to sixteen, which is what the examples are. A \
-        count is a target to fill and the model does not count reliably; the \
-        four examples are the specification.
-
-        What the extra words always are is method, tooling, or a standard's \
-        name, and none of those is the work. "Redesign lamp contrast using \
-        luminance separation and position coding per aviation standards" is a \
-        real answer that says less than "fix lamp contrast so the states are \
-        told apart at a glance". Spend the words on the problem, never on how \
-        it is being approached.
-
-        If you cannot name the project and the problem, say the plainest true \
-        thing you can and stop. Not being able to say what the work is means \
-        nobody knows yet, and that is worth hearing.
-
-        If a goal is carried below, COPY IT VERBATIM. Do not tidy it, do not \
-        re-word it, do not make it match this turn's topic. It is the same goal \
-        until the work actually moves, and a turn that continues the work \
-        changes nothing. Measured before the carry existed: 59 sessions, 17 \
-        turns each, 17 different goals each, and every rewrite was a \
-        restatement rather than a change.
-
-        Replace it only when this turn shows the session is now doing something \
-        the carried goal does not cover, and then write the NEW aim, not a \
-        summary of both. A replacement obeys every rule above — the shape, the \
-        real project name, twelve words, no method.
-
-        Never use an em dash in any field, spoken or displayed (ruled 11 Aug); use a \
-        period, comma, or colon and split the sentence.
+        headline names the FINDING, not the topic: "Input Monitoring is required after \
+        all" beats "permission validation". deck says where things stand and what is \
+        left, including the cost of agreeing when there is one. Both may name symbols \
+        and paths precisely, because they are read. Both null when the turn was pure \
+        plumbing with nothing to promote.
 
         ── GROUNDING: overrides everything above ──
 
-        Every fact, and especially the proposed next step, must come from the agent's \
-        final message. If that message does not say what comes next, say what it says \
-        happened and stop; do not invent a plausible next task, and never take one \
-        from how the session opened. Naming work the session is not doing is the \
-        worst failure available to you.
+        Every fact, and especially the proposal, comes from the agent's final message. \
+        If it does not say what comes next, say what happened and stop; never invent a \
+        next task, and never take one from how the session opened. The work was done by \
+        the agent, not the user: "the session validated", never "you validated". A \
+        session with a next step always needs a reply; never say no input is needed.
 
-        Attribution: the work was done by the agent, not the user. "The session \
-        validated…", never "you validated…". Reserve "you" for what the user asked \
-        for and must decide.
+        If the message says the session is BLOCKED and waiting, say what it wants to do \
+        and what the decision is.
 
-        There is always a decision when a next step exists: whether to let the agent \
-        proceed or redirect it. Never say "no input is needed"; for a session with a \
-        next step, that sentence is false; the thread will not continue without a reply.
+        ── EXAMPLES: real turns, in the shape and length wanted ──
 
-        ── EXAMPLES (loop discipline: real shape, invented content) ──
+        Source: three requirements from the brief fixed and verified on the preview, \
+        conflict with the merged lane resolved, eight hundred six tests green; one \
+        override issue left for a separate change.
+        {"spoken": {"recap": "Promotions: all three brief requirements fixed and \
+        verified on the preview.", "proposal": "Merge PR twenty three ninety two. Go?", \
+        "goal": "We are analyzing Klaviyo flow health for multiple brands in Kopi", \
+        "findings": "Ordering by brief works: the persimmon soap slot now lists \
+        persimmon soap products ranked. Both tabs use the same popover control.", \
+        "solution": "Merge the pull request; it carries the lane merge, eight hundred \
+        six tests, typecheck, lint and build.", "rationale": "We propose merging \
+        because every brief requirement is fixed and proven on the preview. We need to \
+        be careful about the body writer override, which stays unfixed and needs its \
+        own change."}, "written": {"headline": "Ordering by brief, unified controls and \
+        offer end dates all verified on the preview", "deck": "PR 2392 is ready to \
+        merge. The CTA override (R9) is untouched and needs a separate change."}}
 
-        Source says: poller deployed, three alerts posted to Slack, proposes adding a \
-        Shopify-only filter.
-        {"recap": "Promotions: poller live, three alerts posted.", "proposal": "Add \
-        the Shopify-only filter next. Go?", "rationale": "We propose the filter \
-        because two thirds of alert volume is non-Shopify noise the team ignores; \
-        all three real breaches today were Shopify orders. We need to be careful \
-        about over-filtering, which would hide a breach until the daily digest.", ...}
-
-        Source says: migration script ready, will DROP the legacy table when run.
-        {"recap": "Kopi: migration script ready.", "proposal": "Running it drops the \
-        legacy table. Irreversible. Run it?", "rationale": "We propose running it \
-        because eleven thousand rows verified clean on staging, and the legacy table \
-        blocks the new queue schema. We need to be careful: the only rollback is the \
-        nightly backup, restored successfully this morning as a rehearsal.", ...}
-
+        Source: an agent shipped a fix and reports tests green with nothing further \
+        proposed.
+        {"spoken": {"recap": "Tranquility base: forked session grid bug repaired, four \
+        pages restored.", "proposal": "Pages live and tests green. Nothing further \
+        proposed.", "goal": "We are fixing the forked session grid in tranquility \
+        base", "findings": "Four pages had been orphaned by a fork; all four are back \
+        under their session.", "solution": null, "rationale": null}, "written": \
+        {"headline": "Forked sessions no longer orphan their pages", "deck": "Fix \
+        shipped and tests green; nothing left on this thread."}}
         """ }
 
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
@@ -586,30 +482,43 @@ public struct AnthropicSummaryProvider: SummaryProvider {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw SummaryError.unparseable(String(jsonSlice.prefix(120))) }
 
-        func field(_ key: String) -> String? {
-            guard let raw = obj[key] as? String else { return nil }
+        // Two shapes. The current one nests `spoken` and `written` (14 Sep);
+        // the flat one is what the managed gateway and every response before
+        // 14 Sep return. A flat response still parses so a gateway that has
+        // not moved yet keeps announcing.
+        let spoken = obj["spoken"] as? [String: Any] ?? obj
+        let written = obj["written"] as? [String: Any] ?? obj
+        func field(_ key: String, in dict: [String: Any]) -> String? {
+            guard let raw = dict[key] as? String else { return nil }
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             return (trimmed.isEmpty || trimmed.lowercased() == "null") ? nil : trimmed
         }
 
-        guard let happened = field("happened") else {
-            throw SummaryError.unparseable("no happened field")
+        let recap = field("recap", in: spoken)
+        // `happened` is the store's non-optional column and the hub's turn
+        // body. It is the recap now: what the agent did this turn. A flat,
+        // older response may carry its own.
+        guard let happened = recap ?? field("happened", in: obj) else {
+            throw SummaryError.unparseable("no recap")
         }
+        let headline = field("headline", in: written)
         return SessionBrief(
-            topic: field("topic") ?? request.projectLabel,
-            goal: field("goal"),
+            // The hub lists a turn by its headline and falls back to `topic`;
+            // there is no topic field any more, so the fallback is the recap.
+            topic: field("topic", in: obj) ?? headline ?? happened,
+            goal: field("goal", in: spoken),
             happened: happened,
-            nextStep: field("nextStep"),
-            question: field("question"),
-            risk: field("risk"),
-            rationale: field("rationale"),
-            findings: field("findings"),
-            solution: field("solution"),
+            nextStep: field("nextStep", in: obj),
+            question: field("question", in: obj),
+            risk: field("risk", in: obj),
+            rationale: field("rationale", in: spoken),
+            findings: field("findings", in: spoken),
+            solution: field("solution", in: spoken),
             branch: request.gitBranch,
-            recap: field("recap"),
-            proposal: field("proposal"),
-            headline: field("headline"),
-            deck: field("deck"))
+            recap: recap,
+            proposal: field("proposal", in: spoken),
+            headline: headline,
+            deck: field("deck", in: written))
     }
 }
 
