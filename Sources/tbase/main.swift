@@ -1397,6 +1397,10 @@ case "reconcile":
         if let i = args.firstIndex(of: "--seed"), i + 1 < args.count { seed = UInt64(args[i + 1]) ?? 7 }
         var since = "2026-09-07"
         if let i = args.firstIndex(of: "--since"), i + 1 < args.count { since = args[i + 1] }
+        // --dry: compile the prompts for the picked turns and print them, no
+        // model call. The point of the command is to READ what the model
+        // receives; that should not cost ten calls.
+        let dry = args.contains("--dry")
         guard let raw = try? String(contentsOf: ModelCallLog.url, encoding: .utf8) else {
             print("no model-call log at \(ModelCallLog.url.path)"); break
         }
@@ -1414,8 +1418,17 @@ case "reconcile":
             else { continue }
             pool.append(LoggedCall(at: at, user: user, system: system, response: response))
         }
-        var rng = SeededGenerator(seed: seed)
-        let picked = Array(pool.shuffled(using: &rng).prefix(n))
+        // --at T1,T2,...: exactly these calls, by their log timestamp, in
+        // that order. A seeded shuffle over a pool that keeps growing picks
+        // different turns tomorrow; a list of timestamps picks the same ones.
+        var picked: [LoggedCall]
+        if let i = args.firstIndex(of: "--at"), i + 1 < args.count {
+            let wanted = args[i + 1].split(separator: ",").map(String.init)
+            picked = wanted.compactMap { at in pool.first { $0.at == at } }
+        } else {
+            var rng = SeededGenerator(seed: seed)
+            picked = Array(pool.shuffled(using: &rng).prefix(n))
+        }
         FileHandle.standardError.write(Data("pool \(pool.count) calls since \(since); replaying \(picked.count), seed \(seed)\n".utf8))
         let provider = AnthropicSummaryProvider()
         let encoder = JSONEncoder()
@@ -1435,7 +1448,10 @@ case "reconcile":
             let historicalText = call.responseText
             let historical = try? AnthropicSummaryProvider.parse(historicalText, request: request)
             var fresh: [String: Any] = [:]
-            do {
+            if dry {
+                fresh = ["skipped": true]
+            } else {
+                do {
                 let completion = try await provider.complete(system: system, user: call.user, log: false)
                 let brief = try? AnthropicSummaryProvider.parse(completion.text, request: request)
                 fresh = ["text": completion.text, "brief": dict(brief), "elapsedMs": completion.elapsedMs]
@@ -1444,9 +1460,12 @@ case "reconcile":
                 fresh = ["error": "\(error)"]
                 FileHandle.standardError.write(Data("\(i + 1)/\(picked.count) \(label) FAILED \(error)\n".utf8))
             }
+            }
             out.append([
                 "index": i + 1, "at": call.at, "projectLabel": label,
                 "user": call.user,
+                "system": system,
+                "historicalSystem": call.system,
                 "historicalSystemChanged": call.system != system,
                 "historical": ["text": historicalText, "brief": dict(historical)],
                 "fresh": fresh,
