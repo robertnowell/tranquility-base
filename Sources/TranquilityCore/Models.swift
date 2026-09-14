@@ -196,6 +196,14 @@ public enum TranscriptFinality: String, Codable, DatabaseValueConvertible, Senda
 public enum TransportKind: String, Codable, DatabaseValueConvertible, Sendable {
     case terminalApp = "terminal_app"
     case tmux
+    /// An agent somewhere else, answered through its provider's API rather
+    /// than by typing into a pane.
+    ///
+    /// A THIRD TRANSPORT, not a third kind of agent. The distinction is the
+    /// 14 Sep ruling: the user picks an agent, and how the words get there is
+    /// ours to carry. This enum is where "how" legitimately lives, because it
+    /// is the transport's own name for itself.
+    case remote
 }
 
 public struct Utterance: Codable, FetchableRecord, PersistableRecord, Identifiable, Sendable {

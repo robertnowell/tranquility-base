@@ -572,6 +572,14 @@ public struct TmuxTransport: DispatchTransport {
         guard let pane = target.pane, paneExists(pane) else { return .targetGone }
 
         switch target.readinessSource {
+        case .provider:
+            // A remote agent has no pane, so it never reaches this transport:
+            // `Coordinator` selects a transport by `DispatchTarget.kind`, and
+            // the two guards above have already refused anything without a
+            // live pid and pane. Listed rather than defaulted so that adding
+            // a fourth source is a compile error here, which is how this
+            // switch has stayed honest.
+            return .targetGone
         case .processAlive:
             return .ready
         case .claudeAgents:

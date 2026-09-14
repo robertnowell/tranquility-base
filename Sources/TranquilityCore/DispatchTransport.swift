@@ -20,6 +20,10 @@ public struct DispatchTarget: Sendable, Equatable {
         /// from the rollout alone) — `.targetGone` fires first; this case is
         /// only reached once the process is confirmed alive.
         case rolloutTail
+        /// A remote agent: its PROVIDER states what it is doing, first-hand,
+        /// which is better evidence than any witness this Mac could gather.
+        /// There is no process to check and no file to tail.
+        case provider
     }
 
     public var kind: TransportKind
