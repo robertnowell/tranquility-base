@@ -234,9 +234,21 @@ public enum Prerequisites {
     /// harness exists and the row the test asked for was simply not there. A
     /// test that only passes on the developer's Mac is the same defect as the
     /// path that only breaks off it, which is what this whole branch is about.
+    /// **`providers` defaults to NONE CONFIGURED, not to reading the disk**, and
+    /// that asymmetry with `harnesses` is deliberate. It was the other way on
+    /// 13 Sep and it broke the suite the moment a provider was configured on a
+    /// real machine: `snapshot` builds rows from `Probes.providers`, which
+    /// correctly defaults to empty, while this defaulted to the live
+    /// `hq.json`, so the two disagreed about how many rows exist and every
+    /// test that looked a row up in the snapshot crashed on a nil.
+    ///
+    /// CI could never have caught it. CI has no `~/.claude/hq.json` with a
+    /// provider in it, so the two defaults agreed there and disagreed only on
+    /// the one machine that had finished the setup this code exists to
+    /// support. Use `live()` where the real answer is wanted.
     public static func items(
         harnesses: [String] = HookManifest.detected().map(\.id),
-        providers: [String] = ProviderConfig.configured()
+        providers: [String] = []
     ) -> [Item] {
         [.tmux]
             + harnesses.map { Item.hooks(harness: $0) }
@@ -255,6 +267,18 @@ public enum Prerequisites {
             // mapping lives, so this cannot drift from what the sheet can open.
             + providers.filter { Secrets.credential(forProvider: $0) != nil }
                 .map { Item.provider(id: $0) }
+    }
+
+    /// The rows THIS machine has, asking the machine.
+    ///
+    /// One accessor rather than a parameter every call site has to remember,
+    /// for the reason `GridAssembler.tabDisplayName` records at length: a
+    /// parameter is a thing a call site can forget, and the forgetting is
+    /// invisible. Three places render or count these rows, and a provider row
+    /// missing from one of them is a checklist that disagrees with itself.
+    public static func live() -> [Item] {
+        items(harnesses: HookManifest.detected().map(\.id),
+              providers: ProviderConfig.configured())
     }
 
     public struct State: Sendable, Equatable {

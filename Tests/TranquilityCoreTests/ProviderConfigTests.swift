@@ -135,6 +135,28 @@ final class ProviderConfigTests: XCTestCase {
         }
     }
 
+    /// The rows a caller gets by default must not depend on what is on this
+    /// machine's disk. They did, until 13 Sep: `items()` defaulted `providers`
+    /// to the live `hq.json` while `snapshot` defaulted its probe to empty, so
+    /// the two disagreed about how many rows exist the moment a provider was
+    /// actually configured, and every test looking a row up in the snapshot
+    /// crashed on a nil.
+    ///
+    /// CI could not have caught it. CI has no configured provider, so the two
+    /// defaults agreed there and diverged only on a machine that had finished
+    /// the very setup this code exists to support.
+    func testTheDefaultRowSetDoesNotDependOnThisMachinesDisk() {
+        let byDefault = Prerequisites.items(harnesses: []).map(\.id)
+        XCTAssertFalse(byDefault.contains { $0.hasPrefix("provider.") },
+                       "items() read the real hq.json: \(byDefault)")
+        XCTAssertEqual(
+            byDefault,
+            Prerequisites.snapshot(Prerequisites.Probes(
+                tmuxPath: { nil }, hooksProblem: { _ in nil },
+                hasSecret: { _ in false }, harnesses: { [] })).map(\.item.id),
+            "items() and snapshot() must agree about which rows exist")
+    }
+
     func testAProviderRowAppearsOnlyOnceTheMachineHasAnAddressForIt() {
         XCTAssertFalse(Prerequisites.items(harnesses: [], providers: [])
             .contains { $0.id == "provider.crobot" })
