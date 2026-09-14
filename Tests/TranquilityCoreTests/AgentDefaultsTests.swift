@@ -11,16 +11,60 @@ final class AgentDefaultsTests: XCTestCase {
     private let claude = ClaudeCodeAdapter().id
     private let codex = CodexAdapter().id
 
+    private var savedRoot: URL?
+    private var scratch: URL!
+
     override func setUp() {
         super.setUp()
         savedURL = AgentDefaults.fileURL
         AgentDefaults.fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-defaults-\(UUID().uuidString).json")
+        // The fallback directory is a sibling of the agents root; point the
+        // root at scratch so the test makes its workspace there, not beside
+        // the real ~/Documents/agents.
+        savedRoot = HomeBase.rootOverride
+        scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-defaults-root-\(UUID().uuidString)", isDirectory: true)
+        HomeBase.rootOverride = scratch.appendingPathComponent("agents", isDirectory: true)
     }
 
     override func tearDown() {
         AgentDefaults.fileURL = savedURL
+        HomeBase.rootOverride = savedRoot
+        try? FileManager.default.removeItem(at: scratch)
         super.tearDown()
+    }
+
+    // MARK: - Where an agent starts
+
+    /// 14 Sep 2026, a new Mac: agents started in `~` and every glance at
+    /// Desktop, Downloads or Documents was another permission dialog. The
+    /// fallback is a workspace beside the agents folder, made on first use,
+    /// and never home.
+    func testTheFallbackDirectoryIsAWorkspaceBesideTheAgentsFolder() {
+        let expected = scratch.appendingPathComponent("workspace").path
+        XCTAssertFalse(FileManager.default.fileExists(atPath: expected))
+        XCTAssertEqual(AgentDefaults.fallbackDirectory, expected)
+        var isDir: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: expected, isDirectory: &isDir))
+        XCTAssertTrue(isDir.boolValue)
+        XCTAssertNotEqual(AgentDefaults.fallbackDirectory, NSHomeDirectory())
+        // Beside the pages, not among them: the hub mirrors the agents root.
+        XCTAssertFalse(expected.hasPrefix(HomeBase.root.path))
+    }
+
+    /// Nothing configured, and a typo'd setting, both land in the workspace.
+    func testAnUnsetOrMissingDirectoryLandsInTheWorkspace() {
+        let workspace = scratch.appendingPathComponent("workspace").path
+        XCTAssertEqual(AgentDefaults.directory(for: claude), workspace)
+        AgentDefaults.save(directory: scratch.appendingPathComponent("not-there").path, for: claude)
+        XCTAssertEqual(AgentDefaults.directory(for: claude), workspace)
+    }
+
+    /// The card's label is the directory's last path component, so the word
+    /// a new agent wears is the folder's name.
+    func testTheWorkspaceIsNamedForWhatItIs() {
+        XCTAssertEqual((AgentDefaults.fallbackDirectory as NSString).lastPathComponent, "workspace")
     }
 
     func testMissingFileFallsBackPerHarness() {

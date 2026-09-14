@@ -176,12 +176,14 @@ public enum DeepLink {
         }
 
         /// Where a session about it should start. A hosted page belongs to no
-        /// directory here, so it opens at home rather than wherever the app
-        /// happened to be launched from.
+        /// directory here, so it opens where a new agent opens: the workspace
+        /// (`AgentDefaults.fallbackDirectory`). It was home until 14 Sep 2026,
+        /// the same home that met a new Mac with a cascade of permission
+        /// dialogs; the same ruling covers both doors.
         public var directory: String {
             switch self {
             case .file(let path): return (path as NSString).deletingLastPathComponent
-            case .page: return NSHomeDirectory()
+            case .page: return AgentDefaults.fallbackDirectory
             }
         }
 

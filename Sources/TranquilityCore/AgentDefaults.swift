@@ -104,16 +104,47 @@ public enum AgentDefaults {
     }
 
     /// Where a new agent starts when you have not said otherwise, for a given
-    /// harness. The home directory, as it always was — ruled 15 Aug that this
-    /// becomes a setting alongside the command, global for now: "we could
-    /// just make that a global setting for now and see if we need more
-    /// granular later." (Per-harness as of 25 Aug is exactly the "more
-    /// granular later.")
+    /// harness. Ruled 15 Aug that this becomes a setting alongside the
+    /// command, global for now: "we could just make that a global setting for
+    /// now and see if we need more granular later." (Per-harness as of 25 Aug
+    /// is exactly the "more granular later.")
+    ///
+    /// Until 14 Sep 2026 the fallback was the home directory, and on a new
+    /// Mac that day it produced a cascade of permission prompts: an agent
+    /// started in `~` looks around, and every glance at Desktop, Downloads or
+    /// Documents is a separate macOS dialog for the terminal, on top of the
+    /// harness's own "trust this folder?" for the whole home. Ruled the same
+    /// day: "the root is not the answer." The fallback is now a workspace
+    /// beside the agents folder, `~/Documents/workspace` by default, made on
+    /// first use. Beside, not inside: agents build things where they start,
+    /// and the agents folder is the hub's source of pages, mirrored and
+    /// indexed, so a build tree in there would be a page nobody wrote. One
+    /// folder for every agent rather than one each, on purpose: a folder is
+    /// a harness project, with its own trust prompt and its own history, and
+    /// one prompt answered once is the whole point. The terminal already
+    /// needs Documents for the pages agents write, so this adds no dialog.
+    ///
+    /// Home only if the workspace cannot be made, which is not a case anyone
+    /// has seen: a Documents the app cannot write to could not hold the hub
+    /// either.
     ///
     /// A REVIVED agent ignores this entirely and uses the directory its own
     /// transcript records, because resuming a conversation somewhere it never
     /// ran is not the same session in any sense that matters.
-    public static var fallbackDirectory: String { NSHomeDirectory() }
+    public static var fallbackDirectory: String {
+        let workspace = HomeBase.root.deletingLastPathComponent()
+            .appendingPathComponent("workspace", isDirectory: true)
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: workspace.path, isDirectory: &isDir), isDir.boolValue {
+            return workspace.path
+        }
+        do {
+            try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+            return workspace.path
+        } catch {
+            return NSHomeDirectory()
+        }
+    }
 
     /// Overridable for tests; the app always uses the support directory. The
     /// filename is the old one so a machine that has already set a command
