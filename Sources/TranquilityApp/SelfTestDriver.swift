@@ -1569,9 +1569,9 @@ extension StatusHUD {
         // is (correctly) refused from a capture state.
         endCapture(because: "selftest cleanup")
         // The truth, not an empty list. The drill four calls up deliberately
-        // backdates `emptySince` and paints an empty room to prove the teaching
-        // card appears; leaving the slate on that fixture is how the teaching
-        // card ends up on a machine running twenty agents.
+        // paints an empty room to prove its door appears; leaving the slate on
+        // that fixture is how an empty grid ends up on a machine running
+        // twenty agents.
         returnToTheGrid(because: "selftest cleanup")
 
         // The collapsed strip. Three properties, and the third is the ruling.
@@ -1994,34 +1994,43 @@ extension StatusHUD {
             ("failureStartsNothing", failureStartsNothing),
             ("failureIsStillAmber", failureIsStillAmber),
         ])
-        // The empty room. Its ten seconds are backdated rather than waited out —
-        // the clock is a timestamp precisely so it can be reasoned about without
-        // a ten-second drill — but everything after the clock is the real path:
-        // the same showIdle every ambient tick calls, painting the real panel.
+        // The empty room is the grid, empty (ruled 14 Sep 2026): it describes
+        // itself, wears the grid's own footer, and offers the one door that
+        // fills it. The ten-second teaching card is gone; on Gary Marx's
+        // first run it read as a stalled startup screen, and the press it
+        // taught does nothing on an empty grid. The same showIdle every
+        // ambient tick calls, painting the real panel.
         showIdle(rows: [])
-        let describesItselfFirst = !face.gettingStarted
-            && titleLabel.stringValue == "Tranquility Base"
-        emptySince = Date().addingTimeInterval(-StateLegend.gettingStartedAfter - 1)
-        showIdle(rows: [])
-        let teaches = face.gettingStarted
-            && bodyLabel.stringValue == StateLegend.gettingStartedMessage
-            && titleLabel.isHidden && stateLabel.isHidden
-            && bodyLabel.alignment == .center
-        // The ruling's other half: this surface spells the keys out. A glyph
-        // creeping back in is the failure the drill is here to catch.
-        let spelledOut = !StateLegend.gettingStartedMessage.contains("⌃")  // key-names:exempt — asserts absence
-            && !StateLegend.gettingStartedMessage.contains("⌥")  // key-names:exempt — asserts absence
-        // An agent reporting in takes the room back, and the ambient repaint
-        // that follows must not inherit the big centred type.
+        let describesItself = face.grid
+            && bodyLabel.stringValue == "Nothing waiting. Agents appear here as they finish."
+            && stateLabel.attributedStringValue.string.contains(StateLegend.gridStripTitle)
+        let offersTheDoor = !waitingRows.isHidden
+            && waitingRows.arrangedSubviews.contains { $0 is SplitPlacardRowView }
+            && !waitingRows.arrangedSubviews.contains { $0 is GridRowView }
+        let wearsTheGridChrome = !gridFooter.isHidden
+        // The Dock rule, read against its own inputs rather than a fixed
+        // answer: a tile whenever the panel is on screen or no agent has ever
+        // been listed here (AppDelegate+Dock). Asserted on both paints.
+        let dockRule = { () -> Bool in
+            NSApp.activationPolicy()
+                == ((!Self.everListedAgent || self.isOnScreen) ? .regular : .accessory)
+        }
+        let tileFollowsTheEmptyRoom = dockRule()
+        // An agent reporting in takes the room back: the door goes, the
+        // rows come, and the ambient repaint must not inherit anything.
         showIdle(rows: [SessionRow(
             id: "drill", name: "an agent arrives", aux: "drill", lamp: .ready)])
-        let roomTakenBack = !face.gettingStarted && emptySince == nil
+        let roomTakenBack = face.grid && face.sessionRows.count == 1
+            && waitingRows.arrangedSubviews.contains { $0 is GridRowView }
             && bodyLabel.alignment == .natural
+        let tileFollowsTheArrival = Self.everListedAgent && dockRule()
         SelfTest.report("emptyRoom", [
-            ("describesItselfFirst", describesItselfFirst),
-            ("teachesAfterTheClock", teaches),
-            ("spelledOutNotGlyphs", spelledOut),
+            ("describesItself", describesItself),
+            ("offersTheDoor", offersTheDoor),
+            ("wearsTheGridChrome", wearsTheGridChrome),
+            ("tileFollowsTheEmptyRoom", tileFollowsTheEmptyRoom),
             ("roomTakenBack", roomTakenBack),
+            ("tileFollowsTheArrival", tileFollowsTheArrival),
         ])
 
         contrastDrill()

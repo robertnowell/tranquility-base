@@ -692,25 +692,12 @@ enum StateLegend {
     /// back. Ruled 12 Aug.
     static let pastAgentsTitle = "PAST AGENTS"
 
-    /// The empty room's one sentence (ruled 08 Aug). It replaces the grid
-    /// outright rather than joining it: with nothing to list, the panel's job is
-    /// to teach the one gesture that starts everything, and every other element
-    /// on that face — the app's own name, the Ready pill, the key line naming
-    /// four chords — is complexity charged to someone who has not yet used one.
-    ///
-    /// Spelled out, deliberately. The glyph vocabulary (⌃⌥) is compression that
-    /// only pays once you already know what it compresses; on the one surface
-    /// whose entire purpose is a first press, "Control + Option" is the version
-    /// that can be READ. `gridHint` keeps the symbols — by the time the grid has
-    /// rows, the reader has pressed the keys.
-    static let gettingStartedMessage = "Control + Option to get started"
-    /// How long the room stays quietly empty before the sentence appears.
-    ///
-    /// Not zero: sessions register a beat after launch, and a message teaching
-    /// the first press has no business flashing in front of someone whose grid
-    /// is about to fill on its own. Ten seconds is long enough that only a
-    /// genuinely empty room reaches it.
-    static let gettingStartedAfter: TimeInterval = 10
+    /// The empty room has no sentence of its own any more (ruled 14 Sep
+    /// 2026). It used to replace the grid, ten seconds in, with "Control +
+    /// Option to get started". On Gary Marx's first run that read as a stalled
+    /// startup screen, and the press it taught does nothing on an empty grid:
+    /// a tap announces nothing waiting, a hold has nobody to talk to. The empty
+    /// grid is the grid, empty, and `newAgentTitle` above is its door.
 
     /// The grid strip's transient amber line, for the refusal that is not a
     /// failure (ruled 08 Aug). It says what happened to the MICROPHONE and
