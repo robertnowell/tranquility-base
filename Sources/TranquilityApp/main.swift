@@ -370,6 +370,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the thresholds can be provisional.
     let gateLog = GateObservationLog()
 
+    /// Whether `app_launched` was recorded during launch, as opposed to
+    /// deferred into a `Task` that the self-test slate's `Track.suppressed`
+    /// window then swallowed whole. That happened at `e770131`, on every
+    /// deploy, and every other event kept flowing so nothing looked wrong.
+    @MainActor static var launchEventRecorded = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Before anything can take the keyboard. An accessory app with no main
         // menu has no Command-V, in any field, ever: see `EditMenu`.
@@ -1311,34 +1317,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // does nothing and an app that is broken, and the person who has it
         // usually cannot tell which.
         //
-        // ONE HOP LATER THAN EVERYTHING ABOVE, and that is the whole fix.
-        // Automation cannot be read from inside this method: its probe
-        // refreshes on the main actor, which is busy running this method, so a
-        // synchronous read here returns the `procNotFound` seed and reports
-        // `unknowable` on every launch a machine ever makes. Measured 13 Sep:
-        // 11 of 11. `primeAutomationProbe()` is the awaited reading; the
-        // `await` is what lets the run loop turn so the answer can exist.
+        // RECORDED SYNCHRONOUSLY, and that is deliberate after getting it
+        // wrong once. Deferring this into a `Task` so an awaited automation
+        // probe could sharpen one field dropped the whole event instead:
+        // `beginDrills()` sets `Track.suppressed` while the slate runs, and
+        // `relaunch.sh` passes `--selftest-hud` on EVERY deploy, so the
+        // deferred record landed inside that window and was discarded. Seen
+        // live on 13 Sep at e770131 -- drills held the panel at 00:19:42.790,
+        // the event never appeared, and the build went on recording every
+        // OTHER event normally, which is what made it look fine.
         //
-        // The cost is that `app_launched` lands a few milliseconds after
-        // launch instead of during it, which is the right trade: an event that
-        // is slightly late is worth more than one that is promptly wrong.
-        let baseProperties = launched
-        Task { @MainActor in
-            await Permissions.primeAutomationProbe()
-            var launched = baseProperties
-            for kind in Permissions.Kind.allCases {
-                let name = Track.token(from: kind.title).tokenString
-                launched["permission_\(name)"] = Track.token(from: "\(Permissions.state(kind))")
-            }
-            // `failingTheGate`, never a hand-rolled `!= .active`: this alert
-            // must agree with the gate it is reporting on, or it cries missing
-            // at a user the app is letting straight in.
-            let missing = Permissions.failingTheGate
-                .map { Track.token(from: $0.title).tokenString }
-            launched["permissions_missing"] = .int(missing.count)
-            if !missing.isEmpty { launched["permissions_missing_names"] = .prose(missing.joined(separator: " ")) }
-            Track.record("app_launched", launched)
+        // So: automation reads `unknowable` here, because at this instant that
+        // is TRUE -- the probe is cached and its refresh cannot run until this
+        // method returns. An honest "not measured yet" costs nothing now that
+        // `failingTheGate` no longer counts it as a refusal. A sharper reading
+        // belongs in a later event of its own, never in a late copy of this one.
+        for kind in Permissions.Kind.allCases {
+            let name = Track.token(from: kind.title).tokenString
+            launched["permission_\(name)"] = Track.token(from: "\(Permissions.state(kind))")
         }
+        // `failingTheGate`, never a hand-rolled `!= .active`: this alert must
+        // agree with the gate it is reporting on, or it cries missing at a
+        // user the app is letting straight in.
+        let missing = Permissions.failingTheGate.map { Track.token(from: $0.title).tokenString }
+        launched["permissions_missing"] = .int(missing.count)
+        if !missing.isEmpty { launched["permissions_missing_names"] = .prose(missing.joined(separator: " ")) }
+        Track.record("app_launched", launched)
+        // Proof for `permissionSurfaces`. The drill slate suppresses `Track`,
+        // so a drill cannot ask the store whether this landed; it asks this.
+        AppDelegate.launchEventRecorded = true
         Diagnostics.refreshEnvironment(reason: "startup")
         // Sending, one run-loop turn later: after this method returns and the
         // panel has painted, so the SDK's start (a crash handler, a watchdog

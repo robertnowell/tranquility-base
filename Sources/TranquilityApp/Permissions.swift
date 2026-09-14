@@ -512,6 +512,23 @@ struct Permissions {
     private static var automationProbeRunning = false
     private static var automationProbeGeneration = 0
 
+    /// ALWAYS RETURNS THE SEED ON ITS FIRST CALL IN A PROCESS, and callers
+    /// that report rather than react need to know it. The refresh below runs
+    /// on a `Task { @MainActor }`, which cannot start until the main thread
+    /// returns to the run loop, so anything asking from inside
+    /// `applicationDidFinishLaunching` is guaranteed `procNotFound` ->
+    /// `unknowable` whatever TCC holds. Measured 13 Sep on install aa699c62:
+    /// 11 of 11 `app_launched` events said `unknowable`, never once `active`,
+    /// with the permission granted and Terminal running throughout.
+    ///
+    /// That is honest -- at that instant nothing HAS been measured -- and it
+    /// is now harmless, because `failingTheGate` does not count `unknowable`
+    /// as a refusal. Resist "fixing" it by deferring the caller into a `Task`
+    /// so it can await a real reading: that was tried at `e770131` and the
+    /// launch event vanished instead, because `beginDrills()` holds
+    /// `Track.suppressed` for the whole self-test slate and `relaunch.sh`
+    /// passes `--selftest-hud` on every deploy. A sharper reading belongs in a
+    /// later event of its own, not in a late copy of an early one.
     private static func automationStatus() -> OSStatus {
         if !automationProbeRunning, Date().timeIntervalSince(automationCheckedAt) >= 2 {
             automationProbeRunning = true
@@ -526,35 +543,6 @@ struct Permissions {
             }
         }
         return automationCached
-    }
-
-    /// The automation reading, AWAITED rather than sampled. Call this before
-    /// anything that reports the answer rather than merely reacting to it.
-    ///
-    /// `automationStatus()` above answers instantly from a cache seeded with
-    /// `procNotFound`, and refreshes on a `Task { @MainActor }` that cannot
-    /// start until the current main-thread work returns to the run loop. So
-    /// the FIRST read taken in a process is always the seed, and a caller
-    /// sitting inside `applicationDidFinishLaunching` -- the launch event, for
-    /// one -- is GUARANTEED to see `unknowable` whatever TCC actually holds.
-    /// Not a race that sometimes loses: structured concurrency makes it
-    /// certain.
-    ///
-    /// Measured 13 Sep on install aa699c62: 11 of 11 `app_launched` events
-    /// reported automation `unknowable`, not one ever `active`, with the
-    /// permission granted and Terminal running throughout. Three Slack cards
-    /// that afternoon said a permission was missing. None was.
-    ///
-    /// Cheap -- one Apple event with `askUserIfNeeded: false` -- and it never
-    /// prompts, so it is safe on the launch path.
-    static func primeAutomationProbe() async {
-        let status = await Task.detached(priority: .utility) { probeAutomationStatus() }.value
-        // Same invalidation `request(.automation)` uses: this reading is
-        // authoritative, so any sample already in flight must not land on top
-        // of it afterwards.
-        automationProbeGeneration += 1
-        automationCached = status
-        automationCheckedAt = Date()
     }
 
     private nonisolated static func probeAutomationStatus() -> OSStatus {
