@@ -73,6 +73,70 @@ extension Coordinator {
     /// addressing — a deep link from an HTML review page names the session it is
     /// about, and that beats "whatever you heard last". The session must still
     /// exist in the log; an unknown id refuses rather than guessing.
+    /// The remote half, which is the same five steps with none of the process
+    /// archaeology: claim the utterance, ask the provider, record what it said.
+    private func dispatchRemote(
+        utterance: inout Utterance, text: String, target: WaitingSession,
+        transport: any DispatchTransport
+    ) async throws -> ReplyOutcome {
+        let dispatchTarget = DispatchTarget(
+            kind: .remote,
+            sessionId: target.sessionId,
+            label: target.callsign ?? target.projectLabel,
+            readinessSource: .provider)
+
+        utterance.targetKind = .remote
+        utterance.targetSessionId = target.sessionId
+        try store.update(utterance: utterance)
+
+        // Readiness FIRST, so a refusal costs nothing and says why. The local
+        // path does the same; the difference is only where the answer comes
+        // from.
+        let readiness = await transport.readiness(for: dispatchTarget)
+        switch readiness {
+        case .ready, .busy, .waiting:
+            break
+        default:
+            // The provider says not now. `deferred` carries the reason to the
+            // card, which is the whole point of surfacing it rather than
+            // retrying into silence.
+            attachments.resolve(utteranceId: utterance.id, landed: false)
+            try store.update(utterance: utterance)
+            return .sessionNotReady(readiness)
+        }
+
+        switch await transport.send(text: text, to: dispatchTarget) {
+        case .confirmed(let latencyMs):
+            attachments.resolve(utteranceId: utterance.id, landed: true)
+            utterance.status = .confirmed
+            utterance.confirmedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+            try store.update(utterance: utterance)
+            return .dispatched(text: text, latencyMs: latencyMs,
+                               sessionId: target.sessionId, pid: nil)
+        case .queued:
+            attachments.resolve(utteranceId: utterance.id, landed: true)
+            utterance.status = .confirmed
+            try store.update(utterance: utterance)
+            return .queued(text: text, sessionId: target.sessionId, pid: nil)
+        case .deferred(let why):
+            // BUSY REACHES THE USER. A provider that refused a follow-up while
+            // its agent works must say so; silence reads as the words having
+            // landed. `sessionNotReady` is the case the card already knows how
+            // to speak, so this needs no new surface.
+            attachments.resolve(utteranceId: utterance.id, landed: false)
+            try store.update(utterance: utterance)
+            return .sessionNotReady(why)
+        case .failed(let failure):
+            attachments.resolve(utteranceId: utterance.id, landed: false)
+            utterance.status = .dispatchFailed
+            utterance.lastError = "\(failure)"
+            try store.update(utterance: utterance)
+            // Carries its reason, both streams (ruling, 11 Sep).
+            Failures.report(.deliveryFailed, reason: "remote dispatch: \(failure)")
+            return .dispatchFailed(failure, utteranceId: utterance.id)
+        }
+    }
+
     /// `streamed:` is an optional live-transcription final captured while the
     /// user was speaking (`StreamedUtterance.finish`). Nil — the only value the
     /// app passes until streaming is wired — keeps this path byte-identical to
@@ -314,6 +378,17 @@ extension Coordinator {
     private func dispatch(
         utterance: inout Utterance, text: String, target: WaitingSession
     ) async throws -> ReplyOutcome {
+        // REMOTE FIRST, and before anything below reads a process.
+        //
+        // Everything after this point resolves a live session, a tmux pane and
+        // a transcript path. A remote agent has none of the three, and the
+        // resolution would not merely fail, it would fail with the local
+        // vocabulary: "can't take this yet", about an agent that is perfectly
+        // able to take it. One branch here, where the question is asked once.
+        if isRemote(target.sessionId), let remote = remoteTransport {
+            return try await dispatchRemote(utterance: &utterance, text: text,
+                                            target: target, transport: remote)
+        }
         // Typing fails CLOSED: probe failure and genuine absence refuse alike,
         // because injecting into a session we cannot verify could answer a dialog.
         // A session that has JUST registered can drop back out of

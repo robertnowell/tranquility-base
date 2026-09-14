@@ -159,7 +159,8 @@ extension AppDelegate {
             family: { SessionLineage.family(of: $0) },
             supersedesWaiting: { delivering.supersedesWaiting($0, latestId: $1) },
             isInFlight: { delivering.isInFlight($0) },
-            closedCallsigns: closedCallsigns))
+            closedCallsigns: closedCallsigns,
+            remote: remoteAgents(known: known)))
 
         // Recorded before anything is drawn so the card can ask the same
         // question the rows answered, and get the same answer.
@@ -187,6 +188,25 @@ extension AppDelegate {
     /// to pass one. Twenty-five call sites reach the grid; asking each to label
     /// itself is twenty-five chances to paste the neighbour's string, which is
     /// how they all ended up saying "idle repaint" in the first place.
+    /// The fifth band's inputs, from whatever the poller last saw.
+    ///
+    /// Empty on a machine with no provider configured, which draws no remote
+    /// rows and costs nothing. Read from the snapshot rather than fetched:
+    /// a repaint must never wait on a network call, which is the same rule
+    /// `lastSeenLive` follows for the local bands.
+    func remoteAgents(known: [WaitingSession]) -> GridAssembler.RowInputs.RemoteAgents {
+        guard let snapshot = agents?.snapshot else { return .init() }
+        // UNREAD COMES FROM THE STORED EVENT LOG, exactly like every local
+        // row's green lamp, rather than from the provider's own opinion. The
+        // spool line a remote turn wrote is what puts it here, so a remote
+        // agent goes green by the same route a local one does.
+        let unread = Set(known.filter { !$0.heard }.map(\.sessionId))
+        return .init(agents: snapshot.agents,
+                     requests: snapshot.requests,
+                     unread: unread.intersection(snapshot.agents.map(\.id)),
+                     unreachable: snapshot.unreachable)
+    }
+
     func showIdleGrid(note: String? = nil,
                               caller: String = #function, line: Int = #line) {
         hud.showIdle(note: note, rows: sessionRowsNow(),
