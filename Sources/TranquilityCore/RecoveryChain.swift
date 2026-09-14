@@ -275,6 +275,111 @@ extension QueueStore {
     /// panel's transcription retry: the caller must know which row an attempt
     /// owns BEFORE the attempt resolves, or a superseded attempt's row can
     /// neither be found nor retired.
+    /// What Dismiss owes a live microphone: the words, kept and transcribed,
+    /// never sent.
+    ///
+    /// Earned 14 Sep 2026: a 3m31s dictation was ended by a click on the menu
+    /// bar icon, and the dismiss handler ran `_ = try? recorder.stop()` — the
+    /// one line in the app that took a finished capture and threw it away.
+    /// The file survived as `.wav.live`; nothing gave it a row, Recents showed
+    /// twelve rows and none of them was it, and the streamed transcript was
+    /// dropped with its socket. The ruling this belongs to
+    /// (docs/rulings/ruling-an-open-microphone-is-a-promise.md) says an open
+    /// microphone means you are being listened to; a dismiss ends the
+    /// listening, it does not unsay what was said.
+    ///
+    /// So a dismissed capture takes the SAME durable path as a sent one —
+    /// row first, then the streamed final or the recovery chain — and then
+    /// parts from it: a transcribed row is marked `.discarded` with its
+    /// reason, because a `.transcribed` row is what the boot sweep promotes
+    /// to `.ready`, and ready is a step from being typed into a terminal.
+    /// Recents shows it with its text; nothing dispatches it. A row the chain
+    /// could not transcribe stays `.transcriptionFailed`, retryable by a human
+    /// exactly like any other (13 Aug ruling).
+    ///
+    /// Room tone is the one thing not kept. The gate is the send path's own:
+    /// under half a second, or a peak below the silence floor, and the
+    /// write-ahead file is removed rather than left for the 72h reap — the
+    /// thirteen orphan `.wav.live` slips found on 14 Sep were exactly this.
+    /// Returns nil in that case.
+    @discardableResult
+    public func keepDismissedCapture(
+        pcm16: Data,
+        sampleRate: Double,
+        peak: Float,
+        audioStore: AudioStore = AudioStore(),
+        chain: RecoveryChain = RecoveryChain(),
+        streamed: TranscriptionResult? = nil,
+        streamHadRecognizedText: Bool = false,
+        streamNoSpeechProvider: String? = nil,
+        preWritten: URL? = nil,
+        utteranceId: String? = nil
+    ) async throws -> Utterance? {
+        let seconds = Double(pcm16.count) / 2.0 / sampleRate
+        guard seconds >= 0.5 else {
+            if let preWritten { try? FileManager.default.removeItem(at: preWritten) }
+            Track.record("capture_kept", ["reason": "dismissed", "outcome": "room_tone",
+                                          "audio_ms": .int(Int(seconds * 1000)), "peak": .double(Double(peak))])
+            return nil
+        }
+        guard peak >= Recorder.silenceFloor else {
+            // Long enough to be words, too quiet for the recorder to vouch
+            // for. Not cleanup: it has a chance of holding speech, so it is
+            // kept as a row a human can play and retry, and no provider is
+            // spent on it unasked.
+            let row = try keepUntranscribed(pcm16: pcm16, sampleRate: sampleRate, audioStore: audioStore,
+                                            preWritten: preWritten, utteranceId: utteranceId, because: "dismissed_quiet")
+            Track.record("capture_kept", ["reason": "dismissed", "outcome": "kept_untranscribed",
+                                          "audio_ms": .int(Int(seconds * 1000)), "peak": .double(Double(peak))])
+            return row
+        }
+        var utterance = try await captureAndTranscribe(
+            pcm16: pcm16, sampleRate: sampleRate, audioStore: audioStore, chain: chain,
+            eventId: nil, streamed: streamed, streamHadRecognizedText: streamHadRecognizedText,
+            streamNoSpeechProvider: streamNoSpeechProvider, preWritten: preWritten,
+            utteranceId: utteranceId)
+        if utterance.status == .transcribed {
+            utterance.status = .discarded
+            utterance.discardedReason = "dismissed before send"
+            try update(utterance: utterance)
+        }
+        Track.record("capture_kept", [
+            "reason": "dismissed",
+            "outcome": utterance.transcriptText == nil ? "kept_untranscribed" : "kept_transcribed",
+            "audio_ms": .int(Int(seconds * 1000)),
+            "chars": .int(utterance.transcriptText?.count ?? 0),
+        ])
+        return utterance
+    }
+
+    /// The durability floor alone: a `.recorded` row with its audio and no
+    /// transcript, for audio nobody should spend a provider on unasked but
+    /// nobody may delete either — a capture the silence gate refused as too
+    /// quiet, or a dismissed one the recorder could not vouch for. Recents
+    /// shows it with Play and Retry.
+    @discardableResult
+    public func keepUntranscribed(
+        pcm16: Data,
+        sampleRate: Double,
+        audioStore: AudioStore = AudioStore(),
+        preWritten: URL? = nil,
+        utteranceId: String? = nil,
+        because reason: String
+    ) throws -> Utterance {
+        var utterance = Utterance(id: utteranceId ?? UUID().uuidString, eventId: nil, status: .recorded)
+        utterance.captureId = Track.captureID
+        let stored = try adopt(preWritten, as: utterance.id, audioStore: audioStore)
+            ?? audioStore.write(pcm16Data: pcm16, sampleRate: sampleRate, utteranceId: utterance.id)
+        utterance.audioPath = stored.url.path
+        utterance.audioBytes = stored.byteCount
+        utterance.audioSha256 = stored.sha256
+        utterance.audioDurationMs = stored.durationMs
+        utterance.transcriptionOutcome = "kept_" + reason
+        try update(utterance: utterance)
+        Self.trace?("\(reason): kept \(utterance.id.prefix(8)) (\(stored.durationMs / 1000)s) untranscribed in Recents")
+        return utterance
+    }
+
     @discardableResult
     public func captureAndTranscribe(
         pcm16: Data,

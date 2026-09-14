@@ -143,6 +143,13 @@ public final class Recorder: @unchecked Sendable {
     /// once per wedge entry, after the capture fault for the same open.
     public var onWedge: (() -> Void)?
 
+    /// `abandon` kept a file because it held speech. The app gives it a row
+    /// at once (`QueueStore.adoptKeptCapture`), so a kept capture is in
+    /// Recents while the person still remembers saying it, not at the next
+    /// boot (14 Sep 2026). Called off the gesture's thread with the file
+    /// already closed; seconds is the audio that survived.
+    public var onCaptureKept: ((URL, Double) -> Void)?
+
     /// Deferred teardown: a device config change landed mid-capture. The
     /// capture keeps whatever audio arrives; the unit is discarded and
     /// rebuilt when the capture ends rather than under it.
@@ -806,7 +813,13 @@ public final class Recorder: @unchecked Sendable {
             "buffers_kept": .int(kept), "peak": .double(Double(peak)),
             "speech_evidence": "unknown", "audio_saved": .bool(captureURL != nil),
         ])
-        guard captured.count > 1600 else { throw RecorderError.nothingRecorded }  // <50ms
+        guard captured.count > 1600 else {  // <50ms
+            // Nothing to hand back, so nothing will ever claim the write-ahead
+            // file; `close()` above left it `.wav.live`, which is the shape a
+            // kept capture has, and it would sit there as one until the reap.
+            if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
+            throw RecorderError.nothingRecorded
+        }
         return Capture(pcm16: captured, fileURL: captureURL, id: id)
     }
 
@@ -884,6 +897,7 @@ public final class Recorder: @unchecked Sendable {
         if case .kept(let url) = ending {
             Recorder.trace?(String(format: "capture: abandoned but KEPT — %.1fs, peak %.4f, ",
                                    seconds, peak) + url.lastPathComponent)
+            onCaptureKept?(url, seconds)
         }
         verification?.cancel(); verification = nil
         if ended.accepted {

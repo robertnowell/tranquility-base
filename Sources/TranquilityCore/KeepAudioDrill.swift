@@ -32,6 +32,15 @@ public enum KeepAudioDrill {
     /// rule gates on duration and the caller's speech evidence, not content.
     private static func pcm(seconds: Double) -> Data { Data(count: Int(seconds * 16000) * 2) }
 
+    /// The same, with a signal in it: every sample at `amplitude`, so the
+    /// file's peak reads back as amplitude/32768 wherever peak matters.
+    private static func pcm(seconds: Double, amplitude: Int16) -> Data {
+        var data = Data(capacity: Int(seconds * 16000) * 2)
+        let le = amplitude.littleEndian
+        for _ in 0..<Int(seconds * 16000) { withUnsafeBytes(of: le) { data.append(contentsOf: $0) } }
+        return data
+    }
+
     public static func run(now: Date = Date()) throws -> [Group] {
         let fm = FileManager.default
         let root = fm.temporaryDirectory
@@ -73,11 +82,19 @@ public enum KeepAudioDrill {
         try orphan.append(pcm16: pcm(seconds: 1))
         _ = try orphan.close()
         try? fm.setAttributes([.modificationDate: old], ofItemAtPath: orphan.url.path)
+        // A short orphan WITH a signal in it is a press that died mid-word
+        // (ruled 14 Sep 2026: salvageable audio is salvaged, only room tone
+        // is cleanup). Same 1s, but the samples are not zero.
+        let spokenOrphan = try LiveAudioCapture(utteranceId: "keep-spoken-orphan", sampleRate: 16000, directory: audio)
+        try spokenOrphan.append(pcm16: pcm(seconds: 1, amplitude: 3000))
+        _ = try spokenOrphan.close()
+        try? fm.setAttributes([.modificationDate: old], ofItemAtPath: spokenOrphan.url.path)
 
         let store = try QueueStore(url: root.appendingPathComponent("queue.sqlite"))
         let report = try store.reconcileOnBoot(audioDirectory: audio)
         let adopted = Set(report.adoptedAudio)
         let longRow = try store.utterance(id: "keep-long")
+        let spokenOrphanRow = try store.utterance(id: "keep-spoken-orphan")
 
         let boot = Group(name: "bootAdopt", checks: [
             Check("keptLongAdopted", adopted.contains("keep-long")),
@@ -85,10 +102,116 @@ public enum KeepAudioDrill {
             Check("adoptedRowHasNoTranscript", longRow?.transcriptText == nil),
             Check("adoptedRowDatedByFile",
                   longRow.map { abs(Double($0.createdAtMs) / 1000 - old.timeIntervalSince1970) < 2 } ?? false),
-            Check("shortOrphanNotAdopted", !adopted.contains("keep-orphan")),
-            Check("shortOrphanStaysForReap", fm.fileExists(atPath: orphan.url.path)),
+            Check("silentOrphanNotAdopted", !adopted.contains("keep-orphan")),
+            Check("silentOrphanStaysForReap", fm.fileExists(atPath: orphan.url.path)),
+            Check("spokenShortOrphanAdopted", adopted.contains("keep-spoken-orphan")
+                  && spokenOrphanRow?.status == .recorded),
         ])
 
-        return [keep, boot]
+        // F — a kept file is a Recents row the moment it is kept, not at the
+        // next boot (14 Sep 2026). The brief kept file from C is seconds old
+        // and under the boot floor: both guards the boot sweep applies, and
+        // neither applies to a file the recorder itself just decided to keep.
+        let keptNowId = try store.adoptKeptCapture(at: brief.url, because: "abandoned")
+        let keptNowRow = try keptNowId.flatMap { try store.utterance(id: $0) }
+        let keptNowTwice = try store.adoptKeptCapture(at: brief.url, because: "abandoned")
+        let now = Group(name: "keptNow", checks: [
+            Check("keptFileAdoptedAtOnce", keptNowId == "keep-brief"),
+            Check("adoptedRowIsRecorded", keptNowRow?.status == .recorded),
+            Check("adoptedRowSaysWhy", keptNowRow?.transcriptionOutcome == "adopted_abandoned"),
+            Check("adoptedFileIsFinished",
+                  !fm.fileExists(atPath: brief.url.path)
+                  && fm.fileExists(atPath: brief.url.deletingPathExtension().path)),
+            Check("adoptingTwiceIsOnce", keptNowTwice == nil),
+        ])
+
+        // G — Dismiss keeps the words and never sends them (14 Sep 2026: the
+        // menu-bar click that ran `_ = try? recorder.stop()`). A capture with
+        // speech becomes a row with its transcript, parked `.discarded` so the
+        // boot sweep cannot promote it toward a terminal; room tone is removed
+        // rather than left for the reap. The chain is a fixture — the drill
+        // spends nothing and reaches no provider.
+        let audioStore = AudioStore(directory: audio)
+        let spoken = try LiveAudioCapture(utteranceId: "keep-dismissed", sampleRate: 16000, directory: audio)
+        try spoken.append(pcm16: pcm(seconds: 2))
+        _ = spoken.abandon(hadSpeech: true)
+        let dismissed = try awaitDismiss(store: store, audioStore: audioStore,
+                                         pcm16: pcm(seconds: 2), peak: 0.5, preWritten: spoken.url,
+                                         utteranceId: "keep-dismissed")
+        let slipFile = try LiveAudioCapture(utteranceId: "keep-dismissed-slip", sampleRate: 16000, directory: audio)
+        try slipFile.append(pcm16: pcm(seconds: 0.3))
+        _ = try slipFile.close()
+        let dismissedSlip = try awaitDismiss(store: store, audioStore: audioStore,
+                                             pcm16: pcm(seconds: 0.3), peak: 0.5, preWritten: slipFile.url,
+                                             utteranceId: "keep-dismissed-slip")
+        // Long enough to be words, too quiet for the recorder to vouch for:
+        // kept as a row, no transcript, nothing spent.
+        let quiet = try LiveAudioCapture(utteranceId: "keep-dismissed-quiet", sampleRate: 16000, directory: audio)
+        try quiet.append(pcm16: pcm(seconds: 2))
+        _ = quiet.abandon(hadSpeech: true)
+        let dismissedQuiet = try awaitDismiss(store: store, audioStore: audioStore,
+                                              pcm16: pcm(seconds: 2), peak: 0.001, preWritten: quiet.url,
+                                              utteranceId: "keep-dismissed-quiet")
+        let boot2 = try store.reconcileOnBoot(audioDirectory: audio)
+        let afterBoot = try store.utterance(id: "keep-dismissed")
+        let slipRow = try store.utterance(id: "keep-dismissed-slip")
+        let dismiss = Group(name: "dismissKeeps", checks: [
+            Check("dismissedSpeechHasARow", dismissed != nil),
+            Check("dismissedSpeechIsTranscribed", dismissed?.transcriptText == "the drill heard it"),
+            Check("dismissedRowIsParked", dismissed?.status == .discarded
+                  && dismissed?.discardedReason == "dismissed before send"),
+            Check("dismissedRowKeepsItsAudio",
+                  dismissed?.audioPath.map { fm.fileExists(atPath: $0) } ?? false),
+            Check("bootDoesNotRequeueIt", !boot2.requeuedForTranscription.contains("keep-dismissed")
+                  && afterBoot?.status == .discarded),
+            Check("dismissedRoomToneHasNoRow", dismissedSlip == nil && slipRow == nil),
+            Check("dismissedRoomToneIsRemoved", !fm.fileExists(atPath: slipFile.url.path)),
+            Check("dismissedQuietIsKeptUntranscribed", dismissedQuiet?.status == .recorded
+                  && dismissedQuiet?.transcriptText == nil
+                  && dismissedQuiet?.transcriptionOutcome == "kept_dismissed_quiet"
+                  && (dismissedQuiet?.audioPath.map { fm.fileExists(atPath: $0) } ?? false)),
+        ])
+
+        return [keep, boot, now, dismiss]
+    }
+
+    /// A fixture chain that answers at once, so the drill spends nothing.
+    private struct Says: RecoveryTranscriptionProvider {
+        let name = "drill-fixture"
+        let isConfigured = true
+        func transcribe(fileAt url: URL) async throws -> TranscriptionResult {
+            TranscriptionResult(text: "the drill heard it", finality: .recoveryForcedFinal, provider: name)
+        }
+    }
+
+    /// The drill is synchronous (it runs inside the launch gate and `tbase
+    /// keepdrill`); the dismiss path is async because transcription is.
+    /// Bridged with a semaphore on a detached task, never on the caller's
+    /// executor.
+    private static func awaitDismiss(store: QueueStore, audioStore: AudioStore, pcm16: Data, peak: Float,
+                                     preWritten: URL, utteranceId: String) throws -> Utterance? {
+        let done = DispatchSemaphore(value: 0)
+        let box = ResultBox()
+        Task.detached {
+            defer { done.signal() }
+            do {
+                let row = try await store.keepDismissedCapture(
+                    pcm16: pcm16, sampleRate: 16000, peak: peak, audioStore: audioStore,
+                    chain: RecoveryChain(providers: [Says()], maxAttemptsPerProvider: 1, backoff: [0], floorAfter: nil),
+                    preWritten: preWritten, utteranceId: utteranceId)
+                box.set(.success(row))
+            } catch {
+                box.set(.failure(error))
+            }
+        }
+        done.wait()
+        return try box.get()
+    }
+
+    private final class ResultBox: @unchecked Sendable {
+        private var result: Result<Utterance?, Error> = .success(nil)
+        private let lock = NSLock()
+        func set(_ r: Result<Utterance?, Error>) { lock.lock(); result = r; lock.unlock() }
+        func get() throws -> Utterance? { lock.lock(); defer { lock.unlock() }; return try result.get() }
     }
 }
