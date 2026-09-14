@@ -528,6 +528,35 @@ struct Permissions {
         return automationCached
     }
 
+    /// The automation reading, AWAITED rather than sampled. Call this before
+    /// anything that reports the answer rather than merely reacting to it.
+    ///
+    /// `automationStatus()` above answers instantly from a cache seeded with
+    /// `procNotFound`, and refreshes on a `Task { @MainActor }` that cannot
+    /// start until the current main-thread work returns to the run loop. So
+    /// the FIRST read taken in a process is always the seed, and a caller
+    /// sitting inside `applicationDidFinishLaunching` -- the launch event, for
+    /// one -- is GUARANTEED to see `unknowable` whatever TCC actually holds.
+    /// Not a race that sometimes loses: structured concurrency makes it
+    /// certain.
+    ///
+    /// Measured 13 Sep on install aa699c62: 11 of 11 `app_launched` events
+    /// reported automation `unknowable`, not one ever `active`, with the
+    /// permission granted and Terminal running throughout. Three Slack cards
+    /// that afternoon said a permission was missing. None was.
+    ///
+    /// Cheap -- one Apple event with `askUserIfNeeded: false` -- and it never
+    /// prompts, so it is safe on the launch path.
+    static func primeAutomationProbe() async {
+        let status = await Task.detached(priority: .utility) { probeAutomationStatus() }.value
+        // Same invalidation `request(.automation)` uses: this reading is
+        // authoritative, so any sample already in flight must not land on top
+        // of it afterwards.
+        automationProbeGeneration += 1
+        automationCached = status
+        automationCheckedAt = Date()
+    }
+
     private nonisolated static func probeAutomationStatus() -> OSStatus {
         // The descriptor owns its AEDesc and disposes it in its own dealloc, so
         // we borrow the pointer and never copy or dispose it ourselves. Copying
@@ -663,6 +692,22 @@ struct Permissions {
     /// the restart gap.
     static var allActive: Bool {
         Kind.allCases.filter(\.isRequired).allSatisfy { opensTheGate(state($0)) }
+    }
+
+    /// The permissions genuinely in the way: everything the gate refuses.
+    ///
+    /// THE ONE SPELLING for "what is missing", and it exists because the
+    /// alternative kept being rewritten by hand. The launch event asked
+    /// `state != .active` (7 Sep) and so reported a permission it had merely
+    /// failed to READ as one the user had refused -- the 29 Aug bug, reborn in
+    /// a layer nobody thought of as a gate, alerting on a machine where the
+    /// app itself was letting the user straight in. A rule that lives in a
+    /// helper only holds where the helper is called, so callers get a named
+    /// list rather than a comparison to get wrong.
+    ///
+    /// `unknowable` is absent from this list ON PURPOSE. See `opensTheGate`.
+    static var failingTheGate: [Kind] {
+        Kind.allCases.filter { !opensTheGate(state($0)) }
     }
 
     /// Anything granted that this process still cannot use. One restart clears

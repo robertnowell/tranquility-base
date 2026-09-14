@@ -242,9 +242,15 @@ extension AppDelegate {
         // the recorded grant: it is the one row where "granted" and "working"
         // genuinely disagree, and the working answer is the useful one.
         for kind in Permissions.Kind.allCases {
+            // `opensTheGate`, not `== .active`, for the same reason
+            // `Permissions.progress` uses it: a red dot next to a permission
+            // the app merely could not READ accuses the user of a refusal
+            // they never made, and does it beside a panel that is working
+            // fine. The row the app cannot read is the checklist's job, and
+            // the checklist link is directly below.
             let granted = kind == .inputMonitoring
                 ? hotkeyWorking
-                : Permissions.state(kind) == .active
+                : Permissions.opensTheGate(Permissions.state(kind))
             menu.addItem(permissionRow(
                 title: kind == .inputMonitoring ? "Input Monitoring (hotkey)" : kind.title,
                 granted: granted,

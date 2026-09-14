@@ -1310,16 +1310,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // microphone that is denied is the difference between an app that
         // does nothing and an app that is broken, and the person who has it
         // usually cannot tell which.
-        var missing: [String] = []
-        for kind in Permissions.Kind.allCases {
-            let state = Permissions.state(kind)
-            let name = Track.token(from: kind.title).tokenString
-            launched["permission_\(name)"] = Track.token(from: "\(state)")
-            if state != .active { missing.append(name) }
+        //
+        // ONE HOP LATER THAN EVERYTHING ABOVE, and that is the whole fix.
+        // Automation cannot be read from inside this method: its probe
+        // refreshes on the main actor, which is busy running this method, so a
+        // synchronous read here returns the `procNotFound` seed and reports
+        // `unknowable` on every launch a machine ever makes. Measured 13 Sep:
+        // 11 of 11. `primeAutomationProbe()` is the awaited reading; the
+        // `await` is what lets the run loop turn so the answer can exist.
+        //
+        // The cost is that `app_launched` lands a few milliseconds after
+        // launch instead of during it, which is the right trade: an event that
+        // is slightly late is worth more than one that is promptly wrong.
+        let baseProperties = launched
+        Task { @MainActor in
+            await Permissions.primeAutomationProbe()
+            var launched = baseProperties
+            for kind in Permissions.Kind.allCases {
+                let name = Track.token(from: kind.title).tokenString
+                launched["permission_\(name)"] = Track.token(from: "\(Permissions.state(kind))")
+            }
+            // `failingTheGate`, never a hand-rolled `!= .active`: this alert
+            // must agree with the gate it is reporting on, or it cries missing
+            // at a user the app is letting straight in.
+            let missing = Permissions.failingTheGate
+                .map { Track.token(from: $0.title).tokenString }
+            launched["permissions_missing"] = .int(missing.count)
+            if !missing.isEmpty { launched["permissions_missing_names"] = .prose(missing.joined(separator: " ")) }
+            Track.record("app_launched", launched)
         }
-        launched["permissions_missing"] = .int(missing.count)
-        if !missing.isEmpty { launched["permissions_missing_names"] = .prose(missing.joined(separator: " ")) }
-        Track.record("app_launched", launched)
         Diagnostics.refreshEnvironment(reason: "startup")
         // Sending, one run-loop turn later: after this method returns and the
         // panel has painted, so the SDK's start (a crash handler, a watchdog

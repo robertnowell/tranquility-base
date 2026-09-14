@@ -68,8 +68,7 @@ extension AppDelegate {
     @MainActor
     private func confirmPermissionsStillHold() {
         guard !Permissions.allActive else { return }
-        let firstMiss = Permissions.Kind.allCases
-            .filter(\.isRequired).filter { Permissions.state($0) != .active }
+        let firstMiss = Permissions.failingTheGate.filter(\.isRequired)
         Permissions.log("permissions: \(firstMiss.map(\.title)) read as missing on activation "
             + "— confirming before acting")
         Task { @MainActor [weak self] in
@@ -79,8 +78,7 @@ extension AppDelegate {
                     + "leaving the panel alone")
                 return
             }
-            let confirmed = Permissions.Kind.allCases
-                .filter(\.isRequired).filter { Permissions.state($0) != .active }
+            let confirmed = Permissions.failingTheGate.filter(\.isRequired)
             Permissions.log("permissions: \(confirmed.map(\.title)) confirmed missing — "
                 + "back to onboarding")
             self.onboarding.show { [weak self] in self?.refresh() }
