@@ -29,7 +29,7 @@ cd "$(dirname "$0")/.."
 
 # Raise these when the suite grows. They exist so that "the tests stopped being
 # compiled in" cannot look like "the tests passed".
-FLOOR_XCTEST=1880
+FLOOR_XCTEST=1891
 FLOOR_SWIFT_TESTING=61
 
 # Apple Silicon hardware under a translated shell: re-exec the test run native.
@@ -101,7 +101,7 @@ fail() {
   # context under a warning, which also contains "XCTAssert" and used to fill
   # all twenty lines before a single real failure was reached (PR #299).
   printf '%s\n' "$OUT" \
-    | grep -E ": error: |error: -\[|Test Case .* failed|Test Suite .* failed|couldn't be loaded|incompatible architecture|recorded an issue" \
+    | grep -E ": error: |error: -\[|Test Case .* failed|Test Suite .* failed|unexpected signal|Fatal error|couldn't be loaded|incompatible architecture|recorded an issue" \
     | grep -v " warning: " | head -40 >&2 || true
   exit 1
 }

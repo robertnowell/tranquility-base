@@ -27,6 +27,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let recorder = Recorder()
     var store: QueueStore?
     var coordinator: Coordinator?
+    /// Agents running somewhere else, kept current off the main thread.
+    ///
+    /// Nil on a machine with no provider configured, which is most of them:
+    /// the registry is empty, so nothing is started and nothing is drawn.
+    var agents: AgentPoller?
     /// Held for the process lifetime. Prod and Dev have different bundle ids,
     /// so LaunchServices cannot arbitrate their shared hotkey and microphone.
     var appOwnership: AppOwnershipLock?
@@ -555,7 +560,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let terms = (try? Lexicon.harvest(store: store).terms) ?? []
                 return StreamedUtterance(provider: AssemblyAIStreaming(), lexicon: terms)
             }
-            self.coordinator = Coordinator(store: store)
+            // The registry is built ONCE and shared: the coordinator answers
+            // through it and the poller watches through it, so a reply can
+            // never reach a provider the grid is not showing.
+            let registry = AgentProviders.registry()
+            let poller = registry.configured().isEmpty ? nil : AgentPoller(registry: registry)
+            self.coordinator = Coordinator(
+                store: store,
+                remoteTransport: poller.map { p in
+                    RemoteDispatchTransport(
+                        registry: registry,
+                        agent: { [weak p] in p?.snapshot.agent($0) },
+                        pending: { [weak p] in p?.snapshot.requests[$0] })
+                },
+                // AN ID IS REMOTE IF THE POLLER HAS SEEN IT, which is the only
+                // honest test: it is the same snapshot the grid drew the row
+                // from, so the reply goes where the row said it would. Asking
+                // the registry instead would be asking what COULD be remote
+                // rather than what is.
+                isRemote: { [weak poller] id in poller?.snapshot.agent(id) != nil })
             // The mirror: every page and turn into the hub, while the panel
             // runs. Nil until this Mac is connected; nothing else changes.
             if let mirror = HubMirror.fromMachine(store: store) {
@@ -574,6 +597,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 mirror.start()
                 Permissions.log("hub: mirroring to \(HubApp.baseURL?.host ?? "?") as \(mirror.device)")
             }
+            // Remote agents, on the same launch path as the mirror and for the
+            // same reason: it is a long-lived poller that must not be started
+            // twice and must stop cleanly.
+            //
+            // EVERY EVENT BECOMES A SPOOL LINE, which is the trick that makes
+            // this cheap: the line flows through the drainer the hooks already
+            // feed and arrives as a brief, a summary, speech, a hub page and
+            // the returned earcon with nothing new written downstream.
+            if let poller {
+                poller.trace = { Permissions.log("agents: \($0)") }
+                poller.onEvents = { [weak self] events in
+                    guard let self else { return }
+                    let snapshot = self.agents?.snapshot
+                    let lines = events.flatMap {
+                        RemoteSpool.lines(for: $0, agent: snapshot?.agent($0.session))
+                    }
+                    guard !lines.isEmpty else { return }
+                    RemoteSpool.append(lines, to: QueueStore.supportDirectory
+                        .appendingPathComponent("spool.jsonl"))
+                    // The drainer runs on the same beat the hooks' lines are
+                    // picked up on, so nothing new schedules it.
+                }
+                poller.start()
+                self.agents = poller
+                Permissions.log("agents: polling \(registry.configured().map(\.id).joined(separator: ", "))")
+            }
+
             let report = try store.reconcileOnBoot()
             if !report.adoptedAudio.isEmpty {
                 // Speech a previous process left unclaimed — a death, or an

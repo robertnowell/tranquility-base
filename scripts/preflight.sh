@@ -157,8 +157,33 @@ if [ "$TEST_STATUS" -ne 0 ]; then
   # a warning, and twenty of those from the build phase pushed every real
   # failure off the bottom of a CI log (PR #299: three lines, seven times,
   # and not one of them the failure).
-  printf '%s\n' "$TEST_OUT" | grep -E "✗|: error: |error: -\[|Test Case .* failed|Test Suite .* failed" \
+  # A CRASH IS NOT AN ASSERTION, and the patterns above could only see the
+  # second. A `fatalError` or a force-unwrapped nil kills the xctest process,
+  # so swift test reports "exited with unexpected signal code 5" and never
+  # prints "Test Case ... failed" at all. The grep matched nothing, the log
+  # said "✗ tests failed (exit 1)" and stopped, and finding out why cost a
+  # full CI round trip (14 Sep, PR #423).
+  #
+  # `unexpected signal` and `Fatal error` are what a crash actually prints.
+  printf '%s\n' "$TEST_OUT" | grep -E "✗|: error: |error: -\[|Test Case .* failed|Test Suite .* failed|unexpected signal|Fatal error|Crash:|couldn.t be loaded|incompatible architecture|recorded an issue" \
     | grep -v " warning: " | head -40 >&2 || true
+
+  # AND IF THAT MATCHED NOTHING, PRINT THE END OF THE RUN ANYWAY.
+  #
+  # Twice on 14 Sep a red CI build said exactly two lines, both of them "the
+  # tests failed", and neither said why. Patterns were added for crashes and
+  # it still said nothing, which means the guessing was the problem rather
+  # than any particular missing pattern: a grep can only find what somebody
+  # already thought of.
+  #
+  # So the rule is now the one this repo applies to failures everywhere else:
+  # a failure carries its reason. If the filter finds nothing, the last forty
+  # lines go out unfiltered. Noisy beats silent, and silent has now cost two
+  # round trips.
+  if ! printf '%s\n' "$TEST_OUT" | grep -qE "error|failed|signal|Fatal"; then
+    echo "  (no recognised failure line; the end of the run follows)" >&2
+    printf '%s\n' "$TEST_OUT" | tail -40 >&2
+  fi
   exit 1
 fi
 printf '%s\n' "$TEST_OUT" | grep -E "^✓ [0-9]+ XCTest" | tail -1 | sed 's/^✓/ /'

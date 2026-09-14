@@ -18,6 +18,20 @@ public struct Coordinator: Sendable {
     /// refuses cleanly in `dispatch` below instead of rerouting through it).
     public let tmuxTransport: any DispatchTransport
 
+    /// Answering an agent that runs somewhere else, or nil on a machine with
+    /// no provider configured.
+    ///
+    /// A SECOND TRANSPORT, chosen before the local pipeline starts rather than
+    /// inside it. That pipeline resolves a live process, a pane and a
+    /// transcript path, and a remote agent has none of the three; threading
+    /// "unless it is remote" through each step would be four guards that have
+    /// to agree, which is the shape `HarnessAdapter`'s own header warns about.
+    /// One branch, at the top, where the question is asked once.
+    public let remoteTransport: (any DispatchTransport)?
+    /// Whether an id belongs to a provider rather than to a process on this
+    /// Mac. Injected rather than asked of a global, so a test decides.
+    public let isRemote: @Sendable (String) -> Bool
+
     /// TRANSFERS ownership of a hand-started session dispatch resolved no
     /// tmux pane for — the mechanism `dispatch` reaches for BEFORE falling
     /// to `transport`, added 22 Aug alongside `SessionLauncher.resume`'s own
@@ -93,6 +107,8 @@ public struct Coordinator: Sendable {
         speech: SpeechChain = SpeechChain(),
         gate: InterruptGate = InterruptGate(),
         tmuxTransport: any DispatchTransport = TmuxTransport(),
+        remoteTransport: (any DispatchTransport)? = nil,
+        isRemote: @escaping @Sendable (String) -> Bool = { _ in false },
         enrolment: EnrolmentRegistry = EnrolmentRegistry(),
         agents: ClaudeAgentsReading = ClaudeAgentsCLI(),
         ownership: any SessionOwnershipStore = FileSessionOwnershipStore.shared,
@@ -125,6 +141,8 @@ public struct Coordinator: Sendable {
         self.speech = speech
         self.gate = gate
         self.tmuxTransport = tmuxTransport
+        self.remoteTransport = remoteTransport
+        self.isRemote = isRemote
         self.enrolment = enrolment
         self.agents = agents
         self.ownership = ownership

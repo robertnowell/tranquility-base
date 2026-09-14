@@ -15,6 +15,13 @@ final class CrobotProviderTests: XCTestCase {
         private(set) var created: [(String, String, String?)] = []
 
         struct Missing: Error {}
+        var who: String? = "robert@coframe.com"
+        private(set) var identityCalls = 0
+
+        func identity() async throws -> String? {
+            identityCalls += 1
+            return who
+        }
 
         func tasks(limit: Int) async throws -> [CrobotTask] {
             listLimits.append(limit)
@@ -73,6 +80,39 @@ final class CrobotProviderTests: XCTestCase {
         XCTAssertEqual(mine.map(\.providerID), [a])
         XCTAssertFalse(provider(g).can.listIsCallerScoped,
                        "declaring this true would make the filter look optional")
+    }
+
+    /// **Measured against the live gateway, 14 Sep: 115 tasks visible, 7 mine.**
+    /// A nil identity used to mean "show everything", so the wiring that passed
+    /// nil would have put 108 other people's agents on the panel. Refusing is
+    /// the safe direction: an empty list reads as nothing to show, a full one
+    /// reads as somebody else's work being yours.
+    func testWithNoIdentityItShowsNothingRatherThanEverything() async throws {
+        let g = Gateway()
+        g.who = nil
+        g.list = [task(a), task(b, by: "someone@else.com")]
+        let mine = try await CrobotProvider(transport: g, me: nil).mine()
+        XCTAssertTrue(mine.isEmpty, "a nil identity must not mean show everybody")
+    }
+
+    /// The identity is asked of the gateway when the caller does not supply
+    /// one, which is what the app does.
+    func testTheIdentityComesFromTheGatewayWhenNotSupplied() async throws {
+        let g = Gateway()
+        g.list = [task(a), task(b, by: "someone@else.com")]
+        let mine = try await CrobotProvider(transport: g, me: nil).mine()
+        XCTAssertEqual(mine.map(\.providerID), [a])
+        XCTAssertGreaterThanOrEqual(g.identityCalls, 1)
+    }
+
+    /// Archived means the disk was released and the record stays so a
+    /// follow-up can recreate the sandbox. 112 of the 115 were archived, and
+    /// listing them would bury three live agents under a hundred tombstones.
+    func testArchivedTasksAreHistoryRatherThanRows() async throws {
+        let g = Gateway()
+        g.list = [task(a, status: "idle"), task(b, status: "archived")]
+        let mine = try await provider(g).mine()
+        XCTAssertEqual(mine.map(\.providerID), [a])
     }
 
     /// `limit` slices newest-first, so a small page silently drops the
