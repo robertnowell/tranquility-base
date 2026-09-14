@@ -1088,6 +1088,53 @@ extension StatusHUD {
     /// app twice (06 Aug 14:35, 07 Aug 17:39). An unlit row whose liveness
     /// could not be proven must therefore do NOTHING on tap rather than fall
     /// through to the announce path it used to share.
+    /// **The agent grid draws what it says it draws.**
+    ///
+    /// `Sources/TranquilityApp` has no unit tests and cannot easily have them,
+    /// so a drill against a real view is this surface's only evidence (rule 7).
+    /// What it asserts is the promise the grid makes: every tile is an agent
+    /// this app can actually drive, each wears its vendor's own mark, and a
+    /// tile that needs setting up does NOT become the selection when tapped.
+    func agentGridDrill() {
+        let tiles = StatusHUD.agentTiles()
+        let offerable = Set(AgentRoster.validated.filter { $0.reach.isOfferable }.map(\.id))
+
+        // Built for real, at the real width, so a layout that cannot satisfy
+        // its constraints fails here rather than on screen.
+        let grid = AgentGridRow(width: 320, agents: tiles, selected: tiles.first?.id ?? "")
+        grid.layoutSubtreeIfNeeded()
+
+        let everyTileIsDrivable = tiles.allSatisfy { offerable.contains($0.id) }
+        let everyTileHasAMark = tiles.allSatisfy { AgentMarks.png($0.id) != nil }
+        let itIsAGridNotARow = AgentGridRow.columns == 3 && tiles.count > AgentGridRow.columns
+            ? grid.frame.height > AgentGridRow.tileHeight
+            : grid.frame.height >= AgentGridRow.tileHeight
+        let fourAgents = tiles.count == 4
+
+        // A greyed tile hands its step out and must not change the selection:
+        // picking an agent you cannot use leaves the panel pointing at
+        // something that cannot answer.
+        var handedOut: AgentRoster.Step?
+        var selectedInstead: String?
+        let notSetUp = AgentRoster.Agent(id: "opencode", name: "OpenCode", glyph: "○",
+                                         standing: .needsSetup(.signIn("Sign in")))
+        let greyed = AgentGridRow(width: 320, agents: [notSetUp], selected: "claude-code")
+        greyed.onSetUp = { _, step in handedOut = step }
+        greyed.onSelect = { selectedInstead = $0 }
+        if let button = greyed.subviews.compactMap({ $0 as? NSButton }).first {
+            button.performClick(nil)
+        }
+
+        SelfTest.report("agentGrid", [
+            ("everyTileIsAnAgentWeCanDrive", everyTileIsDrivable),
+            ("everyTileWearsItsOwnMark", everyTileHasAMark),
+            ("fourAgentsOffered", fourAgents),
+            ("itIsAGridNotARow", itIsAGridNotARow),
+            ("aGreyedTileOffersItsStep", handedOut != nil),
+            ("aGreyedTileDoesNotBecomeTheSelection", selectedInstead == nil),
+        ])
+    }
+
     func closedRowsDrill() {
         func row(_ id: String, _ lamp: Lamp,
                  revivable: Bool = false) -> SessionRow {

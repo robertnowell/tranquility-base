@@ -424,6 +424,8 @@ extension StatusHUD {
         setupChecklist.widthAnchor.constraint(
             equalToConstant: Self.gridWidth).isActive = true
 
+        _ = Self.agentTiles  // referenced below; keeps the helper next to its use
+
         settingsTabs = SettingsTabBar(width: Self.gridWidth)
         settingsTabs.isHidden = true
         settingsTabs.onSelect = { [weak self] tab in self?.showSettingsTab(tab) }
@@ -436,6 +438,36 @@ extension StatusHUD {
             guard let self else { return }
             self.viewingHarness = harness
             self.showAgentFields(for: harness)
+        }
+
+        // **The grid replaces the picker above.** That row listed
+        // `KnownHarnesses.all` — two entries — and labelled them with a
+        // hard-coded ternary, so a third agent would have been called
+        // "CLAUDE". Its own doc comment had already recorded the ruling it did
+        // not implement: this picker lists agents of both kinds, harnesses and
+        // providers alike, with no indication of which is which.
+        //
+        // What it lists is the roster filtered to agents this app can actually
+        // drive, which is the promise: a tile that signs you in to something
+        // TB cannot then use is worse than no tile.
+        agentGrid = AgentGridRow(
+            width: Self.gridWidth,
+            agents: Self.agentTiles(),
+            selected: AgentDefaults.defaultHarness)
+        agentGrid.onSelect = { [weak self] agent in
+            guard let self else { return }
+            self.viewingHarness = agent
+            self.showAgentFields(for: agent)
+            // Selecting IS choosing, ruled 14 Sep: "to the user it's just which
+            // agent do I want to use." The separate make-default click the old
+            // row carried was judged not worth its own step.
+            AgentDefaults.defaultHarness = agent
+            Track.record("setting_changed", ["key": "default_harness", "value": .token(agent)])
+            self.agentGrid.update(agents: Self.agentTiles(), selected: agent)
+            self.onDefaultHarnessChanged?()
+        }
+        agentGrid.onSetUp = { [weak self] agent, step in
+            self?.onAgentNeedsSetUp?(agent, step)
         }
         // Viewing a harness's settings and making it the one New Agent
         // launches are different questions (see HarnessPickerRow's own doc
@@ -468,6 +500,7 @@ extension StatusHUD {
         }
         directoryRow.onBrowse = { [weak self] in self?.pickAgentDirectory() }
         harnessPicker.isHidden = true
+        agentGrid.isHidden = true
         launchRow.isHidden = true; directoryRow.isHidden = true
 
         pastList = PastAgentsList(width: Self.gridWidth, height: 420)
@@ -541,7 +574,7 @@ extension StatusHUD {
                                         waitingRows, pastList, bodyLabel,
                                         stripRule, stripLabel, trayRow, gridFooter,
                                         countdownBar, meter,
-                                        settingsTabs, harnessPicker, launchRow, directoryRow,
+                                        settingsTabs, agentGrid, launchRow, directoryRow,
                                         voiceList, setupChecklist, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading

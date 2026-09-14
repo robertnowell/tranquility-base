@@ -202,6 +202,10 @@ final class StatusHUD: NSObject {
     var pastList: PastAgentsList!
     var settingsTabs: SettingsTabBar!
     var harnessPicker: HarnessPickerRow!
+    /// The agents you can pick, as tiles. Replaces the two-word picker above
+    /// it; that view stays declared while the self-tests that name it are
+    /// migrated, and is never added to the stack.
+    var agentGrid: AgentGridRow!
     var launchRow: SettingRowView!
     var directoryRow: SettingRowView!
     /// Which harness the Agents tab is currently showing fields for — pane-
@@ -1161,6 +1165,10 @@ final class StatusHUD: NSObject {
     /// item's icon updates immediately rather than waiting for whatever
     /// unrelated event next calls `rebuildMenu()`.
     var onDefaultHarnessChanged: (() -> Void)?
+    /// A tile that is not set up was tapped. The panel knows nothing about
+    /// installing or signing in — it hands the step to whoever does, which is
+    /// the same rule every other control on this surface keeps.
+    var onAgentNeedsSetUp: ((String, AgentRoster.Step) -> Void)?
 
     /// The host answers the voices pane's "Recent audio ▸" row by assembling
     /// events and calling `showRecentAudio` — the pane never reads the store.
@@ -1207,6 +1215,15 @@ final class StatusHUD: NSObject {
     /// their own `onCommit`/browse-completion handlers) rather than round-
     /// tripping back through here.
     func showAgentFields(for harness: String) {
+        // **A provider has no launch command and no working directory**, and
+        // showing empty ones would invite the user to configure something
+        // nothing reads. The fields belong to a harness this Mac starts; an
+        // agent that lives behind an API or a pipe is configured by its
+        // credential and nothing else.
+        let isHarness = KnownHarnesses.all.contains { $0.id == harness }
+        launchRow.isHidden = !isHarness
+        directoryRow.isHidden = !isHarness
+        guard isHarness else { return }
         launchRow.show(AgentDefaults.load(for: harness))
         launchRow.setPlaceholder(AgentDefaults.fallback(for: harness))
         directoryRow.show(AgentDefaults.directoryAsTyped(for: harness))
