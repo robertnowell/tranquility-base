@@ -101,7 +101,7 @@ fail() {
   # context under a warning, which also contains "XCTAssert" and used to fill
   # all twenty lines before a single real failure was reached (PR #299).
   printf '%s\n' "$OUT" \
-    | grep -E ": error: |error: -\[|Test Case .* failed|Test Suite .* failed|couldn't be loaded|incompatible architecture|recorded an issue" \
+    | grep -E ": error: |error: -\[|Test Case .* failed|Test Suite .* failed|unexpected signal|Fatal error|couldn't be loaded|incompatible architecture|recorded an issue" \
     | grep -v " warning: " | head -40 >&2 || true
   exit 1
 }

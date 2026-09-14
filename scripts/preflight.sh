@@ -157,7 +157,15 @@ if [ "$TEST_STATUS" -ne 0 ]; then
   # a warning, and twenty of those from the build phase pushed every real
   # failure off the bottom of a CI log (PR #299: three lines, seven times,
   # and not one of them the failure).
-  printf '%s\n' "$TEST_OUT" | grep -E "✗|: error: |error: -\[|Test Case .* failed|Test Suite .* failed" \
+  # A CRASH IS NOT AN ASSERTION, and the patterns above could only see the
+  # second. A `fatalError` or a force-unwrapped nil kills the xctest process,
+  # so swift test reports "exited with unexpected signal code 5" and never
+  # prints "Test Case ... failed" at all. The grep matched nothing, the log
+  # said "✗ tests failed (exit 1)" and stopped, and finding out why cost a
+  # full CI round trip (14 Sep, PR #423).
+  #
+  # `unexpected signal` and `Fatal error` are what a crash actually prints.
+  printf '%s\n' "$TEST_OUT" | grep -E "✗|: error: |error: -\[|Test Case .* failed|Test Suite .* failed|unexpected signal|Fatal error|Crash:|couldn.t be loaded|incompatible architecture|recorded an issue" \
     | grep -v " warning: " | head -40 >&2 || true
   exit 1
 fi
