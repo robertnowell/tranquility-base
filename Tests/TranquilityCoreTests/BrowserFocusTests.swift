@@ -8,6 +8,43 @@ final class BrowserFocusTests: XCTestCase {
 
     private let page = URL(fileURLWithPath: "/Users/x/Documents/agents/489b4804/index.html")
 
+    /// Every case below is about the script. The machine running them has
+    /// whatever default browser its owner set, so the answer is pinned here
+    /// and put back afterwards.
+    private var savedDefault: (() -> Bool)!
+    override func setUp() {
+        super.setUp()
+        savedDefault = BrowserFocus.chromeIsDefault
+        BrowserFocus.chromeIsDefault = { true }
+    }
+    override func tearDown() {
+        BrowserFocus.chromeIsDefault = savedDefault
+        super.tearDown()
+    }
+
+    // MARK: - The default browser
+
+    /// 14 Sep: a Safari user's doors went to a Chrome that happened to be
+    /// open. When Chrome is not the default, Chrome is not asked — the script
+    /// never runs — and the caller opens the URL the ordinary way, which
+    /// LaunchServices sends to the browser the person chose.
+    func testANonChromeDefaultNeverRunsTheScript() {
+        BrowserFocus.chromeIsDefault = { false }
+        var ran = 0
+        let count: (String) -> Result<String, ScriptError> = { _ in ran += 1; return .success("true") }
+        XCTAssertEqual(BrowserFocus.focusExistingTab(page, run: count), .notFound)
+        XCTAssertEqual(BrowserFocus.navigateExistingTab(to: page, within: page, run: count), .notFound)
+        XCTAssertEqual(BrowserFocus.reveal(page, app: nil, run: count), .notFound)
+        XCTAssertEqual(ran, 0)
+    }
+
+    func testAChromeDefaultStillReusesTheTab() {
+        var ran = 0
+        let outcome = BrowserFocus.focusExistingTab(page) { _ in ran += 1; return .success("true") }
+        XCTAssertEqual(outcome, .focused)
+        XCTAssertEqual(ran, 1)
+    }
+
     func testAMatchFocuses() {
         XCTAssertEqual(BrowserFocus.focusExistingTab(page) { _ in .success("true") },
                        .focused)
