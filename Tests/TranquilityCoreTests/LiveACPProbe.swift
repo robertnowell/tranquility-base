@@ -93,3 +93,57 @@ final class LiveACPProbe: XCTestCase {
         func record(_ method: String) { methods.insert(method) }
     }
 }
+
+/// **Does the catalog tell the truth?**
+///
+/// Every published entry this machine actually has, driven through a real
+/// handshake. A catalog is a list of CLAIMS about other people's software, and
+/// the first time this ran, one of the three testable entries was wrong:
+/// `cursor-agent` 2025.09.18 has no `acp` subcommand at all and drops into its
+/// interactive TUI, so the client saw the pipe close.
+///
+/// Guarded on `TB_ACP_VERIFY` because it spawns real agents, and skipped
+/// entirely in CI, which has none installed.
+final class ACPCatalogVerification: XCTestCase {
+
+    override func setUpWithError() throws {
+        try XCTSkipIf(ProcessInfo.processInfo.environment["TB_ACP_VERIFY"] == nil,
+                      "set TB_ACP_VERIFY=1 to drive every installed agent")
+    }
+
+    func testEveryInstalledEntryActuallySpeaksACP() async throws {
+        let installed = ACPCatalog.installed()
+        print("VERIFY: \(installed.count) of \(ACPCatalog.published.count) published "
+            + "agents are installed here")
+        XCTAssertFalse(installed.isEmpty, "nothing to verify on this machine")
+
+        var working: [String] = []
+        var broken: [(String, String)] = []
+        for (entry, command) in installed {
+            let transport = ACPProcessTransport(command: command, cwd: NSTemporaryDirectory())
+            let client = ACPClient(transport: transport)
+            await client.setTimeout(.seconds(25))
+            do {
+                try transport.start()
+                await client.start()
+                let shook = try await client.initialize()
+                working.append("\(entry.name) (\(shook.agentInfo?.name ?? "?") "
+                    + "\(shook.agentInfo?.version ?? ""))")
+            } catch {
+                broken.append((entry.name, "\(error)"))
+            }
+            await client.close()
+        }
+
+        print("VERIFY working: \(working.joined(separator: ", "))")
+        for (name, why) in broken { print("VERIFY BROKEN  \(name): \(why)") }
+
+        // Deliberately NOT an assertion that everything works. A catalog entry
+        // that is wrong on this machine may be right on the next one, and the
+        // published list is a list, not a promise. What this asserts is that
+        // SOMETHING works, so a wholesale regression in the client cannot hide
+        // behind "well, none of them are installed".
+        XCTAssertFalse(working.isEmpty,
+                       "no installed agent completed a handshake: \(broken)")
+    }
+}

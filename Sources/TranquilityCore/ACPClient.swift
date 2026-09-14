@@ -47,7 +47,11 @@ public actor ACPClient {
     /// How long any one request may take. Generous, because a prompt turn is a
     /// model call: the live probe's round trip was 22 seconds and that was a
     /// three-token answer.
-    public var timeout: Duration = .seconds(180)
+    public private(set) var timeout: Duration = .seconds(180)
+
+    /// Shortened when a caller is probing rather than working: a catalog sweep
+    /// across eleven agents cannot spend three minutes per broken one.
+    public func setTimeout(_ value: Duration) { timeout = value }
 
     public init(transport: any ACPTransport) {
         self.transport = transport
