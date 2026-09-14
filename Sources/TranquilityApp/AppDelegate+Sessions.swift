@@ -418,10 +418,24 @@ extension AppDelegate {
             Permissions.log(String(format:
                 "send: refused, silence gate (%.2fs, peak %.4f)", seconds, recorder.peakLevel))
             recordingDestination = nil
-            // Refused here, the write-ahead file has no row and never will;
-            // left alone it sits as `.wav.live` — the shape of a kept capture —
-            // until the 72h reap. Thirteen of them were on disk on 14 Sep.
-            if let capturedFile { try? FileManager.default.removeItem(at: capturedFile) }
+            if seconds < 0.5 {
+                // Refused here, the write-ahead file has no row and never
+                // will; left alone it sits as `.wav.live` — the shape of a
+                // kept capture — until the 72h reap. Thirteen of them were on
+                // disk on 14 Sep. Under half a second is room tone: cleanup.
+                if let capturedFile { try? FileManager.default.removeItem(at: capturedFile) }
+            } else if let store {
+                // Long enough to be words, too quiet to send unread. Ruled
+                // 14 Sep 2026: salvageable audio is salvaged. A row with Play
+                // and Retry, no provider spent unasked.
+                if let row = try? store.keepUntranscribed(pcm16: pcm, sampleRate: 16_000,
+                                                           preWritten: capturedFile, because: "silence_gate") {
+                    Permissions.log("send: quiet capture kept untranscribed as \(row.id.prefix(8))")
+                    Track.record("capture_kept", ["reason": "silence_gate", "outcome": "kept_untranscribed",
+                                                  "audio_ms": .int(Int(seconds * 1000))])
+                    hud.updateRecentAudio(events: recentAudioEvents())
+                }
+            }
             reportNothingHeard(because: seconds < 0.5 ? "too short" : "below signal threshold")
             return
         }

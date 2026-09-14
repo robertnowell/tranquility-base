@@ -32,6 +32,15 @@ public enum KeepAudioDrill {
     /// rule gates on duration and the caller's speech evidence, not content.
     private static func pcm(seconds: Double) -> Data { Data(count: Int(seconds * 16000) * 2) }
 
+    /// The same, with a signal in it: every sample at `amplitude`, so the
+    /// file's peak reads back as amplitude/32768 wherever peak matters.
+    private static func pcm(seconds: Double, amplitude: Int16) -> Data {
+        var data = Data(capacity: Int(seconds * 16000) * 2)
+        let le = amplitude.littleEndian
+        for _ in 0..<Int(seconds * 16000) { withUnsafeBytes(of: le) { data.append(contentsOf: $0) } }
+        return data
+    }
+
     public static func run(now: Date = Date()) throws -> [Group] {
         let fm = FileManager.default
         let root = fm.temporaryDirectory
@@ -73,11 +82,19 @@ public enum KeepAudioDrill {
         try orphan.append(pcm16: pcm(seconds: 1))
         _ = try orphan.close()
         try? fm.setAttributes([.modificationDate: old], ofItemAtPath: orphan.url.path)
+        // A short orphan WITH a signal in it is a press that died mid-word
+        // (ruled 14 Sep 2026: salvageable audio is salvaged, only room tone
+        // is cleanup). Same 1s, but the samples are not zero.
+        let spokenOrphan = try LiveAudioCapture(utteranceId: "keep-spoken-orphan", sampleRate: 16000, directory: audio)
+        try spokenOrphan.append(pcm16: pcm(seconds: 1, amplitude: 3000))
+        _ = try spokenOrphan.close()
+        try? fm.setAttributes([.modificationDate: old], ofItemAtPath: spokenOrphan.url.path)
 
         let store = try QueueStore(url: root.appendingPathComponent("queue.sqlite"))
         let report = try store.reconcileOnBoot(audioDirectory: audio)
         let adopted = Set(report.adoptedAudio)
         let longRow = try store.utterance(id: "keep-long")
+        let spokenOrphanRow = try store.utterance(id: "keep-spoken-orphan")
 
         let boot = Group(name: "bootAdopt", checks: [
             Check("keptLongAdopted", adopted.contains("keep-long")),
@@ -85,8 +102,10 @@ public enum KeepAudioDrill {
             Check("adoptedRowHasNoTranscript", longRow?.transcriptText == nil),
             Check("adoptedRowDatedByFile",
                   longRow.map { abs(Double($0.createdAtMs) / 1000 - old.timeIntervalSince1970) < 2 } ?? false),
-            Check("shortOrphanNotAdopted", !adopted.contains("keep-orphan")),
-            Check("shortOrphanStaysForReap", fm.fileExists(atPath: orphan.url.path)),
+            Check("silentOrphanNotAdopted", !adopted.contains("keep-orphan")),
+            Check("silentOrphanStaysForReap", fm.fileExists(atPath: orphan.url.path)),
+            Check("spokenShortOrphanAdopted", adopted.contains("keep-spoken-orphan")
+                  && spokenOrphanRow?.status == .recorded),
         ])
 
         // F — a kept file is a Recents row the moment it is kept, not at the
@@ -125,6 +144,14 @@ public enum KeepAudioDrill {
         let dismissedSlip = try awaitDismiss(store: store, audioStore: audioStore,
                                              pcm16: pcm(seconds: 0.3), peak: 0.5, preWritten: slipFile.url,
                                              utteranceId: "keep-dismissed-slip")
+        // Long enough to be words, too quiet for the recorder to vouch for:
+        // kept as a row, no transcript, nothing spent.
+        let quiet = try LiveAudioCapture(utteranceId: "keep-dismissed-quiet", sampleRate: 16000, directory: audio)
+        try quiet.append(pcm16: pcm(seconds: 2))
+        _ = quiet.abandon(hadSpeech: true)
+        let dismissedQuiet = try awaitDismiss(store: store, audioStore: audioStore,
+                                              pcm16: pcm(seconds: 2), peak: 0.001, preWritten: quiet.url,
+                                              utteranceId: "keep-dismissed-quiet")
         let boot2 = try store.reconcileOnBoot(audioDirectory: audio)
         let afterBoot = try store.utterance(id: "keep-dismissed")
         let slipRow = try store.utterance(id: "keep-dismissed-slip")
@@ -139,6 +166,10 @@ public enum KeepAudioDrill {
                   && afterBoot?.status == .discarded),
             Check("dismissedRoomToneHasNoRow", dismissedSlip == nil && slipRow == nil),
             Check("dismissedRoomToneIsRemoved", !fm.fileExists(atPath: slipFile.url.path)),
+            Check("dismissedQuietIsKeptUntranscribed", dismissedQuiet?.status == .recorded
+                  && dismissedQuiet?.transcriptText == nil
+                  && dismissedQuiet?.transcriptionOutcome == "kept_dismissed_quiet"
+                  && (dismissedQuiet?.audioPath.map { fm.fileExists(atPath: $0) } ?? false)),
         ])
 
         return [keep, boot, now, dismiss]

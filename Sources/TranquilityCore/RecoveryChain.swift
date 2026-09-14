@@ -316,11 +316,22 @@ extension QueueStore {
         utteranceId: String? = nil
     ) async throws -> Utterance? {
         let seconds = Double(pcm16.count) / 2.0 / sampleRate
-        guard seconds >= 0.5, peak >= Recorder.silenceFloor else {
+        guard seconds >= 0.5 else {
             if let preWritten { try? FileManager.default.removeItem(at: preWritten) }
             Track.record("capture_kept", ["reason": "dismissed", "outcome": "room_tone",
                                           "audio_ms": .int(Int(seconds * 1000)), "peak": .double(Double(peak))])
             return nil
+        }
+        guard peak >= Recorder.silenceFloor else {
+            // Long enough to be words, too quiet for the recorder to vouch
+            // for. Not cleanup: it has a chance of holding speech, so it is
+            // kept as a row a human can play and retry, and no provider is
+            // spent on it unasked.
+            let row = try keepUntranscribed(pcm16: pcm16, sampleRate: sampleRate, audioStore: audioStore,
+                                            preWritten: preWritten, utteranceId: utteranceId, because: "dismissed_quiet")
+            Track.record("capture_kept", ["reason": "dismissed", "outcome": "kept_untranscribed",
+                                          "audio_ms": .int(Int(seconds * 1000)), "peak": .double(Double(peak))])
+            return row
         }
         var utterance = try await captureAndTranscribe(
             pcm16: pcm16, sampleRate: sampleRate, audioStore: audioStore, chain: chain,
@@ -338,6 +349,34 @@ extension QueueStore {
             "audio_ms": .int(Int(seconds * 1000)),
             "chars": .int(utterance.transcriptText?.count ?? 0),
         ])
+        return utterance
+    }
+
+    /// The durability floor alone: a `.recorded` row with its audio and no
+    /// transcript, for audio nobody should spend a provider on unasked but
+    /// nobody may delete either — a capture the silence gate refused as too
+    /// quiet, or a dismissed one the recorder could not vouch for. Recents
+    /// shows it with Play and Retry.
+    @discardableResult
+    public func keepUntranscribed(
+        pcm16: Data,
+        sampleRate: Double,
+        audioStore: AudioStore = AudioStore(),
+        preWritten: URL? = nil,
+        utteranceId: String? = nil,
+        because reason: String
+    ) throws -> Utterance {
+        var utterance = Utterance(id: utteranceId ?? UUID().uuidString, eventId: nil, status: .recorded)
+        utterance.captureId = Track.captureID
+        let stored = try adopt(preWritten, as: utterance.id, audioStore: audioStore)
+            ?? audioStore.write(pcm16Data: pcm16, sampleRate: sampleRate, utteranceId: utterance.id)
+        utterance.audioPath = stored.url.path
+        utterance.audioBytes = stored.byteCount
+        utterance.audioSha256 = stored.sha256
+        utterance.audioDurationMs = stored.durationMs
+        utterance.transcriptionOutcome = "kept_" + reason
+        try update(utterance: utterance)
+        Self.trace?("\(reason): kept \(utterance.id.prefix(8)) (\(stored.durationMs / 1000)s) untranscribed in Recents")
         return utterance
     }
 

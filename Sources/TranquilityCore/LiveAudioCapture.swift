@@ -262,6 +262,23 @@ public final class LiveAudioCapture: @unchecked Sendable {
         public func durationMs(sampleRate: Double = 16000) -> Int64 {
             Int64((Double(max(0, byteCount - 44)) / 2.0 / sampleRate) * 1000)
         }
+
+        /// The loudest sample in the file, 0...1 — the same evidence the
+        /// recorder's `peakLevel` gives a live capture, read back from disk
+        /// for one a dead process left. A three-minute file is ~3M samples
+        /// and reads in milliseconds.
+        public func peak() -> Float {
+            guard let data = try? Data(contentsOf: url), data.count > 44 else { return 0 }
+            var loudest: Int32 = 0
+            data.withUnsafeBytes { raw in
+                let samples = raw.bindMemory(to: Int16.self)
+                for i in 22..<samples.count {
+                    let v = Int32(Int16(littleEndian: samples[i]))
+                    loudest = max(loudest, abs(v))
+                }
+            }
+            return Float(loudest) / 32768
+        }
     }
 
     /// Adopt an interrupted recording as a finished one, so it can be

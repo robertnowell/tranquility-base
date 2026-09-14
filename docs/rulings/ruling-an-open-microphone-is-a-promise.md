@@ -98,6 +98,22 @@ The drill grew two groups, `keptNow` and `dismissKeeps`, run on every deploy
 and by `tbase keepdrill`. The dismiss group's chain is a fixture; it spends
 nothing.
 
+### The ruling, widened (14 Sep 2026, by the user, on hearing the above)
+
+> "Any audio that we have access to should not be lost. Effectively, unless
+> it's part of cleanup or something. But if it has a chance of having user
+> data and it's salvageable, it should be salvaged."
+
+So rule 3's ten-second floor is gone. The boot sweep applies the recorder's
+own keep rule to files the recorder never got to judge: committed length
+(ten seconds), or half a second and a peak above the silence floor, read
+back from the file. What remains for the reap is room tone: under half a
+second, or never above the floor. The same line runs through the two gates
+that refuse audio: under half a second is removed; longer and too quiet is
+kept as an untranscribed row (`keepUntranscribed`) with Play and Retry, no
+provider spent unasked. Rule 3's "not transcribed unasked" still stands for
+every adopted row.
+
 Still open from the list above: partials durable as they arrive (a process
 death mid-hold still loses the streamed text and recovers from the file), and
 Recents has no Copy — a kept transcript can be read there and played, not

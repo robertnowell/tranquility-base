@@ -1466,8 +1466,17 @@ public final class QueueStore: Sendable {
         var adopted: [String] = []
         for interrupted in LiveAudioCapture.interrupted(in: directory) {
             guard !known.contains(interrupted.utteranceId) else { continue }
-            guard interrupted.durationMs() >= floorMs else { continue }
             guard now.timeIntervalSince(interrupted.modifiedAt) > 5 else { continue }
+            // The recorder's own keep rule, applied to a file it never got to
+            // judge: committed length, or speech by the same silence floor.
+            // Ruled 14 Sep 2026: "any audio we have access to should not be
+            // lost, unless it's part of cleanup; if it has a chance of having
+            // user data and is salvageable, it should be salvaged." Under
+            // half a second, or never above the floor, is room tone — cleanup.
+            let ms = interrupted.durationMs()
+            let committed = ms >= floorMs
+            let spoken = ms >= 500 && interrupted.peak() >= Recorder.silenceFloor
+            guard committed || spoken else { continue }
             guard let id = try? adopt(interrupted, outcome: "adopted_at_boot", trace: "boot") else { continue }
             adopted.append(id)
         }

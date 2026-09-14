@@ -247,9 +247,30 @@ final class QueueStoreTests: XCTestCase {
         XCTAssertTrue(try store.reconcileOnBoot(audioDirectory: audio).adoptedAudio.isEmpty)
     }
 
+    /// A press that died mid-word: one second, and it has a signal in it.
+    /// Ruled 14 Sep 2026: salvageable audio is salvaged; the boot sweep's
+    /// ten-second floor was the gap between "kept" and "reachable".
+    func testAShortOrphanWithSpeechIsAdoptedAtBoot() throws {
+        let audio = tmpDir.appendingPathComponent("audio", isDirectory: true)
+        let capture = try LiveAudioCapture(utteranceId: "capture-word", sampleRate: 16000, directory: audio)
+        var spoken = Data(capacity: 16000 * 2)
+        for _ in 0..<16000 { withUnsafeBytes(of: Int16(2000).littleEndian) { spoken.append(contentsOf: $0) } }
+        try capture.append(pcm16: spoken)
+        try capture.close()
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-120)],
+                                              ofItemAtPath: capture.url.path)
+
+        let report = try store.reconcileOnBoot(audioDirectory: audio)
+
+        XCTAssertEqual(report.adoptedAudio, ["capture-word"])
+        let row = try XCTUnwrap(try store.utterance(id: "capture-word"))
+        XCTAssertEqual(row.status, .recorded)
+        XCTAssertEqual(row.audioDurationMs, 1_000)
+    }
+
     func testAShortOrphanLiveCaptureIsLeftForTheReap() throws {
-        // A press that died in the arm window: milliseconds, no speech.
-        // Offering it back would be worse than silence.
+        // A press that died in the arm window: one second of digital
+        // silence, no speech. Offering it back would be worse than silence.
         let audio = tmpDir.appendingPathComponent("audio", isDirectory: true)
         let capture = try LiveAudioCapture(utteranceId: "capture-slip", sampleRate: 16000, directory: audio)
         try capture.append(pcm16: Data(count: 16000 * 2))   // one second
