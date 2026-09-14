@@ -1955,6 +1955,12 @@ extension AppDelegate {
         // state whose entire meaning is "you restarted and it did not take",
         // which was a false accusation here.
         let unmeasurableIsNotStale = Permissions.stale.isEmpty
+        // ...and must not be REPORTED as missing either. The app's own gate was
+        // right all along on 13 Sep; the launch event was the thing that
+        // disagreed with it, so an install with every permission in order sent
+        // three "a permission is missing" alerts in one afternoon. An alert
+        // that contradicts the app it watches trains you to ignore it.
+        let unmeasurableIsNotAlertedOn = Permissions.failingTheGate.isEmpty
         Permissions.previewStates = realStates
 
         // The Automation pane is a generated list of app-to-app pairs. It has
@@ -1978,6 +1984,7 @@ extension AppDelegate {
             ("unmeasurableDoesNotBlock", unmeasurableDoesNotBlock),
             ("unmeasurableCountsAsDone", unmeasurableCountsAsDone),
             ("unmeasurableIsNotStale", unmeasurableIsNotStale),
+            ("unmeasurableIsNotAlertedOn", unmeasurableIsNotAlertedOn),
             ("automationRemedyIsPossible", automationRemedyIsPossible),
             ("automationRouteIsAnchored", automationRouteIsAnchored),
             ("nothingIsOptional", nothingIsOptional),
