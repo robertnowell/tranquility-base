@@ -1145,7 +1145,36 @@ extension StatusHUD {
             button.performClick(nil)
         }
 
+        // **Is it actually ON SCREEN?**
+        //
+        // Everything above this line builds a view and asks it questions,
+        // which is a fixture describing itself. The first version of this
+        // drill stopped there and passed while the Agents tab showed no grid
+        // at all: the row was in the stack and permanently hidden, because the
+        // code that un-hides it still named the view it replaced. A drill that
+        // cannot see the panel cannot catch that, and a screenshot did.
+        _ = pose("settings")
+        // On the tab it is asserting about. `pose("settings")` opens the pane
+        // at whatever tab it defaults to, and a grid that is correctly hidden
+        // on VOICES proves nothing about AGENTS.
+        showSettingsTab(.agents)
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        func findGrid(_ view: NSView) -> AgentGridRow? {
+            if let grid = view as? AgentGridRow { return grid }
+            for sub in view.subviews { if let found = findGrid(sub) { return found } }
+            return nil
+        }
+        let onScreen = panel?.contentView.flatMap(findGrid)
+        let gridIsInThePanel = onScreen != nil
+        let gridIsVisible = onScreen.map { !$0.isHidden && $0.frame.height > 0 } ?? false
+        let tilesAreVisible = onScreen.map { grid in
+            grid.subviews.contains { !$0.isHidden && $0.frame.width > 0 }
+        } ?? false
+
         SelfTest.report("agentGrid", [
+            ("gridIsInThePanel", gridIsInThePanel),
+            ("gridIsVisibleOnTheAgentsTab", gridIsVisible),
+            ("itsTilesAreDrawn", tilesAreVisible),
             ("everyTileIsAnAgentWeCanDrive", everyTileIsDrivable),
             ("everyTileWearsItsOwnMark", everyTileHasAMark),
             ("fourAgentsOffered", fourAgents),
