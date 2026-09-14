@@ -33,6 +33,11 @@ public enum TranscriptionFailure: Error, Sendable, Equatable {
     /// Closed without an end-of-turn signal. Carries whatever partial existed —
     /// but the caller must treat it as suspect, never as final.
     case truncatedNoFinality(partial: String)
+    /// Closed WITH an end-of-turn signal, but the transcript stops far short of
+    /// the audio the server acknowledges receiving. The partial is whatever the
+    /// stream did say — suspect for the same reason, and for the same reason
+    /// never returned as a result. See `AssemblyAIStreaming.speechModel`.
+    case coverageShort(partial: String)
     case fileUnreadable
     case providerUnavailable(String)
     case providerHTTP(status: Int, stage: String)

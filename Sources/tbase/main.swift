@@ -43,7 +43,7 @@ func usage() -> Never {
       tbase transcribe <wav> [--apple-only|--openai-only|--assemblyai-only]
                                 run the file-based recovery chain, optionally
                                 pinned to one rung so it can be probed alone
-      tbase transcribe-stream <wav> [--chunk-ms N]
+      tbase transcribe-stream <wav> [--chunk-ms N] [--model NAME]
                                 replay a saved recording through the AssemblyAI
                                 streaming provider in pseudo-realtime; --chunk-ms
                                 replays a capture stack's real feed cadence
@@ -1657,7 +1657,13 @@ case "reconcile":
         guard args.count > 1 else { usage() }
         AssemblyAIStreaming.trace = { print("  assemblyai: \($0)") }
         StreamedUtterance.trace = { print("  stream: \($0)") }
-        let provider = AssemblyAIStreaming()
+        var provider = AssemblyAIStreaming()
+        // `--model X` drives another model through the real client path: the
+        // A/B control for "is the promoted default still safe", and the only
+        // way to exercise the coverage guard against a live server.
+        if let i = args.firstIndex(of: "--model"), args.indices.contains(i + 1) {
+            provider.speechModel = args[i + 1]
+        }
         guard provider.isConfigured else {
             print("assemblyai key is not configured — run: tbase set-key assemblyai")
             exit(2)

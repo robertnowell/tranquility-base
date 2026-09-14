@@ -54,6 +54,7 @@ extension TranscriptionFailure {
         case .audioRateExceeded: return "audio_rate_exceeded"
         case .noSpeechDetected: return "no_speech_detected"
         case .truncatedNoFinality: return "missing_finality"
+        case .coverageShort: return "coverage_short"
         case .fileUnreadable: return "file_unreadable"
         case .offline: return "offline"
         case .providerUnavailable: return "provider_unavailable"
