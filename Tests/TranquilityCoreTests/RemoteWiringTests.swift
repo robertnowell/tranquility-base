@@ -146,7 +146,7 @@ final class RemoteWiringTests: XCTestCase {
                           unread: [], unreachable: snapshot.unreachable))).rows
 
         XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].lamp, .fault, "a blocked remote agent shows amber")
+        XCTAssertEqual(rows[0].lamp, .ready, "an agent asking you something shows green")
         XCTAssertEqual(rows[0].aux, "Merge?")
     }
 }

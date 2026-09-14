@@ -14,6 +14,16 @@ import Foundation
 /// must not be able to empty the grid.
 enum Wire {
 
+    // MARK: - Status
+
+    /// One entry of `GET /session/status`. Every field optional because the
+    /// shape differs by build; `type` absent is read as idle.
+    struct Status: Decodable {
+        var sessionID: String?
+        var id: String?
+        var type: String?
+    }
+
     // MARK: - Session
 
     struct Session: Decodable {
@@ -25,18 +35,25 @@ enum Wire {
 
         struct Time: Decodable { var created: Double?; var updated: Double? }
 
-        func agentSession(provider: String) -> AgentSession {
+        /// - Parameter busy: session ids the server says it is working on right
+        ///   now, from `GET /session/status`. Absent from that set means the
+        ///   turn is over, which is a FACT the server stated and not a guess.
+        ///
+        ///   This used to hard-code `.unknown`, on the reasoning that
+        ///   `/session` says a session exists and not what it is doing. True,
+        ///   and the wrong conclusion: `/session/status` says exactly what it
+        ///   is doing, and crobot's own gateway has been reading it all along
+        ///   (`gateway/src/opencode.ts`, `busySessions`). Asserting ignorance
+        ///   next to an endpoint that answers is not honesty, it is an
+        ///   unread route — and under the 14 Sep three-lamp ruling it painted
+        ///   22 working local sessions amber.
+        func agentSession(provider: String, busy: Set<String>) -> AgentSession {
             // `of` keeps the addressable id and the server's own id together,
             // so nothing downstream has to reverse a one-way hash.
             AgentSession.of(
                 id, provider: provider,
                 title: title ?? "",
-                // A LOCAL SERVER DOES NOT REPORT A STATE, and inventing one is
-                // the failed-poll bug in another costume. `/session` says a
-                // session exists, not what it is doing; the event stream and
-                // the pending-request fetch say that. `.unknown` is the honest
-                // answer and it renders as unreachable rather than as calm.
-                state: .unknown,
+                state: busy.contains(id) ? .working : .completed,
                 updatedAt: Self.date(time?.updated ?? time?.created))
         }
 

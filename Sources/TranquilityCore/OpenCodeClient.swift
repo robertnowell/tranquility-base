@@ -83,7 +83,32 @@ public struct OpenCodeClient: Sendable {
     /// task, so this returns that task's sessions and nobody else's.
     public func sessions() async throws -> [AgentSession] {
         let data = try await call("GET", "/session")
-        return decodeList(data, as: Wire.Session.self).map { $0.agentSession(provider: provider) }
+        let busy = await busySessions()
+        return decodeList(data, as: Wire.Session.self)
+            .map { $0.agentSession(provider: provider, busy: busy) }
+    }
+
+    /// The ids the server is working on right now. Empty when it is idle.
+    ///
+    /// Shaped from crobot's `busySessions`, which reads the same route against
+    /// the same server: the payload is EITHER an array of `{sessionID, type}`
+    /// OR an object keyed by session id, depending on the build, and anything
+    /// whose `type` is not `idle` is busy. A live 1.18.30 returns `{}`.
+    ///
+    /// Failure is not fatal and is not `.unknown`: this route is an enrichment
+    /// of a list that already succeeded, so losing it costs blue, never the
+    /// row. The one thing it must not do is report everything busy.
+    func busySessions() async -> Set<String> {
+        guard let data = try? await call("GET", "/session/status") else { return [] }
+        if let array = try? JSONDecoder().decode([Wire.Status].self, from: data) {
+            return Set(array.filter { $0.type != "idle" }.compactMap { $0.sessionID ?? $0.id })
+        }
+        if let map = try? JSONDecoder().decode([String: Wire.Status?].self, from: data) {
+            return Set(map.compactMap { key, value in
+                (value.flatMap { $0 }?.type ?? "idle") != "idle" ? key : nil
+            })
+        }
+        return []
     }
 
     public func start() async throws -> AgentSession.ID {

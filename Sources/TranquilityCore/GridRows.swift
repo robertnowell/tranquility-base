@@ -150,21 +150,19 @@ public extension GridAssembler {
         public var harnessById: [String: String]
     }
 
-    /// The lamp a bucket draws.
+    /// The lamp a bucket draws. Three of them, and there is no fourth.
     ///
     /// One mapping, so a remote row and a local row cannot come to mean
-    /// different things by the same colour. `unreachable` is the one that did
-    /// not exist before remote agents: a provider we cannot reach is not quiet,
-    /// and `.running` is the app's existing word for "alive, nothing owed",
-    /// which is the closest honest lamp. The row's WORDS carry the difference,
-    /// because a colour cannot say "as of four minutes ago".
+    /// different things by the same colour. `.running` is deliberately absent:
+    /// measured on 14 Sep, the quiet lamp was worn by 23 rows and every one of
+    /// them was remote, which means this band invented a fourth lamp the local
+    /// grid had never used. `.unlit` is absent for the same reason in reverse —
+    /// it is reachable only through the user's own switch, or a dead process.
     static func lamp(for bucket: AgentPresentation) -> Lamp {
         switch bucket {
-        case .needsYou: return .fault
-        case .unread: return .ready
+        case .yours: return .ready
         case .working: return .working
-        case .idle, .unreachable: return .running
-        case .done: return .unlit
+        case .problem: return .fault
         }
     }
 
@@ -178,9 +176,11 @@ public extension GridAssembler {
         if let request, !request.asked.isEmpty { return request.asked }
         if silent != nil { return "cannot reach it" }
         switch bucket {
-        case .needsYou: return "needs you"
+        case .problem: return "needs you"
         case .working: return "working"
-        case .unread, .idle, .done, .unreachable: return SessionRow.shortId(id)
+        // Green says "your turn" by being green. The column spends itself on
+        // the id, which is the thing you would otherwise be grepping for.
+        case .yours: return SessionRow.shortId(id)
         }
     }
 
@@ -422,9 +422,9 @@ public extension GridAssembler {
             placed.insert(agent.id)
             let request = input.remote.requests[agent.id]
             let bucket = AgentPresentation.bucket(
-                state: agent.state,
-                hasPendingRequest: request != nil,
-                hasUnread: input.remote.unread.contains(agent.id))
+                state: agent.state, hasPendingRequest: request != nil)
+            // Read-state is carried alongside the lamp, never inside it.
+            let unread = input.remote.unread.contains(agent.id)
             let silent = input.remote.unreachable[agent.provider]
             rows.append(SessionRow(
                 id: agent.id,
@@ -438,11 +438,17 @@ public extension GridAssembler {
                 aux: Self.remoteAux(bucket: bucket, request: request, silent: silent,
                                     id: agent.id),
                 lamp: Self.lamp(for: bucket),
-                // A remote agent cannot be revived by relaunching a command;
-                // whether it can be restarted at all is its provider's
-                // business, and `Capabilities` answers that where it matters.
+                // False because nothing archived reaches this band YET, not
+                // because remote agents cannot be revived. They can: crobot's
+                // own source says an archived task "stays listed, keeps its
+                // archived transcript, and can resume onto a fresh sandbox"
+                // (gateway/src/task-archive.ts:13), and `CrobotProvider.mine`
+                // filters `archived` out of the list entirely. When that filter
+                // lifts, this becomes a provider capability and never a
+                // constant — a declared capability nothing reads is worse than
+                // no capability (provider seam, rule 5).
                 revivable: false,
-                read: bucket == .unread ? .unread : .none,
+                read: unread ? .unread : .none,
                 detail: Self.remoteDetail(request: request, silent: silent, agent: agent),
                 harness: agent.provider,
                 // The provider said where this agent lives, or said it lives

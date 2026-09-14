@@ -96,8 +96,8 @@ final class AgentPollerTests: XCTestCase {
                        "a poll that failed must not leave a stale working lamp either")
         XCTAssertNotNil(after.unreachable["a"], "the provider's silence has a reason recorded")
         XCTAssertEqual(
-            AgentPresentation.bucket(state: .unknown, hasPendingRequest: false, hasUnread: false),
-            .unreachable, "and it renders as unreachable, not as a calm agent")
+            AgentPresentation.bucket(state: .unknown, hasPendingRequest: false),
+            .problem, "and it renders amber, not as a calm agent")
     }
 
     /// The row keeps its age so staleness is visible rather than invented.
