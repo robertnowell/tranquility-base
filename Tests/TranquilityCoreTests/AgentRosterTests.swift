@@ -17,7 +17,10 @@ final class AgentRosterTests: XCTestCase {
     /// have proven two.
     func testTheRosterIsTheShortlistAndNotThePublishedCatalog() {
         let roster = Set(AgentRoster.validated.map(\.id))
-        XCTAssertEqual(roster, ["claude-code", "codex", "crobot", "opencode", "devin"])
+        XCTAssertEqual(roster, ["claude-code", "codex", "crobot", "opencode"])
+        XCTAssertFalse(roster.contains("devin"),
+                       "Devin is proven at the protocol and wired to nothing; four we "
+                       + "can drive beats five where one is a promise")
         // Cursor is published, installed on at least one machine, and BROKEN
         // there (no `acp` subcommand at all). It must not be offered.
         XCTAssertTrue(ACPCatalog.published.contains { $0.id == "cursor" })
@@ -39,13 +42,13 @@ final class AgentRosterTests: XCTestCase {
     // MARK: - A tile is a tick, or a next step
 
     func testAnInstalledAndCredentialedAgentIsSimplyReady() {
-        let tile = grid(installed: ["devin"], credentialed: ["devin"])
-            .first { $0.id == "devin" }
+        let tile = grid(installed: ["opencode"], credentialed: ["opencode"])
+            .first { $0.id == "opencode" }
         XCTAssertEqual(tile?.standing, .ready)
     }
 
     func testAnAgentThatIsNotHereOffersTheInstall() {
-        let tile = grid().first { $0.id == "devin" }
+        let tile = grid().first { $0.id == "opencode" }
         guard case .needsSetup(.install) = tile?.standing else {
             return XCTFail("\(String(describing: tile?.standing))")
         }
@@ -54,8 +57,8 @@ final class AgentRosterTests: XCTestCase {
     /// **Signed out is an ordinary state, not an error.** It offers the step
     /// and nothing else: no failure, no block, no red.
     func testBeingSignedOutOffersASignInAndNotAFailure() {
-        let tile = grid(installed: ["devin"], credentialed: ["devin"],
-                        signedOut: ["devin"]).first { $0.id == "devin" }
+        let tile = grid(installed: ["opencode"], credentialed: ["opencode"],
+                        signedOut: ["opencode"]).first { $0.id == "opencode" }
         guard case .needsSetup(.signIn) = tile?.standing else {
             return XCTFail("\(String(describing: tile?.standing))")
         }
@@ -126,30 +129,40 @@ extension AgentRosterTests {
     /// nowhere, and Devin is proven at the protocol and wired to nothing.
     func testOnlyAgentsTheAppCanActuallyDriveAreOfferable() {
         let offerable = AgentRoster.validated.filter { $0.reach.isOfferable }.map(\.id)
-        XCTAssertEqual(Set(offerable), ["claude-code", "codex"],
+        XCTAssertEqual(Set(offerable), ["claude-code", "codex", "crobot", "opencode"],
                        "an agent became offerable without the app being able to drive it")
     }
 
-    /// And the ones that are not offerable say so rather than being dropped:
-    /// knowing crobot is nearly there is worth more than pretending it is not
-    /// in the list at all.
-    func testTheOthersAreListedWithTheirLimitStated() {
+    /// Anything short of drivable states where it stops, rather than being
+    /// dropped without explanation.
+    func testAnythingShortOfDrivableSaysWhereItStops() {
         for entry in AgentRoster.validated where !entry.reach.isOfferable {
-            XCTAssertNotEqual(entry.reach, .whole)
             XCTAssertFalse(entry.provenance.isEmpty,
                            "\(entry.id) stops short and does not say where")
         }
-        XCTAssertEqual(AgentRoster.validated.first { $0.id == "devin" }?.reach, .protocolOnly)
-        XCTAssertEqual(AgentRoster.validated.first { $0.id == "crobot" }?.reach, .readOnly)
+    }
+
+    /// **Every offered agent was driven against the real thing**, and its
+    /// evidence says so. The bar is a message sent AND the answer read back,
+    /// because `.accepted` is the server taking a request, not an agent
+    /// answering. Both remote providers failed this bar this morning.
+    func testEveryOfferedAgentWasDrivenLiveAndSaysSo() {
+        for entry in AgentRoster.validated where entry.reach.isOfferable {
+            let ok = entry.provenance.contains("read back")
+                || entry.provenance.contains("READ BACK")
+                || entry.provenance.contains("daily use")
+            XCTAssertTrue(ok, "\(entry.id) is offered without live evidence: \(entry.provenance)")
+        }
     }
 
     /// The provenance must not claim more than was done. This is a specific
     /// guard against the sentence that was actually written today — "reply
     /// delivered through the spool" — about a reply that has only ever reached
     /// a test double.
-    func testNoProvenanceClaimsALiveReplyThatWasNeverSent() {
+    func testCrobotsEvidenceNamesTheLiveRunAndItsCost() {
         let crobot = AgentRoster.validated.first { $0.id == "crobot" }?.provenance ?? ""
-        XCTAssertTrue(crobot.contains("fake gateway"),
-                      "crobot's evidence must say sending was never driven live")
+        XCTAssertTrue(crobot.contains("READ BACK"), "must name the read-back, not the send")
+        XCTAssertTrue(crobot.contains("99s") || crobot.contains("cold sandbox"),
+                      "must carry what it costs: the first write wakes a sandbox")
     }
 }

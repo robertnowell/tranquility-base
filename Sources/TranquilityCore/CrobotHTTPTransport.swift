@@ -39,8 +39,24 @@ public struct CrobotHTTPTransport: CrobotTransport {
         return parts.url ?? joined
     }
 
+    /// A poll runs on a 20 second beat, so a read that hangs has already
+    /// failed at its job even if it eventually answers.
+    static let readTimeout: TimeInterval = 15
+
+    /// **Waking a sandbox is not a read.** crobot releases a task's disk when
+    /// it goes quiet, so the first write to a cold task attaches a volume and
+    /// starts a pod before anything is delivered. Measured 14 Sep against a
+    /// real idle task: 15 seconds was not close, and the send came back as
+    /// `NSURLErrorTimedOut` while the gateway was still doing the work.
+    ///
+    /// The old code used one constant for every call, which is the actual
+    /// defect: the number was right for the calls it was written for and
+    /// wrong for the one nobody re-read it against.
+    static let wakeTimeout: TimeInterval = 150
+
     private func request(_ method: String, _ path: String, query: [URLQueryItem] = [],
-                         body: Data? = nil) -> URLRequest {
+                         body: Data? = nil,
+                         timeout: TimeInterval = CrobotHTTPTransport.readTimeout) -> URLRequest {
         var request = URLRequest(url: url(path, query: query))
         request.httpMethod = method
         request.httpBody = body
@@ -49,17 +65,17 @@ public struct CrobotHTTPTransport: CrobotTransport {
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "content-type")
         }
-        // Short: this runs on a 20 second beat and a poll that hangs has
-        // already failed at its job even if it eventually answers.
-        request.timeoutInterval = 15
+        request.timeoutInterval = timeout
         return request
     }
 
     private func call<T: Decodable>(_ method: String, _ path: String,
                                     query: [URLQueryItem] = [],
-                                    body: Data? = nil, as: T.Type) async throws -> T {
+                                    body: Data? = nil, as: T.Type,
+                                    timeout: TimeInterval = CrobotHTTPTransport.readTimeout)
+        async throws -> T {
         let (data, response) = try await session.data(
-            for: request(method, path, query: query, body: body))
+            for: request(method, path, query: query, body: body, timeout: timeout))
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200...299).contains(status) else {
             throw Gateway.status(status, String(String(data: data, encoding: .utf8)?.prefix(200)
@@ -105,7 +121,7 @@ public struct CrobotHTTPTransport: CrobotTransport {
         do {
             struct Reply: Decodable { var answered: Bool? }
             _ = try await call("POST", "api/v1/tasks/\(esc(id))/prompt", body: body,
-                               as: Reply.self)
+                               as: Reply.self, timeout: Self.wakeTimeout)
             return .accepted
         } catch Gateway.status(409, _) {
             // The sandbox could not be woken, or a turn is running. Retryable,

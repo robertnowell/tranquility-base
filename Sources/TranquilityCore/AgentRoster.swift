@@ -83,7 +83,15 @@ public struct AgentRoster: Sendable {
     /// How far an agent gets from inside the app, which is a different
     /// question from whether its protocol works.
     public enum Reach: Sendable, Equatable {
-        /// Pick it, drive it, reply to it, start a new one.
+        /// **This app can drive it, proven against the real thing.** A message
+        /// was sent and the answer was READ BACK, which is a different claim
+        /// from the send returning `.accepted`.
+        ///
+        /// Creating a BRAND NEW agent from TB is deliberately not part of this
+        /// bar: `newSession()` launches a terminal and `provider.start(brief:)`
+        /// is called from no app code, which is #374 and is equally missing for
+        /// every provider. Driving the agents you have is what picking one in
+        /// Settings has to mean today.
         case whole
         /// It appears and can be opened, but this app cannot yet drive it.
         case readOnly
@@ -127,20 +135,16 @@ public struct AgentRoster: Sendable {
               provenance: "Second harness, shipped 4 Sep 2026. In daily use.",
               reach: .whole),
         .init(id: "crobot", name: "crobot", glyph: "◇",
-              provenance: "13 Sep 2026: live gateway, 115 tasks filtered to the 1 that is "
-                        + "mine, row drawn green, its page opens. Sending has been driven "
-                        + "against a fake gateway only — never against the live one.",
-              reach: .readOnly),
+              provenance: "14 Sep 2026: a real message sent to a real task on the live "
+                        + "gateway and READ BACK out of its transcript. Took 99s, because "
+                        + "the first write to a quiet task wakes a cold sandbox. Two bugs "
+                        + "found doing it, both invisible against the fake.",
+              reach: .whole),
         .init(id: "opencode", name: "OpenCode", glyph: "○",
-              provenance: "14 Sep 2026: over ACP it edited a file on disk "
-                        + "(print('hello') -> print('goodbye')) through tool calls. The "
-                        + "app reaches it over HTTP; the ACP path is not registered.",
-              reach: .readOnly),
-        .init(id: "devin", name: "Devin", glyph: "▲",
-              provenance: "14 Sep 2026: ACP handshake, session and a whole prompt turn, "
-                        + "with no code changes beyond the catalog row. Proven at the "
-                        + "protocol only — ACPProvider is registered nowhere.",
-              reach: .protocolOnly),
+              provenance: "14 Sep 2026: session started over HTTP, prompt sent, and the "
+                        + "agent's answer read back carrying the exact token asked for. "
+                        + "Separately, over ACP, it edited a file on disk.",
+              reach: .whole),
     ]
 
     // MARK: - Assembling the grid
