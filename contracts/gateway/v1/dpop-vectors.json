@@ -1,0 +1,11 @@
+{
+  "_": "One key, one fingerprint, agreed by every language that touches it. RFC 7638 hashes a canonical JSON object with the required members in lexicographic order and no whitespace; get that wrong in one implementation and a correct signature is refused for no visible reason, which is the least diagnosable failure this design can produce. Swift asserts it in DeviceKeyTests; the private service asserts it in test/verify.test.ts. Generated once with jose and never regenerated: a vector that moves with the code it checks is not a vector.",
+  "publicJWK": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "r6yrfmKIBoyEHHm5uS2Zf1lP70W41yFpG9tmCe8g_v0",
+    "y": "-KqUX-84S7Nl12_2o6JvO1rGrH0R3mDT739QA17DQoQ"
+  },
+  "canonical": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"r6yrfmKIBoyEHHm5uS2Zf1lP70W41yFpG9tmCe8g_v0\",\"y\":\"-KqUX-84S7Nl12_2o6JvO1rGrH0R3mDT739QA17DQoQ\"}",
+  "thumbprint": "gNrKo047iJ1Uzvxf1gFOGLUIn7XhFna4s8kNIHA7h54"
+}
