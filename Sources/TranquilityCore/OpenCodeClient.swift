@@ -153,8 +153,13 @@ public struct OpenCodeClient: Sendable {
     /// crobot (task ui-owxd968g5sbf, 11 Sep 2026). Their client carries that
     /// comment; this one inherits it rather than rediscovering it.
     ///
-    /// Permissions ARE session-scoped, and under `/api/session/...` rather than
-    /// `/session/...`. The inconsistent prefix is OpenCode's, not a typo here.
+    /// **Permissions are unscoped too**, at `/permission`, and filtered here
+    /// exactly like questions. The session-scoped `/api/session/{id}/permission`
+    /// exists and answers `{"data":[]}` even while one is pending for that
+    /// session; measured live on 14 Sep 2026 against 1.18.30, where an agent
+    /// with `edit: ask` sat blocked for 240 s reading as `working` because
+    /// this client asked the wrong route. Same for the reply: the scoped
+    /// route answers PermissionNotFoundError, the unscoped one clears it.
     public func pendingRequest(_ session: String) async throws -> PendingRequest? {
         if let question = try await questions(session).first { return question }
         return try await permissions(session).first
@@ -168,8 +173,9 @@ public struct OpenCodeClient: Sendable {
     }
 
     func permissions(_ session: String) async throws -> [PendingRequest] {
-        let data = try await call("GET", "/api/session/\(esc(session))/permission")
+        let data = try await call("GET", "/permission")
         return decodeList(data, as: Wire.Permission.self)
+            .filter { $0.sessionID == session }
             .map { $0.pending(session: AgentSession.id(session, provider: provider)) }
     }
 
@@ -191,10 +197,10 @@ public struct OpenCodeClient: Sendable {
             case .permission:
                 let reply = permissionReply(response)
                 let body = try JSONSerialization.data(withJSONObject: ["reply": reply])
-                _ = try await call(
-                    "POST",
-                    "/api/session/\(esc(session))/permission/\(esc(request.id))/reply",
-                    body: body)
+                // Unscoped, like the read. `/api/session/{sid}/permission/{pid}/reply`
+                // is 404 PermissionNotFoundError on a live server for a permission
+                // that `/permission` lists; `/permission/{pid}/reply` returns true.
+                _ = try await call("POST", "/permission/\(esc(request.id))/reply", body: body)
             }
             return .accepted
         } catch ClientError.asleep {
