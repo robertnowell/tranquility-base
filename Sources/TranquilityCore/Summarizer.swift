@@ -191,7 +191,7 @@ public struct AnthropicSummaryProvider: SummaryProvider {
     /// stale background to ignore — two blocks whose difference is the feature,
     /// and neither was reachable from a test while this lived inside a function
     /// that needs an API key to run.
-    static func userPrompt(for request: SummaryRequest) -> String {
+    public static func userPrompt(for request: SummaryRequest) -> String {
         var context = "Project: \(request.projectLabel)"
         if request.hookEvent == .notification {
             context += """
@@ -244,7 +244,7 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         return user
     }
 
-    static func systemPrompt(projectLabel: String) -> String { """
+    public static func systemPrompt(projectLabel: String) -> String { """
         You are the dispatcher for a developer running many coding-agent sessions at \
         once. One just finished a turn. You write the ONE spoken update they will hear \
         about it, in loop discipline: callsign first, short, exact, one decision.
@@ -510,9 +510,25 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         }
 
         let user = Self.userPrompt(for: request)
-
-
         let system = Self.systemPrompt(projectLabel: request.projectLabel)
+        let completion = try await complete(system: system, user: user)
+        return try Self.parse(completion.text, request: request)
+    }
+
+    /// One model call, exactly as `brief(for:)` makes it: the same body, the
+    /// same headers, the same log line. Factored out 14 Sep so a replay can
+    /// send a HISTORICAL user prompt (the context production actually
+    /// compiled, read back from the model-call log) under the system prompt
+    /// compiled from THIS build, and get a real answer, not a simulation.
+    /// `log: false` keeps a replay out of the production corpus.
+    public struct Completion: Sendable {
+        public let text: String
+        public let raw: String
+        public let elapsedMs: Int
+    }
+
+    public func complete(system: String, user: String, log: Bool = true) async throws -> Completion {
+        guard let key = Secrets.read(.anthropicAPIKey) else { throw SummaryError.notConfigured }
         let body: [String: Any] = [
             "model": model,
             // Sized for the FIVE-spoken-field brief plus cards with 2x headroom.
@@ -539,10 +555,12 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
         guard let http = response as? HTTPURLResponse else { throw SummaryError.emptyResponse }
 
-        ModelCallLog.record(
-            model: model, status: http.statusCode, elapsedMs: elapsedMs,
-            system: system, user: user,
-            response: String(data: data, encoding: .utf8) ?? "<undecodable>")
+        let raw = String(data: data, encoding: .utf8) ?? "<undecodable>"
+        if log {
+            ModelCallLog.record(
+                model: model, status: http.statusCode, elapsedMs: elapsedMs,
+                system: system, user: user, response: raw)
+        }
         guard http.statusCode == 200 else {
             throw SummaryError.http(http.statusCode, String(String(data: data, encoding: .utf8)?.prefix(200) ?? ""))
         }
@@ -555,11 +573,10 @@ public struct AnthropicSummaryProvider: SummaryProvider {
             .compactMap { $0["text"] as? String }
             .joined()
             .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        return try Self.parse(text, request: request)
+        return Completion(text: text, raw: raw, elapsedMs: elapsedMs)
     }
 
-    static func parse(_ text: String, request: SummaryRequest) throws -> SessionBrief {
+    public static func parse(_ text: String, request: SummaryRequest) throws -> SessionBrief {
         // Tolerate a stray code fence or leading prose.
         guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}") else {
             throw SummaryError.unparseable(String(text.prefix(120)))
