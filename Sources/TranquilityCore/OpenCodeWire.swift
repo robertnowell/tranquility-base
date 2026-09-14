@@ -26,9 +26,10 @@ enum Wire {
         struct Time: Decodable { var created: Double?; var updated: Double? }
 
         func agentSession(provider: String) -> AgentSession {
-            AgentSession(
-                id: AgentSession.id(id, provider: provider),
-                provider: provider,
+            // `of` keeps the addressable id and the server's own id together,
+            // so nothing downstream has to reverse a one-way hash.
+            AgentSession.of(
+                id, provider: provider,
                 title: title ?? "",
                 // A LOCAL SERVER DOES NOT REPORT A STATE, and inventing one is
                 // the failed-poll bug in another costume. `/session` says a
