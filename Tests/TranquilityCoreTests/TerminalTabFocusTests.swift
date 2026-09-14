@@ -28,6 +28,12 @@ final class TerminalTabFocusTests: XCTestCase {
         XCTAssertTrue(script.contains("window id 4211"))
         XCTAssertTrue(script.contains("exists window id 4211"),
                       "a closed window must be a fact, not a near-miss")
+        // And `exists` alone is not that fact. Measured against the real
+        // Terminal: a CLOSED window still answers `exists` with true, as a
+        // zombie reporting tabs = 0. Raising it succeeds and shows nothing,
+        // which is this file's own defect one layer up.
+        XCTAssertTrue(script.contains("count of tabs of window id 4211"),
+                      "a window with no tabs has nothing to show")
         XCTAssertTrue(script.contains("return \"notfound\""))
         XCTAssertTrue(script.contains("return \"ok\""))
     }
