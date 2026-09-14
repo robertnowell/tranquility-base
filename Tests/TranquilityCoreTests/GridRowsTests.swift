@@ -306,21 +306,25 @@ final class GridRowsTests: XCTestCase {
                        "a failed probe must not read as a dead machine")
     }
 
-    // MARK: - Asking outranks standing by, wherever it runs (14 Sep)
+    // MARK: - Hearing a row does not move it (14 Sep, reversing #428)
 
-    /// The fifth band is enumerated last by construction, so while arrival
-    /// order alone decided the grid a remote agent could never win a slot
-    /// however loudly it was asking. Read-state breaks the tie, which is the
-    /// one job the three-lamp ruling licences it for.
-    func testARemoteAgentWithSomethingUnreadOutranksAnIdleLocalOne() {
+    /// For one afternoon unread green sorted above read green, so that a
+    /// remote agent enumerated last could win a slot. Robert reversed it the
+    /// same day: a row he had just heard dropped out of its place and was
+    /// hard to find again. Green orders by recency, whether or not it is
+    /// read, so the local band (already recency-ordered) stays ahead of the
+    /// fifth band, unread or not.
+    func testHearingARowDoesNotMoveItBelowAnUnreadOne() {
         var agent = AgentSession.of("remote-1", provider: "crobot", state: .completed)
         agent.title = "the cloud one"
         let verdict = GridAssembler.rows(inputs(
             waiting: [waiting(A, heardThrough: 9)], live: [A: live(A)],
             remote: .init(agents: [agent], unread: [agent.id])))
-        XCTAssertEqual(verdict.rows.first?.name, "the cloud one",
-                       "an unread remote agent sorts above a local one standing by")
-        XCTAssertEqual(verdict.rows.count, 2, "and the local row is still there")
+        XCTAssertEqual(verdict.rows.map(\.read), [.opened, .unread],
+                       "the local row is heard and the remote one is not")
+        XCTAssertEqual(verdict.rows.first?.id, A,
+                       "and the heard row keeps its place: read-state does not order the grid")
+        XCTAssertEqual(verdict.rows.count, 2, "and the remote row is still there")
     }
 
     /// Recorded so the card can ask the same question the rows answered and get

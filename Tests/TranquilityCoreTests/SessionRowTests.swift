@@ -156,6 +156,21 @@ final class SessionRowTests: XCTestCase {
         XCTAssertEqual(ordered.map(\.id), ["first", "second"])
     }
 
+    /// The 14 Sep reversal of #428, stated as the thing the user could see: he
+    /// heard a row and it moved down the grid, under every unread one. The
+    /// caller orders lit rows by recency; hearing one changes its weight on
+    /// screen and nothing else.
+    func testAHeardGreenRowKeepsItsPlaceAboveAnUnreadOne() {
+        let heard = SessionRow(id: "heard", name: "heard", aux: "aux", lamp: .ready,
+                               read: .opened)
+        let unread = SessionRow(id: "unread", name: "unread", aux: "aux", lamp: .ready,
+                                read: .unread)
+        let amber = SessionRow(id: "amber", name: "amber", aux: "aux", lamp: .fault)
+        let ordered = SessionRow.quietRowsLast([heard, unread, amber])
+        XCTAssertEqual(ordered.map(\.id), ["heard", "unread", "amber"],
+                       "lit rows keep the recency order they arrived in, read or not")
+    }
+
     // MARK: - gridRows / shownCount: the grid's own membership
 
     func testShownCountIsAtLeastTheFloorOnAQuietMachine() {
