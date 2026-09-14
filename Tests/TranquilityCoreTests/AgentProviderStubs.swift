@@ -175,8 +175,9 @@ struct StreamingStub: AgentProvider, Sendable {
         guard can.canAnswer else { return .unsupported }
         // Structural: the answer must name an option the request offered, so
         // the provider is never asked to parse a sentence back into a choice.
-        if case .option(let chosen) = response,
-           !request.options.contains(where: { $0.id == chosen }) {
+        if let chosen = response.answers.first?.first,
+           let offered = request.questions.first?.options, !offered.isEmpty,
+           !offered.contains(where: { $0.id == chosen }) {
             return .failed(reason: "no such option: \(chosen)")
         }
         return .accepted

@@ -187,13 +187,29 @@ public enum KeyCheck {
             request = URLRequest(url: base.appendingPathComponent("api/v1/me"))
             request.setValue("Bearer " + value, forHTTPHeaderField: "Authorization")
         case .openCodePassword:
-            // A local server, and its own liveness is most of what a check
-            // here can prove. `/app` is OpenCode's cheapest authenticated
-            // read; unreachable means the server is not running, which is the
-            // thing a person actually needs to be told.
-            guard let base = providerBase("opencode") else { return nil }
-            request = URLRequest(url: base.appendingPathComponent("app"))
-            request.setValue("Bearer " + value, forHTTPHeaderField: "Authorization")
+            // HTTP BASIC, not Bearer, and the username is the literal
+            // `opencode`. Read from the crobot gateway's own proxy, which sets
+            // exactly this header when it forwards to a sandbox's OpenCode
+            // server (`gateway/src/routes.ts:1051`):
+            //
+            //     headers.set("authorization",
+            //       "Basic " + Buffer.from(`opencode:${conn.password}`)...)
+            //
+            // The first draft sent Bearer, which the server would have refused,
+            // reporting a correct password as rejected. Same defect as the
+            // crobot route above and found the same way: by reading the client
+            // that already talks to this server rather than assuming the shape.
+            //
+            // `/session` rather than `/app`: it is the route the provider
+            // actually calls, so a pass is evidence about the real work. An
+            // unreachable result means the server is not running, which is the
+            // thing a person needs to be told.
+            guard let base = providerBase("opencode"),
+                  let encoded = "opencode:\(value)".data(using: .utf8)
+            else { return nil }
+            request = URLRequest(url: base.appendingPathComponent("session"))
+            request.setValue("Basic " + encoded.base64EncodedString(),
+                             forHTTPHeaderField: "Authorization")
         }
         request.httpMethod = "GET"
         // Short: this runs while somebody watches a row. A check that hangs for

@@ -84,7 +84,7 @@ enum AgentProviderConformance {
         }
         if !p.can.canAnswer {
             let request = PendingRequest(id: "probe", session: any.id, asked: "?")
-            let outcome = try await p.respond(to: request, with: .text("no"))
+            let outcome = try await p.respond(to: request, with: Response("no"))
             XCTAssertEqual(outcome, .unsupported,
                            "\(p.id): canAnswer is false, so respond must refuse rather than throw",
                            file: file, line: line)
@@ -298,12 +298,13 @@ enum AgentProviderConformance {
                                                  file: StaticString, line: UInt) async throws {
         guard p.can.canAnswer else { return }
         for session in try await p.mine() {
-            guard let request = try await p.request(session.id), !request.options.isEmpty
+            guard let request = try await p.request(session.id),
+                  let offered = request.questions.first?.options, !offered.isEmpty
             else { continue }
-            let good = try await p.respond(to: request, with: .option(request.options[0].id))
+            let good = try await p.respond(to: request, with: Response(offered[0].id))
             XCTAssertEqual(good, .accepted,
                            "\(p.id): refused an option it offered", file: file, line: line)
-            let bad = try await p.respond(to: request, with: .option("not-an-option"))
+            let bad = try await p.respond(to: request, with: Response("not-an-option"))
             XCTAssertNotEqual(bad, .accepted,
                               "\(p.id): accepted an option it never offered",
                               file: file, line: line)

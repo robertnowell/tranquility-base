@@ -267,13 +267,45 @@ public enum SendOutcome: Sendable, Equatable {
 /// question lives in the messages array, crobot is identical in shape, and an
 /// interface that couples them needs a rewrite on the first provider that
 /// separates them, which is all of them.
+///
+/// **Carries MANY questions, not one** (corrected 13 Sep 2026, building #401).
+/// The first draft modelled one prompt with one flat list of options, and that
+/// cannot express what OpenCode actually sends: a request holds an array of
+/// questions, each with its own options, its own multi-select flag and its own
+/// free-text flag, and they are answered together as `answers: string[][]`.
+///
+/// That gap survived the two-stub negotiation in #367 because both stubs were
+/// invented. Neither was modelled on a real vendor payload, so both agreed with
+/// each other and with nothing else. The lesson is cheap here and expensive
+/// after two providers are built on the wrong shape, which is the whole reason
+/// this client is written before either of them.
+///
+/// A permission request is the degenerate case: one question, three options,
+/// no custom text. It fits without a second type.
 public struct PendingRequest: Sendable, Equatable, Identifiable {
     public var id: String
     public var session: AgentSession.ID
-    /// What it wants, in the agent's own words.
-    public var asked: String
-    /// Empty means free text. Otherwise these are the only valid answers.
-    public var options: [Option]
+    /// One or more. Never empty.
+    public var questions: [Question]
+
+    public struct Question: Sendable, Equatable {
+        /// What it wants, in the agent's own words.
+        public var asked: String
+        /// Empty means free text is the only answer.
+        public var options: [Option]
+        /// Whether more than one option may be chosen.
+        public var allowsMultiple: Bool
+        /// Whether an answer outside the options is accepted.
+        public var allowsCustom: Bool
+
+        public init(asked: String, options: [Option] = [],
+                    allowsMultiple: Bool = false, allowsCustom: Bool = false) {
+            self.asked = asked
+            self.options = options
+            self.allowsMultiple = allowsMultiple
+            self.allowsCustom = allowsCustom
+        }
+    }
 
     public struct Option: Sendable, Equatable, Identifiable {
         public var id: String
@@ -284,6 +316,9 @@ public struct PendingRequest: Sendable, Equatable, Identifiable {
         /// found anywhere in the survey, plus `other` for an option that is not
         /// a permission decision at all (a plan choice, a branch name).
         /// `other` is what keeps this from being a permission-only model.
+        ///
+        /// OpenCode's permission reply values map exactly:
+        /// `once` / `always` / `reject`.
         public enum Kind: String, Sendable, Equatable, Codable {
             case allowOnce = "allow_once"
             case allowAlways = "allow_always"
@@ -297,18 +332,40 @@ public struct PendingRequest: Sendable, Equatable, Identifiable {
         }
     }
 
+    public init(id: String, session: AgentSession.ID, questions: [Question]) {
+        self.id = id; self.session = session; self.questions = questions
+    }
+
+    /// The single-question case, which is most of them and all permissions.
     public init(id: String, session: AgentSession.ID, asked: String,
                 options: [Option] = []) {
-        self.id = id; self.session = session; self.asked = asked; self.options = options
+        self.init(id: id, session: session,
+                  questions: [Question(asked: asked, options: options)])
     }
+
+    /// The first question's words, for a lamp caption or a spoken line that has
+    /// room for one clause. Never the whole request: answering needs all of it.
+    public var asked: String { questions.first?.asked ?? "" }
 }
 
 /// An answer to a `PendingRequest`.
-public enum Response: Sendable, Equatable {
-    case text(String)
-    /// A `PendingRequest.Option.id`. Structural, so the provider is not asked
-    /// to parse a sentence back into the choice it offered.
-    case option(String)
+///
+/// **One entry per question, in order**, because that is how every provider
+/// that asks more than one at a time accepts them back (OpenCode: `answers`,
+/// an array of arrays). Each entry is the chosen option ids, or free text when
+/// the question allows it.
+public struct Response: Sendable, Equatable {
+    public var answers: [[String]]
+
+    public init(answers: [[String]]) { self.answers = answers }
+
+    /// A single free-text or single-choice answer, which is the common case.
+    public init(_ one: String) { self.answers = [[one]] }
+
+    /// Reject the whole request. Distinct from answering "no" to its first
+    /// question: a provider with a reject verb must be able to reach it.
+    public static let rejected = Response(answers: [])
+    public var isRejection: Bool { answers.isEmpty }
 }
 
 /// One thing said, by either side.
