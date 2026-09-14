@@ -60,6 +60,8 @@ public enum DeepLink {
     public enum DiscussDestination: Equatable {
         case conversationCard
         case agentTerminal
+        /// The agent's own page, for one that has no pane of ours.
+        case agentPage(URL)
         case revive
         case refused
         case invitation
@@ -70,6 +72,10 @@ public enum DeepLink {
         switch rowAction {
         case .announce:  return .conversationCard
         case .goToAgent: return .agentTerminal
+        // Discuss on a remote agent opens where the agent lives. Same
+        // destination in meaning as a terminal, different door, and the enum
+        // says which so no caller has to ask what kind of agent it was.
+        case .openPage(let url): return .agentPage(url)
         case .revive:    return .revive
         case .none?:     return .refused
         case nil:        return hasCompletedTurn ? .conversationCard : .invitation

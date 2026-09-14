@@ -3735,6 +3735,10 @@ final class StatusHUD: NSObject {
             // it — announce found nothing waiting and returned to the grid,
             // which is a control that did nothing at all.
             case .goToAgent: onGoToSession?(id)
+            // The same verb through the door this row carries. A remote agent
+            // has no pane to focus, and its provider already said where it
+            // lives; opening that is what Go to Agent MEANS for it.
+            case .openPage(let url): NSWorkspace.shared.open(url)
             case .revive: onRevive?(id, row.name)
             case .none: refuseRowTap(id)
             }

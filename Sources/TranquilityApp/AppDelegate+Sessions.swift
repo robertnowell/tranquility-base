@@ -237,6 +237,12 @@ extension AppDelegate {
         case .agentTerminal:
             guard let resolved else { return }
             goToSession(resolved)
+        case .agentPage(let url):
+            // The remote half of `agentTerminal`. `goToSession` focuses a pane
+            // this Mac owns, and a remote agent has none; its provider already
+            // told us where it lives. Same intent, different door, decided by
+            // the row rather than by anything here asking what it is.
+            NSWorkspace.shared.open(url)
         case .revive:
             guard let row else { return }
             // `revive` speaks the stored brief first and resumes behind it, so
