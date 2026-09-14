@@ -69,6 +69,37 @@ public extension GridAssembler {
         public var isInFlight: (String) -> Bool
         /// Callsigns minted for sessions that are no longer running.
         public var closedCallsigns: [String: String]
+        /// **The fifth band: agents that run somewhere else.**
+        ///
+        /// Passed in exactly like the other four rather than fetched here, and
+        /// carrying no hint of how they are driven. There is one kind of thing,
+        /// an agent; keystrokes into a terminal are this app's implementation
+        /// choice, not a property of the agent, and location does not belong in
+        /// the type system.
+        public var remote: RemoteAgents
+
+        /// What the poller last saw, in the shape the bands need.
+        public struct RemoteAgents {
+            public var agents: [AgentSession]
+            /// The pending request per agent, for the few that have one.
+            public var requests: [AgentSession.ID: PendingRequest]
+            /// Which agents have something the user has not read. Comes from
+            /// the stored event log, exactly like every local row's green lamp,
+            /// rather than from the provider's own opinion.
+            public var unread: Set<AgentSession.ID>
+            /// Providers that could not be reached, by id, with the reason.
+            public var unreachable: [String: String]
+
+            public init(agents: [AgentSession] = [],
+                        requests: [AgentSession.ID: PendingRequest] = [:],
+                        unread: Set<AgentSession.ID> = [],
+                        unreachable: [String: String] = [:]) {
+                self.agents = agents
+                self.requests = requests
+                self.unread = unread
+                self.unreachable = unreachable
+            }
+        }
 
         public init(
             waiting: [WaitingSession], known: [WaitingSession],
@@ -81,7 +112,8 @@ public extension GridAssembler {
             family: @escaping (String) -> [String],
             supersedesWaiting: @escaping (String, Int64) -> Bool,
             isInFlight: @escaping (String) -> Bool,
-            closedCallsigns: [String: String] = [:]
+            closedCallsigns: [String: String] = [:],
+            remote: RemoteAgents = RemoteAgents()
         ) {
             self.waiting = waiting
             self.known = known
@@ -96,6 +128,7 @@ public extension GridAssembler {
             self.supersedesWaiting = supersedesWaiting
             self.isInFlight = isInFlight
             self.closedCallsigns = closedCallsigns
+            self.remote = remote
         }
     }
 
@@ -115,6 +148,55 @@ public extension GridAssembler {
         /// Which harness each live row is, recorded so the card can ask the
         /// same question the rows answered and get the same answer.
         public var harnessById: [String: String]
+    }
+
+    /// The lamp a bucket draws.
+    ///
+    /// One mapping, so a remote row and a local row cannot come to mean
+    /// different things by the same colour. `unreachable` is the one that did
+    /// not exist before remote agents: a provider we cannot reach is not quiet,
+    /// and `.running` is the app's existing word for "alive, nothing owed",
+    /// which is the closest honest lamp. The row's WORDS carry the difference,
+    /// because a colour cannot say "as of four minutes ago".
+    static func lamp(for bucket: AgentPresentation) -> Lamp {
+        switch bucket {
+        case .needsYou: return .fault
+        case .unread: return .ready
+        case .working: return .working
+        case .idle, .unreachable: return .running
+        case .done: return .unlit
+        }
+    }
+
+    /// The clause in the row's own column.
+    ///
+    /// An amber row spends it on why, like every other amber row on the panel.
+    /// A provider that has gone silent says so, because a row that looks calm
+    /// while nobody can reach it is the lie the poller exists to prevent.
+    static func remoteAux(bucket: AgentPresentation, request: PendingRequest?,
+                          silent: String?, id: AgentSession.ID) -> String {
+        if let request, !request.asked.isEmpty { return request.asked }
+        if silent != nil { return "cannot reach it" }
+        switch bucket {
+        case .needsYou: return "needs you"
+        case .working: return "working"
+        case .unread, .idle, .done, .unreachable: return SessionRow.shortId(id)
+        }
+    }
+
+    /// The hover, which has room for the whole sentence the column could not
+    /// hold, and for the provider's own reason when it is unreachable.
+    static func remoteDetail(request: PendingRequest?, silent: String?,
+                             agent: AgentSession) -> String? {
+        if let silent { return "\(agent.provider) could not be reached: \(silent)" }
+        guard let request else {
+            return agent.repository.map { "\($0) · \(agent.provider)" } ?? agent.provider
+        }
+        // EVERY question, not just the first. A request can carry several and
+        // answering needs all of them; the column shows one clause and this is
+        // where the rest lives.
+        return request.questions.map(\.asked).filter { !$0.isEmpty }
+            .joined(separator: "\n")
     }
 
     /// Smooth a transient miss in the liveness probe.
@@ -321,6 +403,52 @@ public extension GridAssembler {
                 detail: found.activity?.fullReason
                     ?? (found.harness == CodexAdapter().id ? "Codex session" : nil),
                 harness: found.harness))
+        }
+
+        // BAND 5: agents running somewhere else.
+        //
+        // Placed after the local bands and before the switch, so a remote row
+        // is subject to every rule the others are: the user's filed lamp, the
+        // quiet-rows-last ordering, all of it. That is the whole claim of this
+        // issue, and the placement is the proof: there is no branch below this
+        // point that asks whether a row is remote.
+        //
+        // `lampAndReason` is NOT called here, deliberately. It reads a
+        // transcript and a process witness, and a remote agent has neither; its
+        // provider states what it is doing, first-hand, which is better
+        // evidence than either. `AgentPresentation` is the equivalent rule and
+        // it was written for exactly this.
+        for agent in input.remote.agents where !placed.contains(agent.id) {
+            placed.insert(agent.id)
+            let request = input.remote.requests[agent.id]
+            let bucket = AgentPresentation.bucket(
+                state: agent.state,
+                hasPendingRequest: request != nil,
+                hasUnread: input.remote.unread.contains(agent.id))
+            let silent = input.remote.unreachable[agent.provider]
+            rows.append(SessionRow(
+                id: agent.id,
+                // The provider's own title, then the repository, then the id.
+                // Same precedence as every other band: the harness's own name
+                // for a thing beats anything this app can derive.
+                name: SessionRow.displayName(
+                    liveName: agent.title.isEmpty ? nil : agent.title,
+                    callsign: agent.repository,
+                    fallback: SessionRow.shortId(agent.id)),
+                aux: Self.remoteAux(bucket: bucket, request: request, silent: silent,
+                                    id: agent.id),
+                lamp: Self.lamp(for: bucket),
+                // A remote agent cannot be revived by relaunching a command;
+                // whether it can be restarted at all is its provider's
+                // business, and `Capabilities` answers that where it matters.
+                revivable: false,
+                read: bucket == .unread ? .unread : .none,
+                detail: Self.remoteDetail(request: request, silent: silent, agent: agent),
+                harness: agent.provider,
+                // The provider said where this agent lives, or said it lives
+                // nowhere you can open. Either way the row carries the answer
+                // and nothing downstream asks what kind of agent it is.
+                door: agent.url.map { .page($0) } ?? SessionRow.Door.none))
         }
 
         // The user's own switch, applied last and to every band at once.

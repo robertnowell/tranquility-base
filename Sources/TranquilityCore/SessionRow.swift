@@ -157,11 +157,33 @@ public struct SessionRow: Equatable, Sendable {
     /// Optional because it genuinely can be unknown: a row rebuilt from disk
     /// for a session with no ownership record has no way to say.
     public let harness: String?
+    /// **Where Go to Agent goes.**
+    ///
+    /// A FACT ABOUT THE ROW, set by whoever built it, rather than a question
+    /// anybody asks about what kind of agent this is. That is the whole point:
+    /// "does this have a terminal" is a capability, and writing
+    /// `if harness == "opencode"` here would be the 48th identity comparison
+    /// (#382) on the day the seam exists to stop them.
+    ///
+    /// Defaults to `.terminal`, so every row the four local bands build is
+    /// unchanged.
+    public let door: Door
+
+    public enum Door: Equatable, Sendable {
+        /// A tmux pane this Mac owns. Every local agent.
+        case terminal
+        /// A page in the provider's own interface. crobot has one per task.
+        case page(URL)
+        /// Neither, and that is honest rather than a gap: a local
+        /// `opencode serve` has no web page and no terminal of ours. Go to
+        /// Agent has nowhere to go, so it is not offered.
+        case none
+    }
 
     public init(id: String, name: String, aux: String, lamp: Lamp,
                revivable: Bool = false, read: ReadState = .none,
                switchedOff: Bool = false, detail: String? = nil,
-               harness: String? = nil) {
+               harness: String? = nil, door: Door = .terminal) {
         self.id = id
         self.name = name
         self.aux = aux
@@ -171,6 +193,7 @@ public struct SessionRow: Equatable, Sendable {
         self.switchedOff = switchedOff
         self.detail = detail
         self.harness = harness
+        self.door = door
     }
 
     /// The same row with its lamp out, as a session the user has filed.
@@ -183,7 +206,7 @@ public struct SessionRow: Equatable, Sendable {
     public func switchedOffCopy() -> SessionRow {
         SessionRow(id: id, name: name, aux: aux, lamp: .running,
                    revivable: revivable, read: read, switchedOff: true,
-                   detail: detail, harness: harness)
+                   detail: detail, harness: harness, door: door)
     }
 
     /// What the pointer gets when it rests on a row: the full name, and
@@ -254,6 +277,9 @@ public struct SessionRow: Equatable, Sendable {
         /// read; three different reasons, one verb, and no lamp left whose
         /// tap has to be learned as an exception.
         case goToAgent
+        /// Go to Agent for a row whose agent lives on a web page rather than
+        /// in a pane. Same verb to the user, different door.
+        case openPage(URL)
         /// Proven gone, and its directory is still there: bring it back.
         case revive
         /// Unlit but unproven — the probe could not answer, or the
@@ -266,9 +292,24 @@ public struct SessionRow: Equatable, Sendable {
 
     public static func action(for row: SessionRow) -> RowAction {
         switch row.lamp {
-        case .fault, .working, .running: return .goToAgent
+        case .fault, .working, .running: return goTo(row)
         case .ready: return .announce
         case .unlit: return row.revivable ? .revive : .none
+        }
+    }
+
+    /// Go to Agent, through whichever door this row has.
+    ///
+    /// The verb is the same to the user, which is the ruling: they picked an
+    /// agent, not a mechanism. Only the destination differs, and it differs
+    /// because the row says so rather than because anything here guessed.
+    private static func goTo(_ row: SessionRow) -> RowAction {
+        switch row.door {
+        case .terminal: return .goToAgent
+        case .page(let url): return .openPage(url)
+        // Offering a door that opens on nothing is worse than offering none:
+        // it reads as broken rather than as absent.
+        case .none: return .none
         }
     }
 
@@ -331,7 +372,11 @@ public struct SessionRow: Equatable, Sendable {
     /// moment amber got its own verb.
     public static func isLive(_ row: SessionRow) -> Bool {
         switch action(for: row) {
-        case .announce, .goToAgent: return true
+        // `openPage` is live for the same reason `goToAgent` is: it is the
+        // same verb through a different door, and an agent you can open is an
+        // agent that exists. Listing it here rather than defaulting, because a
+        // default is what let the menu and the left-click drift apart before.
+        case .announce, .goToAgent, .openPage: return true
         case .revive, .none: return false
         }
     }
