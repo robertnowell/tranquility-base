@@ -1,0 +1,246 @@
+import Foundation
+
+/// Keeps a snapshot of every configured provider's agents, off the main
+/// thread, so the grid can read one without asking the network.
+///
+/// **Two tiers, because the calls cost different amounts.** A provider's list
+/// is one request for every agent it has; verified liveness and the pending
+/// request are one request EACH. So tier one runs on a beat and gets the row
+/// set with coarse state, and tier two runs only for the handful of rows tier
+/// one says are live or waiting, which in practice is nought to three.
+///
+/// crobot's own web client polls its list every fifteen seconds, so twenty is
+/// neighbourly. A provider that streams is not polled on tier one at all: its
+/// `changes()` is the ingress, and this holds the snapshot its events update.
+///
+/// Modelled on `HubMirror`: same `DispatchSourceTimer` on a utility queue,
+/// same coalescing `kick()`, same rule that a test never opens a socket.
+public final class AgentPoller: @unchecked Sendable {
+
+    /// How often tier one runs.
+    public static let beat: TimeInterval = 20
+
+    private let registry: AgentProviderRegistry
+    private let queue = DispatchQueue(label: "agent-poller", qos: .utility)
+    private let lock = NSLock()
+    private func sync<T>(_ body: () -> T) -> T { lock.withLock(body) }
+
+    private var timer: DispatchSourceTimer?
+    private var state = Snapshot()
+    private var digests: [String: [AgentSession.ID: String]] = [:]
+    private var streams: [String: Task<Void, Never>] = [:]
+
+    /// Every event this poller has produced, for whoever writes spool lines
+    /// (#372). Set before `start()`; called off the main thread.
+    public var onEvents: (@Sendable ([AgentEvent]) -> Void)?
+    /// Diagnostics, with reasons. Never the user's speech.
+    public var trace: (@Sendable (String) -> Void)?
+    public var now: @Sendable () -> Date = { Date() }
+    /// Which config decides a provider is CONFIGURED.
+    ///
+    /// Injectable for the reason `Prerequisites` learned the hard way on
+    /// 13 Sep: a default that reads `~/.claude/hq.json` makes every test's
+    /// result depend on what happens to be on the machine running it, and the
+    /// divergence only appears once somebody has actually finished the setup
+    /// the code exists to support.
+    public var registryConfig: URL = HubApp.configPath
+
+    public init(registry: AgentProviderRegistry) {
+        self.registry = registry
+    }
+
+    private var configured: [any AgentProvider] {
+        registry.configured(config: registryConfig)
+    }
+
+    // MARK: - The snapshot
+
+    /// What the grid reads. A value, copied out under the lock, so a repaint
+    /// never waits on a network call and never sees a half-updated map.
+    public struct Snapshot: Sendable {
+        public var agents: [AgentSession] = []
+        /// The pending request per agent, for the few that have one.
+        public var requests: [AgentSession.ID: PendingRequest] = [:]
+        /// **Why a provider is silent, when it is.** Held rather than
+        /// discarded: a row whose provider cannot be reached shows its last
+        /// state with this beside it, and never turns green on silence.
+        public var unreachable: [String: String] = [:]
+        /// When each agent was last CONFIRMED by a provider that answered.
+        /// The grid shows the age; a stale row is honest, an invented state is
+        /// not.
+        public var confirmedAt: [AgentSession.ID: Date] = [:]
+
+        public func agent(_ id: AgentSession.ID) -> AgentSession? {
+            agents.first { $0.id == id }
+        }
+    }
+
+    public var snapshot: Snapshot { sync { state } }
+
+    // MARK: - Running
+
+    public func start() {
+        stop()
+        for provider in configured { subscribe(provider) }
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + 1, repeating: Self.beat)
+        t.setEventHandler { [weak self] in self?.tick() }
+        sync { timer = t }
+        t.resume()
+    }
+
+    public func stop() {
+        let t: DispatchSourceTimer? = sync { let t = timer; timer = nil; return t }
+        t?.cancel()
+        let running: [String: Task<Void, Never>] = sync { let s = streams; streams = [:]; return s }
+        for (_, task) in running { task.cancel() }
+    }
+
+    /// Coalesced, like `HubMirror.kick`: several reasons to refresh inside a
+    /// moment are one refresh.
+    public func kick() {
+        queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.tick() }
+    }
+
+    private func tick() {
+        Task { [weak self] in await self?.refresh() }
+    }
+
+    // MARK: - Tier one
+
+    /// Every configured provider that does not stream, asked for its list.
+    ///
+    /// A provider that DOES stream is skipped here: its events already keep
+    /// the snapshot current, and polling it as well would double every row's
+    /// cost to learn what it just said.
+    public func refresh() async {
+        for provider in configured {
+            guard provider.changes() == nil else { continue }
+            await pollOnce(provider)
+        }
+    }
+
+    func pollOnce(_ provider: any AgentProvider) async {
+        let before = sync { digests[provider.id] ?? [:] }
+        let outcome = await AgentPoll.refresh(provider, from: before, at: now())
+
+        switch outcome {
+        case .unreachable(let reason, let stale):
+            // NEVER IDLE. Absence of news is not news: the rows keep their last
+            // state, the provider is recorded as unreachable with its reason,
+            // and `confirmedAt` stops advancing so the age the grid shows
+            // starts telling the truth about how old this is.
+            sync {
+                state.unreachable[provider.id] = reason
+                for id in stale where state.agent(id) != nil {
+                    if let index = state.agents.firstIndex(where: { $0.id == id }) {
+                        state.agents[index].state = .unknown
+                    }
+                }
+            }
+            trace?("provider \(provider.id) unreachable: \(reason)")
+
+        case .polled(let events, let next):
+            let fresh = (try? await provider.mine()) ?? []
+            sync {
+                digests[provider.id] = next
+                state.unreachable.removeValue(forKey: provider.id)
+                merge(fresh, from: provider.id)
+                let at = now()
+                for session in fresh { state.confirmedAt[session.id] = at }
+            }
+            if !events.isEmpty { onEvents?(events) }
+            await refine(fresh, with: provider)
+        }
+    }
+
+    // MARK: - Tier two
+
+    /// The expensive calls, for the few rows that earn them.
+    ///
+    /// "Live or waiting" is the filter the issue names, and it is deliberately
+    /// narrow: a finished agent has nothing to verify and an unknown one has
+    /// nobody to ask. In practice this is nought to three rows, which is the
+    /// whole reason the tiers exist.
+    func refine(_ agents: [AgentSession], with provider: any AgentProvider) async {
+        let worth = agents.filter { $0.state.isBlocked || $0.state == .working }
+        for agent in worth.prefix(8) {
+            // A THROW and a nil are different answers and must not be merged.
+            // `request` returning nil means "it is not asking"; a throw means
+            // "I could not find out", and clearing the row's question on the
+            // second would drop an amber lamp because the network blinked.
+            let answered: PendingRequest??
+            do { answered = try await provider.request(agent.id) }
+            catch {
+                trace?("could not read \(agent.id.prefix(8))'s request: \(error)")
+                continue
+            }
+            sync {
+                if let request = answered ?? nil { state.requests[agent.id] = request }
+                else { state.requests.removeValue(forKey: agent.id) }
+            }
+        }
+    }
+
+    // MARK: - Streaming providers
+
+    private func subscribe(_ provider: any AgentProvider) {
+        guard let stream = provider.changes() else { return }
+        let task = Task { [weak self] in
+            for await event in stream {
+                guard let self else { return }
+                self.apply(event)
+                self.onEvents?([event])
+            }
+            self?.trace?("provider \(provider.id) stream ended")
+        }
+        sync { streams[provider.id] = task }
+    }
+
+    /// One event into the snapshot. The stream is the ingress for a provider
+    /// that has one, so this is the equivalent of tier one for those.
+    func apply(_ event: AgentEvent) {
+        sync {
+            switch event.kind {
+            case .appeared(let session), .changed(let session):
+                merge([session], from: event.provider)
+                state.confirmedAt[session.id] = event.at
+            case .asks(let request):
+                state.requests[event.session] = request
+                if let index = state.agents.firstIndex(where: { $0.id == event.session }) {
+                    state.agents[index].state = .inputRequired
+                }
+            case .answered:
+                state.requests.removeValue(forKey: event.session)
+            case .said:
+                state.confirmedAt[event.session] = event.at
+            case .failed(let reason):
+                trace?("agent \(event.session.prefix(8)) failed: \(reason)")
+                if let index = state.agents.firstIndex(where: { $0.id == event.session }) {
+                    state.agents[index].state = .failed
+                }
+            }
+        }
+    }
+
+    // MARK: -
+
+    /// Replace this provider's agents with what it just reported, and leave
+    /// every other provider's alone.
+    ///
+    /// **An agent missing from one poll is NOT removed**, for the reason
+    /// `AgentPoll.events` gives: crobot's list has no creator filter and
+    /// several vendors paginate, so absence from one page of one poll is not
+    /// evidence that an agent ended. An ending is a state. Rows leave this
+    /// snapshot when a provider says they are finished, or when the whole
+    /// provider goes away.
+    private func merge(_ fresh: [AgentSession], from provider: String) {
+        for session in fresh {
+            if let index = state.agents.firstIndex(where: { $0.id == session.id }) {
+                state.agents[index] = session
+            } else {
+                state.agents.append(session)
+            }
+        }
+    }
+}
