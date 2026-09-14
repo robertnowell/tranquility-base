@@ -812,7 +812,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // The tap callback runs on the main run loop, but hop explicitly so the
             // compiler agrees and so this stays correct if the tap ever moves.
-            Task { @MainActor in self?.handle(transition) }
+            Task { @MainActor in
+                // A real key beats a drill: if the launch self-test still holds
+                // the panel, it is stood down HERE, before the gesture table
+                // reads the state, so the press acts on a real panel instead of
+                // being refused by a fixture. This seam and not `handle(_:)`,
+                // because the arm drills call `handle` directly and would each
+                // stand down the slate they are part of.
+                self?.hud.yieldTheSlateToAGesture()
+                self?.handle(transition)
+            }
         }
 
         // The panel can drive a recording itself, so answering never depends on

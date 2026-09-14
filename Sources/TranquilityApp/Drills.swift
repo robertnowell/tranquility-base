@@ -42,7 +42,7 @@ extension StatusHUD {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             SelfTest.report("goToSession.roundTrip", [
                 ("guardDropped", !self.goToSessionInFlight),
-            ])
+            ], skippedBecauseOfAGesture: self.slateInterruptedByAGesture)
             // The background half paints its outcome over whatever the
             // cleanup left up; a deploy's selftest must not strand that on
             // the live panel. The fixture session does not exist anywhere, not
@@ -2077,5 +2077,77 @@ extension StatusHUD {
 
         endCapture(because: "slateHandsBack cleanup")
         showIdle(rows: [])
+    }
+}
+
+extension StatusHUD {
+
+    /// A real key beats a drill (`yieldTheSlateToAGesture`).
+    ///
+    /// The incident, measured 13 Sep: at 23:36:31 and again at 23:36:32 two ⌃⌥
+    /// presses played the green recognised chime and were dropped with
+    /// `announce: refused, reply flow on stage`. The panel was holding a
+    /// `pendingSend` fixture whose countdown the drill had already cancelled,
+    /// so the state claimed a live reply flow that did not exist, and it
+    /// refused every arrival for the rest of the slate. Robert pressed twice,
+    /// heard the app say it had heard him twice, and nothing happened either
+    /// time. First seen 08 Aug, under ten drills reporting PASS.
+    ///
+    /// The fixture is rebuilt here exactly as the slate leaves it, zombie and
+    /// all, because a live `pendingSend` would be cleared by the gesture's own
+    /// commit path and would prove nothing about the case that bit.
+    ///
+    /// Asserted on both sides of the yield. "The press works afterwards" is
+    /// half a drill: without the refusal first, this passes just as happily on
+    /// a build where the fixture never blocked anything, and would go on
+    /// passing after somebody deletes the repair.
+    func slateYieldsDrill() {
+        let held = drillsHoldThePanel
+        let realHome = onBreadcrumbHome
+        let realTarget = currentTarget
+        defer { onBreadcrumbHome = realHome; currentTarget = realTarget }
+        onBreadcrumbHome = { [weak self] in self?.showIdle(rows: []) }
+
+        // The zombie, as the slate really leaves it: a pendingSend face whose
+        // countdown and closures are already gone.
+        endCapture(because: "slateYields setup")
+        showIdle(rows: [])
+        currentTarget = ("slate-yields", 1, "drill")
+        showPendingSend(utteranceId: "slate-yields", text: "words that should never be sent",
+                        label: "drill", seconds: 4, send: {}, cancel: { _ in })
+        _ = cancelPendingSend(restartListening: false)
+        var zombieIsOnStage = false
+        if case .pendingSend = state { zombieIsOnStage = true }
+
+        // Before: the panel refuses the announcement the gesture asks for.
+        // This is the exact call `announceNext` makes, and its exact refusal.
+        let refusedBefore = !showPreparing()
+
+        // The gesture arrives.
+        yieldTheSlateToAGesture()
+        let slateStoodDown = !drillsHoldThePanel && slateInterruptedByAGesture
+        let stageIsClear = !state.ownsStage
+
+        // After: the same call, now admitted.
+        let acceptedAfter = showPreparing()
+
+        SelfTest.report("slateYields", [
+            ("aZombieFixtureIsOnStage", zombieIsOnStage),
+            ("itRefusesTheGestureFirst", refusedBefore),
+            ("theSlateStandsDown", slateStoodDown),
+            ("theStageIsHandedBack", stageIsClear),
+            ("andThenThePressLands", acceptedAfter),
+        ])
+
+        endCapture(because: "slateYields cleanup")
+        showIdle(rows: [])
+        // The slate is NOT over: this drill stood it down on purpose and the
+        // drills after it still need the hold, and still need the 60 s ceiling
+        // that comes with it. Re-armed through the real door rather than by
+        // setting the flag back, so the ceiling is re-armed too.
+        if held { beginDrills() }
+        // The gesture was ours, so the deferred verdicts are still about their
+        // own panel and must not be skipped.
+        slateInterruptedByAGesture = false
     }
 }

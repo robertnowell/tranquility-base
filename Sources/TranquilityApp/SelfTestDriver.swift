@@ -141,7 +141,7 @@ extension StatusHUD {
         var count: Int { lock.lock(); defer { lock.unlock() }; return n }
     }
 
-    private func beginDrills() {
+    func beginDrills() {
         drillsHoldThePanel = true
         // A drill paints failures on purpose. They are counted (so a drill
         // can prove the wiring) and never written or forwarded: a record that
@@ -160,7 +160,7 @@ extension StatusHUD {
         Permissions.log("selftest: drills hold the panel — ambient repaints suspended")
     }
 
-    private func endDrills() {
+    func endDrills() {
         guard drillsHoldThePanel else { return }
         drillsHoldThePanel = false
         Failures.suppressed = false
@@ -171,6 +171,40 @@ extension StatusHUD {
             + "failures \(Failures.hasSink ? "attached" : "none"), "
             + "track \(Track.hasSink ? "attached" : "none")")
         handBackTheStage()
+    }
+
+    /// A real key beats a drill. Always.
+    ///
+    /// For the five seconds the slate runs, a drill's fixture owns the stage,
+    /// and a face that owns the stage refuses what arrives next. Measured
+    /// 13 Sep at 23:36:31 and again at 23:36:32: two ⌃⌥ presses played the
+    /// green recognised chime and were then dropped with `announce: refused,
+    /// reply flow on stage`, because the fixture on stage was a `pendingSend`
+    /// whose countdown the drill had already cancelled. A zombie: the state
+    /// said a reply flow was live, and there was no reply flow.
+    ///
+    /// This is the 08 Aug incident, which a comment two files away says was
+    /// fixed. It was not, and it cannot be fixed by making the fixtures
+    /// tidier, because the problem is not which face is up. The problem is
+    /// that a self-test was allowed to outrank the person using the app.
+    ///
+    /// So the slate stands down, at once, and the gesture goes on to act on a
+    /// real panel. Called from the hotkey callback in `main.swift` and NOT
+    /// from `handle(_:)`, deliberately: drills drive `handle` directly for the
+    /// arm battery, and a yield there would have every drill stand its own
+    /// slate down.
+    ///
+    /// Deploy cost, measured: the synchronous drills finish about a second
+    /// after launch. The rest of the window is two timers, so a press that
+    /// lands in it costs the slate two deferred verdicts, which report SKIP.
+    func yieldTheSlateToAGesture() {
+        guard drillsHoldThePanel else { return }
+        Permissions.log("selftest: a real gesture arrived mid-slate, standing "
+            + "the drills down so the press lands on a real panel")
+        slateInterruptedByAGesture = true
+        // endDrills releases the hold, restores the sinks, and hands the stage
+        // back through the user door, which is what clears the zombie.
+        endDrills()
     }
 
     /// The slate hands the panel back, once, at the end: a backstop under
@@ -251,7 +285,8 @@ extension StatusHUD {
         // And it must stay dead past the window it was armed for — the same
         // assertion `pendingSend.afterWindow` makes, through the other door.
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            SelfTest.report("readbackDoor.afterWindow", [("stillNotSent", !sent)])
+            SelfTest.report("readbackDoor.afterWindow", [("stillNotSent", !sent)],
+                            skippedBecauseOfAGesture: self.slateInterruptedByAGesture)
         }
     }
 
@@ -285,7 +320,8 @@ extension StatusHUD {
 
         // And it must stay stopped: the timer should be dead, not merely ignored.
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-            SelfTest.report("pendingSend.afterWindow", [("stillNotSent", !sent)])
+            SelfTest.report("pendingSend.afterWindow", [("stillNotSent", !sent)],
+                            skippedBecauseOfAGesture: self?.slateInterruptedByAGesture ?? false)
             // Then stand the drill's card down. It is the only drill whose
             // assertion outlives the call that starts it, so it is the only one
             // that cannot clean up before returning — and for as long as its
@@ -1982,6 +2018,7 @@ extension StatusHUD {
         cardPasteDrill()
         elasticGridDrill()
         slateHandsBackDrill()
+        slateYieldsDrill()
         goToSessionDrill()
         speechCallbackDrill()
 

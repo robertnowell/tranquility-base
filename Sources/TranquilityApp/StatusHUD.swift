@@ -1966,6 +1966,16 @@ final class StatusHUD: NSObject {
     /// `endDrills` (the only writers) moved to `SelfTestDriver.swift` — a
     /// `private` witness is invisible across that file boundary.
     var drillsHoldThePanel = false
+
+    /// A real key reached the panel while the slate was running, so the slate
+    /// was stood down mid-flight (`yieldTheSlateToAGesture`).
+    ///
+    /// Read by the drills that report on a timer, seconds after the call that
+    /// armed them. Their assertions are about a panel that no longer exists by
+    /// then: the user has taken it. A verdict measured against somebody else's
+    /// panel is not a verdict, and a PASS there would be the worse outcome of
+    /// the two, so those drills report SKIP instead.
+    var slateInterruptedByAGesture = false
     var drillRelease: DispatchWorkItem?
 
     var isOnScreen: Bool { panel?.isVisible ?? false }

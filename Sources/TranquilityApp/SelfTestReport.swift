@@ -33,6 +33,25 @@ enum SelfTest {
         Permissions.log("selftest \(name): SKIP — \(reason)")
     }
 
+    /// For the drills that report on a timer, seconds after the call that armed
+    /// them: a verdict is only a verdict if it is about the panel the drill set
+    /// up. Since the slate now stands down the moment a real key arrives
+    /// (`yieldTheSlateToAGesture`), these can find the USER's panel there
+    /// instead, and asserting against it would be measuring a stranger.
+    ///
+    /// SKIP rather than PASS, because a PASS is the worse error of the two: a
+    /// claim of coverage over a launch where the drill never really ran. And
+    /// SKIP rather than silence, because a drill that quietly reports nothing
+    /// is how a slate loses a verdict without anybody noticing.
+    static func report(_ name: String, _ checks: [(String, Bool)],
+                       skippedBecauseOfAGesture interrupted: Bool) {
+        guard !interrupted else {
+            skipped(name, because: "a real gesture took the panel mid-slate")
+            return
+        }
+        report(name, checks)
+    }
+
     /// The line that says the slate is finished, so nothing has to guess how
     /// long a slate takes.
     ///
