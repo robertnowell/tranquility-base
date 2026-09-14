@@ -1482,11 +1482,22 @@ extension AppDelegate {
             }
 
             let outcome = await TerminalTabFocus.focus(tty: tty, sessionId: sessionId)
+            // What was actually raised, not what we asked for. The old line
+            // printed the PANE tty while the script raised a Terminal tab it
+            // had found by a different tty entirely, so twelve wrong windows
+            // in a row logged as twelve successes and the record could not be
+            // used to tell a hit from a corpse (13 Sep).
+            let landedOn = TmuxOwnership.pane(forSessionId: sessionId, pid: nil)
+                .map { pane in
+                    TerminalWindows.windowId(for: pane.sessionName)
+                        .map { "\(pane.sessionName) in Terminal window \($0)" }
+                        ?? pane.sessionName
+                } ?? tty
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 switch outcome {
                 case .focused:
-                    Permissions.log("goTo: focused \(tty)")
+                    Permissions.log("goTo: focused \(landedOn)")
                     report(owned == nil ? "focused_after_transfer" : "focused", nil)
                     self.hud.finishGoToSession(nil)
                 case .tabGone:
@@ -2346,6 +2357,15 @@ extension AppDelegate {
             // dropped on the greeting card has to be under that id already.
             if let launch, let attachments = await self?.coordinator?.attachments {
                 attachments.adopt(stagingKey: launch.stagingKey, asSession: sessionId)
+                // And re-point the panel at the agent in the same breath.
+                // `adopt` moves the fragments; without this the card goes on
+                // naming the staging key until the next ambient tick, which
+                // sits behind a model call — so the chip row shows an empty
+                // tray under a launch that has already become an agent, and
+                // reads as "my screenshot vanished". The alias in the tray is
+                // what makes a drop in that window still land correctly; this
+                // is what stops it looking wrong while it does.
+                await MainActor.run { [weak self] in self?.refreshDropTarget() }
             }
             launch?.resolve(sessionId: sessionId)
             guard greet else { return }

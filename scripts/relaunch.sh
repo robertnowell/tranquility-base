@@ -180,43 +180,19 @@ fi
 
 # Never kill a live microphone.
 #
-# The recorder holds the whole utterance in memory and flushes once at key-up, so
-# killing mid-sentence does not lose a file — it loses the words. That was
-# survivable while a person chose the moment to relaunch. It stopped being
-# survivable when a merge started firing this automatically, possibly from a
-# session the speaker is not watching.
+# The wait itself, and the constants behind it, live in lib/app-process.sh —
+# on `app_stop`, which is the line that actually does the killing. See the
+# comment there for why it moved: four scripts stop the app and only this one
+# was asking.
 #
-# The marker is written by Recorder.start and cleared by stop/abandon; it carries
-# its start time so a crash cannot wedge relaunches forever (see CaptureMarker).
-MARKER="$HOME/Library/Application Support/VoiceDispatch/capturing"
-# Mirrors CaptureMarker.staleAfter, which this script cannot read because it is
-# bash. The marker is re-stamped every CaptureMarker.heartbeat seconds for as
-# long as the microphone is open, so age means "silence from the writer", not
-# "length of the utterance". It was the second reading, at 180s, that let this
-# script destroy a live four-minute capture on 10 Aug. Change both or neither.
-STALE_AFTER=20
-GIVE_UP_AFTER=120
-waited=0
-while [ -f "$MARKER" ]; do
-  started=$(cat "$MARKER" 2>/dev/null || echo 0)
-  case "$started" in ''|*[!0-9]*) started=0 ;; esac
-  age=$(( $(date +%s) - started ))
-  if [ "$started" -eq 0 ] || [ "$age" -ge "$STALE_AFTER" ]; then
-    echo "→ ignoring a stale capture marker (${age}s old)"
-    break
-  fi
-  if [ "$waited" -ge "$GIVE_UP_AFTER" ]; then
-    # Refusing is the safe failure: the app keeps running its current build,
-    # which is exactly what it was doing a second ago. Losing the utterance is
-    # not recoverable; being one commit behind for another minute is.
-    echo "✗ microphone still open after ${waited}s — not relaunching." >&2
-    echo "  The app stays on its current build. Run this again when you're done." >&2
-    exit 1
-  fi
-  [ "$waited" -eq 0 ] && echo "→ microphone is open; waiting for the utterance to finish"
-  sleep 2
-  waited=$(( waited + 2 ))
-done
+# This early call is a courtesy, not the guard. It keeps somebody mid-sentence
+# from paying for forty seconds of compiling that `app_stop` is about to refuse
+# anyway. The guard that matters runs immediately before the kill, which is the
+# half that was missing: measured 14 Sep, this script began at 04:21:21 with the
+# microphone shut, Robert started speaking at 04:21:24, and the app was killed
+# and replaced by 04:21:39. The old single check passed three seconds before he
+# opened his mouth and was never asked again.
+wait_for_microphone "before building"
 
 # BUILD FIRST, then stop, then launch.
 #
