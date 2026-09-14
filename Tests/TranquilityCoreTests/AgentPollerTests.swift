@@ -20,11 +20,18 @@ final class AgentPollerTests: XCTestCase {
 
         struct Down: Error, CustomStringConvertible { var description: String { "the wire is down" } }
 
+        /// `holdOpen` keeps the stream alive after its events, which matters
+        /// more than it looks: a stream that FINISHES triggers the
+        /// stream-ended seed, so a test using one cannot tell the start-time
+        /// seed from the reconnect seed. The first version of the seeding test
+        /// passed with the fix removed for exactly that reason.
+        var holdOpen = false
         func changes() -> AsyncStream<AgentEvent>? {
             guard let stream else { return nil }
+            let hold = holdOpen
             return AsyncStream { c in
                 for e in stream { c.yield(e) }
-                c.finish()
+                if !hold { c.finish() }
             }
         }
         func mine() async throws -> [AgentSession] {
@@ -188,6 +195,54 @@ final class AgentPollerTests: XCTestCase {
         XCTAssertNil(poller.snapshot.agent(session("s1", "a").id),
                      "the streaming provider was polled anyway")
         XCTAssertNotNil(poller.snapshot.agent(session("s2", "b").id))
+    }
+
+    // MARK: - A stream has to be seeded
+
+    /// **A stream reports what happens NEXT.** At startup a streaming
+    /// provider's sessions all already exist, so nothing is changing and the
+    /// grid would show an empty panel beside a server with work on it.
+    ///
+    /// Measured 14 Sep on a live `opencode serve` holding 22 sessions: the app
+    /// polled, subscribed, logged no error and drew no rows. `mine()` is
+    /// mandatory for a streaming provider for exactly this reason, and the
+    /// first poller required it and then never called it.
+    func testAStreamingProviderIsSeededSoItsRowsExistBeforeAnythingChanges() async throws {
+        let p = Controlled(id: "a")
+        p.stream = []                       // declares a stream, emits nothing
+        p.holdOpen = true                   // and never ends, so only the start-time seed can fire
+        p.sessions = [session("s1", "a"), session("s2", "a")]
+        let (poller, config) = try poller([p])
+        poller.registryConfig = config
+
+        poller.start()
+        defer { poller.stop() }
+
+        // The seed is a Task; give it a moment to land.
+        for _ in 0..<40 where poller.snapshot.agents.isEmpty {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(poller.snapshot.agents.count, 2,
+                       "a streaming provider drew no rows until something moved")
+    }
+
+    /// And a failed seed is silence WITH a reason, never "there is nothing
+    /// there" - the same rule a failed poll follows.
+    func testAFailedSeedIsRecordedRatherThanReadAsEmpty() async throws {
+        let p = Controlled(id: "a")
+        p.stream = []
+        p.holdOpen = true
+        p.failList = true
+        let (poller, config) = try poller([p])
+        poller.registryConfig = config
+
+        poller.start()
+        defer { poller.stop() }
+        for _ in 0..<40 where poller.snapshot.unreachable["a"] == nil {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertNotNil(poller.snapshot.unreachable["a"])
+        XCTAssertTrue(poller.snapshot.agents.isEmpty)
     }
 
     // MARK: - Events into the snapshot

@@ -81,7 +81,23 @@ public final class AgentPoller: @unchecked Sendable {
 
     public func start() {
         stop()
-        for provider in configured { subscribe(provider) }
+        for provider in configured {
+            subscribe(provider)
+            // SEED IT. A stream reports what happens NEXT, and the largest gap
+            // is the one before it opened: at startup a streaming provider's
+            // sessions all already exist, so nothing is "changing" and the grid
+            // shows an empty panel beside a server with work on it.
+            //
+            // Measured 14 Sep on a live `opencode serve` holding 22 sessions:
+            // the app polled, subscribed, logged no error, and drew no rows.
+            //
+            // `mine()` is mandatory for a streaming provider for exactly this
+            // reason, and the first draft of this poller required it and then
+            // never called it. A2A's rule is the same one: resubscribe must
+            // deliver a snapshot first, because a client that only hears
+            // changes cannot know the state it started in.
+            if provider.changes() != nil { seed(provider) }
+        }
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + 1, repeating: Self.beat)
         t.setEventHandler { [weak self] in self?.tick() }
@@ -100,6 +116,29 @@ public final class AgentPoller: @unchecked Sendable {
     /// moment are one refresh.
     public func kick() {
         queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.tick() }
+    }
+
+    /// One list call for a provider whose ingress is a stream, so the rows
+    /// exist before anything changes.
+    private func seed(_ provider: any AgentProvider) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let fresh = try await provider.mine()
+                self.sync {
+                    self.state.unreachable.removeValue(forKey: provider.id)
+                    self.merge(fresh, from: provider.id)
+                    let at = self.now()
+                    for session in fresh { self.state.confirmedAt[session.id] = at }
+                }
+                self.trace?("provider \(provider.id) seeded \(fresh.count) agent(s)")
+            } catch {
+                // Same rule as a failed poll: silence is recorded with its
+                // reason and never read as "there is nothing there".
+                self.sync { self.state.unreachable[provider.id] = String(describing: error) }
+                self.trace?("provider \(provider.id) could not be seeded: \(error)")
+            }
+        }
     }
 
     private func tick() {
@@ -193,6 +232,11 @@ public final class AgentPoller: @unchecked Sendable {
                 self.onEvents?([event])
             }
             self?.trace?("provider \(provider.id) stream ended")
+            // A DROPPED STREAM IS A GAP TOO. Re-listing on the way out is what
+            // turns `mine()` from a formality into the catch-up it was
+            // specified as: whatever changed while the connection was down is
+            // in the list even though its events are gone for ever.
+            self?.seed(provider)
         }
         sync { streams[provider.id] = task }
     }
