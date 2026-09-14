@@ -909,7 +909,34 @@ extension StatusHUD {
             ("closedLast", sorted.suffix(2) == ["d1", "d2"]),
             ("quietAboveClosed", Array(sorted[4...5]) == ["i1", "i2"]),
             ("filedOutranksTheDead", withFiled == ["w1", "i1", "filed", "d1"]),
-            ("activeKeepsArrivalOrder", Array(sorted.prefix(4)) == ["w1", "r1", "f1", "w2"]),
+            // **RE-RULED 14 Sep**, and this assertion is the reversal.
+            //
+            // It read `["w1", "r1", "f1", "w2"]` — lit rows in pure arrival
+            // order. That held while green was rare. Under the three-lamp
+            // ruling green is the majority lamp (43 of 46 lit rows on the real
+            // panel), so arrival order alone decided the whole grid, and
+            // arrival order is BAND order: a remote agent, enumerated last by
+            // construction, could never win a slot however loudly it asked.
+            //
+            // Read-state breaks the tie, which is the one job the ruling
+            // licences it for: it orders rows and bolds them, never colours
+            // them. So amber, then anything unread, then everything merely
+            // standing by — each group keeping its arrival order.
+            //
+            // Shipped red: the change landed in #428 and this drill was not
+            // updated with it, which `swift test` cannot catch because the
+            // panel has no unit tests. Rule 7, earned again.
+            ("amberLeadsThenUnreadThenTheRest",
+             Array(sorted.prefix(4)) == ["f1", "w1", "r1", "w2"]),
+            ("unreadOutranksAStandingByRow",
+             SessionRow.quietRowsLast([
+                SessionRow(id: "read", name: "read", aux: "", lamp: .ready),
+                SessionRow(id: "unread", name: "unread", aux: "", lamp: .ready,
+                           read: .unread),
+             ]).map(\.id) == ["unread", "read"]),
+            ("andNothingButReadStateReordersThem",
+             SessionRow.quietRowsLast([row("a", .ready), row("b", .working),
+                                       row("c", .ready)]).map(\.id) == ["a", "b", "c"]),
             ("nothingLost", sorted.count == mixed.count),
             ("allQuietIsStillAllQuiet",
              SessionRow.quietRowsLast([row("i1", .running), row("i2", .running)])

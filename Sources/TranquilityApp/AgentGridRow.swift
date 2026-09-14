@@ -106,12 +106,16 @@ final class AgentGridRow: NSView {
                 ? (picked ? StateLegend.Palette.ready : StateLegend.Palette.ink)
                 : StateLegend.Palette.fault
 
-            let title = NSMutableAttributedString()
-            title.append(Widgets.letterspaced(agent.name.uppercased(), size: 9,
-                                              tracking: 1.1, color: ink))
-            title.append(NSAttributedString(string: "  "))
-            title.append(Widgets.letterspaced(mark, size: 9, tracking: 0, color: ink))
-            button.attributedTitle = title
+            // **Through `ChromeType.line`, not `Widgets.letterspaced`.** The
+            // tick and the arrow are MARKS (`ChromeType.isMark`), and
+            // `letterspaced` has no idea marks exist — it draws every
+            // character on the baseline the letters use, which the chrome
+            // self-test (`everyMarkComposed`) exists specifically to catch.
+            // `line(_:)` is "the one place a glyph meets a word in this app",
+            // and this row shipped red for ignoring it.
+            button.attributedTitle = ChromeType.line(
+                "\(agent.name.uppercased()) \(mark)",
+                font: StateLegend.Face.chrome(9), color: ink, tracking: 1.1)
             // An agent that is not set up reads back, so the eye lands on the
             // ones that are. It is still legible and still tappable: being
             // signed out is an ordinary state, not a disabled control.
