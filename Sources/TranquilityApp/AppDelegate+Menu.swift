@@ -383,7 +383,7 @@ extension AppDelegate {
     }
 
     @objc func showOnboarding() {
-        onboarding.show { [weak self] in self?.refresh() }
+        onboarding.show { [weak self] in self?.finishOnboarding() }
     }
 
     @objc func openMicrophoneSettings() {
