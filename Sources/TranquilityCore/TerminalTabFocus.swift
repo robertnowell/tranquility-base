@@ -3,41 +3,32 @@ import Foundation
 /// Bring a live session to the front — the addressing half of "go to
 /// session".
 ///
-/// Two shapes, tried in order, because the thing behind a tty stopped being
-/// one thing on 21 Aug (`cc7bf4e`, "tmux is simply how a launch works now"):
+/// An agent's terminal is a tmux pane, and a pane is reached by attaching to
+/// its tmux session. So there is one mechanism and one question: is there
+/// already a window attached to it that we opened, or does one need opening?
 ///
-/// 1. **tmux pane** (every session TB launches, unconditionally, since
-///    `cc7bf4e`): `TmuxOwnership.pane(forTty:)` finds the live pane and this
-///    opens a fresh Terminal window running `tmux attach`, per "The end
-///    state" note in `docs/log/architecture-program.md` ("GO TO AGENT = attach").
-///    A LIVE server cannot serve a stale pane the way Terminal.app served a
-///    dead tab (the 19 Aug misfire this file's sibling type guards against),
-///    which is what makes this branch safe to try first, always.
-/// 2. **Terminal.app tab** (a hand-started session the user opened directly
-///    in their own tab, never launched by TB at all — the adoption design's
-///    "every session is adoptable, wherever it started") — the original
-///    mechanism, unchanged, kept as the fallback for exactly that case.
+///   1. **A window we opened.** `TerminalWindows` holds Terminal's own window
+///      id, recorded at the moment we opened it. Raising by id is exact.
+///   2. **Otherwise, a fresh one.** `tmux attach -d` detaches whatever client
+///      was there — so the previous window closes itself rather than being
+///      left as a second view onto the same pane — and the new window's id is
+///      recorded on the way past.
 ///
-/// Found live, 22 Aug, the hard way: branch 2 alone was ALL this type did
-/// until today, and since branch 1's precondition (every launch is tmux) has
-/// held for every session TB launches since 21 Aug, "Go to Agent" had been a
-/// silent, universal no-op for a full day — reproduced on a session launched
-/// seconds before the fix, not just an old one. `SessionLauncher.focus(pid:)`
-/// was the other copy of branch 2 alone; deleted rather than fixed twice,
-/// its one call site routed through here instead.
+/// **There is no tty matching here any more, and there must never be again.**
+/// Terminal reports the tty of a tab whose shell has exited, and macOS
+/// recycles tty device numbers, so a tty names several tabs at once and only
+/// one of them is alive. Measured 13 Sep 2026: 61 Terminal windows on one
+/// machine, `/dev/ttys045` claimed by five of them, four dead. The old
+/// `tty of tabs of windows` walk returned the first match — a dead canary
+/// window, left behind by `scripts/canary.sh` — and reported `.focused`,
+/// twelve presses in a row, while the agent sat in window 61. Filtering that
+/// list by liveness was considered and rejected: it stacks a second scraped
+/// fact on the first and the two have to agree, which is the shape of the bug
+/// rather than a fix for it. We open the window, so we know its id; nothing
+/// needs to be inferred.
 ///
-/// One osascript run per branch, two Apple events for the tab walk
-/// regardless of how many tabs exist: a batched `tty of tabs of windows`
-/// fetch answers for every tab at once, then a single select-and-raise lands
-/// on the match. The shape it replaces — one `tty of t` Apple event per tab —
-/// is the shape that froze the app (issue 14): 192 open tabs meant 192
-/// round-trips, 3.5 s against an idle Terminal and unbounded against a busy
-/// one, each event entitled to the two-minute default Apple-event timeout.
-/// Measured 12 Aug: the batched fetch answers the same 192 tabs in ~120 ms.
-///
-/// The index math runs locally between the two events, so window/tab indices
-/// are only trusted for the milliseconds between fetch and select — the same
-/// script execution.
+/// One osascript run per focus, one Apple event, no tab walk at any size. The
+/// walk it replaces is what froze the app at 192 open tabs (issue 14).
 public enum TerminalTabFocus {
     public enum Outcome: Equatable, Sendable {
         /// The tab is selected, its window raised, Terminal activated — or,
@@ -51,43 +42,6 @@ public enum TerminalTabFocus {
         /// still exist — the honest message is "busy", not "gone".
         case timedOut(seconds: Int)
         case failed(String)
-    }
-
-    /// The script is only ever built around a tty that looks like one.
-    /// A tty is spliced into AppleScript source, so anything outside the
-    /// character set of a device path is refused rather than quoted.
-    static func script(focusing tty: String) -> String? {
-        let allowed = CharacterSet(charactersIn:
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-")
-        guard tty.hasPrefix("/dev/"), tty.count <= 64,
-              tty.unicodeScalars.allSatisfy({ allowed.contains($0) })
-        else { return nil }
-        // The inner `try` keeps one tab with an unreadable tty (a closing
-        // window, a missing value) from failing the whole search — the old
-        // per-tab walk had the same exposure on every event.
-        return """
-            tell application "Terminal"
-              set ttyLists to tty of tabs of windows
-              set wi to 0
-              repeat with wl in ttyLists
-                set wi to wi + 1
-                set ti to 0
-                repeat with tv in wl
-                  set ti to ti + 1
-                  try
-                    if (tv as text) is "\(tty)" then
-                      set w to window wi
-                      set selected tab of w to tab ti of w
-                      set index of w to 1
-                      activate
-                      return "ok"
-                    end if
-                  end try
-                end repeat
-              end repeat
-              return "notfound"
-            end tell
-            """
     }
 
     /// Pure mapping from the script result, separated so it is testable
@@ -127,7 +81,7 @@ public enum TerminalTabFocus {
 
     /// Only a name shaped the way `launchTmux` actually makes one (`tb-`
     /// plus an 8-char hex session-id prefix) is ever attached to — the same
-    /// posture `script(focusing:)` takes with a tty: refuse to script
+    /// posture the tty filter used to take: refuse to script
     /// anything outside the character set of the thing being addressed,
     /// rather than trust a live server's own output.
     static let sessionNameCharset = CharacterSet(charactersIn:
@@ -165,7 +119,7 @@ public enum TerminalTabFocus {
               sessionName.unicodeScalars.allSatisfy({ sessionNameCharset.contains($0) })
         else { return nil }
         // Built once, reused for both tmux invocations below — same pattern
-        // `script(focusing:)`'s sibling and `SessionLauncher.resume()`'s own
+        // `SessionLauncher.resume()`'s own
         // `cd … && …` build already use: every dynamic piece goes through
         // AppleScript's `quoted form of`, never manual Swift-side escaping.
         func tmuxCommand(_ args: String) -> String {
@@ -181,18 +135,142 @@ public enum TerminalTabFocus {
                 """
         }
         let resize = tmuxCommand("resize-window -x \(humanAttachColumns) -y \(humanAttachRows)")
-        let attach = tmuxCommand("attach")
+        // `attach -d` rather than a bare attach, and this is the whole of the
+        // "two windows onto the same pane" fix (found live 23 Aug, previously
+        // handled by searching Terminal for the existing client's tty and
+        // raising that instead). tmux already has the verb: -d detaches every
+        // other client as this one attaches, so the old window's `tmux attach`
+        // exits and the window goes with it. One flag, tmux's own semantics,
+        // and no tty is consulted to get there.
+        let attach = tmuxCommand("attach -d")
+        // The window id comes back with the "ok", because we OPENED this
+        // window and that is the only moment its identity is knowable without
+        // guessing. `do script` with no `in` clause makes a new window and
+        // leaves it frontmost, so `window 1` is it. Wrapped in a try: an id we
+        // fail to read costs a future reopen, never this attach.
         return """
             tell application "Terminal"
               activate
               do script \(resize) & " && " & \(attach)
+              set wid to ""
+              try
+                set wid to (id of window 1) as text
+              end try
+              return "ok|" & wid
             end tell
             """
+    }
+
+    /// Raise a window we opened earlier, by Terminal's own id.
+    ///
+    /// No tty, no tab walk, no search. Either the id still names a usable
+    /// window or it does not, and "notfound" is a fact rather than a
+    /// near-miss — which is exactly what the tty match could never say,
+    /// because a recycled tty on a dead tab looks identical to a live one.
+    ///
+    /// **`exists` alone is not that fact.** Measured against the real
+    /// Terminal, 14 Sep, minutes after #418 shipped: a window that has been
+    /// CLOSED goes on answering `exists window id N` with true, as a zombie
+    /// object reporting `tabs = 0` and `visible = false`. Raising it succeeds
+    /// silently and shows the reader nothing — the same defect #418 existed
+    /// to remove (a predicate that cannot tell a corpse from the real thing),
+    /// reintroduced one layer up in the fix for it.
+    ///
+    /// A window with no tabs has nothing to show, so the tab count is the
+    /// honest test. `visible` separates the two cases too, but would also
+    /// reject a merely minimised window, which is somebody's real terminal.
+    static func raiseScript(windowId: Int) -> String {
+        """
+        tell application "Terminal"
+          if (exists window id \(windowId)) then
+            if (count of tabs of window id \(windowId)) > 0 then
+              set index of window id \(windowId) to 1
+              activate
+              return "ok"
+            end if
+          end if
+          return "notfound"
+        end tell
+        """
+    }
+
+    /// The window id an attach reported, or nil when it did not say.
+    static func windowId(fromAttach result: String) -> Int? {
+        guard let bar = result.firstIndex(of: "|") else { return nil }
+        return Int(result[result.index(after: bar)...]
+            .trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Open a fresh window on this pane and remember which one it is.
+    ///
+    /// The single place an attach happens, so the launcher's two callers (a
+    /// pane that needs a human, `showPane`) record their window the same way
+    /// GO TO AGENT does and the next focus can raise it instead of opening a
+    /// second one.
+    @discardableResult
+    public static func attachFresh(pane: TmuxPaneAddress,
+                                   timeout: TimeInterval = 5) async -> Outcome {
+        guard let binary = Tmux.resolveBinary() else {
+            return .failed("tmux binary not found")
+        }
+        guard let script = attachScript(
+            binary: binary, socket: pane.socketName,
+            tmuxTmpDir: Tmux.socketDirectory.path, sessionName: pane.sessionName)
+        else {
+            return .failed("refused to script an unexpected tmux session name: "
+                + "\(pane.sessionName)")
+        }
+        let result = await AppleScript.run(script: script, timeout: timeout)
+        if case .success(let out) = result, let id = windowId(fromAttach: out) {
+            TerminalWindows.remember(sessionName: pane.sessionName, windowId: id)
+        }
+        return outcome(of: result, timeout: timeout)
+    }
+
+    /// The same attach, run synchronously, for callers already off the main
+    /// actor and not in an async context — the launcher's trust-prompt watcher
+    /// and `showPane`. Both used to build the script themselves and drop the
+    /// window id on the floor, so the window they opened was unknown to the
+    /// next GO TO AGENT and got detached and reopened for no reason.
+    @discardableResult
+    public static func attachFreshSync(pane: TmuxPaneAddress) -> Outcome {
+        guard let binary = Tmux.resolveBinary() else {
+            return .failed("tmux binary not found")
+        }
+        guard let script = attachScript(
+            binary: binary, socket: pane.socketName,
+            tmuxTmpDir: Tmux.socketDirectory.path, sessionName: pane.sessionName)
+        else {
+            return .failed("refused to script an unexpected tmux session name: "
+                + "\(pane.sessionName)")
+        }
+        let result = AppleScript.run(script: script)
+        if case .success(let out) = result, let id = windowId(fromAttach: out) {
+            TerminalWindows.remember(sessionName: pane.sessionName, windowId: id)
+        }
+        return outcome(of: result, timeout: 5)
     }
 
     /// Never call from the main actor: the one Apple event still blocks for
     /// up to `timeout` when Terminal is busy, and a main-thread block past
     /// ~1 s trips the event-tap watchdog and silently kills the hotkeys.
+    ///
+    /// Two steps, and neither of them looks at a tty:
+    ///
+    ///   1. **Raise the window we opened.** If this session has been focused
+    ///      before in this run of the app, `TerminalWindows` has Terminal's
+    ///      own window id for it. Raising by id cannot land on a corpse.
+    ///   2. **Otherwise open a fresh one.** `attach -d` detaches whatever
+    ///      client was there, so the old window closes itself, and the new
+    ///      window's id is recorded on the way past.
+    ///
+    /// What is gone is the tab walk that matched on tty. It could not work:
+    /// Terminal reports the stale tty of tabs whose shell has exited and macOS
+    /// recycles the numbers, so `/dev/ttys045` named five windows at once on
+    /// the machine this was found on, and the search returned the first — a
+    /// dead canary window — while reporting success. `tty` survives in the
+    /// signature only as the caller's way of naming a pane it already holds;
+    /// nothing matches on it any more.
     public static func focus(tty: String, sessionId: String? = nil,
                              timeout: TimeInterval = 5) async -> Outcome {
         // Ask the session's own registry entry for its pane before inferring
@@ -200,47 +278,26 @@ public enum TerminalTabFocus {
         // for the pid, the server's inventory for the pane) and Claude Code
         // writes the pane down itself — see `TmuxOwnership.pane(forSessionId:pid:)`.
         let resolved = sessionId.flatMap { TmuxOwnership.pane(forSessionId: $0, pid: nil) }
-        if let pane = resolved ?? TmuxOwnership.pane(forTty: tty) {
-            guard let binary = Tmux.resolveBinary() else {
-                return .failed("tmux binary not found")
-            }
-            // tmux happily mirrors a second client onto a session that
-            // already has one attached, so `attach` unconditionally is how
-            // GO TO AGENT clicked twice opened two Terminal windows onto the
-            // same pane (found live, 23 Aug). If a client is already there,
-            // raise ITS window — its tty is an ordinary Terminal.app tab, so
-            // the tab-search branch below already knows how to find it —
-            // rather than mirroring a new one in on top of it.
-            if case .success(let clients) = Tmux.run(
-                ["list-clients", "-t", pane.sessionName, "-F", "#{client_tty}"],
-                socket: pane.socketName),
-               let existingTty = clients.split(separator: "\n").first.map(String.init),
-               !existingTty.isEmpty,
-               let raiseScript = script(focusing: existingTty) {
-                let raised = outcome(of: await AppleScript.run(script: raiseScript, timeout: timeout),
-                                     timeout: timeout)
-                // `.tabGone` means the client's tty is no longer a Terminal
-                // tab — the window closed without tmux noticing the detach
-                // (rare, but tmux's own client bookkeeping can lag a killed
-                // window). Fall through to a fresh attach exactly as if no
-                // client had been listed at all; every other outcome, success
-                // or failure, is this call's real answer.
-                if raised != .tabGone { return raised }
-            }
-            guard let script = attachScript(
-                binary: binary, socket: pane.socketName,
-                tmuxTmpDir: Tmux.socketDirectory.path, sessionName: pane.sessionName)
-            else {
-                return .failed("refused to script an unexpected tmux session name: "
-                    + "\(pane.sessionName)")
-            }
-            return outcome(of: await AppleScript.run(script: script, timeout: timeout),
-                           timeout: timeout)
+        guard let pane = resolved ?? TmuxOwnership.pane(forTty: tty) else {
+            // No live tmux server owns this. There is no identity to address
+            // and nothing to attach to, and the tty search that used to stand
+            // in here answered with whichever dead tab sorted first. Callers
+            // reach this only for a session that was never moved under tmux;
+            // `AppDelegate.goToSession` transfers one before it ever calls in.
+            return .failed("no tmux pane owns \(tty), so there is no window to open")
         }
-        guard let script = script(focusing: tty) else {
-            return .failed("refused to script an unexpected tty form: \(tty)")
+        if let known = TerminalWindows.windowId(for: pane.sessionName) {
+            let raised = outcome(
+                of: await AppleScript.run(script: raiseScript(windowId: known),
+                                          timeout: timeout),
+                timeout: timeout)
+            // `.tabGone` here means the window was closed by hand since we
+            // opened it. Forget it and open a fresh one, which is the same
+            // answer as never having known it. Any other outcome — raised, or
+            // a real Automation failure — is this call's answer.
+            if raised != .tabGone { return raised }
+            TerminalWindows.forget(sessionName: pane.sessionName)
         }
-        return outcome(of: await AppleScript.run(script: script, timeout: timeout),
-                       timeout: timeout)
+        return await attachFresh(pane: pane, timeout: timeout)
     }
 }

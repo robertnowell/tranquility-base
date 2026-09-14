@@ -1389,19 +1389,19 @@ public enum SessionLauncher {
     public static func showPane(pane: TmuxPaneAddress, why: String) -> Bool {
         guard case .success = Tmux.run(
                 ["has-session", "-t", pane.stableTarget],
-                socket: pane.socketName, timeout: 2),
-              let binary = Tmux.resolveBinary(),
-              let script = TerminalTabFocus.attachScript(
-                binary: binary, socket: pane.socketName,
-                tmuxTmpDir: Tmux.socketDirectory.path, sessionName: pane.sessionName)
+                socket: pane.socketName, timeout: 2)
         else {
             Self.trace?("showPane: \(pane.sessionName) on \(pane.paneTty) — \(why), "
                 + "but no window could be opened for it")
             return false
         }
-        if case .failure(let error) = AppleScript.run(script: script) {
+        // Through `attachFreshSync` rather than a hand-built script, so the
+        // window this opens is RECORDED and the next GO TO AGENT raises it
+        // instead of detaching it and opening another.
+        let opened = TerminalTabFocus.attachFreshSync(pane: pane)
+        guard opened == .focused else {
             Self.trace?("showPane: \(pane.sessionName) on \(pane.paneTty) — \(why), "
-                + "but opening a window failed: \(error.message)")
+                + "but opening a window failed: \(opened)")
             return false
         }
         Self.trace?("showPane: opened \(pane.sessionName) on \(pane.paneTty) — \(why)")
@@ -1499,18 +1499,10 @@ public enum SessionLauncher {
                 // needs the human's own decision is not "resumed" until
                 // they can see it (ruled 23 Aug — see the needle's own
                 // comment on `ClaudeCodeAdapter.trustPrompt`).
-                guard let binary = Tmux.resolveBinary(),
-                      let script = TerminalTabFocus.attachScript(
-                        binary: binary, socket: pane.socketName,
-                        tmuxTmpDir: Tmux.socketDirectory.path, sessionName: pane.sessionName)
-                else {
-                    Self.trace?("newSession: \(pane.sessionName) needed a human but could not "
-                        + "open a window for it")
-                    return
-                }
-                if case .failure(let error) = AppleScript.run(script: script) {
+                let opened = TerminalTabFocus.attachFreshSync(pane: pane)
+                if opened != .focused {
                     Self.trace?("newSession: \(pane.sessionName) needed a human — opening a "
-                        + "window failed: \(error.message)")
+                        + "window failed: \(opened)")
                 }
             })
     }

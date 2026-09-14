@@ -1,6 +1,14 @@
 -- The watcher's contract, replayed end to end (see scripts/canary.sh).
 -- argv: 1 = untrusted directory, 2 = launch command.
--- Returns "PASS|<tty>", "FAIL-TRUST|<tty>" or "FAIL-BANNER|<tty>".
+-- Returns "PASS|<tty>|<window id>", "FAIL-TRUST|…" or "FAIL-BANNER|…".
+--
+-- The window id is captured at the moment WE open the window, which is the
+-- only moment its identity is knowable without guessing. The 16 Aug ruling
+-- left the dead tab behind because "closing the window needs a handle on the
+-- window, and there isn't one that holds up" — a tty is not one, as four
+-- windows claiming /dev/ttys007 proved then and five claiming /dev/ttys045
+-- proved again on 13 Sep. `do script` hands the window straight to us, so
+-- there is a handle now and nothing has to go hunting.
 --
 -- The tab is re-found by tty on every read, and addressed DIRECTLY
 -- (`tab i of window id wid`), never through a variable: `contents of x` where
@@ -42,9 +50,16 @@ end pressReturn
 on run argv
   set dir to item 1 of argv
   set cmd to item 2 of argv
+  set theWID to ""
   tell application "Terminal"
     set newTab to do script "cd " & quoted form of dir & " && " & cmd
     set theTTY to (tty of newTab) as text
+    -- `do script` with no `in` clause makes a new window and leaves it
+    -- frontmost, so `window 1` is the one just opened. Wrapped: an id we
+    -- cannot read costs one dead tab, never the probe's verdict.
+    try
+      set theWID to (id of window 1) as text
+    end try
   end tell
   -- Sentinel 1: the trust prompt renders. Same cadence and needles as the
   -- watcher: "trust this folder" is v2.1.x's "Yes, I trust this folder" row,
@@ -58,7 +73,7 @@ on run argv
       exit repeat
     end if
   end repeat
-  if not sawTrust then return "FAIL-TRUST|" & theTTY
+  if not sawTrust then return "FAIL-TRUST|" & theTTY & "|" & theWID
   -- The watcher's answer: one bare Return into the tab.
   my pressReturn(theTTY)
   -- Sentinel 2: the banner word the watcher settles on.
@@ -71,6 +86,6 @@ on run argv
       exit repeat
     end if
   end repeat
-  if not sawBanner then return "FAIL-BANNER|" & theTTY
-  return "PASS|" & theTTY
+  if not sawBanner then return "FAIL-BANNER|" & theTTY & "|" & theWID
+  return "PASS|" & theTTY & "|" & theWID
 end run

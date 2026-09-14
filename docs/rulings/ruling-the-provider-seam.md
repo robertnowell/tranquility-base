@@ -103,6 +103,40 @@ eighteen months, with a third-party landing pad.
 (#382), not the terminal path itself**, which is load-bearing for supervising
 sessions the user started by hand.
 
+## 11. One door per vendor
+
+Added 14 Sep 2026, after a page listing three ways to reach OpenCode raised the
+obvious question: are we building three of them?
+
+**No. One vendor gets one `AgentProvider`, and adding a second way to reach a
+vendor we can already reach is a rewrite, not a feature.**
+
+At the time of writing exactly one conformance exists, `LocalOpenCodeProvider`,
+and there is no ACP code in `Sources/` at all. The three "ways" were three
+options considered; one was rejected outright (a keystroke-scraped TUI), one is
+unbuilt (ACP), one is built and proven against a live server (the HTTP client).
+
+The rule matters because the temptation is real and arrives later. When the ACP
+client lands (#386), OpenCode will be the most convenient thing to develop it
+against, because it is installed and answers the protocol correctly. That makes
+it a good **test fixture** for the client and a bad **catalog entry**, because
+shipping one would mean two providers for one vendor, disagreeing subtly for
+ever about which is authoritative.
+
+So the value of a protocol client is measured on vendors with **no other door**:
+
+| Vendor | Door | Why |
+|---|---|---|
+| local OpenCode | HTTP client | built, proven live, structured permissions and events already |
+| crobot | HTTP client plus lifecycle | ACP is stdio; its agent is remote behind HTTPS and cannot be reached |
+| Claude Code | ACP or Agent SDK | the prize: real permission events instead of scraped TUI text |
+| Codex | ACP or app-server | same |
+| OpenHands, Devin, Cursor | HTTP | REST services, like crobot |
+
+If a vendor ever genuinely needs a second transport, that is a change to its
+ONE provider's internals, chosen there and invisible above it. It is never a
+second entry in the registry.
+
 ## What is enforced, and how
 
 | Rule | Mechanism | Where |
