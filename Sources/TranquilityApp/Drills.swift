@@ -909,32 +909,25 @@ extension StatusHUD {
             ("closedLast", sorted.suffix(2) == ["d1", "d2"]),
             ("quietAboveClosed", Array(sorted[4...5]) == ["i1", "i2"]),
             ("filedOutranksTheDead", withFiled == ["w1", "i1", "filed", "d1"]),
-            // **RE-RULED 14 Sep**, and this assertion is the reversal.
-            //
-            // It read `["w1", "r1", "f1", "w2"]` — lit rows in pure arrival
-            // order. That held while green was rare. Under the three-lamp
-            // ruling green is the majority lamp (43 of 46 lit rows on the real
-            // panel), so arrival order alone decided the whole grid, and
-            // arrival order is BAND order: a remote agent, enumerated last by
-            // construction, could never win a slot however loudly it asked.
-            //
-            // Read-state breaks the tie, which is the one job the ruling
-            // licences it for: it orders rows and bolds them, never colours
-            // them. So amber, then anything unread, then everything merely
-            // standing by — each group keeping its arrival order.
-            //
-            // Shipped red: the change landed in #428 and this drill was not
-            // updated with it, which `swift test` cannot catch because the
-            // panel has no unit tests. Rule 7, earned again.
-            ("amberLeadsThenUnreadThenTheRest",
-             Array(sorted.prefix(4)) == ["f1", "w1", "r1", "w2"]),
-            ("unreadOutranksAStandingByRow",
+            // RE-RULED TWICE on 14 Sep. #428 split the lit band by read-state
+            // (amber, then unread, then the rest) so a remote agent enumerated
+            // last could win a slot; #438 re-ruled this drill to match. Robert
+            // reversed it the same day: "if you read something it moves in the
+            // order and it's hard to find again ... just order green by
+            // recency, whether or not they're read or unread." Hearing a row
+            // must not move it. Lit rows keep pure arrival order, which is the
+            // recency order the bands established. The remote-agent gap is
+            // real and still open; it wants a recency field of its own, not a
+            // read-state tiebreak. Mirrored in SessionRowTests so `swift test`
+            // catches the next drift before the panel does.
+            ("activeKeepsArrivalOrder", Array(sorted.prefix(4)) == ["w1", "r1", "f1", "w2"]),
+            ("hearingARowDoesNotMoveIt",
              SessionRow.quietRowsLast([
-                SessionRow(id: "read", name: "read", aux: "", lamp: .ready),
+                SessionRow(id: "read", name: "read", aux: "", lamp: .ready, read: .opened),
                 SessionRow(id: "unread", name: "unread", aux: "", lamp: .ready,
                            read: .unread),
-             ]).map(\.id) == ["unread", "read"]),
-            ("andNothingButReadStateReordersThem",
+             ]).map(\.id) == ["read", "unread"]),
+            ("andNothingReordersLitRows",
              SessionRow.quietRowsLast([row("a", .ready), row("b", .working),
                                        row("c", .ready)]).map(\.id) == ["a", "b", "c"]),
             ("nothingLost", sorted.count == mixed.count),

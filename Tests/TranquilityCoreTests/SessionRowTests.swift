@@ -156,6 +156,36 @@ final class SessionRowTests: XCTestCase {
         XCTAssertEqual(ordered.map(\.id), ["first", "second"])
     }
 
+    /// The 14 Sep reversal of #428, stated as the thing the user could see: he
+    /// heard a row and it moved down the grid, under every unread one. The
+    /// caller orders lit rows by recency; hearing one changes its weight on
+    /// screen and nothing else.
+    func testAHeardGreenRowKeepsItsPlaceAboveAnUnreadOne() {
+        let heard = SessionRow(id: "heard", name: "heard", aux: "aux", lamp: .ready,
+                               read: .opened)
+        let unread = SessionRow(id: "unread", name: "unread", aux: "aux", lamp: .ready,
+                                read: .unread)
+        let amber = SessionRow(id: "amber", name: "amber", aux: "aux", lamp: .fault)
+        let ordered = SessionRow.quietRowsLast([heard, unread, amber])
+        XCTAssertEqual(ordered.map(\.id), ["heard", "unread", "amber"],
+                       "lit rows keep the recency order they arrived in, read or not")
+    }
+
+    /// The panel's `quietRowsDrill`, mirrored. That drill shipped red twice on
+    /// 14 Sep because the panel has no unit tests and nobody re-ran it; this
+    /// is the same fixture, so the next drift fails here first.
+    func testTheQuietRowsDrillFixtureHoldsInTheSuite() {
+        func row(_ id: String, _ lamp: Lamp) -> SessionRow {
+            SessionRow(id: id, name: id, aux: id, lamp: lamp)
+        }
+        let mixed = [row("w1", .working), row("i1", .running), row("d1", .unlit),
+                     row("r1", .ready), row("i2", .running), row("d2", .unlit),
+                     row("f1", .fault), row("w2", .working)]
+        let sorted = SessionRow.quietRowsLast(mixed).map(\.id)
+        XCTAssertEqual(sorted, ["w1", "r1", "f1", "w2", "i1", "i2", "d1", "d2"],
+                       "lit rows in arrival order, then quiet, then closed")
+    }
+
     // MARK: - gridRows / shownCount: the grid's own membership
 
     func testShownCountIsAtLeastTheFloorOnAQuietMachine() {

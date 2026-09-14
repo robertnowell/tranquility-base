@@ -438,30 +438,30 @@ public struct SessionRow: Equatable, Sendable {
             // prefix of this array any more, so the only thing the old rank
             // still did was rank a live session below a dead one on the one
             // face built to show it.
-            if row.switchedOff { return 3 }
+            if row.switchedOff { return 2 }
             switch row.lamp {
-            // LIT, and split in two on 14 Sep. Under the three-lamp ruling
-            // "alive and ready for the next turn" is GREEN rather than quiet,
-            // which is right, and which made green the majority lamp: 43 of 46
-            // lit rows on the real panel. Arrival order alone then decided the
-            // whole grid, and arrival order is BAND order — so a remote agent,
-            // enumerated last by construction, could never win a slot however
-            // loudly it was asking. That is the placement being the
-            // vendor-specific branch the fifth band's own comment promised
-            // there wasn't.
+            // LIT, and ranked TOGETHER. Split in two for one afternoon (14
+            // Sep, #428: unread green above read green, so a remote agent
+            // enumerated last could win a slot) and reversed the same day on
+            // Robert's report: "right now Read is all at the top, but then if
+            // you read something it moves in the order and it's hard to find
+            // again ... just order green by recency, whether or not they're
+            // read or unread." Hearing a row must not move it. Read-state
+            // bolds a row and drives the announcer; it does not order the
+            // grid. The bands above have already put every lit row in recency
+            // order, and a stable partition keeps it.
             //
-            // Read-state is what breaks the tie, and it is the one thing the
-            // ruling licences for exactly this: *it orders rows and it bolds
-            // them; it never colours one.* So something amber, or something
-            // said that you have not read, sorts above an agent that is merely
-            // standing by — wherever any of them happen to run.
-            case .fault: return 0
-            case .ready, .working: return row.read == .unread ? 0 : 1
-            case .running: return 2
-            case .unlit: return 4
+            // The remote-agent placement that motivated the split is a real
+            // gap and is still open: the fifth band arrives last by
+            // construction, so it needs a recency field of its own to join
+            // this order, not a read-state tiebreak that reshuffles the local
+            // rows every time one is heard.
+            case .ready, .working, .fault: return 0
+            case .running: return 1
+            case .unlit: return 3
             }
         }
-        return (0...4).flatMap { rank in rows.filter { band($0) == rank } }
+        return (0...3).flatMap { rank in rows.filter { band($0) == rank } }
     }
 
     /// A session id in the shape of a commit hash: the leading eight,
