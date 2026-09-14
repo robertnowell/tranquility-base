@@ -109,20 +109,32 @@ public struct AssemblyAIStreaming: LiveTranscriptionProvider {
             .prefix(100))
     }
 
-    /// PINNED, never defaulted. Left unset, v3 hands out whatever AssemblyAI
-    /// has most recently promoted — on 13 Sep 2026 that became
-    /// `universal-3-5-pro`, which on some recordings emits one `end_of_turn`
-    /// and then stops emitting anything at all: no `SpeechStarted`, no further
-    /// `Turn`, for the whole rest of the session, and then a clean
-    /// `Termination` that reports having received every byte. Three of Robert's
-    /// captures that day lost 306, 237 and 261 characters off the tail, each a
-    /// clean suffix, each shipped as a trustworthy final. The same files
-    /// transcribe end to end on this model. Reproduced 5x over a raw websocket
-    /// with no TB code in the path, so it is the model and not the client, and
-    /// neither `end_of_turn_confidence_threshold` nor
-    /// `min_end_of_turn_silence_when_confident` changes it. `coverageGuard`
-    /// below is the half of the fix that survives the next silent promotion.
-    public static let speechModel = "universal-streaming-english"
+    /// PINNED, never defaulted — and pinned to the model v3 hands out TODAY,
+    /// which is the counter-intuitive half.
+    ///
+    /// 13 Sep 2026: AssemblyAI promoted the v3 default to `universal-3-5-pro`.
+    /// On some recordings it transcribes the first turn, then emits nothing at
+    /// all — no `SpeechStarted`, no further `Turn` — for the rest of the
+    /// session, and closes with a clean `Termination` reporting every byte
+    /// received. Three of Robert's captures lost 306, 237 and 261 characters
+    /// off the tail, each a clean suffix, each shipped as a trustworthy final.
+    ///
+    /// The obvious repair is to pin the PREVIOUS model, which does transcribe
+    /// those files end to end. Measured over 16 real captures, that repair is
+    /// worse than the bug: `universal-streaming-english` returns complete but
+    /// materially wrong text on every capture, not just the affected ones
+    /// ("user heard Snape" for "user heard state", "the ladd. Er." for "the
+    /// ladder"), and a wrong transcript that covers the whole recording is
+    /// undetectable in a way a truncated one is not. It also endpoints so
+    /// loosely that it tripped the coverage guard on a capture it had not
+    /// truncated.
+    ///
+    /// So: pin the accurate model, and let `maxUncoveredTailMs` below catch
+    /// the truncation — which it did on 4 of 16 captures with no false
+    /// positives. Pinning buys determinism (an alias like `universal-3-5-pro`
+    /// can be repointed under us); the guard, not the pin, is what survives
+    /// the next silent promotion.
+    public static let speechModel = "u3-rt-pro"
 
     public func startSession(
         onPartial: @escaping @Sendable (String) -> Void,
@@ -190,6 +202,10 @@ struct AssemblyAITurnReducer {
     /// End of the last word the server ever timestamped, in ms from the start
     /// of the session. The coverage guard's numerator.
     private var lastWordEndMs: Int?
+    /// What the guard measured, kept so a PASSING stream can report its margin
+    /// too. `maxUncoveredTailMs` is a judgement call made on four incidents;
+    /// logging the gap on every stream is what turns it into a measurement.
+    private(set) var coverage: (coveredMs: Int, audioMs: Int)?
 
     /// How much audio may end after the last transcribed word before the
     /// transcript stops being trustworthy. A capture ends on key-up, a beat
@@ -210,6 +226,11 @@ struct AssemblyAITurnReducer {
         /// The session closed without finalizing everything. `partial` carries
         /// whatever text existed — suspect, never to be treated as final.
         case endedWithoutFinal(partial: String?)
+        /// A clean final the coverage guard could not check, because the
+        /// server sent no word timings or no audio duration. Trusted exactly as
+        /// it was before the guard existed — and traced, because a guard that
+        /// quietly stops guarding is the failure this whole change is about.
+        case finalUnverified(String)
         /// Every turn ended cleanly and the server closed cleanly, but the
         /// transcript stops far short of the audio the server says it received.
         /// Structurally a final; substantively a truncation. See `speechModel`.
@@ -271,13 +292,14 @@ struct AssemblyAITurnReducer {
                 // this guard existed, and says so in the trace.
                 let audioMs = Int(((object["audio_duration_seconds"] as? Double) ?? 0) * 1000)
                 if let coveredMs = lastWordEndMs, audioMs > 0 {
+                    coverage = (coveredMs, audioMs)
                     if audioMs - coveredMs > Self.maxUncoveredTailMs {
                         return .stoppedShort(
                             partial: accumulated, coveredMs: coveredMs, audioMs: audioMs)
                     }
                     return .final(accumulated)
                 }
-                return .final(accumulated)
+                return .finalUnverified(accumulated)
             }
             return .endedWithoutFinal(partial: hasAnyTranscript ? accumulated : nil)
 
@@ -439,9 +461,28 @@ final class AssemblyAIStreamingSession: LiveTranscriptionSession, @unchecked Sen
             case .partial(let accumulated):
                 onPartial(accumulated)
             case .final(let transcript):
-                conclude { _ in .final(TranscriptionResult(
-                    text: transcript, finality: .explicitEndOfTurn,
-                    provider: providerName)) }
+                let margin = coverageMargin()
+                conclude { _ in
+                    if let margin {
+                        AssemblyAIStreaming.trace?(
+                            "coverage: \(margin.coveredMs / 1000)s of "
+                            + "\(margin.audioMs / 1000)s audio, "
+                            + "\((margin.audioMs - margin.coveredMs) / 1000)s uncovered")
+                    }
+                    return .final(TranscriptionResult(
+                        text: transcript, finality: .explicitEndOfTurn,
+                        provider: providerName))
+                }
+                return
+            case .finalUnverified(let transcript):
+                conclude { _ in
+                    AssemblyAIStreaming.trace?(
+                        "coverage: UNCHECKED — server sent no word timings or no "
+                        + "audio duration; trusting finality alone, as before the guard")
+                    return .final(TranscriptionResult(
+                        text: transcript, finality: .explicitEndOfTurn,
+                        provider: providerName))
+                }
                 return
             case .stoppedShort(let partial, let coveredMs, let audioMs):
                 let gap = (audioMs - coveredMs) / 1000
@@ -473,6 +514,11 @@ final class AssemblyAIStreamingSession: LiveTranscriptionSession, @unchecked Sen
 
     /// Synchronous on purpose — NSLock is not async-safe, so every locked
     /// region lives in a sync function the async loop calls.
+    private func coverageMargin() -> (coveredMs: Int, audioMs: Int)? {
+        lock.lock(); defer { lock.unlock() }
+        return reducer.coverage
+    }
+
     private func didRequestFinal() -> Bool {
         lock.lock(); defer { lock.unlock() }
         return finalRequested
@@ -548,7 +594,8 @@ public final class StreamedUtterance: @unchecked Sendable {
         switch outcome {
         case .final(let result):
             return !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .failed(.truncatedNoFinality(let partial)):
+        case .failed(.truncatedNoFinality(let partial)),
+             .failed(.coverageShort(let partial)):
             return !partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .failed(.connectionDropped(let hadPartialTranscript)):
             return hadPartialTranscript

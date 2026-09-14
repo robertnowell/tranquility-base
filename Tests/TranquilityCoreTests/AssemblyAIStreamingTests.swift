@@ -139,6 +139,12 @@ final class AssemblyAIStreamingTests: XCTestCase {
         XCTAssertNil(sink.failure)
     }
 
+    func testPinnedModelIsTheOneMeasuredAccurate() {
+        XCTAssertEqual(AssemblyAIStreaming.speechModel, "u3-rt-pro",
+                       "pinning the PREVIOUS model returns complete but wrong text on "
+                       + "every capture; the guard, not the pin, answers the truncation")
+    }
+
     func testCoverageUnmeasurableFallsBackToTrustingFinality() async throws {
         let socket = FakeSocket()
         let sink = Sink()
