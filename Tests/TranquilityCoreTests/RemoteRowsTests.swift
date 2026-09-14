@@ -26,12 +26,14 @@ final class RemoteRowsTests: XCTestCase {
 
     // MARK: - Lamps
 
-    func testABlockedAgentIsAmberAndSpendsItsColumnOnTheQuestion() {
+    /// **A question is GREEN** (ruled 14 Sep). Amber is for the unanticipated,
+    /// not for the agent doing the one thing this app exists to carry.
+    func testAnAgentAskingSomethingIsGreenAndSpendsItsColumnOnTheQuestion() {
         let agent = remote("a", state: .inputRequired)
         let out = rows(.init(agents: [agent],
                              requests: [agent.id: PendingRequest(
                                 id: "q", session: agent.id, asked: "Merge to main?")]))
-        XCTAssertEqual(out.first?.lamp, .fault)
+        XCTAssertEqual(out.first?.lamp, .ready)
         XCTAssertEqual(out.first?.aux, "Merge to main?")
     }
 
@@ -42,9 +44,16 @@ final class RemoteRowsTests: XCTestCase {
         XCTAssertEqual(out.first?.read, .unread)
     }
 
-    func testAFinishedAgentNobodyOwesAnythingIsUnlit() {
+    /// **A finished turn is GREEN, read or unread.** The unlit socket is
+    /// reachable only through the user's own switch or a dead process, so a
+    /// remote agent that simply finished cannot land there. This assertion is
+    /// the one that was keeping every crobot task off the panel: `idle` became
+    /// `.completed` became unlit became unsorted became invisible.
+    func testAFinishedAgentIsGreenEvenWithNothingUnread() {
         let out = rows(.init(agents: [remote("a", state: .completed)]))
-        XCTAssertEqual(out.first?.lamp, .unlit)
+        XCTAssertEqual(out.first?.lamp, .ready)
+        XCTAssertEqual(out.first?.read, ReadState.none,
+                       "green without unread is still not unread")
     }
 
     func testAWorkingAgentIsBlue() {
@@ -57,19 +66,38 @@ final class RemoteRowsTests: XCTestCase {
     func testAnUnreachableProviderSaysSoRatherThanLookingQuiet() {
         let agent = remote("a", state: .unknown)
         let out = rows(.init(agents: [agent], unreachable: ["crobot": "the wire is down"]))
+        XCTAssertEqual(out.first?.lamp, .fault, "silence is amber, never calm")
         XCTAssertEqual(out.first?.aux, "cannot reach it")
         XCTAssertTrue(out.first?.detail?.contains("the wire is down") == true,
                       "the provider's own reason belongs in the hover")
     }
 
-    /// A blocked agent outranks everything, exactly as on the local bands.
-    func testABlockingRequestOutranksUnread() {
+    /// A question outranks blue, exactly as on the local bands: an agent that
+    /// is nominally still working but has stopped to ask is YOUR turn, and
+    /// advisory blue must not mask it.
+    func testAQuestionOutranksWorking() {
         let agent = remote("a", state: .working)
         let out = rows(.init(agents: [agent],
                              requests: [agent.id: PendingRequest(id: "q", session: agent.id,
                                                                  asked: "?")],
                              unread: [agent.id]))
-        XCTAssertEqual(out.first?.lamp, .fault)
+        XCTAssertEqual(out.first?.lamp, .ready)
+    }
+
+    /// **The tripwire.** Three lamps light a remote row and there is no fourth:
+    /// no quiet socket, no unlit. Measured 14 Sep, the retired quiet lamp was
+    /// worn by 23 rows and every one of them came from this band.
+    func testARemoteRowOnlyEverDrawsOneOfThreeLamps() {
+        let states: [AgentSessionState] = [
+            .submitted, .working, .inputRequired, .authRequired,
+            .failed, .completed, .canceled, .rejected, .unknown,
+        ]
+        var seen: Set<Lamp> = []
+        for state in states {
+            seen.formUnion(rows(.init(agents: [remote("a", state: state)])).map(\.lamp))
+        }
+        XCTAssertEqual(seen, [.ready, .working, .fault],
+                       "a remote row drew a lamp outside the three: \(seen)")
     }
 
     // MARK: - The door
@@ -132,7 +160,9 @@ final class RemoteRowsTests: XCTestCase {
         let agent = remote("a", state: .working)
         let out = rows(.init(agents: [agent]), switchedOff: [agent.id])
         XCTAssertTrue(out.first?.switchedOff == true)
-        XCTAssertEqual(out.first?.lamp, .running)
+        XCTAssertEqual(out.first?.lamp, .running,
+                       "the user's switch is the ONE route to a quiet lamp, and it is "
+                       + "the same route for a remote row as for a local one")
     }
 
     /// The SHARED rule, and the assertion is deliberately about peers.
@@ -150,8 +180,9 @@ final class RemoteRowsTests: XCTestCase {
         let out = rows(.init(agents: [done, working, asking],
                              requests: [asking.id: PendingRequest(id: "q", session: asking.id,
                                                                   asked: "?")]))
-        XCTAssertEqual(out.map(\.lamp), [.working, .fault, .unlit],
-                       "lit rows keep arrival order; only the dead sink")
+        XCTAssertEqual(out.map(\.lamp), [.ready, .working, .ready],
+                       "lit rows keep arrival order, and under the three-lamp ruling "
+                       + "a finished agent is lit rather than sunk")
         XCTAssertEqual(out.map(\.lamp), SessionRow.quietRowsLast(out).map(\.lamp),
                        "and the band is already in the shared rule's order")
     }

@@ -55,14 +55,15 @@ final class GridRowsTests: XCTestCase {
         family: @escaping (String) -> [String] = { [$0] },
         supersedes: @escaping (String, Int64) -> Bool = { _, _ in false },
         isInFlight: @escaping (String) -> Bool = { _ in false },
-        callsigns: [String: String] = [:]
+        callsigns: [String: String] = [:],
+        remote: GridAssembler.RowInputs.RemoteAgents = .init()
     ) -> GridAssembler.RowInputs {
         GridAssembler.RowInputs(
             waiting: waiting, known: known, discovered: discovered, liveById: live,
             boundaries: [:], switchedOff: switchedOff, switchedOn: switchedOn,
             evidence: evidence, isHeadless: isHeadless, family: family,
             supersedesWaiting: supersedes, isInFlight: isInFlight,
-            closedCallsigns: callsigns)
+            closedCallsigns: callsigns, remote: remote)
     }
 
     // MARK: - The liveness probe, and the crash it caused twice
@@ -263,11 +264,63 @@ final class GridRowsTests: XCTestCase {
     /// without disturbing the recency order the bands spent the whole function
     /// establishing.
     func testQuietRowsSinkBelowTheOnesAskingForYou() {
+        // A is given a live entry deliberately: since 14 Sep an unanswered turn
+        // does not keep a DEAD process lit, so a waiting session with no live
+        // entry now sorts with the dead and this fixture would be testing that
+        // instead of the ordering it is named for.
         let verdict = GridAssembler.rows(inputs(
             waiting: [waiting(A)], known: [waiting(B)],
-            discovered: [found(C)], live: [B: live(B)], switchedOff: [B]))
+            discovered: [found(C)], live: [A: live(A), B: live(B)], switchedOff: [B]))
         XCTAssertEqual(verdict.rows.map { $0.id }, [A, B, C],
                        "waiting, then the filed one, then the dead")
+    }
+
+    // MARK: - An unanswered turn does not keep a dead process lit (14 Sep)
+
+    /// Measured on the real panel before the fix: 201 of 223 green rows had no
+    /// live process, and five of the twelve rows actually drawn were sessions
+    /// that had ended days earlier. Band 1 read `liveById` three times and
+    /// never asked whether the session was in it.
+    func testAWaitingSessionWhoseProcessIsGoneLosesItsLamp() {
+        let verdict = GridAssembler.rows(inputs(
+            waiting: [waiting(A)], live: [B: live(B)]))
+        let row = verdict.rows.first { $0.id == A }
+        XCTAssertEqual(row?.lamp, .unlit,
+                       "green means your turn, and there is nothing there to take one")
+        XCTAssertTrue(row?.revivable == true,
+                      "the answer is already owed; revive-and-answer is the tap")
+    }
+
+    /// The same session, still running, keeps the green lamp it always had.
+    func testAWaitingSessionThatIsStillAliveKeepsItsGreenLamp() {
+        let verdict = GridAssembler.rows(inputs(waiting: [waiting(A)], live: [A: live(A)]))
+        XCTAssertEqual(verdict.rows.first?.lamp, .ready)
+        XCTAssertFalse(verdict.rows.first?.revivable == true)
+    }
+
+    /// **The fail-safe.** "The probe returned nothing" and "nothing is running"
+    /// are the same value, and only one of them should grey the whole panel.
+    func testAnEmptyLivenessProbeGreysNothing() {
+        let verdict = GridAssembler.rows(inputs(waiting: [waiting(A), waiting(B)], live: [:]))
+        XCTAssertEqual(verdict.rows.map(\.lamp), [.ready, .ready],
+                       "a failed probe must not read as a dead machine")
+    }
+
+    // MARK: - Asking outranks standing by, wherever it runs (14 Sep)
+
+    /// The fifth band is enumerated last by construction, so while arrival
+    /// order alone decided the grid a remote agent could never win a slot
+    /// however loudly it was asking. Read-state breaks the tie, which is the
+    /// one job the three-lamp ruling licences it for.
+    func testARemoteAgentWithSomethingUnreadOutranksAnIdleLocalOne() {
+        var agent = AgentSession.of("remote-1", provider: "crobot", state: .completed)
+        agent.title = "the cloud one"
+        let verdict = GridAssembler.rows(inputs(
+            waiting: [waiting(A, heardThrough: 9)], live: [A: live(A)],
+            remote: .init(agents: [agent], unread: [agent.id])))
+        XCTAssertEqual(verdict.rows.first?.name, "the cloud one",
+                       "an unread remote agent sorts above a local one standing by")
+        XCTAssertEqual(verdict.rows.count, 2, "and the local row is still there")
     }
 
     /// Recorded so the card can ask the same question the rows answered and get

@@ -86,63 +86,80 @@ final class AgentSessionTests: XCTestCase {
                           AgentSession.id("session one", provider: "opencode"))
     }
 
-    // MARK: - The buckets are computed, and their precedence is the rule
+    // MARK: - Three lamps, and there is no fourth (ruled 14 Sep 2026)
 
-    /// A blocking request outranks everything, which is the same precedence the
-    /// local grid holds: a process saying it cannot go on alone is the one
-    /// thing whose tap actually helps.
-    func testABlockingRequestOutranksUnreadAndWorking() {
-        XCTAssertEqual(
-            AgentPresentation.bucket(state: .working, hasPendingRequest: true, hasUnread: true),
-            .needsYou)
-        XCTAssertEqual(
-            AgentPresentation.bucket(state: .inputRequired, hasPendingRequest: false,
-                                     hasUnread: false),
-            .needsYou)
+    /// > *"Any lamps turned on, that is to say agents that are in the grid, are
+    /// > either green, blue, or amber. There's nothing else."*
+    ///
+    /// The tripwire for the whole ruling. A fourth bucket cannot be added
+    /// without this failing, which is the point: the last fourth lamp arrived
+    /// by accident, was worn by 23 rows, and every one of them was remote.
+    func testEveryStateLandsOnExactlyOneOfThreeLamps() {
+        let states: [AgentSessionState] = [
+            .submitted, .working, .inputRequired, .authRequired,
+            .failed, .completed, .canceled, .rejected, .unknown,
+        ]
+        var seen: Set<AgentPresentation> = []
+        for state in states {
+            for pending in [true, false] {
+                seen.insert(AgentPresentation.bucket(state: state, hasPendingRequest: pending))
+            }
+        }
+        XCTAssertEqual(seen, [.yours, .working, .problem],
+                       "a fourth lamp appeared: \(seen)")
+        XCTAssertEqual(Set([GridAssembler.lamp(for: .yours),
+                            GridAssembler.lamp(for: .working),
+                            GridAssembler.lamp(for: .problem)]),
+                       [.ready, .working, .fault],
+                       "the three buckets must draw the three lamps")
     }
 
-    /// Green and amber are the two channels that mean *you*. Advisory blue must
-    /// not mask either.
-    func testUnreadOutranksWorking() {
-        XCTAssertEqual(
-            AgentPresentation.bucket(state: .working, hasPendingRequest: false, hasUnread: true),
-            .unread)
-        XCTAssertEqual(
-            AgentPresentation.bucket(state: .working, hasPendingRequest: false, hasUnread: false),
-            .working)
+    /// **A question is GREEN, not amber.** Robert, 14 Sep: *"for something
+    /// needs your judgment is great. That's like it needs you. It's your time
+    /// to shine."* Amber is reserved for the unanticipated.
+    func testAQuestionIsGreenAndAFailureIsAmber() {
+        XCTAssertEqual(AgentPresentation.bucket(state: .inputRequired,
+                                                hasPendingRequest: false), .yours)
+        XCTAssertEqual(AgentPresentation.bucket(state: .working,
+                                                hasPendingRequest: true), .yours)
+        for broken: AgentSessionState in [.authRequired, .failed, .rejected] {
+            XCTAssertEqual(AgentPresentation.bucket(state: broken, hasPendingRequest: false),
+                           .problem, "\(broken) is a problem, not a question")
+        }
     }
 
-    /// A finished agent with something you have not read is still asking for
-    /// you. Filing it as done is how a result goes unheard.
-    func testAFinishedAgentWithSomethingUnreadIsStillUnread() {
-        XCTAssertEqual(
-            AgentPresentation.bucket(state: .completed, hasPendingRequest: false, hasUnread: true),
-            .unread)
-        XCTAssertEqual(
-            AgentPresentation.bucket(state: .completed, hasPendingRequest: false, hasUnread: false),
-            .done)
+    /// **A vendor's own word `idle` is GREEN.** crobot says `idle` when the
+    /// sandbox is up and the turn is over, which is exactly "ready for the next
+    /// turn". Mapping it toward the dark end of the panel put an agent's own
+    /// state in the position that means *the user switched this off*, and kept
+    /// every crobot task off the grid.
+    func testAFinishedTurnIsGreenWhetherOrNotAnythingIsUnread() {
+        XCTAssertEqual(AgentPresentation.bucket(state: .completed,
+                                                hasPendingRequest: false), .yours)
+        XCTAssertEqual(AgentPresentation.bucket(state: .canceled,
+                                                hasPendingRequest: false), .yours)
     }
 
-    /// An unreachable provider's agents are UNREACHABLE, not quiet. Folding
-    /// the two together made a captive portal render as a grid of calm agents,
-    /// with every lamp lying by omission.
-    func testUnknownIsItsOwnBucketAndNotIdle() {
-        XCTAssertEqual(
-            AgentPresentation.bucket(state: .unknown, hasPendingRequest: false, hasUnread: false),
-            .unreachable)
-        XCTAssertNotEqual(
-            AgentPresentation.bucket(state: .unknown, hasPendingRequest: false, hasUnread: false),
-            AgentPresentation.bucket(state: .completed, hasPendingRequest: false,
-                                     hasUnread: false),
-            "silence must not read as finished")
+    /// **Read-state is not an input to the lamp.** It orders rows and it bolds
+    /// them; it never colours one. Making unread a precondition for green is
+    /// the defect this signature change exists to make unrepresentable — there
+    /// is no longer a parameter to pass it through.
+    func testTheLampCannotSeeReadState() {
+        let takesUnread = "\(AgentPresentation.bucket)".contains("Bool, Bool")
+        XCTAssertFalse(takesUnread,
+                       "bucket() regained a second Bool; read-state is leaking into the lamp")
     }
 
-    /// Something it said before we lost contact is still something you have
-    /// not read, and silence since does not retract it.
-    func testLosingContactDoesNotRetractAnUnreadResult() {
-        XCTAssertEqual(
-            AgentPresentation.bucket(state: .unknown, hasPendingRequest: false, hasUnread: true),
-            .unread)
+    /// An unreachable provider's agents are AMBER, not quiet. Folding them into
+    /// a calm lamp made a captive portal render as a grid of calm agents, with
+    /// every lamp lying by omission (13 Sep). The 14 Sep ruling keeps the
+    /// distinction and moves it to the channel that actually means *fix this*.
+    func testSilenceIsAProblemAndNotAFinishedTurn() {
+        XCTAssertEqual(AgentPresentation.bucket(state: .unknown,
+                                                hasPendingRequest: false), .problem)
+        XCTAssertNotEqual(AgentPresentation.bucket(state: .unknown, hasPendingRequest: false),
+                          AgentPresentation.bucket(state: .completed, hasPendingRequest: false),
+                          "silence must not read as finished")
     }
 
     /// There is deliberately nowhere to PUT a bucket. A bucket enum has no

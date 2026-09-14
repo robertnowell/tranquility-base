@@ -176,43 +176,47 @@ public enum AgentSessionState: String, Sendable, Equatable, CaseIterable, Codabl
 /// and the card at the moment of drawing. There is deliberately nowhere to put
 /// one.
 public enum AgentPresentation: Sendable, Equatable {
-    /// Amber. The agent cannot go on alone.
-    case needsYou
-    /// Green. Something it said that you have not read.
-    case unread
-    /// Blue. Chewing.
+    /// **Green. Your turn.** A question waiting on your judgment, something it
+    /// said that you have not read, or a turn that finished and is standing by
+    /// for the next one. All three are the same instruction to the user — say
+    /// something — so they are one lamp.
+    case yours
+    /// **Blue. Its turn.** Chewing on the last thing you said.
     case working
-    /// Quiet. Alive, nothing owed either way.
-    case idle
-    /// Unlit. Finished, however it finished.
-    case done
-    /// **Nobody can say.** A failed poll, or a state this app does not
-    /// recognise. Separated from `idle` on 13 Sep because folding the two
-    /// together made a captive portal render as a grid of calm agents: the
-    /// lamps went quiet and every one of them was a lie by omission.
-    ///
-    /// The row holds its last known state with its age visible rather than
-    /// asserting a new one. That is the same rule the local grid already
-    /// keeps for an unreadable transcript, where the answer is the old quiet
-    /// lamp and never a guess.
-    case unreachable
+    /// **Amber. Something unanticipated.** Auth expired, the provider refused,
+    /// the run failed, nobody can reach it. Not a question: a thing that has to
+    /// be repaired before the agent can go on at all.
+    case problem
 
-    /// **A blocking request outranks everything**, which is the same precedence
-    /// the local grid already holds: a process saying it cannot go on alone is
-    /// the one thing whose tap actually helps. Unread outranks working for the
-    /// reason `GridAssembler.lampAndReason` gives: green and amber are the two
-    /// channels that mean *you*, and advisory blue must not mask either.
+    /// Ruled 14 Sep 2026. An agent whose lamp is ON is green, blue or amber,
+    /// and there is no fourth. The quiet lamp this enum used to carry (`idle`,
+    /// "alive, nothing owed") is gone, because the grey circle means one thing
+    /// only and it is not a state any agent can put itself into:
+    ///
+    /// > *"The only way to get to gray, or AKA idle, is if I turn off the lamp.
+    /// > Any lamps turned on, that is to say agents that are in the grid, are
+    /// > either green, blue, or amber. There's nothing else."*
+    ///
+    /// Which retired three separate mistakes in one go. A vendor's own word
+    /// `idle` is GREEN, not quiet: crobot says `idle` when the sandbox is up
+    /// and the turn is over, which is precisely "ready for the next turn".
+    /// `unreachable` is AMBER, not quiet: a provider nobody can reach is an
+    /// unanticipated thing needing attention, and rendering it calm was the
+    /// captive-portal lie this bucket was split for on 13 Sep. And a pending
+    /// question is GREEN, not amber: *"for something needs your judgment is
+    /// great. That's like it needs you. It's your time to shine."*
+    ///
+    /// Read-state is deliberately NOT an input. It orders rows and it bolds
+    /// them; it never colours one. Making unread a precondition for green is
+    /// what kept every crobot task off the panel for a week.
     public static func bucket(state: AgentSessionState,
-                              hasPendingRequest: Bool,
-                              hasUnread: Bool) -> AgentPresentation {
-        if hasPendingRequest || state.isBlocked { return .needsYou }
-        if state.isFinished { return hasUnread ? .unread : .done }
-        if hasUnread { return .unread }
-        // Unknown is checked AFTER unread, deliberately: something it said
-        // before we lost contact is still something you have not read, and
-        // silence since does not retract it.
-        if state == .unknown { return .unreachable }
-        return state == .working || state == .submitted ? .working : .idle
+                              hasPendingRequest: Bool) -> AgentPresentation {
+        // Amber first: a broken agent that also has something unread is broken.
+        switch state {
+        case .authRequired, .failed, .rejected, .unknown: return .problem
+        case .submitted, .working: return hasPendingRequest ? .yours : .working
+        case .inputRequired, .completed, .canceled: return .yours
+        }
     }
 }
 

@@ -289,8 +289,8 @@ enum AgentProviderConformance {
         XCTAssertFalse(unknown.isFinished, file: file, line: line)
         XCTAssertFalse(unknown.isBlocked, file: file, line: line)
         XCTAssertEqual(
-            AgentPresentation.bucket(state: unknown, hasPendingRequest: false, hasUnread: false),
-            .unreachable,
+            AgentPresentation.bucket(state: unknown, hasPendingRequest: false),
+            .problem,
             "\(p.id): silence must not render as a calm agent", file: file, line: line)
     }
 

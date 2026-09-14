@@ -54,15 +54,39 @@ final class OpenCodeClientTests: XCTestCase {
 
     /// `/session` says a session EXISTS, never what it is doing. Inventing
     /// `.idle` from that is the failed-poll bug in another costume.
-    func testAListedSessionHasAnUnknownStateRatherThanAGuessedOne() async throws {
+    /// A listed session takes its state from `/session/status`, which is the
+    /// server's own first-hand answer, not from a guess and not from
+    /// `.unknown`. Absent from the busy set means the turn is over.
+    func testAListedSessionTakesItsStateFromTheStatusFeed() async throws {
+        let fake = Fake()
+        fake.routes["GET /session"] = (200, #"[{"id":"ses_abc"},{"id":"ses_busy"}]"#)
+        fake.routes["GET /session/status"] =
+            (200, #"[{"sessionID":"ses_busy","type":"running"}]"#)
+        let sessions = try await client(fake).sessions()
+        XCTAssertEqual(sessions.first(where: { $0.providerID == "ses_abc" })?.state, .completed)
+        XCTAssertEqual(sessions.first(where: { $0.providerID == "ses_busy" })?.state, .working)
+    }
+
+    /// The object-keyed shape of the same route, which other builds return.
+    func testTheStatusFeedIsReadInBothOfItsShapes() async throws {
+        let fake = Fake()
+        fake.routes["GET /session"] = (200, #"[{"id":"ses_abc"},{"id":"ses_busy"}]"#)
+        fake.routes["GET /session/status"] =
+            (200, #"{"ses_busy":{"type":"running"},"ses_abc":{"type":"idle"}}"#)
+        let sessions = try await client(fake).sessions()
+        XCTAssertEqual(sessions.first(where: { $0.providerID == "ses_busy" })?.state, .working)
+        XCTAssertEqual(sessions.first(where: { $0.providerID == "ses_abc" })?.state, .completed)
+    }
+
+    /// Losing the enrichment costs blue, never the row, and must never report
+    /// everything busy.
+    func testAFailedStatusFeedStillYieldsRows() async throws {
         let fake = Fake()
         fake.routes["GET /session"] = (200, #"[{"id":"ses_abc"}]"#)
-        let session = try await client(fake).sessions().first
-        XCTAssertEqual(session?.state, .unknown)
-        XCTAssertEqual(
-            AgentPresentation.bucket(state: session!.state, hasPendingRequest: false,
-                                     hasUnread: false),
-            .unreachable, "silence must not render as a calm agent")
+        fake.routes["GET /session/status"] = (500, "nope")
+        let sessions = try await client(fake).sessions()
+        XCTAssertEqual(sessions.count, 1)
+        XCTAssertEqual(sessions.first?.state, .completed)
     }
 
     func testEveryIdIsAddressableWhateverOpenCodeCallsIt() async throws {

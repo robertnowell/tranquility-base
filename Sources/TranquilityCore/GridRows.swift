@@ -150,21 +150,19 @@ public extension GridAssembler {
         public var harnessById: [String: String]
     }
 
-    /// The lamp a bucket draws.
+    /// The lamp a bucket draws. Three of them, and there is no fourth.
     ///
     /// One mapping, so a remote row and a local row cannot come to mean
-    /// different things by the same colour. `unreachable` is the one that did
-    /// not exist before remote agents: a provider we cannot reach is not quiet,
-    /// and `.running` is the app's existing word for "alive, nothing owed",
-    /// which is the closest honest lamp. The row's WORDS carry the difference,
-    /// because a colour cannot say "as of four minutes ago".
+    /// different things by the same colour. `.running` is deliberately absent:
+    /// measured on 14 Sep, the quiet lamp was worn by 23 rows and every one of
+    /// them was remote, which means this band invented a fourth lamp the local
+    /// grid had never used. `.unlit` is absent for the same reason in reverse —
+    /// it is reachable only through the user's own switch, or a dead process.
     static func lamp(for bucket: AgentPresentation) -> Lamp {
         switch bucket {
-        case .needsYou: return .fault
-        case .unread: return .ready
+        case .yours: return .ready
         case .working: return .working
-        case .idle, .unreachable: return .running
-        case .done: return .unlit
+        case .problem: return .fault
         }
     }
 
@@ -178,9 +176,11 @@ public extension GridAssembler {
         if let request, !request.asked.isEmpty { return request.asked }
         if silent != nil { return "cannot reach it" }
         switch bucket {
-        case .needsYou: return "needs you"
+        case .problem: return "needs you"
         case .working: return "working"
-        case .unread, .idle, .done, .unreachable: return SessionRow.shortId(id)
+        // Green says "your turn" by being green. The column spends itself on
+        // the id, which is the thing you would otherwise be grepping for.
+        case .yours: return SessionRow.shortId(id)
         }
     }
 
@@ -255,6 +255,28 @@ public extension GridAssembler {
         }
 
         // BAND 1: sessions with an unanswered turn.
+        //
+        // **An unanswered turn does not keep a dead process lit** (fixed 14 Sep
+        // 2026). This band read `liveById` three times — for the restart
+        // check, for the dialog check, for the name — and never once asked
+        // whether the session was there at all, so a session whose process
+        // ended weeks ago kept the green lamp for as long as the store
+        // remembered its turn. Measured on the real panel: 201 of 223 green
+        // rows had no live process, and five of the twelve rows actually drawn
+        // were sessions that had ended days earlier.
+        //
+        // That was an omission rather than a policy. The 11 Aug ruling already
+        // says a dead agent keeps its row and loses its lamp, and band 4
+        // implements exactly that; this band simply never joined in, because it
+        // was written when a waiting turn implied a waiting process. Under the
+        // three-lamp ruling it is also incoherent: green means "your turn" and
+        // there is nothing to take a turn.
+        //
+        // Guarded on a NON-EMPTY probe, because "the CLI returned nothing"
+        // and "nothing is running" are the same value and only one of them
+        // should grey the whole panel. `smoothedLive` has already absorbed the
+        // transient misses by the time the rows are built.
+        let livenessKnown = !input.liveById.isEmpty
         var rows = input.waiting.map { (event: WaitingSession) -> SessionRow in
             let evidence = event.transcriptPath.flatMap {
                 input.evidence($0, input.boundaries[event.sessionId])
@@ -275,6 +297,10 @@ public extension GridAssembler {
             // terminal.
             let blocked = GridAssembler.blockedOnYou(input.liveById[event.sessionId],
                                                      resumed: resumed)
+            // The process is gone: the turn is still owed and still on the
+            // row, but nothing is standing there to take it. Revive-and-answer
+            // is one tap, which is what `revivable` is for.
+            let gone = livenessKnown && input.liveById[event.sessionId] == nil
             // Green says "you have not answered this". While a reply to this
             // very turn is in flight that is the most misleading thing the grid
             // can say — the cursor does not advance until the send confirms, so
@@ -290,15 +316,19 @@ public extension GridAssembler {
                 // blocked row spends the column on its reason, like every other
                 // amber row on the panel.
                 aux: blocked?.reason ?? SessionRow.shortId(event.sessionId),
-                lamp: blocked?.lamp
+                lamp: gone ? .unlit : (blocked?.lamp
                     ?? (!resumed
                         && (evidence?.activity == .working
                             || input.supersedesWaiting(event.sessionId, event.latestId))
-                        ? .working : .ready),
+                        ? .working : .ready)),
                 // This band is the only one with a real read state: these rows
                 // HAVE a waiting turn. Everywhere else the answer is `.none`,
                 // which rests at the same intensity as `.opened` (16 Aug) — an
                 // idle session is not asking for you either.
+                // A dead session with an owed turn is the single best case for
+                // the revive tap there is: the answer is already written, it
+                // just has nowhere to land yet.
+                revivable: gone,
                 read: event.heard ? .opened : .unread,
                 // The hover carries the whole sentence, as it does on every
                 // other amber row — the column can only hold a clause.
@@ -422,9 +452,9 @@ public extension GridAssembler {
             placed.insert(agent.id)
             let request = input.remote.requests[agent.id]
             let bucket = AgentPresentation.bucket(
-                state: agent.state,
-                hasPendingRequest: request != nil,
-                hasUnread: input.remote.unread.contains(agent.id))
+                state: agent.state, hasPendingRequest: request != nil)
+            // Read-state is carried alongside the lamp, never inside it.
+            let unread = input.remote.unread.contains(agent.id)
             let silent = input.remote.unreachable[agent.provider]
             rows.append(SessionRow(
                 id: agent.id,
@@ -438,11 +468,17 @@ public extension GridAssembler {
                 aux: Self.remoteAux(bucket: bucket, request: request, silent: silent,
                                     id: agent.id),
                 lamp: Self.lamp(for: bucket),
-                // A remote agent cannot be revived by relaunching a command;
-                // whether it can be restarted at all is its provider's
-                // business, and `Capabilities` answers that where it matters.
+                // False because nothing archived reaches this band YET, not
+                // because remote agents cannot be revived. They can: crobot's
+                // own source says an archived task "stays listed, keeps its
+                // archived transcript, and can resume onto a fresh sandbox"
+                // (gateway/src/task-archive.ts:13), and `CrobotProvider.mine`
+                // filters `archived` out of the list entirely. When that filter
+                // lifts, this becomes a provider capability and never a
+                // constant — a declared capability nothing reads is worse than
+                // no capability (provider seam, rule 5).
                 revivable: false,
-                read: bucket == .unread ? .unread : .none,
+                read: unread ? .unread : .none,
                 detail: Self.remoteDetail(request: request, silent: silent, agent: agent),
                 harness: agent.provider,
                 // The provider said where this agent lives, or said it lives
