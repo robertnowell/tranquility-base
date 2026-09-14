@@ -206,7 +206,7 @@ extension StatusHUD {
     /// A `.speaking`, `.settings` or `.pastAgents` face is left alone: those
     /// admit what comes next, and a real announcement CAN take the stage
     /// mid-slate (the drill hold suspends ambient surfacing, not transitions).
-    private func handBackTheStage() {
+    func handBackTheStage() {
         guard state.ownsStage || state == .result else { return }
         Permissions.log("selftest: slate over with \(state.name) on stage, "
             + "handing the panel back to the grid")
@@ -1981,6 +1981,7 @@ extension StatusHUD {
         trayTeardownChurnDrill()
         cardPasteDrill()
         elasticGridDrill()
+        slateHandsBackDrill()
         goToSessionDrill()
         speechCallbackDrill()
 
