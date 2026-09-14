@@ -241,15 +241,42 @@ extension StatusHUD {
     /// admit what comes next, and a real announcement CAN take the stage
     /// mid-slate (the drill hold suspends ambient surfacing, not transitions).
     func handBackTheStage() {
-        guard state.ownsStage || state == .result else { return }
+        // A spoken card is the one face left alone: a real announcement can
+        // take the stage mid-slate, and the slate running out is not a reason
+        // to pull it off. Settings and Past Agents are opened deliberately and
+        // are not the slate's to close.
+        switch state {
+        case .speaking, .settings, .pastAgents: return
+        default: break
+        }
         Permissions.log("selftest: slate over with \(state.name) on stage, "
             + "handing the panel back to the grid")
         // Through the user door: a capture state does not admit idle by
         // design, so a bare repaint would log REFUSED and change nothing.
-        endCapture(because: "selftest slate over")
-        // The breadcrumb, not `showIdle(rows: [])`: this one goes through
-        // AppDelegate and comes back with the REAL rows on it.
-        onBreadcrumbHome?()
+        if state.ownsStage { endCapture(because: "selftest slate over") }
+        returnToTheGrid(because: "selftest slate over")
+    }
+
+    /// The one way back to the grid, for the drills and for the slate.
+    ///
+    /// Two rules, and the second is the one that was missing:
+    ///
+    ///   1. The rows come from `gridRows`, never from the caller. A drill that
+    ///      names its own rows is a drill asserting something ABOUT the grid,
+    ///      which is a fixture; a drill going home is not naming anything.
+    ///   2. With no provider wired, this paints NOTHING. Falling back to `[]`
+    ///      would put the lie back, and a panel left as it was is always safer
+    ///      than a panel told there are no agents.
+    ///
+    /// Every "go back to the grid" in the slate routes here, so there is one
+    /// place to be right rather than twenty-nine places to remember.
+    func returnToTheGrid(because reason: String) {
+        guard let gridRows else {
+            Permissions.log("selftest: \(reason), but no rows source is wired "
+                + "so the panel is left alone rather than painted empty")
+            return
+        }
+        showIdle(rows: gridRows(), because: reason)
     }
 
     /// Prove that LEAVING the read-back stops the send — not just pressing the
@@ -350,7 +377,7 @@ extension StatusHUD {
             defer { self.endDrills() }
             guard case .pendingSend = self.state else { return }
             self.endCapture(because: "selftest pendingSend cleanup")
-            self.showIdle(rows: [])
+            self.returnToTheGrid(because: "selftest pendingSend cleanup")
         }
     }
 
@@ -1541,7 +1568,11 @@ extension StatusHUD {
         // Through the user door, exactly as a real abort must go — showIdle alone
         // is (correctly) refused from a capture state.
         endCapture(because: "selftest cleanup")
-        showIdle(rows: [])
+        // The truth, not an empty list. The drill four calls up deliberately
+        // backdates `emptySince` and paints an empty room to prove the teaching
+        // card appears; leaving the slate on that fixture is how the teaching
+        // card ends up on a machine running twenty agents.
+        returnToTheGrid(because: "selftest cleanup")
 
         // The collapsed strip. Three properties, and the third is the ruling.
         let mixed: [SessionRow] = [
