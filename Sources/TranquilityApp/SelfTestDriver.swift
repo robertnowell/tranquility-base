@@ -522,7 +522,7 @@ extension StatusHUD {
                     // `items()`, which counts one hooks row per harness this
                     // machine has, rather than a constant.
                     ("everyPrerequisiteHasARow",
-                     rows == Prerequisites.items().count),
+                     rows == Prerequisites.live().count),
                     ("agentFieldsAreGone",
                      self.launchRow?.isHidden == true
                         && self.harnessPicker?.isHidden == true),

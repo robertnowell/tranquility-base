@@ -71,7 +71,7 @@ final class SetupChecklistView: NSStackView {
         // has not landed yet on the frame this runs in.
         // `items()`, not a constant list: the hooks rows depend on which
         // harnesses this machine has, one row each.
-        for (index, item) in Prerequisites.items().enumerated() {
+        for (index, item) in Prerequisites.live().enumerated() {
             addArrangedSubview(prerequisiteRow(item, step: index + 1))
         }
         // The SETUP tab gets a restart door and onboarding does not.
@@ -276,7 +276,7 @@ final class SetupChecklistView: NSStackView {
             // averaging them.
             //
             // Off-main: this parses and rewrites a file (rule 9).
-            for row in Prerequisites.items() where row.harness != nil {
+            for row in Prerequisites.live() where row.harness != nil {
                 prereqNote[row] = "wiring..."
             }
             renderPrerequisites()
