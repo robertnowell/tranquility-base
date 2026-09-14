@@ -158,30 +158,32 @@ extension StatusHUD {
         stateLabel.addGestureRecognizer(NSClickGestureRecognizer(
             target: self, action: #selector(breadcrumbClicked)))
 
-        titleLabel = DoorLabel(labelWithString: "")
         // The identity face: mono, matching the grid rows (ruled). renderTitle
         // sets the string; this is the fallback style. ONE line since the topic
         // died (10 Aug) — the identity was always the only thing on line one.
+        //
+        // A LABEL, not a door (ruled 14 Sep). From 06 Aug it was a second door
+        // to the session, "for when your eye is already on the name". Robert,
+        // on the screenshot of a launch card: "we have the Go to Agent button,
+        // so we don't need the dedicated thing there … the name and the
+        // spoken text, that's not actionable, so it doesn't need a cursor."
+        // Only the things that DO something answer the pointer — the gear,
+        // GO TO AGENT, and the breadcrumb — and a name that answered it was
+        // one of two ways the same click could read.
+        titleLabel = NSTextField(labelWithString: "")
         titleLabel.font = ChromeType.mono(ofSize: 13, weight: .semibold)
         titleLabel.textColor = StateLegend.Lens.content.color
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
-        // The second door to the session. GO TO AGENT stays — it is the
-        // discoverable one, and you said you use it. This is the shortcut for
-        // when your eye is already on the name, which is where it already goes.
-        titleLabel.addGestureRecognizer(
-            NSClickGestureRecognizer(target: self, action: #selector(goToSession)))
 
         bodyLabel = CardBodyLabel(wrappingLabelWithString: "")
-        // A press on the words selects AND arms: the selection takes the
-        // event, so the surface never sees this one.
-        bodyLabel.onPress = { [weak self] in self?.armPaste(via: "words") }
         bodyLabel.font = StateLegend.Face.message(12)
         bodyLabel.textColor = StateLegend.Lens.content.color
         bodyLabel.maximumNumberOfLines = 0
-        // Selectable so a line can be quoted out of a card by hand; see
-        // `CardBodyLabel` for what stops it selecting itself.
-        bodyLabel.isSelectable = true
+        // Prose, not a text field (ruled 14 Sep, same screenshot): no
+        // selection, so no I-beam and no highlight. A press on the words
+        // reaches the surface underneath, which is what arms card paste.
+        bodyLabel.isSelectable = false
 
         // Every surviving action is a QUIET text action (ruled): borderless,
         // palette ink, no lozenge. The button rows are dead — chords are the

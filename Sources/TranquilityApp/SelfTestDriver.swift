@@ -924,20 +924,14 @@ extension StatusHUD {
         let pillAnswersTheCursor = stateLabel.isADoor
             && firstColour(pillHovered) != firstColour(pillResting)
             && firstColour(pillRestored) == firstColour(pillResting)
-        // The TITLE, which is the one the ramp could not answer: it rests at
-        // `ink`, the ramp's top rung, so `hovered` handed it back unchanged and
-        // the card's identity took a pointing hand while staying exactly the
-        // colour it was ("it does show the cursor pointer, but it doesn't have
-        // the change text colour impact", 18 Aug). Asserted separately from the
-        // pill because they fail separately: the pill rests mid-ramp and passed
-        // this whole time.
-        let titleResting = titleLabel.attributedStringValue
-        titleLabel.setHovered(true)
-        let titleHovered = titleLabel.attributedStringValue
-        titleLabel.setHovered(false)
-        let titleAnswersTheCursor = titleLabel.isADoor
-            && firstColour(titleHovered) != firstColour(titleResting)
-            && firstColour(titleLabel.attributedStringValue) == firstColour(titleResting)
+        // The TITLE does NOT answer the pointer, and neither does the prose
+        // (ruled 14 Sep, reversing 18 Aug's `titleAnswersTheCursor`): a name
+        // and a sentence are not controls, and the only things on a card that
+        // answer the pointer are the ones that do something — the gear, GO TO
+        // AGENT, and the breadcrumb. Structural, so the door cannot come back
+        // as a well-meant restoration.
+        let titleIsNotADoor = !(titleLabel is DoorLabel) && titleLabel.gestureRecognizers.isEmpty
+        let proseIsNotAField = !bodyLabel.isSelectable && !bodyLabel.isEditable
         // Through the button's own hover seam, not a cast to a class it is not.
         // The first version of this claim cast `goButton` to a type that had
         // never been in the tree — the panel already had `ConsoleButton` with an
@@ -1128,7 +1122,8 @@ extension StatusHUD {
             ("bottomRowFits", bottomRowFits),
             ("footerFits", footerFits),
             ("pillAnswersTheCursor", pillAnswersTheCursor),
-            ("titleAnswersTheCursor", titleAnswersTheCursor),
+            ("titleIsNotADoor", titleIsNotADoor),
+            ("proseIsNotAField", proseIsNotAField),
             ("doorAnswersTheCursor", doorAnswersTheCursor),
             ("stripIsNotADoor", stripIsNotADoor),
             ("rowLightsItsName", rowLightsItsName),
@@ -1887,12 +1882,21 @@ extension StatusHUD {
         let refusedTapSpeaks = noticeIsShowing
             && stateLabel.attributedStringValue.string == StateLegend.cannotReopenNotice
         clearNoticeForDrill()
+        // And the OTHER refusal says the other thing (14 Sep): a live row with
+        // nowhere to open is not "no proof it stopped", and for two minutes on
+        // 14 Sep it was.
+        declineDoorlessTap("d00rless", harness: "opencode")
+        let doorlessTapSpeaks = noticeIsShowing
+            && stateLabel.attributedStringValue.string == StateLegend.nothingToOpenNotice
+            && StateLegend.nothingToOpenNotice != StateLegend.cannotReopenNotice
+        clearNoticeForDrill()
 
         SelfTest.report("notice", [
             ("onGrid", noticedOnGrid),
             ("clearedByCard", clearedByCard),
             ("refusedOnCard", refusedOnCard),
             ("refusedTapSpeaks", refusedTapSpeaks),
+            ("doorlessTapSpeaks", doorlessTapSpeaks),
         ])
         // And the leak the two transition doors close: a notice must not survive
         // a hide and come back up with the panel. `.hidden` returns out of

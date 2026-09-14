@@ -227,8 +227,16 @@ extension StatusHUD {
              codexTitles.contains("Continue work with Claude Code")),
             ("handoffNamesTheSource",
              continued?.0 == "ready" && continued?.1 == "agent-ready"),
+            // The lamp's verb is listed too (14 Sep): the menu is where a
+            // row's verbs are read, and on a row with no door it is the only
+            // one. Its place is with the harmless verbs, above the rule.
+            ("lampVerbIsListed", titles.contains("Turn lamp off")),
+            // Last, behind the ONLY separator, however many harmless verbs
+            // sit above it. Counted by shape rather than by index, so a new
+            // harmless verb cannot fail this by existing.
             ("destructiveIsLastAndSeparated",
-             items.count == 4 && items[2].isSeparatorItem),
+             items.count >= 2 && items[items.count - 2].isSeparatorItem
+                && items.dropLast(2).allSatisfy { !$0.isSeparatorItem }),
             ("theItemNamesItsTarget", named == "End session \u{201C}agent-ready\u{201D}"),
         ])
     }
@@ -1109,6 +1117,17 @@ extension StatusHUD {
                         row("unproven", unlit)])
         let built = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
 
+        // The doorless row, built the way band 5 builds one for a local
+        // OpenCode session: amber, "needs you", and `door: .none`.
+        let doorless = SessionRow(id: "doorless", name: "doorless", aux: "needs you",
+                                  lamp: .fault, harness: "opencode", door: .none)
+        showIdle(rows: [doorless])
+        let builtWithDoorless = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
+        declineDoorlessTap(doorless.id, harness: doorless.harness)
+        let doorlessTapSpoke = noticeIsShowing
+            && stateLabel.attributedStringValue.string == StateLegend.nothingToOpenNotice
+        clearNoticeForDrill()
+
         SelfTest.report("closedRows", [
             ("unlitHasNoFill", noFill),
             ("unlitRingIsFainterThanQuiet", fainterRing),
@@ -1145,6 +1164,19 @@ extension StatusHUD {
             ("unprovenRowDoesNothing",
              SessionRow.action(for: row("unproven", unlit)) == SessionRow.RowAction.none),
             ("closedRowsStillRender", built.count == 3),
+            // A live row with no door is the OTHER kind of nothing (14 Sep):
+            // alive, amber, and with no page or pane to open. It is not dead,
+            // so it keeps a menu — the lamp's verb — and its tap says what is
+            // true rather than the dead row's sentence.
+            ("doorlessRowIsNothingToOpen",
+             SessionRow.action(for: doorless) == .nothingToOpen),
+            ("doorlessRowIsStillLive", SessionRow.isLive(doorless)),
+            ("doorlessRowKeepsTheLamp", SessionRow.verbs(for: doorless) == [.turnLampOff]),
+            ("doorlessRowRenders", builtWithDoorless.count == 1),
+            ("doorlessRowHasAMenu", builtWithDoorless.first?.menu != nil),
+            ("doorlessMenuIsTheLamp",
+             builtWithDoorless.first?.menu?.items.map(\.title) == ["Turn lamp off"]),
+            ("doorlessTapSaysNothingToOpen", doorlessTapSpoke),
         ])
         showIdle(rows: [])
     }
@@ -1430,15 +1462,16 @@ extension StatusHUD {
         showIdle(rows: [])
     }
 
-    /// The identity opens the tab — but only when there is a tab.
+    /// The card's name is a label, and only a label (ruled 14 Sep).
     ///
-    /// The door is derived from `currentTarget`, not stored per face, which is
-    /// correct only for as long as `currentTarget` is nil on every face whose
-    /// title is not a session. That is true today (idle and showVoices both
-    /// clear it) and it is the kind of thing that stops being true quietly. So
-    /// it is asserted rather than trusted: a title that offers to open a tab
-    /// that is not there would fail at the click, which is the worst place to
-    /// find out.
+    /// It was a door from 06 Aug: a pointing hand and a click that opened the
+    /// session's tab, "for when your eye is already on the name". Robert, on
+    /// the screenshot of a launch card: "we have the Go to Agent button, so we
+    /// don't need the dedicated thing there … the name and the spoken text,
+    /// that's not actionable, so it doesn't need a cursor." Asserted
+    /// structurally — not the `DoorLabel` class, and no recognizer on it — so
+    /// a later pass cannot restore the door meaning well, which is exactly the
+    /// sort of thing a later pass does.
     ///
     /// Also asserts the topic line stays dead. It was removed because it said
     /// the body's own sentence with the detail taken out, and it is exactly the
@@ -1450,13 +1483,16 @@ extension StatusHUD {
         _ = showAnnouncement(
             spoken: SpokenTextSanitizer().sanitize("Finished the poller. Go?"),
             sessionId: "drill", pid: 1, project: "promotions copy", cwd: "/tmp")
-        checks.append(("sessionTitleIsADoor", titleLabel.isADoor))
+        checks.append(("sessionTitleIsNotADoor",
+                       !(titleLabel is DoorLabel) && titleLabel.gestureRecognizers.isEmpty))
         checks.append(("titleIsOneLine", titleLabel.maximumNumberOfLines == 1))
         // The identity, alone. A second line here is the topic coming back.
         checks.append(("noSecondLine", !titleLabel.stringValue.contains("\n")))
+        // The door that remains, on the same card: GO TO AGENT.
+        checks.append(("goToAgentIsTheDoor", !goButton.isHidden))
 
         showSettings(voices: [], roster: [], note: "")
-        checks.append(("settingsTitleIsNotADoor", !titleLabel.isADoor))
+        checks.append(("settingsTitleIsNotADoorEither", titleLabel.gestureRecognizers.isEmpty))
 
         showIdle(rows: [])
         checks.append(("idleClearsTheTarget", currentTarget == nil))
@@ -1552,16 +1588,21 @@ extension StatusHUD {
         SelfTest.report("harnessMark", checks)
     }
 
-    /// A card's prose is selectable, and selects itself never.
+    /// A card's prose is words, not a field (ruled 14 Sep).
     ///
-    /// The 16 Aug screenshot: a card came back from a turn with its whole body
-    /// highlighted, in a light-grey band that put `ink` at 1.23:1 — text and
-    /// selection both, unreadable, and untouched by any hand. Two independent
-    /// faults, so two independent halves here.
+    /// The 16 Aug screenshot — a card back from a turn with its whole body
+    /// highlighted, untouched by any hand — was answered then by a gate on who
+    /// could start a selection. The 14 Sep ruling removes the selection
+    /// outright: "you shouldn't even really be able to highlight it", so there
+    /// is no field editor to install, no I-beam, and no band to dress. Three
+    /// facts, asserted at the label and at the window: it is not selectable,
+    /// the window cannot hand it the keyboard, and a press on the words lands
+    /// on the card behind them — which is what arms card paste, so that path
+    /// is asserted here rather than assumed.
     ///
-    /// The panel cannot be photographed by a drill, so the second half is
-    /// asserted where it is caused: the panel's declared appearance. `.aqua` on
-    /// a dark console is what dressed the selection band for a light ground.
+    /// The last check is the one the old drill kept for the band's colour:
+    /// the panel's declared appearance. There is no selection to dress now,
+    /// but the same appearance dresses every control, so it stays.
     func selectionDrill() {
         var checks: [(String, Bool)] = []
         currentTarget = ("drill", 1, "promotions")
@@ -1569,52 +1610,34 @@ extension StatusHUD {
             spoken: SpokenTextSanitizer().sanitize("The poller is fixed. Go?"),
             sessionId: "drill", pid: 1, project: "promotions", cwd: "/tmp")
 
-        // Nothing selects itself. Both halves: no field editor is installed, and
-        // asking for one the way the window does on becoming key is refused.
-        checks.append(("aCardArrivesUnselected", bodyLabel.currentEditor() == nil))
-        checks.append(("noSelection", !bodyLabel.hasSelection))
+        checks.append(("theProseIsNotSelectable", !bodyLabel.isSelectable))
+        checks.append(("theProseIsNotEditable", !bodyLabel.isEditable))
+        checks.append(("aCardArrivesWithNoEditor", bodyLabel.currentEditor() == nil))
+        checks.append(("theProseRefusesTheKeyboard", !bodyLabel.acceptsFirstResponder))
         if let panel {
             _ = panel.makeFirstResponder(bodyLabel)
             checks.append(("theWindowCannotHandItTheKeyboard",
-                           bodyLabel.currentEditor() == nil))
-
+                           bodyLabel.currentEditor() == nil && panel.firstResponder !== bodyLabel))
+            // A press on the words is a press on the card: the label yields
+            // the hit, and whatever the window finds there is not the label.
+            panel.contentView?.layoutSubtreeIfNeeded()
             let inside = bodyLabel.convert(
                 NSPoint(x: bodyLabel.bounds.midX, y: bodyLabel.bounds.midY), to: nil)
-            func press(at point: NSPoint) -> NSEvent? {
-                NSEvent.mouseEvent(
-                    with: .leftMouseDown, location: point, modifierFlags: [],
-                    timestamp: 0, windowNumber: panel.windowNumber, context: nil,
-                    eventNumber: 0, clickCount: 1, pressure: 1)
-            }
-            let tab = NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-                windowNumber: panel.windowNumber, context: nil, characters: "\t",
-                charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48)
-            // The gate, in all four directions. The third and fourth are the
-            // ones that were failing: the window picks a first responder on
-            // becoming key with no mouse event at all, and Tab walks the key
-            // view loop into any selectable field.
-            checks.append(("aPressOnTheWordsSelects", bodyLabel.acceptsPress(press(at: inside))))
-            checks.append(("aPressElsewhereDoesNot",
-                           !bodyLabel.acceptsPress(press(at: NSPoint(x: -80, y: -80)))))
-            checks.append(("noEventDoesNot", !bodyLabel.acceptsPress(nil)))
-            checks.append(("theKeyboardDoesNot", !bodyLabel.acceptsPress(tab)))
+            let hit = panel.contentView?.hitTest(
+                panel.contentView?.superview?.convert(inside, from: nil) ?? inside)
+            checks.append(("aPressOnTheWordsIsAPressOnTheCard",
+                           hit != nil && hit !== bodyLabel))
+            checks.append(("theWordsYieldTheHit", bodyLabel.hitTest(inside) == nil))
         }
 
-        // A hand-made selection survives a repaint that changed only the ink —
-        // the karaoke cursor rewrites this label once per spoken word — and is
-        // dropped the moment the WORDS change, because it is then a selection
-        // of text that is no longer there.
-        bodyLabel.selectText(nil)
-        let madeByHand = bodyLabel.hasSelection
+        // The karaoke repaint still writes the label once per spoken word, and
+        // now has no selection to preserve or drop; the words simply change.
         paintInkForTesting(displayCursor: 4)
-        checks.append(("aRepaintKeepsIt", madeByHand && bodyLabel.hasSelection))
         bodyLabel.stringValue = "A different turn, with different words in it."
-        checks.append(("newWordsDropIt", !bodyLabel.hasSelection))
-        checks.append(("andGiveTheKeyboardBack", bodyLabel.currentEditor() == nil))
+        checks.append(("newWordsInstallNoEditor", bodyLabel.currentEditor() == nil))
 
-        // The cause of the unreadable band. `.aqua` was pinned when the console
-        // was light putty and did not follow it into the dark (09 Aug).
+        // `.aqua` was pinned when the console was light putty and did not
+        // follow it into the dark (09 Aug).
         checks.append(("panelIsDressedForItsOwnSurface",
                        panel?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua))
 

@@ -167,6 +167,27 @@ it rather than a preference:
   since 06 Aug on exactly this argument, written down at the time: "a click
   target with no affordance is a secret". Twenty-three others kept the secret.
 
+## Revised 14 Sep 2026: the title and the prose do not answer the pointer
+
+Two of the targets above were taken back, on a screenshot of a launch card.
+Robert: "we have the Go to Agent button, so we don't need the dedicated thing
+there … the name and the spoken text, that's not actionable, so it doesn't
+need a cursor. You shouldn't even really be able to highlight it."
+
+- **The title is a label.** The 06 Aug door on the name is gone; GO TO AGENT is
+  the one door to the session. `titleAnswersTheCursor` became `titleIsNotADoor`,
+  asserted structurally (not a `DoorLabel`, no recognizer).
+- **The body is prose, not a field.** The I-beam this document reserved for it
+  ("the body is the one thing here that keeps an I-beam") went with the
+  selection. `selectionDrill` now asserts there is no field editor to install
+  and that a press on the words lands on the card, which is what arms paste.
+- What still answers the pointer on a card: the gear, GO TO AGENT and the other
+  quiet actions, and the breadcrumb pill, which keeps its hover lift.
+
+The rule itself stands. It was written for controls, and the two things taken
+back were never controls; they had been made to answer the pointer because the
+click was cheap, not because there was a verb behind it.
+
 ## What changed
 
 - `ConsoleButton` (StatusHUD.swift) — cursor rect, tracking area, and the ink

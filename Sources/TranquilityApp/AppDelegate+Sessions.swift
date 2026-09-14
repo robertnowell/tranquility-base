@@ -257,6 +257,11 @@ extension AppDelegate {
             // gone. Said on the panel rather than swallowed.
             showPanel()
             hud.refuseRowTap(row.id)
+        case .nothingToOpen:
+            guard let row else { return }
+            // Alive, and nowhere to open: said as that, not as a death.
+            showPanel()
+            hud.declineDoorlessTap(row.id, harness: row.harness)
         case .invitation:
             inviteNewSession(for: ref)
         }

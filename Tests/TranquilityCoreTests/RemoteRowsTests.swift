@@ -113,10 +113,14 @@ final class RemoteRowsTests: XCTestCase {
     }
 
     /// A local `opencode serve` has no web page and no pane of ours. Offering
-    /// a door that opens on nothing reads as broken rather than as absent.
-    func testAnAgentWithNeitherDoorOffersNothing() {
+    /// a door that opens on nothing reads as broken rather than as absent —
+    /// and absent is not dead. The tap says "nothing to open" rather than the
+    /// dead row's "no proof it stopped", and the row keeps its lamp verb.
+    func testAnAgentWithNeitherDoorOffersNothingToOpen() {
         let out = rows(.init(agents: [remote("a", state: .working, url: nil)]))
-        XCTAssertEqual(SessionRow.action(for: out[0]), SessionRow.RowAction.none)
+        XCTAssertEqual(SessionRow.action(for: out[0]), .nothingToOpen)
+        XCTAssertTrue(SessionRow.isLive(out[0]), "it is running; it is just not somewhere to open")
+        XCTAssertEqual(SessionRow.verbs(for: out[0]), [.turnLampOff])
     }
 
     /// Every local row keeps the door it always had, which is what makes this

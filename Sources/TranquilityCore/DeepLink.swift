@@ -64,6 +64,8 @@ public enum DeepLink {
         case agentPage(URL)
         case revive
         case refused
+        /// Alive, no door, nothing recorded: the grid's other refusal.
+        case nothingToOpen
         case invitation
     }
 
@@ -78,6 +80,12 @@ public enum DeepLink {
         case .openPage(let url): return .agentPage(url)
         case .revive:    return .revive
         case .none?:     return .refused
+        // Alive with no door (a local OpenCode session): there is no pane and
+        // no page to put you in front of, so the card is the whole of what
+        // Discuss can open — and it can, since a remote agent takes a reply.
+        // Nothing recorded yet is the same refusal the grid's tap gives,
+        // through `nothingToOpen` rather than the dead row's sentence.
+        case .nothingToOpen?: return hasCompletedTurn ? .conversationCard : .nothingToOpen
         case nil:        return hasCompletedTurn ? .conversationCard : .invitation
         }
     }

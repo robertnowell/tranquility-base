@@ -29,7 +29,7 @@ final class StatusHUD: NSObject {
     static let contentColumn: CGFloat = 14
 
     var panel: ConsolePanel?
-    var titleLabel: DoorLabel!
+    var titleLabel: NSTextField!
     var bodyLabel: CardBodyLabel!
     var stateLabel: DoorLabel!
     var goButton: ConsoleButton!
@@ -2635,8 +2635,8 @@ final class StatusHUD: NSObject {
     /// half-admitting this: it dropped the topic whenever it equalled the
     /// project, which is the special case of a general truth.
     ///
-    /// What the identity is for is getting BACK to the session — so it is now a
-    /// door (see `titleIsADoor`), which is the job it was actually doing.
+    /// The identity is for READING. It was a second door to the session from
+    /// 06 Aug to 14 Sep; GO TO AGENT is the door now, alone (see `Build.swift`).
     private func renderTitle() {
         titleLabel.isHidden = face.title.isEmpty
         guard !face.title.isEmpty else { titleLabel.stringValue = ""; return }
@@ -2669,12 +2669,7 @@ final class StatusHUD: NSObject {
         }
         line.append(NSAttributedString(string: face.title, attributes: attributes))
         titleLabel.attributedStringValue = line
-        // Only a live target has a tab to open. No per-face flag is needed for
-        // this: `currentTarget` is already nil on exactly the faces whose title
-        // is not a session — it is cleared going idle and again by showVoices,
-        // so "Voices" and the empty room's "Tranquility Base" cannot inherit the
-        // last session's tab. `titleDoorDrill` holds that alignment.
-        titleLabel.isADoor = currentTarget?.pid != nil
+        // Not a door, since 14 Sep. See `Build.swift`, where the label is made.
     }
 
     /// The listening pill: the live dot in channel green (mic open = go), the
@@ -3767,8 +3762,19 @@ final class StatusHUD: NSObject {
             case .openPage(let url): NSWorkspace.shared.open(url)
             case .revive: onRevive?(id, row.name)
             case .none: refuseRowTap(id)
+            case .nothingToOpen: declineDoorlessTap(id, harness: row.harness)
             }
         }
+    }
+
+    /// A tap on a live row that has nowhere to put you, said out loud — and
+    /// said TRUTHFULLY, which is the whole reason it is not `refuseRowTap`.
+    /// That sentence diagnoses a dead row; this row is running, somewhere
+    /// this Mac has no pane or page for. See `RowAction.nothingToOpen`.
+    func declineDoorlessTap(_ id: String, harness: String?) {
+        Permissions.log("grid: tap on \(id.prefix(8)) — alive on \(harness ?? "an unknown harness") "
+            + "with no door: no page and no terminal of ours to open")
+        flashNotice(StateLegend.nothingToOpenNotice)
     }
 
     /// A tap that will not be honoured, said out loud.
@@ -3808,33 +3814,54 @@ final class StatusHUD: NSObject {
     /// does it would be teaching the exception rather than the rule. CONTINUE
     /// WORK is another harmless create action and follows it. END SESSION stays
     /// last and separated because it is the only destructive verb.
+    ///
+    /// The VERBS come from Core (`SessionRow.verbs(for:)`, 14 Sep), so which
+    /// items a row gets is a tested fact and not a branch here. This function
+    /// only draws them. A row with nothing to open — a local OpenCode session
+    /// — keeps the lamp's verb and loses the two that need somewhere to go;
+    /// before, `isLive` read it as dead and the menu vanished with the tap.
     private func rowMenu(for item: SessionRow) -> NSMenu? {
-        guard SessionRow.isLive(item) else { return nil }
+        let verbs = SessionRow.verbs(for: item)
+        guard !verbs.isEmpty else { return nil }
         let menu = NSMenu()
-        let go = NSMenuItem(title: "Go to agent",
-                            action: #selector(goToAgentGridRowPicked(_:)),
-                            keyEquivalent: "")
-        go.target = self
-        go.representedObject = item.id
-        menu.addItem(go)
-        if let destination = AgentHandoff.destination(for: item.harness) {
-            let handoff = NSMenuItem(
-                title: "Continue work with \(destination.label)",
-                action: #selector(continueWorkGridRowPicked(_:)),
-                keyEquivalent: "")
-            handoff.target = self
-            handoff.representedObject = item.id
-            menu.addItem(handoff)
+        func add(_ title: String, _ action: Selector) {
+            let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = item.id
+            menu.addItem(entry)
         }
-        menu.addItem(.separator())
-        // The item NAMES its target, and that IS the confirmation.
-        let end = NSMenuItem(title: "End session \u{201C}\(item.name)\u{201D}",
-                             action: #selector(terminateGridRowPicked(_:)),
-                             keyEquivalent: "")
-        end.target = self
-        end.representedObject = item.id
-        menu.addItem(end)
+        for verb in verbs {
+            switch verb {
+            case .goToAgent:
+                add("Go to agent", #selector(goToAgentGridRowPicked(_:)))
+            case .continueWork(let destination):
+                add("Continue work with \(destination.label)",
+                    #selector(continueWorkGridRowPicked(_:)))
+            case .turnLampOff:
+                // The lamp's own verb, listed: "clicking an ON lamp turns it
+                // off … it goes to past agents" (18 Aug). On the row whose
+                // tap and door are both absent, this is the one thing the
+                // menu has to say, and it is what "remove it" means here.
+                add("Turn lamp off", #selector(turnLampOffGridRowPicked(_:)))
+            case .endSession:
+                menu.addItem(.separator())
+                // The item NAMES its target, and that IS the confirmation.
+                add("End session \u{201C}\(item.name)\u{201D}",
+                    #selector(terminateGridRowPicked(_:)))
+            }
+        }
         return menu
+    }
+
+    @objc nonisolated private func turnLampOffGridRowPicked(_ sender: NSMenuItem) {
+        let picked = sender.representedObject as? String
+        MainActor.assumeIsolated {
+            guard let id = picked else { return }
+            Track.record("row_menu", ["item": "turn_lamp_off", "agent_id": Track.hash(id), "surface": "grid"])
+            // The same closure the lamp column fires, so the two cannot mean
+            // different things: dismissed if it was waiting, filed either way.
+            onClearLamp?(id)
+        }
     }
 
     @objc nonisolated private func goToAgentGridRowPicked(_ sender: NSMenuItem) {
