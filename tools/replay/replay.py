@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """Re-run corpus records through a candidate prompt via `claude -p` headless.
 
-The prompt template is a plain text file (tools/replay/prompts/<name>.txt)
-containing the ENTIRE prompt (system + user scaffolding merged — `claude -p`
-takes one prompt). Variable slots are literal tokens substituted with
+The prompt template is a plain text file containing the ENTIRE prompt (system +
+user scaffolding merged — `claude -p` takes one prompt).
+
+THE PROMPT IS contracts/gateway/v1/summary-prompt.txt, and there is no longer a
+folder of candidates beside this script. There used to be seven, and by 14 Sep
+2026 the shipped Swift prompt had grown to 2,228 words against the largest of
+them at 1,216: this harness had been replaying a prompt that did not ship, for
+long enough that nobody noticed. Ruled that day: the live prompt is the only
+prompt, it lives in the contract directory beside the schema because the managed
+Gateway must produce identical summaries, and PromptIsOneThingTests fails the
+build if the Swift literal and that file diverge. To try a variant, copy the
+contract file somewhere, point --prompt at the copy, and throw it away after. Variable slots are literal tokens substituted with
 str.replace (NOT str.format, so the JSON braces in the prompt are safe):
 
   {project_label}          e.g. "promotions"
@@ -26,7 +35,7 @@ reply). Failures/timeouts land in <record-id>.error. Existing outputs are
 skipped, so a run is resumable.
 
 Usage:
-  python3 replay.py --prompt prompts/current.txt --limit 3
+  python3 replay.py --limit 3     # defaults to the shipped prompt
   python3 replay.py --prompt prompts/v2.txt --sample 25 --seed 7 --model haiku
 """
 
@@ -68,8 +77,8 @@ def fill(template, rec):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--prompt", required=True,
-                    help="path to prompt template, e.g. prompts/current.txt")
+    ap.add_argument("--prompt", default="../../contracts/gateway/v1/summary-prompt.txt",
+                    help="path to a prompt template; defaults to the shipped one")
     ap.add_argument("--corpus", default=DEFAULT_CORPUS)
     ap.add_argument("--model", default="haiku",
                     help="claude -p model (haiku|sonnet|full model id); default haiku")
