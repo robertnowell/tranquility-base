@@ -1078,6 +1078,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         }
         hud.onBreadcrumbHome = { [weak self] in self?.goHomeFromCard(via: "breadcrumb") }
+        // The drills' one source of truth about the grid. Wired here because
+        // this is the object that knows; the panel never guesses rows, and
+        // never invents an empty list to mean "go home".
+        hud.gridRows = { [weak self] in self?.sessionRowsNow() ?? [] }
         hud.onPendingSendStopped = { [weak self] cardRestored in
             // Don't send has landed the panel somewhere alive. A restored card
             // gets its dwell clock back (ruling 14's shape — same as the arm

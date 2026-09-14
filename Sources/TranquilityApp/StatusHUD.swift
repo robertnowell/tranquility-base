@@ -1965,6 +1965,24 @@ final class StatusHUD: NSObject {
     /// `internal`, not `private` (App-lane P4, 23 Aug): `beginDrills`/
     /// `endDrills` (the only writers) moved to `SelfTestDriver.swift` — a
     /// `private` witness is invisible across that file boundary.
+    /// The real rows, from the one place that knows them.
+    ///
+    /// `showIdle(rows:)` takes whatever it is handed, and the drills got into
+    /// the habit of handing it `[]` as a way of saying "never mind, go back to
+    /// the grid". An empty row list is not a neutral reset. It is the claim
+    /// that this machine is running no agents, the panel believes it, and
+    /// `scheduleGettingStarted` escalates it ten seconds later into
+    /// "Control + Option to get started", the FIRST RUN card.
+    ///
+    /// Measured 13 Sep 20:59 with twenty agents live: the go-to drill's late
+    /// sweep painted `showIdle(rows: [])` over a healthy grid at 03:58:56 and
+    /// the teaching card was on screen by 03:59:07. Nothing corrected it,
+    /// because the ambient repaint does not fire on an unchanged roster, so an
+    /// empty paint is DURABLE. A drill can leave a lie on the panel and go home.
+    ///
+    /// So the drills stop naming rows at all. They ask for the truth, and the
+    /// truth has one source.
+    var gridRows: (() -> [SessionRow])?
     var drillsHoldThePanel = false
 
     /// A real key reached the panel while the slate was running, so the slate

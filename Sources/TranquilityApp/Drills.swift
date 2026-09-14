@@ -70,8 +70,16 @@ extension StatusHUD {
             // true for the whole window. The late pass can outlive the slate on
             // a cold cache, which is exactly why it stays: `endDrills` has
             // already handed the stage back by then and cannot see this one.
+            //
+            // `returnToTheGrid`, never `showIdle(rows: [])`. This sweep is the
+            // one piece of the slate that can run AFTER the slate is over, on a
+            // panel that has gone back to work, and on 13 Sep at 20:59 it
+            // painted an empty grid over twenty live agents. Ten seconds later
+            // the panel was teaching Robert his first keypress.
             for _ in 0..<2 {
-                if case .result = self.state { self.showIdle(rows: []) }
+                if case .result = self.state {
+                    self.returnToTheGrid(because: "goToSession drill, late sweep")
+                }
                 try? await Task.sleep(nanoseconds: 6_000_000_000)
             }
         }
@@ -2027,16 +2035,18 @@ extension StatusHUD {
     /// out is not a reason to pull it off. A backstop that cleared everything
     /// would pass the first two checks and be a worse bug than the one it fixed.
     func slateHandsBackDrill() {
-        let realHome = onBreadcrumbHome
+        let realRows = gridRows
         let realTarget = currentTarget
-        defer { onBreadcrumbHome = realHome; currentTarget = realTarget }
-        var wentHome = 0
-        // The real closure paints the REAL grid through AppDelegate. The drill
-        // only needs to know it was pulled, and to leave a grid behind.
-        onBreadcrumbHome = { [weak self] in
-            wentHome += 1
-            self?.showIdle(rows: [])
-        }
+        defer { gridRows = realRows; currentTarget = realTarget }
+        // A roster with something in it, because the failure this drill exists
+        // to catch is a teardown that hands back an EMPTY grid: a claim that
+        // the machine is running nothing, which the panel then escalates into
+        // the first-run teaching card. "It went back to idle" is not the
+        // assertion. "It went back to the truth" is.
+        var asked = 0
+        let roster = [SessionRow(id: "hands-back-1", name: "one", aux: "", lamp: .running),
+                      SessionRow(id: "hands-back-2", name: "two", aux: "", lamp: .ready)]
+        gridRows = { asked += 1; return roster }
 
         // 1. A capture face. It owns the stage, so it refuses the next arrival.
         endCapture(because: "slateHandsBack setup")
@@ -2047,15 +2057,19 @@ extension StatusHUD {
                         seconds: 4, send: {}, cancel: { _ in })
         let stageWasOwned = state.ownsStage
         handBackTheStage()
-        let ownedFaceHandedBack = wentHome == 1 && !state.ownsStage
+        let ownedFaceHandedBack = asked == 1 && !state.ownsStage
+        let handedBackTheRealRoster = face.sessionRows.count == roster.count
 
         // 2. A result card. It admits what follows, so it strands nothing, but
         //    it is a red failure about a session that never existed and it sat
         //    on the panel for 61 minutes on 13 Sep.
         showResult("Drill failure that nobody should be left looking at.")
-        let resultWasUp = state == .result
+        var resultWasUp = false
+        if case .result = state { resultWasUp = true }
         handBackTheStage()
-        let resultHandedBack = wentHome == 2 && state != .result
+        var stillResult = false
+        if case .result = state { stillResult = true }
+        let resultHandedBack = asked == 2 && !stillResult
 
         // 3. And the face the backstop must keep its hands off.
         _ = showAnnouncement(spoken: SpokenTextSanitizer().sanitize("Slate drill card."),
@@ -2064,7 +2078,19 @@ extension StatusHUD {
                              eventId: "slate-hands-back")
         let spokenWasUp = state.isSpeaking
         handBackTheStage()
-        let spokenCardSurvives = wentHome == 2 && state.isSpeaking
+        let spokenCardSurvives = asked == 2 && state.isSpeaking
+
+        // And with no source wired, it paints NOTHING rather than reaching for
+        // `[]`. A fallback to the empty list is the whole bug, written as a
+        // default argument instead of as a paint.
+        gridRows = nil
+        endCapture(because: "slateHandsBack no-source setup")
+        showIdle(rows: roster)
+        showResult("Drill failure with no rows source wired.")
+        handBackTheStage()
+        var refusedToPaintALie = false
+        if case .result = state { refusedToPaintALie = true }
+        gridRows = { asked += 1; return roster }
 
         SelfTest.report("slateHandsBack", [
             ("aCaptureFaceOwnsTheStage", stageWasOwned),
@@ -2073,10 +2099,12 @@ extension StatusHUD {
             ("aResultCardIsHandedBack", resultHandedBack),
             ("aSpokenCardIsUp", spokenWasUp),
             ("aSpokenCardIsLeftAlone", spokenCardSurvives),
+            ("theRealRosterComesBackNotAnEmptyOne", handedBackTheRealRoster),
+            ("withNoRowsSourceItPaintsNothing", refusedToPaintALie),
         ])
 
         endCapture(because: "slateHandsBack cleanup")
-        showIdle(rows: [])
+        returnToTheGrid(because: "slateHandsBack cleanup")
     }
 }
 
@@ -2103,10 +2131,10 @@ extension StatusHUD {
     /// passing after somebody deletes the repair.
     func slateYieldsDrill() {
         let held = drillsHoldThePanel
-        let realHome = onBreadcrumbHome
+        let realRows = gridRows
         let realTarget = currentTarget
-        defer { onBreadcrumbHome = realHome; currentTarget = realTarget }
-        onBreadcrumbHome = { [weak self] in self?.showIdle(rows: []) }
+        defer { gridRows = realRows; currentTarget = realTarget }
+        gridRows = { [SessionRow(id: "yields-1", name: "one", aux: "", lamp: .running)] }
 
         // The zombie, as the slate really leaves it: a pendingSend face whose
         // countdown and closures are already gone.
@@ -2140,7 +2168,7 @@ extension StatusHUD {
         ])
 
         endCapture(because: "slateYields cleanup")
-        showIdle(rows: [])
+        returnToTheGrid(because: "slateYields cleanup")
         // The slate is NOT over: this drill stood it down on purpose and the
         // drills after it still need the hold, and still need the 60 s ceiling
         // that comes with it. Re-armed through the real door rather than by
