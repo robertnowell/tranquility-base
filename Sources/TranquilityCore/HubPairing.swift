@@ -88,10 +88,9 @@ public final class HubPairing: @unchecked Sendable {
     public static func newCode() -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        return Data(bytes).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+        // One encoder, in DeviceKey.swift. Two copies of this is how a
+        // pairing code and a JWS field come to disagree about padding.
+        return Data(bytes).base64URLEncoded
     }
 
     /// What both sides show. Derived from the code, never transmitted, so a
