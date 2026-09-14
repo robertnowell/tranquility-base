@@ -927,6 +927,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
+        hud.onPresenceChanged = { [weak self] in self?.refreshDockPresence(because: "panel") }
         hud.onContinueWork = { [weak self] id, name in
             self?.continueWork(from: id, name: name)
         }
@@ -1828,8 +1829,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onboarding.show { [weak self] in
                 self?.refresh()
                 self?.showIdleGrid()
+                self?.refreshDockPresence(because: "onboarding done")
             }
         }
+        // After the gate, whichever branch ran: the first thing a new install
+        // can rely on seeing is the Dock tile, not the status item.
+        refreshDockPresence(because: "launch")
         deepLinksReady = true
         drainPendingDeepLinksIfReady()
     }

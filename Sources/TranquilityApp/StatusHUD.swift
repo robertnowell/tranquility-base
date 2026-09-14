@@ -1650,45 +1650,6 @@ final class StatusHUD: NSObject {
         noticeUnderCard = false
     }
 
-    /// When the room went empty, and the clock that turns it into a lesson.
-    ///
-    /// A timestamp rather than a one-shot flag because the empty face repaints
-    /// on every ambient tick: a flag would be reset by the tick five seconds in,
-    /// and the sentence would never arrive. Elapsed time since the room emptied
-    /// is the fact; the work item only exists to paint it when nothing else is
-    /// repainting.
-    var emptySince: Date?
-    private var gettingStartedWork: DispatchWorkItem?
-
-    /// Retired in the one place state changes, so no path has to remember —
-    /// the same discipline the notice follows. A panel that has left idle is a
-    /// panel with something to do, and the room is no longer empty.
-    private func forgetEmptyRoom() {
-        emptySince = nil
-        gettingStartedWork?.cancel()
-        gettingStartedWork = nil
-    }
-
-    /// Paint the sentence when the room has been empty long enough, if nothing
-    /// has happened by then. Re-armed on every empty repaint with the time
-    /// REMAINING, never restarted from ten.
-    private func scheduleGettingStarted(in seconds: TimeInterval) {
-        gettingStartedWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self,
-                  case .idle = self.state,
-                  self.face.sessionRows.isEmpty,
-                  let since = self.emptySince,
-                  Date().timeIntervalSince(since) >= StateLegend.gettingStartedAfter
-            else { return }
-            Permissions.log("empty room: teaching the first press")
-            self.face = Face(body: StateLegend.gettingStartedMessage, gettingStarted: true)
-            self.render()
-        }
-        gettingStartedWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, seconds), execute: work)
-    }
-
     /// `note` is a prefix about what just happened ("Stopped."). The sentence about
     /// what is waiting is always derived from `waiting`, never passed in — the two
     /// were computed at different call sites and drifted, so the panel showed
@@ -1785,7 +1746,7 @@ final class StatusHUD: NSObject {
         // The hide/show leak this closes: `.hidden` returns out of render before
         // its body runs, so a notice cleared down there survived a dismiss and
         // came back up with the panel.
-        if case .idle = next {} else { clearNotice(); forgetEmptyRoom() }
+        if case .idle = next {} else { clearNotice() }
     }
 
     /// Do what `PanelState.releasesPendingSend` decides: leaving the read-back
@@ -1912,30 +1873,31 @@ final class StatusHUD: NSObject {
         shownRows = rows
 
         if rows.isEmpty {
-            // An empty room says two different things depending on how long it
-            // has been empty. For the first ten seconds it is a room whose
-            // agents have not reported in yet, and it describes itself. After
-            // that nobody is coming on their own, and the only useful thing the
-            // panel can say is how to start one (ruled 08 Aug).
-            let since = emptySince ?? Date()
-            emptySince = since
-            let elapsed = Date().timeIntervalSince(since)
-            if elapsed >= StateLegend.gettingStartedAfter {
-                face = Face(body: StateLegend.gettingStartedMessage, gettingStarted: true)
-            } else {
-                // The true empty state — the ONLY surface where the literal app name
-                // appears, with the one-line hint.
-                face = Face(title: "Tranquility Base",
-                            body: [note, "Nothing waiting. Agents appear here as they finish."]
-                                .compactMap { $0 }.joined(separator: " "))
-                scheduleGettingStarted(in: StateLegend.gettingStartedAfter - elapsed)
-            }
+            // The empty grid is the grid, empty (ruled 14 Sep 2026). It used
+            // to become, ten seconds in, one centred sentence: "Control +
+            // Option to get started". On Gary Marx's first run that sentence
+            // read as a stalled startup screen, and the press it taught does
+            // nothing on an empty grid: a tap announces nothing waiting and
+            // repaints this face, a hold has nobody to talk to. Nobody had hit
+            // it before because every earlier user had run a session in the
+            // last seven days, and the room was never empty.
+            //
+            // So the empty room IS the grid: the AGENTS placard, one line
+            // about what fills it, the NEW AGENT and PAST AGENTS band that
+            // every full grid ends in, and the footer. Zero rows, same face.
+            face = Face(body: [note, "Nothing waiting. Agents appear here as they finish."]
+                            .compactMap { $0 }.joined(separator: " "),
+                        grid: true)
         } else {
-            // Someone reported in: the room is not empty and the clock is void.
-            forgetEmptyRoom()
+            // The first agent this install has ever listed is a durable fact:
+            // the Dock tile reads it (AppDelegate+Dock).
+            if !Self.everListedAgent {
+                Self.everListedAgent = true
+                Permissions.log("grid: first agent ever listed on this install")
+            }
             // No "N waiting" headline (ruled): the strip says SESSIONS, the lamps
             // say who is waiting, and the count lives in the menu bar.
-            face = Face(body: note ?? "", sessionRows: rows)
+            face = Face(body: note ?? "", sessionRows: rows, grid: true)
         }
         render()
     }
@@ -2014,8 +1976,7 @@ final class StatusHUD: NSObject {
     /// the habit of handing it `[]` as a way of saying "never mind, go back to
     /// the grid". An empty row list is not a neutral reset. It is the claim
     /// that this machine is running no agents, the panel believes it, and
-    /// `scheduleGettingStarted` escalates it ten seconds later into
-    /// "Control + Option to get started", the FIRST RUN card.
+    /// the empty room paints over whatever was there, NEW AGENT door and all.
     ///
     /// Measured 13 Sep 20:59 with twenty agents live: the go-to drill's late
     /// sweep painted `showIdle(rows: [])` over a healthy grid at 03:58:56 and
@@ -2040,6 +2001,27 @@ final class StatusHUD: NSObject {
     var drillRelease: DispatchWorkItem?
 
     var isOnScreen: Bool { panel?.isVisible ?? false }
+
+    /// Whether an agent has ever been listed on this install's grid. The Dock
+    /// tile reads it (AppDelegate+Dock): until it is true the menu bar is the
+    /// only door to the app, and macOS may have dropped it.
+    static var everListedAgent: Bool {
+        get { ProductDefaults.shared.bool(forKey: everListedAgentKey) }
+        set { ProductDefaults.shared.set(newValue, forKey: everListedAgentKey) }
+    }
+    private static let everListedAgentKey = "grid.everListedAgent"
+
+    /// Fires when what the Dock rule reads has changed: the panel's presence
+    /// on screen, or the first agent ever listed. Called from render, which
+    /// is the one place the panel is ordered on or off the screen.
+    var onPresenceChanged: (() -> Void)?
+    private var lastPresence: (onScreen: Bool, everListed: Bool)?
+    func reportPresence() {
+        let now = (onScreen: isOnScreen, everListed: Self.everListedAgent)
+        if let last = lastPresence, last == now { return }
+        lastPresence = now
+        onPresenceChanged?()
+    }
 
     // MARK: - Rendering
 
@@ -2085,7 +2067,11 @@ final class StatusHUD: NSObject {
         /// The empty room has been empty long enough to teach the first press
         /// instead of describing itself. A face of idle, not a state of its own:
         /// nothing about what the panel ADMITS changes, only what it says.
-        var gettingStarted = false
+        /// The grid, with or without rows (ruled 14 Sep 2026: the empty grid
+        /// is the grid, empty). Decides the render case, so an empty room
+        /// wears the AGENTS placard, the NEW AGENT band and the footer that a
+        /// full one does, rather than becoming a different screen.
+        var grid = false
 
         /// How far the read-along got, in DISPLAY coordinates. `nil` is the
         /// unspoken baseline, which is why a fresh `Face()` starts grey.
@@ -2114,7 +2100,7 @@ final class StatusHUD: NSObject {
         /// "what state am I in" but "is there anything here worth keeping", and
         /// the face can answer it about itself. Derived, never stored: a stored
         /// flag is one more thing that can disagree with the face it describes.
-        var hasCard: Bool { !body.isEmpty && sessionRows.isEmpty }
+        var hasCard: Bool { !body.isEmpty && sessionRows.isEmpty && !grid }
 
         /// The words waiting to be sent, shown in the strip during the undo
         /// window. Separate from `body`, which belongs to the card underneath —
@@ -2187,7 +2173,7 @@ final class StatusHUD: NSObject {
         endTranscribingUI()
         stopBodyShimmer()
         if !state.isCapturingAudio { meterTimer?.invalidate(); meterTimer = nil }
-        if case .hidden = state { panel?.orderOut(nil); return }
+        if case .hidden = state { panel?.orderOut(nil); reportPresence(); return }
         let panel = panel ?? build()
 
         // Baseline: pill from the state's legend row (or the face's own
@@ -2327,7 +2313,7 @@ final class StatusHUD: NSObject {
             // reset" symptom — the words go grey AND start loading again.
             if inkCursor == 0 { armBodyShimmer() }
 
-        case .idle where !face.sessionRows.isEmpty:
+        case .idle where face.grid:
             // The grid: the idle face IS one row per live session (WS-B, ruled).
             // Ruled strip: a small letterspaced AGENTS placard where the Ready
             // pill would be — no "Ready", no "N waiting" (the count lives in the
@@ -2371,24 +2357,10 @@ final class StatusHUD: NSObject {
             if isCollapsed { strip?.show(rows: face.sessionRows) }
             rebuildSessionRows()
 
-        case .idle where face.gettingStarted:
-            // The empty room, past its ten seconds: ONE sentence and nothing
-            // else. Every other element is switched off by name rather than
-            // left to the baseline, because the point of this face is what it
-            // does NOT show — the app's name, the Ready pill, and the key line
-            // are all complexity charged to someone who has not pressed a key
-            // yet. The gear stays: it is the only door to settings, and a first
-            // -run face that strands the microphone pane is worse than a busy
-            // one. Centred and larger, so it reads as the panel's whole purpose
-            // rather than a caption on an absence.
-            stateLabel.isHidden = true
-            titleLabel.isHidden = true
-            bodyLabel.font = StateLegend.Face.message(17)
-            bodyLabel.alignment = .center
-
         case .idle:
-            // True empty state: the baseline already says everything — the app
-            // name as title and the one-line note as body.
+            // An idle face that is not the grid: the baseline says it all.
+            // `showIdle` always paints the grid, empty or not (ruled 14 Sep
+            // 2026), so this arm is for whatever else still lands idle.
             break
 
         case .arming:
@@ -2609,6 +2581,7 @@ final class StatusHUD: NSObject {
         resizeToFit(panel)
         position(panel)
         panel.orderFrontRegardless()
+        reportPresence()
         Permissions.log("HUD frame=\(panel.frame) visible=\(panel.isVisible) screen=\(NSScreen.main?.visibleFrame.debugDescription ?? "nil")")
 
         // Which timer runs is a fact of the state, decided in the same breath as

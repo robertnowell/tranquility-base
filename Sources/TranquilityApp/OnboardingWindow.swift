@@ -20,6 +20,8 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     private var nameLabels: [Permissions.Kind: NSTextField] = [:]
     private var refreshTimer: Timer?
     private var onDone: (() -> Void)?
+    /// Whether the window is up. The Dock rule reads it (AppDelegate+Dock).
+    var isShowing: Bool { window != nil }
 
     /// Two screens, in the order the work actually happens.
     ///
