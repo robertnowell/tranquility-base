@@ -498,6 +498,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.rebuildMenu()
             }
         }
+        // A file `abandon` kept is a Recents row at once, not at the next
+        // boot (14 Sep 2026): the boot sweep was the only reader of kept
+        // files, and the app runs for days between boots.
+        recorder.onCaptureKept = { [weak self] url, seconds in
+            DispatchQueue.main.async {
+                guard let self, let store = self.store else { return }
+                do {
+                    if let id = try store.adoptKeptCapture(at: url, because: "abandoned") {
+                        Permissions.log(String(format: "capture: kept %.1fs adopted into Recents as ", seconds)
+                                        + id.prefix(8))
+                        Track.record("capture_kept", ["reason": "abandoned", "outcome": "kept_untranscribed",
+                                                      "audio_ms": .int(Int(seconds * 1000))])
+                        self.hud.updateRecentAudio(events: self.recentAudioEvents())
+                    }
+                } catch {
+                    Permissions.log("capture: kept file could not be adopted: \(error)")
+                    Failures.report(.microphone, reason: "kept capture not adopted: \(error)",
+                                    card: "A recording was kept but could not be listed. Audio kept.")
+                }
+            }
+        }
         // The daemon itself, as distinct from this app's capture stack: when
         // coreaudiod stops answering, every app's audio is gone and the panel
         // says so within seconds of the first blocked call, with the one
@@ -1327,7 +1348,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.coordinator?.speech.stop()
             GreetingCache.stop()
             self.isAnnouncing = false
-            if self.recorder.isRecording { _ = try? self.recorder.stop() }
+            // Dismiss ends the listening; it does not unsay what was said.
+            // This line used to read `_ = try? self.recorder.stop()` — the
+            // one place in the app that took a finished capture and threw it
+            // away — and on 14 Sep 2026 a click on the menu bar icon put
+            // 3m31s of dictation through it. The stream goes with the
+            // capture, because the streamed final is usually the transcript.
+            if self.recorder.isRecording {
+                let stream = self.recorder.takeStream()
+                if let capture = try? self.recorder.stop() {
+                    self.keepDismissedCapture(capture, stream: stream)
+                }
+            }
             self.handsFreeListening = false
             self.recordingDestination = nil
             self.isBusy = false

@@ -358,6 +358,45 @@ extension AppDelegate {
     /// recorder's peak may belong to a later arm by now) and the face says
     /// "Retrying" — re-entering `.transcribing` restarts the elapsed clock,
     /// which is the visible acknowledgment the first Retry never had.
+    /// A capture ended by Dismiss (the button, the menu bar toggle, Escape's
+    /// teardown): kept and transcribed into Recents, never sent. The durable
+    /// half is `QueueStore.keepDismissedCapture`; this is the app's wrapper —
+    /// the peak the recorder measured, the stream the recorder opened, the
+    /// log line, and the pane refresh. Off the gesture's thread for the
+    /// transcription, back on main for the paint (rule 9).
+    func keepDismissedCapture(_ capture: Recorder.Capture, stream: StreamedUtterance?) {
+        guard let store else { return }
+        let seconds = Double(capture.pcm16.count) / 2.0 / 16_000.0
+        let peak = recorder.peakLevel
+        let id = UUID().uuidString
+        Permissions.log(String(format: "dismiss: keeping %.1fs (peak %.4f) as ", seconds, peak)
+                        + id.prefix(8) + ", transcribing")
+        Task { @MainActor in
+            do {
+                let streamed = await stream?.finish()
+                let row = try await Track.$captureID.withValue(capture.id) {
+                    try await store.keepDismissedCapture(
+                        pcm16: capture.pcm16, sampleRate: 16_000, peak: peak, chain: RecoveryChain(),
+                        streamed: streamed, streamHadRecognizedText: stream?.hasRecognizedText ?? false,
+                        streamNoSpeechProvider: stream?.noSpeechProvider,
+                        preWritten: capture.fileURL, utteranceId: id)
+                }
+                if let row {
+                    Permissions.log("dismiss: kept \(id.prefix(8)) → "
+                        + "\(row.transcriptText.map { "\($0.count) chars" } ?? "no transcript") "
+                        + "(\(row.transcriptProvider ?? "no provider"), \(row.status.rawValue))")
+                } else {
+                    Permissions.log("dismiss: room tone, nothing kept")
+                }
+            } catch {
+                Permissions.log("dismiss: keep failed: \(error)")
+                Failures.report(.transcriptionProvider, reason: "dismissed capture not kept: \(error)",
+                                card: "Couldn't keep that recording. Audio kept.")
+            }
+            self.hud.updateRecentAudio(events: self.recentAudioEvents())
+        }
+    }
+
     func sendReply(_ capture: Recorder.Capture, isRetry: Bool = false) {
         guard let coordinator else { return }
         // Unpacked once, at the top, from the value stop() returned. Both of
@@ -379,6 +418,10 @@ extension AppDelegate {
             Permissions.log(String(format:
                 "send: refused, silence gate (%.2fs, peak %.4f)", seconds, recorder.peakLevel))
             recordingDestination = nil
+            // Refused here, the write-ahead file has no row and never will;
+            // left alone it sits as `.wav.live` — the shape of a kept capture —
+            // until the 72h reap. Thirteen of them were on disk on 14 Sep.
+            if let capturedFile { try? FileManager.default.removeItem(at: capturedFile) }
             reportNothingHeard(because: seconds < 0.5 ? "too short" : "below signal threshold")
             return
         }

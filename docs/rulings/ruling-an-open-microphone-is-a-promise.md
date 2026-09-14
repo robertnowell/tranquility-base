@@ -63,3 +63,42 @@ anything over 30 seconds"): **"That's not a user-facing solution."**
 - "Our transcription needs to be faster" (same dictation). AssemblyAI
   streaming has been out of funds since 4 Sep, so every capture takes the
   ~3s file path; that is a billing fact, not a code change.
+
+## Amended 14 Sep 2026: Dismiss is not a door out of the promise
+
+Measured, not reasoned: a 3m31s dictation (capture `39EDF72B`, 15:52:09 to
+15:55:40 PDT, app.log `capture: 210.85s open, tap delivered 19757, kept
+19757, 6519810 bytes`) was ended by a left click on the menu bar icon. The
+toggle's "full dismiss" ran `hud.dismiss()`, and the dismiss handler's
+`_ = try? self.recorder.stop()` took the finished capture and dropped it. The
+file survived as `.wav.live` (rule 2 held); nothing read it (rule 3 reads
+only at boot); the Recents pane said "12 rows, 0 without a transcript" while
+the longest recording of the day was on disk beside them. Recovered by hand
+from the file through AssemblyAI's file API, 1,819 characters.
+
+Three instances of one class — audio leaves the recorder and no row claims it:
+
+1. **Dismiss discarded `stop()`'s result.** Now `keepDismissedCapture`: the
+   same durable path as a send (row, then the streamed final or the recovery
+   chain), and the transcribed row is parked `.discarded` with the reason
+   "dismissed before send", because `.transcribed` is what the boot sweep
+   promotes to `.ready`. It is in Recents with its text; nothing types it.
+2. **A kept file waited for a boot.** `abandon`'s kept ending now reaches the
+   app (`Recorder.onCaptureKept`) and `QueueStore.adoptKeptCapture` gives it
+   a row at once, with no floor — the recorder already decided it was speech.
+   Rule 3's boot sweep and its ten-second floor still cover process death.
+   Before this, a 6s kept file from 13 Sep was under the boot floor and above
+   the keep floor: kept forever, adoptable never, reaped at 72h.
+3. **Room tone leaked as kept files.** A capture the silence gate refused, or
+   one `stop()` threw away as under 50ms, left its write-ahead file `.wav.live`
+   — the shape of a kept capture — until the reap. Thirteen were on disk on
+   14 Sep. Both paths now remove the file they refused.
+
+The drill grew two groups, `keptNow` and `dismissKeeps`, run on every deploy
+and by `tbase keepdrill`. The dismiss group's chain is a fixture; it spends
+nothing.
+
+Still open from the list above: partials durable as they arrive (a process
+death mid-hold still loses the streamed text and recovers from the file), and
+Recents has no Copy — a kept transcript can be read there and played, not
+yet copied.

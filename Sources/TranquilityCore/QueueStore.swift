@@ -1468,23 +1468,58 @@ public final class QueueStore: Sendable {
             guard !known.contains(interrupted.utteranceId) else { continue }
             guard interrupted.durationMs() >= floorMs else { continue }
             guard now.timeIntervalSince(interrupted.modifiedAt) > 5 else { continue }
-            guard let url = try? LiveAudioCapture.adopt(interrupted) else { continue }
-            let data = (try? Data(contentsOf: url)) ?? Data()
-            var row = Utterance(
-                id: interrupted.utteranceId,
-                createdAtMs: Int64(interrupted.modifiedAt.timeIntervalSince1970 * 1000),
-                status: .recorded,
-                audioPath: url.path,
-                audioBytes: Int64(data.count),
-                audioSha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
-                audioDurationMs: interrupted.durationMs())
-            row.transcriptionOutcome = "adopted_at_boot"
-            try update(utterance: row)
-            adopted.append(row.id)
-            Self.trace?("boot: adopted kept capture \(row.id.prefix(16)) "
-                + "(\(interrupted.durationMs() / 1000)s) into Recents")
+            guard let id = try? adopt(interrupted, outcome: "adopted_at_boot", trace: "boot") else { continue }
+            adopted.append(id)
         }
         return adopted
+    }
+
+    /// The recorder just kept this file, and the app is still running: give
+    /// it a row NOW, not at the next boot.
+    ///
+    /// Earned 14 Sep 2026. `abandon` had kept a file since 10 Sep, but the
+    /// only thing that ever read a kept file was `reconcileOnBoot` — so a
+    /// capture kept at 15:55 was invisible in Recents at 15:56, and the app
+    /// runs for days between boots. A 6s kept file from 13 Sep was never
+    /// going to be adopted at all: the recorder keeps anything with speech,
+    /// the boot sweep adopts ten seconds or more, and the gap between the two
+    /// rules was the 72h reap. There is no floor here: the caller is the
+    /// recorder's own decision that this was speech, and the file is closed,
+    /// so neither boot guard applies.
+    ///
+    /// Same row the boot sweep writes — `.recorded`, no transcript, dated by
+    /// the file — so Recents shows it with Play and Retry at once.
+    @discardableResult
+    public func adoptKeptCapture(at url: URL, because reason: String) throws -> String? {
+        guard url.pathExtension == LiveAudioCapture.liveExtension,
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let interrupted = LiveAudioCapture.Interrupted(
+            utteranceId: AudioStore.utteranceId(of: url), url: url,
+            byteCount: (attributes[.size] as? Int) ?? 0,
+            modifiedAt: (attributes[.modificationDate] as? Date) ?? Date())
+        if try utterance(id: interrupted.utteranceId) != nil { return nil }
+        return try adopt(interrupted, outcome: "adopted_" + reason, trace: reason)
+    }
+
+    /// One row for one kept file, whichever sweep found it.
+    private func adopt(_ interrupted: LiveAudioCapture.Interrupted,
+                       outcome: String, trace: String) throws -> String {
+        let url = try LiveAudioCapture.adopt(interrupted)
+        let data = (try? Data(contentsOf: url)) ?? Data()
+        var row = Utterance(
+            id: interrupted.utteranceId,
+            createdAtMs: Int64(interrupted.modifiedAt.timeIntervalSince1970 * 1000),
+            status: .recorded,
+            audioPath: url.path,
+            audioBytes: Int64(data.count),
+            audioSha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            audioDurationMs: interrupted.durationMs())
+        row.transcriptionOutcome = outcome
+        try update(utterance: row)
+        Self.trace?("\(trace): adopted kept capture \(row.id.prefix(16)) "
+            + "(\(interrupted.durationMs() / 1000)s) into Recents")
+        return row.id
     }
 
     /// Audio files on disk with no row pointing at them.
