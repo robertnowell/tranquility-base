@@ -530,6 +530,18 @@ public final class QueueStore: Sendable {
                 t.primaryKey(["eventRowid", "kind"])
             }
         }
+        m.registerMigration("v20_managed_summary_binding") { db in
+            try db.execute(sql: """
+                CREATE TABLE event_summary_source (
+                    eventId TEXT PRIMARY KEY NOT NULL REFERENCES events(id),
+                    source BLOB NOT NULL
+                );
+                CREATE TABLE brief_receipt (
+                    eventRowid INTEGER PRIMARY KEY REFERENCES brief(eventRowid),
+                    receipt BLOB NOT NULL
+                );
+                """)
+        }
         return m
     }
 
@@ -552,14 +564,17 @@ public final class QueueStore: Sendable {
     /// Insert an event. Returns nil if it was a duplicate (same session + promptId),
     /// which is the normal outcome for a re-fired hook.
     @discardableResult
-    public func insert(event: QueuedEvent) throws -> QueuedEvent? {
+    public func insert(event: QueuedEvent, summarySource: GatewaySource? = nil) throws -> QueuedEvent? {
         try dbQueue.write { db in
             do {
                 try event.insert(db)
-                return event
             } catch let error as DatabaseError where error.resultCode == .SQLITE_CONSTRAINT {
                 return nil
             }
+            if let summarySource {
+                try Self.bindSummarySource(summarySource, eventId: event.id, db: db)
+            }
+            return event
         }
     }
 
@@ -1027,11 +1042,15 @@ public final class QueueStore: Sendable {
     /// interrupted announcement replaces rather than duplicates.
     public func saveBrief(
         _ brief: SessionBrief, sessionId: String, eventRowid: Int64,
-        provider: String, callsign: String?, at: Date = Date()
+        provider: String, callsign: String?, at: Date = Date(),
+        managedReceipt: GatewayReceipt? = nil
     ) throws {
         let row = QueueStore.briefRow(brief, sessionId: sessionId, eventRowid: eventRowid,
                                       provider: provider, callsign: callsign, at: at)
-        try dbQueue.write { db in try row.save(db) }
+        try dbQueue.write { db in
+            try row.save(db)
+            try Self.saveSummaryReceipt(managedReceipt, brief: row, db: db)
+        }
     }
 
     /// One brief, as a row. Shared by the two writers — a generated summary
