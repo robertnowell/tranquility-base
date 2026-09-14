@@ -131,12 +131,20 @@ final class KeyCheckTests: XCTestCase {
         XCTAssertNil(KeyCheck.request(for: .openCodePassword, value: "probe", providerBase: none))
     }
 
-    /// The one route crobot's key is minted for, and the only one crobot calls
-    /// with it. Checking anything else already cost a day on ElevenLabs.
-    func testCrobotVerifiesAgainstTheRouteItsKeyIsMintedFor() {
+    /// The GATEWAY's identity route, not Jarvis's.
+    ///
+    /// Measured live 13 Sep 2026: `/api/auth/me` on the gateway sits behind
+    /// the same auth middleware, so it refuses a bad key correctly and then
+    /// serves a GOOD one the single page app, 200 with HTML. A check reading
+    /// "working" off that has proved the credential authenticates and nothing
+    /// about whether an identity resolves behind it. `/api/v1/me` passes the
+    /// same auth and org-scope chain as `/api/v1/tasks`, which is what the
+    /// provider actually calls.
+    func testCrobotVerifiesAgainstTheGatewaysOwnIdentityRoute() {
         let url = KeyCheck.request(for: .crobotAPIKey, value: "probe",
                                    providerBase: configured)?.url?.path
-        XCTAssertEqual(url, "/api/auth/me")
+        XCTAssertEqual(url, "/api/v1/me")
+        XCTAssertNotEqual(url, "/api/auth/me", "that is Jarvis's route, not the gateway's")
     }
 
     func testTheKeyNeverAppearsInTheURL() {
