@@ -14,8 +14,34 @@ public struct CrobotHTTPTransport: CrobotTransport {
         self.base = base; self.key = key; self.session = session
     }
 
-    private func request(_ method: String, _ path: String, body: Data? = nil) -> URLRequest {
-        var request = URLRequest(url: base.appendingPathComponent(path))
+    /// A path, and a QUERY THAT CANNOT GO THROUGH `appendingPathComponent`.
+    ///
+    /// That method percent-encodes everything it is given, `?` included, so
+    /// `appendingPathComponent("api/v1/tasks?limit=200")` produces
+    /// `/api/v1/tasks%3Flimit=200`. Measured against the live gateway,
+    /// 14 Sep: that URL matches no route, falls through to the single page
+    /// app, and returns **200 with HTML**, which then fails JSON decoding with
+    /// "Unexpected character '<'". The provider read as permanently
+    /// unreachable while the credential and the routes were both perfect.
+    ///
+    ///     /api/v1/tasks%3Flimit=200  -> 200  <!doctype html>...
+    ///     /api/v1/tasks?limit=200    -> 200  {"tasks":[...
+    ///
+    /// Third time in one day that this gateway's SPA fallback has turned a
+    /// wrong URL into a successful-looking response, so the query is built
+    /// with `URLComponents` and never by string append.
+    private func url(_ path: String, query: [URLQueryItem] = []) -> URL {
+        let joined = base.appendingPathComponent(path)
+        guard !query.isEmpty,
+              var parts = URLComponents(url: joined, resolvingAgainstBaseURL: false)
+        else { return joined }
+        parts.queryItems = query
+        return parts.url ?? joined
+    }
+
+    private func request(_ method: String, _ path: String, query: [URLQueryItem] = [],
+                         body: Data? = nil) -> URLRequest {
+        var request = URLRequest(url: url(path, query: query))
         request.httpMethod = method
         request.httpBody = body
         request.setValue("Bearer " + key, forHTTPHeaderField: "authorization")
@@ -30,12 +56,23 @@ public struct CrobotHTTPTransport: CrobotTransport {
     }
 
     private func call<T: Decodable>(_ method: String, _ path: String,
+                                    query: [URLQueryItem] = [],
                                     body: Data? = nil, as: T.Type) async throws -> T {
-        let (data, response) = try await session.data(for: request(method, path, body: body))
+        let (data, response) = try await session.data(
+            for: request(method, path, query: query, body: body))
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200...299).contains(status) else {
             throw Gateway.status(status, String(String(data: data, encoding: .utf8)?.prefix(200)
                 ?? ""))
+        }
+        // A 200 CARRYING HTML IS NOT SUCCESS, and on this gateway it is the
+        // normal shape of a wrong URL rather than an exotic failure: anything
+        // it does not route falls through to the single page app. Saying so
+        // here beats a JSON decoding error about an unexpected '<', which
+        // describes the symptom and hides the cause.
+        if let type = (response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "content-type"), type.contains("text/html") {
+            throw Gateway.servedThePage(path)
         }
         return try JSONDecoder().decode(T.self, from: data)
     }
@@ -54,7 +91,9 @@ public struct CrobotHTTPTransport: CrobotTransport {
 
     public func tasks(limit: Int) async throws -> [CrobotTask] {
         struct Envelope: Decodable { var tasks: [CrobotTask]? }
-        return try await call("GET", "api/v1/tasks?limit=\(limit)", as: Envelope.self).tasks ?? []
+        return try await call("GET", "api/v1/tasks",
+                              query: [URLQueryItem(name: "limit", value: String(limit))],
+                              as: Envelope.self).tasks ?? []
     }
 
     public func task(_ id: String) async throws -> CrobotTask {
@@ -103,8 +142,21 @@ public struct CrobotHTTPTransport: CrobotTransport {
             CharacterSet(charactersIn: "-._~"))) ?? s
     }
 
-    public enum Gateway: Error, Equatable {
+    public enum Gateway: Error, CustomStringConvertible, Equatable {
         case status(Int, String)
+        /// The gateway answered with its web page, which means the URL matched
+        /// no route. Named as itself so the log says "wrong URL" rather than
+        /// "unexpected character '<'".
+        case servedThePage(String)
+
+        public var description: String {
+            switch self {
+            case .status(let code, let body):
+                return body.isEmpty ? "crobot -> \(code)" : "crobot \(code): \(body)"
+            case .servedThePage(let path):
+                return "crobot served its web page for \(path): the URL matched no route"
+            }
+        }
     }
 
     /// The OpenCode half, through the gateway's proxy.
