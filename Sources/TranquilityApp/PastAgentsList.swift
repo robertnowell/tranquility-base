@@ -1189,13 +1189,26 @@ final class SettingsTabBar: NSView {
     }
 }
 
-/// Which harness the Agents tab's LAUNCH/DIRECTORY rows are showing — Claude
-/// Code or Codex (25 Aug, default launcher). Modeled on `SettingsTabBar`
-/// itself: hand-drawn buttons, not `NSSegmentedControl`'s bezel, for the same
-/// reason. A second affordance the tab bar doesn't need — MAKE DEFAULT —
-/// because viewing a harness's settings and making it the one `New Agent`
-/// launches are different questions; switching which one is SHOWN must never
-/// itself change the default.
+/// Which agent the Agents tab's configuration rows are showing, and which one
+/// `New Agent` starts. Modeled on `SettingsTabBar` itself: hand-drawn buttons,
+/// not `NSSegmentedControl`'s bezel, for the same reason.
+///
+/// **SELECTING IS SETTING, since 14 Sep 2026.** This row used to carry a second
+/// affordance, MAKE DEFAULT, on the argument that viewing an agent's settings
+/// and making it the one `New Agent` launches are different questions, and that
+/// switching which one is SHOWN must never itself change the default.
+///
+/// They ARE different questions and the extra click was still not worth it.
+/// Ruled: "to the user it's just which agent do I want to use." The risk the
+/// old design guarded against is real but small and visible: the picker shows
+/// which agent is current, so opening this tab to look at one and thereby
+/// selecting it is something you can see, not something that happens behind
+/// you.
+///
+/// See `docs/rulings/ruling-settings-picks-an-agent-not-a-mechanism.md`, which
+/// also settles that this picker lists agents of BOTH kinds, harnesses and
+/// providers alike, with no indication of which is which. That distinction is
+/// ours to carry, not the user's.
 final class HarnessPickerRow: NSView {
     static let height: CGFloat = 30
     private var buttons: [String: NSButton] = [:]
