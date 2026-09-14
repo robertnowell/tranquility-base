@@ -255,7 +255,36 @@ extension Coordinator {
                 + "reply goes bare")
             return nil
         }
-        return HeardContext.note(recap: brief.recap, proposal: brief.proposal)
+        return HeardContext.note(
+            recap: brief.recap, proposal: brief.proposal,
+            rungs: rungsHeard(sessionId: sessionId, eventRowid: brief.eventRowid))
+    }
+
+    /// A ⌃⌃ rung was spoken. The app calls this as it speaks each rung, so
+    /// the reply that follows can quote it (`heardNote`). MESSAGE is the
+    /// announcement re-heard and is dropped here rather than at every caller.
+    public func recordRungHeard(
+        sessionId: String, eventRowid: Int64,
+        kind: SpokenComposition.RungKind, spoken: String
+    ) {
+        guard kind != .message else { return }
+        do {
+            try store.recordRungHeard(
+                sessionId: sessionId, eventRowid: eventRowid,
+                kind: kind.rawValue, spoken: spoken)
+        } catch {
+            Coordinator.trace?("heard-context: could not record \(kind.rawValue) "
+                + "for event \(eventRowid): \(error)")
+        }
+    }
+
+    /// The pulled rungs' spoken text in LADDER order (goal, findings,
+    /// solution, why), whatever order they were pulled in. Best-effort: a
+    /// read failing here shortens the quote, never the send.
+    func rungsHeard(sessionId: String, eventRowid: Int64) -> [String] {
+        let order: [SpokenComposition.RungKind] = [.goal, .findings, .solution, .why]
+        let heard = (try? store.rungsHeard(sessionId: sessionId, eventRowid: eventRowid)) ?? []
+        return order.compactMap { kind in heard.first { $0.kind == kind.rawValue }?.spoken }
     }
 
     /// The one composition every send and every readback goes through: the

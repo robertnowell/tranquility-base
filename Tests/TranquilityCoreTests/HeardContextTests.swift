@@ -20,6 +20,18 @@ final class HeardContextTests: XCTestCase {
         XCTAssertEqual(HeardContext.compose(note: nil, message: "go ahead"), "go ahead")
     }
 
+    /// The rungs the user pulled join the paragraph after the announcement,
+    /// in the order given, as one line (ruled 13 Sep).
+    func testPulledRungsJoinTheParagraph() throws {
+        let note = try XCTUnwrap(HeardContext.note(
+            recap: "Kopi: fixed.", proposal: "Ship? Go?",
+            rungs: ["We are shipping the footer fix for Kopi.", "Two blockers, both closed."]))
+        XCTAssertEqual(note,
+            "[assistant]: Kopi: fixed. Ship? Go? We are shipping the footer fix for Kopi. "
+            + "Two blockers, both closed.")
+        XCTAssertFalse(note.contains("\n"))
+    }
+
     /// Either half alone is still what was heard.
     func testOneHalfIsEnough() throws {
         let recapOnly = try XCTUnwrap(HeardContext.note(recap: "Shipped and tests green.", proposal: nil))

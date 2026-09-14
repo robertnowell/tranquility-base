@@ -52,8 +52,14 @@ public enum HeardContext {
     /// no brief (a launch greeting, a summariser floor, a turn the user was
     /// deep-linked to before it was announced) dispatches the transcript
     /// byte-identical to before this existed.
-    public static func note(recap: String?, proposal: String?) -> String? {
-        let spoken = [recap, proposal]
+    ///
+    /// `rungs` are the ⌃⌃ rungs the user actually pulled for this turn, as
+    /// spoken, already in ladder order (ruled 13 Sep: "rung 0 through rung n,
+    /// concatenated into a paragraph"). They follow the announcement because
+    /// that is the order they were heard in. The MESSAGE rung is the
+    /// announcement re-heard and is never passed here.
+    public static func note(recap: String?, proposal: String?, rungs: [String] = []) -> String? {
+        let spoken = ([recap, proposal] + rungs.map { Optional($0) })
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
