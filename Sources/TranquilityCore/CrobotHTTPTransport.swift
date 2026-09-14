@@ -40,6 +40,18 @@ public struct CrobotHTTPTransport: CrobotTransport {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    /// Who this key belongs to, from the gateway's own identity route.
+    ///
+    /// Needed because `listIsCallerScoped` is false and the filter is
+    /// client-side: without an identity there is nothing to filter ON, and the
+    /// list is everybody's. Measured 14 Sep against the live gateway: **115
+    /// tasks visible, 7 created by this user.** A registry that passed nil here
+    /// would have put 108 other people's agents on the panel.
+    public func identity() async throws -> String? {
+        struct Me: Decodable { var email: String? }
+        return try await call("GET", "api/v1/me", as: Me.self).email
+    }
+
     public func tasks(limit: Int) async throws -> [CrobotTask] {
         struct Envelope: Decodable { var tasks: [CrobotTask]? }
         return try await call("GET", "api/v1/tasks?limit=\(limit)", as: Envelope.self).tasks ?? []

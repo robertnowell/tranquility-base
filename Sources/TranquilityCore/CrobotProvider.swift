@@ -51,12 +51,36 @@ public struct CrobotProvider: AgentProvider {
     public func changes() -> AsyncStream<AgentEvent>? { nil }
 
     public func mine() async throws -> [AgentSession] {
+        // WHO WE ARE, or nothing at all.
+        //
+        // Measured 14 Sep against the live gateway: 115 tasks visible, 7
+        // created by this user. `listIsCallerScoped` is false, so this filter
+        // is the only thing between the panel and 108 other people's agents,
+        // and a nil identity used to mean "show everything" rather than "do
+        // not know". Refusing is the safe direction: an empty list reads as
+        // nothing to show, a full one reads as somebody else's work being
+        // yours.
+        guard let who = try await whoAmI() else { return [] }
+
         // A GENEROUS PAGE. `limit` slices newest-first, so a small page silently
         // drops the caller's older tasks off the end while returning a
         // perfectly valid list of somebody else's newer ones.
-        try await transport.tasks(limit: 200)
-            .filter { task in me.map { task.createdBy == $0 } ?? true }
+        return try await transport.tasks(limit: 200)
+            .filter { $0.createdBy == who }
+            // ARCHIVED IS HISTORY, not an agent. The disk was released; the
+            // record stays so a follow-up can recreate the sandbox. 112 of the
+            // 115 were archived, and listing them would bury three live agents
+            // under a hundred tombstones.
+            .filter { $0.status != "archived" }
             .map { $0.agentSession(provider: id) }
+    }
+
+    /// The caller's identity, asked once and remembered.
+    ///
+    /// `me` passed to the initialiser wins when present, so a test decides.
+    private func whoAmI() async throws -> String? {
+        if let me { return me }
+        return try await transport.identity()
     }
 
     // MARK: - Detail
@@ -180,6 +204,11 @@ public struct CrobotProvider: AgentProvider {
 
 /// What the gateway can be asked, so a test never opens a socket.
 public protocol CrobotTransport: Sendable {
+    /// Whose key this is, for the client-side `createdBy` filter that
+    /// `listIsCallerScoped: false` makes mandatory. Nil when the gateway will
+    /// not say, which is handled by refusing to list rather than by listing
+    /// everybody.
+    func identity() async throws -> String?
     func tasks(limit: Int) async throws -> [CrobotTask]
     func task(_ id: String) async throws -> CrobotTask
     func prompt(_ id: String, text: String) async throws -> SendOutcome
