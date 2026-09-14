@@ -26,9 +26,10 @@ enum Wire {
         struct Time: Decodable { var created: Double?; var updated: Double? }
 
         func agentSession(provider: String) -> AgentSession {
-            AgentSession(
-                id: AgentSession.id(id, provider: provider),
-                provider: provider,
+            // `of` keeps the addressable id and the server's own id together,
+            // so nothing downstream has to reverse a one-way hash.
+            AgentSession.of(
+                id, provider: provider,
                 title: title ?? "",
                 // A LOCAL SERVER DOES NOT REPORT A STATE, and inventing one is
                 // the failed-poll bug in another costume. `/session` says a
@@ -162,9 +163,20 @@ enum Wire {
     /// One server-sent event, decoded into an `AgentEvent`, or nil for one this
     /// app has no use for.
     ///
-    /// Returning nil rather than throwing is rule 1 again: OpenCode emits many
-    /// event types and adds more, and a client that fell over on an unfamiliar
-    /// one would break on a release nobody here controls.
+    /// **Every case below was OBSERVED, not guessed.** The first draft invented
+    /// four event names from the shape of the API and got two of them wrong; a
+    /// live `opencode serve` 1.18.30 was driven through a real turn and the
+    /// frames captured, which is the only reason the stream yields anything at
+    /// all. What actually arrives, by frequency:
+    ///
+    ///     plugin.added, message.part.updated, message.part.delta,
+    ///     message.updated, session.updated, session.status, session.created,
+    ///     session.diff, session.idle, server.connected, catalog.updated,
+    ///     reference.updated, integration.updated
+    ///
+    /// Returning nil rather than throwing for the rest is rule 1: OpenCode adds
+    /// event types on a release nobody here controls, and a client that fell
+    /// over on an unfamiliar one would break on somebody else's Tuesday.
     static func event(_ data: Data, provider: String) -> AgentEvent? {
         struct Envelope: Decodable {
             var type: String?
@@ -172,13 +184,23 @@ enum Wire {
             struct Properties: Decodable {
                 var sessionID: String?
                 var info: Info?
-                var part: Message.Part?
+                var part: Part?
+                var status: Status?
                 struct Info: Decodable {
                     var id: String?
                     var sessionID: String?
                     var role: String?
-                    var time: Message.Info.Time?
                 }
+                struct Part: Decodable {
+                    var id: String?
+                    var type: String?
+                    var text: String?
+                    var messageID: String?
+                }
+                /// `{"status":{"type":"busy"}}`. THE working signal, and it is
+                /// first-hand rather than inferred from whether a message
+                /// arrived recently.
+                struct Status: Decodable { var type: String? }
             }
         }
         guard let e = try? JSONDecoder().decode(Envelope.self, from: data),
@@ -187,34 +209,64 @@ enum Wire {
         guard let raw, !raw.isEmpty else { return nil }
         let session = AgentSession.id(raw, provider: provider)
 
-        switch type {
-        case "message.updated", "message.part.updated":
-            guard let text = e.properties?.part?.text, !text.isEmpty,
-                  e.properties?.part?.type == "text",
-                  let id = e.properties?.info?.id ?? e.properties?.part?.type
-            else { return nil }
-            let role: Turn.Role = e.properties?.info?.role == "user" ? .user : .agent
-            return AgentEvent(provider: provider, session: session,
-                              kind: .said(Turn(id: id, at: Date(), role: role, text: text)))
-        case "session.idle":
-            // The turn ended. Carried as a state change rather than as speech,
-            // because the words already arrived through the message events and
-            // saying them twice is how a row reads its result out again.
-            var s = AgentSession(id: session, provider: provider)
-            s.state = .completed
+        func changed(_ state: AgentSessionState) -> AgentEvent {
+            var s = AgentSession.of(raw, provider: provider)
+            s.state = state
             return AgentEvent(provider: provider, session: session, kind: .changed(s))
+        }
+
+        switch type {
+        case "message.part.updated":
+            // The TEXT lives on the part, and so does its own id. The first
+            // draft fell back to `part.type` for the id, which made every text
+            // part in a session share the id "text".
+            guard let part = e.properties?.part, part.type == "text",
+                  let text = part.text, !text.isEmpty,
+                  let id = part.id ?? part.messageID else { return nil }
+            // `message.updated` carries the role; a part does not, so an
+            // assistant part and a user part are told apart by the message
+            // event that precedes them. Absent that, agent is the safe default
+            // for the reason `Message.turn` gives.
+            return AgentEvent(provider: provider, session: session,
+                              kind: .said(Turn(id: id, at: Date(), role: .agent, text: text)))
+
+        case "session.status":
+            // busy or idle, first-hand. `idle` means THE TURN ENDED, not that
+            // the session is over: you can send it another message. A2A has no
+            // "idle but alive", and `completed` is the closest honest word --
+            // the bucket rule then decides between "finished, unread" and
+            // "finished, read", which is exactly Paseo's attention-vs-done
+            // split.
+            switch e.properties?.status?.type {
+            case "busy": return changed(.working)
+            case "idle": return changed(.completed)
+            default: return nil
+            }
+
+        case "session.idle":
+            return changed(.completed)
+
         case "session.error":
             return AgentEvent(provider: provider, session: session,
                               kind: .failed(reason: "opencode reported a session error"))
+
+        case "session.created", "session.updated":
+            // It exists, or something about it moved. Neither says what it is
+            // doing, and inventing a state here would overwrite a `busy` that
+            // `session.status` had just reported correctly.
+            return changed(.unknown)
+
         case "question.updated", "permission.updated":
             // The REQUEST ITSELF is not on this event in a shape worth trusting
             // across versions, and it is one cheap fetch away. So this says
             // "something is asking" and the caller fetches it, which is the
             // same separation the model already insists on everywhere else.
-            var s = AgentSession(id: session, provider: provider)
-            s.state = .inputRequired
-            return AgentEvent(provider: provider, session: session, kind: .changed(s))
+            return changed(.inputRequired)
+
         default:
+            // Includes message.part.delta, deliberately: it carries a fragment
+            // of text that message.part.updated then delivers whole, and
+            // emitting both would read the same sentence out twice.
             return nil
         }
     }

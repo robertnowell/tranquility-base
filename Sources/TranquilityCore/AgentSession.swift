@@ -27,6 +27,18 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
     public typealias ID = String
 
     public var id: ID
+    /// **What the PROVIDER calls this session**, before `AgentSession.id`
+    /// reduced it to something addressable.
+    ///
+    /// Carried because that reduction is ONE-WAY: anything not already hex and
+    /// dashes is hashed, so no caller can recover the vendor's own identifier
+    /// from `id`, and every egress call needs it. Without this each provider
+    /// would keep a private reverse map, which is four copies of one fact and
+    /// four chances for it to go stale.
+    ///
+    /// Equal to `id` whenever the provider's identifier was already
+    /// addressable, which is the common case: crobot's task ids are UUIDs.
+    public var providerID: String
     /// `AgentProvider.id`. Carried on the value rather than re-derived at each
     /// use, for the reason `LiveSession.harness` documents at length: a value
     /// that knew its provider and dropped it makes every downstream caller
@@ -56,8 +68,12 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
 
     public init(id: ID, provider: String, title: String = "",
                 state: AgentSessionState = .unknown, updatedAt: Date = Date(),
-                repository: String? = nil, pullRequest: URL? = nil, url: URL? = nil) {
+                repository: String? = nil, pullRequest: URL? = nil, url: URL? = nil,
+                providerID: String? = nil) {
         self.id = id
+        // Defaulting to `id` is right rather than lazy: they ARE the same
+        // string for every provider whose identifiers are already addressable.
+        self.providerID = providerID ?? id
         self.provider = provider
         self.title = title
         self.state = state
@@ -83,6 +99,15 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
     ///
     /// The provider is mixed into the hash so two providers cannot produce the
     /// same app-side id from the same raw string.
+    /// A session built from the provider's own identifier, carrying both
+    /// halves so nothing downstream has to reverse a hash.
+    public static func of(_ raw: String, provider: String, title: String = "",
+                          state: AgentSessionState = .unknown,
+                          updatedAt: Date = Date()) -> AgentSession {
+        AgentSession(id: id(raw, provider: provider), provider: provider, title: title,
+                     state: state, updatedAt: updatedAt, providerID: raw)
+    }
+
     public static func id(_ raw: String, provider: String) -> ID {
         if ArtifactStore.isPlausibleSession(raw) { return raw }
         let digest = SHA256.hash(data: Data("\(provider)\u{0}\(raw)".utf8))

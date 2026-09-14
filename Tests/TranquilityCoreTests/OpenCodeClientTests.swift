@@ -255,12 +255,17 @@ final class OpenCodeClientTests: XCTestCase {
         XCTAssertNil(client(Fake()).events())
     }
 
+    /// Every frame below is VERBATIM from a live `opencode serve` 1.18.30
+    /// driven through a real turn, not invented. The first draft's fixtures
+    /// were guesses and two of the four event names were wrong, which is why
+    /// the stream yielded nothing at all against a real server.
     func testTheStreamYieldsSpeechAndABlockingRequest() async {
         let fake = Fake()
         fake.stream = [
-            #"{"type":"message.part.updated","properties":{"sessionID":"s","info":{"id":"m1","role":"assistant"},"part":{"type":"text","text":"Cleaning up."}}}"#,
+            #"{"type":"server.connected","properties":{}}"#,
+            #"{"type":"message.part.updated","properties":{"sessionID":"s","part":{"type":"text","text":"Cleaning up.","messageID":"msg_1","sessionID":"s","id":"prt_1"},"time":1789356676239}}"#,
             #"{"type":"question.updated","properties":{"sessionID":"s"}}"#,
-            #"{"type":"session.idle","properties":{"sessionID":"s"}}"#,
+            #"{"type":"session.status","properties":{"sessionID":"s","status":{"type":"idle"}}}"#,
         ]
         guard let stream = client(fake).events() else { return XCTFail("expected a stream") }
         var kinds: [String] = []
@@ -271,7 +276,66 @@ final class OpenCodeClientTests: XCTestCase {
             default: kinds.append("other")
             }
         }
-        XCTAssertEqual(kinds, ["said", "changed:input-required", "changed:completed"])
+        XCTAssertEqual(kinds, ["said", "changed:input-required", "changed:completed"],
+                       "server.connected carries no session and is correctly dropped")
+    }
+
+    /// A text part carries its OWN id. The first draft fell back to
+    /// `part.type`, so every text part in a session shared the id "text".
+    func testATextPartKeepsItsOwnIdRatherThanItsType() async {
+        let fake = Fake()
+        fake.stream = [
+            #"{"type":"message.part.updated","properties":{"sessionID":"s","part":{"type":"text","text":"one","messageID":"msg_1","id":"prt_1"}}}"#,
+            #"{"type":"message.part.updated","properties":{"sessionID":"s","part":{"type":"text","text":"two","messageID":"msg_1","id":"prt_2"}}}"#,
+        ]
+        var ids: [String] = []
+        for await event in client(fake).events()! {
+            if case .said(let turn) = event.kind { ids.append(turn.id) }
+        }
+        XCTAssertEqual(ids, ["prt_1", "prt_2"], "two parts must not share one id")
+    }
+
+    /// `session.status` is the first-hand working signal, rather than inferring
+    /// it from whether a message arrived recently.
+    func testSessionStatusCarriesTheWorkingSignalFirstHand() async {
+        let fake = Fake()
+        fake.stream = [
+            #"{"type":"session.status","properties":{"sessionID":"s","status":{"type":"busy"}}}"#,
+        ]
+        var states: [AgentSessionState] = []
+        for await event in client(fake).events()! {
+            if case .changed(let s) = event.kind { states.append(s.state) }
+        }
+        XCTAssertEqual(states, [.working])
+    }
+
+    /// A delta is a fragment that `message.part.updated` then delivers whole.
+    /// Emitting both reads the same sentence out twice.
+    func testAPartialDeltaIsNotSpokenTwice() async {
+        let fake = Fake()
+        fake.stream = [
+            #"{"type":"message.part.delta","properties":{"sessionID":"s","part":{"type":"text","text":"Clean","id":"prt_1"}}}"#,
+            #"{"type":"message.part.updated","properties":{"sessionID":"s","part":{"type":"text","text":"Cleaning up.","id":"prt_1"}}}"#,
+        ]
+        var said: [String] = []
+        for await event in client(fake).events()! {
+            if case .said(let turn) = event.kind { said.append(turn.text) }
+        }
+        XCTAssertEqual(said, ["Cleaning up."])
+    }
+
+    /// A session appearing is news; claiming it is idle is not. Inventing a
+    /// state here would overwrite a `busy` that session.status just reported.
+    func testASessionCreatedEventDoesNotInventAState() async {
+        let fake = Fake()
+        fake.stream = [
+            #"{"type":"session.created","properties":{"sessionID":"s","info":{"id":"s","title":"New session"}}}"#,
+        ]
+        var states: [AgentSessionState] = []
+        for await event in client(fake).events()! {
+            if case .changed(let s) = event.kind { states.append(s.state) }
+        }
+        XCTAssertEqual(states, [.unknown])
     }
 
     /// OpenCode emits many event types and adds more. Falling over on an
