@@ -113,3 +113,43 @@ final class AgentRosterTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Validated is not the same as reachable (14 Sep)
+
+extension AgentRosterTests {
+
+    /// **A tile must not sign somebody in to something the app cannot drive.**
+    /// The first draft of the roster listed five agents as though picking any
+    /// of them worked, when three of them stop somewhere short: crobot can be
+    /// seen and opened but has never had a reply delivered to a live gateway,
+    /// OpenCode reaches the app over HTTP while its ACP path is registered
+    /// nowhere, and Devin is proven at the protocol and wired to nothing.
+    func testOnlyAgentsTheAppCanActuallyDriveAreOfferable() {
+        let offerable = AgentRoster.validated.filter { $0.reach.isOfferable }.map(\.id)
+        XCTAssertEqual(Set(offerable), ["claude-code", "codex"],
+                       "an agent became offerable without the app being able to drive it")
+    }
+
+    /// And the ones that are not offerable say so rather than being dropped:
+    /// knowing crobot is nearly there is worth more than pretending it is not
+    /// in the list at all.
+    func testTheOthersAreListedWithTheirLimitStated() {
+        for entry in AgentRoster.validated where !entry.reach.isOfferable {
+            XCTAssertNotEqual(entry.reach, .whole)
+            XCTAssertFalse(entry.provenance.isEmpty,
+                           "\(entry.id) stops short and does not say where")
+        }
+        XCTAssertEqual(AgentRoster.validated.first { $0.id == "devin" }?.reach, .protocolOnly)
+        XCTAssertEqual(AgentRoster.validated.first { $0.id == "crobot" }?.reach, .readOnly)
+    }
+
+    /// The provenance must not claim more than was done. This is a specific
+    /// guard against the sentence that was actually written today — "reply
+    /// delivered through the spool" — about a reply that has only ever reached
+    /// a test double.
+    func testNoProvenanceClaimsALiveReplyThatWasNeverSent() {
+        let crobot = AgentRoster.validated.first { $0.id == "crobot" }?.provenance ?? ""
+        XCTAssertTrue(crobot.contains("fake gateway"),
+                      "crobot's evidence must say sending was never driven live")
+    }
+}

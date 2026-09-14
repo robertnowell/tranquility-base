@@ -80,6 +80,22 @@ public struct AgentRoster: Sendable {
     /// attached, because that is the whole point: *"the only things that
     /// should be in the grid are ones that we've fully validated and tested
     /// and love and work with."*
+    /// How far an agent gets from inside the app, which is a different
+    /// question from whether its protocol works.
+    public enum Reach: Sendable, Equatable {
+        /// Pick it, drive it, reply to it, start a new one.
+        case whole
+        /// It appears and can be opened, but this app cannot yet drive it.
+        case readOnly
+        /// The protocol is proven and nothing in the app is wired to it.
+        case protocolOnly
+
+        /// **Only `whole` may be offered as a choice.** Anything less would
+        /// put a tile in front of the user that signs them in and then cannot
+        /// use what they signed into.
+        public var isOfferable: Bool { self == .whole }
+    }
+
     public struct Validated: Sendable {
         public let id: String
         public let name: String
@@ -87,26 +103,44 @@ public struct AgentRoster: Sendable {
         /// When, and by what evidence. Prose, read by people, so that a row
         /// nobody can vouch for any more is obvious on sight.
         public let provenance: String
+        /// How far this agent actually gets from inside the app today.
+        public let reach: Reach
 
-        public init(id: String, name: String, glyph: String, provenance: String) {
-            self.id = id; self.name = name; self.glyph = glyph; self.provenance = provenance
+        public init(id: String, name: String, glyph: String,
+                    provenance: String, reach: Reach) {
+            self.id = id; self.name = name; self.glyph = glyph
+            self.provenance = provenance; self.reach = reach
         }
     }
 
+    /// **`provenance` states what was PROVEN, and `reach` states how far it
+    /// gets from the app.** They are different questions and the first draft
+    /// of this list conflated them, which is how "reply delivered through the
+    /// spool" came to be written about a reply that has only ever reached a
+    /// test double. Protocol-level validation is not end-to-end reach, and a
+    /// tile that implies otherwise is a promise this app cannot keep.
     public static let validated: [Validated] = [
         .init(id: "claude-code", name: "Claude Code", glyph: "✳",
-              provenance: "The original harness. In daily use since the first build."),
+              provenance: "The original harness. In daily use since the first build.",
+              reach: .whole),
         .init(id: "codex", name: "Codex", glyph: "◆",
-              provenance: "Second harness, shipped 4 Sep 2026."),
+              provenance: "Second harness, shipped 4 Sep 2026. In daily use.",
+              reach: .whole),
         .init(id: "crobot", name: "crobot", glyph: "◇",
               provenance: "13 Sep 2026: live gateway, 115 tasks filtered to the 1 that is "
-                        + "mine, row drawn, reply delivered through the spool."),
+                        + "mine, row drawn green, its page opens. Sending has been driven "
+                        + "against a fake gateway only — never against the live one.",
+              reach: .readOnly),
         .init(id: "opencode", name: "OpenCode", glyph: "○",
-              provenance: "14 Sep 2026: ACP end to end, and it edited a file on disk "
-                        + "(print('hello') -> print('goodbye')) through tool calls."),
+              provenance: "14 Sep 2026: over ACP it edited a file on disk "
+                        + "(print('hello') -> print('goodbye')) through tool calls. The "
+                        + "app reaches it over HTTP; the ACP path is not registered.",
+              reach: .readOnly),
         .init(id: "devin", name: "Devin", glyph: "▲",
               provenance: "14 Sep 2026: ACP handshake, session and a whole prompt turn, "
-                        + "with no code changes beyond the catalog row."),
+                        + "with no code changes beyond the catalog row. Proven at the "
+                        + "protocol only — ACPProvider is registered nowhere.",
+              reach: .protocolOnly),
     ]
 
     // MARK: - Assembling the grid
