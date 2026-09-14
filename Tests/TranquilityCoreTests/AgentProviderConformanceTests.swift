@@ -44,8 +44,9 @@ struct ConformanceStub: AgentProvider, Sendable {
     func transcript(_ id: AgentSession.ID) async throws -> [Turn] { [] }
     func send(_ text: String, to id: AgentSession.ID) async throws -> SendOutcome { .accepted }
     func respond(to request: PendingRequest, with response: Response) async throws -> SendOutcome {
-        if case .option(let chosen) = response,
-           !request.options.contains(where: { $0.id == chosen }) {
+        if let chosen = response.answers.first?.first,
+           let offered = request.questions.first?.options, !offered.isEmpty,
+           !offered.contains(where: { $0.id == chosen }) {
             return .failed(reason: "no such option: \(chosen)")
         }
         return .accepted
@@ -114,7 +115,7 @@ final class AgentProviderConformanceTests: XCTestCase {
             if case .asks(let request) = event.kind { asked = request }
         }
         XCTAssertNotNil(asked, "a blocking request has nowhere to land in the event model")
-        XCTAssertFalse(asked?.options.isEmpty ?? true,
+        XCTAssertFalse(asked?.questions.first?.options.isEmpty ?? true,
                        "a permission request with no options cannot be answered structurally")
     }
 

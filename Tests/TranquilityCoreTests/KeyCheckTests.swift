@@ -118,7 +118,11 @@ final class KeyCheckTests: XCTestCase {
         XCTAssertEqual(header(.assemblyAIAPIKey, "Authorization"), "probe")
         XCTAssertEqual(header(.openAIAPIKey, "Authorization"), "Bearer probe")
         XCTAssertEqual(header(.crobotAPIKey, "Authorization"), "Bearer probe")
-        XCTAssertEqual(header(.openCodePassword, "Authorization"), "Bearer probe")
+        // BASIC, with the literal username `opencode`. The gateway's own proxy
+        // sets exactly this when it forwards to a sandbox, and sending Bearer
+        // would report a correct password as rejected.
+        XCTAssertEqual(header(.openCodePassword, "Authorization"),
+                       "Basic " + Data("opencode:probe".utf8).base64EncodedString())
     }
 
     /// An unconfigured provider yields NO request, which `verify` turns into
