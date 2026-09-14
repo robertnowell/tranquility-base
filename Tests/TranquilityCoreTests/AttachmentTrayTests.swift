@@ -27,8 +27,17 @@ final class AttachmentTrayTests: XCTestCase {
         tray.stage("/shots/two.png", session: "launch:abc")
         tray.adopt(stagingKey: "launch:abc", asSession: "S")
         XCTAssertEqual(tray.staged(for: "S"), ["/shots/one.png", "/shots/two.png"])
-        XCTAssertEqual(tray.staged(for: "launch:abc"), [],
-                       "the provisional key is spent; nothing can stage against it again")
+        // This used to assert the opposite — "the provisional key is spent;
+        // nothing can stage against it again" — and that assertion WAS the
+        // bug. Spent meant addressable-but-empty: the panel's drop target
+        // goes on naming the key for as long as it takes the next ambient
+        // tick to re-derive one, so a screenshot dropped a second after
+        // registration landed in a hole and was never sent, never shown and
+        // never logged. Adoption is a rename now, so the old name still
+        // reaches the agent (14 Sep).
+        XCTAssertEqual(tray.staged(for: "launch:abc"),
+                       ["/shots/one.png", "/shots/two.png"],
+                       "the retired key and the session are one tray")
     }
 
     func testAdoptionAppendsAndDeduplicatesLikeAReDrop() {
@@ -40,12 +49,18 @@ final class AttachmentTrayTests: XCTestCase {
         XCTAssertEqual(tray.staged(for: "S"), ["/shots/one.png", "/shots/two.png"])
     }
 
-    func testAdoptingAKeyNothingWasDroppedOnChangesNothing() {
+    func testAdoptingAKeyNothingWasDroppedOnStagesNothingButIsStillRecorded() {
         var tray = AttachmentTray()
         tray.stage("/a/one.png", session: "S")
-        let before = tray
         tray.adopt(stagingKey: "launch:never", asSession: "S")
-        XCTAssertEqual(tray, before)
+        // No chips move: there were none. But the alias IS recorded, and that
+        // is the narrow half of the same defect — drop nothing while the
+        // agent comes up, drop one a second after it registers, and without
+        // the alias that drop has nowhere to go. `adopt` used to return early
+        // on an empty key and record nothing at all.
+        XCTAssertEqual(tray.staged(for: "S"), ["/a/one.png"])
+        XCTAssertTrue(tray.stage("/a/late.png", session: "launch:never"))
+        XCTAssertEqual(tray.staged(for: "S"), ["/a/one.png", "/a/late.png"])
     }
 
     func testReDropOfTheSamePathIsOneChip() {
@@ -206,5 +221,89 @@ final class AttachmentTrayTests: XCTestCase {
         XCTAssertEqual(store.staged(for: "A"), ["/a/one.png"])
         store.clearStaged(session: "A")
         XCTAssertEqual(store.staged(for: "A"), [])
+    }
+}
+
+// MARK: - Adoption is a rename, not a deletion (14 Sep)
+
+/// The case neither suite made, and the one that lost a screenshot.
+///
+/// `selftest cardPaste` and `tray-teardown-churn` both pass twenty-odd
+/// assertions on every deploy, and neither crosses an adoption: they stage
+/// against a fixed key and never run a registration underneath a live drop
+/// target. The tray's own tests covered `adopt`; none covered STAGING AFTER
+/// one. Measured in Robert's log: a screenshot dropped 0.9 s after
+/// registration staged under `launch:b`, a key `adopt` had already emptied
+/// and would never visit again. Two staged, one delivered.
+final class AttachmentTrayAdoptionTests: XCTestCase {
+
+    func testAFragmentStagedAfterAdoptionStillReachesTheAgent() {
+        var tray = AttachmentTray()
+        tray.stage("\"/tmp/one.png\"", session: "launch:abc")
+        tray.adopt(stagingKey: "launch:abc", asSession: "sess-1")
+        // The drop that used to vanish: same key, one second too late.
+        XCTAssertTrue(tray.stage("\"/tmp/two.png\"", session: "launch:abc"))
+        XCTAssertEqual(tray.staged(for: "sess-1"),
+                       ["\"/tmp/one.png\"", "\"/tmp/two.png\""],
+                       "both screenshots must ride, whichever key they arrived on")
+    }
+
+    func testAdoptionIsRecordedEvenWhenNothingWasStagedYet() {
+        // The narrower miss: you drop NOTHING while the agent comes up, and
+        // one a second after it registers. `adopt` used to return early on an
+        // empty key, so no alias existed and that drop had nowhere to go.
+        var tray = AttachmentTray()
+        tray.adopt(stagingKey: "launch:abc", asSession: "sess-1")
+        XCTAssertTrue(tray.stage("\"/tmp/late.png\"", session: "launch:abc"))
+        XCTAssertEqual(tray.staged(for: "sess-1"), ["\"/tmp/late.png\""])
+    }
+
+    func testTheRetiredKeyAndTheSessionAreOneTray() {
+        var tray = AttachmentTray()
+        tray.stage("\"/tmp/one.png\"", session: "launch:abc")
+        tray.adopt(stagingKey: "launch:abc", asSession: "sess-1")
+        // Reading, de-duplicating and un-staging all follow the alias, so the
+        // card cannot show one tray while a send reads another.
+        XCTAssertEqual(tray.staged(for: "launch:abc"), tray.staged(for: "sess-1"))
+        XCTAssertFalse(tray.stage("\"/tmp/one.png\"", session: "launch:abc"),
+                       "a re-drop through the old key is still one chip")
+        tray.unstage("\"/tmp/one.png\"", session: "launch:abc")
+        XCTAssertTrue(tray.staged(for: "sess-1").isEmpty)
+    }
+
+    func testASnapshotThroughTheRetiredKeyRidesUnderTheRealSession() {
+        var tray = AttachmentTray()
+        tray.stage("\"/tmp/one.png\"", session: "launch:abc")
+        tray.adopt(stagingKey: "launch:abc", asSession: "sess-1")
+        XCTAssertEqual(tray.snapshot(session: "launch:abc", utteranceId: "u1"),
+                       ["\"/tmp/one.png\""])
+        // And a failed send returns them to the SESSION, not to the dead key.
+        tray.resolve(utteranceId: "u1", landed: false)
+        XCTAssertEqual(tray.staged(for: "sess-1"), ["\"/tmp/one.png\""])
+    }
+
+    func testTwoLaunchesNeverShareATray() {
+        // The leak the per-session tray exists to prevent, re-checked now
+        // that keys can alias: one client's screenshot must never follow the
+        // other's alias into the wrong transcript.
+        var tray = AttachmentTray()
+        tray.stage("\"/tmp/a.png\"", session: "launch:aaa")
+        tray.stage("\"/tmp/b.png\"", session: "launch:bbb")
+        tray.adopt(stagingKey: "launch:aaa", asSession: "sess-a")
+        tray.adopt(stagingKey: "launch:bbb", asSession: "sess-b")
+        XCTAssertEqual(tray.staged(for: "sess-a"), ["\"/tmp/a.png\""])
+        XCTAssertEqual(tray.staged(for: "sess-b"), ["\"/tmp/b.png\""])
+    }
+
+    func testEndingASessionRetiresItsAliasesToo() {
+        var tray = AttachmentTray()
+        tray.adopt(stagingKey: "launch:abc", asSession: "sess-1")
+        tray.stage("\"/tmp/one.png\"", session: "launch:abc")
+        tray.sessionEnded("sess-1")
+        XCTAssertTrue(tray.staged(for: "sess-1").isEmpty)
+        // The retired key must not go on collecting fragments for an agent
+        // nobody can reach; it is its own tray again, not a pipe to a corpse.
+        tray.stage("\"/tmp/two.png\"", session: "launch:abc")
+        XCTAssertTrue(tray.staged(for: "sess-1").isEmpty)
     }
 }

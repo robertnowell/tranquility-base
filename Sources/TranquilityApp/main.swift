@@ -1059,8 +1059,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             lastStatusLine = via == .paste
                 ? "pasted to \(target.label)"
                 : "\(staged) file\(staged == 1 ? "" : "s") attached to \(target.label)"
+            // The RESOLVED session, so a drop in the seconds after a launch
+            // registers logs the agent it actually reached rather than the
+            // retired `launch:` key it was addressed to.
+            let landedOn = coordinator.attachments.realSession(target.sessionId)
             Permissions.log("\(via.rawValue): staged \(staged) for "
-                            + "\(target.sessionId.prefix(8)) (\(total) total)")
+                            + "\(landedOn.prefix(8)) (\(total) total)")
             // A drop during the undo window changes THIS message, not a
             // mysterious future one. Core binds the newly staged fragments to the
             // pending utterance; the HUD refreshes the exact text that will be
