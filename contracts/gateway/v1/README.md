@@ -125,3 +125,15 @@ provider credentials/prices, panel/onboarding composition, retention, operationa
 reconciliation and payment flows are NOT proven by fixtures. No public launch
 or managed audio release is implied. Changes discovered by integration must
 revise the contract explicitly, with conformance fixtures, not silently diverge.
+
+## Summariser prompt
+
+`summary.prompt.txt` is the system prompt the app sends the model, verbatim.
+It is one file on purpose (ruled 2026-09-14): a provider behind this gateway
+uses this text and nothing else, so the app and the gateway cannot drift.
+`SummaryPromptContractTests` holds the app's Swift literal to this file byte
+for byte. The user turn is assembled per request from the frozen `input`
+fields (see `AnthropicSummaryProvider.userPrompt` in the app); a provider
+either receives it compiled or ports that function unchanged. The `brief` in
+`summary.schema.json` is the flat shape; the app also accepts the nested
+`spoken`/`written` shape the prompt asks for, and a provider may return either.

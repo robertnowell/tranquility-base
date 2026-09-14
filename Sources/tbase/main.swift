@@ -64,6 +64,37 @@ func usage() -> Never {
     exit(1)
 }
 
+/// SplitMix64: a seeded generator so `replay-log --seed` picks the same
+/// turns twice, which is what makes two replays comparable.
+struct SeededGenerator: RandomNumberGenerator {
+    var state: UInt64
+    init(seed: UInt64) { state = seed &+ 0x9E37_79B9_7F4A_7C15 }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+}
+
+/// One historical summariser call, read back from the model-call log.
+struct LoggedCall {
+    let at: String
+    let user: String
+    let system: String
+    let response: String
+    /// The Anthropic response body's text content, joined, as `brief(for:)`
+    /// itself extracts it.
+    var responseText: String {
+        guard let json = try? JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any],
+              let content = json["content"] as? [[String: Any]] else { return "" }
+        return content.filter { ($0["type"] as? String) == "text" }
+            .compactMap { $0["text"] as? String }.joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else { usage() }
 
@@ -1350,6 +1381,104 @@ case "reconcile":
         }
         try Secrets.write(key, value: value)
         print("stored \(key.rawValue) in the login keychain (service: \(Secrets.service))")
+
+    case "replay-log":
+        // tbase replay-log [N] [--seed S] [--since YYYY-MM-DD]
+        //
+        // Replay N random REAL summariser calls under THIS build's system
+        // prompt. The user prompt is the context production actually
+        // compiled for that turn, read back verbatim from the model-call
+        // log; the system prompt is compiled here from Summarizer.swift; the
+        // call is the production call (`complete`), not logged. Output is
+        // JSON on stdout: per turn, the exact input, the historical response
+        // (what the prompt of that day produced) and the fresh one.
+        let n = args.count > 1 ? Int(args[1]) ?? 10 : 10
+        var seed: UInt64 = 7
+        if let i = args.firstIndex(of: "--seed"), i + 1 < args.count { seed = UInt64(args[i + 1]) ?? 7 }
+        var since = "2026-09-07"
+        if let i = args.firstIndex(of: "--since"), i + 1 < args.count { since = args[i + 1] }
+        // --dry: compile the prompts for the picked turns and print them, no
+        // model call. The point of the command is to READ what the model
+        // receives; that should not cost ten calls.
+        let dry = args.contains("--dry")
+        guard let raw = try? String(contentsOf: ModelCallLog.url, encoding: .utf8) else {
+            print("no model-call log at \(ModelCallLog.url.path)"); break
+        }
+        var pool: [LoggedCall] = []
+        for line in raw.split(separator: "\n") {
+            guard let d = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let at = d["at"] as? String, at >= since,
+                  (d["status"] as? Int) == 200,
+                  let user = d["user"] as? String, let system = d["system"] as? String,
+                  let response = d["response"] as? String,
+                  user.hasPrefix("Project: "),
+                  // A digit-grounding retry carries a corrective note; the
+                  // first attempt is the turn, the retry is a repair of it.
+                  !user.contains("Your previous reply spoke the number")
+            else { continue }
+            pool.append(LoggedCall(at: at, user: user, system: system, response: response))
+        }
+        // --at T1,T2,...: exactly these calls, by their log timestamp, in
+        // that order. A seeded shuffle over a pool that keeps growing picks
+        // different turns tomorrow; a list of timestamps picks the same ones.
+        var picked: [LoggedCall]
+        if let i = args.firstIndex(of: "--at"), i + 1 < args.count {
+            let wanted = args[i + 1].split(separator: ",").map(String.init)
+            picked = wanted.compactMap { at in pool.first { $0.at == at } }
+        } else {
+            var rng = SeededGenerator(seed: seed)
+            picked = Array(pool.shuffled(using: &rng).prefix(n))
+        }
+        FileHandle.standardError.write(Data("pool \(pool.count) calls since \(since); replaying \(picked.count), seed \(seed)\n".utf8))
+        let provider = AnthropicSummaryProvider()
+        let encoder = JSONEncoder()
+        func dict(_ brief: SessionBrief?) -> Any {
+            guard let brief, let data = try? encoder.encode(brief),
+                  let obj = try? JSONSerialization.jsonObject(with: data) else { return NSNull() }
+            return obj
+        }
+        var out: [[String: Any]] = []
+        for (i, call) in picked.enumerated() {
+            let label = call.user.split(separator: "\n", maxSplits: 1).first
+                .map { String($0.dropFirst("Project: ".count)) } ?? "?"
+            let marker = "The agent's final message this turn:\n"
+            let source = call.user.range(of: marker).map { String(call.user[$0.upperBound...]) } ?? call.user
+            let request = SummaryRequest(lastAssistantMessage: source, projectLabel: label)
+            let system = AnthropicSummaryProvider.systemPrompt(projectLabel: label)
+            let historicalText = call.responseText
+            let historical = try? AnthropicSummaryProvider.parse(historicalText, request: request)
+            var fresh: [String: Any] = [:]
+            if dry {
+                fresh = ["skipped": true]
+            } else {
+                do {
+                let completion = try await provider.complete(system: system, user: call.user, log: false)
+                let brief = try? AnthropicSummaryProvider.parse(completion.text, request: request)
+                fresh = ["text": completion.text, "brief": dict(brief), "elapsedMs": completion.elapsedMs]
+                FileHandle.standardError.write(Data("\(i + 1)/\(picked.count) \(label) \(completion.elapsedMs)ms\n".utf8))
+            } catch {
+                fresh = ["error": "\(error)"]
+                FileHandle.standardError.write(Data("\(i + 1)/\(picked.count) \(label) FAILED \(error)\n".utf8))
+            }
+            }
+            out.append([
+                "index": i + 1, "at": call.at, "projectLabel": label,
+                "user": call.user,
+                "system": system,
+                "historicalSystem": call.system,
+                "historicalSystemChanged": call.system != system,
+                "historical": ["text": historicalText, "brief": dict(historical)],
+                "fresh": fresh,
+            ])
+        }
+        let result: [String: Any] = [
+            "seed": seed, "since": since, "poolSize": pool.count,
+            "systemPrompt": AnthropicSummaryProvider.systemPrompt(projectLabel: "{project_label}"),
+            "model": provider.model,
+            "turns": out,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
+        print(String(data: data, encoding: .utf8) ?? "{}")
 
     case "summarize":
         guard args.count > 1 else { usage() }

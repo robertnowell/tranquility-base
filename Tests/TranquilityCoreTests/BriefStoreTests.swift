@@ -36,6 +36,9 @@ final class BriefStoreTests: XCTestCase {
                 nextStep: "run the migration",
                 question: "Proceed?",
                 risk: "migration drops a legacy table",
+                rationale: "We propose the migration to ship the Klaviyo export because "
+                    + "staging is clean. We need to be careful: the migration drops a "
+                    + "legacy table.",
                 recap: "promotions: export pipeline green.",
                 proposal: "Run the migration next. Proceed?")
         }
@@ -157,8 +160,8 @@ final class BriefStoreTests: XCTestCase {
         XCTAssertEqual(speech.spoken.count, 1)
     }
 
-    /// Depth-1 amnesia, fixed: the ⌃⌃ pull composes from the restored brief's
-    /// card fields after a restart.
+    /// Depth-1 amnesia, fixed: the ⌃⌃ WHY rung speaks the restored brief's
+    /// rationale after a restart, with zero model calls.
     func testDepthOneWorksFromTheStoredBriefAcrossRestart() async throws {
         let coordinator = makeCoordinator(store: store, provider: CountingCardSummary())
         try append()
@@ -169,11 +172,11 @@ final class BriefStoreTests: XCTestCase {
         guard case .spoke(let announcement) = try await restarted.announceNext() else {
             return XCTFail("expected an announcement")
         }
-        let depthOne = SpokenComposition.depthOneSpokenText(
-            for: announcement, allowing: ["Klaviyo"])
+        let depthOne = try XCTUnwrap(SpokenComposition.whyRung(
+            for: announcement, allowing: ["Klaviyo"]))
         XCTAssertEqual(after.calls, 0)
         XCTAssertTrue(depthOne.text.contains("ship the Klaviyo export"),
-                      "card fields survive the restart: \(depthOne.text)")
+                      "the rationale survives the restart: \(depthOne.text)")
         XCTAssertTrue(depthOne.text.contains("migration drops a legacy table"))
     }
 
