@@ -156,13 +156,27 @@ public enum KeyCheck {
             request = URLRequest(url: url)
             request.setValue("Bearer \(value)", forHTTPHeaderField: "Authorization")
         case .crobotAPIKey:
-            // `/api/auth/me`, because it is the ONLY route crobot calls with
-            // this key and the only one the key is minted for. Verifying
-            // against a permission the product does not use is not
-            // verification, it is a second thing to get wrong: that is the
-            // whole ElevenLabs lesson above, where a perfectly good
-            // text-to-speech key was reported rejected by an endpoint wanting
-            // `user_read`.
+            // `/api/v1/me` ON THE GATEWAY, which is NOT `/api/auth/me`.
+            //
+            // `/api/auth/me` is JARVIS's route. The gateway calls it
+            // internally to turn a key into a user (`gateway/src/jarvis.ts:82`)
+            // and does not serve it. Its own identity route is `/me`, mounted
+            // at both `/api` and `/api/v1` (`gateway/src/routes.ts:473`,
+            // `1069-1070`).
+            //
+            // Measured live against crobot.coframe.com, 13 Sep 2026, and the
+            // wrong path fails in the direction that hides the mistake: the
+            // auth middleware runs on `/api/*`, so a BAD key is correctly
+            // refused 401 there, while a GOOD key falls through to the single
+            // page app and comes back **200 with HTML**. The check would have
+            // read "checked, working" off a page, having proved only that the
+            // credential authenticates and nothing about whether an identity
+            // resolves behind it.
+            //
+            // `/api/v1/me` passes the same auth AND org-scope middleware chain
+            // as `/api/v1/tasks`, so a pass is evidence about the calls the
+            // provider will really make. That is the ElevenLabs lesson above,
+            // applied: verify against the route the product uses.
             //
             // Nil when no base URL is configured, which `verify` turns into
             // `.unreachable` -- the honest verdict, since an unconfigured
@@ -170,7 +184,7 @@ public enum KeyCheck {
             // `.rejected`, and the difference is somebody rotating a key that
             // was fine.
             guard let base = providerBase("crobot") else { return nil }
-            request = URLRequest(url: base.appendingPathComponent("api/auth/me"))
+            request = URLRequest(url: base.appendingPathComponent("api/v1/me"))
             request.setValue("Bearer " + value, forHTTPHeaderField: "Authorization")
         case .openCodePassword:
             // A local server, and its own liveness is most of what a check
