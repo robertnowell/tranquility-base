@@ -1842,6 +1842,29 @@ final class StatusHUD: NSObject {
         Permissions.log("capture: ended (\(reason))")
     }
 
+    /// What the grid last painted, whoever painted it.
+    ///
+    /// The ambient tick repaints only on a content change, and the guard for
+    /// that used to be the tick's OWN copy of what it last drew. Every other
+    /// caller of `showIdle(rows:)` — the return to the grid after a capture,
+    /// a card standing down, a drill — painted without telling it. So a paint
+    /// made under a transient state stuck: 14 Sep, a 0.68 s ⌥ press with no
+    /// speech painted an agent blue through the reply-in-flight overlay, the
+    /// overlay closed, and the tick compared fresh green rows with the green
+    /// paint IT remembered from 53 minutes earlier, found no change, and left
+    /// the blue on screen for 26 minutes. The row data was right the whole
+    /// time; the screen was never asked to catch up.
+    ///
+    /// One writer, here, on the one path that paints. Nil until the grid has
+    /// been painted at all, so the first tick always paints.
+    private(set) var shownRows: [SessionRow]?
+
+    /// Whether the tick owes the grid a paint: the rows differ from what is
+    /// on screen. Asked of the screen, not of the tick's memory of it.
+    func gridNeedsRepaint(_ rows: [SessionRow]) -> Bool {
+        rows != shownRows
+    }
+
     /// The idle face IS the grid (WS-B, ruled): one row per live session,
     /// callsign + lamp + short topic. Row tap invites that session. The old
     /// count-pill and hint text are gone as the default face; the app's own name
@@ -1867,6 +1890,9 @@ final class StatusHUD: NSObject {
         guard transition(to: .idle(waiting: waiting), because: reason)
         else { return }
         currentTarget = nil; currentEventId = nil
+        // Recorded after the guard, so a refused paint is not certified as
+        // one: the tick retries it instead.
+        shownRows = rows
 
         if rows.isEmpty {
             // An empty room says two different things depending on how long it

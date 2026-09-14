@@ -2179,3 +2179,51 @@ extension StatusHUD {
         slateInterruptedByAGesture = false
     }
 }
+
+extension StatusHUD {
+
+    /// A paint from any path is the paint the tick compares against (14 Sep).
+    ///
+    /// The shape of the bug: something other than the tick paints the grid
+    /// under a transient state, the state passes, and the tick, comparing
+    /// fresh rows with its own last paint rather than with the screen, sees
+    /// no change and never redraws. A blue lamp sat on an idle agent for 26
+    /// minutes that way, painted by the no-speech return to the grid while the
+    /// reply-in-flight overlay was open for a 0.68 s ⌥ press.
+    ///
+    /// Asked of the truth, per the empty-grid ruling (#422): the drill paints a
+    /// variant of the real rows through the bypass path, checks the tick would
+    /// now repaint the truth, and puts the truth back.
+    func paintGuardDrill() {
+        guard let truth = gridRows?() else {
+            SelfTest.report("paintGuard", [("realRowsAvailable", false)])
+            return
+        }
+        // A variant that differs in row DATA, which is what the guard compares.
+        // With no real rows at all, one fixture row is the variant, and the
+        // restore paints the truthful empty grid.
+        let variant: [SessionRow]
+        if let first = truth.first {
+            variant = [SessionRow(id: first.id, name: first.name,
+                                  aux: "paint guard drill", lamp: .working)]
+                + truth.dropFirst()
+        } else {
+            variant = [SessionRow(id: "paint-guard-drill", name: "paint guard drill",
+                                  aux: "drill", lamp: .working)]
+        }
+        // The bypass path: a direct paint, not the tick.
+        showIdle(rows: variant, because: "paint guard drill: bypass paint")
+        let recorded = shownRows == variant
+        let tickWouldRepaint = gridNeedsRepaint(truth)
+        let unchangedStaysQuiet = !gridNeedsRepaint(variant)
+        // The truth, back on the panel, the way the tick would put it.
+        showIdle(rows: truth, because: "paint guard drill: truth restored")
+        let restored = !gridNeedsRepaint(truth)
+        SelfTest.report("paintGuard", [
+            ("bypassPaintIsRecorded", recorded),
+            ("tickSeesTheBypassPaint", tickWouldRepaint),
+            ("unchangedRowsStayQuiet", unchangedStaysQuiet),
+            ("truthRestored", restored),
+        ])
+    }
+}
