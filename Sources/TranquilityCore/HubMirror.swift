@@ -504,11 +504,18 @@ public final class HubMirror: @unchecked Sendable {
         let sessions = knownSessions()
         let live = liveSessions()
         var cursor = sync { state.turnCursor }
+        // What is left to claim, per session, for the whole run. Read once per
+        // session and emptied as briefs claim from it, so two briefs can never
+        // be sent the same words -- the failure a per-batch join would produce
+        // silently, because a session's briefs routinely span two batches.
+        var unclaimed: [String: [TurnText.Turn]] = [:]
         while true {
             guard let batch = try? store.briefs(after: cursor, limit: 100), !batch.isEmpty else { break }
             let turns: [[String: Any]] = batch.compactMap { b in
                 guard !Self.isRobot(sessions[b.sessionId]) else { return nil }
-                return Self.turnPayload(b, session: sessions[b.sessionId], live: live[b.sessionId])
+                let said = Self.claimWords(&unclaimed, for: b)
+                return Self.turnPayload(b, session: sessions[b.sessionId], live: live[b.sessionId],
+                                        said: said)
             }
             if !turns.isEmpty {
                 do {
@@ -545,9 +552,47 @@ public final class HubMirror: @unchecked Sendable {
         SessionDiscovery.isHeadless(transcriptPath: session?.transcriptPath)
     }
 
+    /// How many turns of a session's transcript the mirror reads.
+    ///
+    /// The tail, and only the tail: `TurnText` reads bytes from the end of a
+    /// transcript, so this is the natural bound on which turns carry their
+    /// words rather than a policy somebody has to remember. It matches the
+    /// hub's own full tier, which is what prints them.
+    static let wordsForTurns = 12
+
+    /// The words this brief summarises, claimed from its session's transcript.
+    ///
+    /// A brief is written when a turn ENDS, so the transcript turn it covers
+    /// is the last one that OPENED at or before it -- the same rule the panel's
+    /// own hub files by, and for the same reason: two timestamps decide it,
+    /// where counting backwards from the end cannot, since the tail does not
+    /// know how many turns came before it. Claimed once and removed, so no two
+    /// briefs are sent the same words.
+    ///
+    /// A session whose transcript is gone, rotated, or too old to bother
+    /// reading returns nothing, and the turn goes without them.
+    static func claimWords(_ unclaimed: inout [String: [TurnText.Turn]],
+                           for b: StoredBrief) -> TurnText.Turn? {
+        let at = Date(timeIntervalSince1970: Double(b.atMs) / 1000)
+        if unclaimed[b.sessionId] == nil {
+            // Old turns are past the tail anyway; reading a transcript for
+            // them is disk work with a guaranteed empty answer, and a first
+            // drain walks every session this Mac has ever run.
+            unclaimed[b.sessionId] = at > Date().addingTimeInterval(-30 * 86_400)
+                ? TurnText.forSession(b.sessionId, limit: wordsForTurns) : []
+        }
+        guard let pick = unclaimed[b.sessionId]?.enumerated()
+            .filter({ ($0.element.at).map { $0 <= at } == true })
+            .max(by: { $0.element.at! < $1.element.at! })
+        else { return nil }
+        unclaimed[b.sessionId]?.remove(at: pick.offset)
+        return pick.element.isEmpty ? nil : pick.element
+    }
+
     /// One turn, in the shape the hub keys on: `source_key` is the session and
     /// the event row, so the same brief twice is one row there.
-    static func turnPayload(_ b: StoredBrief, session: WaitingSession?, live: LiveSession?) -> [String: Any] {
+    static func turnPayload(_ b: StoredBrief, session: WaitingSession?, live: LiveSession?,
+                            said: TurnText.Turn? = nil) -> [String: Any] {
         var json: [String: Any] = [
             "session_id": b.sessionId,
             "source_key": "\(b.sessionId):\(b.eventRowid)",
@@ -559,6 +604,12 @@ public final class HubMirror: @unchecked Sendable {
         put("findings", b.findings); put("solution", b.solution); put("rationale", b.rationale)
         put("next_step", b.nextStep); put("question", b.question); put("risk", b.risk)
         put("branch", b.branch)
+        // The turn itself, under the summary of it: what the person asked and
+        // what the agent said in prose, copied from the transcript. No model
+        // is involved -- `TurnText` is a parser -- and tool calls never appear,
+        // which is what makes a transcript readable at all.
+        put("prompt", said?.prompt)
+        put("prose", said?.prose)
         put("cwd", session?.cwd)
         put("agent_title", displayName(session: session, live: live, sessionId: b.sessionId, callsign: b.callsign))
         return json
