@@ -203,49 +203,31 @@ public enum TmuxOwnership {
         return pane(forTty: tty)
     }
 
-    /// The pane a session is in, asked of the session's own registry entry
-    /// before anything is inferred.
+    /// The pane a session is in, as the ledger verifies it now.
     ///
-    /// The tty join below is three hops — pid to tty via `ps`, tty to pane via
-    /// the server's inventory — and each hop can be stale or recycled while
-    /// the session sits there perfectly alive. That is where "the session is
-    /// right here and it couldn't open it" came from on 25 Aug: a pid twelve
-    /// seconds out of date, and a button that answered "couldn't find a
-    /// terminal for process 49931" about a pane one keystroke away.
-    ///
-    /// Claude Code writes the pane down itself. When it has, that is the
-    /// answer; when it hasn't — a Codex session, a session too old to
-    /// register — the join still runs, unchanged. A better source where one
-    /// exists, never a second mechanism.
-    ///
-    /// The registry's pane id is still checked against the live server before
-    /// it is returned: a registry file outlives the pane it names, and this
-    /// type's whole contract (19 Aug) is that a pane address is resolved from
-    /// LIVE inventory and never from a stored string.
+    /// Until 15 Sep this read Claude Code's registry for a pane id and
+    /// matched that id alone against live inventory, then fell back to a
+    /// pid-to-tty join. A pane id is unique only per server: a TEST build's
+    /// `%1` matched the real app's `%1` and a reply was typed into a
+    /// stranger. `AgentLedger.locate` is the one resolver now (its doc
+    /// comment carries the ruling); this is the nil-collapsing view of it
+    /// for callers that only need an address. Anything that DECIDES on a
+    /// miss must ask `locate` itself and read the whole answer.
     public static func pane(forSessionId sessionId: String, pid: Int?) -> TmuxPaneAddress? {
-        if let entry = SessionRegistry.entry(forSessionId: sessionId),
-           let paneId = entry.paneId,
-           let address = paneById(paneId) {
-            return address
-        }
-        guard let pid else { return nil }
-        return pane(forPid: pid)
+        AgentLedger.locate(sessionId: sessionId, pid: pid).pane
     }
 
-    /// Confirm a pane id against live inventory, and fill in the rest of its
-    /// address from what the server says rather than from the file.
-    static func paneById(_ paneId: String) -> TmuxPaneAddress? {
+    /// Confirm a session-and-pane pair against live inventory, and fill in
+    /// the rest of its address from what the server says rather than from
+    /// the file. Both halves are required: the session name is what the
+    /// launcher minted and is unique for a server's life; the pane id is
+    /// what every tmux command addresses; and neither alone names one pane
+    /// across two servers.
+    static func pane(sessionName: String, paneId: String) -> TmuxPaneAddress? {
         for socket in sockets {
-            guard case .success(let out) = Tmux.run(
-                ["list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_tty}"],
-                socket: socket, timeout: 3)
-            else { continue }
-            for line in out.split(separator: "\n") {
-                let parts = line.split(separator: "\t", maxSplits: 2,
-                                       omittingEmptySubsequences: false).map(String.init)
-                guard parts.count == 3, parts[0] == paneId else { continue }
-                return TmuxPaneAddress(socketName: socket, paneId: parts[0],
-                                       sessionName: parts[1], paneTty: parts[2])
+            guard case .listed(let rows) = AgentLedger.inventory(socket: socket) else { continue }
+            if let row = rows.first(where: { $0.sessionName == sessionName && $0.paneId == paneId }) {
+                return row.address
             }
         }
         return nil

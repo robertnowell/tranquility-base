@@ -2047,6 +2047,7 @@ extension StatusHUD {
         titleDoorDrill()
         harnessMarkDrill()
         revivedDoorDrill()
+        ledgerDrill()
         selectionDrill()
         hoverDrill()
         quietRowsDrill()

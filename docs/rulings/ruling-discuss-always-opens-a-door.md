@@ -96,3 +96,19 @@ say just turn that off."* `PanelState.dismissKeepsTheTurn` is true for every
 face the reply flow owns (arming, listening, transcribing, pendingSend); the
 panel reads it before `endCapture` moves the state, and the app skips the
 turn's dismissal when it is true. A card's own Dismiss still dismisses the turn.
+
+## Amended 15 Sep 2026: only amber goes straight to the agent
+
+Ruled on the Past Agents list, where blue rows had kept the card while the
+grid sent them to the terminal: *"I actually like that it opens the card
+rather than going straight to the agent. So only amber should go straight to
+the agent, and blue and green obviously should open the card."* Asked whether
+that meant the list or everywhere: *"Everywhere."*
+
+`SessionRow.action(for:)` now reads: amber takes the door; green, blue and
+quiet open the card when they have a recorded turn and take the door when they
+do not (the rule green already had since #458/#483); dead revives. Discuss
+follows it: a row that is not amber and has a completed turn reads the card.
+The 24 Aug reason for blue taking the door (announce had nothing to say) no
+longer holds: a heard turn is read on request since #439, and the card carries
+GO TO AGENT, so the card is a superset of the door.

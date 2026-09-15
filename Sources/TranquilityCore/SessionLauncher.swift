@@ -174,7 +174,13 @@ public enum SessionLauncher {
         // True when this launch is a REVIVE (called through `resumeTmux`).
         // The only difference it makes: the trust watcher also answers the
         // resume-depth prompt, which a fresh launch never shows.
-        resuming: Bool = false
+        resuming: Bool = false,
+        // The session this pane is for, when the caller knows it (a resume
+        // does; a fresh launch learns it when the harness registers). Known
+        // here, the ledger is written at creation, which is the whole point
+        // of a ledger.
+        sessionId: String? = nil,
+        ledger: any SessionOwnershipStore = FileSessionOwnershipStore.shared
     ) -> Result<TmuxPaneAddress, ScriptError> {
         let command = launch.command
         let adapter = launch.adapter
@@ -314,7 +320,35 @@ public enum SessionLauncher {
         if acceptTrustPrompt {
             watchForTrustPrompt(pane: pane, adapter: adapter, answerResumePrompt: resuming)
         }
+        if let sessionId {
+            Self.recordLaunch(sessionId: sessionId, pane: pane, adapter: adapter,
+                              directory: directory, ledger: ledger)
+        }
         return .success(pane)
+    }
+
+    /// Write the pane down the moment it exists, for every harness.
+    ///
+    /// Until 15 Sep only Codex launches were recorded (`if isCodex`, in the
+    /// app), because Claude Code's own registry was taken as good enough.
+    /// It is not an address: it names a pane without its server. The pid is
+    /// found by the session id in its argv; when the harness has not exec'd
+    /// yet the record waits for `AgentLedger.locate`, which adopts from the
+    /// registry against this same pane once the harness has written it.
+    static func recordLaunch(sessionId: String, pane: TmuxPaneAddress, adapter: any HarnessAdapter,
+                             directory: String, ledger: any SessionOwnershipStore) {
+        guard let pid = ProcessProbe.pid(onTty: pane.paneTty, containing: sessionId) else {
+            Self.trace?("newSession: \(sessionId.prefix(8)) is in \(pane.sessionName) "
+                + "\(pane.paneId) but its pid is not on \(pane.paneTty) yet; the ledger "
+                + "adopts it at first use")
+            return
+        }
+        ledger.record(SessionOwnershipRecord(
+            sessionId: sessionId, harness: adapter.id, pid: pid,
+            paneId: pane.paneId, socketName: pane.socketName,
+            sessionName: pane.sessionName, paneTty: pane.paneTty, cwd: directory))
+        Self.trace?("newSession: ledger \(sessionId.prefix(8)) = \(pane.sessionName) "
+            + "\(pane.paneId) pid \(pid)")
     }
 
     /// Resume any adaptable session in a fresh detached tmux pane — the one
@@ -394,7 +428,8 @@ public enum SessionLauncher {
         return launchTmux(directory: directory,
                           launch: HarnessLaunch(adapter: adapter, command: fullCommand),
                           acceptTrustPrompt: acceptTrustPrompt,
-                          resuming: true)
+                          resuming: true,
+                          sessionId: sessionId)
     }
 
     /// Single-quote wrapping, the shell's own escape for "trust nothing
@@ -722,12 +757,33 @@ public enum SessionLauncher {
             // inference; this line is where that inference stops being
             // cheap, so this is where it gets checked against the stronger
             // answer.
-            if let live, let tty = ProcessProbe.tty(of: live.pid),
-               case .unknown = TmuxOwnership.ownership(forTty: tty) {
-                let why = "tmux could not be asked whether \(tty) is a pane — refusing to end a "
-                    + "session on an unanswered question"
+            //
+            // 15 Sep: the check is the ledger's whole answer, not the tty's.
+            // A transfer is for a session in NO tmux. One that is in a pane
+            // this app cannot see (a TEST build's server, a second install)
+            // is `.elsewhere`, and ending it moves a live agent behind a
+            // wall its owner cannot reach, which is exactly what happened
+            // that morning. Only `.unhosted` may proceed.
+            switch AgentLedger.locate(sessionId: sessionId, pid: live?.pid, harness: launch.adapter.id) {
+            case .unhosted:
+                break
+            case .here(let pane, let pid):
+                let why = "already in \(pane.sessionName) \(pane.paneId) (pid \(pid)); nothing to transfer"
                 SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(why)")
                 return .refused(why)
+            case .elsewhere(let where_):
+                let why = "\(where_): refusing to end a session another instance owns"
+                SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(why)")
+                return .refused(why)
+            case .unknown(let why):
+                let refusal = "tmux could not answer where this session is (\(why)): refusing to end a "
+                    + "session on an unanswered question"
+                SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(refusal)")
+                return .refused(refusal)
+            case .gone:
+                // No live process: a plain first resume. `live` is nil or
+                // stale, and the resume below handles both.
+                break
             }
             // Ask the guard BEFORE ending anything.
             //

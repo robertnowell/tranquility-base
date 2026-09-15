@@ -602,8 +602,14 @@ extension Coordinator {
             attachments.resolve(utteranceId: utterance.id, landed: false)
             utterance.status = .ready
             try store.update(utterance: utterance)
+            // The reason, not the category (rule of 11 Sep). The ledger has
+            // just been asked by the transfer; asking it again here is what
+            // puts "elsewhere: in tmux session tb-68cf6fcf" on the failure
+            // instead of a sentence that blames tmux.
+            let location = AgentLedger.locate(sessionId: target.sessionId, pid: live.pid,
+                                              harness: live.harness)
             return .dispatchFailed(
-                .injectionFailed("tmux is unavailable for this session"),
+                .injectionFailed("no pane this app can type into: \(location.summary)"),
                 utteranceId: utterance.id)
         }
         // Every field below `pane` used to default to Claude Code's own

@@ -1585,6 +1585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Tmux.trace = { Permissions.log($0) }
         ClaudeAgentsCLI.trace = { Permissions.log("liveness: \($0)") }
         SessionOwnershipReconciliation.trace = { Permissions.log($0) }
+        AgentLedger.trace = { Permissions.log($0) }
         SessionLauncher.trace = { Permissions.log("launcher: \($0)") }
         Recorder.trace = { Permissions.log($0) }
         AudioSystemHealth.trace = { Permissions.log($0) }
