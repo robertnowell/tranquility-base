@@ -28,6 +28,23 @@ arch -arm64e swift test --enable-xctest --disable-swift-testing
 arch -arm64e swift test --disable-xctest --enable-swift-testing
 ```
 
+## What CI checks
+
+The required Source audit checks the exact proposed merge commit supplied by
+CI. It calls `scripts/audit-source.sh <full-commit-sha>`, which verifies a clean
+checkout, builds, runs both test frameworks, checks packaging, and runs the
+isolated tmux drill. It accepts a detached checkout and never skips because a
+diff is empty. A passing check describes that candidate; branch protection
+still decides whether the PR can merge.
+
+A newer revision cancels obsolete runs for that PR. Independent PRs and
+merge-group candidates have separate concurrency identities. Release builds
+repeat the source audit on the actual merged commit before signing.
+
+Local `scripts/preflight.sh` retains branch-freshness checks and informational
+checks that need this Mac's authenticated tools. Those local checks are kept
+out of the CI source verdict. Workstream progress is tracked in issue #489.
+
 ## Testing the Intel slice
 
 The app ships universal (arm64 + x86_64). To run the suite against the Intel
