@@ -191,8 +191,37 @@ final class SessionRowTests: XCTestCase {
                      row("r1", .ready), row("i2", .running), row("d2", .unlit),
                      row("f1", .fault), row("w2", .working)]
         let sorted = SessionRow.quietRowsLast(mixed).map(\.id)
-        XCTAssertEqual(sorted, ["w1", "r1", "f1", "w2", "i1", "i2", "d1", "d2"],
-                       "lit rows in arrival order, then quiet, then closed")
+        XCTAssertEqual(sorted, ["r1", "f1", "w1", "w2", "i1", "i2", "d1", "d2"],
+                       "asks-for-you, then blue, each in arrival order; then quiet, then closed")
+    }
+
+    // MARK: - Green above blue (ruled 15 Sep 2026)
+
+    /// Robert, on the screenshot #458 produced: "the green lamps should
+    /// always be above the blue lamps." A working session writes its
+    /// transcript every few seconds, so on a pure recency sort it is always
+    /// the newest row on the panel; the blue here is newer than every green
+    /// by a wide margin and must still sit under all of them.
+    func testBlueSitsBelowEveryGreenHoweverRecentItIs() {
+        let sorted = SessionRow.quietRowsLast([
+            lit("blue-now", 0, lamp: .working),
+            lit("green-yesterday", 16 * 3600),
+            lit("green-this-morning", 5 * 3600),
+        ]).map(\.id)
+        XCTAssertEqual(sorted, ["green-this-morning", "green-yesterday", "blue-now"])
+    }
+
+    /// Amber is the other channel that asks (`Lamp.asksForYou`), and it sits
+    /// WITH green rather than above it: which of the two asked most recently
+    /// is the order that matters. Blue orders among itself the same way.
+    func testTheAskingTierAndTheBlueTierEachOrderByRecency() {
+        let sorted = SessionRow.quietRowsLast([
+            lit("blue-old", 300, lamp: .working),
+            lit("amber", 60, lamp: .fault),
+            lit("blue-new", 10, lamp: .working),
+            lit("green", 30),
+        ]).map(\.id)
+        XCTAssertEqual(sorted, ["green", "amber", "blue-new", "blue-old"])
     }
 
     // MARK: - gridRows / shownCount: the grid's own membership

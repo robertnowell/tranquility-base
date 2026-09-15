@@ -167,12 +167,12 @@ final class RemoteRowsTests: XCTestCase {
 
     /// The SHARED rule, and the assertion is deliberately about peers.
     ///
-    /// `quietRowsLast` ranks ready, working and fault together at the top and
-    /// keeps their arrival order; only merely-alive and dead rows sink. So a
-    /// blocked remote agent does NOT jump above a working one, exactly as a
-    /// blocked local session does not. That is the point: the fifth band is
-    /// subject to the same ordering as the other four, including the parts
-    /// somebody might expect to work differently.
+    /// `quietRowsLast` ranks the lamps that ask for you (green, amber) above
+    /// blue, and each tier by recency (ruled 15 Sep); only merely-alive and
+    /// dead rows sink below all of them. So a working remote agent sits under
+    /// a finished one, exactly as a working local session does. That is the
+    /// point: the fifth band is subject to the same ordering as the other
+    /// four, including the parts somebody might expect to work differently.
     func testRemoteRowsObeyTheSameOrderingAsLocalOnes() {
         let asking = remote("asking", state: .inputRequired)
         let working = remote("working", state: .working)
@@ -180,8 +180,8 @@ final class RemoteRowsTests: XCTestCase {
         let out = rows(.init(agents: [done, working, asking],
                              requests: [asking.id: PendingRequest(id: "q", session: asking.id,
                                                                   asked: "?")]))
-        XCTAssertEqual(out.map(\.lamp), [.ready, .working, .ready],
-                       "lit rows keep arrival order, and under the three-lamp ruling "
+        XCTAssertEqual(out.map(\.lamp), [.ready, .ready, .working],
+                       "green above blue, and under the three-lamp ruling "
                        + "a finished agent is lit rather than sunk")
         XCTAssertEqual(out.map(\.lamp), SessionRow.quietRowsLast(out).map(\.lamp),
                        "and the band is already in the shared rule's order")
