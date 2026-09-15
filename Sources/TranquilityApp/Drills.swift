@@ -1624,7 +1624,10 @@ extension StatusHUD {
         _ = showAnnouncement(
             spoken: SpokenTextSanitizer().sanitize("Finished the poller. Go?"),
             sessionId: "drill", pid: 1, project: "promotions copy", cwd: "/tmp")
-        checks.append(("sessionTitleIsADoor", titleLabel.isADoor))
+        // Reversed 15 Sep: the title is not a door; GO TO AGENT is the one
+        // way to the session. The drill keeps the line so the reversal is
+        // asserted rather than remembered.
+        checks.append(("sessionTitleIsNotADoor", !titleLabel.isADoor))
         checks.append(("titleIsOneLine", titleLabel.maximumNumberOfLines == 1))
         // The identity, alone. A second line here is the topic coming back.
         checks.append(("noSecondLine", !titleLabel.stringValue.contains("\n")))

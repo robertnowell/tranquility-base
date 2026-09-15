@@ -13,12 +13,15 @@ import AppKit
 /// a cursor." They always did; the rule was written, and the pixels never
 /// kept it, on any face, for anyone.
 ///
-/// Measured the same afternoon on the Dev lane: a `.cursorUpdate` tracking
-/// area did not change the cursor either, though enter and exit fired (the
-/// Controls note opened under the same synthetic pointer). Enter and exit
-/// are what this panel demonstrably receives, so the hand is pushed on
-/// enter and popped on exit, by a watcher that owns the tracking area, and
-/// the control itself has nothing to override.
+/// The hand is set on enter and the arrow on exit, by a watcher that owns
+/// the tracking area, so the control has nothing to override. `set`, not
+/// `push`/`pop`: a face can change under a hovered control and the exit
+/// never arrive, and a pushed hand with no pop is a hand that sticks.
+///
+/// Not measured by a machine: a synthetic pointer (CGEvent moves) drives
+/// enter and exit but never the window server's cursor tracking, so every
+/// probe read the arrow, including over a key window with a cursor rect
+/// that visibly shows the hand to a real mouse. This wants a hand on it.
 enum PointerCursor {
     /// One per tracked view; the tracking area's owner, retained by the
     /// view through its userInfo so it lives as long as the area does.
@@ -29,13 +32,13 @@ enum PointerCursor {
         @available(*, unavailable) required init?(coder: NSCoder) { fatalError("not used") }
 
         override func mouseEntered(with event: NSEvent) {
-            guard enabled(), !pushed else { return }
-            NSCursor.pointingHand.push()
+            guard enabled() else { return }
+            NSCursor.pointingHand.set()
             pushed = true
         }
         override func mouseExited(with event: NSEvent) {
             guard pushed else { return }
-            NSCursor.pop()
+            NSCursor.arrow.set()
             pushed = false
         }
         override func cursorUpdate(with event: NSEvent) {
