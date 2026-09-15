@@ -156,4 +156,27 @@ final class PanelStateTests: XCTestCase {
         }
     }
 
+    // MARK: - A dismiss from a reply face keeps the turn
+
+    /// Ruled 14 Sep: a dismiss during a dictation ended the capture AND
+    /// dismissed the turn behind it, which sent the session's row to Past
+    /// Agents. Ending a reply leaves the turn owed; only a card's own dismiss
+    /// is the turn's dismissal. The pair is pinned to `ownsStage` so the two
+    /// tables cannot drift: every face the reply flow owns keeps the turn, and
+    /// no other face does.
+    func testDismissFromAReplyFaceKeepsTheTurn() {
+        let all: [PanelState] = [
+            .hidden, .idle(waiting: 0), .preparing, .speaking(eventId: anEvent), .arming,
+            .listening(eventId: anEvent), .transcribing(startedAt: Date()),
+            .pendingSend(utteranceId: "u1"), .result, .receipt, .settings, .pastAgents,
+        ]
+        for state in all {
+            XCTAssertEqual(state.dismissKeepsTheTurn, state.ownsStage,
+                           "\(state.name): a dismiss keeps the turn exactly when the reply owns the stage")
+        }
+        XCTAssertTrue(PanelState.listening(eventId: anEvent).dismissKeepsTheTurn)
+        XCTAssertFalse(PanelState.speaking(eventId: anEvent).dismissKeepsTheTurn)
+        XCTAssertFalse(PanelState.idle(waiting: 1).dismissKeepsTheTurn)
+    }
+
 }

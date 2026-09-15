@@ -67,11 +67,22 @@ public enum DeepLink {
         case invitation
     }
 
+    /// Amended 14 Sep: a QUIET live row with a completed turn opens the card.
+    /// The 9 Sep amendment was measured on a dead agent and its sentence
+    /// ("every other live lamp opens the terminal") rewrote the quiet-alive
+    /// case with it. Measured 14 Sep 16:15 on `gary-first-run.html`: the
+    /// agent was alive and idle, its turn had been dismissed, and three
+    /// clicks on Discuss each focused a tmux pane instead of reading the
+    /// turn. The card has GO TO AGENT, so nothing is lost by landing there;
+    /// working and fault still open the terminal, because there is no
+    /// finished turn to read (working) or the terminal is where the fault
+    /// is (amber). `lamp` is the row's own; nil when there is no row.
     public static func discussDestination(rowAction: SessionRow.RowAction?,
+                                          lamp: Lamp?,
                                           hasCompletedTurn: Bool) -> DiscussDestination {
         switch rowAction {
         case .announce:  return .conversationCard
-        case .goToAgent: return .agentTerminal
+        case .goToAgent: return lamp == .running && hasCompletedTurn ? .conversationCard : .agentTerminal
         // Discuss on a remote agent opens where the agent lives. Same
         // destination in meaning as a terminal, different door, and the enum
         // says which so no caller has to ask what kind of agent it was.

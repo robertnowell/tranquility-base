@@ -1343,7 +1343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        hud.onDismiss = { [weak self] in
+        hud.onDismiss = { [weak self] turnStaysOwed in
             guard let self else { return }
             self.coordinator?.speech.stop()
             GreetingCache.stop()
@@ -1365,7 +1365,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.isBusy = false
             // Dismiss means the item is done with — not "hide the window and leave
             // it in the queue", which is what made the button meaningless.
-            if let sessionId = self.hud.currentEventId { self.dismissCurrent(sessionId) }
+            // Unless it ended a reply: then the turn stays owed (ruled 14 Sep,
+            // `PanelState.dismissKeepsTheTurn`), so the row stays green and on
+            // the grid, and Discuss on its page still reads the card.
+            if let sessionId = self.hud.currentEventId {
+                if turnStaysOwed {
+                    Permissions.log("dismiss: ended the reply to \(sessionId.prefix(8)); turn stays owed")
+                } else {
+                    self.dismissCurrent(sessionId)
+                }
+            }
             self.activeConversation = nil
             self.updateTitle()
             self.rebuildMenu()

@@ -3727,7 +3727,12 @@ final class StatusHUD: NSObject {
     }
 
     /// Set by the app so Dismiss can silence the voice, not just hide the panel.
-    var onDismiss: (() -> Void)?
+    /// The argument is `PanelState.dismissKeepsTheTurn` read from the face the
+    /// dismiss landed on, BEFORE `endCapture` moves it: by the time the
+    /// closure runs the state is already idle, and idle would say the turn is
+    /// done with. Ruled 14 Sep: a dismiss that ends a reply leaves the turn
+    /// green.
+    var onDismiss: ((_ turnStaysOwed: Bool) -> Void)?
     var onOpenSettings: (() -> Void)?
     var onLeaveSettings: (() -> Void)?
 
@@ -3926,8 +3931,9 @@ final class StatusHUD: NSObject {
         MainActor.assumeIsolated {
             // Through the capture teardown, not around it: raw timer invalidation
             // here once dropped a mid-countdown send with no record of the cancel.
+            let turnStaysOwed = state.dismissKeepsTheTurn
             endCapture(because: "dismissed")
-            onDismiss?()
+            onDismiss?(turnStaysOwed)
             hide()
         }
     }
