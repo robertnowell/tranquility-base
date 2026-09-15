@@ -192,12 +192,11 @@ final class TrayRowView: NSStackView, NSTextFieldDelegate {
         if selector == #selector(NSResponder.cancelOperation(_:)) { onComposeEscape?(); return true }
         return false
     }
+
     /// Per-fragment, never clear-all (a cross that took entries you did not
     /// point at is the surprise this whole feature exists to avoid).
     var onRemove: ((String) -> Void)?
-    /// The Attach door was clicked (ruled 15 Sep, mockup 2): the row is
-    /// where a chip lands, so the button that makes one sits on it, at the
-    /// right end, with "no attachments" at the left while it is empty.
+    /// The paperclip was clicked (ruled 15 Sep, second pass): a file picker.
     var onAttach: (() -> Void)?
 
     /// What is drawn right now, so `apply` can skip identical repaints —
@@ -205,48 +204,29 @@ final class TrayRowView: NSStackView, NSTextFieldDelegate {
     /// would kill the hover state on the ✕ you are reaching for.
     private(set) var fragments: [String] = []
 
-    /// The header line: the empty state and the door. Persistent; the chip
-    /// rows are rebuilt under it.
-    private let header = NSView()
-    private let empty = NSTextField(labelWithString: "")
-    let attach = DoorLabel(labelWithString: "")
-    /// The typed line (ruled 15 Sep: "while the card is selected, if I start
-    /// typing, I would just love for that to be received"). A press on the
-    /// card arms it and it takes the keys; Return enters the line as a chip
-    /// under the attachments; Send takes whatever is still in it. Shown
-    /// while the card is armed or the line has words.
+    /// ONE row to type or attach (ruled 15 Sep, on seeing the first cut):
+    /// the typed line at the left, "type a message or paste", and a
+    /// paperclip at the right. It appears when the card is selected (a
+    /// press arms it and it takes the keys) and stays while it has words;
+    /// the chips, when there are any, stack above it. No "no attachments":
+    /// an empty row says nothing.
+    let composeRow = NSView()
     let compose = NSTextField()
+    let attach: ConsoleButton
     var onComposeChanged: ((String) -> Void)?
     var onComposeReturn: ((String) -> Void)?
     var onComposeEscape: (() -> Void)?
 
     init() {
+        attach = ConsoleButton(image: NSImage(systemSymbolName: "paperclip",
+                                              accessibilityDescription: StateLegend.attachTitle)!
+                                 .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))!,
+                               target: nil, action: nil)
         super.init(frame: .zero)
         orientation = .vertical
         alignment = .leading
         spacing = 3
         translatesAutoresizingMaskIntoConstraints = false
-
-        header.translatesAutoresizingMaskIntoConstraints = false
-        empty.attributedStringValue = ChromeType.line(
-            StateLegend.noAttachmentsTitle, font: ChromeType.mono(ofSize: 10.5, weight: .regular),
-            color: StateLegend.Palette.faint)
-        empty.translatesAutoresizingMaskIntoConstraints = false
-        attach.attributedStringValue = StateLegend.BottomLine.quiet(StateLegend.attachTitle)
-        attach.isADoor = true
-        attach.toolTip = StateLegend.attachTip
-        attach.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(attachTapped)))
-        attach.translatesAutoresizingMaskIntoConstraints = false
-        header.addSubview(empty); header.addSubview(attach)
-        NSLayoutConstraint.activate([
-            header.widthAnchor.constraint(equalToConstant: 348),
-            header.heightAnchor.constraint(equalToConstant: 16),
-            empty.leadingAnchor.constraint(equalTo: header.leadingAnchor),
-            empty.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            attach.trailingAnchor.constraint(equalTo: header.trailingAnchor),
-            attach.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-        ])
-        addArrangedSubview(header)
 
         compose.isBordered = false
         compose.isBezeled = false
@@ -269,33 +249,54 @@ final class TrayRowView: NSStackView, NSTextFieldDelegate {
         compose.cell?.isScrollable = true
         compose.delegate = self
         compose.translatesAutoresizingMaskIntoConstraints = false
-        compose.widthAnchor.constraint(equalToConstant: 348).isActive = true
-        compose.isHidden = true
-        addArrangedSubview(compose)
+
+        attach.isBordered = false
+        attach.restingInk = StateLegend.Lens.chrome.color
+        attach.toolTip = StateLegend.attachTip
+        attach.target = self
+        attach.action = #selector(attachTapped)
+        attach.translatesAutoresizingMaskIntoConstraints = false
+
+        composeRow.translatesAutoresizingMaskIntoConstraints = false
+        composeRow.addSubview(compose); composeRow.addSubview(attach)
+        NSLayoutConstraint.activate([
+            composeRow.widthAnchor.constraint(equalToConstant: 348),
+            composeRow.heightAnchor.constraint(equalToConstant: 20),
+            compose.leadingAnchor.constraint(equalTo: composeRow.leadingAnchor),
+            compose.centerYAnchor.constraint(equalTo: composeRow.centerYAnchor),
+            compose.trailingAnchor.constraint(equalTo: attach.leadingAnchor, constant: -8),
+            attach.trailingAnchor.constraint(equalTo: composeRow.trailingAnchor),
+            attach.centerYAnchor.constraint(equalTo: composeRow.centerYAnchor),
+            attach.widthAnchor.constraint(equalToConstant: 20),
+            attach.heightAnchor.constraint(equalToConstant: 20),
+        ])
+        composeRow.isHidden = true
+        addArrangedSubview(composeRow)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     @objc private func attachTapped() { onAttach?() }
 
-    /// Show the line and hand it the keys, or hide it when it is empty.
+    /// Show the row and hand it the keys, or hide it when it is empty.
     func setComposing(_ on: Bool) {
-        compose.isHidden = !(on || !compose.stringValue.isEmpty)
+        composeRow.isHidden = !(on || !compose.stringValue.isEmpty)
     }
+    /// Whether the row is on screen: the panel shows the tray for it.
+    var isComposeRowShown: Bool { !composeRow.isHidden }
     var composedText: String { compose.stringValue }
-    func clearComposed() { compose.stringValue = ""; compose.isHidden = true }
+    func clearComposed() { compose.stringValue = ""; composeRow.isHidden = true }
 
     func apply(_ next: [String]) {
         guard next != fragments else { return }
         fragments = next
-        for view in arrangedSubviews where view !== header && view !== compose {
+        for view in arrangedSubviews where view !== composeRow {
             removeArrangedSubview(view); view.removeFromSuperview()
         }
-        empty.isHidden = !next.isEmpty
         for fragment in next {
             let row = ChipRow(fragment: fragment)
             row.onRemove = { [weak self] in self?.onRemove?(fragment) }
-            // Chips above the typed line: the line is what you are writing
-            // now, the chips are what is already in.
+            // Chips above the row you type on: what is already in, then
+            // what you are writing now.
             insertArrangedSubview(row, at: arrangedSubviews.count - 1)
             row.widthAnchor.constraint(equalToConstant: 348).isActive = true
         }
@@ -311,7 +312,7 @@ final class TrayRowView: NSStackView, NSTextFieldDelegate {
     /// `displayedNamesForTesting` and visible here, which is the difference
     /// the teardown fix is about.
     var arrangedSubviewCountForTesting: Int {
-        arrangedSubviews.filter { $0 !== header && $0 !== compose }.count
+        arrangedSubviews.filter { $0 !== composeRow }.count
     }
 
     var removeButtonsForTesting: [ConsoleButton] {

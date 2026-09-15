@@ -695,12 +695,14 @@ extension StatusHUD {
         // ("if I start typing, I would just love for that to be received"),
         // and takes the keys for it. The actions move down by that line and
         // nothing else: same x, same width, one line taller.
-        let lineHeight = trayRow.compose.fittingSize.height + 3
-        let armShowsTheLine = !trayRow.compose.isHidden
+        let lineHeight = trayRow.composeRow.fittingSize.height + 3
+        let armShowsTheLine = trayRow.isComposeRowShown
             && (panel.firstResponder as? NSTextView)?.delegate === trayRow.compose
         let armKeepsGeometry = armShowsTheLine
-            && abs(((intendedHeight ?? 0) - (restingHeight ?? 0)) - lineHeight) <= 1
-            && abs(((contentStack?.fittingSize.height ?? 0) - (restingFit ?? 0)) - lineHeight) <= 1
+            // Within the outer stack's own 6pt spacing: at rest the tray is
+            // not there at all, so its arrival brings the row and one gap.
+            && abs(((intendedHeight ?? 0) - (restingHeight ?? 0)) - lineHeight) <= 6
+            && abs(((contentStack?.fittingSize.height ?? 0) - (restingFit ?? 0)) - lineHeight) <= 6
             && restingActionFrame.minX == armedActionFrame.minX
             && restingActionFrame.width == armedActionFrame.width
             && restingGoFrame.minX == armedGoFrame.minX
