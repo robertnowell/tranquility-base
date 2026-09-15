@@ -97,19 +97,11 @@ final class SetupChecklistView: NSStackView {
                                         ink: StateLegend.Palette.working,
                                         target: self, action: #selector(restartTapped))
         button.identifier = NSUserInterfaceItemIdentifier("prereq.restart")
-        let note = NSTextField(wrappingLabelWithString:
-            "a permission granted while the app is running only reaches it after this")
-        note.font = ChromeType.mono(ofSize: 11, weight: .regular)
-        note.textColor = StateLegend.Palette.secondary
-        note.drawsBackground = false
-        note.translatesAutoresizingMaskIntoConstraints = false
-        note.widthAnchor.constraint(equalToConstant: 300).isActive = true
-
-        let stacked = NSStackView(views: [button, note])
-        stacked.orientation = .vertical
-        stacked.alignment = .leading
-        stacked.spacing = 2
-        return stacked
+        // The door alone. It carried a line explaining when a restart is
+        // needed ("a permission granted while the app is running only reaches
+        // it after this"); ruled 14 Sep 21:37, the line goes. The door's own
+        // words are the whole instruction.
+        return button
     }
 
     @objc private func restartTapped() {
@@ -342,6 +334,10 @@ final class SetupChecklistView: NSStackView {
                 guard let self else { return }
                 self.prereqNote[.hub] = HubConnect.shared.note
                 self.renderPrerequisites()
+                // Same repair as the keys (14 Sep): the note said "connected
+                // as garys-macbook-pro" under a lamp that still read the
+                // pre-connect scan. Connected is stored state; scan it.
+                self.scanPrerequisites()
             }
             HubConnect.shared.begin()
             prereqNote[.hub] = HubConnect.shared.note
@@ -492,8 +488,14 @@ final class SetupChecklistView: NSStackView {
                 "\(position[item] ?? 1). " + item.title
             // A satisfied tmux or hooks row has nothing left to do; a key row
             // keeps its door, because a key is a thing you rotate.
-            prereqButtons[item]?.isHidden =
-                mode != .reference && state.satisfied && item.secret == nil
+            // A satisfied tmux has nothing to copy, in either host. Keys keep
+            // their door (a key is a thing you rotate) and hooks keep theirs
+            // (a harness is a thing you reinstall), in the quiet ink: an amber
+            // door beside a green lamp read as a problem on 14 Sep.
+            prereqButtons[item]?.isHidden = state.satisfied
+                && (item == .tmux || (mode != .reference && item.secret == nil))
+            prereqButtons[item]?.restingInk = state.satisfied
+                ? StateLegend.Palette.hint : StateLegend.Palette.fault
 
             // The panel's lamp vocabulary, same meanings as stage one. Amber is
             // "needs action", so an unmet REQUIRED row is amber. An unmet key is
@@ -515,7 +517,11 @@ final class SetupChecklistView: NSStackView {
             }
             prereqDetails[item]?.textColor = state.satisfied
                 ? StateLegend.Palette.hint : StateLegend.Palette.secondary
-            prereqDetails[item]?.stringValue = prereqNote[item] ?? state.detail
+            // A note is what the row's own door last said. Over an installed
+            // tmux it is furniture ("copied. Paste it in a terminal", 14 Sep),
+            // so the state speaks instead.
+            let note = (state.satisfied && item == .tmux) ? nil : prereqNote[item]
+            prereqDetails[item]?.stringValue = note ?? state.detail
         }
         onReadiness?(!prereqStates.isEmpty
             && Prerequisites.allRequiredSatisfied(prereqStates))

@@ -34,6 +34,12 @@ extension AppDelegate {
     }
 
     @objc func statusItemClicked() {
+        // The one proof that the menu bar is reachable (AppDelegate+Dock).
+        if !Self.menuBarEverClicked {
+            Self.menuBarEverClicked = true
+            Permissions.log("menubar: first click on this install")
+            refreshDockPresence(because: "menu bar clicked")
+        }
         if NSApp.currentEvent?.type == .rightMouseUp {
             Track.record("menubar_clicked", ["button": "right", "result": "menu",
                                              "panel_was_on_screen": .bool(hud.isOnScreen)])

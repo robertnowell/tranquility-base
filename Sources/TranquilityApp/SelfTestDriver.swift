@@ -603,6 +603,12 @@ extension StatusHUD {
                     ("noRowEditorialises",
                      self.setupChecklist?.rowTextForSelfTest
                         .contains("recommended") == false),
+                    // The pane on this screen, not a screen in general: the
+                    // rows scroll and the panel clamps, so the bottom door is
+                    // on the glass (14 Sep).
+                    ("fitsTheScreen",
+                     (self.panel?.frame.height ?? .greatestFiniteMagnitude)
+                        <= (NSScreen.main?.visibleFrame.height ?? 0) - 32),
                 ])
             }),
             // The settings state's second pane. What must hold: a
@@ -2001,19 +2007,18 @@ extension StatusHUD {
         // taught does nothing on an empty grid. The same showIdle every
         // ambient tick calls, painting the real panel.
         showIdle(rows: [])
-        let describesItself = face.grid
-            && bodyLabel.stringValue == "Nothing waiting. Agents appear here as they finish."
+        let describesItself = face.grid && bodyLabel.stringValue.isEmpty
             && stateLabel.attributedStringValue.string.contains(StateLegend.gridStripTitle)
         let offersTheDoor = !waitingRows.isHidden
             && waitingRows.arrangedSubviews.contains { $0 is SplitPlacardRowView }
             && !waitingRows.arrangedSubviews.contains { $0 is GridRowView }
         let wearsTheGridChrome = !gridFooter.isHidden
-        // The Dock rule, read against its own inputs rather than a fixed
-        // answer: a tile whenever the panel is on screen or no agent has ever
-        // been listed here (AppDelegate+Dock). Asserted on both paints.
+        // The Dock rule, read against its own input rather than a fixed
+        // answer: a tile until the status item has been clicked once on this
+        // install (AppDelegate+Dock). Asserted on both paints.
         let dockRule = { () -> Bool in
             NSApp.activationPolicy()
-                == ((!Self.everListedAgent || self.isOnScreen) ? .regular : .accessory)
+                == (AppDelegate.menuBarEverClicked ? .accessory : .regular)
         }
         let tileFollowsTheEmptyRoom = dockRule()
         // An agent reporting in takes the room back: the door goes, the
@@ -2023,7 +2028,7 @@ extension StatusHUD {
         let roomTakenBack = face.grid && face.sessionRows.count == 1
             && waitingRows.arrangedSubviews.contains { $0 is GridRowView }
             && bodyLabel.alignment == .natural
-        let tileFollowsTheArrival = Self.everListedAgent && dockRule()
+        let tileFollowsTheArrival = dockRule()
         SelfTest.report("emptyRoom", [
             ("describesItself", describesItself),
             ("offersTheDoor", offersTheDoor),

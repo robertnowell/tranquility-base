@@ -199,6 +199,12 @@ final class StatusHUD: NSObject {
     var meter: LevelMeterView!
     var voiceList: NSScrollView!
     var setupChecklist: SetupChecklistView!
+    /// The setup rows' scroll view, and its height, which is whichever is
+    /// smaller: the rows, or what the screen has left after the pane's own
+    /// chrome. Rows scale with harnesses and providers and their details
+    /// wrap, and on 14 Sep the tab ran off the bottom of a shared screen.
+    var setupScroll: NSScrollView!
+    var setupScrollHeight: NSLayoutConstraint!
     var pastList: PastAgentsList!
     var settingsTabs: SettingsTabBar!
     var harnessPicker: HarnessPickerRow!
@@ -1882,19 +1888,14 @@ final class StatusHUD: NSObject {
             // it before because every earlier user had run a session in the
             // last seven days, and the room was never empty.
             //
-            // So the empty room IS the grid: the AGENTS placard, one line
-            // about what fills it, the NEW AGENT and PAST AGENTS band that
-            // every full grid ends in, and the footer. Zero rows, same face.
-            face = Face(body: [note, "Nothing waiting. Agents appear here as they finish."]
-                            .compactMap { $0 }.joined(separator: " "),
-                        grid: true)
+            // So the empty room IS the grid: the AGENTS placard, the NEW AGENT
+            // and PAST AGENTS band that every full grid ends in, and the
+            // footer. Zero rows, same face, and no sentence of its own:
+            // "Nothing waiting. Agents appear here as they finish" was
+            // furniture beside a door that already says what to do (ruled
+            // 14 Sep, 21:20). A note about what just happened still shows.
+            face = Face(body: note ?? "", grid: true)
         } else {
-            // The first agent this install has ever listed is a durable fact:
-            // the Dock tile reads it (AppDelegate+Dock).
-            if !Self.everListedAgent {
-                Self.everListedAgent = true
-                Permissions.log("grid: first agent ever listed on this install")
-            }
             // No "N waiting" headline (ruled): the strip says SESSIONS, the lamps
             // say who is waiting, and the count lives in the menu bar.
             face = Face(body: note ?? "", sessionRows: rows, grid: true)
@@ -2002,26 +2003,27 @@ final class StatusHUD: NSObject {
 
     var isOnScreen: Bool { panel?.isVisible ?? false }
 
-    /// Whether an agent has ever been listed on this install's grid. The Dock
-    /// tile reads it (AppDelegate+Dock): until it is true the menu bar is the
-    /// only door to the app, and macOS may have dropped it.
-    static var everListedAgent: Bool {
-        get { ProductDefaults.shared.bool(forKey: everListedAgentKey) }
-        set { ProductDefaults.shared.set(newValue, forKey: everListedAgentKey) }
-    }
-    private static let everListedAgentKey = "grid.everListedAgent"
+    /// What the settings pane spends above and below the setup rows: back,
+    /// tabs, title, hint, insets. Measured from the pose, generous by design;
+    /// a few points of slack costs a shorter list, a few points short costs a
+    /// clipped door.
+    static let setupChrome: CGFloat = 176
 
-    /// Fires when what the Dock rule reads has changed: the panel's presence
-    /// on screen, or the first agent ever listed. Called from render, which
-    /// is the one place the panel is ordered on or off the screen.
-    var onPresenceChanged: (() -> Void)?
-    private var lastPresence: (onScreen: Bool, everListed: Bool)?
-    func reportPresence() {
-        let now = (onScreen: isOnScreen, everListed: Self.everListedAgent)
-        if let last = lastPresence, last == now { return }
-        lastPresence = now
-        onPresenceChanged?()
+    /// Size the setup rows' scroll view to the rows, capped at what the
+    /// screen has left. Called on the pane's own render and again when the
+    /// off-main scan lands and the rows change height.
+    func fitSetupScroll() {
+        guard let setupScroll, let setupScrollHeight, let setupChecklist else { return }
+        setupChecklist.layoutSubtreeIfNeeded()
+        let usable = (NSScreen.main?.visibleFrame.height ?? 900) - 32 - Self.setupChrome
+        let wanted = min(setupChecklist.fittingSize.height, max(usable, 120))
+        guard abs(setupScrollHeight.constant - wanted) > 0.5 else { return }
+        setupScrollHeight.constant = wanted
+        Permissions.log("setup pane: rows \(Int(setupChecklist.fittingSize.height))pt, "
+            + "scroll \(Int(wanted))pt of \(Int(usable))pt usable")
+        if let panel, !setupScroll.isHidden { resizeToFit(panel); position(panel) }
     }
+
 
     // MARK: - Rendering
 
@@ -2173,7 +2175,7 @@ final class StatusHUD: NSObject {
         endTranscribingUI()
         stopBodyShimmer()
         if !state.isCapturingAudio { meterTimer?.invalidate(); meterTimer = nil }
-        if case .hidden = state { panel?.orderOut(nil); reportPresence(); return }
+        if case .hidden = state { panel?.orderOut(nil); return }
         let panel = panel ?? build()
 
         // Baseline: pill from the state's legend row (or the face's own
@@ -2250,7 +2252,7 @@ final class StatusHUD: NSObject {
         gridFooter.isHidden = true; controlsSticky.isHidden = true
         stripLabel.stringValue = ""
         voiceList.isHidden = true; waitingRows.isHidden = true
-        setupChecklist?.isHidden = true
+        setupChecklist?.isHidden = true; setupScroll?.isHidden = true
         pastList?.isHidden = true
         pastBackButton?.isHidden = true
         settingsTabs?.isHidden = true
@@ -2484,10 +2486,15 @@ final class StatusHUD: NSObject {
                 // row, a lamp or a label: two renderers of one checklist
                 // disagree inside a fortnight and the one you are not looking
                 // at is the wrong one.
+                setupScroll.isHidden = false
                 setupChecklist.isHidden = false
                 setupChecklist.refresh()
+                fitSetupScroll()
                 bodyLabel.stringValue = face.body
-                setHint("every row carries its own fix")
+                // No hint line under the rows (ruled 14 Sep 21:37): "every
+                // row carries its own fix" described the pane instead of
+                // being part of it. An empty hint is not a line.
+                setHint("")
 
             case .voices:
                 voiceList.isHidden = false
@@ -2581,7 +2588,6 @@ final class StatusHUD: NSObject {
         resizeToFit(panel)
         position(panel)
         panel.orderFrontRegardless()
-        reportPresence()
         Permissions.log("HUD frame=\(panel.frame) visible=\(panel.isVisible) screen=\(NSScreen.main?.visibleFrame.debugDescription ?? "nil")")
 
         // Which timer runs is a fact of the state, decided in the same breath as
