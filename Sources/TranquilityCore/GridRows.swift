@@ -77,6 +77,14 @@ public extension GridAssembler {
         /// choice, not a property of the agent, and location does not belong in
         /// the type system.
         public var remote: RemoteAgents
+        /// The clock, for the one rule that needs one: a remote session that
+        /// nobody owes anything (nothing unread, no question, not working)
+        /// and that has not been touched for `remoteStaleAfter` is not an
+        /// agent on this grid. A local OpenCode server lists every transcript
+        /// it has ever kept; on 14 Sep that was 31 rows, most of them probes
+        /// from a day of testing, lit for ever under the working ones.
+        public var now: Date
+        public var remoteStaleAfter: TimeInterval
 
         /// What the poller last saw, in the shape the bands need.
         public struct RemoteAgents {
@@ -113,7 +121,9 @@ public extension GridAssembler {
             supersedesWaiting: @escaping (String, Int64) -> Bool,
             isInFlight: @escaping (String) -> Bool,
             closedCallsigns: [String: String] = [:],
-            remote: RemoteAgents = RemoteAgents()
+            remote: RemoteAgents = RemoteAgents(),
+            now: Date = Date(),
+            remoteStaleAfter: TimeInterval = 3600
         ) {
             self.waiting = waiting
             self.known = known
@@ -129,6 +139,8 @@ public extension GridAssembler {
             self.isInFlight = isInFlight
             self.closedCallsigns = closedCallsigns
             self.remote = remote
+            self.now = now
+            self.remoteStaleAfter = remoteStaleAfter
         }
     }
 
@@ -148,6 +160,27 @@ public extension GridAssembler {
         /// Which harness each live row is, recorded so the card can ask the
         /// same question the rows answered and get the same answer.
         public var harnessById: [String: String]
+    }
+
+    /// Slot `adding` into `rows` by recency, leaving `rows` in its own order.
+    ///
+    /// Each added row goes in front of the first existing row that is OLDER
+    /// than it, and after everything when nothing is. Rows with no time are
+    /// never overtaken and never reordered: the closed bands carry none, and
+    /// they stay where the walk put them. Pure, so the ordering test can pin
+    /// it without a provider.
+    public static func mergedByRecency(_ rows: [SessionRow], adding: [SessionRow]) -> [SessionRow] {
+        var out = rows
+        for row in adding {
+            guard let when = row.recency,
+                  let slot = out.firstIndex(where: { existing in
+                      guard let theirs = existing.recency else { return false }
+                      return theirs < when
+                  })
+            else { out.append(row); continue }
+            out.insert(row, at: slot)
+        }
+        return out
     }
 
     /// The lamp a bucket draws. Three of them, and there is no fourth.
@@ -333,7 +366,8 @@ public extension GridAssembler {
                 // The hover carries the whole sentence, as it does on every
                 // other amber row — the column can only hold a clause.
                 detail: blocked?.detail,
-                harness: input.liveById[event.sessionId]?.harness)
+                harness: input.liveById[event.sessionId]?.harness,
+                recency: Date(timeIntervalSince1970: Double(event.createdAtMs) / 1000))
         }
 
         // BAND 2: live sessions with nothing waiting. Quiet rows, so a skipped
@@ -364,7 +398,8 @@ public extension GridAssembler {
                 id: stored.sessionId,
                 name: GridAssembler.tabDisplayName(for: stored, live: live),
                 aux: storedLamp.reason ?? SessionRow.shortId(stored.sessionId),
-                lamp: storedLamp.lamp, detail: storedLamp.detail, harness: live.harness))
+                lamp: storedLamp.lamp, detail: storedLamp.detail, harness: live.harness,
+                recency: Date(timeIntervalSince1970: Double(stored.createdAtMs) / 1000)))
         }
 
         // BAND 3: live sessions with no stored events yet. Nothing to rank them
@@ -448,6 +483,7 @@ public extension GridAssembler {
         // provider states what it is doing, first-hand, which is better
         // evidence than either. `AgentPresentation` is the equivalent rule and
         // it was written for exactly this.
+        var remoteRows: [SessionRow] = []
         for agent in input.remote.agents where !placed.contains(agent.id) {
             placed.insert(agent.id)
             let request = input.remote.requests[agent.id]
@@ -456,7 +492,17 @@ public extension GridAssembler {
             // Read-state is carried alongside the lamp, never inside it.
             let unread = input.remote.unread.contains(agent.id)
             let silent = input.remote.unreachable[agent.provider]
-            rows.append(SessionRow(
+            // A listed transcript is not an agent. Nothing unread, no
+            // question, not working, and untouched for an hour: that is a
+            // file the provider keeps, and the grid is for agents. Recent,
+            // it is plausibly alive and keeps its lamp; owed anything, it
+            // stays whatever its age; a silent provider is never pruned,
+            // because the silence is the provider's, not the session's.
+            if !unread, request == nil, bucket != .working, silent == nil,
+               input.now.timeIntervalSince(agent.updatedAt) > input.remoteStaleAfter {
+                continue
+            }
+            remoteRows.append(SessionRow(
                 id: agent.id,
                 // The provider's own title, then the repository, then the id.
                 // Same precedence as every other band: the harness's own name
@@ -484,8 +530,15 @@ public extension GridAssembler {
                 // The provider said where this agent lives, or said it lives
                 // nowhere you can open. Either way the row carries the answer
                 // and nothing downstream asks what kind of agent it is.
-                door: agent.url.map { .page($0) } ?? SessionRow.Door.none))
+                door: agent.url.map { .page($0) } ?? SessionRow.Door.none,
+                recency: agent.updatedAt))
         }
+        // Into the order, not after it. The local bands were walked newest
+        // first; a remote row takes the place its own time earns among them,
+        // so an agent that just asked from somewhere else is not fifth-band
+        // furniture under twenty older local rows (ruled 14 Sep). Nothing
+        // below this point asks whether a row is remote.
+        rows = Self.mergedByRecency(rows, adding: remoteRows)
 
         // The user's own switch, applied last and to every band at once.
         //

@@ -168,6 +168,14 @@ public struct SessionRow: Equatable, Sendable {
     /// Defaults to `.terminal`, so every row the four local bands build is
     /// unchanged.
     public let door: Door
+    /// When this row last did something, as its own source reports it: the
+    /// waiting event's time for a local row, the provider's `updatedAt` for
+    /// a remote one. The bands are walked in recency order already; this is
+    /// the same fact made explicit, so a row from another band can be slotted
+    /// into that order rather than appended after it (ruled 14 Sep: "a remote
+    /// agent that just did something can reach the panel"). Nil where the
+    /// source has no time to give, and nil never reorders anything.
+    public let recency: Date?
 
     public enum Door: Equatable, Sendable {
         /// A tmux pane this Mac owns. Every local agent.
@@ -196,7 +204,8 @@ public struct SessionRow: Equatable, Sendable {
     public init(id: String, name: String, aux: String, lamp: Lamp,
                revivable: Bool = false, read: ReadState = .none,
                switchedOff: Bool = false, detail: String? = nil,
-               harness: String? = nil, door: Door = .terminal) {
+               harness: String? = nil, door: Door = .terminal,
+               recency: Date? = nil) {
         self.id = id
         self.name = name
         self.aux = aux
@@ -207,6 +216,7 @@ public struct SessionRow: Equatable, Sendable {
         self.detail = detail
         self.harness = harness
         self.door = door
+        self.recency = recency
     }
 
     /// The same row with its lamp out, as a session the user has filed.
@@ -219,7 +229,7 @@ public struct SessionRow: Equatable, Sendable {
     public func switchedOffCopy() -> SessionRow {
         SessionRow(id: id, name: name, aux: aux, lamp: .running,
                    revivable: revivable, read: read, switchedOff: true,
-                   detail: detail, harness: harness, door: door)
+                   detail: detail, harness: harness, door: door, recency: recency)
     }
 
     /// What the pointer gets when it rests on a row: the full name, and
