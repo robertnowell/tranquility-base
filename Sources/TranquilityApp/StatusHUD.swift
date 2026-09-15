@@ -580,8 +580,9 @@ final class StatusHUD: NSObject {
     /// rides the next send after the attachments and before the words
     /// (ruled 15 Sep: "when the mic is used, the typed text should be sent
     /// the same, right after the attachments, before the user message").
-    /// Called when the microphone opens and again when the capture closes,
-    /// so words typed while talking ride too. Nothing on the line is a no-op.
+    /// Called when the capture CLOSES, and only then (ruled 15 Sep: "only
+    /// on close"): the line stays yours to edit for as long as you are
+    /// talking, and leaves with the words. Nothing on the line is a no-op.
     @discardableResult
     func flushTypedLineIntoTray() -> Bool {
         let text = trayRow.composedText.trimmingCharacters(in: .whitespacesAndNewlines)
