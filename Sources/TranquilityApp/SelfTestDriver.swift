@@ -2068,6 +2068,7 @@ extension StatusHUD {
         slateYieldsDrill()
         goToSessionDrill()
         speechCallbackDrill()
+        dismissKeepsTheTurnDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])

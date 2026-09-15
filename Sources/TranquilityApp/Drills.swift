@@ -2369,3 +2369,45 @@ extension StatusHUD {
         ])
     }
 }
+
+extension StatusHUD {
+    /// A dismiss that ends a reply leaves the turn owed (ruled 14 Sep, #449).
+    ///
+    /// The Core rule (`PanelState.dismissKeepsTheTurn`) is unit-tested; this
+    /// drives the panel's side of it, the one line that makes the rule reach
+    /// the app: `dismissTapped` reads the face BEFORE `endCapture` moves it,
+    /// and hands the answer to `onDismiss`. Read it after and every dismiss
+    /// says "idle, the turn is done with", which is exactly how a 3m31s
+    /// dictation sent a live session to Past Agents on 14 Sep.
+    ///
+    /// Wraps `onDismiss` for the two dismisses and restores it in the same
+    /// synchronous frame; the real handler still runs behind the wrapper, so
+    /// nothing the app does on dismiss is skipped by being measured.
+    func dismissKeepsTheTurnDrill() {
+        let real = onDismiss
+        defer { onDismiss = real }
+        var seen: [Bool] = []
+        onDismiss = { owed in seen.append(owed); real?(owed) }
+
+        // A reply on stage: the dismiss ends the capture and keeps the turn.
+        currentTarget = ("selftest", 1, "promotions")
+        showListening(level: { 0 })
+        let replyTookTheStage = state.isCapturingAudio
+        dismiss()
+        let replyEnded = !state.isCapturingAudio
+
+        // A card on stage: its own Dismiss is the turn's dismissal.
+        showResult("selftest dismissKeepsTheTurn card")
+        let cardTookTheStage = state.isCardOnStage
+        dismiss()
+
+        SelfTest.report("dismissKeepsTheTurn", [
+            ("replyTookTheStage", replyTookTheStage),
+            ("replyEnded", replyEnded),
+            ("replyDismissKeepsTheTurn", seen.first == true),
+            ("cardTookTheStage", cardTookTheStage),
+            ("cardDismissEndsTheTurn", seen.count == 2 && seen[1] == false),
+        ])
+        returnToTheGrid(because: "selftest dismissKeepsTheTurn")
+    }
+}
