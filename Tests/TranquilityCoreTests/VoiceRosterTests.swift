@@ -8,22 +8,36 @@ final class VoiceRosterTests: XCTestCase {
 
     private var savedURL: URL!
     private var savedSystemURL: URL!
+    private var savedCatalogURL: URL!
 
     override func setUp() {
         super.setUp()
         savedURL = VoiceRoster.fileURL
         savedSystemURL = VoiceRoster.systemFileURL
+        savedCatalogURL = VoiceCatalog.cacheURL
         let unique = UUID().uuidString
         VoiceRoster.fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("roster-\(unique).json")
         VoiceRoster.systemFileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("roster-system-\(unique).json")
+        // No catalogue by default: an absent cache means "we have not asked the
+        // account yet", which every pre-existing case here relies on — the
+        // roster must come back whole when there is nothing to check it against.
+        VoiceCatalog.cacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voices-\(unique).json")
     }
 
     override func tearDown() {
         VoiceRoster.fileURL = savedURL
         VoiceRoster.systemFileURL = savedSystemURL
+        VoiceCatalog.cacheURL = savedCatalogURL
         super.tearDown()
+    }
+
+    /// Write a catalogue the roster can be checked against.
+    private func catalogue(_ ids: [String]) throws {
+        let voices = ids.map { Voice(id: $0, name: "Voice \($0)", category: "premade") }
+        try JSONEncoder().encode(voices).write(to: VoiceCatalog.cacheURL)
     }
 
     func testMissingFileSeedsTheOriginalCast() {
@@ -102,5 +116,55 @@ final class VoiceRosterTests: XCTestCase {
         XCTAssertNil(VoiceRoster.splitMixedRoster())
         XCTAssertFalse(FileManager.default.fileExists(atPath: VoiceRoster.systemFileURL.path),
                        "no system file means the seed still applies")
+    }
+
+    // MARK: - Voices the account no longer has
+    //
+    // Earned 11 Sep. A cloned voice was deleted on the ElevenLabs account and
+    // stayed in the roster: minted to a brand-new session, 404 on every
+    // announcement for seven minutes, and no row in the roster pane to uncheck
+    // it with, because a voice the catalogue does not list has no row.
+
+    func testAVoiceTheAccountNoLongerHasLeavesTheRoster() throws {
+        let alive = "EXAVITQu4vr4xnSDxMaL"
+        let deleted = "EGxJIQ5TF187oclOp8aT"
+        VoiceRoster.save([alive, deleted])
+        try catalogue([alive])
+        XCTAssertEqual(VoiceRoster.load(), [alive],
+                       "a deleted voice must not be handed out again")
+    }
+
+    func testTheDeletedCloneIsNotInTheSeed() {
+        XCTAssertFalse(VoiceRoster.seed.contains("EGxJIQ5TF187oclOp8aT"),
+                       "removing it from the file is undone by a fresh install "
+                       + "while the seed still carries it")
+    }
+
+    /// The catalogue is a cache of the last successful fetch, so "empty" means
+    /// "we have not asked", never "the account has no voices". Filtering on it
+    /// would silence every agent at once.
+    func testAnUnfetchedCatalogueFiltersNothing() {
+        VoiceRoster.save(VoiceRoster.seed)
+        XCTAssertEqual(VoiceRoster.load(), VoiceRoster.seed)
+    }
+
+    /// The same guard one step further in: a catalogue that agrees with nothing
+    /// on the roster is a catalogue that is wrong — a fetch against the wrong
+    /// account, or a truncated page — and emptying the cast on its word would
+    /// take every voice away over a transient.
+    func testACatalogueThatKnowsNoneOfThemIsDisbelieved() throws {
+        VoiceRoster.save(VoiceRoster.seed)
+        try catalogue(["some-unrelated-voice-id"])
+        XCTAssertEqual(VoiceRoster.load(), VoiceRoster.seed,
+                       "a roster with nothing left is evidence about the "
+                       + "catalogue, not about the roster")
+    }
+
+    /// Order is the assignment sequence, so the filter must not disturb it.
+    func testFilteringPreservesRosterOrder() throws {
+        let ids = ["c-id", "a-id", "gone", "b-id"]
+        VoiceRoster.save(ids)
+        try catalogue(["a-id", "b-id", "c-id"])
+        XCTAssertEqual(VoiceRoster.load(), ["c-id", "a-id", "b-id"])
     }
 }
