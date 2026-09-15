@@ -687,10 +687,19 @@ extension StatusHUD {
         let armAddsNoHint = pasteHintForTesting.isEmpty
         let armedActionFrame = actionRow.convert(actionRow.bounds, to: panel.contentView)
         let armedGoFrame = goButton.convert(goButton.bounds, to: panel.contentView)
-        let armKeepsGeometry = restingHeight == intendedHeight
-            && restingFit == contentStack?.fittingSize.height
-            && restingActionFrame == armedActionFrame
-            && restingGoFrame == armedGoFrame
+        // Reversed 15 Sep: arming now ADDS exactly one line, the typed one
+        // ("if I start typing, I would just love for that to be received"),
+        // and takes the keys for it. The actions move down by that line and
+        // nothing else: same x, same width, one line taller.
+        let lineHeight = trayRow.compose.fittingSize.height + 3
+        let armShowsTheLine = !trayRow.compose.isHidden
+            && (panel.firstResponder as? NSTextView)?.delegate === trayRow.compose
+        let armKeepsGeometry = armShowsTheLine
+            && abs(((intendedHeight ?? 0) - (restingHeight ?? 0)) - lineHeight) <= 1
+            && abs(((contentStack?.fittingSize.height ?? 0) - (restingFit ?? 0)) - lineHeight) <= 1
+            && restingActionFrame.minX == armedActionFrame.minX
+            && restingActionFrame.width == armedActionFrame.width
+            && restingGoFrame.minX == armedGoFrame.minX
 
         func key(_ chars: String, code: UInt16, command: Bool = false) -> NSEvent? {
             NSEvent.keyEvent(
@@ -762,7 +771,7 @@ extension StatusHUD {
             ("ringShows", ringShows),
             ("ringIsWorkingBlue", ringIsWorkingBlue),
             ("armAddsNoHint", armAddsNoHint),
-            ("armKeepsGeometry", armKeepsGeometry),
+            ("armAddsTheTypedLineOnly", armKeepsGeometry),
             ("pasteStagedOnce", pasteStagedOnce),
             ("staysArmedAfterPaste", staysArmedAfterPaste),
             ("chipIsCutAndCounted", chipIsCutAndCounted),
