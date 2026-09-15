@@ -712,20 +712,26 @@ extension StatusHUD {
         let letterA = key("a", code: 0)
         let escape = key("\u{1B}", code: 53)
 
-        // Command-V while armed: one paste, through the handler, as a paste,
-        // and the card stays armed for a second one. The chip shows the cut
-        // first line and says how much it is not showing.
+        // Command-V while armed (re-ruled 15 Sep: one rule, not two). WORDS
+        // go into the typed line, as in any message box, and stage nothing;
+        // the card stays armed. A FILE is a chip, through the handler, as a
+        // paste. The chip's cut-and-counted preview is FragmentPreview's own
+        // test now that a pasted paragraph is no longer a chip.
         let paragraph = String(repeating: "the quick brown fox jumps over the lazy dog ", count: 6)
             .trimmingCharacters(in: .whitespaces)
         board.clearContents()
         board.setString(paragraph, forType: .string)
         if let commandV { panel.sendEvent(commandV) }
-        let pasteStagedOnce = received.count == 1 && received.first?.via == .paste
+        let wordsPasteIntoTheLine = received.isEmpty
+            && trayRow.compose.stringValue == paragraph
         let staysArmedAfterPaste = pasteArmed
+        trayRow.clearComposed(); trayRow.setComposing(true)
+        board.clearContents()
+        board.writeObjects([URL(fileURLWithPath: "/tmp/pasted-one.png") as NSURL])
+        if let commandV { panel.sendEvent(commandV) }
+        let pasteStagedOnce = received.count == 1 && received.first?.via == .paste
         let chip = trayRow.displayedNamesForTesting.first ?? ""
-        let chipIsCutAndCounted = chip == FragmentPreview.preview(paragraph)
-            && chip.hasSuffix("+\(paragraph.count - 48) chars")
-            && chip.count < paragraph.count
+        let chipIsCutAndCounted = chip == "pasted-one.png"
 
         // A refused paste says why, on the card, and stages nothing.
         board.clearContents()
@@ -778,9 +784,10 @@ extension StatusHUD {
             ("ringIsWorkingBlue", ringIsWorkingBlue),
             ("armAddsNoHint", armAddsNoHint),
             ("armAddsTheTypedLineOnly", armKeepsGeometry),
+            ("wordsPasteIntoTheLine", wordsPasteIntoTheLine),
             ("pasteStagedOnce", pasteStagedOnce),
             ("staysArmedAfterPaste", staysArmedAfterPaste),
-            ("chipIsCutAndCounted", chipIsCutAndCounted),
+            ("fileIsAChip", chipIsCutAndCounted),
             ("refusalOnTheCard", refusalOnTheCard),
             ("typedKeyLandsOnTheLine", strayKeyReleases),
             ("releasedPastesNothing", releasedPastesNothing),
