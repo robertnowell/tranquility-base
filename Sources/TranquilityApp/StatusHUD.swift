@@ -310,6 +310,9 @@ final class StatusHUD: NSObject {
     /// The tray row's Attach door: the app opens the picker and stages what
     /// was picked through `onItemsStaged`, the same way a drop is staged.
     var onAttach: (() -> Void)?
+    /// Send with the microphone closed: the typed line (may be empty) and
+    /// whatever the tray holds, to the card's session, now.
+    var onSendTyped: ((String) -> Void)?
 
     // MARK: - Public surface
 
@@ -1068,7 +1071,17 @@ final class StatusHUD: NSObject {
     @objc nonisolated func sendTapped() {
         MainActor.assumeIsolated {
             Track.record("door_opened", ["door": "send"])
-            onSpeakDoor?()
+            // With the microphone open, Send is the tap that ends the
+            // capture, and the words go the way a dictation goes. With it
+            // closed, Send is the typed line and the chips, now.
+            if isCapturingAudio {
+                onSpeakDoor?()
+            } else {
+                let text = trayRow.composedText
+                releasePaste(because: "sent", repaint: false)
+                trayRow.clearComposed()
+                onSendTyped?(text)
+            }
         }
     }
 
@@ -2288,9 +2301,12 @@ final class StatusHUD: NSObject {
         newSessionButton.isHidden = true
         restartAudioButton.isHidden = true
         // The mic sits in the waveform's slot on a card whose microphone is
-        // closed; the waveform takes the slot back while it is open, and Send
-        // takes the Controls word's place in the bottom line for exactly that
-        // long. Baseline properties like every other widget.
+        // closed; the waveform takes the slot back while it is open. Send
+        // takes the Controls word's place whenever there is something to
+        // send (ruled 15 Sep): the microphone open, a chip in the tray, or
+        // words on the typed line. Baseline properties like every other
+        // widget; the tray branch below re-derives Send once it knows the
+        // chips.
         micRow.isHidden = !state.isCardOnStage
         sendButton.isHidden = !isCapturingAudio
         countdownBar.isHidden = true; meter.isHidden = true
@@ -2606,6 +2622,10 @@ final class StatusHUD: NSObject {
                 // mockup 2): "no attachments" and the Attach door, where the
                 // chip will land. Never empty on the grid, which names no one.
                 trayRow.isHidden = staged.isEmpty && !(state.isCardOnStage || state.isCapturingAudio)
+                // Something to send: Send stands in for Controls (ruled 15
+                // Sep), on a card as well as during a capture.
+                let hasWords = !trayRow.composedText.trimmingCharacters(in: .whitespaces).isEmpty
+                if state.isCardOnStage, !staged.isEmpty || hasWords { sendButton.isHidden = false }
             } else {
                 trayRow.apply([])
             }
@@ -2619,7 +2639,7 @@ final class StatusHUD: NSObject {
         // mid-transaction, and a note explaining how to start the thing you are
         // already doing is furniture. Written as one rule off the state rather
         // than unhidden by each arm, so a face added later inherits the answer.
-        cardControls.isHidden = !state.isCardOnStage
+        cardControls.isHidden = !state.isCardOnStage || !sendButton.isHidden
 
         // The action row exists exactly when a quiet action is visible. (The
         // slow-transcription tick unhides its own actions later and re-runs
@@ -3465,7 +3485,11 @@ final class StatusHUD: NSObject {
         panel.makeKeyAndOrderFront(nil)
         Permissions.log("paste: armed for \(target.sessionId.prefix(8)) via \(door)")
         Track.record("paste_armed", ["via": .token(door)])
+        // The typed line takes the keys (ruled 15 Sep). It is on the tray
+        // row, which render() shows on every card that can take a reply.
+        trayRow.setComposing(true)
         render()
+        panel.makeFirstResponder(trayRow.compose)
     }
 
     /// Give the keyboard back. `repaint` is false from inside a transition,
@@ -3474,6 +3498,9 @@ final class StatusHUD: NSObject {
         guard let panel, panel.pasteArmed else { return }
         Permissions.log("paste: released (\(reason))")
         releaseKeyboard()
+        // The line stays if it has words (they are not lost by looking
+        // away) and goes if it is empty.
+        trayRow.setComposing(false)
         if repaint { render() }
     }
 

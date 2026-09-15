@@ -1139,12 +1139,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if accepted { hud.render() }
             }
         }
+        // Send with the microphone closed (ruled 15 Sep): the typed line and
+        // the chips go now. The click is the consent, so there is no undo
+        // window; the same `send` the countdown hands off to does the rest.
+        hud.onSendTyped = { [weak self] text in
+            guard let self, let coordinator, let target = dropTarget else {
+                self?.lastStatusLine = "nothing to send to yet"
+                return
+            }
+            Task { @MainActor in
+                do {
+                    let outcome = try await coordinator.submitTypedReply(text: text, to: target.sessionId)
+                    switch outcome {
+                    case .readyToSend(let utteranceId, _, let label, let sessionId):
+                        let answering = (try? coordinator.waiting())?
+                            .first { $0.sessionId == sessionId }?.latestId
+                        self.delivering.began(sessionId: sessionId, answering: answering)
+                        self.hud.render()
+                        self.send(utteranceId: utteranceId, label: label, sessionId: sessionId)
+                    case .noTarget:
+                        self.lastStatusLine = "nothing to send"
+                        Permissions.log("typed send: nothing typed and nothing staged")
+                        self.hud.render()
+                    default:
+                        Permissions.log("typed send: unexpected outcome \(outcome)")
+                    }
+                } catch {
+                    Permissions.log("typed send threw: \(error)")
+                    Failures.report(.deliveryFailed, reason: "typed send threw: \(error)")
+                }
+            }
+        }
         hud.onItemsStaged = { [weak self] items, via in
             let event: String = {
                 switch via {
                 case .drop: return "files_dropped"
                 case .paste: return "pasted"
                 case .picker: return "files_picked"
+                case .typed: return "typed_line"
                 }
             }()
             guard let self, let coordinator, let target = dropTarget else {

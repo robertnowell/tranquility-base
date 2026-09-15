@@ -23,6 +23,8 @@ enum StagingSource: String {
     case drop, paste
     /// The Attach door on the tray row (ruled 15 Sep): a file picker.
     case picker
+    /// A line typed on the card and entered with Return (ruled 15 Sep).
+    case typed
 }
 
 /// One pasteboard, read into items, with the reason when it could not be.
@@ -176,7 +178,13 @@ final class DropSurfaceView: NSView {
 /// list: fragments can be long and a wrapped row reflows unpredictably as the
 /// set changes, while rows only ever grow downward — the geometry the panel
 /// already handles by anchoring its top edge.
-final class TrayRowView: NSStackView {
+final class TrayRowView: NSStackView, NSTextFieldDelegate {
+    func controlTextDidChange(_ note: Notification) { onComposeChanged?(compose.stringValue) }
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.insertNewline(_:)) { onComposeReturn?(compose.stringValue); return true }
+        if selector == #selector(NSResponder.cancelOperation(_:)) { onComposeEscape?(); return true }
+        return false
+    }
     /// Per-fragment, never clear-all (a cross that took entries you did not
     /// point at is the surprise this whole feature exists to avoid).
     var onRemove: ((String) -> Void)?
@@ -195,6 +203,15 @@ final class TrayRowView: NSStackView {
     private let header = NSView()
     private let empty = NSTextField(labelWithString: "")
     let attach = DoorLabel(labelWithString: "")
+    /// The typed line (ruled 15 Sep: "while the card is selected, if I start
+    /// typing, I would just love for that to be received"). A press on the
+    /// card arms it and it takes the keys; Return enters the line as a chip
+    /// under the attachments; Send takes whatever is still in it. Shown
+    /// while the card is armed or the line has words.
+    let compose = NSTextField()
+    var onComposeChanged: ((String) -> Void)?
+    var onComposeReturn: ((String) -> Void)?
+    var onComposeEscape: (() -> Void)?
 
     init() {
         super.init(frame: .zero)
@@ -223,22 +240,51 @@ final class TrayRowView: NSStackView {
             attach.centerYAnchor.constraint(equalTo: header.centerYAnchor),
         ])
         addArrangedSubview(header)
+
+        compose.isBordered = false
+        compose.isBezeled = false
+        compose.drawsBackground = false
+        compose.focusRingType = .none
+        compose.font = ChromeType.mono(ofSize: 11, weight: .regular)
+        compose.textColor = StateLegend.Lens.content.color
+        compose.placeholderAttributedString = ChromeType.line(
+            StateLegend.composePlaceholder, font: ChromeType.mono(ofSize: 11, weight: .regular),
+            color: StateLegend.Palette.faint)
+        compose.lineBreakMode = .byTruncatingHead
+        compose.maximumNumberOfLines = 1
+        compose.cell?.usesSingleLineMode = true
+        compose.cell?.wraps = false
+        compose.cell?.isScrollable = true
+        compose.delegate = self
+        compose.translatesAutoresizingMaskIntoConstraints = false
+        compose.widthAnchor.constraint(equalToConstant: 348).isActive = true
+        compose.isHidden = true
+        addArrangedSubview(compose)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     @objc private func attachTapped() { onAttach?() }
 
+    /// Show the line and hand it the keys, or hide it when it is empty.
+    func setComposing(_ on: Bool) {
+        compose.isHidden = !(on || !compose.stringValue.isEmpty)
+    }
+    var composedText: String { compose.stringValue }
+    func clearComposed() { compose.stringValue = ""; compose.isHidden = true }
+
     func apply(_ next: [String]) {
         guard next != fragments else { return }
         fragments = next
-        for view in arrangedSubviews where view !== header {
+        for view in arrangedSubviews where view !== header && view !== compose {
             removeArrangedSubview(view); view.removeFromSuperview()
         }
         empty.isHidden = !next.isEmpty
         for fragment in next {
             let row = ChipRow(fragment: fragment)
             row.onRemove = { [weak self] in self?.onRemove?(fragment) }
-            addArrangedSubview(row)
+            // Chips above the typed line: the line is what you are writing
+            // now, the chips are what is already in.
+            insertArrangedSubview(row, at: arrangedSubviews.count - 1)
             row.widthAnchor.constraint(equalToConstant: 348).isActive = true
         }
     }
@@ -252,7 +298,9 @@ final class TrayRowView: NSStackView {
     /// removed from the tree but left in the arrangement is invisible to
     /// `displayedNamesForTesting` and visible here, which is the difference
     /// the teardown fix is about.
-    var arrangedSubviewCountForTesting: Int { arrangedSubviews.filter { $0 !== header }.count }
+    var arrangedSubviewCountForTesting: Int {
+        arrangedSubviews.filter { $0 !== header && $0 !== compose }.count
+    }
 
     var removeButtonsForTesting: [ConsoleButton] {
         arrangedSubviews.compactMap { ($0 as? ChipRow)?.removeButton }

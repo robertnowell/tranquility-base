@@ -53,9 +53,17 @@ extension StatusHUD {
                 let held = event.modifierFlags.intersection([.command, .shift, .option, .control])
                 if held == .command, event.charactersIgnoringModifiers?.lowercased() == "v" {
                     onPasteRequested?()
-                } else {
-                    onPasteReleased?()
+                    return
                 }
+                // The typed line (ruled 15 Sep): while it is editing, keys
+                // are words for it, and Return and Escape are its own. Only
+                // a key with no editor to land in releases the card, as
+                // every stray key did before.
+                if (firstResponder as? NSTextView)?.delegate is NSTextField {
+                    super.sendEvent(event)
+                    return
+                }
+                onPasteReleased?()
                 return
             }
             super.sendEvent(event)
@@ -389,6 +397,22 @@ extension StatusHUD {
         trayRow.onAttach = { [weak self] in
             Track.record("door_opened", ["door": "attach"])
             self?.onAttach?()
+        }
+        trayRow.onComposeChanged = { [weak self] _ in self?.render() }
+        trayRow.onComposeReturn = { [weak self] line in
+            guard let self else { return }
+            let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return }
+            // Received: the line becomes a chip under the attachments, the
+            // same chip a pasted sentence makes, and the line clears for the
+            // next one. Send takes them all.
+            if onItemsStaged?([.text(text)], .typed) == true {
+                trayRow.compose.stringValue = ""
+                render()
+            }
+        }
+        trayRow.onComposeEscape = { [weak self] in
+            self?.releasePaste(because: "escape", repaint: true)
         }
         trayRow.onRemove = { [weak self] path in
             guard let self, let session = currentTarget?.sessionId else { return }
