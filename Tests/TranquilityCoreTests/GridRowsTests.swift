@@ -168,6 +168,39 @@ final class GridRowsTests: XCTestCase {
         XCTAssertEqual(rows.map(\.id), [C, B, A])
     }
 
+    // MARK: - A row is dated by its conversation, never by its file (15 Sep)
+
+    /// The screenshot that ruled it: "Calendar approved state UX", last turn
+    /// 22:01 the night before, second on the panel at 14:09 because Remote
+    /// Control had appended a `bridge-session` line to its transcript five
+    /// minutes earlier. The file's clock and the conversation's clock
+    /// disagree here by sixteen hours, in the direction that lies, and the
+    /// row must take the conversation's.
+    func testARowIsDatedByItsLastTurnNotByTheFileMovingUnderneathIt() {
+        let now = Date()
+        let evidence: (String, SessionActivity.TurnBoundary?) -> SessionActivity.Evidence? = { path, _ in
+            switch path {
+            case "/stale.jsonl":
+                // Turn last night; file touched just now by bookkeeping.
+                return .init(activity: .idle, observedAt: now.addingTimeInterval(-16 * 3600),
+                             modifiedAt: now.addingTimeInterval(-5 * 60))
+            case "/fresh.jsonl":
+                // Turn an hour ago; file untouched since.
+                return .init(activity: .idle, observedAt: now.addingTimeInterval(-3600),
+                             modifiedAt: now.addingTimeInterval(-3600))
+            default: return nil
+            }
+        }
+        let rows = GridAssembler.rows(inputs(
+            waiting: [waiting(A, latestId: 20, path: "/stale.jsonl"),
+                      waiting(B, latestId: 10, path: "/fresh.jsonl")],
+            live: [A: live(A), B: live(B)], evidence: evidence)).rows
+        XCTAssertEqual(rows.map(\.id), [B, A],
+                       "the file moved under A; A's conversation did not, so A is older")
+        XCTAssertEqual(rows.first { $0.id == A }?.lastActivity,
+                       now.addingTimeInterval(-16 * 3600))
+    }
+
     /// A live session with no stored events has no recorded transcript path, so
     /// that band derives one, and it must still get a row rather than being
     /// skipped for having nothing to rank it by.

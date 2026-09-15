@@ -181,6 +181,17 @@ public struct SessionRow: Equatable, Sendable {
     ///
     /// `nil` means the band had nothing to offer, and those rows keep their
     /// arrival order at the end rather than being flung to 1970.
+    ///
+    /// **Dated by what the conversation last said, never by its file.** Ruled
+    /// 15 Sep 2026, the day after this field landed reading the transcript's
+    /// mtime. Claude Code's Remote Control bridge appends a `bridge-session`
+    /// line to every idle transcript when it reconnects (55 of them on one
+    /// session), and each one moves the file; so a green row whose last turn
+    /// was 22:01 the night before sat second on the panel at 14:09, above
+    /// agents that had spoken within the hour. `SessionActivity.Evidence`
+    /// already separates the two clocks and warns which one is dangerous;
+    /// `observedAt` is the turn's own timestamp and is the only local source
+    /// this field may have. `scripts/check-row-dates.sh` holds that.
     public let lastActivity: Date?
 
     public enum Door: Equatable, Sendable {
@@ -432,13 +443,24 @@ public struct SessionRow: Equatable, Sendable {
         }
     }
 
-    /// Four bands: sessions doing something, then sessions merely alive,
-    /// then sessions the user switched off by hand, then sessions that
-    /// have exited — which sink below all of them, because a row you
-    /// cannot speak to must never sit between two you can.
+    /// Five bands: sessions asking for you (green and amber), then sessions
+    /// working on their own (blue), then sessions merely alive, then sessions
+    /// the user switched off by hand, then sessions that have exited — which
+    /// sink below all of them, because a row you cannot speak to must never
+    /// sit between two you can.
     ///
-    /// Order WITHIN each band is untouched: the caller has already
-    /// established recency, and a stable partition keeps it.
+    /// Within the two lit bands, newest turn first (`lastActivity`), and a
+    /// stable partition keeps every other band in the order it arrived.
+    ///
+    /// **Green above blue** was ruled 15 Sep 2026, on a screenshot of five
+    /// blue rows over every green one: "the green lamps should always be
+    /// above the blue lamps." One band had held all three lit colours since
+    /// the partition was written, and it did not show until #458 sorted that
+    /// band by time — a working session writes its transcript every few
+    /// seconds, so it is always the newest thing on the panel and blue won
+    /// every repaint by construction. Amber sits with green, not above it:
+    /// both are the channels that ask (`Lamp.asksForYou`), and which of them
+    /// asked most recently is the order the user wants.
     public static func quietRowsLast(_ rows: [SessionRow]) -> [SessionRow] {
         func band(_ row: SessionRow) -> Int {
             // A row the user switched off is ALIVE — `switchedOffCopy()`
@@ -464,31 +486,25 @@ public struct SessionRow: Equatable, Sendable {
             // prefix of this array any more, so the only thing the old rank
             // still did was rank a live session below a dead one on the one
             // face built to show it.
-            if row.switchedOff { return 2 }
+            if row.switchedOff { return 3 }
             switch row.lamp {
-            // LIT, and ranked TOGETHER. Split in two for one afternoon (14
-            // Sep, #428: unread green above read green, so a remote agent
-            // enumerated last could win a slot) and reversed the same day on
-            // Robert's report: "right now Read is all at the top, but then if
-            // you read something it moves in the order and it's hard to find
-            // again ... just order green by recency, whether or not they're
-            // read or unread." Hearing a row must not move it. Read-state
-            // bolds a row and drives the announcer; it does not order the
-            // grid. The bands above have already put every lit row in recency
-            // order, and a stable partition keeps it.
-            //
-            // The remote-agent placement that motivated the split is a real
-            // gap and is still open: the fifth band arrives last by
-            // construction, so it needs a recency field of its own to join
-            // this order, not a read-state tiebreak that reshuffles the local
-            // rows every time one is heard.
-            case .ready, .working, .fault: return 0
-            case .running: return 1
-            case .unlit: return 3
+            // LIT, in two tiers: the lamps that ask for you, then the one
+            // that does not. Ranked by LAMP and never by read-state. Split
+            // by read-state for one afternoon (14 Sep, #428: unread green
+            // above read green, so a remote agent enumerated last could win
+            // a slot) and reversed the same day on Robert's report: "right
+            // now Read is all at the top, but then if you read something it
+            // moves in the order and it's hard to find again ... just order
+            // green by recency, whether or not they're read or unread."
+            // Hearing a row must not move it. Read-state bolds a row and
+            // drives the announcer; it does not order the grid.
+            case .ready, .fault: return 0
+            case .working: return 1
+            case .running: return 2
+            case .unlit: return 4
             }
         }
-        // **The lit band orders by recency** (#454), which is the field the
-        // comment above says it was waiting for.
+        // **Each lit band orders by recency** (#454), newest turn first.
         //
         // The local bands already arrive in recency order, so for them this is
         // a no-op that happens to be explicit. What it adds is the fifth band:
@@ -517,9 +533,9 @@ public struct SessionRow: Equatable, Sendable {
                 }
             }.map(\.element)
         }
-        return (0...3).flatMap { rank -> [SessionRow] in
+        return (0...4).flatMap { rank -> [SessionRow] in
             let inBand = rows.filter { band($0) == rank }
-            return rank == 0 ? byRecency(inBand) : inBand
+            return rank <= 1 ? byRecency(inBand) : inBand
         }
     }
 

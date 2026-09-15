@@ -337,9 +337,6 @@ public extension GridAssembler {
                 // blocked row spends the column on its reason, like every other
                 // amber row on the panel.
                 aux: blocked?.reason ?? SessionRow.shortId(event.sessionId),
-                // The transcript's own mtime when we have it, and otherwise
-                // when the turn arrived. Both are "when this agent last did
-                // something"; the file is simply the better witness.
                 lamp: gone ? .unlit : (blocked?.lamp
                     ?? (!resumed
                         && (evidence?.activity == .working
@@ -358,10 +355,12 @@ public extension GridAssembler {
                 // other amber row — the column can only hold a clause.
                 detail: blocked?.detail,
                 harness: input.liveById[event.sessionId]?.harness,
-                // The transcript's own mtime when we have it, and otherwise
-                // when the turn arrived. Both are "when this agent last did
-                // something"; the file is simply the better witness.
-                lastActivity: evidence?.modifiedAt
+                // The timestamp of the transcript entry the verdict rests on,
+                // and otherwise when the turn arrived at the hook. NEVER the
+                // file's mtime: it moves for reasons that are not the
+                // conversation (15 Sep: Remote Control's `bridge-session`
+                // lines put a sixteen-hour-old green row second on the panel).
+                lastActivity: evidence?.observedAt
                     ?? Date(timeIntervalSince1970: Double(event.createdAtMs) / 1000))
         }
 
@@ -400,7 +399,8 @@ public extension GridAssembler {
                 name: GridAssembler.tabDisplayName(for: stored, live: live),
                 aux: storedLamp.reason ?? SessionRow.shortId(stored.sessionId),
                 lamp: storedLamp.lamp, detail: storedLamp.detail, harness: live.harness,
-                lastActivity: evidence?.modifiedAt
+                // The conversation's clock, then the hook's; never the file's.
+                lastActivity: evidence?.observedAt
                     ?? Date(timeIntervalSince1970: Double(stored.createdAtMs) / 1000)))
         }
 
@@ -428,7 +428,8 @@ public extension GridAssembler {
                 name: GridAssembler.tabDisplayName(live: live, callsign: nil),
                 aux: liveLamp.reason ?? SessionRow.shortId(live.sessionId),
                 lamp: liveLamp.lamp, detail: liveLamp.detail, harness: live.harness,
-                lastActivity: evidence?.modifiedAt ?? live.startedAtDate))
+                // The conversation's clock, then the process start; never the file's.
+                lastActivity: evidence?.observedAt ?? live.startedAtDate))
         }
 
         // BAND 4: the sessions that are not awake (ruled 11 Aug). Everything

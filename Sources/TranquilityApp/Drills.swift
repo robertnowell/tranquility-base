@@ -915,21 +915,22 @@ extension StatusHUD {
             // reversed it the same day: "if you read something it moves in the
             // order and it's hard to find again ... just order green by
             // recency, whether or not they're read or unread." Hearing a row
-            // must not move it. Lit rows keep pure arrival order, which is the
-            // recency order the bands established. The remote-agent gap is
-            // real and still open; it wants a recency field of its own, not a
-            // read-state tiebreak. Mirrored in SessionRowTests so `swift test`
-            // catches the next drift before the panel does.
-            ("activeKeepsArrivalOrder", Array(sorted.prefix(4)) == ["w1", "r1", "f1", "w2"]),
+            // must not move it. Then RULED AGAIN on 15 Sep, on the screenshot
+            // #458 produced: "the green lamps should always be above the blue
+            // lamps." Lit rows are two tiers, the lamps that ask for you and
+            // then blue, each in the recency order the bands established.
+            // Mirrored in SessionRowTests so `swift test` catches the next
+            // drift before the panel does.
+            ("asksForYouAboveBlue", Array(sorted.prefix(4)) == ["r1", "f1", "w1", "w2"]),
             ("hearingARowDoesNotMoveIt",
              SessionRow.quietRowsLast([
                 SessionRow(id: "read", name: "read", aux: "", lamp: .ready, read: .opened),
                 SessionRow(id: "unread", name: "unread", aux: "", lamp: .ready,
                            read: .unread),
              ]).map(\.id) == ["read", "unread"]),
-            ("andNothingReordersLitRows",
+            ("blueSinksBelowEveryGreen",
              SessionRow.quietRowsLast([row("a", .ready), row("b", .working),
-                                       row("c", .ready)]).map(\.id) == ["a", "b", "c"]),
+                                       row("c", .ready)]).map(\.id) == ["a", "c", "b"]),
             ("nothingLost", sorted.count == mixed.count),
             ("allQuietIsStillAllQuiet",
              SessionRow.quietRowsLast([row("i1", .running), row("i2", .running)])

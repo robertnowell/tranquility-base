@@ -95,6 +95,13 @@ python3 scripts/check-borrowed-descriptors.sh
 echo "→ compat comments"
 python3 scripts/check-compat-comments.sh
 
+# And the one grep that keeps the grid honest about time (15 Sep): a row's
+# `lastActivity` is the conversation's clock, never the file's. #458 shipped
+# the other choice and Remote Control's bookkeeping lines reordered the panel
+# by the next afternoon.
+echo "→ row dates"
+python3 scripts/check-row-dates.sh
+
 echo "→ notarization log parser"
 # Anything that decides WHO WROTE A PAGE runs against the adversarial set
 # first. Both attribution regressions of 03 Sep would have died here in seconds;
