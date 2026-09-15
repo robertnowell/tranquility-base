@@ -127,6 +127,30 @@ final class LiveGridProbe: XCTestCase {
             let tag = remoteIDs.contains(row.id) ? "REMOTE" : "local "
             print("  \(tag) \(String(describing: row.lamp).padding(toLength: 9, withPad: " ", startingAt: 0))\(row.name.prefix(46))")
         }
+        if let at = verdict.rows.firstIndex(where: { $0.harness == "crobot" }) {
+            let row = verdict.rows[at]
+            let lit = verdict.rows.filter { $0.lamp.isLit && !$0.switchedOff }
+            let litAt = lit.firstIndex(where: { $0.harness == "crobot" })
+            print("LIVE crobot position: row \(at + 1) of \(verdict.rows.count), "
+                + "lit rank \((litAt ?? -1) + 1) of \(lit.count), "
+                + "lastActivity \(row.lastActivity.map { "\($0)" } ?? "nil")")
+        } else {
+            let remote = verdict.rows.filter { remoteIDs.contains($0.id) }
+            var byHarness: [String: Int] = [:]
+            for r in remote { byHarness[r.harness ?? "nil", default: 0] += 1 }
+            print("LIVE remote rows by harness: \(byHarness)")
+            print("LIVE snapshot providers: "
+                + "\(Set(snapshot.agents.map(\.provider)).sorted())")
+            for r in remote where r.harness == nil {
+                let agent = snapshot.agents.first { $0.id == r.id }
+                print("   nil-harness row \(r.id.prefix(10)) lamp=\(r.lamp) "
+                    + "door=\(r.door) provider=\(agent?.provider ?? "?") "
+                    + "name=\(r.name.prefix(38))")
+                print("     in waiting=\(waiting.contains { $0.sessionId == r.id }) "
+                    + "known=\(known.contains { $0.sessionId == r.id }) "
+                    + "discovered=\(discovered.contains { $0.sessionId == r.id })")
+            }
+        }
         let crobot = verdict.rows.first { $0.harness == "crobot" }
         print("LIVE crobot row: \(crobot.map { "\($0.lamp) \($0.name.prefix(46))" } ?? "NOT IN THE GRID")")
     }

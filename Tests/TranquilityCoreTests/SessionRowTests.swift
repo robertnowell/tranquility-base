@@ -283,3 +283,83 @@ final class SessionRowTests: XCTestCase {
         XCTAssertFalse(ReadState.none.isAsking)
     }
 }
+
+// MARK: - Lit rows order by recency (#454, ruled 14 Sep 2026)
+
+extension SessionRowTests {
+
+    private func lit(_ id: String, _ ago: TimeInterval?, lamp: Lamp = .ready) -> SessionRow {
+        SessionRow(id: id, name: id, aux: "", lamp: lamp,
+                   lastActivity: ago.map { Date(timeIntervalSinceNow: -$0) })
+    }
+
+    /// The whole point: newest first, whatever band enumerated it.
+    func testLitRowsSortNewestFirst() {
+        let sorted = SessionRow.quietRowsLast([
+            lit("old", 900), lit("newest", 5), lit("middle", 60),
+        ]).map(\.id)
+        XCTAssertEqual(sorted, ["newest", "middle", "old"])
+    }
+
+    /// **The case that motivated it.** A remote row is enumerated last by
+    /// construction, so before this it could never win a slot however recently
+    /// it had spoken. Measured on the real panel beforehand: 0 of 12.
+    func testARecentRemoteRowOutranksStaleLocalOnes() {
+        let sorted = SessionRow.quietRowsLast([
+            lit("local-old", 3600), lit("local-older", 7200),
+            lit("remote-just-now", 2),          // arrives last, sorts first
+        ]).map(\.id)
+        XCTAssertEqual(sorted.first, "remote-just-now")
+    }
+
+    /// **Hearing a row must not move it** — Robert's own rule, and the reason
+    /// the read-state ranking was reverted. Read-state bolds a row and drives
+    /// the announcer; it does not order the grid.
+    func testReadingARowDoesNotChangeItsPlace() {
+        let before = SessionRow.quietRowsLast([
+            lit("a", 10), lit("b", 20), lit("c", 30),
+        ]).map(\.id)
+        let afterReading = SessionRow.quietRowsLast([
+            SessionRow(id: "a", name: "a", aux: "", lamp: .ready, read: .opened,
+                       lastActivity: Date(timeIntervalSinceNow: -10)),
+            lit("b", 20), lit("c", 30),
+        ]).map(\.id)
+        XCTAssertEqual(before, afterReading)
+    }
+
+    /// A band that cannot say when keeps its arrival place at the END of the
+    /// lit rows. "I don't know" is not "never", and sorting it to 1970 would
+    /// bury a live agent under every dated one.
+    func testRowsWithNoTimestampKeepArrivalOrderAtTheEnd() {
+        let sorted = SessionRow.quietRowsLast([
+            lit("undated-first", nil), lit("dated", 100), lit("undated-second", nil),
+        ]).map(\.id)
+        XCTAssertEqual(sorted, ["dated", "undated-first", "undated-second"])
+    }
+
+    /// The partition is untouched: recency orders WITHIN the lit band only,
+    /// and a quiet or dead row does not climb past a lit one by being recent.
+    func testRecencyDoesNotDisturbTheLampPartition() {
+        let sorted = SessionRow.quietRowsLast([
+            SessionRow(id: "dead", name: "", aux: "", lamp: .unlit,
+                       lastActivity: Date()),
+            SessionRow(id: "quiet", name: "", aux: "", lamp: .running,
+                       lastActivity: Date()),
+            lit("lit", 9999),
+        ]).map(\.id)
+        XCTAssertEqual(sorted, ["lit", "quiet", "dead"])
+    }
+
+    /// Equal timestamps must not shuffle between repaints: `sorted(by:)` is
+    /// not stable in Swift, so arrival is the tiebreak.
+    func testEqualTimestampsKeepArrivalOrderEveryTime() {
+        let at = Date()
+        let rows = (1...6).map {
+            SessionRow(id: "r\($0)", name: "", aux: "", lamp: .ready, lastActivity: at)
+        }
+        let expected = rows.map(\.id)
+        for _ in 0..<50 {
+            XCTAssertEqual(SessionRow.quietRowsLast(rows).map(\.id), expected)
+        }
+    }
+}
