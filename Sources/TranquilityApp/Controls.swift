@@ -118,6 +118,14 @@ final class GridFooterView: NSView {
     /// The signature was tapped. The panel's one door to the project itself
     /// rather than to an agent.
     var onWordmark: (() -> Void)?
+    /// The chords' doors (ruled 14 Sep): the same two moves the keys make,
+    /// as words at the row's leading edge. `Next` invites the next agent;
+    /// `Speak` opens the microphone hands-free and, while it is open, reads
+    /// `Send`.
+    var onNext: (() -> Void)?
+    var onSpeak: (() -> Void)?
+    let next = DoorLabel(labelWithString: "")
+    let speak = DoorLabel(labelWithString: "")
     /// The hover target, exposed so the note can be hung above the row that
     /// actually owns the word rather than above a hard-coded one.
     let controls = ControlsWordView()
@@ -142,7 +150,21 @@ final class GridFooterView: NSView {
             NSClickGestureRecognizer(target: self, action: #selector(wordmarkTapped)))
         mark.translatesAutoresizingMaskIntoConstraints = false
 
-        addSubview(controls); addSubview(mark)
+        // The two doors, in the door ink, so they read as the same kind of
+        // thing as OPEN HUB and GO TO AGENT on a card: something you can do,
+        // not something the panel is telling you.
+        for (door, title, tip, action) in [
+            (next, "\(StateLegend.nextTitle) \(StateLegend.Glyph.forward)", StateLegend.nextTip, #selector(nextTapped)),
+            (speak, StateLegend.speakTitle, StateLegend.speakTip, #selector(speakTapped)),
+        ] {
+            door.attributedStringValue = StateLegend.BottomLine.door(title)
+            door.isADoor = true
+            door.toolTip = tip
+            door.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: action))
+            door.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        addSubview(controls); addSubview(mark); addSubview(next); addSubview(speak)
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: width),
             heightAnchor.constraint(equalToConstant: Self.height),
@@ -151,10 +173,25 @@ final class GridFooterView: NSView {
             controls.bottomAnchor.constraint(equalTo: bottomAnchor),
             mark.trailingAnchor.constraint(equalTo: trailingAnchor),
             mark.centerYAnchor.constraint(equalTo: centerYAnchor),
+            speak.leadingAnchor.constraint(equalTo: leadingAnchor),
+            speak.centerYAnchor.constraint(equalTo: centerYAnchor),
+            next.leadingAnchor.constraint(equalTo: speak.trailingAnchor, constant: 12),
+            next.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
+    /// The microphone door follows the microphone: `Speak` when it is
+    /// closed, `Send` while it is open, so the same word never means two
+    /// opposite things.
+    func setListening(_ listening: Bool) {
+        speak.attributedStringValue = StateLegend.BottomLine.door(
+            listening ? StateLegend.sendTitle : StateLegend.speakTitle)
+        speak.toolTip = listening ? StateLegend.sendTip : StateLegend.speakTip
+    }
+
     @objc private func wordmarkTapped() { onWordmark?() }
+    @objc private func nextTapped() { onNext?() }
+    @objc private func speakTapped() { onSpeak?() }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -162,7 +199,34 @@ final class GridFooterView: NSView {
 
 /// The sticky note behind `Controls`: the chords the key line used to spell out
 /// along the bottom of every grid, now shown only when asked for.
+///
+/// Since 14 Sep each row is also a door: clicking a chord does what the
+/// chord does. The note used to close the instant the pointer left the word
+/// `Controls`, which put it 8pt out of reach; it now reports its own hover
+/// so the panel can keep it open while the pointer is on it.
 final class ControlsNoteView: NSView {
+    /// True on enter, false on exit, for the note itself.
+    var onHover: ((Bool) -> Void)?
+    /// A row was clicked. The index is into `StateLegend.controlsNote`.
+    var onRow: ((Int) -> Void)?
+    private(set) var rowDoors: [DoorLabel] = []
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
+
+    @objc private func rowTapped(_ recognizer: NSClickGestureRecognizer) {
+        guard let view = recognizer.view, let index = rowDoors.firstIndex(where: { $0 === view })
+        else { return }
+        onRow?(index)
+    }
+
     init() {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -205,10 +269,18 @@ final class ControlsNoteView: NSView {
             chord.translatesAutoresizingMaskIntoConstraints = false
             chord.widthAnchor.constraint(equalToConstant: chordWidth).isActive = true
 
-            let meaning = NSTextField(labelWithString: entry.meaning)
+            // The meaning is the door: the words say what will happen, and
+            // clicking them makes it happen. Same cursor and the same one-step
+            // ink as every other door on the panel.
+            let meaning = DoorLabel(labelWithString: "")
+            meaning.attributedStringValue = ChromeType.line(
+                entry.meaning, font: font, color: StateLegend.Palette.hint)
             meaning.font = font
-            meaning.textColor = StateLegend.Palette.hint
+            meaning.isADoor = true
+            meaning.addGestureRecognizer(
+                NSClickGestureRecognizer(target: self, action: #selector(rowTapped(_:))))
             meaning.translatesAutoresizingMaskIntoConstraints = false
+            rowDoors.append(meaning)
 
             let line = NSStackView(views: [chord, meaning])
             line.orientation = .horizontal

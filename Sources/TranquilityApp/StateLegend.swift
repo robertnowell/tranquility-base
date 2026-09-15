@@ -623,6 +623,24 @@ enum StateLegend {
     static let openHubTitle = "Open Hub"
     static let openReportTitle = "Open Report"
 
+    // MARK: - The chords' doors (ruled 14 Sep 2026)
+    //
+    // "It's my contention that we should have a clickable interface." A new
+    // user on a new Mac drove a whole session with row clicks and ⌥ holds,
+    // and the one chord that had no button was the one he could not make
+    // work. Every chord now has a door: a quiet word in the bottom line that
+    // does exactly what the chord does, by calling the same handler, so the
+    // two cannot drift. The key stays the fast way; the word is the
+    // discoverable one, and its tooltip teaches the key.
+    static let nextTitle = "Next"
+    static let homeTitle = "Home"
+    static let speakTitle = "Speak"
+    static let sendTitle = "Send"
+    static let nextTip = "Hear the next agent. Or press \u{2303} Control + \u{2325} Option."
+    static let homeTip = "Back to the grid. Or press \u{2303} Control + \u{2325} Option."
+    static let speakTip = "Click, talk, click again to send. Or hold \u{2325} Option."
+    static let sendTip = "Send what you said. Or tap \u{2325} Option."
+
     /// What hovering `Controls` reveals, in order of how often you reach for it.
     ///
     /// Probation ended 10 Aug: the key line — four chords spelled out along the

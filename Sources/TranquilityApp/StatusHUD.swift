@@ -38,6 +38,11 @@ final class StatusHUD: NSObject {
     /// are the interface.
     var dontSendButton: ConsoleButton!
     var micSettingsButton: ConsoleButton!
+    /// The chords' doors on a card (ruled 14 Sep): `Home` is what ⌃⌥ does
+    /// from a card, `Speak` what holding ⌥ does. Quiet actions at the leading
+    /// edge, like every other thing a card lets you do about itself.
+    var homeButton: ConsoleButton!
+    var speakButton: ConsoleButton!
     var newSessionButton: ConsoleButton!
     var restartAudioButton: ConsoleButton!
     var openPageButton: ConsoleButton!
@@ -292,6 +297,11 @@ final class StatusHUD: NSObject {
     var onOpenRepository: (() -> Void)?
     /// Wired by the app onto the workspace's focus-or-open call.
     var onOpenReport: ((String) -> Void)?
+    /// The chords' doors. Each is wired by the app to the SAME handler the
+    /// key reaches, so a click and a chord cannot mean different things.
+    var onNextDoor: (() -> Void)?
+    var onSpeakDoor: (() -> Void)?
+    var onHearMoreDoor: (() -> Void)?
 
     // MARK: - Public surface
 
@@ -508,8 +518,27 @@ final class StatusHUD: NSObject {
     /// same note serves both. Centred on the panel rather than aligned to the
     /// word — the note is wider than the word is long, so a leading-aligned
     /// note hung off a centred word would run off the right edge.
+    /// The pending close of the note, if the pointer has left the word or
+    /// the note and not yet arrived on the other.
+    var controlsNoteClose: DispatchWorkItem?
+
+    /// Close the note in a beat, unless the pointer lands on it first. 250 ms
+    /// is the 8pt gap at any speed a hand crosses it; it is not long enough
+    /// to feel like the note is sticking.
+    func closeControlsNoteSoon() {
+        controlsNoteClose?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            controlsNoteClose = nil
+            setControlsNote(open: false)
+        }
+        controlsNoteClose = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
     func setControlsNote(open: Bool, above host: NSView? = nil) {
         guard let controlsSticky else { return }
+        if open { controlsNoteClose?.cancel(); controlsNoteClose = nil }
         if open, let host, let background = controlsSticky.superview {
             NSLayoutConstraint.deactivate(stickyPlacement)
             stickyPlacement = [
@@ -1021,6 +1050,20 @@ final class StatusHUD: NSObject {
     // therefore redundant, and it was not free: it crashed in swift_getObjectType
     // on a bad executor pointer, killing the app on a button press. `nonisolated`
     // plus assumeIsolated keeps the isolation guarantee without the check.
+    @objc nonisolated func homeTapped() {
+        MainActor.assumeIsolated {
+            Track.record("door_opened", ["door": "home"])
+            onNextDoor?()
+        }
+    }
+
+    @objc nonisolated func speakTapped() {
+        MainActor.assumeIsolated {
+            Track.record("door_opened", ["door": isCapturingAudio ? "send" : "speak"])
+            onSpeakDoor?()
+        }
+    }
+
     @objc nonisolated func cancelPendingSendTapped() {
         // FALSE (ruling §D, "no outcome reopens the microphone on its own").
         // Don't send meant "don't send, and start listening again", so the one
@@ -2236,6 +2279,16 @@ final class StatusHUD: NSObject {
         micSettingsButton.isHidden = true
         newSessionButton.isHidden = true
         restartAudioButton.isHidden = true
+        // The chords' doors ride the card: shown on every face that has a
+        // card on stage and hidden on the rest, where the grid footer carries
+        // them instead. `Home` goes where ⌃⌥ goes from a card, and `Speak`
+        // follows the microphone.
+        let cardDoors = state.isCardOnStage
+        homeButton.isHidden = !cardDoors
+        speakButton.isHidden = !cardDoors
+        speakButton.title = isCapturingAudio ? StateLegend.sendTitle : StateLegend.speakTitle
+        speakButton.toolTip = isCapturingAudio ? StateLegend.sendTip : StateLegend.speakTip
+        gridFooter.setListening(isCapturingAudio)
         countdownBar.isHidden = true; meter.isHidden = true
         // The strip belongs to the capture arms alone. Both the label AND its
         // rule are baselined — a rule left behind is the residue class this

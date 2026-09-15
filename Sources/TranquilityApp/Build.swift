@@ -222,6 +222,13 @@ extension StatusHUD {
         openPageButton.restingInk = StateLegend.Palette.accent
         openPageButton.wordmark = "\(StateLegend.openHubTitle) \(StateLegend.Glyph.forward)"
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
+        // The chords' doors on a card (ruled 14 Sep). Quiet like their
+        // row-mates: the key is the fast way, the word is the discoverable
+        // one, and the tooltip teaches the key.
+        homeButton = quietAction(StateLegend.homeTitle, #selector(homeTapped))
+        homeButton.toolTip = StateLegend.homeTip
+        speakButton = quietAction(StateLegend.speakTitle, #selector(speakTapped))
+        speakButton.toolTip = StateLegend.speakTip
         // The device-fault card's way out. Quiet like its row-mates: it is a
         // door, not an alarm — the placard and the body have already said how
         // bad this is, and a loud button would say it a third time.
@@ -298,6 +305,8 @@ extension StatusHUD {
         // takes its spacing with it.
         buttons.edgeInsets = NSEdgeInsets(top: 6, left: 0, bottom: 0, right: 0)
         buttons.addView(openPageButton, in: .leading)
+        buttons.addView(homeButton, in: .leading)
+        buttons.addView(speakButton, in: .leading)
         buttons.addView(dontSendButton, in: .leading)
         buttons.addView(micSettingsButton, in: .leading)
         buttons.addView(newSessionButton, in: .leading)
@@ -371,14 +380,44 @@ extension StatusHUD {
         gridFooter = GridFooterView(width: Self.gridWidth)
         controlsSticky = ControlsNoteView()
         controlsSticky.isHidden = true
+        // The note opens on hover of the word and, since 14 Sep, STAYS open
+        // while the pointer crosses to it and rests on it: its rows are doors
+        // now, and a door that closes as you reach for it is no door. The
+        // close is deferred a beat and cancelled by the note's own hover.
         gridFooter.onControlsHover = { [weak self] hovering in
             guard let self else { return }
-            setControlsNote(open: hovering, above: gridFooter)
+            if hovering { setControlsNote(open: true, above: gridFooter) } else { closeControlsNoteSoon() }
         }
         gridFooter.onWordmark = { [weak self] in self?.onOpenRepository?() }
+        gridFooter.onNext = { [weak self] in
+            Track.record("door_opened", ["door": "next"])
+            self?.onNextDoor?()
+        }
+        gridFooter.onSpeak = { [weak self] in
+            guard let self else { return }
+            Track.record("door_opened", ["door": isCapturingAudio ? "send" : "speak"])
+            onSpeakDoor?()
+        }
         cardControls.onHover = { [weak self] hovering in
             guard let self else { return }
-            setControlsNote(open: hovering, above: actionRow)
+            if hovering { setControlsNote(open: true, above: actionRow) } else { closeControlsNoteSoon() }
+        }
+        controlsSticky.onHover = { [weak self] hovering in
+            guard let self else { return }
+            if hovering { controlsNoteClose?.cancel(); controlsNoteClose = nil } else { closeControlsNoteSoon() }
+        }
+        // A row of the note is the chord it names, as a click. Indices follow
+        // StateLegend.controlsNote: next, speak, hear more.
+        controlsSticky.onRow = { [weak self] index in
+            guard let self else { return }
+            let door = ["next", "speak", "hear_more"][min(index, 2)]
+            Track.record("door_opened", ["door": .token(door), "via": "controls_note"])
+            switch index {
+            case 0: onNextDoor?()
+            case 1: onSpeakDoor?()
+            default: onHearMoreDoor?()
+            }
+            setControlsNote(open: false)
         }
 
         countdownBar = CountdownBarView()

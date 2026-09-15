@@ -1068,6 +1068,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return HomeBase.existingPage(sessionId: session) != nil ? .hub : nil
         }
+        // The chords' doors reach the SAME handler the keys do, so a click is
+        // a chord in every respect the state machine can see: the mic-open
+        // guard, home-first from a card, the pending-send commit, the
+        // hands-free latch, all of it, once.
+        hud.onNextDoor = { [weak self] in self?.handle(.next) }
+        hud.onSpeakDoor = { [weak self] in self?.handle(.optionTapped) }
+        hud.onHearMoreDoor = { [weak self] in self?.handle(.controlDoubleTapped) }
         hud.onOpenHub = { [weak self] session in
             _ = self?.openHub(session: session)
         }
