@@ -27,6 +27,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . "$(dirname "$0")/lib/app-process.sh"
+. "$(dirname "$0")/lib/deployment.sh"
 DEST="/Applications/Tranquility Base.app"
 BUNDLE_ID="com.robertnowell.voice-dispatch"
 TEAM_ID="FKE587SZ6H"
@@ -61,6 +62,14 @@ if [ "$SRC_BUNDLE_ID" != "$BUNDLE_ID" ]; then
   echo "  Production requires $BUNDLE_ID; use scripts/install-dev.sh for Dev." >&2
   exit 1
 fi
+
+tb_deployment_lock
+trap tb_deployment_unlock EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 141' PIPE
+SOURCE_SHA=$(/usr/libexec/PlistBuddy -c "Print :TBSourceCommit" "$SRC/Contents/Info.plist")
+tb_deployment_authorize install "$SOURCE_SHA" prod
 
 # --- the release identity check, before anything is copied -----------------
 codesign --verify --deep --strict "$SRC" 2>/dev/null \
