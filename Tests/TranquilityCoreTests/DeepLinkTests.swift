@@ -66,19 +66,40 @@ final class DeepLinkTests: XCTestCase {
     func testDiscussDoesWhatTheRowTapDoes() {
         for hasTurn in [true, false] {
             XCTAssertEqual(
-                DeepLink.discussDestination(rowAction: .announce, hasCompletedTurn: hasTurn),
+                DeepLink.discussDestination(rowAction: .announce, lamp: .ready, hasCompletedTurn: hasTurn),
                 .conversationCard)
+            for lamp in [Lamp.working, .fault] {
+                XCTAssertEqual(
+                    DeepLink.discussDestination(rowAction: .goToAgent, lamp: lamp, hasCompletedTurn: hasTurn),
+                    .agentTerminal, "\(lamp)")
+            }
             XCTAssertEqual(
-                DeepLink.discussDestination(rowAction: .goToAgent, hasCompletedTurn: hasTurn),
-                .agentTerminal)
-            XCTAssertEqual(
-                DeepLink.discussDestination(rowAction: .revive, hasCompletedTurn: hasTurn),
+                DeepLink.discussDestination(rowAction: .revive, lamp: .unlit, hasCompletedTurn: hasTurn),
                 .revive)
             XCTAssertEqual(
-                DeepLink.discussDestination(rowAction: RowActionNone.value,
+                DeepLink.discussDestination(rowAction: RowActionNone.value, lamp: .unlit,
                                             hasCompletedTurn: hasTurn),
                 .refused)
         }
+    }
+
+    /// The 14 Sep incident: an alive, idle agent whose turn had been dismissed.
+    /// Its row is quiet (`.running`), the grid's tap says GO TO AGENT, and
+    /// Discuss opened a tmux pane three times. A quiet row with a completed
+    /// turn reads the card; a quiet row with nothing recorded is still the
+    /// terminal, because there is nothing to read.
+    func testDiscussOnAQuietLiveRowReadsTheCard() {
+        let row = SessionRow(id: "f8a08ca3-3bcf-45ba-b08b-00d441e0a62f", name: "Tranquility Base setup",
+                             aux: "", lamp: .running)
+        XCTAssertEqual(SessionRow.action(for: row), .goToAgent)
+        XCTAssertEqual(
+            DeepLink.discussDestination(rowAction: SessionRow.action(for: row), lamp: row.lamp,
+                                        hasCompletedTurn: true),
+            .conversationCard)
+        XCTAssertEqual(
+            DeepLink.discussDestination(rowAction: SessionRow.action(for: row), lamp: row.lamp,
+                                        hasCompletedTurn: false),
+            .agentTerminal)
     }
 
     /// The 9 Sep incident: a finished Codex agent, exited, directory still
@@ -90,7 +111,7 @@ final class DeepLinkTests: XCTestCase {
                              lamp: .unlit, revivable: true)
         XCTAssertEqual(SessionRow.action(for: row), .revive)
         XCTAssertEqual(
-            DeepLink.discussDestination(rowAction: SessionRow.action(for: row),
+            DeepLink.discussDestination(rowAction: SessionRow.action(for: row), lamp: row.lamp,
                                         hasCompletedTurn: true),
             .revive)
     }
@@ -99,10 +120,10 @@ final class DeepLinkTests: XCTestCase {
     /// card worth reading; nothing recorded is the invitation.
     func testDiscussWithoutARowFallsBackOnTheStore() {
         XCTAssertEqual(
-            DeepLink.discussDestination(rowAction: nil, hasCompletedTurn: true),
+            DeepLink.discussDestination(rowAction: nil, lamp: nil, hasCompletedTurn: true),
             .conversationCard)
         XCTAssertEqual(
-            DeepLink.discussDestination(rowAction: nil, hasCompletedTurn: false),
+            DeepLink.discussDestination(rowAction: nil, lamp: nil, hasCompletedTurn: false),
             .invitation)
     }
 

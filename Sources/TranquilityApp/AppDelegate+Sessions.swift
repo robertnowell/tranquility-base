@@ -216,6 +216,7 @@ extension AppDelegate {
         let known = resolved.flatMap { id in try? store?.latestStop(for: id) } ?? nil
         let action = row.map { SessionRow.action(for: $0) }
         let destination = DeepLink.discussDestination(rowAction: action,
+                                                      lamp: row?.lamp,
                                                       hasCompletedTurn: known != nil)
         let who = resolved?.prefix(8) ?? session?.prefix(8) ?? "-"
         Permissions.log("deeplink: discuss, \(who) row="
