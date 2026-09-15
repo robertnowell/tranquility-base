@@ -38,11 +38,10 @@ final class StatusHUD: NSObject {
     /// are the interface.
     var dontSendButton: ConsoleButton!
     var micSettingsButton: ConsoleButton!
-    /// The chords' doors on a card (ruled 14 Sep): `Home` is what ⌃⌥ does
-    /// from a card, `Speak` what holding ⌥ does. Quiet actions at the leading
-    /// edge, like every other thing a card lets you do about itself.
-    var homeButton: ConsoleButton!
-    var speakButton: ConsoleButton!
+    /// The microphone's button (ruled 15 Sep): Record, and Send while the
+    /// microphone is open. Centre of the card's bottom line, beside the
+    /// Controls word, apart from the two doors at the edges that point out.
+    var recordButton: ConsoleButton!
     var newSessionButton: ConsoleButton!
     var restartAudioButton: ConsoleButton!
     var openPageButton: ConsoleButton!
@@ -1050,16 +1049,9 @@ final class StatusHUD: NSObject {
     // therefore redundant, and it was not free: it crashed in swift_getObjectType
     // on a bad executor pointer, killing the app on a button press. `nonisolated`
     // plus assumeIsolated keeps the isolation guarantee without the check.
-    @objc nonisolated func homeTapped() {
+    @objc nonisolated func recordTapped() {
         MainActor.assumeIsolated {
-            Track.record("door_opened", ["door": "home"])
-            onNextDoor?()
-        }
-    }
-
-    @objc nonisolated func speakTapped() {
-        MainActor.assumeIsolated {
-            Track.record("door_opened", ["door": isCapturingAudio ? "send" : "speak"])
+            Track.record("door_opened", ["door": isCapturingAudio ? "send" : "record"])
             onSpeakDoor?()
         }
     }
@@ -2279,16 +2271,12 @@ final class StatusHUD: NSObject {
         micSettingsButton.isHidden = true
         newSessionButton.isHidden = true
         restartAudioButton.isHidden = true
-        // The chords' doors ride the card: shown on every face that has a
-        // card on stage and hidden on the rest, where the grid footer carries
-        // them instead. `Home` goes where ⌃⌥ goes from a card, and `Speak`
-        // follows the microphone.
-        let cardDoors = state.isCardOnStage
-        homeButton.isHidden = !cardDoors
-        speakButton.isHidden = !cardDoors
-        speakButton.title = isCapturingAudio ? StateLegend.sendTitle : StateLegend.speakTitle
-        speakButton.toolTip = isCapturingAudio ? StateLegend.sendTip : StateLegend.speakTip
-        gridFooter.setListening(isCapturingAudio)
+        // The microphone's button rides the card: shown on every face that
+        // has a card on stage, and it follows the microphone, Record when it
+        // is closed and Send while it is open.
+        recordButton.isHidden = !state.isCardOnStage
+        recordButton.title = isCapturingAudio ? StateLegend.sendTitle : StateLegend.recordTitle
+        recordButton.toolTip = isCapturingAudio ? StateLegend.sendTip : StateLegend.recordTip
         countdownBar.isHidden = true; meter.isHidden = true
         // The strip belongs to the capture arms alone. Both the label AND its
         // rule are baselined — a rule left behind is the residue class this
@@ -2734,7 +2722,10 @@ final class StatusHUD: NSObject {
         // is not a session — it is cleared going idle and again by showVoices,
         // so "Voices" and the empty room's "Tranquility Base" cannot inherit the
         // last session's tab. `titleDoorDrill` holds that alignment.
-        titleLabel.isADoor = currentTarget?.pid != nil
+        // Not a door any more (ruled 15 Sep: "the title doesn't need to be
+        // clickable"). GO TO AGENT is the way to the session, and it is
+        // getting the cursor it never actually had; see PointerCursor.
+        titleLabel.isADoor = false
     }
 
     /// The listening pill: the live dot in channel green (mic open = go), the

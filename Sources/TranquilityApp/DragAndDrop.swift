@@ -299,10 +299,8 @@ final class TrayRowView: NSStackView {
             FragmentPreview.preview(fragment)
         }
 
-        override func resetCursorRects() {
-            super.resetCursorRects()
-            addCursorRect(removeButton.frame, cursor: .pointingHand)
-        }
+        // The ✕ is a ConsoleButton and carries its own pointer tracking now
+        // (PointerCursor); a cursor rect here never worked on this panel.
     }
 }
 

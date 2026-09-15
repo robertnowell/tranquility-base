@@ -166,11 +166,9 @@ extension StatusHUD {
         titleLabel.textColor = StateLegend.Lens.content.color
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
-        // The second door to the session. GO TO AGENT stays — it is the
-        // discoverable one, and you said you use it. This is the shortcut for
-        // when your eye is already on the name, which is where it already goes.
-        titleLabel.addGestureRecognizer(
-            NSClickGestureRecognizer(target: self, action: #selector(goToSession)))
+        // Not a door (ruled 15 Sep, reversing the 15 Aug shortcut): "the title
+        // doesn't need to be clickable." GO TO AGENT is the one way to the
+        // session, and it now carries the cursor that says so.
 
         bodyLabel = CardBodyLabel(wrappingLabelWithString: "")
         // A press on the words selects AND arms: the selection takes the
@@ -222,13 +220,13 @@ extension StatusHUD {
         openPageButton.restingInk = StateLegend.Palette.accent
         openPageButton.wordmark = "\(StateLegend.openHubTitle) \(StateLegend.Glyph.forward)"
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
-        // The chords' doors on a card (ruled 14 Sep). Quiet like their
-        // row-mates: the key is the fast way, the word is the discoverable
-        // one, and the tooltip teaches the key.
-        homeButton = quietAction(StateLegend.homeTitle, #selector(homeTapped))
-        homeButton.toolTip = StateLegend.homeTip
-        speakButton = quietAction(StateLegend.speakTitle, #selector(speakTapped))
-        speakButton.toolTip = StateLegend.speakTip
+        // The microphone's button (ruled 15 Sep). Quiet like the card's other
+        // actions: the key is the fast way, the word is the discoverable one,
+        // and the tooltip teaches the key. It lives in the CENTRE, with
+        // Controls, not at either edge: the edges point outward (a browser, a
+        // terminal) and this one acts on the card itself.
+        recordButton = quietAction(StateLegend.recordTitle, #selector(recordTapped))
+        recordButton.toolTip = StateLegend.recordTip
         // The device-fault card's way out. Quiet like its row-mates: it is a
         // door, not an alarm — the placard and the body have already said how
         // bad this is, and a loud button would say it a third time.
@@ -305,8 +303,6 @@ extension StatusHUD {
         // takes its spacing with it.
         buttons.edgeInsets = NSEdgeInsets(top: 6, left: 0, bottom: 0, right: 0)
         buttons.addView(openPageButton, in: .leading)
-        buttons.addView(homeButton, in: .leading)
-        buttons.addView(speakButton, in: .leading)
         buttons.addView(dontSendButton, in: .leading)
         buttons.addView(micSettingsButton, in: .leading)
         buttons.addView(newSessionButton, in: .leading)
@@ -317,6 +313,7 @@ extension StatusHUD {
         // The middle, which is the only space a card's bottom line has left and
         // the same place the grid puts it.
         cardControls = ControlsWordView()
+        buttons.addView(recordButton, in: .center)
         buttons.addView(cardControls, in: .center)
         // And the row is exactly as tall as its contents: BOTH directions.
         //
@@ -389,15 +386,6 @@ extension StatusHUD {
             if hovering { setControlsNote(open: true, above: gridFooter) } else { closeControlsNoteSoon() }
         }
         gridFooter.onWordmark = { [weak self] in self?.onOpenRepository?() }
-        gridFooter.onNext = { [weak self] in
-            Track.record("door_opened", ["door": "next"])
-            self?.onNextDoor?()
-        }
-        gridFooter.onSpeak = { [weak self] in
-            guard let self else { return }
-            Track.record("door_opened", ["door": isCapturingAudio ? "send" : "speak"])
-            onSpeakDoor?()
-        }
         cardControls.onHover = { [weak self] hovering in
             guard let self else { return }
             if hovering { setControlsNote(open: true, above: actionRow) } else { closeControlsNoteSoon() }

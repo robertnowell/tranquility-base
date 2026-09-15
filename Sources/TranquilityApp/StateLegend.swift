@@ -623,22 +623,21 @@ enum StateLegend {
     static let openHubTitle = "Open Hub"
     static let openReportTitle = "Open Report"
 
-    // MARK: - The chords' doors (ruled 14 Sep 2026)
+    // MARK: - The buttons around the transcription (ruled 14 and 15 Sep 2026)
     //
     // "It's my contention that we should have a clickable interface." A new
     // user on a new Mac drove a whole session with row clicks and ⌥ holds,
     // and the one chord that had no button was the one he could not make
-    // work. Every chord now has a door: a quiet word in the bottom line that
-    // does exactly what the chord does, by calling the same handler, so the
-    // two cannot drift. The key stays the fast way; the word is the
-    // discoverable one, and its tooltip teaches the key.
-    static let nextTitle = "Next"
-    static let homeTitle = "Home"
-    static let speakTitle = "Speak"
+    // work. Ruled 15 Sep, on seeing a first cut: the grid needs nothing (its
+    // rows are its doors); the CARD gets physical buttons around the
+    // transcription, in the centre of its bottom line, clearly apart from
+    // Open Report and Go to Agent at the edges, which point outward. Record
+    // opens the microphone hands-free; while it is open the same button
+    // reads Send. Each does exactly what its key does, by calling the same
+    // handler, so the two cannot drift; the tooltip teaches the key.
+    static let recordTitle = "Record"
     static let sendTitle = "Send"
-    static let nextTip = "Hear the next agent. Or press \u{2303} Control + \u{2325} Option."
-    static let homeTip = "Back to the grid. Or press \u{2303} Control + \u{2325} Option."
-    static let speakTip = "Click, talk, click again to send. Or hold \u{2325} Option."
+    static let recordTip = "Click, talk, then click Send. Or hold \u{2325} Option."
     static let sendTip = "Send what you said. Or tap \u{2325} Option."
 
     /// What hovering `Controls` reveals, in order of how often you reach for it.

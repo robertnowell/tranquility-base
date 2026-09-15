@@ -786,6 +786,12 @@ final class PastRowView: NSControl {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .pointingHand)
     }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        PointerCursor.track(self)
+    }
+    override func cursorUpdate(with event: NSEvent) { PointerCursor.show() }
 
     /// Told, not tracked. The list decides who is hovered — see its own note:
     /// a row cannot know it stopped being under the pointer when the thing that
@@ -885,6 +891,7 @@ private final class PlacardHalf: NSControl {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .pointingHand)
     }
+    override func cursorUpdate(with event: NSEvent) { PointerCursor.show() }
 
     init(title: String, glyph: String, alignment: NSLayoutConstraint.Attribute,
          target: AnyObject, action: Selector, harness: String? = nil) {
@@ -970,6 +977,7 @@ private final class PlacardHalf: NSControl {
         addTrackingArea(NSTrackingArea(
             rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
             owner: self, userInfo: nil))
+        PointerCursor.track(self)
     }
     override func mouseEntered(with event: NSEvent) {
         mark.attributedStringValue = StateLegend.hoveredInk(resting[0])
