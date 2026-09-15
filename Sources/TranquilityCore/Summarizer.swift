@@ -596,6 +596,16 @@ public struct SummarizerChain: Sendable {
                 } catch {
                     if provider.usesManagedCredits {
                         managedFailure = (error as? ManagedSummaryFailure) ?? .refused(code: "service_unavailable", operationId: nil)
+                        // A Mac that is NOT ON CREDITS is not a credits failure.
+                        // Paired before key binding, or not connected at all:
+                        // no grant exists to protect, so the person's own key,
+                        // if they pasted one, is the right next thing. Every
+                        // other managed failure lands on the floor and never
+                        // on their bill, which is what `break` is for.
+                        if case let .refused(code, _) = managedFailure!,
+                           code == "rebinding_required" || code == "not_connected" {
+                            continue
+                        }
                         break
                     }
                 }

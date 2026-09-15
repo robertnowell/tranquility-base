@@ -79,6 +79,17 @@ public actor GatewayAuthority {
         /// The hub could not mint. NOT a sign-out, and must never be shown as
         /// one: managed work waits, the app stays signed in.
         case temporarilyUnavailable
+
+        /// The refusal's name on the managed path, in the vocabulary the
+        /// contract's error codes already use.
+        public var code: String {
+            switch self {
+            case .notConnected: return "not_connected"
+            case .connectionRejected: return "connection_rejected"
+            case .rebindingRequired: return "rebinding_required"
+            case .temporarilyUnavailable: return "service_unavailable"
+            }
+        }
     }
 
     /// One fetched bearer and when it stops being usable.
@@ -92,7 +103,7 @@ public actor GatewayAuthority {
 
     private let signer: DeviceKey.Signer
     private let tokenURL: URL
-    private let deviceToken: () -> String?
+    private let deviceToken: @Sendable () -> String?
     private let exchange: Exchange
     private let now: () -> Date
 
@@ -105,7 +116,7 @@ public actor GatewayAuthority {
     private let margin: TimeInterval = 60
 
     public init(signer: DeviceKey.Signer, hubBase: URL,
-                deviceToken: @escaping () -> String? = { Secrets.read(.hubToken) },
+                deviceToken: @escaping @Sendable () -> String? = { Secrets.read(.hubToken) },
                 exchange: @escaping Exchange,
                 now: @escaping () -> Date = { Date() }) {
         self.signer = signer
@@ -125,6 +136,51 @@ public actor GatewayAuthority {
         inFlight = task
         defer { inFlight = nil }
         return try await task.value
+    }
+
+    /// What one request to the Gateway carries: the bound token, presented as
+    /// DPoP and never as Bearer, and a proof made for exactly this method and
+    /// URL that also names the token (`ath`), so a proof captured beside one
+    /// token cannot be replayed with another. RFC 9449 sections 4.1 and 7.1.
+    public struct Credential: Sendable, Equatable {
+        public let authorization: String
+        public let proof: String
+    }
+
+    public func credential(method: String, url: String) async throws -> Credential {
+        let token = try await bearer()
+        let proof = try DeviceKey.proof(
+            signer: signer, method: method, url: url, accessToken: token, now: now())
+        return Credential(authorization: "DPoP \(token)", proof: proof)
+    }
+
+    /// The real exchange: one POST to the hub's mint, carrying the device token
+    /// as the hub's own Bearer and the proof in the DPoP header. Ephemeral
+    /// session, no cookies, no cache, no redirects: a credential that spends
+    /// goes to the route it was signed for and nowhere else.
+    public static func httpExchange(tokenURL: URL) -> Exchange {
+        final class NoRedirect: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+            func urlSession(_ session: URLSession, task: URLSessionTask,
+                            willPerformHTTPRedirection response: HTTPURLResponse,
+                            newRequest request: URLRequest,
+                            completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+                completionHandler(nil)
+            }
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.httpShouldSetCookies = false; config.urlCache = nil
+        config.timeoutIntervalForRequest = 20; config.timeoutIntervalForResource = 30
+        let session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
+        return { proof, deviceToken in
+            var request = URLRequest(url: tokenURL)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(deviceToken)", forHTTPHeaderField: "Authorization")
+            request.setValue(proof, forHTTPHeaderField: "DPoP")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw Failure.temporarilyUnavailable }
+            return (http.statusCode, data)
+        }
     }
 
     /// Forget everything. Called on sign-out and on an account change.

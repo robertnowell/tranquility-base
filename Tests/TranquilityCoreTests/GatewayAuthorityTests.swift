@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import TranquilityCore
 
 /// Free-standing so the @Sendable exchange closures need not capture a test case.
@@ -139,6 +140,33 @@ final class GatewayAuthorityTests: XCTestCase {
         XCTAssertEqual(claims["htu"] as? String, "https://hub.example/api/gateway/token")
         // No access token exists yet: this is the request that asks for one.
         XCTAssertNil(claims["ath"])
+    }
+
+    /// What reaches the Gateway. DPoP and never Bearer, with a proof for
+    /// exactly this request that also names the token, so the Gateway's
+    /// `ath` check and `cnf.jkt` check both have something to bind to.
+    func testACredentialIsDPoPWithAProofBoundToTheTokenAndTheRoute() async throws {
+        let a = authority { _, _ in minted("the-access-token") }
+        let url = "https://gateway.example/v1/accounts/abc/balance"
+        let c = try await a.credential(method: "GET", url: url)
+        XCTAssertEqual(c.authorization, "DPoP the-access-token")
+        let parts = c.proof.split(separator: ".").map(String.init)
+        XCTAssertEqual(parts.count, 3)
+        let header = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: XCTUnwrap(Data(base64URLEncoded: parts[0]))) as? [String: Any])
+        XCTAssertEqual(header["typ"] as? String, "dpop+jwt")
+        XCTAssertNotNil(header["jwk"])
+        let claims = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: XCTUnwrap(Data(base64URLEncoded: parts[1]))) as? [String: Any])
+        XCTAssertEqual(claims["htm"] as? String, "GET")
+        XCTAssertEqual(claims["htu"] as? String, url)
+        let expectedAth = SHA256.hash(data: Data("the-access-token".utf8))
+        XCTAssertEqual(claims["ath"] as? String, Data(expectedAth).base64URLEncoded)
+        // A second credential for a different route is a different proof over
+        // the same cached token: one exchange, many requests.
+        let again = try await a.credential(method: "PUT", url: "https://gateway.example/v1/x")
+        XCTAssertEqual(again.authorization, c.authorization)
+        XCTAssertNotEqual(again.proof, c.proof)
     }
 
     private func assertFails(_ a: GatewayAuthority, with expected: GatewayAuthority.Failure,
