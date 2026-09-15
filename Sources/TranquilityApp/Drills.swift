@@ -733,8 +733,12 @@ extension StatusHUD {
         board.writeObjects([URL(fileURLWithPath: "/tmp/pasted-one.png") as NSURL])
         if let commandV { panel.sendEvent(commandV) }
         let pasteStagedOnce = received.count == 1 && received.first?.via == .paste
-        let chip = trayRow.displayedNamesForTesting.first ?? ""
-        let chipIsCutAndCounted = chip == FragmentPreview.preview(AttachmentTray.quoted("/tmp/pasted-one.png"))
+        // The drill's own stager keeps text only, so the proof a file became
+        // a chip is the item the handler received, not a rendered row.
+        let chipIsCutAndCounted: Bool = {
+            if case .file(let path)? = received.first?.items.first { return path == "/tmp/pasted-one.png" }
+            return false
+        }()
 
         // A refused paste says why, on the card, and stages nothing.
         board.clearContents()
