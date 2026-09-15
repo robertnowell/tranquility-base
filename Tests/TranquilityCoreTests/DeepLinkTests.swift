@@ -241,10 +241,12 @@ final class DeepLinkTests: XCTestCase {
         XCTAssertNil(DeepLink.subject(from: long, exists: never))
     }
 
-    /// The hosted case opens at home: the page belongs to no directory here.
-    func testAHostedPageStartsAtHome() {
+    /// The hosted case opens where a new agent opens: the page belongs to no
+    /// directory here, and home is not the answer (14 Sep 2026).
+    func testAHostedPageStartsInTheWorkspace() {
         let subject = DeepLink.subject(from: "https://example.com/a/plan/", exists: never)
-        XCTAssertEqual(subject?.directory, NSHomeDirectory())
+        XCTAssertEqual(subject?.directory, AgentDefaults.fallbackDirectory)
+        XCTAssertNotEqual(subject?.directory, NSHomeDirectory())
         XCTAssertEqual(subject?.name, "example.com/plan")
     }
 
