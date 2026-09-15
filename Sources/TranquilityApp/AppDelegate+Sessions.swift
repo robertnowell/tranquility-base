@@ -1268,6 +1268,18 @@ extension AppDelegate {
     /// a promise for. A failure is a card with the provider's reason, because
     /// a silent no-op after pressing New Agent is the defect this replaces.
     private func startProviderAgent(_ provider: any AgentProvider) {
+        // **The door, if the provider has one.** One verb, one place: an agent
+        // that begins in its own UI (crobot, in a web page) is opened there,
+        // and `start` is not called. Its first question — which repository? —
+        // is answered where every later question would be, on the agent's own
+        // surface, so New Agent never renders a provider's questions itself
+        // (ruled 15 Sep). A local harness returns nil here and is begun below.
+        if let compose = provider.composeURL(for: Brief(prompt: "")) {
+            Permissions.log("new agent: \(provider.id) opens its own compose page")
+            Track.record("new_agent_compose", ["provider": .token(provider.id)])
+            NSWorkspace.shared.open(compose)
+            return
+        }
         let dir = AgentDefaults.directory(for: provider.id)
         let label = (dir as NSString).lastPathComponent
         let line = LaunchGreeting.nextLine()

@@ -83,6 +83,24 @@ public protocol AgentProvider: Sendable {
     /// because there is no id to hand back when it did not happen.
     func start(_ brief: Brief) async throws -> AgentSession.ID
 
+    /// **Where you go to begin a new agent — the same door you would go to to
+    /// answer any of its questions.**
+    ///
+    /// Ruled 15 Sep 2026. There is one verb, "go to the agent", and one place
+    /// it goes: the agent's own surface. For a local harness that is a
+    /// terminal; for crobot it is a web page. Starting is not special — the
+    /// first thing crobot asks (which repository?) is answered exactly where
+    /// its tenth question would be, in its own UI. Robert: *"click button, go
+    /// to place where I answer questions. That's cleaner ... just a rule, a
+    /// standard."*
+    ///
+    /// A provider that returns a URL here is saying "begin me over there";
+    /// New Agent opens it and does not call `start`. A provider that returns
+    /// nil is begun in the app the ordinary way. This replaced a short-lived
+    /// idea where the app rendered a provider's start-questions itself, which
+    /// was the special case this rule exists to avoid.
+    func composeURL(for brief: Brief) -> URL?
+
     /// Stop an agent. Gated by `can.canCancel`.
     ///
     /// Added 13 Sep, because `canCancel` shipped in the first draft with no
@@ -110,6 +128,11 @@ public protocol AgentProvider: Sendable {
 /// once the adapter exists. Deliberately an instance rather than a global
 /// singleton so a test and the app can hold different sets, which is the same
 /// reasoning `Coordinator` gives for injecting everything it uses.
+public extension AgentProvider {
+    /// Most agents are begun in the app, not at a URL of their own.
+    func composeURL(for brief: Brief) -> URL? { nil }
+}
+
 public struct AgentProviderRegistry: Sendable {
     public let providers: [any AgentProvider]
     /// Providers this app spawns itself, which need no address: an installed
