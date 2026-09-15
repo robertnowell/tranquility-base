@@ -2013,13 +2013,10 @@ extension StatusHUD {
             && waitingRows.arrangedSubviews.contains { $0 is SplitPlacardRowView }
             && !waitingRows.arrangedSubviews.contains { $0 is GridRowView }
         let wearsTheGridChrome = !gridFooter.isHidden
-        // The Dock rule, read against its own input rather than a fixed
-        // answer: a tile until the status item has been clicked once on this
-        // install (AppDelegate+Dock). Asserted on both paints.
-        let dockRule = { () -> Bool in
-            NSApp.activationPolicy()
-                == (AppDelegate.menuBarEverClicked ? .accessory : .regular)
-        }
+        // The Dock tile is there while the app runs (ruled 15 Sep 2026), so
+        // the rule is one line and it is asserted on every paint below,
+        // including after the panel has been hidden.
+        let dockRule = { () -> Bool in NSApp.activationPolicy() == .regular }
         let tileFollowsTheEmptyRoom = dockRule()
         // An agent reporting in takes the room back: the door goes, the
         // rows come, and the ambient repaint must not inherit anything.
@@ -2029,6 +2026,12 @@ extension StatusHUD {
             && waitingRows.arrangedSubviews.contains { $0 is GridRowView }
             && bodyLabel.alignment == .natural
         let tileFollowsTheArrival = dockRule()
+        // Hidden panel, same tile: the two days of rules that hid the tile
+        // with the panel, or after a click, are the thing this asserts against.
+        hide()
+        let tileStaysWhenThePanelHides = dockRule()
+        showIdle(rows: [SessionRow(
+            id: "drill", name: "an agent arrives", aux: "drill", lamp: .ready)])
         SelfTest.report("emptyRoom", [
             ("describesItself", describesItself),
             ("offersTheDoor", offersTheDoor),
@@ -2036,6 +2039,7 @@ extension StatusHUD {
             ("tileFollowsTheEmptyRoom", tileFollowsTheEmptyRoom),
             ("roomTakenBack", roomTakenBack),
             ("tileFollowsTheArrival", tileFollowsTheArrival),
+            ("tileStaysWhenThePanelHides", tileStaysWhenThePanelHides),
         ])
 
         contrastDrill()
