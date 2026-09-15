@@ -121,6 +121,9 @@ echo "→ building"
 swift build 2>&1 | grep -E "error:|warning: .*never used" || true
 swift build >/dev/null
 
+echo "→ isolated Past Agents search UI"
+scripts/test-past-agents-search.sh
+
 echo "→ testing"
 # Captured, never piped. `... | grep -q ...` under `set -o pipefail` reports a
 # FAILED pipeline on success: grep exits the moment it matches, the writer takes

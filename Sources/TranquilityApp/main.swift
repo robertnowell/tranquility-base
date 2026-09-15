@@ -26,6 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var hotkey: HotkeyMonitor!
     let recorder = Recorder()
     var store: QueueStore?
+    let pastAgentSearch = SessionKeywordIndex(cacheURL:
+        QueueStore.supportDirectory.appendingPathComponent("session-search.sqlite"))
+    var pastAgentPreparation: Task<Void, Never>?
     var coordinator: Coordinator?
     /// The providers this build can drive, kept so New Agent can start one.
     /// The same instance the coordinator and the poller share, by the rule at
@@ -2109,6 +2112,17 @@ if CommandLine.arguments.contains("--selftest-capture-diagnostics") {
     Permissions.flushLog()
     print(passed ? "capture diagnostics UI: PASS" : "capture diagnostics UI: FAIL")
     exit(passed ? 0 : 1)
+}
+
+// Isolated search regression: a window and list, with no live app services.
+if CommandLine.arguments.contains("--selftest-past-search") {
+    let probeApplication = NSApplication.shared
+    Task { @MainActor in
+        let passed = await PastAgentsSearchDrill.run()
+        exit(passed ? 0 : 1)
+    }
+    probeApplication.run()
+    exit(1)
 }
 
 // Product choices lived in the production bundle's defaults before Dev had a
