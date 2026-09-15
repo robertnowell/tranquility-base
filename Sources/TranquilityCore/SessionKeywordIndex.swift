@@ -94,8 +94,8 @@ public actor SessionKeywordIndex {
         return "v1|\(a[.size] ?? 0)|\((a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)|\(a[.systemFileNumber] ?? 0)"
     }
 
-    private func cached<T: Codable>(_ url: URL, since: Date,
-                                    read: () throws -> T) throws -> T {
+    private func cached<T: Codable & Sendable>(_ url: URL, since: Date,
+                                               read: @Sendable () throws -> T) throws -> T {
         try autoreleasepool {
             let db = try database()
             let before = try stamp(url)
