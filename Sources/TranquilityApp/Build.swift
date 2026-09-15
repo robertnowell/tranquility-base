@@ -220,13 +220,32 @@ extension StatusHUD {
         openPageButton.restingInk = StateLegend.Palette.accent
         openPageButton.wordmark = "\(StateLegend.openHubTitle) \(StateLegend.Glyph.forward)"
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
-        // The microphone's button (ruled 15 Sep). Quiet like the card's other
-        // actions: the key is the fast way, the word is the discoverable one,
-        // and the tooltip teaches the key. It lives in the CENTRE, with
-        // Controls, not at either edge: the edges point outward (a browser, a
-        // terminal) and this one acts on the card itself.
-        recordButton = quietAction(StateLegend.recordTitle, #selector(recordTapped))
+        // The microphone's two buttons (ruled 15 Sep). A small mic, a symbol
+        // like the gear, in the waveform's slot; and Send, a quiet word in the
+        // bottom line's centre, where Controls sits while the mic is closed.
+        // Neither is at an edge: the edges point outward (a browser, a
+        // terminal) and these act on the card itself.
+        recordButton = ConsoleButton(image: NSImage(systemSymbolName: "mic",
+                                                    accessibilityDescription: StateLegend.recordTitle)!
+                                       .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))!,
+                                     target: self, action: #selector(recordTapped))
+        recordButton.isBordered = false
+        recordButton.restingInk = StateLegend.Lens.chrome.color
         recordButton.toolTip = StateLegend.recordTip
+        recordButton.translatesAutoresizingMaskIntoConstraints = false
+        recordButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        recordButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        // The slot: the meter's exact box, so the panel does not move when one
+        // replaces the other.
+        micRow = NSView()
+        micRow.translatesAutoresizingMaskIntoConstraints = false
+        micRow.addSubview(recordButton)
+        NSLayoutConstraint.activate([
+            recordButton.centerXAnchor.constraint(equalTo: micRow.centerXAnchor),
+            recordButton.centerYAnchor.constraint(equalTo: micRow.centerYAnchor),
+        ])
+        sendButton = quietAction(StateLegend.sendTitle, #selector(sendTapped))
+        sendButton.toolTip = StateLegend.sendTip
         // The device-fault card's way out. Quiet like its row-mates: it is a
         // door, not an alarm — the placard and the body have already said how
         // bad this is, and a loud button would say it a third time.
@@ -313,7 +332,7 @@ extension StatusHUD {
         // The middle, which is the only space a card's bottom line has left and
         // the same place the grid puts it.
         cardControls = ControlsWordView()
-        buttons.addView(recordButton, in: .center)
+        buttons.addView(sendButton, in: .center)
         buttons.addView(cardControls, in: .center)
         // And the row is exactly as tall as its contents: BOTH directions.
         //
@@ -647,7 +666,7 @@ extension StatusHUD {
         let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
                                         waitingRows, pastList, bodyLabel,
                                         stripRule, stripLabel, trayRow, gridFooter,
-                                        countdownBar, meter,
+                                        countdownBar, micRow, meter,
                                         settingsTabs, agentGrid, launchRow, directoryRow,
                                         voiceList, setupScroll, hintLabel, buttons])
         stack.orientation = .vertical
@@ -819,6 +838,8 @@ extension StatusHUD {
             gearButton.centerYAnchor.constraint(equalTo: stateLabel.centerYAnchor),
             meter.widthAnchor.constraint(equalToConstant: 348),
             meter.heightAnchor.constraint(equalToConstant: 28),
+            micRow.widthAnchor.constraint(equalToConstant: 348),
+            micRow.heightAnchor.constraint(equalToConstant: 28),
             countdownBar.widthAnchor.constraint(equalToConstant: 348),
             countdownBar.heightAnchor.constraint(equalToConstant: 4),
             // The action row spans the content column so GO TO AGENT's

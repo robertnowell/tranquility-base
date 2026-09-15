@@ -38,10 +38,16 @@ final class StatusHUD: NSObject {
     /// are the interface.
     var dontSendButton: ConsoleButton!
     var micSettingsButton: ConsoleButton!
-    /// The microphone's button (ruled 15 Sep): Record, and Send while the
-    /// microphone is open. Centre of the card's bottom line, beside the
-    /// Controls word, apart from the two doors at the edges that point out.
+    /// The microphone's buttons (ruled 15 Sep, twice). A small mic, centred
+    /// in the slot the waveform takes while the microphone is open, above
+    /// the Controls word; and Send, in the bottom line's centre, in the place
+    /// Controls vacates while the microphone is open. So the two never share
+    /// a face, and each sits where the eye already is for that face: the
+    /// waveform's slot when there is no waveform, the Controls slot when
+    /// there is no Controls.
     var recordButton: ConsoleButton!
+    var micRow: NSView!
+    var sendButton: ConsoleButton!
     var newSessionButton: ConsoleButton!
     var restartAudioButton: ConsoleButton!
     var openPageButton: ConsoleButton!
@@ -1051,7 +1057,14 @@ final class StatusHUD: NSObject {
     // plus assumeIsolated keeps the isolation guarantee without the check.
     @objc nonisolated func recordTapped() {
         MainActor.assumeIsolated {
-            Track.record("door_opened", ["door": isCapturingAudio ? "send" : "record"])
+            Track.record("door_opened", ["door": "record"])
+            onSpeakDoor?()
+        }
+    }
+
+    @objc nonisolated func sendTapped() {
+        MainActor.assumeIsolated {
+            Track.record("door_opened", ["door": "send"])
             onSpeakDoor?()
         }
     }
@@ -2271,12 +2284,12 @@ final class StatusHUD: NSObject {
         micSettingsButton.isHidden = true
         newSessionButton.isHidden = true
         restartAudioButton.isHidden = true
-        // The microphone's button rides the card: shown on every face that
-        // has a card on stage, and it follows the microphone, Record when it
-        // is closed and Send while it is open.
-        recordButton.isHidden = !state.isCardOnStage
-        recordButton.title = isCapturingAudio ? StateLegend.sendTitle : StateLegend.recordTitle
-        recordButton.toolTip = isCapturingAudio ? StateLegend.sendTip : StateLegend.recordTip
+        // The mic sits in the waveform's slot on a card whose microphone is
+        // closed; the waveform takes the slot back while it is open, and Send
+        // takes the Controls word's place in the bottom line for exactly that
+        // long. Baseline properties like every other widget.
+        micRow.isHidden = !state.isCardOnStage
+        sendButton.isHidden = !isCapturingAudio
         countdownBar.isHidden = true; meter.isHidden = true
         // The strip belongs to the capture arms alone. Both the label AND its
         // rule are baselined — a rule left behind is the residue class this

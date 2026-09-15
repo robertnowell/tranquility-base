@@ -635,6 +635,11 @@ enum StateLegend {
     // opens the microphone hands-free; while it is open the same button
     // reads Send. Each does exactly what its key does, by calling the same
     // handler, so the two cannot drift; the tooltip teaches the key.
+    //
+    // Ruled again the same afternoon: the mic is a small symbol in the slot
+    // the waveform takes while the microphone is open, above Controls; Send
+    // takes the Controls word's place in the bottom line, since Controls is
+    // hidden for exactly as long as the microphone is open.
     static let recordTitle = "Record"
     static let sendTitle = "Send"
     static let recordTip = "Click, talk, then click Send. Or hold \u{2325} Option."
