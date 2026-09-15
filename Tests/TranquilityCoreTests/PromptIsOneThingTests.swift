@@ -25,11 +25,12 @@ final class PromptIsOneThingTests: XCTestCase {
         let onDisk = try String(contentsOf: url, encoding: .utf8)
 
         let label = "Kopi"
-        let expected = onDisk
-            .replacingOccurrences(of: "{project_label}", with: label)
-            .trimmingCharacters(in: CharacterSet.newlines)
+        // NOT trimmed. Trimming newlines here would have hidden a real
+        // difference: the Gateway read the same file and stripped its trailing
+        // newline, so it sent one byte less than the app and this test was
+        // happy about it. Byte-for-byte or it is not the same prompt.
+        let expected = onDisk.replacingOccurrences(of: "{project_label}", with: label)
         let shipped = AnthropicSummaryProvider.systemPrompt(projectLabel: label)
-            .trimmingCharacters(in: CharacterSet.newlines)
 
         if shipped != expected {
             // Say WHERE, because a 2,000-word diff in a test failure is not a
