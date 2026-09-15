@@ -79,16 +79,22 @@ public actor ACPClient {
     /// a client that died on the first one would work only for the agents that
     /// happen to be quiet.
     private func receive(_ line: Data) {
-        guard let message = ACPWire.Message(line: line) else { return }
+        guard var message = ACPWire.Message(line: line) else { return }
         if let id = message.id, message.method == nil {
-            // A response to something we asked.
+            // A response to something we asked, stamped with how much of the
+            // inbound stream precedes it (see `Message.sequence`).
+            message.sequence = delivered
             pending.removeValue(forKey: id)?.resume(returning: message)
             return
         }
         // A notification, or a request from the agent. Both belong to the
         // session's owner, not to this layer.
+        delivered += 1
+        message.sequence = delivered
         inboundContinuation?.yield(message)
     }
+    /// Notifications and agent requests yielded so far.
+    private var delivered = 0
 
     /// The pipe closed with requests outstanding. Every one of them fails with
     /// its own reason rather than hanging until its timeout, because "the
@@ -230,7 +236,9 @@ public actor ACPClient {
             "sessionId": session,
             "prompt": [["type": "text", "text": text]],
         ])
-        return message.result(ACPWire.PromptResult.self) ?? ACPWire.PromptResult()
+        var result = message.result(ACPWire.PromptResult.self) ?? ACPWire.PromptResult()
+        result.sequence = message.sequence
+        return result
     }
 
     /// Sessions the agent already knows about.

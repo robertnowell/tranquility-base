@@ -122,7 +122,25 @@ public actor ACPProvider: AgentProvider {
             guard let self else { return }
             for await message in await self.client.inbound {
                 await self.translate(message)
+                await self.note(translated: message.sequence)
             }
+        }
+    }
+
+    /// How far the pump has translated the inbound stream.
+    private var translated = 0
+    private func note(translated sequence: Int) { translated = max(translated, sequence) }
+
+    /// Wait until every notification delivered before `sequence` has been
+    /// translated. A response resumes its caller directly while the
+    /// notifications ahead of it are still queued for the pump; a turn's
+    /// last chunk can arrive after the turn's result. Bounded: a pump that
+    /// has died must not hold a turn for ever.
+    private func caughtUp(to sequence: Int) async {
+        var waited = 0
+        while translated < sequence, waited < 200 {
+            try? await Task.sleep(for: .milliseconds(10))
+            waited += 1
         }
     }
 
@@ -303,6 +321,7 @@ public actor ACPProvider: AgentProvider {
     private func run(turn text: String, in raw: String) async {
         do {
             let result = try await client.prompt(text, session: raw)
+            await caughtUp(to: result.sequence)
             let said = turnText[raw] ?? ""
             turnText[raw] = nil
             // The ending first, then the words, so the latest line in the

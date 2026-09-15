@@ -33,6 +33,15 @@ public enum ACPWire {
         public var id: Int?
         public var method: String?
         public var error: RPCError?
+        /// How many notifications the client had delivered before this
+        /// message, stamped by `ACPClient.receive`. Notifications reach the
+        /// provider through a stream its pump drains asynchronously;
+        /// responses resume the caller directly. So a `session/prompt`
+        /// response can be acted on before the last `agent_message_chunk`
+        /// ahead of it has been translated, and the turn's words come out
+        /// short (CI, 15 Sep: "working " for "working on it"). The provider
+        /// waits until it has translated up to this number.
+        public var sequence: Int = 0
         /// The whole line, kept so a typed decode can happen later.
         public var raw: Data
 
@@ -208,6 +217,9 @@ public enum ACPWire {
 
     public struct PromptResult: Decodable, Sendable {
         public var stopReason: StopReason?
+        /// `Message.sequence` of the response, for the provider's barrier.
+        public var sequence: Int = 0
+        private enum CodingKeys: String, CodingKey { case stopReason }
 
         /// **A refusal is amber, not green.** The three-lamp ruling reserves
         /// amber for the unanticipated, and an agent that stopped because it
