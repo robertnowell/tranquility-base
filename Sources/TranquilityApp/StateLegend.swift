@@ -623,6 +623,36 @@ enum StateLegend {
     static let openHubTitle = "Open Hub"
     static let openReportTitle = "Open Report"
 
+    // MARK: - The buttons around the transcription (ruled 14 and 15 Sep 2026)
+    //
+    // "It's my contention that we should have a clickable interface." A new
+    // user on a new Mac drove a whole session with row clicks and ⌥ holds,
+    // and the one chord that had no button was the one he could not make
+    // work. Ruled 15 Sep, on seeing a first cut: the grid needs nothing (its
+    // rows are its doors); the CARD gets physical buttons around the
+    // transcription, in the centre of its bottom line, clearly apart from
+    // Open Report and Go to Agent at the edges, which point outward. Record
+    // opens the microphone hands-free; while it is open the same button
+    // reads Send. Each does exactly what its key does, by calling the same
+    // handler, so the two cannot drift; the tooltip teaches the key.
+    //
+    // Ruled again the same afternoon: the mic is a small symbol in the slot
+    // the waveform takes while the microphone is open, above Controls; Send
+    // takes the Controls word's place in the bottom line, since Controls is
+    // hidden for exactly as long as the microphone is open.
+    static let recordTitle = "Record"
+    static let sendTitle = "Send"
+    // The tray row (ruled 15 Sep, mockup 2): shown on every card that can
+    // take a reply, "no attachments" at the left while empty, Attach at the
+    // right. Attach opens a file picker; what you pick becomes a chip, the
+    // same chip a paste or a drop makes.
+    static let attachTitle = "Attach"
+    static let composePlaceholder = "type a message"
+    static let noAttachmentsTitle = "no attachments"
+    static let attachTip = "Pick a file to send with your reply. Or \u{2318}V to paste, or drop a file on the card."
+    static let recordTip = "Click, talk, then click Send. Or hold \u{2325} Option."
+    static let sendTip = "Send what you said. Or tap \u{2325} Option."
+
     /// What hovering `Controls` reveals, in order of how often you reach for it.
     ///
     /// Probation ended 10 Aug: the key line — four chords spelled out along the

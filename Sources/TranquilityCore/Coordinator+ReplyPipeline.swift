@@ -220,6 +220,41 @@ extension Coordinator {
             sessionId: target.sessionId)
     }
 
+    /// A reply with no audio: what was typed on the card, and whatever the
+    /// tray is holding (ruled 15 Sep: "if I start typing, I would just love
+    /// for that to be received"; "when there's an attachment, that should
+    /// bring up the Send button"). Same shape as `submitReply`'s ready
+    /// outcome, so the app sends it through the same door: the row is
+    /// `.ready`, bound to the turn the user heard, and the staged fragments
+    /// ride it. `text` may be empty when only attachments are going; the
+    /// composition then IS the fragments. Nothing when both are empty: a
+    /// Send with nothing in it is a press with no meaning.
+    public func submitTypedReply(text: String, to sessionId: String) async throws -> ReplyOutcome {
+        let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let target = try store.allKnownSessions().first(where: { $0.sessionId == sessionId })
+        else { return .noTarget }
+        let carrying = attachments.staged(for: target.sessionId)
+        guard !typed.isEmpty || !carrying.isEmpty else { return .noTarget }
+        var utterance = Utterance(id: UUID().uuidString,
+                                  eventId: try store.eventId(forRowid: target.latestId),
+                                  status: .ready)
+        utterance.transcriptText = typed
+        utterance.transcriptProvider = "typed"
+        utterance.transcriptFinality = .explicitEndOfTurn
+        utterance.transcriptionOutcome = TranscriptionDisposition.completed.rawValue
+        utterance.targetSessionId = target.sessionId
+        try store.update(utterance: utterance)
+        let riding = attachments.snapshot(session: target.sessionId, utteranceId: utterance.id)
+        Track.record("typed_reply", ["chars": .int(typed.count), "fragments": .int(riding.count)])
+        return .readyToSend(
+            utteranceId: utterance.id,
+            text: outgoingText(for: utterance, transcript: typed, fragments: riding),
+            label: GridAssembler.tabDisplayName(
+                for: target,
+                live: (agents.sessions() ?? []).first { $0.sessionId == target.sessionId }),
+            sessionId: target.sessionId)
+    }
+
     /// Confirm this session and send the reply already recorded for it.
     ///
     /// Consent belongs at the moment it means something — you have heard the

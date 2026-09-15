@@ -687,10 +687,19 @@ extension StatusHUD {
         let armAddsNoHint = pasteHintForTesting.isEmpty
         let armedActionFrame = actionRow.convert(actionRow.bounds, to: panel.contentView)
         let armedGoFrame = goButton.convert(goButton.bounds, to: panel.contentView)
-        let armKeepsGeometry = restingHeight == intendedHeight
-            && restingFit == contentStack?.fittingSize.height
-            && restingActionFrame == armedActionFrame
-            && restingGoFrame == armedGoFrame
+        // Reversed 15 Sep: arming now ADDS exactly one line, the typed one
+        // ("if I start typing, I would just love for that to be received"),
+        // and takes the keys for it. The actions move down by that line and
+        // nothing else: same x, same width, one line taller.
+        let lineHeight = trayRow.compose.fittingSize.height + 3
+        let armShowsTheLine = !trayRow.compose.isHidden
+            && (panel.firstResponder as? NSTextView)?.delegate === trayRow.compose
+        let armKeepsGeometry = armShowsTheLine
+            && abs(((intendedHeight ?? 0) - (restingHeight ?? 0)) - lineHeight) <= 1
+            && abs(((contentStack?.fittingSize.height ?? 0) - (restingFit ?? 0)) - lineHeight) <= 1
+            && restingActionFrame.minX == armedActionFrame.minX
+            && restingActionFrame.width == armedActionFrame.width
+            && restingGoFrame.minX == armedGoFrame.minX
 
         func key(_ chars: String, code: UInt16, command: Bool = false) -> NSEvent? {
             NSEvent.keyEvent(
@@ -703,20 +712,33 @@ extension StatusHUD {
         let letterA = key("a", code: 0)
         let escape = key("\u{1B}", code: 53)
 
-        // Command-V while armed: one paste, through the handler, as a paste,
-        // and the card stays armed for a second one. The chip shows the cut
-        // first line and says how much it is not showing.
+        // Command-V while armed (re-ruled 15 Sep: one rule, not two). WORDS
+        // go into the typed line, as in any message box, and stage nothing;
+        // the card stays armed. A FILE is a chip, through the handler, as a
+        // paste. The chip's cut-and-counted preview is FragmentPreview's own
+        // test now that a pasted paragraph is no longer a chip.
         let paragraph = String(repeating: "the quick brown fox jumps over the lazy dog ", count: 6)
             .trimmingCharacters(in: .whitespaces)
         board.clearContents()
         board.setString(paragraph, forType: .string)
         if let commandV { panel.sendEvent(commandV) }
-        let pasteStagedOnce = received.count == 1 && received.first?.via == .paste
+        let wordsPasteIntoTheLine = received.isEmpty
+            && trayRow.compose.stringValue == paragraph
         let staysArmedAfterPaste = pasteArmed
-        let chip = trayRow.displayedNamesForTesting.first ?? ""
-        let chipIsCutAndCounted = chip == FragmentPreview.preview(paragraph)
-            && chip.hasSuffix("+\(paragraph.count - 48) chars")
-            && chip.count < paragraph.count
+        // Empty the line WITHOUT hiding it: clearComposed hides, and a hidden
+        // field ends its own editing, which is the very thing this drill is
+        // here to catch happening by accident.
+        trayRow.compose.stringValue = ""
+        board.clearContents()
+        board.writeObjects([URL(fileURLWithPath: "/tmp/pasted-one.png") as NSURL])
+        if let commandV { panel.sendEvent(commandV) }
+        let pasteStagedOnce = received.count == 1 && received.first?.via == .paste
+        // The drill's own stager keeps text only, so the proof a file became
+        // a chip is the item the handler received, not a rendered row.
+        let chipIsCutAndCounted: Bool = {
+            if case .file(let path)? = received.first?.items.first { return path == "/tmp/pasted-one.png" }
+            return false
+        }()
 
         // A refused paste says why, on the card, and stages nothing.
         board.clearContents()
@@ -725,16 +747,22 @@ extension StatusHUD {
         let refusalOnTheCard = received.count == 1
             && pasteHintForTesting.contains("too large")
 
-        // Every way out. A stray key releases and is dropped; Escape releases;
-        // another window taking key releases (AppKit's own resignKey); a face
-        // change releases; and released, Command-V stages nothing.
+        // A typed key is WORDS now (ruled 15 Sep): it lands on the typed line
+        // and the card stays armed, where it used to release and drop the
+        // key. Escape releases; another window taking key releases (AppKit's
+        // own resignKey); a face change releases; and released, Command-V
+        // stages nothing.
         if let letterA { panel.sendEvent(letterA) }
-        let strayKeyReleases = !pasteArmed && !panel.acceptsKey
+        let strayKeyReleases = pasteArmed && panel.acceptsKey
+            && trayRow.compose.stringValue == "a"
+        trayRow.clearComposed()
+        if let escape { panel.sendEvent(escape) }
+        let escapeReleases = !pasteArmed
         pasteIntoTray()
         let releasedPastesNothing = received.count == 1
         armPaste(via: "drill")
         if let escape { panel.sendEvent(escape) }
-        let escapeReleases = !pasteArmed
+        let escapeReleasesAgain = !pasteArmed
         armPaste(via: "drill")
         panel.resignKey()
         let clickAwayReleases = !pasteArmed && !panel.acceptsKey
@@ -762,14 +790,15 @@ extension StatusHUD {
             ("ringShows", ringShows),
             ("ringIsWorkingBlue", ringIsWorkingBlue),
             ("armAddsNoHint", armAddsNoHint),
-            ("armKeepsGeometry", armKeepsGeometry),
+            ("armAddsTheTypedLineOnly", armKeepsGeometry),
+            ("wordsPasteIntoTheLine", wordsPasteIntoTheLine),
             ("pasteStagedOnce", pasteStagedOnce),
             ("staysArmedAfterPaste", staysArmedAfterPaste),
-            ("chipIsCutAndCounted", chipIsCutAndCounted),
+            ("fileIsAChip", chipIsCutAndCounted),
             ("refusalOnTheCard", refusalOnTheCard),
-            ("strayKeyReleases", strayKeyReleases),
+            ("typedKeyLandsOnTheLine", strayKeyReleases),
             ("releasedPastesNothing", releasedPastesNothing),
-            ("escapeReleases", escapeReleases),
+            ("escapeReleases", escapeReleases && escapeReleasesAgain),
             ("clickAwayReleases", clickAwayReleases),
             ("faceChangeReleases", faceChangeReleases),
             ("noTargetNoArm", noTargetNoArm),
@@ -1624,7 +1653,10 @@ extension StatusHUD {
         _ = showAnnouncement(
             spoken: SpokenTextSanitizer().sanitize("Finished the poller. Go?"),
             sessionId: "drill", pid: 1, project: "promotions copy", cwd: "/tmp")
-        checks.append(("sessionTitleIsADoor", titleLabel.isADoor))
+        // Reversed 15 Sep: the title is not a door; GO TO AGENT is the one
+        // way to the session. The drill keeps the line so the reversal is
+        // asserted rather than remembered.
+        checks.append(("sessionTitleIsNotADoor", !titleLabel.isADoor))
         checks.append(("titleIsOneLine", titleLabel.maximumNumberOfLines == 1))
         // The identity, alone. A second line here is the topic coming back.
         checks.append(("noSecondLine", !titleLabel.stringValue.contains("\n")))

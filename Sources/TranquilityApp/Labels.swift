@@ -44,6 +44,7 @@ final class DoorLabel: NSTextField {
         addTrackingArea(NSTrackingArea(
             rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
             owner: self, userInfo: nil))
+        PointerCursor.track(self) { [weak self] in self?.isADoor ?? false }
     }
 
     override func mouseEntered(with event: NSEvent) { setHovered(true) }

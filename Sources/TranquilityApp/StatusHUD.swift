@@ -38,6 +38,16 @@ final class StatusHUD: NSObject {
     /// are the interface.
     var dontSendButton: ConsoleButton!
     var micSettingsButton: ConsoleButton!
+    /// The microphone's buttons (ruled 15 Sep, twice). A small mic, centred
+    /// in the slot the waveform takes while the microphone is open, above
+    /// the Controls word; and Send, in the bottom line's centre, in the place
+    /// Controls vacates while the microphone is open. So the two never share
+    /// a face, and each sits where the eye already is for that face: the
+    /// waveform's slot when there is no waveform, the Controls slot when
+    /// there is no Controls.
+    var recordButton: ConsoleButton!
+    var micRow: NSView!
+    var sendButton: ConsoleButton!
     var newSessionButton: ConsoleButton!
     var restartAudioButton: ConsoleButton!
     var openPageButton: ConsoleButton!
@@ -292,6 +302,17 @@ final class StatusHUD: NSObject {
     var onOpenRepository: (() -> Void)?
     /// Wired by the app onto the workspace's focus-or-open call.
     var onOpenReport: ((String) -> Void)?
+    /// The chords' doors. Each is wired by the app to the SAME handler the
+    /// key reaches, so a click and a chord cannot mean different things.
+    var onNextDoor: (() -> Void)?
+    var onSpeakDoor: (() -> Void)?
+    var onHearMoreDoor: (() -> Void)?
+    /// The tray row's Attach door: the app opens the picker and stages what
+    /// was picked through `onItemsStaged`, the same way a drop is staged.
+    var onAttach: (() -> Void)?
+    /// Send with the microphone closed: the typed line (may be empty) and
+    /// whatever the tray holds, to the card's session, now.
+    var onSendTyped: ((String) -> Void)?
 
     // MARK: - Public surface
 
@@ -508,8 +529,27 @@ final class StatusHUD: NSObject {
     /// same note serves both. Centred on the panel rather than aligned to the
     /// word — the note is wider than the word is long, so a leading-aligned
     /// note hung off a centred word would run off the right edge.
+    /// The pending close of the note, if the pointer has left the word or
+    /// the note and not yet arrived on the other.
+    var controlsNoteClose: DispatchWorkItem?
+
+    /// Close the note in a beat, unless the pointer lands on it first. 250 ms
+    /// is the 8pt gap at any speed a hand crosses it; it is not long enough
+    /// to feel like the note is sticking.
+    func closeControlsNoteSoon() {
+        controlsNoteClose?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            controlsNoteClose = nil
+            setControlsNote(open: false)
+        }
+        controlsNoteClose = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
     func setControlsNote(open: Bool, above host: NSView? = nil) {
         guard let controlsSticky else { return }
+        if open { controlsNoteClose?.cancel(); controlsNoteClose = nil }
         if open, let host, let background = controlsSticky.superview {
             NSLayoutConstraint.deactivate(stickyPlacement)
             stickyPlacement = [
@@ -1021,6 +1061,30 @@ final class StatusHUD: NSObject {
     // therefore redundant, and it was not free: it crashed in swift_getObjectType
     // on a bad executor pointer, killing the app on a button press. `nonisolated`
     // plus assumeIsolated keeps the isolation guarantee without the check.
+    @objc nonisolated func recordTapped() {
+        MainActor.assumeIsolated {
+            Track.record("door_opened", ["door": "record"])
+            onSpeakDoor?()
+        }
+    }
+
+    @objc nonisolated func sendTapped() {
+        MainActor.assumeIsolated {
+            Track.record("door_opened", ["door": "send"])
+            // With the microphone open, Send is the tap that ends the
+            // capture, and the words go the way a dictation goes. With it
+            // closed, Send is the typed line and the chips, now.
+            if isCapturingAudio {
+                onSpeakDoor?()
+            } else {
+                let text = trayRow.composedText
+                releasePaste(because: "sent", repaint: false)
+                trayRow.clearComposed()
+                onSendTyped?(text)
+            }
+        }
+    }
+
     @objc nonisolated func cancelPendingSendTapped() {
         // FALSE (ruling §D, "no outcome reopens the microphone on its own").
         // Don't send meant "don't send, and start listening again", so the one
@@ -2236,16 +2300,30 @@ final class StatusHUD: NSObject {
         micSettingsButton.isHidden = true
         newSessionButton.isHidden = true
         restartAudioButton.isHidden = true
+        // The mic sits in the waveform's slot on a card whose microphone is
+        // closed; the waveform takes the slot back while it is open. Send
+        // takes the Controls word's place whenever there is something to
+        // send (ruled 15 Sep): the microphone open, a chip in the tray, or
+        // words on the typed line. Baseline properties like every other
+        // widget; the tray branch below re-derives Send once it knows the
+        // chips.
+        micRow.isHidden = !state.isCardOnStage
+        sendButton.isHidden = !isCapturingAudio
         countdownBar.isHidden = true; meter.isHidden = true
         // The strip belongs to the capture arms alone. Both the label AND its
         // rule are baselined — a rule left behind is the residue class this
         // funnel exists to close, and it would draw a line across a card that
         // has nothing under it.
         stripLabel.isHidden = true; stripRule.isHidden = true
-        // The chips are baselined off like every other widget and re-derived
-        // below. Never left standing from a previous face: a chip belongs to
-        // one session, and a face that addresses nobody must not show one.
-        trayRow.isHidden = true
+        // The chips are re-derived below like every other widget, and never
+        // left standing from a previous face: a chip belongs to one session,
+        // and a face that addresses nobody must not show one. But NOT
+        // baselined to hidden first (15 Sep): hiding a view, even for the
+        // length of one render, ends the field editor's editing inside it,
+        // and render runs twenty times a second while the microphone is
+        // open. "You lose the focus on every keystroke" was this line. The
+        // decision is made once, below, and written only when it changes.
+        var trayShown = false
         // The footer belongs to the grid alone, and the sticky dies with it: a
         // note left open while the face changes underneath is exactly the
         // residue class render()'s baseline exists to make impossible.
@@ -2544,11 +2622,20 @@ final class StatusHUD: NSObject {
             if let target = replyTargetForDrop?() {
                 let staged = stagedFragments?(target.sessionId) ?? []
                 trayRow.apply(staged)
-                trayRow.isHidden = staged.isEmpty
+                // The row shows with chips on any conversational face, as it
+                // always did, and EMPTY on a card or a capture (ruled 15 Sep,
+                // mockup 2): "no attachments" and the Attach door, where the
+                // chip will land. Never empty on the grid, which names no one.
+                trayShown = !(staged.isEmpty && !(state.isCardOnStage || state.isCapturingAudio))
+                // Something to send: Send stands in for Controls (ruled 15
+                // Sep), on a card as well as during a capture.
+                let hasWords = !trayRow.composedText.trimmingCharacters(in: .whitespaces).isEmpty
+                if state.isCardOnStage, !staged.isEmpty || hasWords { sendButton.isHidden = false }
             } else {
                 trayRow.apply([])
             }
         }
+        if trayRow.isHidden != !trayShown { trayRow.isHidden = !trayShown }
 
         // Controls belongs to every face where a gesture is the next thing you
         // might do, not to the grid alone (ruled 18 Aug). That is the grid — in
@@ -2558,7 +2645,7 @@ final class StatusHUD: NSObject {
         // mid-transaction, and a note explaining how to start the thing you are
         // already doing is furniture. Written as one rule off the state rather
         // than unhidden by each arm, so a face added later inherits the answer.
-        cardControls.isHidden = !state.isCardOnStage
+        cardControls.isHidden = !state.isCardOnStage || !sendButton.isHidden
 
         // The action row exists exactly when a quiet action is visible. (The
         // slow-transcription tick unhides its own actions later and re-runs
@@ -2681,7 +2768,10 @@ final class StatusHUD: NSObject {
         // is not a session — it is cleared going idle and again by showVoices,
         // so "Voices" and the empty room's "Tranquility Base" cannot inherit the
         // last session's tab. `titleDoorDrill` holds that alignment.
-        titleLabel.isADoor = currentTarget?.pid != nil
+        // Not a door any more (ruled 15 Sep: "the title doesn't need to be
+        // clickable"). GO TO AGENT is the way to the session, and it is
+        // getting the cursor it never actually had; see PointerCursor.
+        titleLabel.isADoor = false
     }
 
     /// The listening pill: the live dot in channel green (mic open = go), the
@@ -3401,7 +3491,14 @@ final class StatusHUD: NSObject {
         panel.makeKeyAndOrderFront(nil)
         Permissions.log("paste: armed for \(target.sessionId.prefix(8)) via \(door)")
         Track.record("paste_armed", ["via": .token(door)])
+        // The typed line takes the keys (ruled 15 Sep). It is on the tray
+        // row, which render() shows on every card that can take a reply.
+        trayRow.setComposing(true)
         render()
+        let took = panel.makeFirstResponder(trayRow.compose)
+        trayRow.hideCaret()
+        Permissions.log("paste: typed line \(took ? "took" : "REFUSED") the keys; editing="
+            + "\(trayRow.compose.currentEditor() != nil) hidden=\(trayRow.compose.isHiddenOrHasHiddenAncestor)")
     }
 
     /// Give the keyboard back. `repaint` is false from inside a transition,
@@ -3410,6 +3507,9 @@ final class StatusHUD: NSObject {
         guard let panel, panel.pasteArmed else { return }
         Permissions.log("paste: released (\(reason))")
         releaseKeyboard()
+        // The line stays if it has words (they are not lost by looking
+        // away) and goes if it is empty.
+        trayRow.setComposing(false)
         if repaint { render() }
     }
 
@@ -3434,6 +3534,17 @@ final class StatusHUD: NSObject {
             render(); return
         }
         pasteNote = nil
+        // One rule (15 Sep: "paste sometimes goes as an attachment and
+        // sometimes to the text field"): words paste into the typed line
+        // while it is taking keys, as they would in any message box; a file
+        // or an image is a chip, always.
+        if trayRow.compose.currentEditor() != nil,
+           reading.items.count == 1, case .text(let words) = reading.items[0] {
+            trayRow.compose.currentEditor()?.insertText(words)
+            Permissions.log("paste: \(words.count) chars into the typed line")
+            Track.record("pasted", ["accepted": true, "into": "typed_line"])
+            render(); return
+        }
         _ = onItemsStaged?(reading.items, .paste)
         Permissions.log("paste: \(reading.items.count) item(s) for \(target.sessionId.prefix(8))")
         render()

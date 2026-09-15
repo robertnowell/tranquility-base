@@ -937,13 +937,15 @@ extension StatusHUD {
         // the change text colour impact", 18 Aug). Asserted separately from the
         // pill because they fail separately: the pill rests mid-ramp and passed
         // this whole time.
+        // Reversed 15 Sep ("the title doesn't need to be clickable"): the
+        // title is NOT a door, so it must neither lift under the pointer
+        // nor claim the cursor. Same shape of assertion, opposite sign.
         let titleResting = titleLabel.attributedStringValue
         titleLabel.setHovered(true)
         let titleHovered = titleLabel.attributedStringValue
         titleLabel.setHovered(false)
-        let titleAnswersTheCursor = titleLabel.isADoor
-            && firstColour(titleHovered) != firstColour(titleResting)
-            && firstColour(titleLabel.attributedStringValue) == firstColour(titleResting)
+        let titleAnswersTheCursor = !titleLabel.isADoor
+            && firstColour(titleHovered) == firstColour(titleResting)
         // Through the button's own hover seam, not a cast to a class it is not.
         // The first version of this claim cast `goButton` to a type that had
         // never been in the tree — the panel already had `ConsoleButton` with an
@@ -1134,7 +1136,7 @@ extension StatusHUD {
             ("bottomRowFits", bottomRowFits),
             ("footerFits", footerFits),
             ("pillAnswersTheCursor", pillAnswersTheCursor),
-            ("titleAnswersTheCursor", titleAnswersTheCursor),
+            ("titleIsNotADoor", titleAnswersTheCursor),
             ("doorAnswersTheCursor", doorAnswersTheCursor),
             ("stripIsNotADoor", stripIsNotADoor),
             ("rowLightsItsName", rowLightsItsName),

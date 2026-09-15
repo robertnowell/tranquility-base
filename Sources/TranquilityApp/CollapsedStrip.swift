@@ -320,7 +320,9 @@ final class CollapsedStrip: NSView {
             rect: bounds,
             options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
             owner: self))
+        PointerCursor.track(self)
     }
+    override func cursorUpdate(with event: NSEvent) { PointerCursor.show() }
 
     override func mouseEntered(with event: NSEvent) {
         hovering = true

@@ -1068,6 +1068,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return HomeBase.existingPage(sessionId: session) != nil ? .hub : nil
         }
+        // The chords' doors reach the SAME handler the keys do, so a click is
+        // a chord in every respect the state machine can see: the mic-open
+        // guard, home-first from a card, the pending-send commit, the
+        // hands-free latch, all of it, once.
+        hud.onNextDoor = { [weak self] in self?.handle(.next) }
+        hud.onSpeakDoor = { [weak self] in self?.handle(.optionTapped) }
+        hud.onHearMoreDoor = { [weak self] in self?.handle(.controlDoubleTapped) }
         hud.onOpenHub = { [weak self] session in
             _ = self?.openHub(session: session)
         }
@@ -1107,8 +1114,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Track.record("chip_removed", ["agent_id": Track.hash(session)])
             self?.coordinator?.attachments.unstage(fragment, session: session)
         }
+        // The Attach door (ruled 15 Sep). A picker needs the app in front
+        // for the moment it is open; the panel stays non-activating and the
+        // terminal gets the keyboard back when the sheet closes. What was
+        // picked is staged exactly as a drop is.
+        hud.onAttach = { [weak self] in
+            guard let self else { return }
+            let picker = NSOpenPanel()
+            picker.canChooseFiles = true
+            picker.canChooseDirectories = false
+            picker.allowsMultipleSelection = true
+            picker.prompt = StateLegend.attachTitle
+            picker.message = "Send with your reply"
+            NSApp.activate(ignoringOtherApps: true)
+            picker.begin { [weak self] response in
+                guard let self else { return }
+                guard response == .OK, !picker.urls.isEmpty else {
+                    Permissions.log("picker: cancelled")
+                    Track.record("files_picked", ["count": .int(0), "accepted": false, "staged": 0])
+                    return
+                }
+                let items = picker.urls.map { DroppedItem.file($0.path) }
+                let accepted = hud.onItemsStaged?(items, .picker) ?? false
+                if accepted { hud.render() }
+            }
+        }
+        // Send with the microphone closed (ruled 15 Sep): the typed line and
+        // the chips go now. The click is the consent, so there is no undo
+        // window; the same `send` the countdown hands off to does the rest.
+        hud.onSendTyped = { [weak self] text in
+            guard let self, let coordinator, let target = dropTarget else {
+                self?.lastStatusLine = "nothing to send to yet"
+                return
+            }
+            Task { @MainActor in
+                do {
+                    let outcome = try await coordinator.submitTypedReply(text: text, to: target.sessionId)
+                    switch outcome {
+                    case .readyToSend(let utteranceId, _, let label, let sessionId):
+                        let answering = (try? coordinator.waiting())?
+                            .first { $0.sessionId == sessionId }?.latestId
+                        self.delivering.began(sessionId: sessionId, answering: answering)
+                        self.hud.render()
+                        self.send(utteranceId: utteranceId, label: label, sessionId: sessionId)
+                    case .noTarget:
+                        self.lastStatusLine = "nothing to send"
+                        Permissions.log("typed send: nothing typed and nothing staged")
+                        self.hud.render()
+                    default:
+                        Permissions.log("typed send: unexpected outcome \(outcome)")
+                    }
+                } catch {
+                    Permissions.log("typed send threw: \(error)")
+                    Failures.report(.deliveryFailed, reason: "typed send threw: \(error)")
+                }
+            }
+        }
         hud.onItemsStaged = { [weak self] items, via in
-            let event = via == .drop ? "files_dropped" : "pasted"
+            let event: String = {
+                switch via {
+                case .drop: return "files_dropped"
+                case .paste: return "pasted"
+                case .picker: return "files_picked"
+                case .typed: return "typed_line"
+                }
+            }()
             guard let self, let coordinator, let target = dropTarget else {
                 // Refused rather than swallowed. The overlay never appears
                 // without a target, so this is the race where the last
