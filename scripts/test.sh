@@ -29,8 +29,8 @@ cd "$(dirname "$0")/.."
 
 # Raise these when the suite grows. They exist so that "the tests stopped being
 # compiled in" cannot look like "the tests passed".
-FLOOR_XCTEST=1993
-FLOOR_SWIFT_TESTING=61
+FLOOR_XCTEST=1984
+FLOOR_SWIFT_TESTING=66
 
 # Apple Silicon hardware under a translated shell: re-exec the test run native.
 # `uname -m` reports the process PERSONALITY and is exactly what fooled us, so

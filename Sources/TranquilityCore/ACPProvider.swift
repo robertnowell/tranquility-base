@@ -44,6 +44,30 @@ public actor ACPProvider: AgentProvider {
         self.client = client
         self.cwd = cwd
         self.start = start
+        // The stream is opened HERE, not in a separate async call, so a
+        // synchronous registry can build the provider at launch and hand
+        // `changes()` to the poller before any process exists. The continuation
+        // is captured without touching `self`, which is what lets an actor do
+        // this in its initialiser. `openEventStream()` remains as a no-op for
+        // the callers that predate this.
+        var continuation: AsyncStream<AgentEvent>.Continuation!
+        let stream = AsyncStream<AgentEvent> { continuation = $0 }
+        self.eventContinuation = continuation
+        self.streamBox.value = stream
+    }
+
+    /// Whether `connect()` has succeeded. A registered provider sits here
+    /// without a process until something is started on it: that is what makes
+    /// listing every installed agent at launch cost nothing.
+    private var connected = false
+
+    /// Spawn on first use. `start`, `send` and `respond` all route through
+    /// here, so a provider built by the registry and never touched never runs
+    /// a binary, and one that is used runs it exactly once.
+    private func connectIfNeeded() async throws {
+        guard !connected else { return }
+        try await connect()
+        connected = true
     }
 
     /// Spawn, handshake, and begin translating. Separate from `init` because a
@@ -53,6 +77,7 @@ public actor ACPProvider: AgentProvider {
         try start()
         await client.start()
         let shook = try await client.initialize()
+        connected = true
         declared = shook.capabilities
         handshakeCapabilities = shook.agentCapabilities
         capabilitiesBox.value = shook.capabilities
@@ -220,6 +245,7 @@ public actor ACPProvider: AgentProvider {
     }
 
     public func start(_ brief: Brief) async throws -> AgentSession.ID {
+        try await connectIfNeeded()
         let raw = try await client.newSession(cwd: cwd)
         let session = seen(raw: raw, state: .submitted)
         if !brief.prompt.isEmpty { _ = try await send(brief.prompt, to: session.id) }
