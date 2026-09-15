@@ -41,7 +41,10 @@ extension StatusHUD {
         /// lands here: no event tap, no timer, no "did they click away" guess.
         override func resignKey() {
             super.resignKey()
-            if pasteArmed { onPasteReleased?() }
+            if pasteArmed {
+                Permissions.log("paste: window resigned key (first responder \(String(describing: type(of: firstResponder))))")
+                onPasteReleased?()
+            }
         }
 
         /// The Edit menu's Paste, when the responder chain reaches the window
@@ -69,6 +72,8 @@ extension StatusHUD {
                     super.sendEvent(event)
                     return
                 }
+                Permissions.log("paste: key \(event.keyCode) with no typed line editing (first responder "
+                    + "\(String(describing: type(of: firstResponder)))); releasing")
                 onPasteReleased?()
                 return
             }

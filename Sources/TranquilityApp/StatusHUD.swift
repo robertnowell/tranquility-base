@@ -3489,8 +3489,10 @@ final class StatusHUD: NSObject {
         // row, which render() shows on every card that can take a reply.
         trayRow.setComposing(true)
         render()
-        panel.makeFirstResponder(trayRow.compose)
+        let took = panel.makeFirstResponder(trayRow.compose)
         trayRow.hideCaret()
+        Permissions.log("paste: typed line \(took ? "took" : "REFUSED") the keys; editing="
+            + "\(trayRow.compose.currentEditor() != nil) hidden=\(trayRow.compose.isHiddenOrHasHiddenAncestor)")
     }
 
     /// Give the keyboard back. `repaint` is false from inside a transition,
