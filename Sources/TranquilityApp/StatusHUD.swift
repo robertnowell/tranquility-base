@@ -3490,6 +3490,7 @@ final class StatusHUD: NSObject {
         trayRow.setComposing(true)
         render()
         panel.makeFirstResponder(trayRow.compose)
+        trayRow.hideCaret()
     }
 
     /// Give the keyboard back. `repaint` is false from inside a transition,
@@ -3525,6 +3526,17 @@ final class StatusHUD: NSObject {
             render(); return
         }
         pasteNote = nil
+        // One rule (15 Sep: "paste sometimes goes as an attachment and
+        // sometimes to the text field"): words paste into the typed line
+        // while it is taking keys, as they would in any message box; a file
+        // or an image is a chip, always.
+        if trayRow.compose.currentEditor() != nil,
+           reading.items.count == 1, case .text(let words) = reading.items[0] {
+            trayRow.compose.currentEditor()?.insertText(words)
+            Permissions.log("paste: \(words.count) chars into the typed line")
+            Track.record("pasted", ["accepted": true, "into": "typed_line"])
+            render(); return
+        }
         _ = onItemsStaged?(reading.items, .paste)
         Permissions.log("paste: \(reading.items.count) item(s) for \(target.sessionId.prefix(8))")
         render()

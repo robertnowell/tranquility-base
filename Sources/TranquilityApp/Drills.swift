@@ -734,16 +734,22 @@ extension StatusHUD {
         let refusalOnTheCard = received.count == 1
             && pasteHintForTesting.contains("too large")
 
-        // Every way out. A stray key releases and is dropped; Escape releases;
-        // another window taking key releases (AppKit's own resignKey); a face
-        // change releases; and released, Command-V stages nothing.
+        // A typed key is WORDS now (ruled 15 Sep): it lands on the typed line
+        // and the card stays armed, where it used to release and drop the
+        // key. Escape releases; another window taking key releases (AppKit's
+        // own resignKey); a face change releases; and released, Command-V
+        // stages nothing.
         if let letterA { panel.sendEvent(letterA) }
-        let strayKeyReleases = !pasteArmed && !panel.acceptsKey
+        let strayKeyReleases = pasteArmed && panel.acceptsKey
+            && trayRow.compose.stringValue == "a"
+        trayRow.clearComposed()
+        if let escape { panel.sendEvent(escape) }
+        let escapeReleases = !pasteArmed
         pasteIntoTray()
         let releasedPastesNothing = received.count == 1
         armPaste(via: "drill")
         if let escape { panel.sendEvent(escape) }
-        let escapeReleases = !pasteArmed
+        let escapeReleasesAgain = !pasteArmed
         armPaste(via: "drill")
         panel.resignKey()
         let clickAwayReleases = !pasteArmed && !panel.acceptsKey
@@ -776,9 +782,9 @@ extension StatusHUD {
             ("staysArmedAfterPaste", staysArmedAfterPaste),
             ("chipIsCutAndCounted", chipIsCutAndCounted),
             ("refusalOnTheCard", refusalOnTheCard),
-            ("strayKeyReleases", strayKeyReleases),
+            ("typedKeyLandsOnTheLine", strayKeyReleases),
             ("releasedPastesNothing", releasedPastesNothing),
-            ("escapeReleases", escapeReleases),
+            ("escapeReleases", escapeReleases && escapeReleasesAgain),
             ("clickAwayReleases", clickAwayReleases),
             ("faceChangeReleases", faceChangeReleases),
             ("noTargetNoArm", noTargetNoArm),

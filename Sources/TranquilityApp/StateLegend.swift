@@ -647,7 +647,7 @@ enum StateLegend {
     // right. Attach opens a file picker; what you pick becomes a chip, the
     // same chip a paste or a drop makes.
     static let attachTitle = "Attach"
-    static let composePlaceholder = "type a message, Return enters it"
+    static let composePlaceholder = "type a message"
     static let noAttachmentsTitle = "no attachments"
     static let attachTip = "Pick a file to send with your reply. Or \u{2318}V to paste, or drop a file on the card."
     static let recordTip = "Click, talk, then click Send. Or hold \u{2325} Option."

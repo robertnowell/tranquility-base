@@ -180,6 +180,13 @@ final class DropSurfaceView: NSView {
 /// already handles by anchoring its top edge.
 final class TrayRowView: NSStackView, NSTextFieldDelegate {
     func controlTextDidChange(_ note: Notification) { onComposeChanged?(compose.stringValue) }
+    /// No blinking caret (ruled 15 Sep: "it feels distracting"). The line is
+    /// a quiet place words appear, not a text editor; the field editor is
+    /// asked to hide its insertion point the moment it arrives.
+    func controlTextDidBeginEditing(_ note: Notification) { hideCaret() }
+    func hideCaret() {
+        (compose.currentEditor() as? NSTextView)?.insertionPointColor = .clear
+    }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if selector == #selector(NSResponder.insertNewline(_:)) { onComposeReturn?(compose.stringValue); return true }
         if selector == #selector(NSResponder.cancelOperation(_:)) { onComposeEscape?(); return true }

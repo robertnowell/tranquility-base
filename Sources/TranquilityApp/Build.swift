@@ -24,6 +24,12 @@ extension StatusHUD {
         /// Card paste (ruled 7 Sep): the keyboard was borrowed for exactly one
         /// key. True only between a press on the card and whatever ends it.
         var pasteArmed = false
+        /// Whether the typed line is taking keys right now. Asked, not
+        /// inferred from the responder chain: the first cut inferred it and
+        /// was wrong on every keystroke ("you lose the focus on every
+        /// keystroke", 15 Sep), because the field editor's identity is not
+        /// the panel's to know.
+        var typedLineIsEditing: (() -> Bool)?
         var onPasteRequested: (() -> Void)?
         /// The keyboard left while armed: another window took key, or a key
         /// that was not Command-V arrived. The panel releases through this.
@@ -59,7 +65,7 @@ extension StatusHUD {
                 // are words for it, and Return and Escape are its own. Only
                 // a key with no editor to land in releases the card, as
                 // every stray key did before.
-                if (firstResponder as? NSTextView)?.delegate is NSTextField {
+                if typedLineIsEditing?() == true {
                     super.sendEvent(event)
                     return
                 }
@@ -398,19 +404,12 @@ extension StatusHUD {
             Track.record("door_opened", ["door": "attach"])
             self?.onAttach?()
         }
+        panel.typedLineIsEditing = { [weak self] in self?.trayRow.compose.currentEditor() != nil }
         trayRow.onComposeChanged = { [weak self] _ in self?.render() }
-        trayRow.onComposeReturn = { [weak self] line in
-            guard let self else { return }
-            let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return }
-            // Received: the line becomes a chip under the attachments, the
-            // same chip a pasted sentence makes, and the line clears for the
-            // next one. Send takes them all.
-            if onItemsStaged?([.text(text)], .typed) == true {
-                trayRow.compose.stringValue = ""
-                render()
-            }
-        }
+        // Return sends (re-ruled 15 Sep: "return enters it, that's not
+        // needed, just do type a message"): the line is a message box, and
+        // a message box sends on Return. Same door as the Send button.
+        trayRow.onComposeReturn = { [weak self] _ in self?.sendTapped() }
         trayRow.onComposeEscape = { [weak self] in
             self?.releasePaste(because: "escape", repaint: true)
         }
