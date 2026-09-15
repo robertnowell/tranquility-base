@@ -308,8 +308,14 @@ public struct CrobotTask: Decodable, Sendable, Equatable {
     }
 
     static func date(_ raw: String?) -> Date {
-        guard let raw else { return Date(timeIntervalSince1970: 0) }
-        return ISO8601DateFormatter().date(from: raw) ?? Date(timeIntervalSince1970: 0)
+        // Through `RolloutClock`, which parses BOTH the fractional-second stamp
+        // and the plain one. A bare `ISO8601DateFormatter` reads no fractional
+        // seconds, and crobot stamps them ("...:31.315Z"), so every crobot
+        // agent's `updatedAt` was epoch 0 — which read as harmless until lit
+        // rows began ordering by recency (#454) and a 1970 timestamp sorted
+        // every crobot task to the very bottom, off the panel. Same defect as
+        // the ACP `session/list` stamp, same fix (15 Sep 2026).
+        RolloutClock.date(raw) ?? Date(timeIntervalSince1970: 0)
     }
 }
 
