@@ -184,6 +184,20 @@ public struct AnthropicSummaryProvider: SummaryProvider {
     /// stale background to ignore — two blocks whose difference is the feature,
     /// and neither was reachable from a test while this lived inside a function
     /// that needs an API key to run.
+    /// The same user half, rendered from the shared template.
+    ///
+    /// Exists so the managed Gateway can produce a byte-identical prompt
+    /// without a second implementation of the conditionals below. Both read
+    /// `contracts/gateway/v1/summary-user-template.json`, and
+    /// `UserPromptTemplateTests` asserts this and `userPrompt(for:)` agree
+    /// across every combination of the optional blocks. When they agree, the
+    /// one below can go; until they do, the shipped path is unchanged.
+    static func userPromptFromTemplate(
+        for request: SummaryRequest, template: UserPromptTemplate = .shared
+    ) -> String {
+        template.render(for: request)
+    }
+
     public static func userPrompt(for request: SummaryRequest) -> String {
         var context = "Project: \(request.projectLabel)"
         if request.hookEvent == .notification {
@@ -582,6 +596,16 @@ public struct SummarizerChain: Sendable {
                 } catch {
                     if provider.usesManagedCredits {
                         managedFailure = (error as? ManagedSummaryFailure) ?? .refused(code: "service_unavailable", operationId: nil)
+                        // A Mac that is NOT ON CREDITS is not a credits failure.
+                        // Paired before key binding, or not connected at all:
+                        // no grant exists to protect, so the person's own key,
+                        // if they pasted one, is the right next thing. Every
+                        // other managed failure lands on the floor and never
+                        // on their bill, which is what `break` is for.
+                        if case let .refused(code, _) = managedFailure!,
+                           code == "rebinding_required" || code == "not_connected" {
+                            continue
+                        }
                         break
                     }
                 }

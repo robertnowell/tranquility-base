@@ -24,6 +24,10 @@ claim that the authorization exchange or managed onboarding has shipped.
 5. Payment setup comes when needed for further paid usage. It is not authentication.
    Recurring recharge consent remains explicit and separate from signing in.
 
+The wire format that carries this authority, and what the Gateway checks before
+honouring it, is [TOKEN.md](TOKEN.md). It was written 14 Sep and implements no
+new decision: the Principal it produces is already frozen in `Gateway.authorize`.
+
 ## Shared session; separate service authority
 
 - **Identity:** Hub's immutable internal user UUID is the trusted Gateway

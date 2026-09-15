@@ -124,6 +124,33 @@ final class ManagedSummaryTests: XCTestCase {
         let calls = await counter.calls; XCTAssertEqual(calls, 0)
     }
 
+    /// The one exception to never-BYOK: a Mac the hub says is not on credits
+    /// at all. Paired before key binding, it has no grant to protect, and the
+    /// key the person pasted is the right next thing. The failure stays
+    /// visible so the app can say "connect again".
+    func testAMacNotYetOnCreditsKeepsItsOwnKey() async throws {
+        struct NotEnrolled: GatewayTransport {
+            let code: String
+            func request(method: String, path: String, body: Data?) async throws -> (status: Int, body: Data) {
+                throw ManagedSummaryFailure.refused(code: code, operationId: nil)
+            }
+        }
+        for code in ["rebinding_required", "not_connected"] {
+            let counter = Counter()
+            let chain = SummarizerChain(providers: [ManagedSummaryProvider(client: try client(NotEnrolled(code: code), name: code)), Direct(counter: counter)])
+            let summary = await chain.summarize(request)
+            XCTAssertEqual(summary.provider, "direct-fixture", code)
+            XCTAssertEqual(summary.managedFailure, .refused(code: code, operationId: nil))
+            let calls = await counter.calls; XCTAssertEqual(calls, 1, code)
+        }
+        // And a service outage on the credits path is still the floor.
+        let counter = Counter()
+        let chain = SummarizerChain(providers: [ManagedSummaryProvider(client: try client(NotEnrolled(code: "service_unavailable"), name: "outage")), Direct(counter: counter)])
+        let summary = await chain.summarize(request)
+        XCTAssertEqual(summary.provider, "deterministic-fallback")
+        let calls = await counter.calls; XCTAssertEqual(calls, 0)
+    }
+
     func testPendingIsTruthfullyDegradedNotChargedSuccess() async throws {
         let op = GatewayOperation(version: "1", accountId: account.uuidString.lowercased(), operationId: source.operationId(accountId: account),
             state: .reconciling, brief: nil, receipt: nil, error: .init(code: "provider_uncertain"))
@@ -190,9 +217,9 @@ final class ManagedSummaryTests: XCTestCase {
 
     func testTransportRequiresSecureOriginOrExplicitLoopbackFixture() throws {
         for address in ["http://example.com", "http://localhost:8000", "https://example.com/path", "https://user:password@example.com", "https://example.com?leak=yes"] {
-            XCTAssertThrowsError(try GatewayHTTPTransport(base: URL(string: address)!, bearer: { "fixture" }))
+            XCTAssertThrowsError(try GatewayHTTPTransport(base: URL(string: address)!, credential: { _, _ in .init(authorization: "DPoP fixture", proof: "fixture") }))
         }
-        XCTAssertNoThrow(try GatewayHTTPTransport(base: URL(string: "http://127.0.0.1:8000")!, allowLoopbackFixture: true, bearer: { "fixture" }))
+        XCTAssertNoThrow(try GatewayHTTPTransport(base: URL(string: "http://127.0.0.1:8000")!, allowLoopbackFixture: true, credential: { _, _ in .init(authorization: "DPoP fixture", proof: "fixture") }))
     }
 
     func testCancelledBeforeNetworkingMakesNoTransportCall() async throws {
@@ -223,7 +250,7 @@ final class ManagedSummaryTests: XCTestCase {
         guard let url = ProcessInfo.processInfo.environment["TB_GATEWAY_FIXTURE_URL"] else {
             throw XCTSkip("local private-service fixture not requested")
         }
-        let transport = try GatewayHTTPTransport(base: XCTUnwrap(URL(string: url)), allowLoopbackFixture: true, bearer: { "fixture-only-not-a-secret" })
+        let transport = try GatewayHTTPTransport(base: XCTUnwrap(URL(string: url)), allowLoopbackFixture: true, credential: { _, _ in .init(authorization: "DPoP fixture-only-not-a-secret", proof: "fixture") })
         let connected = try await ManagedSummaryClient.connect(transport: transport)
         XCTAssertEqual(connected.balance.availableMicros, "10000000")
         let connectedAgain = try await ManagedSummaryClient.connect(transport: transport)

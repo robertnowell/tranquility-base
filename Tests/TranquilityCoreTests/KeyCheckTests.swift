@@ -95,7 +95,11 @@ final class KeyCheckTests: XCTestCase {
     private let configured: (String) -> URL? = { _ in URL(string: "https://provider.example.test") }
 
     func testEveryProviderHasAReadOnlyRequest() {
-        for key in Secrets.Key.allCases {
+        for key in Secrets.Key.allCases where key.isPasted {
+            // Only pasted keys have a provider to ask. This Mac's own device
+            // key has nobody to verify it with: the only thing that can say it
+            // works is a signature the Gateway accepts, and a "checked,
+            // working" row here would be a claim nobody made.
             let request = KeyCheck.request(for: key, value: "probe", providerBase: configured)
             XCTAssertNotNil(request, "\(key) has no verification request")
             // Verifying a key must never create, spend, or transcribe anything.
@@ -161,10 +165,19 @@ final class KeyCheckTests: XCTestCase {
 
     func testTheCheckIsBounded() {
         for key in Secrets.Key.allCases {
-            let timeout = KeyCheck.request(for: key, value: "probe",
-                                           providerBase: configured)?.timeoutInterval ?? .infinity
-            // Somebody is watching a row while this runs.
-            XCTAssertLessThanOrEqual(timeout, 15, "\(key) check can hang too long")
+            let request = KeyCheck.request(for: key, value: "probe", providerBase: configured)
+            // A key a person pastes MUST be checkable, or a wrong one sits
+            // under a green lamp until it fails in the away-channel. Absence
+            // used to read as an unbounded timeout here, which conflated "no
+            // check" with "a check that can hang" and would have let a real
+            // credential lose its probe silently.
+            if key.isPasted {
+                XCTAssertNotNil(request, "\(key) can be pasted but never verified")
+            }
+            // Whatever exists is bounded: somebody is watching a row while it runs.
+            if let timeout = request?.timeoutInterval {
+                XCTAssertLessThanOrEqual(timeout, 15, "\(key) check can hang too long")
+            }
         }
     }
 }

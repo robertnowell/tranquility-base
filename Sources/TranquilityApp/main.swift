@@ -589,8 +589,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let registry = AgentProviders.registry()
             self.providerRegistry = registry
             let poller = registry.configured().isEmpty ? nil : AgentPoller(registry: registry)
+            // Managed credits, when this Mac can spend: connected to a hub
+            // and holding a device key. Otherwise the chain it always used.
+            // Nothing here asks the person for anything; see ManagedCredits.
+            let managed = ManagedCredits.summarizer(hubBase: HubApp.baseURL,
+                                                    log: { Permissions.log($0) })
             self.coordinator = Coordinator(
                 store: store,
+                summarizer: managed ?? SummarizerChain(),
+                localSummaryOriginId: ManagedCredits.originId(),
                 remoteTransport: poller.map { p in
                     RemoteDispatchTransport(
                         registry: registry,

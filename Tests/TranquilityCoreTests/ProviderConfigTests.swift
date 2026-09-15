@@ -126,10 +126,12 @@ final class ProviderConfigTests: XCTestCase {
     func testEveryPastableCredentialHasARowToTypeItIn() {
         let rows = Prerequisites.items(harnesses: [], providers: ["crobot", "opencode"])
         let reachable = Set(rows.compactMap(\.secret))
-        for key in Secrets.Key.allCases {
-            // The hub token is minted by the hub during the connect flow and
-            // is never pasted, so it correctly has no key row of its own.
-            if key == .hubToken { continue }
+        for key in Secrets.Key.allCases where key.isPasted {
+            // Keys nobody types are excluded by `isPasted` on the key itself,
+            // not by a list here: the hub mints its token and this Mac makes
+            // its own device key, so neither has anything for a person to do.
+            // Declaring it there means the next key added answers the question
+            // instead of quietly inheriting an exception.
             XCTAssertTrue(reachable.contains(key),
                           "\(key.rawValue) can be stored but not entered: it has no checklist row")
         }
