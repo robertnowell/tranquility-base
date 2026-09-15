@@ -114,7 +114,39 @@ kept as an untranscribed row (`keepUntranscribed`) with Play and Retry, no
 provider spent unasked. Rule 3's "not transcribed unasked" still stands for
 every adopted row.
 
-Still open from the list above: partials durable as they arrive (a process
-death mid-hold still loses the streamed text and recovers from the file), and
-Recents has no Copy — a kept transcript can be read there and played, not
-yet copied.
+### The same night, 21:53: a deploy killed the app at key-up
+
+Measured: capture `BE58D4C7`, 2m04s, mic closed 21:53:49 PDT. A merge-hook
+relaunch was waiting on the capture marker; the marker vanished at key-up;
+the script stopped the app with the utterance transcribing and undelivered.
+The replacement booted four seconds later and its sweep skipped the file as
+"may still be under a writer". It surfaced at the NEXT deploy, 21:57, as a
+row with no transcript.
+
+> "We shouldn't be quitting the app while a transcription has not been
+> delivered. If the mic just closed and we're transcribing, then we
+> shouldn't quit the app. Number two, even if that happens, the transcription
+> should be in Recents. If there is an audio file it should be in Recents so
+> I don't lose data. What if the computer shut down and I'm halfway talking?
+> It should be there."
+
+Three changes:
+
+5. **The marker is the whole promise.** `CaptureMarker` now means "an
+   utterance is in flight": mic open, transcribing, read-back countdown, or
+   keystrokes on their way. The app settles it every second from its own
+   state (`utteranceInFlight`), so no terminal point has to remember to drop
+   it and none can drop it early. The deploy scripts wait on it exactly as
+   before, up to two minutes.
+6. **A sole-owner boot adopts a file modified moments ago.** The ownership
+   lock is held before the sweep runs, so a fresh `.wav.live` can only be the
+   dead process's. `tbase reconcile`, run beside a live app, keeps the guard.
+7. **Recovered audio is transcribed once, unasked.** Adopted at boot or on
+   abandon, a capture gets one pass through the ordinary chain and the words
+   land in Recents (with the ⋯ menu's Copy transcript). It is never delivered:
+   the target is a restart ago and a paste with no read-back is the one thing
+   worse than a lost reply. Rule 3's "not transcribed unasked" is amended to
+   this; the 13 Aug rule against re-spending on failed rows stands.
+
+Still open: partials durable as they arrive (a process death mid-hold still
+recovers from the file, not the words already recognised).

@@ -90,8 +90,14 @@ public enum KeepAudioDrill {
         _ = try spokenOrphan.close()
         try? fm.setAttributes([.modificationDate: old], ofItemAtPath: spokenOrphan.url.path)
 
+        // A file the dead process was writing seconds before this boot — the
+        // 14 Sep 21:53 case. Not back-dated; adopted because the boot is the
+        // sole owner, not because time passed.
+        let fresh = try LiveAudioCapture(utteranceId: "keep-fresh", sampleRate: 16000, directory: audio)
+        try fresh.append(pcm16: pcm(seconds: 3, amplitude: 3000))
+
         let store = try QueueStore(url: root.appendingPathComponent("queue.sqlite"))
-        let report = try store.reconcileOnBoot(audioDirectory: audio)
+        let report = try store.reconcileOnBoot(audioDirectory: audio, soleOwner: true)
         let adopted = Set(report.adoptedAudio)
         let longRow = try store.utterance(id: "keep-long")
         let spokenOrphanRow = try store.utterance(id: "keep-spoken-orphan")
@@ -106,6 +112,7 @@ public enum KeepAudioDrill {
             Check("silentOrphanStaysForReap", fm.fileExists(atPath: orphan.url.path)),
             Check("spokenShortOrphanAdopted", adopted.contains("keep-spoken-orphan")
                   && spokenOrphanRow?.status == .recorded),
+            Check("freshFileAdoptedBySoleOwner", adopted.contains("keep-fresh")),
         ])
 
         // F — a kept file is a Recents row the moment it is kept, not at the
@@ -152,7 +159,7 @@ public enum KeepAudioDrill {
         let dismissedQuiet = try awaitDismiss(store: store, audioStore: audioStore,
                                               pcm16: pcm(seconds: 2), peak: 0.001, preWritten: quiet.url,
                                               utteranceId: "keep-dismissed-quiet")
-        let boot2 = try store.reconcileOnBoot(audioDirectory: audio)
+        let boot2 = try store.reconcileOnBoot(audioDirectory: audio, soleOwner: true)
         let afterBoot = try store.utterance(id: "keep-dismissed")
         let slipRow = try store.utterance(id: "keep-dismissed-slip")
         let dismiss = Group(name: "dismissKeeps", checks: [

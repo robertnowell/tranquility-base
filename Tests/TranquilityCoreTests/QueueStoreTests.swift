@@ -286,14 +286,22 @@ final class QueueStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: capture.url.path))
     }
 
-    func testAFileStillBeingWrittenIsNotAdopted() throws {
+    func testAFileStillBeingWrittenIsNotAdoptedUnlessTheCallerIsSoleOwner() throws {
         let audio = tmpDir.appendingPathComponent("audio", isDirectory: true)
         let capture = try LiveAudioCapture(utteranceId: "capture-live", sampleRate: 16000, directory: audio)
         try capture.append(pcm16: Data(count: Int(LiveAudioCapture.keepAfterSeconds * 16000) * 2))
-        // No close, no abandon, modified just now: a writer may still own it.
-
+        // No close, no abandon, modified just now: a writer may still own it —
+        // unless the caller holds the app's ownership lock, in which case the
+        // only writer there could have been is the process it replaced. On
+        // 14 Sep 2026 the age guard skipped a 2m04s file four seconds after
+        // a deploy killed its writer, and it stayed invisible until the next
+        // deploy.
         XCTAssertTrue(try store.reconcileOnBoot(audioDirectory: audio).adoptedAudio.isEmpty)
         XCTAssertTrue(FileManager.default.fileExists(atPath: capture.url.path))
+
+        XCTAssertEqual(try store.reconcileOnBoot(audioDirectory: audio, soleOwner: true).adoptedAudio,
+                       ["capture-live"])
+        XCTAssertEqual(try store.utterance(id: "capture-live")?.status, .recorded)
     }
 
     // MARK: - Spool

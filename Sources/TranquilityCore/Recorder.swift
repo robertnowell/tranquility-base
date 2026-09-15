@@ -938,11 +938,15 @@ public final class Recorder: @unchecked Sendable {
         }
     }
 
+    /// Stops the heartbeat; leaves the file. Key-up is not the end of the
+    /// promise — transcription and delivery follow — so the app's in-flight
+    /// guard (`CaptureMarker.settle`) owns removal. Where no guard runs
+    /// (tests, tools) the file goes stale in `staleAfter` seconds and the
+    /// scripts ignore it.
     private func endMarkerHeartbeat() {
         markerQueue.sync {
             markerTimer?.cancel()
             markerTimer = nil
-            CaptureMarker.end()
         }
     }
 

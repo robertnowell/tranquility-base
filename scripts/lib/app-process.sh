@@ -82,12 +82,12 @@ wait_for_microphone() {
       return 0
     fi
     if [ "$waited" -ge "$TB_MIC_GIVE_UP_AFTER" ]; then
-      echo "✗ microphone still open after ${waited}s (${when}) — not stopping the app." >&2
+      echo "✗ an utterance is still in flight after ${waited}s (${when}) — not stopping the app." >&2
       echo "  It stays on its current build. Run this again when you're done," >&2
       echo "  or TB_KILL_ANYWAY=1 if the marker is wedged." >&2
       exit 1
     fi
-    [ "$waited" -eq 0 ] && echo "→ microphone is open (${when}); waiting for the utterance to finish"
+    [ "$waited" -eq 0 ] && echo "→ an utterance is in flight — mic open, transcribing, or delivering (${when}); waiting for it to land"
     sleep 2
     waited=$(( waited + 2 ))
   done
