@@ -2003,6 +2003,19 @@ final class StatusHUD: NSObject {
 
     var isOnScreen: Bool { panel?.isVisible ?? false }
 
+    /// Fires when the panel's presence on screen has changed. The Dock rule
+    /// reads it (AppDelegate+Dock): while the panel is up, so is a tile that
+    /// focuses it. Called from render, which is the one place the panel is
+    /// ordered on or off the screen.
+    var onPresenceChanged: (() -> Void)?
+    private var lastPresence: Bool?
+    private func reportPresence() {
+        let now = isOnScreen
+        if lastPresence == now { return }
+        lastPresence = now
+        onPresenceChanged?()
+    }
+
     /// What the settings pane spends above and below the setup rows: back,
     /// tabs, title, hint, insets. Measured from the pose, generous by design;
     /// a few points of slack costs a shorter list, a few points short costs a
@@ -2175,7 +2188,7 @@ final class StatusHUD: NSObject {
         endTranscribingUI()
         stopBodyShimmer()
         if !state.isCapturingAudio { meterTimer?.invalidate(); meterTimer = nil }
-        if case .hidden = state { panel?.orderOut(nil); return }
+        if case .hidden = state { panel?.orderOut(nil); reportPresence(); return }
         let panel = panel ?? build()
 
         // Baseline: pill from the state's legend row (or the face's own
@@ -2588,6 +2601,7 @@ final class StatusHUD: NSObject {
         resizeToFit(panel)
         position(panel)
         panel.orderFrontRegardless()
+        reportPresence()
         Permissions.log("HUD frame=\(panel.frame) visible=\(panel.isVisible) screen=\(NSScreen.main?.visibleFrame.debugDescription ?? "nil")")
 
         // Which timer runs is a fact of the state, decided in the same breath as

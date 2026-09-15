@@ -34,12 +34,14 @@ extension AppDelegate {
     }
 
     @objc func statusItemClicked() {
-        // The one proof that the menu bar is reachable (AppDelegate+Dock).
-        if !Self.menuBarEverClicked {
-            Self.menuBarEverClicked = true
-            Permissions.log("menubar: first click on this install")
-            refreshDockPresence(because: "menu bar clicked")
-        }
+        // The one proof that the menu bar is drawing the item right now
+        // (AppDelegate+Dock). Per launch, and the tile follows after the
+        // click has done its work below, so a click that shows the panel
+        // keeps the tile up alongside it.
+        let firstClickThisLaunch = !menuBarClickedThisLaunch
+        menuBarClickedThisLaunch = true
+        if firstClickThisLaunch { Permissions.log("menubar: first click this launch") }
+        defer { refreshDockPresence(because: "menu bar clicked") }
         if NSApp.currentEvent?.type == .rightMouseUp {
             Track.record("menubar_clicked", ["button": "right", "result": "menu",
                                              "panel_was_on_screen": .bool(hud.isOnScreen)])

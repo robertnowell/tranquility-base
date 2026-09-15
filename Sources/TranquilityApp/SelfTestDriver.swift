@@ -2013,12 +2013,17 @@ extension StatusHUD {
             && waitingRows.arrangedSubviews.contains { $0 is SplitPlacardRowView }
             && !waitingRows.arrangedSubviews.contains { $0 is GridRowView }
         let wearsTheGridChrome = !gridFooter.isHidden
-        // The Dock rule, read against its own input rather than a fixed
-        // answer: a tile until the status item has been clicked once on this
-        // install (AppDelegate+Dock). Asserted on both paints.
+        // The Dock rule, read against its own inputs rather than a fixed
+        // answer (AppDelegate+Dock): a tile unless the status item was clicked
+        // this launch AND the panel is off screen AND onboarding is closed.
+        // The panel is on screen for both paints here, so the tile is owed
+        // both times whatever else is true; the third assertion below covers
+        // the hidden case by driving it.
+        let app = NSApp.delegate as? AppDelegate
         let dockRule = { () -> Bool in
-            NSApp.activationPolicy()
-                == (AppDelegate.menuBarEverClicked ? .accessory : .regular)
+            let hidden = (app?.menuBarClickedThisLaunch ?? false)
+                && !self.isOnScreen && !(app?.onboarding.isShowing ?? false)
+            return NSApp.activationPolicy() == (hidden ? .accessory : .regular)
         }
         let tileFollowsTheEmptyRoom = dockRule()
         // An agent reporting in takes the room back: the door goes, the
@@ -2029,6 +2034,18 @@ extension StatusHUD {
             && waitingRows.arrangedSubviews.contains { $0 is GridRowView }
             && bodyLabel.alignment == .natural
         let tileFollowsTheArrival = dockRule()
+        // Driven, not assumed: a click this launch with the panel off screen
+        // is the one state that hides the tile, and the panel coming back
+        // must bring it back. Restored to the real value afterwards.
+        let clickedBefore = app?.menuBarClickedThisLaunch ?? false
+        app?.menuBarClickedThisLaunch = true
+        hide()
+        let tileGoesWhenProvenAndHidden = NSApp.activationPolicy() == .accessory
+        showIdle(rows: [SessionRow(
+            id: "drill", name: "an agent arrives", aux: "drill", lamp: .ready)])
+        let tileReturnsWithThePanel = NSApp.activationPolicy() == .regular
+        app?.menuBarClickedThisLaunch = clickedBefore
+        app?.refreshDockPresence(because: "drill restored")
         SelfTest.report("emptyRoom", [
             ("describesItself", describesItself),
             ("offersTheDoor", offersTheDoor),
@@ -2036,6 +2053,8 @@ extension StatusHUD {
             ("tileFollowsTheEmptyRoom", tileFollowsTheEmptyRoom),
             ("roomTakenBack", roomTakenBack),
             ("tileFollowsTheArrival", tileFollowsTheArrival),
+            ("tileGoesWhenProvenAndHidden", tileGoesWhenProvenAndHidden),
+            ("tileReturnsWithThePanel", tileReturnsWithThePanel),
         ])
 
         contrastDrill()

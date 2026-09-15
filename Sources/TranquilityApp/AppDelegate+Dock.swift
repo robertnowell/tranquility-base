@@ -3,21 +3,27 @@ import TranquilityCore
 
 /// The Dock tile, and when the app wears one.
 ///
-/// Ruled 14 Sep 2026 after Gary Marx's first run. The status item is the
-/// app's only permanent door, and macOS drops status items silently when the
-/// menu bar is full: on his Mac the popover floated under a bar that had no
-/// room for the icon, and "it is not in the menu bar" was the plain truth.
-/// `autosaveName` keeps a position the user has dragged to, but there is no
-/// public API to pin an item to the right or even to ask whether it is drawn,
-/// so on a first run the menu bar cannot be relied on at all.
+/// Ruled 14 Sep 2026 after Gary Marx's first run, and tightened 15 Sep. The
+/// status item is the app's only permanent door, and macOS drops status
+/// items silently when the menu bar is full: on his Mac the popover floated
+/// under a bar that had no room for the icon, and "it is not in the menu
+/// bar" was the plain truth. `autosaveName` keeps a position the user has
+/// dragged to, but there is no public API to pin an item, to ask whether it
+/// is drawn, or to find it once it is not. A hidden icon cannot be dragged.
 ///
-/// So the app takes a Dock tile until the status item has been clicked once
-/// on this install. One click is the only proof there is that the menu bar
-/// is reachable, and it is enough (ruled 14 Sep, 21:20: "if you can click
-/// the menu bar icon, you know you have access to it, so you do not need the
-/// Dock item"). The tile also stays for the onboarding window. A click on
-/// the tile shows the grid; a right-click carries the status item's own
-/// menu, so nothing the menu bar offers is lost with the icon.
+/// So the Dock tile is the door that is always there when it is needed, and
+/// "needed" is decided per LAUNCH, never per install (15 Sep: "let's obsess
+/// if it's going to be in the bottom bar when you need it"). The 14 Sep rule
+/// hid the tile for ever after one click, and a bar that had room yesterday
+/// has none today: a new app, an external display, a notch.
+///
+/// The tile is shown unless all three hold: the status item has been
+/// clicked in THIS launch, which is the only proof it is drawn right now;
+/// the panel is not on screen (the Wispr Flow rule: while the UI is up, so
+/// is a tile that focuses it); and onboarding is not showing.
+///
+/// A click on the tile shows the grid; a right-click carries the status
+/// item's own menu, so nothing the menu bar offers is lost with the icon.
 ///
 /// One writer for the activation policy. Onboarding sets `.regular` for its
 /// own window and `.accessory` when it closes; its `onDone` then runs this,
@@ -25,25 +31,20 @@ import TranquilityCore
 /// not been clicked yet.
 extension AppDelegate {
 
-    /// Whether the status item has ever been clicked on this install. A fact
-    /// on disk: the process that learns it is not the one that needs it.
-    static var menuBarEverClicked: Bool {
-        get { ProductDefaults.shared.bool(forKey: menuBarEverClickedKey) }
-        set { ProductDefaults.shared.set(newValue, forKey: menuBarEverClickedKey) }
-    }
-    private static let menuBarEverClickedKey = "menubar.everClicked"
-
     /// Apply the rule. Idempotent; logs and records only a change.
     func refreshDockPresence(because reason: String) {
+        let proven = menuBarClickedThisLaunch
         let wanted: NSApplication.ActivationPolicy =
-            (!Self.menuBarEverClicked || onboarding.isShowing) ? .regular : .accessory
+            (proven && !hud.isOnScreen && !onboarding.isShowing) ? .accessory : .regular
         guard NSApp.activationPolicy() != wanted else { return }
         NSApp.setActivationPolicy(wanted)
         let shown = wanted == .regular
         Permissions.log("dock: tile \(shown ? "shown" : "hidden") (\(reason); "
-            + "menuBarClicked=\(Self.menuBarEverClicked) onboarding=\(onboarding.isShowing))")
+            + "menuBarClickedThisLaunch=\(proven) panel=\(hud.isOnScreen) "
+            + "onboarding=\(onboarding.isShowing))")
         Track.record("dock_presence", ["shown": .bool(shown), "reason": Track.token(from: reason),
-                                       "menu_bar_ever_clicked": .bool(Self.menuBarEverClicked)])
+                                       "menu_bar_clicked_this_launch": .bool(proven),
+                                       "panel_on_screen": .bool(hud.isOnScreen)])
     }
 
     /// A click on the tile: the grid, exactly as a click on the status item.
