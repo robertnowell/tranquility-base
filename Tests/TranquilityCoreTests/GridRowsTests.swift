@@ -312,11 +312,14 @@ final class GridRowsTests: XCTestCase {
     /// remote agent enumerated last could win a slot. Robert reversed it the
     /// same day: a row he had just heard dropped out of its place and was
     /// hard to find again. Green orders by recency, whether or not it is
-    /// read, so the local band (already recency-ordered) stays ahead of the
-    /// fifth band, unread or not.
+    /// read. Since #457 the fifth band joins that same order by its own
+    /// time, so the remote row here is given an OLDER one than the local
+    /// row's event: it stays second because it is older, and the heard local
+    /// row stays first because being heard moves nothing.
     func testHearingARowDoesNotMoveItBelowAnUnreadOne() {
         var agent = AgentSession.of("remote-1", provider: "crobot", state: .completed)
         agent.title = "the cloud one"
+        agent.updatedAt = .distantPast
         let verdict = GridAssembler.rows(inputs(
             waiting: [waiting(A, heardThrough: 9)], live: [A: live(A)],
             remote: .init(agents: [agent], unread: [agent.id])))
