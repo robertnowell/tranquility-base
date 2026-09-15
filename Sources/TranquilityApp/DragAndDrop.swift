@@ -242,9 +242,13 @@ final class TrayRowView: NSStackView, NSTextFieldDelegate {
             string: StateLegend.composePlaceholder,
             attributes: [.font: ChromeType.mono(ofSize: 11, weight: .regular),
                          .foregroundColor: StateLegend.Palette.faint])
-        compose.lineBreakMode = .byTruncatingHead
+        // NOT single-line mode: it trims the cell to the cap height and cut
+        // the placeholder's ascenders and descenders ("text is cut off from
+        // the hint", 15 Sep). One line by maximumNumberOfLines and no wrap,
+        // scrollable so a long line moves under the field instead of
+        // growing it, and a fixed height with room for the whole glyph.
+        compose.lineBreakMode = .byClipping
         compose.maximumNumberOfLines = 1
-        compose.cell?.usesSingleLineMode = true
         compose.cell?.wraps = false
         compose.cell?.isScrollable = true
         compose.delegate = self
@@ -261,9 +265,10 @@ final class TrayRowView: NSStackView, NSTextFieldDelegate {
         composeRow.addSubview(compose); composeRow.addSubview(attach)
         NSLayoutConstraint.activate([
             composeRow.widthAnchor.constraint(equalToConstant: 348),
-            composeRow.heightAnchor.constraint(equalToConstant: 20),
+            composeRow.heightAnchor.constraint(equalToConstant: 22),
             compose.leadingAnchor.constraint(equalTo: composeRow.leadingAnchor),
             compose.centerYAnchor.constraint(equalTo: composeRow.centerYAnchor),
+            compose.heightAnchor.constraint(equalToConstant: 18),
             compose.trailingAnchor.constraint(equalTo: attach.leadingAnchor, constant: -8),
             attach.trailingAnchor.constraint(equalTo: composeRow.trailingAnchor),
             attach.centerYAnchor.constraint(equalTo: composeRow.centerYAnchor),
