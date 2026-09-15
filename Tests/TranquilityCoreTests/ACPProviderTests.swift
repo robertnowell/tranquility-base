@@ -126,14 +126,15 @@ final class ACPProviderTests: XCTestCase {
 
         let (relaunched, pipe) = registered(
             ledger: ledger,
-            listing: #"{"sessions":[{"sessionId":"ses_live","title":"New session - 2026-09-15T20:15:04.847Z","cwd":"/Users/someone/Documents/tranquility-base","updatedAt":"2026-09-15T20:15:04.847Z"}]}"#)
+            listing: #"{"sessions":[{"sessionId":"ses_live","title":"Three planet paragraphs","cwd":"/Users/someone/Documents/tranquility-base","updatedAt":"2026-09-15T20:15:04.847Z"},{"sessionId":"ses_empty","title":"New session - 2026-09-15T20:15:04.847Z","cwd":"/Users/someone/Documents/tranquility-base"}]}"#)
         let found = try await relaunched.mine()
         XCTAssertEqual(pipe.spawns, 1)
         XCTAssertEqual(found.map(\.providerID), ["ses_live"])
-        XCTAssertEqual(found.first?.title, "",
-                       "OpenCode's placeholder title is not a title")
+        XCTAssertEqual(found.first?.title, "Three planet paragraphs")
         XCTAssertEqual(found.first?.repository, "tranquility-base",
                        "the row falls back to the agent's place, never its hash")
+        XCTAssertFalse(found.contains { $0.providerID == "ses_empty" },
+                       "a session nobody ever spoke to is not adopted")
         XCTAssertEqual(pipe.params(of: "session/list").first?["cwd"] as? String,
                        "/Users/someone/Documents/tranquility-base",
                        "the list is filtered to the workspace")
@@ -202,6 +203,18 @@ final class ACPProviderTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         let session = try await provider.refine(id)
         XCTAssertEqual(session.title, "Add a docstring to greet()")
+    }
+
+    /// OpenCode answers `session/new` with `available_commands_update`;
+    /// that is configuration, not a turn, and must not turn a fresh agent blue.
+    func testConfigurationUpdatesAreNotWork() async throws {
+        let (provider, pipe) = registered(ledger: ledger())
+        let id = try await provider.start(Brief(prompt: ""))
+        pipe.emit(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_live","update":{"sessionUpdate":"available_commands_update","availableCommands":[]}}}"#)
+        pipe.emit(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_live","update":{"sessionUpdate":"current_mode_update","currentModeId":"build"}}}"#)
+        try await Task.sleep(for: .milliseconds(150))
+        let session = try await provider.refine(id)
+        XCTAssertEqual(session.state, .inputRequired, "configuration is not activity")
     }
 
     func testAHeadlineIsOneLineOfARowsWidth() {

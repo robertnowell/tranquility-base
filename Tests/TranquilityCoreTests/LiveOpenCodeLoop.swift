@@ -114,7 +114,11 @@ final class LiveOpenCodeLoop: XCTestCase {
         guard case .shell(let open, let directory) = row.door else { return XCTFail("door is \(row.door)") }
         XCTAssertTrue(open.contains("--session") && open.contains("ses_"), open)
         XCTAssertEqual(directory, toy)
-        XCTAssertEqual(SessionRow.action(for: row), .openShell(open, directory: toy))
+        // Unread: a tap reads the answer. Heard: a tap opens OpenCode's own screen.
+        XCTAssertEqual(SessionRow.action(for: row), .announce, "the answer comes before the door")
+        let heard = SessionRow(id: row.id, name: row.name, aux: row.aux, lamp: row.lamp,
+                               read: .none, harness: row.harness, door: row.door)
+        XCTAssertEqual(SessionRow.action(for: heard), .openShell(open, directory: toy))
         print("LOOP: row name=\(row.name) lamp=\(row.lamp) words=\(words.prefix(60))")
     }
 }

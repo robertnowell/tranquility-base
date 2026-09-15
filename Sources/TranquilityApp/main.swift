@@ -1066,6 +1066,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // report's own "Open hub" footer button.
         // The card asks, the app answers from what the grid already knows.
         hud.harnessForSession = { [weak self] id in self?.harnessById[id] }
+        hud.agentDoorForSession = { [weak self] id in
+            guard let agent = self?.agents?.snapshot.agent(id) else { return nil }
+            return agent.url.map { .page($0) }
+                ?? agent.shell.map { .shell($0.command, directory: $0.directory) }
+        }
         hud.doorForSession = { [weak self] session in
             if let report = self?.freshReport(session: session) {
                 return .report(report)
