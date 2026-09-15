@@ -205,6 +205,97 @@ extension BuddyPCM16Converter {
     }
 }
 
+/// One converter kept across a capture's buffers.
+///
+/// A sample-rate converter is a filter with memory: every output sample needs
+/// input on both sides of it. `BuddyPCM16Converter.pcm16Data` builds a fresh
+/// `AVAudioConverter` per buffer and never asks for the tail, so a 512-frame
+/// buffer at 48 kHz yields 165 frames where 170.67 belong: the last third of
+/// a millisecond of every buffer was cut and the next buffer glued on, 94
+/// times a second. Measured 15 Sep 2026: every capture line in the log was
+/// 3.4% shorter than the seconds the mic was open, and a 1 kHz tone through
+/// the per-buffer path left a residual at −28 dB against −58 dB through this.
+/// It was audible as fuzz riding on the voice, and the level meters could not
+/// see it — the energy was all still there, just in the wrong places.
+///
+/// Feed buffers in order on one thread (AUHAL delivers serially). `reset()`
+/// between captures so one utterance's tail never primes the next.
+public final class StreamingPCM16Converter {
+    public let inputFormat: AVAudioFormat
+    public let targetFormat: AVAudioFormat
+    /// Nil when the input already is 16-bit mono at the target rate.
+    private let converter: AVAudioConverter?
+    /// Reused across calls: one allocation, none on the render thread.
+    private let output: AVAudioPCMBuffer
+    public private(set) var framesIn = 0
+    public private(set) var framesOut = 0
+
+    public init?(from inputFormat: AVAudioFormat,
+                 targetSampleRate: Double = 16000,
+                 maxInputFrames: AVAudioFrameCount = 4096) {
+        guard let target = AVAudioFormat(
+            commonFormat: .pcmFormatInt16, sampleRate: targetSampleRate,
+            channels: 1, interleaved: true) else { return nil }
+        self.inputFormat = inputFormat
+        self.targetFormat = target
+        let passthrough = inputFormat.sampleRate == targetSampleRate
+            && inputFormat.channelCount == 1
+            && inputFormat.commonFormat == .pcmFormatInt16
+        if passthrough {
+            converter = nil
+        } else {
+            guard let c = AVAudioConverter(from: inputFormat, to: target) else { return nil }
+            converter = c
+        }
+        let ratio = targetSampleRate / inputFormat.sampleRate
+        let capacity = AVAudioFrameCount(Double(maxInputFrames) * ratio) + 1024
+        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
+        output = out
+    }
+
+    /// Forget the previous capture's history. Call between captures, on the
+    /// same thread that converts.
+    public func reset() {
+        converter?.reset()
+        framesIn = 0
+        framesOut = 0
+    }
+
+    /// Convert one buffer, keeping filter state for the next. The output is
+    /// a little shorter than `frames × ratio` on the first call (the filter's
+    /// run-up, a third of a millisecond at 48→16 kHz) and whole thereafter.
+    public func convert(_ buffer: AVAudioPCMBuffer) -> Data? {
+        framesIn += Int(buffer.frameLength)
+        guard let converter else {
+            guard let channel = buffer.int16ChannelData else { return nil }
+            framesOut += Int(buffer.frameLength)
+            return Data(bytes: channel[0], count: Int(buffer.frameLength) * 2)
+        }
+        final class InputState: @unchecked Sendable {
+            var supplied = false
+            let buffer: AVAudioPCMBuffer
+            init(_ buffer: AVAudioPCMBuffer) { self.buffer = buffer }
+        }
+        let state = InputState(buffer)
+        output.frameLength = 0
+        var error: NSError?
+        let status = converter.convert(to: output, error: &error) { _, outStatus in
+            if state.supplied {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            state.supplied = true
+            outStatus.pointee = .haveData
+            return state.buffer
+        }
+        guard status != .error, error == nil,
+              let channel = output.int16ChannelData, output.frameLength > 0
+        else { return nil }
+        framesOut += Int(output.frameLength)
+        return Data(bytes: channel[0], count: Int(output.frameLength) * 2)
+    }
+}
+
 public enum BuddyWAVBuilder {
     public static func wavData(fromPCM16 pcm: Data, sampleRate: Double, channels: UInt16 = 1) -> Data {
         var out = Data()
