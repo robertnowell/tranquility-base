@@ -27,6 +27,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let recorder = Recorder()
     var store: QueueStore?
     var coordinator: Coordinator?
+    /// The providers this build can drive, kept so New Agent can start one.
+    /// The same instance the coordinator and the poller share, by the rule at
+    /// its construction: a reply must never reach a provider the grid is not
+    /// showing, and neither must a launch.
+    var providerRegistry: AgentProviderRegistry?
     /// Agents running somewhere else, kept current off the main thread.
     ///
     /// Nil on a machine with no provider configured, which is most of them:
@@ -582,6 +587,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // through it and the poller watches through it, so a reply can
             // never reach a provider the grid is not showing.
             let registry = AgentProviders.registry()
+            self.providerRegistry = registry
             let poller = registry.configured().isEmpty ? nil : AgentPoller(registry: registry)
             self.coordinator = Coordinator(
                 store: store,

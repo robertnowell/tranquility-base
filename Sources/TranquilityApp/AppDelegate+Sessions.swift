@@ -1209,11 +1209,57 @@ extension AppDelegate {
     /// turns enter the loop — and the grid — as soon as the session first
     /// stops.
     func newSession() {
-        let harness = AgentDefaults.defaultHarness
-        let adapter = KnownHarnesses.adapter(for: harness)
-        newSession(directory: AgentDefaults.directory(for: harness),
-                   command: AgentDefaults.load(for: harness),
+        let selected = AgentDefaults.defaultHarness
+
+        // A PROVIDER FIRST. Settings offers OpenCode and crobot as tiles, and
+        // until 15 Sep picking one and pressing New Agent looked the tile up as
+        // a terminal harness, found none, and `KnownHarnesses.adapter(for:)`
+        // fell back to Claude Code without a word. The tile promised one agent
+        // and the button started another. An agent the registry can drive is
+        // started through it, in the workspace, with no terminal at all (#374).
+        if let registry = providerRegistry, let provider = registry.provider(selected) {
+            startProviderAgent(provider)
+            return
+        }
+
+        // Then a terminal harness, and ONLY one that exists. `adapter(for:)`
+        // fails open to Claude Code for callers that predate a third harness;
+        // this one has just checked the registry and the harness table both,
+        // so an id neither knows is a card, never a different agent.
+        guard KnownHarnesses.all.contains(where: { $0.id == selected }) else {
+            let card = "No launcher for \(selected): it is not an installed agent or a terminal harness."
+            Failures.report(.launchFailed, reason: card, card: card)
+            hud.showResult(card)
+            return
+        }
+        let adapter = KnownHarnesses.adapter(for: selected)
+        newSession(directory: AgentDefaults.directory(for: selected),
+                   command: AgentDefaults.load(for: selected),
                    adapter: adapter)
+    }
+
+    /// Start an agent this app drives through a provider rather than a pane.
+    ///
+    /// The brief is empty on purpose, matching a terminal launch: the agent
+    /// exists and the first thing it hears is what the user says to it. The
+    /// poller sees the provider's `.appeared` and draws the row on its next
+    /// tick, which is the same path every other remote row takes; nothing here
+    /// draws anything. A failure is a card with the provider's reason, because
+    /// a silent no-op after pressing New Agent is the exact defect this
+    /// function replaces.
+    private func startProviderAgent(_ provider: any AgentProvider) {
+        hud.showResult("Starting \(provider.id)…")
+        Task { @MainActor [weak self] in
+            do {
+                let id = try await provider.start(Brief(prompt: ""))
+                Permissions.log("new agent: \(provider.id) started \(id)")
+                self?.hud.showResult("\(provider.id) is up. Say something to it.")
+            } catch {
+                let reason = "\(provider.id) could not start: \(error)"
+                Failures.report(.launchFailed, reason: reason, card: reason)
+                self?.hud.showResult(reason)
+            }
+        }
     }
 
     /// The grid's handoff is deliberately an ordinary New Agent launch with
