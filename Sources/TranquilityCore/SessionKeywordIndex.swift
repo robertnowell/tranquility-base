@@ -217,6 +217,7 @@ public actor SessionKeywordIndex {
     }
 
     public func search(_ query: String) throws -> [Match] {
+        try Task.checkCancellation()
         let tokens = Self.words(query)
         guard !tokens.isEmpty else { return [] }
         let expression = tokens.enumerated().map { i, word in
