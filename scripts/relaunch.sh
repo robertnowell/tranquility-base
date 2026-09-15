@@ -122,7 +122,7 @@ automatic_activation_guard() {
     exit 75
   fi
 }
-tb_before_app_stop() { automatic_activation_guard; }
+tb_before_app_stop() { automatic_activation_guard; APP_MUTATED=1; }
 automatic_activation_guard
 UNMERGED=1
 git merge-base --is-ancestor "$TARGET" origin/main && UNMERGED=0
@@ -261,8 +261,8 @@ if [ -d "$INSTALLED" ]; then
   # A merge should never evict somebody who deliberately selected the exact
   # production release for testing. Only stop the Dev path being replaced.
   automatic_activation_guard
-  APP_MUTATED=1
   app_stop_path "$INSTALLED"
+  APP_MUTATED=1
   echo "→ updating the installed copy"
   rm -rf "$INSTALLED"
   cp -R "$APP_PATH" "$INSTALLED"
@@ -291,8 +291,8 @@ fi
 # Two instances racing for one global hotkey is its own bug, so the old one
 # goes down immediately before the new one comes up, not before the build.
 if [ "$APP_MUTATED" -eq 0 ]; then automatic_activation_guard; fi
-APP_MUTATED=1
 app_stop
+APP_MUTATED=1
 
 echo "→ launching (with panel self-tests)"
 LAUNCHED_AT=$(date +%s)
@@ -305,6 +305,9 @@ LAUNCHED_AT=$(date +%s)
 # --selftest-arm is deliberately NOT included: it needs the microphone and drives
 # the real recorder and store. Opt in by hand when changing the arm path.
 open "$APP_PATH" --args --selftest-hud
+# Once automatic delivery has requested launch, a later user Quit must stay
+# stopped. Failure is recorded for the supervisor instead of resurrecting it.
+if [ "${TB_DEPLOY_AUTOMATIC:-0}" = 1 ]; then APP_MUTATED=0; fi
 sleep 4
 
 if app_at_path_running "$APP_PATH"; then
