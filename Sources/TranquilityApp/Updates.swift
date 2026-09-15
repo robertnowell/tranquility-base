@@ -281,19 +281,26 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
         // case must not storm the alert channel).
         let why = error.localizedDescription
         let via = checkTrigger()
+        // The whole chain, every time. The top error's domain and code were
+        // recorded alone until 15 Sep, and for an appcast fetch they are
+        // always "SUSparkleErrorDomain 2001": the same two words for a Mac
+        // with no network and for a feed that answered garbage.
+        let chain = UpdateReadiness.chain(ns)
         if UpdateReadiness.isOffline(ns) {
-            log("updates: check could not reach the feed (\(via)), \(why)")
+            log("updates: check could not reach the feed (\(via)), \(why) [\(chain)]")
             Track.record("update_check_result", [
                 "result": "offline", "detail": .prose(why), "via": .token(via),
-                "domain": Track.token(from: ns.domain), "code": .int(ns.code)])
+                "domain": Track.token(from: ns.domain), "code": .int(ns.code),
+                "chain": .prose(chain)])
             return
         }
-        log("updates: check failed (\(via)), \(why)")
+        log("updates: check failed (\(via)), \(why) [\(chain)]")
         Track.record("update_check_result", [
             "result": "failed", "detail": .prose(why), "via": .token(via),
-            "domain": Track.token(from: ns.domain), "code": .int(ns.code)])
+            "domain": Track.token(from: ns.domain), "code": .int(ns.code),
+            "chain": .prose(chain)])
         Failures.report(.updateFailed,
-                        reason: "update check failed [\(via)]: \(why) [\(ns.domain) \(ns.code)]")
+                        reason: "update check failed [\(via)]: \(why) [\(chain)]")
     }
 
     // MARK: - Waiting
