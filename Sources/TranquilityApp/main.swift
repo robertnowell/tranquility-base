@@ -1691,6 +1691,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || CommandLine.arguments.contains("--show-prerequisites") {
             onboarding.show { }
         }
+        // The Dock tile, before the drills and before either onboarding
+        // branch: a menu-bar-only app on a full menu bar is invisible, and
+        // this is the door that is always there. It sat after the drills
+        // for one deploy (20:50, 15 Sep) and the emptyRoom drill measured a
+        // tile that had not been asked for yet.
+        showDockTile(because: "launch")
         if CommandLine.arguments.contains("--selftest-hud") {
             refreshIsCheapDrill()
             permissionSurfacesDrill()
@@ -1860,9 +1866,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // are ever missing you should show the onboarding screen not the
         // grid because the grid won't work."
         Permissions.logEnvironment()
-        // The Dock tile, before either branch: a menu-bar-only app on a full
-        // menu bar is invisible, and this is the door that is always there.
-        showDockTile(because: "launch")
         // `stageTwoOwed`: the restart that stage one demands used to end the
         // onboarding outright, because this line only ever asked macOS. A
         // process whose permissions are all active can still owe the keys
