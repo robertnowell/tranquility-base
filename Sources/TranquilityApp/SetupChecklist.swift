@@ -97,19 +97,11 @@ final class SetupChecklistView: NSStackView {
                                         ink: StateLegend.Palette.working,
                                         target: self, action: #selector(restartTapped))
         button.identifier = NSUserInterfaceItemIdentifier("prereq.restart")
-        let note = NSTextField(wrappingLabelWithString:
-            "a permission granted while the app is running only reaches it after this")
-        note.font = ChromeType.mono(ofSize: 11, weight: .regular)
-        note.textColor = StateLegend.Palette.secondary
-        note.drawsBackground = false
-        note.translatesAutoresizingMaskIntoConstraints = false
-        note.widthAnchor.constraint(equalToConstant: 300).isActive = true
-
-        let stacked = NSStackView(views: [button, note])
-        stacked.orientation = .vertical
-        stacked.alignment = .leading
-        stacked.spacing = 2
-        return stacked
+        // The door alone. It carried a line explaining when a restart is
+        // needed ("a permission granted while the app is running only reaches
+        // it after this"); ruled 14 Sep 21:37, the line goes. The door's own
+        // words are the whole instruction.
+        return button
     }
 
     @objc private func restartTapped() {

@@ -2491,7 +2491,10 @@ final class StatusHUD: NSObject {
                 setupChecklist.refresh()
                 fitSetupScroll()
                 bodyLabel.stringValue = face.body
-                setHint("every row carries its own fix")
+                // No hint line under the rows (ruled 14 Sep 21:37): "every
+                // row carries its own fix" described the pane instead of
+                // being part of it. An empty hint is not a line.
+                setHint("")
 
             case .voices:
                 voiceList.isHidden = false
