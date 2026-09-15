@@ -2472,7 +2472,12 @@ final class StatusHUD: NSObject {
                 agentGrid.update(agents: Self.agentTiles(), selected: viewingHarness)
                 showAgentFields(for: viewingHarness)
                 bodyLabel.stringValue = face.body
-                setHint("return to save · choose… picks a folder")
+                // The hint is about the two fields, so it exists only with
+                // them. With a provider selected (crobot was Robert's default
+                // on 14 Sep) the fields hide and this line dangled under the
+                // tiles, meaning nothing: "return to save · choose… picks a
+                // folder". Said plainly now, and only when it applies.
+                setHint(launchRow.isHidden ? "" : "Return saves a field · Choose… picks the folder")
                 // Settings is the second face that asks for typing, so it takes
                 // the keyboard the way the list does, and gives it back through
                 // the same baseline door.
