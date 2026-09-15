@@ -1251,17 +1251,29 @@ extension AppDelegate {
     /// draws anything. A failure is a card with the provider's reason, because
     /// a silent no-op after pressing New Agent is the exact defect this
     /// function replaces.
+    ///
+    /// Progress is a NOTICE on the grid's strip, advisory lens, never
+    /// `showResult`: that is the failure card, it wears the amber NEEDS YOU
+    /// pill, and with no session of its own it borrows the current one's
+    /// title. Robert saw "NEEDS YOU / Agent routing to wrong thread /
+    /// opencode is up. Say something to it." on 15 Sep: three claims about an
+    /// unrelated agent, one true line. The row the poller draws is the real
+    /// receipt; the strip only says it is coming.
     private func startProviderAgent(_ provider: any AgentProvider) {
-        hud.showResult("Starting \(provider.id)…")
+        showIdleGrid()
+        hud.flashNotice("Starting \(provider.id)…", lens: .advisory, seconds: 10)
         Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
                 let id = try await provider.start(Brief(prompt: ""))
                 Permissions.log("new agent: \(provider.id) started \(id)")
-                self?.hud.showResult("\(provider.id) is up. Say something to it.")
+                self.hud.flashNotice("\(provider.id) is up. Say something to it.",
+                                     lens: .advisory, seconds: 6)
+                self.agents?.kick()
             } catch {
                 let reason = "\(provider.id) could not start: \(error)"
                 Failures.report(.launchFailed, reason: reason, card: reason)
-                self?.hud.showResult(reason)
+                self.hud.showResult(reason)
             }
         }
     }
