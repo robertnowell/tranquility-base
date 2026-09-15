@@ -220,6 +220,15 @@ extension BuddyPCM16Converter {
 ///
 /// Feed buffers in order on one thread (AUHAL delivers serially). `reset()`
 /// between captures so one utterance's tail never primes the next.
+///
+/// There is deliberately no `flush()`. The filter holds the last third of a
+/// millisecond of a capture at key-up, and handing it back would mean either
+/// waiting for the HAL stop to drain (which `Recorder.stop` refuses to do,
+/// because a HAL mid-config-change can sit on any call) or sharing the
+/// converter between the render thread and the key-up thread under a lock.
+/// What that would recover is 5.7 frames once per capture, after the key
+/// has been released, which is room tone after the last word. Ruled 15 Sep
+/// 2026: once per capture is the fix; 94 times a second was the bug.
 public final class StreamingPCM16Converter {
     public let inputFormat: AVAudioFormat
     public let targetFormat: AVAudioFormat
