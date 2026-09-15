@@ -18,6 +18,10 @@ public actor ACPProvider: AgentProvider {
     private let client: ACPClient
     private let cwd: String
     private let start: @Sendable () throws -> Void
+    /// Where a started agent is remembered across relaunches. Nil for a
+    /// provider built by hand (tests, probes), which then never spawns on a
+    /// list and never survives one either.
+    private let ledger: ProviderLedger?
 
     /// What the agent declared at handshake, translated. `.none` until the
     /// handshake lands: a provider that claimed abilities before asking would
@@ -35,15 +39,27 @@ public actor ACPProvider: AgentProvider {
     /// `respond` can answer the right JSON-RPC call.
     private var asking: [AgentSession.ID: (rpcID: Int, request: PendingRequest)] = [:]
 
+    /// Sessions THIS PROCESS created or loaded. Anything else in `sessions`
+    /// arrived by `session/list` and lives only in the agent's store until
+    /// `session/load` brings it in; a prompt before that is refused with
+    /// "session not found" (measured 15 Sep).
+    private var loaded: Set<String> = []
+    /// Sessions mid-`session/load`, whose replayed history must not be
+    /// announced as new: a turn from yesterday spoken again at relaunch is the
+    /// same defect as a duplicate spool line, with a voice.
+    private var replaying: Set<String> = []
+
     private var eventContinuation: AsyncStream<AgentEvent>.Continuation?
     private var pump: Task<Void, Never>?
 
     public init(id: String, client: ACPClient, cwd: String,
-                start: @escaping @Sendable () throws -> Void = {}) {
+                start: @escaping @Sendable () throws -> Void = {},
+                ledger: ProviderLedger? = nil) {
         self.id = id
         self.client = client
         self.cwd = cwd
         self.start = start
+        self.ledger = ledger
         // The stream is opened HERE, not in a separate async call, so a
         // synchronous registry can build the provider at launch and hand
         // `changes()` to the poller before any process exists. The continuation
@@ -66,9 +82,16 @@ public actor ACPProvider: AgentProvider {
     /// a binary, and one that is used runs it exactly once.
     private func connectIfNeeded() async throws {
         guard !connected else { return }
-        try await connect()
-        connected = true
+        // One spawn, however many callers arrive while it is in flight: the
+        // poller's seed and a New Agent can land in the same moment, and two
+        // children on one pipe is two agents answering as one.
+        if let connecting { return try await connecting.value }
+        let task = Task { try await connect() }
+        connecting = task
+        defer { connecting = nil }
+        try await task.value
     }
+    private var connecting: Task<Void, Error>?
 
     /// Spawn, handshake, and begin translating. Separate from `init` because a
     /// failure here is a real answer the caller has to see, and an initialiser
@@ -132,6 +155,8 @@ public actor ACPProvider: AgentProvider {
     }
 
     private func note(raw: String, update: ACPWire.SessionUpdate) {
+        // History replayed by `session/load` is not news.
+        guard !replaying.contains(raw) else { return }
         let kind = update.update?.sessionUpdate
         // Anything at all from the agent means it is working. An update this
         // app cannot name is still evidence, which is why the default is
@@ -158,7 +183,10 @@ public actor ACPProvider: AgentProvider {
             if changed { emit(known.id, .changed(known)) }
             return known
         }
-        let fresh = AgentSession.of(raw, provider: id, state: state)
+        var fresh = AgentSession.of(raw, provider: id, state: state)
+        // The place, so an untitled row reads as the agent in its workspace
+        // rather than as eight hex characters (#470).
+        fresh.repository = URL(fileURLWithPath: cwd).lastPathComponent
         sessions[raw] = fresh
         emit(fresh.id, .appeared(fresh))
         return fresh
@@ -180,18 +208,38 @@ public actor ACPProvider: AgentProvider {
     /// a session this provider has been streaming knows more about its state
     /// than a list does, and a list that overwrote `.working` with `.completed`
     /// would put a green lamp on an agent mid-turn.
+    ///
+    /// **And the relaunch.** The child dies with the app (measured 15 Sep: no
+    /// `opencode acp` survived the relaunch), and a fresh provider holds
+    /// nothing. The sessions are still in the agent's own store, so a provider
+    /// this Mac has started an agent on before spawns here to ask for them;
+    /// one it never has stays a free registry entry. That is the ledger's
+    /// whole job, and it is why "no process until started" and "survives a
+    /// relaunch" are not in tension (#470).
     public func mine() async throws -> [AgentSession] {
-        guard supportsList else { return Array(sessions.values) }
-        for item in (try? await client.listSessions()) ?? [] {
+        if !connected {
+            guard ledger?.used(id) == true else { return [] }
+            try await connectIfNeeded()
+        }
+        try await adoptListed()
+        return Array(sessions.values)
+    }
+
+    /// One `session/list`, merged. Called at seed and after every turn, the
+    /// latter because the model's title arrives in the list and nowhere else.
+    private func adoptListed() async throws {
+        guard supportsList else { return }
+        for item in (try? await client.listSessions(cwd: cwd)) ?? [] {
             if sessions[item.sessionId] == nil {
                 let session = item.agentSession(provider: id)
                 sessions[item.sessionId] = session
                 emit(session.id, .appeared(session))
-            } else if let title = item.title, !title.isEmpty {
+            } else if let title = ACPWire.SessionList.Item.name(item.title),
+                      sessions[item.sessionId]?.title != title {
                 sessions[item.sessionId]?.title = title
+                if let session = sessions[item.sessionId] { emit(session.id, .changed(session)) }
             }
         }
-        return Array(sessions.values)
     }
 
     private var supportsList: Bool {
@@ -218,9 +266,37 @@ public actor ACPProvider: AgentProvider {
 
     public func send(_ text: String, to id: AgentSession.ID) async throws -> SendOutcome {
         guard let raw = providerID(of: id) else { return .failed(reason: "no such session") }
+        try await connectIfNeeded()
+        try await loadIfNeeded(raw)
+        // The first thing said names the row until the model does (#470):
+        // the precedence is the model's title, then the first user message,
+        // then the agent and its place, and this is the middle rung.
+        if sessions[raw]?.title.isEmpty == true, let named = sessions[raw] {
+            var titled = named
+            titled.title = Self.headline(text)
+            sessions[raw] = titled
+            emit(titled.id, .changed(titled))
+        }
         let result = try await client.prompt(text, session: raw)
         _ = seen(raw: raw, state: result.state)
+        try? await adoptListed()
         return .accepted
+    }
+
+    /// The first line of what was said, cut to a row's width.
+    static func headline(_ text: String) -> String {
+        let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.count <= 60 ? trimmed : String(trimmed.prefix(59)) + "…"
+    }
+
+    /// Bring a listed session into this process before speaking to it.
+    private func loadIfNeeded(_ raw: String) async throws {
+        guard !loaded.contains(raw) else { return }
+        replaying.insert(raw)
+        defer { replaying.remove(raw) }
+        try await client.loadSession(raw, cwd: cwd)
+        loaded.insert(raw)
     }
 
     /// Answer the permission prompt with the option the user picked.
@@ -236,6 +312,7 @@ public actor ACPProvider: AgentProvider {
         guard let chosen = response.answers.first?.first else {
             return .failed(reason: "nothing chosen")
         }
+        try await connectIfNeeded()
         try await client.respond(to: waiting.rpcID,
                                  result: ["outcome": ["outcome": "selected",
                                                       "optionId": chosen]])
@@ -246,8 +323,15 @@ public actor ACPProvider: AgentProvider {
 
     public func start(_ brief: Brief) async throws -> AgentSession.ID {
         try await connectIfNeeded()
+        ledger?.mark(id)
         let raw = try await client.newSession(cwd: cwd)
-        let session = seen(raw: raw, state: .submitted)
+        loaded.insert(raw)
+        // An agent started with nothing to do is waiting for you, which under
+        // the three-lamp ruling is your turn: `.inputRequired`, green. It
+        // shipped as `.submitted`, which is blue, and the first thing the row
+        // said about a fresh OpenCode was "working" (#470). `.submitted` is
+        // kept for the brief that is on its way.
+        let session = seen(raw: raw, state: brief.prompt.isEmpty ? .inputRequired : .submitted)
         if !brief.prompt.isEmpty { _ = try await send(brief.prompt, to: session.id) }
         return session.id
     }

@@ -245,10 +245,23 @@ public enum ACPWire {
             /// and is ready for the next one. Under the three-lamp ruling that
             /// is green, and `.unknown` here would paint it amber.
             public func agentSession(provider: String) -> AgentSession {
-                AgentSession.of(sessionId, provider: provider,
-                                title: title ?? "",
-                                state: .completed,
-                                updatedAt: Self.date(updatedAt))
+                var session = AgentSession.of(sessionId, provider: provider,
+                                              title: Self.name(title) ?? "",
+                                              state: .completed,
+                                              updatedAt: Self.date(updatedAt))
+                session.repository = cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
+                return session
+            }
+
+            /// The agent's title for a session, or nil when it has not named
+            /// it yet. OpenCode lists an unprompted session as
+            /// `New session - 2026-09-15T20:15:04.847Z`, which is a placeholder
+            /// wearing a title's clothes: the row's own fallback (the agent and
+            /// its place) says more than a timestamp does, and the model's
+            /// title replaces both after the first turn. Measured 15 Sep.
+            public static func name(_ title: String?) -> String? {
+                guard let title, !title.isEmpty, !title.hasPrefix("New session - ") else { return nil }
+                return title
             }
 
             /// `RolloutClock` already parses both the fractional and the plain

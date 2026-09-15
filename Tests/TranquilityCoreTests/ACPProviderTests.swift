@@ -13,12 +13,32 @@ private final class ScriptedPipe: ACPTransport, @unchecked Sendable {
         "session/cancel": #"{}"#,
     ]
 
+    /// Notifications the agent sends BEFORE answering a method, the way
+    /// `session/load` replays history before it returns.
+    var before: [String: [String]] = [:]
+    var spawns = 0
+    /// The methods called, in order, read from the JSON rather than matched
+    /// as text: key order in a serialized object is not a contract.
+    var methods: [String] {
+        written.compactMap { line in
+            (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])?["method"] as? String
+        }
+    }
+    func params(of method: String) -> [[String: Any]] {
+        written.compactMap { line in
+            guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  object["method"] as? String == method else { return nil }
+            return object["params"] as? [String: Any]
+        }
+    }
+
     func write(_ line: Data) async throws {
         queue.sync { _written.append(String(decoding: line, as: UTF8.self)) }
         guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
               let id = object["id"] as? Int else { return }
         guard let method = object["method"] as? String else { return }  // our response, not a call
         guard let result = answers[method] else { return }
+        for notification in before[method] ?? [] { emit(notification) }
         emit(#"{"jsonrpc":"2.0","id":\#(id),"result":\#(result)}"#)
     }
     func emit(_ line: String) { continuation?.yield(Data(line.utf8)) }
@@ -62,6 +82,129 @@ final class ACPProviderTests: XCTestCase {
     private actor Collector {
         private(set) var events: [AgentEvent] = []
         func add(_ event: AgentEvent) -> Int { events.append(event); return events.count }
+    }
+
+    private func ledger() -> ProviderLedger {
+        ProviderLedger(url: FileManager.default.temporaryDirectory
+            .appendingPathComponent("tb-ledger-\(UUID().uuidString).json"))
+    }
+
+    /// A provider the way the registry builds it: no process until something
+    /// asks for one, and `spawns` counts the asks.
+    private func registered(ledger: ProviderLedger, listing: String? = nil)
+        -> (ACPProvider, ScriptedPipe) {
+        let pipe = ScriptedPipe()
+        if let listing {
+            pipe.answers["initialize"] = #"{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"list":{},"resume":{}}}}"#
+            pipe.answers["session/list"] = listing
+            pipe.answers["session/load"] = "{}"
+        }
+        let provider = ACPProvider(id: "opencode", client: ACPClient(transport: pipe),
+                                   cwd: "/Users/someone/Documents/tranquility-base",
+                                   start: { pipe.spawns += 1 }, ledger: ledger)
+        return (provider, pipe)
+    }
+
+    // MARK: - #470: a started agent survives a relaunch
+
+    /// A provider this Mac has never started an agent on stays a free registry
+    /// entry: the poller's seed asks, and it answers nothing without spawning.
+    func testAProviderNeverUsedHereIsNotSpawnedToBeListed() async throws {
+        let (provider, pipe) = registered(ledger: ledger())
+        let found = try await provider.mine()
+        XCTAssertEqual(found, [])
+        XCTAssertEqual(pipe.spawns, 0)
+    }
+
+    /// Starting an agent marks the ledger, and a fresh provider on the same
+    /// ledger (the next launch) spawns, lists, and has the session back.
+    func testAProviderUsedHereSpawnsAtSeedAndAdoptsWhatItStarted() async throws {
+        let ledger = ledger()
+        let (first, _) = registered(ledger: ledger, listing: #"{"sessions":[]}"#)
+        _ = try await first.start(Brief(prompt: ""))
+        XCTAssertTrue(ledger.used("opencode"))
+
+        let (relaunched, pipe) = registered(
+            ledger: ledger,
+            listing: #"{"sessions":[{"sessionId":"ses_live","title":"New session - 2026-09-15T20:15:04.847Z","cwd":"/Users/someone/Documents/tranquility-base","updatedAt":"2026-09-15T20:15:04.847Z"}]}"#)
+        let found = try await relaunched.mine()
+        XCTAssertEqual(pipe.spawns, 1)
+        XCTAssertEqual(found.map(\.providerID), ["ses_live"])
+        XCTAssertEqual(found.first?.title, "",
+                       "OpenCode's placeholder title is not a title")
+        XCTAssertEqual(found.first?.repository, "tranquility-base",
+                       "the row falls back to the agent's place, never its hash")
+        XCTAssertEqual(pipe.params(of: "session/list").first?["cwd"] as? String,
+                       "/Users/someone/Documents/tranquility-base",
+                       "the list is filtered to the workspace")
+    }
+
+    /// An adopted session is loaded before it is spoken to, and the history
+    /// the load replays is not announced as new.
+    func testAnAdoptedSessionIsLoadedBeforeItsFirstPromptAndTheReplayIsSilent() async throws {
+        let ledger = ledger()
+        ledger.mark("opencode")
+        let (provider, pipe) = registered(
+            ledger: ledger,
+            listing: #"{"sessions":[{"sessionId":"ses_live","title":"Three planet paragraphs","cwd":"/x","updatedAt":"2026-09-15T20:15:04.847Z"}]}"#)
+        pipe.before["session/load"] = [
+            #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_live","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"yesterday's answer"}}}}"#,
+        ]
+        let found = try await provider.mine()
+        let id = try XCTUnwrap(found.first?.id)
+
+        let outcome = try await provider.send("and today?", to: id)
+        XCTAssertEqual(outcome, .accepted)
+        XCTAssertEqual(pipe.methods.filter { $0.hasPrefix("session/") },
+                       ["session/list", "session/load", "session/prompt", "session/list"],
+                       "loaded once, prompted, then re-listed for the model's title")
+        let transcript = try await provider.transcript(id)
+        XCTAssertTrue(transcript.isEmpty,
+                      "replayed history is not something the agent just said")
+        let events = await drain(provider, upTo: 20, within: .milliseconds(300))
+        XCTAssertFalse(events.contains { if case .said = $0.kind { return true } else { return false } },
+                       "nothing replayed was announced")
+    }
+
+    /// A second prompt does not load again.
+    func testASessionIsLoadedOnce() async throws {
+        let ledger = ledger()
+        ledger.mark("opencode")
+        let (provider, pipe) = registered(
+            ledger: ledger,
+            listing: #"{"sessions":[{"sessionId":"ses_live","title":"t","cwd":"/x"}]}"#)
+        let found = try await provider.mine()
+        let id = try XCTUnwrap(found.first?.id)
+        _ = try await provider.send("one", to: id)
+        _ = try await provider.send("two", to: id)
+        XCTAssertEqual(pipe.methods.filter { $0 == "session/load" }.count, 1)
+    }
+
+    /// An agent started with nothing to do is waiting for you: green, not
+    /// blue. It shipped as `.submitted` and the row said "working" (#470).
+    func testAFreshAgentWithNoBriefIsYourTurn() async throws {
+        let (provider, _) = registered(ledger: ledger())
+        let id = try await provider.start(Brief(prompt: ""))
+        let session = try await provider.refine(id)
+        XCTAssertEqual(session.state, .inputRequired)
+        XCTAssertEqual(AgentPresentation.bucket(state: session.state, hasPendingRequest: false), .yours)
+        XCTAssertEqual(session.repository, "tranquility-base")
+        XCTAssertEqual(session.title, "")
+    }
+
+    /// The first thing said names the row until the model does.
+    func testTheFirstMessageTitlesAnUntitledSession() async throws {
+        let (provider, _) = registered(ledger: ledger())
+        let id = try await provider.start(Brief(prompt: ""))
+        _ = try await provider.send("Add a docstring to greet()\nand nothing else", to: id)
+        let session = try await provider.refine(id)
+        XCTAssertEqual(session.title, "Add a docstring to greet()")
+    }
+
+    func testAHeadlineIsOneLineOfARowsWidth() {
+        XCTAssertEqual(ACPProvider.headline("  short  "), "short")
+        XCTAssertEqual(ACPProvider.headline(String(repeating: "x", count: 80)).count, 60)
+        XCTAssertEqual(ACPProvider.headline("first\nsecond"), "first")
     }
 
     /// **Capabilities come off the wire, not out of the catalog.** Before the

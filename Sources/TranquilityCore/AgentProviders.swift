@@ -24,7 +24,8 @@ public enum AgentProviders {
     /// this.
     public static func registry(config: URL = HubApp.configPath,
                                 session: URLSession = .shared,
-                                secret: (Secrets.Key) -> String? = { Secrets.read($0) })
+                                secret: (Secrets.Key) -> String? = { Secrets.read($0) },
+                                ledger: ProviderLedger = .standard)
         -> AgentProviderRegistry {
         var built: [any AgentProvider] = []
 
@@ -40,7 +41,8 @@ public enum AgentProviders {
             built.append(ACPProvider(id: entry.id,
                                      client: ACPClient(transport: transport),
                                      cwd: workspace,
-                                     start: { try transport.start() }))
+                                     start: { try transport.start() },
+                                     ledger: ledger))
         }
         let spawnable = Set(built.map(\.id))
 
