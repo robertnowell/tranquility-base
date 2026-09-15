@@ -51,8 +51,7 @@ jobs:
             exit 1
           }
           test "$(git rev-parse HEAD)" = "$TARGET_COMMIT"
-          git checkout -B ci-release "$TARGET_COMMIT"
-          TB_SKIP_LIVE_HARNESS_DRILLS=1 scripts/preflight.sh "$TARGET_COMMIT^"
+          scripts/audit-source.sh "$TARGET_COMMIT"
           scripts/prepare-release-app.sh
           tar -czf .build/unsigned-tranquility-base.tgz \
             -C .build/bundle/release "Tranquility Base.app" "Tranquility Base.dSYM"

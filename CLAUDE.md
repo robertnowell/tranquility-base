@@ -104,11 +104,13 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    it. New panel behaviour adds a drill; "252 tests green" says nothing about it.
 8. **Run `scripts/preflight.sh` before landing a branch.** It refuses a dirty or
    behind tree, catches local `main` drifting from origin/main (which happened,
-   unnoticed, for a day on 08 Aug), builds, tests, and then deliberately stops
-   without pushing. Landing stays a decision, because with no CI and no panel
-   tests, green is necessary and not sufficient. Move `main` with `git branch -f`
-   rather than `git checkout` — the ref moves without touching a working tree
-   another session may be editing.
+   unnoticed, for a day on 08 Aug), then runs the shared source audit and local
+   informational drills. It does not push or deploy. CI and release builds call
+   `scripts/audit-source.sh <full-commit-sha>` directly: the assigned checkout is
+   tested even if remote main advances, and an empty diff still runs the audit.
+   Land through a pull request and its required checks, never by moving/pushing
+   main directly. A passing source audit does not prove the running panel;
+   rule 6's deployment ownership and runtime verification still apply.
 9. **The main actor draws; everything else is off-main.** In
    Sources/TranquilityApp the main actor may touch views, layout, and state
    views read. Anything whose cost a human would feel as a frozen frame, a slow
