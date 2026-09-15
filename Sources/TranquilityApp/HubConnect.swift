@@ -43,7 +43,9 @@ final class HubConnect {
         }
         inFlight = true
         phrase = session.phrase
-        note = "showing \(session.phrase). Approve it in the browser"
+        // Says what to DO, with the phrase first: "showing B12-C21. Approve it
+        // in the browser" sent Gary looking for somewhere to type it (14 Sep).
+        note = "\(session.phrase) in the browser? Then press Connect there"
         onChange?()
         Permissions.log("hub: pairing started, phrase \(session.phrase)")
         NSWorkspace.shared.open(session.url)

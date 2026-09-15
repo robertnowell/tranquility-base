@@ -423,6 +423,34 @@ extension StatusHUD {
         setupChecklist.translatesAutoresizingMaskIntoConstraints = false
         setupChecklist.widthAnchor.constraint(
             equalToConstant: Self.gridWidth).isActive = true
+        // Inside a scroll view, like the voices: the rows scale with harnesses
+        // and providers and their details wrap, and a list that only grows
+        // eventually grows past the screen (14 Sep). `fitSetupScroll` sets
+        // the height; the pane shows the scroll, never the bare stack.
+        let setupDoc = FlippedDocumentView()
+        setupDoc.translatesAutoresizingMaskIntoConstraints = false
+        setupDoc.addSubview(setupChecklist)
+        setupScroll = NSScrollView()
+        setupScroll.drawsBackground = false
+        setupScroll.hasVerticalScroller = true
+        setupScroll.scrollerStyle = .overlay
+        setupScroll.translatesAutoresizingMaskIntoConstraints = false
+        setupScroll.documentView = setupDoc
+        setupScroll.isHidden = true
+        setupScrollHeight = setupScroll.heightAnchor.constraint(equalToConstant: 340)
+        NSLayoutConstraint.activate([
+            setupChecklist.topAnchor.constraint(equalTo: setupDoc.topAnchor),
+            setupChecklist.leadingAnchor.constraint(equalTo: setupDoc.leadingAnchor),
+            setupChecklist.bottomAnchor.constraint(equalTo: setupDoc.bottomAnchor),
+            setupDoc.leadingAnchor.constraint(equalTo: setupScroll.contentView.leadingAnchor),
+            setupDoc.topAnchor.constraint(equalTo: setupScroll.contentView.topAnchor),
+            setupDoc.widthAnchor.constraint(equalTo: setupScroll.contentView.widthAnchor),
+            setupScroll.widthAnchor.constraint(equalToConstant: Self.gridWidth),
+            setupScrollHeight,
+        ])
+        // Every render of the rows re-fits the scroll: the scan lands off-main
+        // and changes their height after the pane has already been sized.
+        setupChecklist.onReadiness = { [weak self] _ in self?.fitSetupScroll() }
 
         _ = Self.agentTiles  // referenced below; keeps the helper next to its use
 
@@ -575,7 +603,7 @@ extension StatusHUD {
                                         stripRule, stripLabel, trayRow, gridFooter,
                                         countdownBar, meter,
                                         settingsTabs, agentGrid, launchRow, directoryRow,
-                                        voiceList, setupChecklist, hintLabel, buttons])
+                                        voiceList, setupScroll, hintLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6

@@ -45,7 +45,13 @@ extension StatusHUD {
         guard let stack = contentStack else { return }
         panel.contentView?.layoutSubtreeIfNeeded()
         let needed = stack.fittingSize
-        let height = max(needed.height, 90)
+        // Never taller than the screen it sits on (14 Sep 2026: the SETUP tab
+        // ran off the bottom of a shared screen). `position` pins the TOP
+        // edge, so an unbounded height put the bottom, and whatever door
+        // lived there, below the screen. A face that clips at this height
+        // owes a scroll view, as the voices and the setup rows have.
+        let usable = (NSScreen.main?.visibleFrame.height ?? .greatestFiniteMagnitude) - 32
+        let height = min(max(needed.height, 90), usable)
         // Against the height we last ASKED for, never the live frame: with an
         // animated resize in flight, `panel.frame.height` is a transient, and
         // comparing to it let a render skip its resize because the panel

@@ -11,32 +11,39 @@ import TranquilityCore
 /// public API to pin an item to the right or even to ask whether it is drawn,
 /// so on a first run the menu bar cannot be relied on at all.
 ///
-/// So the app takes a Dock tile until an agent has ever appeared on its grid,
-/// and whenever the panel is on screen: the same rule as Wispr Flow, whose
-/// tile is there while its UI is. A click on the tile shows the grid; a
-/// right-click carries the status item's own menu, so nothing the menu bar
-/// offers is lost with the icon.
+/// So the app takes a Dock tile until the status item has been clicked once
+/// on this install. One click is the only proof there is that the menu bar
+/// is reachable, and it is enough (ruled 14 Sep, 21:20: "if you can click
+/// the menu bar icon, you know you have access to it, so you do not need the
+/// Dock item"). The tile also stays for the onboarding window. A click on
+/// the tile shows the grid; a right-click carries the status item's own
+/// menu, so nothing the menu bar offers is lost with the icon.
 ///
 /// One writer for the activation policy. Onboarding sets `.regular` for its
 /// own window and `.accessory` when it closes; its `onDone` then runs this,
-/// which is why the tile comes straight back on a machine that still has no
-/// agent.
+/// which is why the tile comes straight back on a machine whose menu bar has
+/// not been clicked yet.
 extension AppDelegate {
+
+    /// Whether the status item has ever been clicked on this install. A fact
+    /// on disk: the process that learns it is not the one that needs it.
+    static var menuBarEverClicked: Bool {
+        get { ProductDefaults.shared.bool(forKey: menuBarEverClickedKey) }
+        set { ProductDefaults.shared.set(newValue, forKey: menuBarEverClickedKey) }
+    }
+    private static let menuBarEverClickedKey = "menubar.everClicked"
 
     /// Apply the rule. Idempotent; logs and records only a change.
     func refreshDockPresence(because reason: String) {
         let wanted: NSApplication.ActivationPolicy =
-            (!StatusHUD.everListedAgent || hud.isOnScreen || onboarding.isShowing)
-                ? .regular : .accessory
+            (!Self.menuBarEverClicked || onboarding.isShowing) ? .regular : .accessory
         guard NSApp.activationPolicy() != wanted else { return }
         NSApp.setActivationPolicy(wanted)
         let shown = wanted == .regular
         Permissions.log("dock: tile \(shown ? "shown" : "hidden") (\(reason); "
-            + "everListed=\(StatusHUD.everListedAgent) panel=\(hud.isOnScreen) "
-            + "onboarding=\(onboarding.isShowing))")
+            + "menuBarClicked=\(Self.menuBarEverClicked) onboarding=\(onboarding.isShowing))")
         Track.record("dock_presence", ["shown": .bool(shown), "reason": Track.token(from: reason),
-                                       "ever_listed": .bool(StatusHUD.everListedAgent),
-                                       "panel_on_screen": .bool(hud.isOnScreen)])
+                                       "menu_bar_ever_clicked": .bool(Self.menuBarEverClicked)])
     }
 
     /// A click on the tile: the grid, exactly as a click on the status item.
