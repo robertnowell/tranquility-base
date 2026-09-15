@@ -546,11 +546,30 @@ extension StatusHUD {
         //
         // Order matters. The switch is written BEFORE the card is asked for,
         // so the repaint the card triggers already knows this row is on.
-        pastList.onPick = { [weak self] id, revivable in
+        //
+        // AMBER GOES TO THE TERMINAL (ruled 15 Sep 2026). Measured at 13:20
+        // that day: a session sat amber since 13:17, the grid's twenty slots
+        // were full of green, so it was listed here; the tap opened its card,
+        // and there was nothing the card could do about an amber. The grid's
+        // own tap has sent amber to the terminal since 18 Aug, and Discuss
+        // has since 9 Sep; this list was the one door that still read a lamp
+        // that says "needs you" as "read me". Robert: *"Any amber session
+        // should go to terminal on click. It shouldn't open the card. This
+        // means it needs you."* The 19 Aug ruling above is untouched for the
+        // rows it was about: green and quiet still pick up and open the card.
+        pastList.onPick = { [weak self] id, revivable, lamp in
             guard let self else { return }
             let name = pastListName(id)
             onBreadcrumbHome?()
             guard !revivable else { onRevive?(id, name); return }
+            if lamp == .fault {
+                Track.record("row_clicked", ["action": "gotoagent", "agent_id": Track.hash(id),
+                                             "lamp": .token(lamp.trackName), "face": "past_agents"])
+                onGoToSession?(id)
+                return
+            }
+            Track.record("row_clicked", ["action": "announce", "agent_id": Track.hash(id),
+                                         "lamp": .token(lamp.trackName), "face": "past_agents"])
             onRestoreLamp?(id)
             onPickWaiting?(id)
         }

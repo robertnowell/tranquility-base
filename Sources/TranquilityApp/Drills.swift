@@ -1380,14 +1380,19 @@ extension StatusHUD {
                                           lamp: .running)
         let dead = SessionRow(id: "gone", name: "gone", aux: "gone",
                                           lamp: .unlit, revivable: true)
+        // The 15 Sep row: amber, listed here because the grid was full.
+        let amber = SessionRow(id: "amber", name: "amber", aux: "usage limit",
+                                           lamp: .fault)
         showPastAgents(items: [
             PastAgentsList.Item(row: live, revivable: false, haystack: live.name),
             PastAgentsList.Item(row: dead, revivable: true, haystack: dead.name),
+            PastAgentsList.Item(row: amber, revivable: false, haystack: amber.name),
         ])
         // The row says which verb it has.
         let verbs = pastList.verbsForTesting
         let liveSaysOpen = verbs["alive"] == "OPEN \u{203A}"
         let deadStillRevives = verbs["gone"] == "REVIVE \u{203A}"
+        let amberSaysGoTo = verbs["amber"] == "GO TO \u{203A}"
         // Go to agent lives on the right-click now, on the live row only.
         let menus = pastList.menuTitlesForTesting
         let goToIsInTheMenu = menus["alive"]?.contains { $0.hasPrefix("Go to ") } == true
@@ -1402,8 +1407,14 @@ extension StatusHUD {
         onPickWaiting = { cardOpened = $0 }
         onGoToSession = { wentToTerminal = $0 }
         onBreadcrumbHome = {}
-        pastList.onPick?("alive", false)
+        pastList.onPick?("alive", false, .running)
         let tapStayedOnThePanel = wentToTerminal == nil
+        // The amber row's tap: the terminal, and neither the switch nor the card.
+        let switchedOnBefore = switchedOn, cardBefore = cardOpened
+        pastList.onPick?("amber", false, .fault)
+        let amberWentToTerminal = wentToTerminal == "amber"
+        let amberLeftTheRestAlone = switchedOn == switchedOnBefore && cardOpened == cardBefore
+        wentToTerminal = nil
         // …and the menu's verb, which must still reach the terminal.
         pastList.onGoTo?("alive")
         let menuWentToTerminal = wentToTerminal == "alive"
@@ -1420,7 +1431,10 @@ extension StatusHUD {
             ("goToAgentIsOnTheRightClick", goToIsInTheMenu),
             ("endSessionKeptItsPlace", terminateIsStillThere),
             ("aDeadRowHasNeitherVerb", deadHasNoMenu),
-            ("theRowNamesItsVerb", liveSaysOpen && deadStillRevives),
+            ("theRowNamesItsVerb", liveSaysOpen && deadStillRevives && amberSaysGoTo),
+            // Ruled 15 Sep: amber means needs you, and the terminal is where.
+            ("anAmberTapGoesToTheTerminal", amberWentToTerminal),
+            ("anAmberTapNeitherSwitchesNorReads", amberLeftTheRestAlone),
             // And what the switch it flips is worth: an idle session the user
             // picked up is lit, so the grid draws it.
             ("aPickedUpSessionIsDrawnOnTheGrid",
