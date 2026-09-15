@@ -189,6 +189,78 @@ final class RemoteRowsTests: XCTestCase {
 
     /// One row per agent, and a local band that already placed an id wins,
     /// exactly as the local bands do among themselves.
+    /// A remote row takes the place its own time earns among local rows,
+    /// rather than the end of the list (ruled 14 Sep: "a remote agent that
+    /// just did something can reach the panel").
+    func testARemoteRowSlotsIntoTheLocalOrderByRecency() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        func waiting(_ id: String, secondsAgo: TimeInterval) -> WaitingSession {
+            var w = WaitingSession(sessionId: id, latestId: Int64(1000 - secondsAgo),
+                                   createdAtMs: Int64((now.timeIntervalSince1970 - secondsAgo) * 1000),
+                                   hookEvent: .stop)
+            w.heardThrough = nil
+            return w
+        }
+        let newerLocal = waiting("11111111-1111-4111-8111-111111111111", secondsAgo: 60)
+        let olderLocal = waiting("22222222-2222-4222-8222-222222222222", secondsAgo: 600)
+        var between = remote("between", state: .working)
+        between.updatedAt = now.addingTimeInterval(-300)
+        var oldest = remote("oldest", state: .working)
+        oldest.updatedAt = now.addingTimeInterval(-900)
+        let out = GridAssembler.rows(GridAssembler.RowInputs(
+            waiting: [newerLocal, olderLocal], known: [], discovered: [], liveById: [:],
+            boundaries: [:], switchedOff: [], switchedOn: [],
+            evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
+            supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+            remote: .init(agents: [oldest, between]), now: now)).rows
+        XCTAssertEqual(out.map(\.id),
+                       [newerLocal.sessionId, between.id, olderLocal.sessionId, oldest.id],
+                       "newest first, whichever band a row came from")
+    }
+
+    /// A local server lists every transcript it has ever kept. One that
+    /// nobody owes anything, untouched for an hour, is a file, not an agent,
+    /// and gets no row. Touched ten minutes ago it stays; owed something it
+    /// stays whatever its age.
+    func testAnUntouchedRemoteTranscriptNobodyOwesAnythingIsNotARow() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        var stale = remote("stale", state: .completed, title: "New session - yesterday")
+        stale.updatedAt = now.addingTimeInterval(-7200)
+        var fresh = remote("fresh", state: .completed)
+        fresh.updatedAt = now.addingTimeInterval(-600)
+        var staleButUnread = remote("unread", state: .completed)
+        staleButUnread.updatedAt = now.addingTimeInterval(-7200)
+        var staleButWorking = remote("working", state: .working)
+        staleButWorking.updatedAt = now.addingTimeInterval(-7200)
+        let out = GridAssembler.rows(GridAssembler.RowInputs(
+            waiting: [], known: [], discovered: [], liveById: [:], boundaries: [:],
+            switchedOff: [], switchedOn: [],
+            evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
+            supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+            remote: .init(agents: [stale, fresh, staleButUnread, staleButWorking],
+                          unread: [staleButUnread.id]),
+            now: now)).rows
+        XCTAssertEqual(Set(out.map(\.id)), [fresh.id, staleButUnread.id, staleButWorking.id])
+        XCTAssertNil(out.first { $0.id == stale.id })
+    }
+
+    /// An unreachable provider's old sessions are never pruned: the silence
+    /// is the provider's, not the session's, and the row must say so.
+    func testAnUnreachableProvidersOldSessionsStillShow() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        var old = remote("old", state: .unknown)
+        old.updatedAt = now.addingTimeInterval(-86_400)
+        let out = GridAssembler.rows(GridAssembler.RowInputs(
+            waiting: [], known: [], discovered: [], liveById: [:], boundaries: [:],
+            switchedOff: [], switchedOn: [],
+            evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
+            supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+            remote: .init(agents: [old], unreachable: ["crobot": "the wire is down"]),
+            now: now)).rows
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out.first?.aux, "cannot reach it")
+    }
+
     func testAnIdAlreadyPlacedLocallyIsNotDuplicatedByTheRemoteBand() {
         let id = "8f14e45f-ceea-467a-9eef-2b9c1b2dc9f0"
         var w = WaitingSession(sessionId: id, latestId: 1, createdAtMs: 0, hookEvent: .stop)
