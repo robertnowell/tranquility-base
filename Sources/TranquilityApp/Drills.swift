@@ -725,7 +725,10 @@ extension StatusHUD {
         let wordsPasteIntoTheLine = received.isEmpty
             && trayRow.compose.stringValue == paragraph
         let staysArmedAfterPaste = pasteArmed
-        trayRow.clearComposed(); trayRow.setComposing(true)
+        // Empty the line WITHOUT hiding it: clearComposed hides, and a hidden
+        // field ends its own editing, which is the very thing this drill is
+        // here to catch happening by accident.
+        trayRow.compose.stringValue = ""
         board.clearContents()
         board.writeObjects([URL(fileURLWithPath: "/tmp/pasted-one.png") as NSURL])
         if let commandV { panel.sendEvent(commandV) }
