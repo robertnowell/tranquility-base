@@ -76,11 +76,14 @@ final class DeepLinkTests: XCTestCase {
             XCTAssertEqual(
                 DeepLink.discussDestination(rowAction: .announce, lamp: .ready, hasCompletedTurn: hasTurn),
                 .conversationCard)
-            for lamp in [Lamp.working, .fault] {
-                XCTAssertEqual(
-                    DeepLink.discussDestination(rowAction: .goToAgent, lamp: lamp, hasCompletedTurn: hasTurn),
-                    .agentTerminal, "\(lamp)")
-            }
+            // Amber is the one lamp that goes straight to the agent (15 Sep).
+            XCTAssertEqual(
+                DeepLink.discussDestination(rowAction: .goToAgent, lamp: .fault, hasCompletedTurn: hasTurn),
+                .agentTerminal)
+            // Blue with a completed turn reads the card; with none, the terminal.
+            XCTAssertEqual(
+                DeepLink.discussDestination(rowAction: .goToAgent, lamp: .working, hasCompletedTurn: hasTurn),
+                hasTurn ? .conversationCard : .agentTerminal)
             XCTAssertEqual(
                 DeepLink.discussDestination(rowAction: .revive, lamp: .unlit, hasCompletedTurn: hasTurn),
                 .revive)

@@ -50,29 +50,33 @@ final class SessionRowTests: XCTestCase {
         XCTAssertEqual(SessionRow.action(for: row(lamp: .fault)), .goToAgent)
     }
 
-    func testTapOnWorkingGoesToAgent() {
-        // Blue joined amber on 24 Aug: a row with work in hand has no
-        // unread turn, so the announcement has nothing to say. The door
-        // does — the pane is already writing what a summary would
-        // paraphrase.
-        XCTAssertEqual(SessionRow.action(for: row(lamp: .working)), .goToAgent)
+    func testTapOnWorkingOpensTheCardWhenItHasOne() {
+        // Ruled 15 Sep 2026, reversing 24 Aug: only amber goes straight to
+        // the agent. A blue row with a recorded turn reads its card, which
+        // carries GO TO AGENT; a blue row with nothing recorded still takes
+        // the door, exactly as green does.
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .working, read: .opened)), .announce)
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .working, read: .unread)), .announce)
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .working, read: .none)), .goToAgent)
     }
 
-    func testTapOnQuietGoesToAgent() {
-        // The dark lamp joined them the same day. Its turn is complete and
-        // already heard, so announce had nothing left to read and fell
-        // through to nothingWaiting — a tap that logged a line and did
-        // nothing. Three lamps, three reasons, one verb.
-        XCTAssertEqual(SessionRow.action(for: row(lamp: .running)), .goToAgent)
+    func testTapOnQuietOpensTheCardWhenItHasOne() {
+        // Same ruling, same shape, for the quiet lamp.
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .running, read: .opened)), .announce)
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .running, read: .none)), .goToAgent)
     }
 
-    func testGreenIsTheOnlyLampThatAnnounces() {
-        // The whole rule in one assertion: announce is for a row with an
-        // unread turn, and green is the only lamp that has one.
-        for lamp: Lamp in [.ready, .working, .running, .fault] {
-            let expected: SessionRow.RowAction = lamp == .ready ? .announce : .goToAgent
-            XCTAssertEqual(SessionRow.action(for: row(lamp: lamp)), expected,
-                           "\(lamp) took the wrong verb")
+    func testOnlyAmberGoesStraightToTheAgent() {
+        // The whole 15 Sep rule in one assertion: with a turn to read, every
+        // lamp but amber opens the card; amber points at the terminal
+        // whatever it has recorded.
+        for lamp: Lamp in [.ready, .working, .running] {
+            XCTAssertEqual(SessionRow.action(for: row(lamp: lamp, read: .opened)), .announce,
+                           "\(lamp) with a turn must open the card")
+        }
+        for read: ReadState in [.none, .unread, .opened] {
+            XCTAssertEqual(SessionRow.action(for: row(lamp: .fault, read: read)), .goToAgent,
+                           "amber must go to the agent, read=\(read)")
         }
     }
 

@@ -1316,23 +1316,24 @@ extension StatusHUD {
             // questions are asked through one function precisely so this
             // cannot come apart.
             ("amberRowIsStillLive", SessionRow.isLive(row("amber", .fault))),
-            // Blue joined amber on 24 Aug, same reason and not a second
-            // one: work in hand is not an unread turn, so the tap is the
-            // door rather than the voice.
-            ("workingRowGoesToAgent",
+            // Ruled 15 Sep: only amber goes straight to the agent. Blue and
+            // quiet open the card when they have a turn to read, and take
+            // the door only when nothing is recorded, exactly as green does.
+            ("workingRowWithATurnOpensTheCard",
+             SessionRow.action(for: SessionRow(id: "working", name: "working", aux: "working",
+                                               lamp: .working, read: .opened)) == .announce),
+            ("workingRowWithNothingRecordedTakesTheDoor",
              SessionRow.action(for: row("working", .working)) == .goToAgent),
             ("workingRowIsStillLive", SessionRow.isLive(row("working", .working))),
-            // ...and the dark lamp closed the rule the same day. Announce
-            // on a quiet row read nothing and returned to the grid, so the
-            // tap was a silent no-op — amber's 18 Aug complaint, surviving
-            // where it was hardest to see.
-            ("quietRowGoesToAgent",
-             SessionRow.action(for: row("quiet", .running)) == .goToAgent),
+            ("quietRowWithATurnOpensTheCard",
+             SessionRow.action(for: SessionRow(id: "quiet", name: "quiet", aux: "quiet",
+                                               lamp: .running, read: .opened)) == .announce),
             ("quietRowIsStillLive", SessionRow.isLive(row("quiet", .running))),
-            // Green is the only lamp left that speaks.
-            ("greenIsTheOnlyLampThatAnnounces",
+            // Amber is the only lamp that never speaks.
+            ("onlyAmberGoesStraightToTheAgent",
              SessionRow.action(for: liveGreen) == .announce
-             && SessionRow.action(for: row("quiet", .running)) != .announce),
+             && SessionRow.action(for: SessionRow(id: "amber2", name: "amber2", aux: "amber2",
+                                                  lamp: .fault, read: .opened)) == .goToAgent),
             ("revivableRowRevives",
              SessionRow.action(for: row("dead", unlit, revivable: true)) == .revive),
             ("unprovenRowDoesNothing",
@@ -1718,6 +1719,60 @@ extension StatusHUD {
         checks.append(("aStrangersPidIsIgnored", goButton.isHidden))
 
         SelfTest.report("revivedDoor", checks)
+    }
+
+    /// A pane id from another server never resolves to one of ours.
+    ///
+    /// The 15 Sep misroute, replayed against the REAL server this launch is
+    /// running on: take whatever pane ids it holds right now, claim one of
+    /// them under a tmux session name nobody has, and ask the ledger. The
+    /// old join answered with our pane and typed into it. The ledger must
+    /// say `elsewhere`, and must never hand back a pane. Then the same claim
+    /// with no live pid must read `gone`, and an unaskable server must read
+    /// `unknown`, because both of those are the answers that stop a kill.
+    func ledgerDrill() {
+        var checks: [(String, Bool)] = []
+        let inventory = AgentLedger.inventory(socket: Tmux.socketName)
+        guard case .listed(let rows) = inventory, let ours = rows.first else {
+            // No server or no panes: the drill has nothing real to collide
+            // with. Skip with the reason rather than pass vacuously.
+            SelfTest.skipped("ledger", because: "no pane on this launch's own tmux server to collide with")
+            return
+        }
+        let me = Int(ProcessInfo.processInfo.processIdentifier)
+        let claim = SessionRegistry.Entry(
+            pid: me, sessionId: "drill-elsewhere", cwd: nil, status: "idle",
+            tmux: "tb-drill-elsewhere:@1.\(ours.paneId)", messagingSocketPath: nil,
+            name: nil, updatedAt: 1)
+        let facts = AgentLedger.Facts(
+            record: nil, registry: claim, pidHint: me,
+            inventories: [(Tmux.socketName, inventory), (nil, .listed([]))],
+            isAlive: { $0 == me }, ttyOf: { _ in nil })
+        let decided = AgentLedger.decide(sessionId: "drill-elsewhere", harness: nil, facts: facts)
+        checks.append(("aStrangersPaneIdIsElsewhere", {
+            if case .elsewhere = decided.location { return true }; return false
+        }()))
+        checks.append(("andNeverOurPane", decided.location.pane == nil))
+        checks.append(("andNothingIsAdopted", decided.adopt == nil))
+
+        let dead = AgentLedger.Facts(
+            record: nil, registry: claim, pidHint: me,
+            inventories: [(Tmux.socketName, inventory), (nil, .listed([]))],
+            isAlive: { _ in false }, ttyOf: { _ in nil })
+        checks.append(("aDeadStrangerIsGone",
+                       AgentLedger.decide(sessionId: "drill-elsewhere", harness: nil, facts: dead).location == .gone))
+
+        let unaskable = AgentLedger.Facts(
+            record: nil, registry: claim, pidHint: me,
+            inventories: [(Tmux.socketName, .unaskable("drill")), (nil, .listed([]))],
+            isAlive: { $0 == me }, ttyOf: { _ in nil })
+        checks.append(("anUnaskableServerIsUnknown", {
+            if case .unknown = AgentLedger.decide(sessionId: "drill-elsewhere", harness: nil,
+                                                  facts: unaskable).location { return true }
+            return false
+        }()))
+
+        SelfTest.report("ledger", checks)
     }
 
     /// The harness marks land on the same optical line as the text beside them.

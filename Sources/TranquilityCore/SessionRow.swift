@@ -346,7 +346,25 @@ public struct SessionRow: Equatable, Sendable {
 
     public static func action(for row: SessionRow) -> RowAction {
         switch row.lamp {
-        case .fault, .working, .running: return goTo(row)
+        // ONLY AMBER GOES STRAIGHT TO THE AGENT (ruled 15 Sep 2026). Amber
+        // means needs you, and the terminal is where; nothing on a card can
+        // repair a usage limit or a permission prompt.
+        case .fault: return goTo(row)
+        // Blue and quiet open the card when they have one (ruled 15 Sep,
+        // reversing 24 Aug's "blue joined amber"). Robert, on the Past
+        // Agents list where blue had kept the card: *"I actually like that
+        // it opens the card rather than going straight to the agent. So only
+        // amber should go straight to the agent, and blue and green
+        // obviously should open the card."* Asked whether that was the list
+        // or everywhere: *"Everywhere."* The 24 Aug reason was that announce
+        // had nothing to say for a row with no unread turn; since #439 a
+        // heard turn is still read on request and the card carries GO TO
+        // AGENT, so the card is a superset of the door. The one case the
+        // door still wins is the one green already has: a row with nothing
+        // recorded to read, or a remote row with no local transcript.
+        case .working, .running:
+            if row.door.isRemote || row.read == .none { return goTo(row) }
+            return .announce
         // **Green consults the door too, since 14 Sep.** Announce reads a
         // finished turn out of the LOCAL store, so it is the right verb only
         // for a row that has one. A remote agent has no local transcript and

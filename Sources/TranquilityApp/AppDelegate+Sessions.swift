@@ -1643,11 +1643,41 @@ extension AppDelegate {
 
             // Already in a pane? Then this is only a matter of raising a
             // window. Registry first — a tty is two stale hops from the truth.
-            let owned = TmuxOwnership.pane(forSessionId: sessionId, pid: live.pid)
+            //
+            // The ledger's whole answer is read here, not its nil-collapsed
+            // view: on 15 Sep a TEST build read "not on my server" as
+            // "hand-started", ended two live agents and moved them where the
+            // real app could not follow. `.elsewhere` and `.unknown` are
+            // answers, and neither is a transfer.
+            let location = AgentLedger.locate(sessionId: sessionId, pid: live.pid, harness: live.harness)
             let tty: String
-            if let owned {
+            switch location {
+            case .here(let owned, _):
                 tty = owned.paneTty
-            } else {
+            case .elsewhere(let why):
+                Permissions.log("goTo: \(sessionId.prefix(8)) is \(why); nothing to do from here")
+                report("elsewhere", why)
+                await MainActor.run { [weak self] in
+                    self?.hud.finishGoToSession("That agent is running under another Tranquility "
+                        + "Base instance (\(why)). Nothing was closed.")
+                }
+                return
+            case .unknown(let why):
+                Permissions.log("goTo: \(sessionId.prefix(8)) location unknown: \(why)")
+                report("location_unknown", why)
+                await MainActor.run { [weak self] in
+                    self?.hud.finishGoToSession("I can't tell where that agent is right now "
+                        + "(\(why)). Nothing was closed. Try again in a moment.")
+                }
+                return
+            case .gone:
+                Permissions.log("goTo: \(sessionId.prefix(8)) is gone by the ledger's account")
+                report("gone", nil)
+                await MainActor.run { [weak self] in
+                    self?.hud.finishGoToSession("That agent isn't running any more.")
+                }
+                return
+            case .unhosted:
                 // Hand-started: end it and bring it up under tmux, which is
                 // the only way a human and this app can both reach it. Same
                 // mechanism the card uses, with the session's OWN harness.
@@ -1739,7 +1769,7 @@ extension AppDelegate {
                 switch outcome {
                 case .focused:
                     Permissions.log("goTo: focused \(landedOn)")
-                    report(owned == nil ? "focused_after_transfer" : "focused", nil)
+                    report(location.pane == nil ? "focused_after_transfer" : "focused", nil)
                     self.hud.finishGoToSession(nil)
                 case .tabGone:
                     Permissions.log("goTo: tab not found for \(tty)")
@@ -2580,11 +2610,23 @@ extension AppDelegate {
             // distinctive enough to skip a sibling MCP-server child on the
             // same tty (measured live: a codex launch's own child process
             // shares its tty and does not contain this string).
-            if isCodex, let pid = ProcessProbe.pid(onTty: tty, containing: command) {
+            //
+            // Every harness, since 15 Sep. This was `if isCodex`, on the
+            // premise that Claude Code's own registry was address enough; it
+            // names a pane without its server, and that is how a TEST
+            // build's pane %1 was answered with the real app's pane %1.
+            // Claude Code's pid is read from its registry entry (the launch
+            // argv carries no session id to match); Codex's by command.
+            let launchedPid = isCodex
+                ? ProcessProbe.pid(onTty: tty, containing: command)
+                : SessionRegistry.entry(forSessionId: sessionId)?.pid
+            if let pid = launchedPid {
                 FileSessionOwnershipStore.shared.record(SessionOwnershipRecord(
-                    sessionId: sessionId, harness: CodexAdapter().id, pid: pid,
+                    sessionId: sessionId, harness: adapter.id, pid: pid,
                     paneId: pane.paneId, socketName: pane.socketName,
                     sessionName: pane.sessionName, paneTty: pane.paneTty, cwd: dir))
+                Permissions.log("launcher: ledger \(sessionId.prefix(8)) = \(pane.sessionName) "
+                    + "\(pane.paneId) pid \(pid)")
             }
 
             // Kept BEFORE the greeting row is written and before the card is

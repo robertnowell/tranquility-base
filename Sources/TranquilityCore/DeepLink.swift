@@ -84,7 +84,10 @@ public enum DeepLink {
                                           hasCompletedTurn: Bool) -> DiscussDestination {
         switch rowAction {
         case .announce:  return .conversationCard
-        case .goToAgent: return lamp == .running && hasCompletedTurn ? .conversationCard : .agentTerminal
+        // Ruled 15 Sep: only amber goes straight to the agent. Any other
+        // live row with a completed turn reads the card, which carries GO TO
+        // AGENT; with nothing recorded, the terminal is all there is.
+        case .goToAgent: return lamp != .fault && hasCompletedTurn ? .conversationCard : .agentTerminal
         // Discuss on a remote agent opens where the agent lives. Same
         // destination in meaning as a terminal, different door, and the enum
         // says which so no caller has to ask what kind of agent it was.
