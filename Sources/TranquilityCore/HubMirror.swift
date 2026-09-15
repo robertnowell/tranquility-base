@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SystemConfiguration
 
 /// The mirror: every page and every turn, into the hub, from the panel itself.
 ///
@@ -166,10 +167,24 @@ public final class HubMirror: @unchecked Sendable {
     }
 
     /// The same spelling the script used, so the hub keeps one row per Mac.
+    ///
+    /// A config read, not a lookup. This was `ProcessInfo.hostName` with the
+    /// `.local` cut off, and on 14 Sep 2026 that froze a new Mac's setup
+    /// window: `hostName` resolves the machine's name through DNS, blocking,
+    /// on whatever thread asks, and the Fix button on the hub item asked on
+    /// the main thread (Sentry: fixTapped → HubPairing.init → deviceName →
+    /// -[NSHost blockingResolveUntil:]). The local host name is what the
+    /// Sharing pane shows, read from the system configuration store in
+    /// microseconds, and it IS the spelling the old call produced whenever
+    /// DNS had nothing to add: `Robaroni-Mac-128.local` minus the suffix.
+    /// On a network whose reverse DNS knew the Mac by another name the old
+    /// call returned that name instead, so a row keyed that way gets a new
+    /// row here, once, and then a name that no longer changes with the Wi-Fi.
     public static func deviceName() -> String {
-        var name = ProcessInfo.processInfo.hostName
-        if name.hasSuffix(".local") { name = String(name.dropLast(".local".count)) }
-        return name.isEmpty ? "mac" : name
+        if let name = SCDynamicStoreCopyLocalHostName(nil) as String?, !name.isEmpty {
+            return name
+        }
+        return "mac"
     }
 
     // MARK: - Running

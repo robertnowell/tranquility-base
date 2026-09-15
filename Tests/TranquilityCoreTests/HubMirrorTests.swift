@@ -6,6 +6,19 @@ import XCTest
 /// the grid's name. Every test speaks to a fake hub; none opens a socket.
 final class HubMirrorTests: XCTestCase {
 
+    /// 14 Sep: the name came from `ProcessInfo.hostName`, which resolves
+    /// through DNS and hung a fresh Mac's setup window on the main thread.
+    /// The local host name is a config read; it answers at once, and it is
+    /// the same spelling minus the `.local` the old call had to strip.
+    func testDeviceNameIsTheLocalHostNameAndAnswersAtOnce() {
+        let started = Date()
+        let name = HubMirror.deviceName()
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.1)
+        XCTAssertFalse(name.isEmpty)
+        XCTAssertFalse(name.hasSuffix(".local"))
+        XCTAssertFalse(name.contains("."), "the hub keys one row per Mac on the bare name: \(name)")
+    }
+
     /// A hub that remembers what it was told and answers like the real one.
     final class FakeHub: HubMirror.Transport, @unchecked Sendable {
         var calls: [(path: String, json: [String: Any])] = []
