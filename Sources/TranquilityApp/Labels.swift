@@ -44,13 +44,7 @@ final class DoorLabel: NSTextField {
         addTrackingArea(NSTrackingArea(
             rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
             owner: self, userInfo: nil))
-        PointerCursor.track(self)
-    }
-
-    /// The hand only while this is a door; a label that is not one lets the
-    /// arrow through, which `hitTest` already arranges for clicks.
-    override func cursorUpdate(with event: NSEvent) {
-        if isADoor { PointerCursor.show() } else { super.cursorUpdate(with: event) }
+        PointerCursor.track(self) { [weak self] in self?.isADoor ?? false }
     }
 
     override func mouseEntered(with event: NSEvent) { setHovered(true) }

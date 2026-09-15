@@ -1,6 +1,7 @@
 import AppKit
 
-/// The pointing hand, on a window that is never key.
+/// The pointing hand, on a window that is never key, in an app that is
+/// never active.
 ///
 /// Rule 1 of the hover standard (docs/rulings/ruling-the-panel-answers-the-
 /// pointer.md) says the cursor is what tells a control from a label on this
@@ -12,22 +13,48 @@ import AppKit
 /// a cursor." They always did; the rule was written, and the pixels never
 /// kept it, on any face, for anyone.
 ///
-/// A tracking area with `.cursorUpdate` and `.activeAlways` does not care
-/// whether the window is key: AppKit calls `cursorUpdate(with:)` on entry,
-/// and the view sets the hand. On exit it asks the view underneath, which
-/// sets whatever it wants, or the arrow. One helper, so the eight controls
-/// that each wrote their own `resetCursorRects` cannot each get it wrong
-/// again.
+/// Measured the same afternoon on the Dev lane: a `.cursorUpdate` tracking
+/// area did not change the cursor either, though enter and exit fired (the
+/// Controls note opened under the same synthetic pointer). Enter and exit
+/// are what this panel demonstrably receives, so the hand is pushed on
+/// enter and popped on exit, by a watcher that owns the tracking area, and
+/// the control itself has nothing to override.
 enum PointerCursor {
-    /// Install the tracking. Call from `updateTrackingAreas`, after removing
-    /// the old areas; `rect` nil tracks the whole view (`.inVisibleRect`).
-    static func track(_ view: NSView, rect: NSRect? = nil) {
-        var options: NSTrackingArea.Options = [.cursorUpdate, .activeAlways]
-        if rect == nil { options.insert(.inVisibleRect) }
-        view.addTrackingArea(NSTrackingArea(rect: rect ?? .zero, options: options,
-                                            owner: view, userInfo: nil))
+    /// One per tracked view; the tracking area's owner, retained by the
+    /// view through its userInfo so it lives as long as the area does.
+    @MainActor final class Watcher: NSResponder {
+        private let enabled: () -> Bool
+        private var pushed = false
+        init(enabled: @escaping () -> Bool) { self.enabled = enabled; super.init() }
+        @available(*, unavailable) required init?(coder: NSCoder) { fatalError("not used") }
+
+        override func mouseEntered(with event: NSEvent) {
+            guard enabled(), !pushed else { return }
+            NSCursor.pointingHand.push()
+            pushed = true
+        }
+        override func mouseExited(with event: NSEvent) {
+            guard pushed else { return }
+            NSCursor.pop()
+            pushed = false
+        }
+        override func cursorUpdate(with event: NSEvent) {
+            if enabled() { NSCursor.pointingHand.set() }
+        }
     }
 
-    /// What `cursorUpdate(with:)` does when the view is a control.
+    /// Install the tracking. Call from `updateTrackingAreas`, after removing
+    /// the old areas. `rect` nil tracks the whole view (`.inVisibleRect`).
+    /// `when` gates it, for a label that is a door only sometimes.
+    @MainActor static func track(_ view: NSView, rect: NSRect? = nil,
+                      when enabled: @escaping () -> Bool = { true }) {
+        var options: NSTrackingArea.Options = [.mouseEnteredAndExited, .cursorUpdate, .activeAlways]
+        if rect == nil { options.insert(.inVisibleRect) }
+        let watcher = Watcher(enabled: enabled)
+        view.addTrackingArea(NSTrackingArea(rect: rect ?? .zero, options: options,
+                                            owner: watcher, userInfo: ["watcher": watcher]))
+    }
+
+    /// What a control's own `cursorUpdate(with:)` may still call.
     static func show() { NSCursor.pointingHand.set() }
 }
