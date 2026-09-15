@@ -334,7 +334,17 @@ public struct SessionRow: Equatable, Sendable {
         // three lamps above; making them green under the three-lamp ruling
         // stranded it. A row that carries a page has somewhere to go, and that
         // is true whatever colour it is.
-        case .ready: return row.door.isPage ? goTo(row) : .announce
+        // A green row ANNOUNCES only when there is something to announce.
+        // Announce reads a turn out of the local store, and a row with
+        // `read: .none` has no turn there — it is green because its agent
+        // finished (the three-lamp ruling, and right), not because it said
+        // anything. Robert, 15 Sep, on 29 such rows in Past Agents: "clicking
+        // on them does nothing. It's very weird that they're there." Every
+        // one was a probe session that had never spoken. So: the door if it
+        // has one, otherwise nothing, and never an announce that finds nothing.
+        case .ready:
+            if row.door.isPage { return goTo(row) }
+            return row.read == .none ? .none : .announce
         case .unlit: return row.revivable ? .revive : .none
         }
     }

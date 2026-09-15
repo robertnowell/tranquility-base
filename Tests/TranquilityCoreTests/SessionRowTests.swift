@@ -9,11 +9,20 @@ import XCTest
 /// cannot easily have any (CLAUDE.md rule 7).
 final class SessionRowTests: XCTestCase {
 
+    /// A green fixture carries an unread turn, because that is what a green
+    /// LOCAL row always has: band 1 stamps `.unread` or `.opened` and nothing
+    /// else builds one. A green row with `read: .none` is a remote agent that
+    /// has never spoken, and since 15 Sep it does not announce (there is
+    /// nothing in the store to read out). The fixtures used to build green
+    /// rows with no read state and assert they announced — describing a row
+    /// production never makes, and hiding the one it does.
     private func row(id: String = "a1b2c3d4e5", lamp: Lamp = .ready, revivable: Bool = false,
-                     switchedOff: Bool = false, aux: String = "aux", detail: String? = nil
+                     switchedOff: Bool = false, aux: String = "aux", detail: String? = nil,
+                     read: ReadState? = nil
     ) -> SessionRow {
         SessionRow(id: id, name: "name", aux: aux, lamp: lamp,
-                  revivable: revivable, switchedOff: switchedOff, detail: detail)
+                   revivable: revivable, read: read ?? (lamp == .ready ? .unread : .none),
+                   switchedOff: switchedOff, detail: detail)
     }
 
     // MARK: - Lamp

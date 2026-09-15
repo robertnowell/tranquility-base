@@ -151,6 +151,20 @@ final class LiveGridProbe: XCTestCase {
                     + "discovered=\(discovered.contains { $0.sessionId == r.id })")
             }
         }
+        // PAST AGENTS = everything the grid does not draw. What is green there?
+        let shownIDs = Set(SessionRow.gridRows(verdict.rows, capacity: 12, floor: 4).map(\.id))
+        let past = verdict.rows.filter { !shownIDs.contains($0.id) }
+        let pastGreen = past.filter { $0.lamp == .ready }
+        print("LIVE past agents: \(past.count), of which green: \(pastGreen.count)")
+        var byHarness: [String: Int] = [:]
+        for r in pastGreen { byHarness[r.harness ?? "nil", default: 0] += 1 }
+        print("LIVE past green by harness: \(byHarness)")
+        for r in pastGreen.prefix(12) {
+            print("   past-green \(String(describing: r.lamp).padding(toLength: 7, withPad: " ", startingAt: 0)) "
+                + "\(r.harness ?? "nil")  door=\(r.door)  action=\(SessionRow.action(for: r))  "
+                + "\(r.name.prefix(40))")
+        }
+
         let crobot = verdict.rows.first { $0.harness == "crobot" }
         print("LIVE crobot row: \(crobot.map { "\($0.lamp) \($0.name.prefix(46))" } ?? "NOT IN THE GRID")")
     }
