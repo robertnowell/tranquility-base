@@ -60,7 +60,7 @@ extension AppDelegate {
             case let .home(s, r):    session = s; ref = r
             case let .hear(s):       session = s; ref = nil
             case let .reply(s):      session = s; ref = nil
-            case .show, .connect, .unknown: session = nil; ref = nil
+            case .show, .connect, .new, .unknown: session = nil; ref = nil
             }
             Permissions.log("deeplink: \(action) session=\(session?.prefix(8) ?? "-")")
             var link: [String: TrackValue] = ["action": Track.token(from: action),
@@ -124,6 +124,10 @@ extension AppDelegate {
                 }
             case "show":
                 showPanel()
+            case "new":
+                // The same call the button and the menu item make; nothing
+                // is decided here that they do not decide.
+                newSession()
             case "connect":
                 // "Begin", and nothing else: the link carries no token and no
                 // address, so this is the same flow the Setup row starts. The

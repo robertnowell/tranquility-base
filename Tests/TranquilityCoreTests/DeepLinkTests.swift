@@ -45,6 +45,14 @@ final class DeepLinkTests: XCTestCase {
     /// link that CAN carry those is a link somebody else can aim. Parsing
     /// drops every parameter, so even a link that carries them hands the app
     /// nothing to act on.
+    /// `new` is a verb with no object, like `connect`: the agent comes from
+    /// Settings, never from the link.
+    func testNewCarriesNothingAndParses() {
+        XCTAssertEqual(DeepLink.parse(URL(string: "tbdev://new")!), .new)
+        XCTAssertEqual(DeepLink.parse(URL(string: "tranquilitybase://new?agent=opencode&dir=/tmp")!), .new,
+                       "parameters on the link are ignored, not honoured")
+    }
+
     func testConnectCarriesNothing() {
         XCTAssertEqual(DeepLink.parse(URL(string: "tranquilitybase://connect")!), .connect)
         XCTAssertEqual(DeepLink.parse(URL(string:
