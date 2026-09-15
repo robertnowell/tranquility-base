@@ -359,6 +359,58 @@ extension AppDelegate {
     /// recorder's peak may belong to a later arm by now) and the face says
     /// "Retrying" — re-entering `.transcribing` restarts the elapsed clock,
     /// which is the visible acknowledgment the first Retry never had.
+    /// Whether stopping the app now would lose words. Read by the in-flight
+    /// guard every second and written to `CaptureMarker`, which the deploy
+    /// scripts wait on. Every leg of the promise, in the order a reply takes
+    /// it: mic open, transcribing, the read-back countdown, keystrokes in
+    /// flight to a terminal.
+    var utteranceInFlight: Bool { utteranceInFlightReason != "idle" }
+
+    var utteranceInFlightReason: String {
+        if recorder.isRecording { return "mic open" }
+        if inFlightTranscription != nil { return "transcribing" }
+        switch hud.state {
+        case .transcribing: return "transcribing"
+        case .pendingSend: return "read-back countdown"
+        default: break
+        }
+        if !delivering.inFlightSessions().isEmpty { return "delivering" }
+        return "idle"
+    }
+
+    /// Audio the app got back after losing it — a kept file adopted at boot
+    /// or on abandon — is transcribed once, unasked, so the words are in
+    /// Recents and not only the sound. Ruled 14 Sep 2026: "even if that
+    /// happens, the transcription should be in Recents." One attempt per
+    /// capture, through the ordinary chain; a row it cannot transcribe stays
+    /// for a human's Retry, and the 13 Aug rule against re-spending on
+    /// FAILED rows is untouched. Never delivered: the target it was spoken
+    /// to is a restart ago, and a paste with no read-back is the one thing
+    /// worse than a lost reply.
+    func transcribeRecovered(_ ids: [String], because trigger: String) {
+        guard let store, !ids.isEmpty else { return }
+        Task { @MainActor in
+            for id in ids {
+                do {
+                    guard let row = try await store.retryTranscription(utteranceId: id, trigger: trigger) else { continue }
+                    let seconds = Int((row.audioDurationMs ?? 0) / 1000)
+                    if let text = row.transcriptText, !text.isEmpty {
+                        Permissions.log("recovered: \(id.prefix(8)) (\(seconds)s) → \(text.count) chars (\(row.transcriptProvider ?? "?"))")
+                        hud.note("Recovered a \(seconds >= 60 ? "\(seconds / 60)m\(String(format: "%02d", seconds % 60))s" : "\(seconds)s") recording. Transcript in Recents.")
+                    } else {
+                        Permissions.log("recovered: \(id.prefix(8)) (\(seconds)s) → no transcript (\(row.transcriptionOutcome ?? "?")); Retry in Recents")
+                    }
+                    Track.record("audio_recovered", ["trigger": .token(trigger),
+                                                     "outcome": row.transcriptText == nil ? "no_transcript" : "transcribed",
+                                                     "audio_ms": .int(Int(row.audioDurationMs ?? 0))])
+                } catch {
+                    Permissions.log("recovered: \(id.prefix(8)) transcription failed: \(error)")
+                }
+            }
+            hud.updateRecentAudio(events: recentAudioEvents())
+        }
+    }
+
     /// A capture ended by Dismiss (the button, the menu bar toggle, Escape's
     /// teardown): kept and transcribed into Recents, never sent. The durable
     /// half is `QueueStore.keepDismissedCapture`; this is the app's wrapper —

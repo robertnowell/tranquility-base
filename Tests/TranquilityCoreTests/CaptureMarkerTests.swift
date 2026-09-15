@@ -134,4 +134,23 @@ final class CaptureMarkerTests: XCTestCase {
             .appendingPathComponent("definitely-absent-\(UUID().uuidString)")
         CaptureMarker.remove(at: missing)
     }
+
+    /// `settle` is the app's one-second verdict: refreshed while anything is
+    /// in flight, gone the second nothing is. It writes the real marker
+    /// path, so this test restores whatever was there.
+    func testSettleHoldsWhileInFlightAndReleasesAfter() throws {
+        let url = CaptureMarker.url
+        let before = try? Data(contentsOf: url)
+        defer {
+            if let before { try? before.write(to: url) } else { try? FileManager.default.removeItem(at: url) }
+        }
+        let now = Date()
+        CaptureMarker.settle(inFlight: true, now: now)
+        XCTAssertTrue(CaptureMarker.isCapturing(now: now), "held while in flight")
+        CaptureMarker.settle(inFlight: true, now: now.addingTimeInterval(CaptureMarker.staleAfter + 30))
+        XCTAssertTrue(CaptureMarker.isCapturing(now: now.addingTimeInterval(CaptureMarker.staleAfter + 30)),
+                      "each settle refreshes, so a long transcription never reads as stale")
+        CaptureMarker.settle(inFlight: false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "released when nothing is in flight")
+    }
 }

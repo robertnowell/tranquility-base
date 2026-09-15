@@ -1365,7 +1365,18 @@ public final class QueueStore: Sendable {
         public var adoptedAudio: [String] = []
     }
 
-    public func reconcileOnBoot(audioDirectory: URL = QueueStore.audioDirectory) throws -> ReconciliationReport {
+    /// `soleOwner` says the caller holds the app's ownership lock, so no other
+    /// process can be writing a `.wav.live` right now and a file modified a
+    /// moment ago is a capture the dead process was mid-word on — the one
+    /// case this sweep exists for. Without it (tbase's reconcile, run beside
+    /// a live app) the age guard stays.
+    ///
+    /// Measured 14 Sep 2026 21:53: a deploy killed the app at key-up, the
+    /// replacement booted four seconds later, and the age guard skipped the
+    /// 2m04s file as "may still be under a writer". It sat invisible until
+    /// the NEXT deploy adopted it three and a half minutes on.
+    public func reconcileOnBoot(audioDirectory: URL = QueueStore.audioDirectory,
+                                soleOwner: Bool = false) throws -> ReconciliationReport {
         var report = ReconciliationReport()
 
         try dbQueue.write { db in
@@ -1432,7 +1443,7 @@ public final class QueueStore: Sendable {
             }
         }
 
-        report.adoptedAudio = try adoptKeptLiveCaptures(in: audioDirectory)
+        report.adoptedAudio = try adoptKeptLiveCaptures(in: audioDirectory, minimumAge: soleOwner ? 0 : 5)
         report.orphanedAudio = try orphanedAudioFiles(in: audioDirectory)
         return report
     }
@@ -1458,7 +1469,8 @@ public final class QueueStore: Sendable {
     /// the app is single-instance, but the guard costs nothing and a capture
     /// in progress appends every ~64ms — so those wait for the next boot.
     @discardableResult
-    func adoptKeptLiveCaptures(in directory: URL, now: Date = Date()) throws -> [String] {
+    func adoptKeptLiveCaptures(in directory: URL, now: Date = Date(),
+                               minimumAge: TimeInterval = 5) throws -> [String] {
         let known = Set(try dbQueue.read { db in
             try String.fetchAll(db, sql: "SELECT id FROM utterances")
         })
@@ -1466,7 +1478,7 @@ public final class QueueStore: Sendable {
         var adopted: [String] = []
         for interrupted in LiveAudioCapture.interrupted(in: directory) {
             guard !known.contains(interrupted.utteranceId) else { continue }
-            guard now.timeIntervalSince(interrupted.modifiedAt) > 5 else { continue }
+            guard now.timeIntervalSince(interrupted.modifiedAt) >= minimumAge else { continue }
             // The recorder's own keep rule, applied to a file it never got to
             // judge: committed length, or speech by the same silence floor.
             // Ruled 14 Sep 2026: "any audio we have access to should not be

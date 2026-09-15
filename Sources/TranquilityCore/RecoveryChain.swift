@@ -538,7 +538,7 @@ extension QueueStore {
     /// Nil when the utterance does not exist or its audio file is gone —
     /// "nothing to retry", which the caller surfaces as such.
     public func retryTranscription(
-        utteranceId: String, chain: RecoveryChain = RecoveryChain()
+        utteranceId: String, chain: RecoveryChain = RecoveryChain(), trigger: String = "manual_retry"
     ) async throws -> Utterance? {
         guard var utterance = try utterances(limit: 10_000)
             .first(where: { $0.id == utteranceId }),
@@ -546,7 +546,7 @@ extension QueueStore {
             FileManager.default.fileExists(atPath: path)
         else { return nil }
 
-        let outcome = await transcribeSavedUtterance(utterance, at: path, chain: chain, trigger: "manual_retry")
+        let outcome = await transcribeSavedUtterance(utterance, at: path, chain: chain, trigger: trigger)
         utterance.transcriptionOutcome = outcome.disposition.rawValue
         if let result = outcome.result {
             utterance.transcriptText = result.text

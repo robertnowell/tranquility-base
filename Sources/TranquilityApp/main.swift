@@ -45,6 +45,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         "com.robertnowell.tranquilitybase.forwarded-deep-link")
     var permissionTimer: Timer?
     var intakeTimer: Timer?
+    var inFlightTimer: Timer?
+    var utteranceWasInFlight = false
     let onboarding = OnboardingWindow()
     let utterancePlayer = UtterancePlayer()
     let hud = StatusHUD()
@@ -511,6 +513,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         Track.record("capture_kept", ["reason": "abandoned", "outcome": "kept_untranscribed",
                                                       "audio_ms": .int(Int(seconds * 1000))])
                         self.hud.updateRecentAudio(events: self.recentAudioEvents())
+                        self.transcribeRecovered([id], because: "recovered_after_abandon")
                     }
                 } catch {
                     Permissions.log("capture: kept file could not be adopted: \(error)")
@@ -639,12 +642,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("agents: polling \(registry.configured().map(\.id).joined(separator: ", "))")
             }
 
-            let report = try store.reconcileOnBoot()
+            // Sole owner: the ownership lock above is held, so a live file
+            // modified seconds ago belongs to the process this one replaced.
+            let report = try store.reconcileOnBoot(soleOwner: true)
             if !report.adoptedAudio.isEmpty {
                 // Speech a previous process left unclaimed — a death, or an
                 // abandon that kept it — is in Recents now, not on the reap.
                 Permissions.log("boot: \(report.adoptedAudio.count) kept capture(s) adopted into Recents")
                 Track.record("audio_adopted_at_boot", ["count": .int(report.adoptedAudio.count)])
+                transcribeRecovered(report.adoptedAudio, because: "recovered_at_boot")
             }
             lastStatusLine = report.needsDeliveryCheck.isEmpty
                 ? "ready"
@@ -664,6 +670,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Pull spooled hook events in on a timer. The hook only appends to a file,
         // so nothing is lost while the app is closed — this just moves them across.
+        // The deploy scripts wait on `CaptureMarker` before stopping the app.
+        // It used to mean "mic open" and vanished at key-up, and on 14 Sep
+        // 2026 at 21:53 a relaunch killed the app in the seconds between
+        // key-up and delivery. The marker now covers the whole promise, and
+        // it is derived, not event-driven: a terminal point nobody wired
+        // cannot leave it standing, and one nobody wired cannot drop it early.
+        inFlightTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let inFlight = self.utteranceInFlight
+                if inFlight != self.utteranceWasInFlight {
+                    Permissions.log("in-flight: \(inFlight ? "held" : "released") (\(self.utteranceInFlightReason))")
+                    self.utteranceWasInFlight = inFlight
+                }
+                CaptureMarker.settle(inFlight: inFlight)
+            }
+        }
         intakeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let coordinator = self.coordinator else { return }
@@ -1926,6 +1949,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Analytics.flush()
         permissionTimer?.invalidate()
         intakeTimer?.invalidate()
+        inFlightTimer?.invalidate()
         hotkey?.stop()
         if recorder.isRecording { recorder.abandon() }
         // Last, and after everything above has had its say: log writes are
