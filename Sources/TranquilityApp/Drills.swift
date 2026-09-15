@@ -1720,6 +1720,60 @@ extension StatusHUD {
         SelfTest.report("revivedDoor", checks)
     }
 
+    /// A pane id from another server never resolves to one of ours.
+    ///
+    /// The 15 Sep misroute, replayed against the REAL server this launch is
+    /// running on: take whatever pane ids it holds right now, claim one of
+    /// them under a tmux session name nobody has, and ask the ledger. The
+    /// old join answered with our pane and typed into it. The ledger must
+    /// say `elsewhere`, and must never hand back a pane. Then the same claim
+    /// with no live pid must read `gone`, and an unaskable server must read
+    /// `unknown`, because both of those are the answers that stop a kill.
+    func ledgerDrill() {
+        var checks: [(String, Bool)] = []
+        let inventory = AgentLedger.inventory(socket: Tmux.socketName)
+        guard case .listed(let rows) = inventory, let ours = rows.first else {
+            // No server or no panes: the drill has nothing real to collide
+            // with. Skip with the reason rather than pass vacuously.
+            SelfTest.skipped("ledger", because: "no pane on this launch's own tmux server to collide with")
+            return
+        }
+        let me = Int(ProcessInfo.processInfo.processIdentifier)
+        let claim = SessionRegistry.Entry(
+            pid: me, sessionId: "drill-elsewhere", cwd: nil, status: "idle",
+            tmux: "tb-drill-elsewhere:@1.\(ours.paneId)", messagingSocketPath: nil,
+            name: nil, updatedAt: 1)
+        let facts = AgentLedger.Facts(
+            record: nil, registry: claim, pidHint: me,
+            inventories: [(Tmux.socketName, inventory), (nil, .listed([]))],
+            isAlive: { $0 == me }, ttyOf: { _ in nil })
+        let decided = AgentLedger.decide(sessionId: "drill-elsewhere", harness: nil, facts: facts)
+        checks.append(("aStrangersPaneIdIsElsewhere", {
+            if case .elsewhere = decided.location { return true }; return false
+        }()))
+        checks.append(("andNeverOurPane", decided.location.pane == nil))
+        checks.append(("andNothingIsAdopted", decided.adopt == nil))
+
+        let dead = AgentLedger.Facts(
+            record: nil, registry: claim, pidHint: me,
+            inventories: [(Tmux.socketName, inventory), (nil, .listed([]))],
+            isAlive: { _ in false }, ttyOf: { _ in nil })
+        checks.append(("aDeadStrangerIsGone",
+                       AgentLedger.decide(sessionId: "drill-elsewhere", harness: nil, facts: dead).location == .gone))
+
+        let unaskable = AgentLedger.Facts(
+            record: nil, registry: claim, pidHint: me,
+            inventories: [(Tmux.socketName, .unaskable("drill")), (nil, .listed([]))],
+            isAlive: { $0 == me }, ttyOf: { _ in nil })
+        checks.append(("anUnaskableServerIsUnknown", {
+            if case .unknown = AgentLedger.decide(sessionId: "drill-elsewhere", harness: nil,
+                                                  facts: unaskable).location { return true }
+            return false
+        }()))
+
+        SelfTest.report("ledger", checks)
+    }
+
     /// The harness marks land on the same optical line as the text beside them.
     ///
     /// Robert rejected the first render for exactly this: "let's make sure the

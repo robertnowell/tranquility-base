@@ -56,6 +56,24 @@ public enum SessionRegistry {
         /// When the process came up (epoch ms), as the file records it.
         public var startedAt: Double? = nil
 
+        public init(pid: Int, sessionId: String, cwd: String?, status: String?, tmux: String?,
+                    messagingSocketPath: String?, name: String?, updatedAt: Double?,
+                    kind: String? = nil, parkedJobId: String? = nil, jobId: String? = nil,
+                    startedAt: Double? = nil) {
+            self.pid = pid
+            self.sessionId = sessionId
+            self.cwd = cwd
+            self.status = status
+            self.tmux = tmux
+            self.messagingSocketPath = messagingSocketPath
+            self.name = name
+            self.updatedAt = updatedAt
+            self.kind = kind
+            self.parkedJobId = parkedJobId
+            self.jobId = jobId
+            self.startedAt = startedAt
+        }
+
         /// Just the `%17` — the only part any tmux command needs, and the
         /// part that is stable while a window is renamed or moved.
         public var paneId: String? {
