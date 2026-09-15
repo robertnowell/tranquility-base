@@ -169,8 +169,17 @@ extension Coordinator {
         let live = Set(sessions.map(\.sessionId))
             .union(ownership.liveNonRegistrySessions().map(\.sessionId))
         let all = yours(try store.waitingSessions())
-        sweep.sweep(all, live: live, trace: Coordinator.trace)
-        return all.filter { live.contains($0.sessionId) }
+        // A REMOTE AGENT IS LIVE BY ITS PROVIDER'S WORD, not by a pid on this
+        // Mac. The two probes above are local facts and a remote agent has
+        // neither, so it read as gone: never announced on its own, swept and
+        // retired 120 s after it was started, and its card offered no door
+        // (15 Sep, Robert's first OpenCode agent: "skipping tranquility-base:
+        // session is gone" one second after "replies now go to" it). The
+        // poller's snapshot is the liveness fact for those, and it is the
+        // same one the grid drew the row from.
+        let local = all.filter { !isRemote($0.sessionId) }
+        sweep.sweep(local, live: live, trace: Coordinator.trace)
+        return all.filter { live.contains($0.sessionId) || isRemote($0.sessionId) }
     }
 
     /// Sessions a person started, which is the only kind worth announcing.

@@ -179,9 +179,13 @@ public final class AgentPoller: @unchecked Sendable {
             }
             trace?("provider \(provider.id) unreachable: \(reason)")
 
-        case .polled(let events, let next):
+        case .polled(let diffed, let next):
             let fresh = (try? await provider.mine()) ?? []
+            var events = diffed
             sync {
+                for index in events.indices {
+                    events[index].previously = state.agent(events[index].session)?.state
+                }
                 digests[provider.id] = next
                 state.unreachable.removeValue(forKey: provider.id)
                 merge(fresh, from: provider.id)
@@ -228,8 +232,8 @@ public final class AgentPoller: @unchecked Sendable {
         let task = Task { [weak self] in
             for await event in stream {
                 guard let self else { return }
-                self.apply(event)
-                self.onEvents?([event])
+                let stamped = self.apply(event)
+                self.onEvents?([stamped])
             }
             self?.trace?("provider \(provider.id) stream ended")
             // A DROPPED STREAM IS A GAP TOO. Re-listing on the way out is what
@@ -243,8 +247,14 @@ public final class AgentPoller: @unchecked Sendable {
 
     /// One event into the snapshot. The stream is the ingress for a provider
     /// that has one, so this is the equivalent of tier one for those.
-    func apply(_ event: AgentEvent) {
+    ///
+    /// Returns the event stamped with what the snapshot knew before it was
+    /// applied (`AgentEvent.previously`), for the spool writer.
+    @discardableResult
+    func apply(_ event: AgentEvent) -> AgentEvent {
+        var stamped = event
         sync {
+            stamped.previously = state.agent(event.session)?.state
             switch event.kind {
             case .appeared(let session):
                 // The one line that answers "did the row reach the grid" from
@@ -273,6 +283,7 @@ public final class AgentPoller: @unchecked Sendable {
                 }
             }
         }
+        return stamped
     }
 
     // MARK: -

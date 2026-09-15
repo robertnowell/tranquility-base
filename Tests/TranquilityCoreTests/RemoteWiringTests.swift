@@ -30,6 +30,11 @@ final class RemoteWiringTests: XCTestCase {
     }
     override func tearDown() { AgentProviders.installedACP = { ACPCatalog.installed() }; super.tearDown() }
 
+    /// Not this Mac's ledger either: the real one says OpenCode has been used
+    /// here, and a registry test reading it would spawn a fake binary.
+    private let ledger = ProviderLedger(url: FileManager.default.temporaryDirectory
+        .appendingPathComponent("tb-ledger-\(UUID().uuidString).json"))
+
     private func opencodeInstalled() -> [(entry: ACPCatalog.Entry, command: [String])] {
         [(ACPCatalog.published.first { $0.id == "opencode" }!, ["/fake/bin/opencode", "acp"])]
     }
@@ -40,7 +45,7 @@ final class RemoteWiringTests: XCTestCase {
     func testAnInstalledAgentIsRegisteredAndConfiguredWithNoAddress() throws {
         AgentProviders.installedACP = opencodeInstalled
         let url = try config(#"{"app":{"base_url":"https://hq.example.test"}}"#)
-        let registry = AgentProviders.registry(config: url, secret: { _ in nil })
+        let registry = AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger)
         XCTAssertEqual(registry.providers.map(\.id), ["opencode"])
         XCTAssertTrue(registry.providers[0] is ACPProvider)
         XCTAssertEqual(registry.configured(config: url).map(\.id), ["opencode"],
@@ -53,7 +58,7 @@ final class RemoteWiringTests: XCTestCase {
     func testTheHTTPRouteYieldsToTheSpawnableOneUnderOneId() throws {
         AgentProviders.installedACP = opencodeInstalled
         let url = try config(#"{"providers":{"opencode":{"base_url":"http://127.0.0.1:4096"}}}"#)
-        let built = AgentProviders.registry(config: url, secret: { _ in nil }).providers
+        let built = AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger).providers
         XCTAssertEqual(built.map(\.id), ["opencode"])
         XCTAssertTrue(built[0] is ACPProvider, "the app spawns it; the address is for machines that cannot")
     }
@@ -63,18 +68,18 @@ final class RemoteWiringTests: XCTestCase {
         AgentProviders.installedACP = { [(ACPCatalog.published[0], ["/definitely/not/a/binary", "acp"])] }
         let url = try config(#"{"app":{"base_url":"https://hq.example.test"}}"#)
         // A missing binary would throw on spawn; building the registry must not spawn.
-        XCTAssertNoThrow(AgentProviders.registry(config: url, secret: { _ in nil }))
+        XCTAssertNoThrow(AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger))
     }
 
     func testAMachineWithNothingConfiguredGetsAnEmptyRegistry() throws {
         let url = try config(#"{"app":{"base_url":"https://hq.example.test"}}"#)
-        XCTAssertTrue(AgentProviders.registry(config: url, secret: { _ in nil })
+        XCTAssertTrue(AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger)
             .configured(config: url).isEmpty)
     }
 
     func testALocalServerNeedsOnlyAnAddress() throws {
         let url = try config(#"{"providers":{"opencode":{"base_url":"http://127.0.0.1:4096"}}}"#)
-        let ids = AgentProviders.registry(config: url, secret: { _ in nil })
+        let ids = AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger)
             .configured(config: url).map(\.id)
         XCTAssertEqual(ids, ["opencode"])
     }
@@ -88,14 +93,14 @@ final class RemoteWiringTests: XCTestCase {
         // first version of this test asked the real keychain, passed on a
         // machine with no crobot key and failed on one that had it: the same
         // disk-dependency defect this file's own registry was just fixed for.
-        let built = AgentProviders.registry(config: url, secret: { _ in nil })
+        let built = AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger)
             .providers.map(\.id)
         XCTAssertFalse(built.contains("crobot"),
                        "a provider with no key would 401 on every poll")
 
         // And WITH a key it is built, which is the other half: a guard that
         // always refuses is indistinguishable from one that works.
-        let withKey = AgentProviders.registry(config: url, secret: { _ in "jrv_probe" })
+        let withKey = AgentProviders.registry(config: url, secret: { _ in "jrv_probe" }, ledger: ledger)
             .providers.map(\.id)
         XCTAssertTrue(withKey.contains("crobot"))
     }

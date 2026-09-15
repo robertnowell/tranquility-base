@@ -1050,6 +1050,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A live session does not need reviving — it needs finding, which is
         // the same door the card's GO TO AGENT opens.
         hud.onGoToSession = { [weak self] id in self?.goToSession(id) }
+        hud.onOpenShell = { [weak self] command, directory in self?.openShell(command, in: directory) }
         hud.onNewSessionForArtifact = { [weak self] ref in
             self?.newSession(forArtifact: ref)
         }

@@ -33,6 +33,15 @@ public enum ACPWire {
         public var id: Int?
         public var method: String?
         public var error: RPCError?
+        /// How many notifications the client had delivered before this
+        /// message, stamped by `ACPClient.receive`. Notifications reach the
+        /// provider through a stream its pump drains asynchronously;
+        /// responses resume the caller directly. So a `session/prompt`
+        /// response can be acted on before the last `agent_message_chunk`
+        /// ahead of it has been translated, and the turn's words come out
+        /// short (CI, 15 Sep: "working " for "working on it"). The provider
+        /// waits until it has translated up to this number.
+        public var sequence: Int = 0
         /// The whole line, kept so a typed decode can happen later.
         public var raw: Data
 
@@ -208,6 +217,9 @@ public enum ACPWire {
 
     public struct PromptResult: Decodable, Sendable {
         public var stopReason: StopReason?
+        /// `Message.sequence` of the response, for the provider's barrier.
+        public var sequence: Int = 0
+        private enum CodingKeys: String, CodingKey { case stopReason }
 
         /// **A refusal is amber, not green.** The three-lamp ruling reserves
         /// amber for the unanticipated, and an agent that stopped because it
@@ -245,10 +257,23 @@ public enum ACPWire {
             /// and is ready for the next one. Under the three-lamp ruling that
             /// is green, and `.unknown` here would paint it amber.
             public func agentSession(provider: String) -> AgentSession {
-                AgentSession.of(sessionId, provider: provider,
-                                title: title ?? "",
-                                state: .completed,
-                                updatedAt: Self.date(updatedAt))
+                var session = AgentSession.of(sessionId, provider: provider,
+                                              title: Self.name(title) ?? "",
+                                              state: .completed,
+                                              updatedAt: Self.date(updatedAt))
+                session.repository = cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
+                return session
+            }
+
+            /// The agent's title for a session, or nil when it has not named
+            /// it yet. OpenCode lists an unprompted session as
+            /// `New session - 2026-09-15T20:15:04.847Z`, which is a placeholder
+            /// wearing a title's clothes: the row's own fallback (the agent and
+            /// its place) says more than a timestamp does, and the model's
+            /// title replaces both after the first turn. Measured 15 Sep.
+            public static func name(_ title: String?) -> String? {
+                guard let title, !title.isEmpty, !title.hasPrefix("New session - ") else { return nil }
+                return title
             }
 
             /// `RolloutClock` already parses both the fractional and the plain

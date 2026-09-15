@@ -242,6 +242,8 @@ extension AppDelegate {
         case .agentTerminal:
             guard let resolved else { return }
             goToSession(resolved)
+        case .agentShell(let command, let directory):
+            openShell(command, in: directory)
         case .agentPage(let url):
             // The remote half of `agentTerminal`. `goToSession` focuses a pane
             // this Mac owns, and a remote agent has none; its provider already
@@ -1242,26 +1244,76 @@ extension AppDelegate {
                    adapter: adapter)
     }
 
-    /// Start an agent this app drives through a provider rather than a pane.
+    /// A provider agent, started the way a terminal one is: the greeting card
+    /// FIRST, spoken in the voice the agent is about to be given, then the
+    /// start, then the session bound underneath it. Same pieces as the local
+    /// path above (`showGreeting`, `GreetingCache`, `LaunchGreeting.record`,
+    /// `activeConversation`, `bindGreeting`), because the promise is the
+    /// same: the next thing you say goes to the agent you just started.
     ///
-    /// The brief is empty on purpose, matching a terminal launch: the agent
-    /// exists and the first thing it hears is what the user says to it. The
-    /// poller sees the provider's `.appeared` and draws the row on its next
-    /// tick, which is the same path every other remote row takes; nothing here
-    /// draws anything. A failure is a card with the provider's reason, because
-    /// a silent no-op after pressing New Agent is the exact defect this
-    /// function replaces.
+    /// Robert pressed New Agent → OpenCode on 15 Sep and got a card that said
+    /// "opencode is up. Say something to it." with nowhere for the words to
+    /// go: the row existed, the reply target did not move, and the card wore
+    /// another session's title. A remote agent becomes a reply target the way
+    /// a local one does, by a greeting turn in the store under its id, and
+    /// the dispatcher already routes an id the poller has seen to its
+    /// provider (`RemoteDispatchTransport`).
+    ///
+    /// No `PendingLaunch`: a protocol start is sub-second (0.8 s measured),
+    /// so words spoken before the id exists are a window too small to build
+    /// a promise for. A failure is a card with the provider's reason, because
+    /// a silent no-op after pressing New Agent is the defect this replaces.
     private func startProviderAgent(_ provider: any AgentProvider) {
-        hud.showResult("Starting \(provider.id)…")
+        let dir = AgentDefaults.directory(for: provider.id)
+        let label = (dir as NSString).lastPathComponent
+        let line = LaunchGreeting.nextLine()
+        let voice = (try? store?.nextVoiceInRotation(roster: VoiceRoster.load())) ?? nil
+        let conversationAtLaunch = activeConversation?.sessionId
+        if hud.showGreeting(line: line, label: label) {
+            Task.detached(priority: .userInitiated) {
+                await GreetingCache.speak(line, voiceId: voice)
+            }
+        }
         Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
                 let id = try await provider.start(Brief(prompt: ""))
                 Permissions.log("new agent: \(provider.id) started \(id)")
-                self?.hud.showResult("\(provider.id) is up. Say something to it.")
+                self.agents?.kick()
+                // The destination follows the launch, unless you moved on
+                // since pressing the button (ruled 19 Aug, same rule as above).
+                if LaunchAdoption.claimsTheReply(
+                    isNewestLaunch: true,
+                    conversationAtLaunch: conversationAtLaunch,
+                    conversationNow: self.activeConversation?.sessionId) {
+                    self.activeConversation = (id, label, dir)
+                    Permissions.log("launch: replies now go to \(id.prefix(8))")
+                } else {
+                    Permissions.log("launch: \(id.prefix(8)) started, but you moved on — "
+                        + "replies stay where you put them")
+                }
+                // The durable half: a row, a reply target, a turn the agent's
+                // own first turn supersedes.
+                if let store = self.store {
+                    do {
+                        if try LaunchGreeting.record(sessionId: id, directory: dir, line: line,
+                                                     voice: voice, store: store) != nil {
+                            Permissions.log("greeting: recorded for \(id.prefix(8)) in \(dir)")
+                        }
+                    } catch {
+                        Permissions.log("greeting: not recorded for \(id.prefix(8)): \(error)")
+                    }
+                }
+                if self.hud.bindGreeting(sessionId: id, pid: nil, label: label, cwd: dir) {
+                    Permissions.log("greeting: bound \(id.prefix(8)) to the card")
+                } else {
+                    Permissions.log("greeting: NOT bound \(id.prefix(8)) — card moved on; replies still go to it")
+                }
             } catch {
                 let reason = "\(provider.id) could not start: \(error)"
                 Failures.report(.launchFailed, reason: reason, card: reason)
-                self?.hud.showResult(reason)
+                self.hud.markLaunchFailed()
+                self.hud.showResult(reason)
             }
         }
     }
@@ -1474,6 +1526,32 @@ extension AppDelegate {
                 "because": .token(reason),
                 "detail": .prose(verdict.summary
                     + (verdict.evidence.isEmpty ? "" : ", " + verdict.evidence))])
+        }
+    }
+
+    /// Go to Agent for an agent whose interface is a program on this Mac:
+    /// a Terminal window running it in the agent's directory. OpenCode's TUI
+    /// opens the same session the protocol provider is driving
+    /// (`opencode --session`), so what you see there is what you have been
+    /// talking to. Off the main thread, like every other AppleScript here.
+    func openShell(_ command: String, in directory: String) {
+        let line = SessionLauncher.manualLaunch(directory: directory, command: command)
+        Permissions.log("door: shell in \(directory): \(command)")
+        Task.detached(priority: .userInitiated) {
+            // Every dynamic piece goes through `quoted form of`, never
+            // Swift-side escaping (the rule `TerminalTabFocus` records).
+            let literal = line.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            let script = """
+                tell application "Terminal"
+                  activate
+                  do script "\(literal)"
+                end tell
+                """
+            if case .failure(let error) = AppleScript.run(script: script) {
+                Failures.report(.launchFailed, reason: "shell door: \(error)",
+                                card: "Couldn't open a Terminal for that agent: \(error)")
+            }
         }
     }
 

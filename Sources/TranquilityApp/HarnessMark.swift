@@ -178,12 +178,56 @@ enum HarnessMark {
 
     /// The ink box of a harness's mark, in its own units.
     static func ink(for harness: String) -> CGSize {
-        harness == CodexAdapter().id ? codexInk : claudeCodeInk
+        switch harness {
+        case CodexAdapter().id: return codexInk
+        case ClaudeCodeAdapter().id: return claudeCodeInk
+        default: return monogramInk
+        }
     }
 
     /// The path, normalised so its bounds are exactly its ink.
     static func path(for harness: String) -> NSBezierPath {
-        harness == CodexAdapter().id ? codexPath() : claudeCodePath()
+        switch harness {
+        case CodexAdapter().id: return codexPath()
+        case ClaudeCodeAdapter().id: return claudeCodePath()
+        default: return monogramPath(for: harness)
+        }
+    }
+
+    // MARK: - Everything else: a monogram, never a borrowed brand
+
+    /// A provider this app has no vector mark for wears its initial in a
+    /// rounded square. Before this, anything that was not Codex drew the
+    /// Claude mark, so an OpenCode row wore Claude's logo (Robert, 15 Sep).
+    /// A wrong brand is worse than a plain one; the initial is honest and
+    /// tells the vendors apart at a glance (O, C, D, ...).
+    static let monogramInk = CGSize(width: 24, height: 24)
+
+    static func monogramPath(for harness: String) -> NSBezierPath {
+        let box = NSRect(origin: .zero, size: monogramInk)
+        let path = NSBezierPath(roundedRect: box, xRadius: 5, yRadius: 5)
+        let letter = String(harness.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
+        let font = NSFont.systemFont(ofSize: 17, weight: .bold)
+        let glyphPath = NSBezierPath()
+        let layout = NSTextStorage(string: letter.isEmpty ? "?" : letter, attributes: [.font: font])
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: 100, height: 100))
+        manager.addTextContainer(container)
+        layout.addLayoutManager(manager)
+        let range = manager.glyphRange(for: container)
+        var glyphs = [CGGlyph](repeating: 0, count: range.length)
+        manager.getGlyphs(in: range, glyphs: &glyphs, properties: nil, characterIndexes: nil, bidiLevels: nil)
+        glyphPath.move(to: .zero)
+        glyphPath.append(withCGGlyphs: glyphs, count: glyphs.count, in: font)
+        // Centre the letter in the square, then cut it out of the fill so the
+        // template tints as one shape with a hole, like the other two marks.
+        let bounds = glyphPath.bounds
+        let shift = AffineTransform(translationByX: (box.width - bounds.width) / 2 - bounds.minX,
+                                    byY: (box.height - bounds.height) / 2 - bounds.minY)
+        glyphPath.transform(using: shift)
+        path.append(glyphPath)
+        path.windingRule = .evenOdd
+        return path
     }
 
     /// What to draw, at this ink height. Width follows the mark's own aspect;

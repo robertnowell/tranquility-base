@@ -1285,17 +1285,21 @@ final class StatusHUD: NSObject {
     /// their own `onCommit`/browse-completion handlers) rather than round-
     /// tripping back through here.
     func showAgentFields(for harness: String) {
-        // **A provider has no launch command and no working directory**, and
-        // showing empty ones would invite the user to configure something
-        // nothing reads. The fields belong to a harness this Mac starts; an
-        // agent that lives behind an API or a pipe is configured by its
-        // credential and nothing else.
+        // **A provider has no launch command**, and showing an empty one
+        // would invite the user to configure something nothing reads: an
+        // agent behind a pipe is started by the catalog's own argv. It DOES
+        // have a working directory, the workspace a new agent starts in and
+        // the one `session/list` is filtered to, and the registry reads it
+        // from the same setting a terminal harness uses (#471). Before this
+        // the pane was empty for a provider default and two launch drills
+        // went red on every deploy after Robert chose OpenCode.
         let isHarness = KnownHarnesses.all.contains { $0.id == harness }
         launchRow.isHidden = !isHarness
-        directoryRow.isHidden = !isHarness
-        guard isHarness else { return }
-        launchRow.show(AgentDefaults.load(for: harness))
-        launchRow.setPlaceholder(AgentDefaults.fallback(for: harness))
+        directoryRow.isHidden = false
+        if isHarness {
+            launchRow.show(AgentDefaults.load(for: harness))
+            launchRow.setPlaceholder(AgentDefaults.fallback(for: harness))
+        }
         directoryRow.show(AgentDefaults.directoryAsTyped(for: harness))
         directoryRow.setPlaceholder(AgentDefaults.fallbackDirectory)
     }
@@ -3116,6 +3120,8 @@ final class StatusHUD: NSObject {
     var onOpenPastAgents: (() -> Void)?
     /// Wired by the app: focus a LIVE session's terminal tab.
     var onGoToSession: ((String) -> Void)?
+    /// Go to Agent through a program on this Mac (`SessionRow.Door.shell`).
+    var onOpenShell: ((String, String) -> Void)?
     /// Wired by the app: create an ordinary agent under the other harness,
     /// carrying this live row's context into its first explicit user message.
     var onContinueWork: ((_ id: String, _ name: String) -> Void)?
@@ -3600,9 +3606,13 @@ final class StatusHUD: NSObject {
     /// reason `currentDoor` gives just above it: a second copy of a fact the
     /// row already carries is a second thing to keep in step, and this one
     /// changes on every poll.
-    var remoteDoorForCurrentTarget: URL? {
-        guard let target = currentTarget else { return nil }
-        return face.sessionRows.first { $0.id == target.sessionId }?.door.url
+    /// The current target's door when it is not a pane of ours: a page or a
+    /// program. Nil for a terminal (the pid is the door) and for none.
+    var remoteDoorForCurrentTarget: SessionRow.Door? {
+        guard let target = currentTarget,
+              let door = face.sessionRows.first(where: { $0.id == target.sessionId })?.door,
+              door.isRemote else { return nil }
+        return door
     }
 
     @objc nonisolated func goToSession() {
@@ -3611,8 +3621,12 @@ final class StatusHUD: NSObject {
             // The remote door first: a session with no pid of ours is not
             // "no longer running", it is running somewhere this Mac cannot
             // focus, and saying otherwise is the lie this branch used to tell.
-            if currentTarget?.pid == nil, let page = remoteDoorForCurrentTarget {
-                NSWorkspace.shared.open(page)
+            if currentTarget?.pid == nil, let door = remoteDoorForCurrentTarget {
+                switch door {
+                case .page(let url): NSWorkspace.shared.open(url)
+                case .shell(let command, let directory): onOpenShell?(command, directory)
+                case .terminal, .none: break
+                }
                 return
             }
             guard let target = currentTarget else {
@@ -3906,6 +3920,7 @@ final class StatusHUD: NSObject {
             // has no pane to focus, and its provider already said where it
             // lives; opening that is what Go to Agent MEANS for it.
             case .openPage(let url): NSWorkspace.shared.open(url)
+            case .openShell(let command, let directory): onOpenShell?(command, directory)
             case .revive: onRevive?(id, row.name)
             case .none: refuseRowTap(id)
             }

@@ -24,7 +24,8 @@ public enum AgentProviders {
     /// this.
     public static func registry(config: URL = HubApp.configPath,
                                 session: URLSession = .shared,
-                                secret: (Secrets.Key) -> String? = { Secrets.read($0) })
+                                secret: (Secrets.Key) -> String? = { Secrets.read($0) },
+                                ledger: ProviderLedger = .standard)
         -> AgentProviderRegistry {
         var built: [any AgentProvider] = []
 
@@ -34,13 +35,20 @@ public enum AgentProviders {
         // provider here; none of them runs a process until something is
         // started on it (`ACPProvider.connectIfNeeded`), so listing them at
         // launch is free. The workspace is where a new agent starts (#446).
-        let workspace = AgentDefaults.fallbackDirectory
         for (entry, command) in installedACP() {
+            // The directory the Settings pane holds for this agent, or the
+            // workspace: the same setting a terminal harness launches into,
+            // read the same way (#471). Fixed for the life of the process,
+            // which is the child's cwd and the list's filter.
+            let workspace = AgentDefaults.directory(for: entry.id)
             let transport = ACPProcessTransport(command: command, cwd: workspace)
+            let binary = command[0]
             built.append(ACPProvider(id: entry.id,
                                      client: ACPClient(transport: transport),
                                      cwd: workspace,
-                                     start: { try transport.start() }))
+                                     start: { try transport.start() },
+                                     ledger: ledger,
+                                     open: { entry.openLine(session: $0, binary: binary) }))
         }
         let spawnable = Set(built.map(\.id))
 

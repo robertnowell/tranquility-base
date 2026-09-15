@@ -79,16 +79,22 @@ public actor ACPClient {
     /// a client that died on the first one would work only for the agents that
     /// happen to be quiet.
     private func receive(_ line: Data) {
-        guard let message = ACPWire.Message(line: line) else { return }
+        guard var message = ACPWire.Message(line: line) else { return }
         if let id = message.id, message.method == nil {
-            // A response to something we asked.
+            // A response to something we asked, stamped with how much of the
+            // inbound stream precedes it (see `Message.sequence`).
+            message.sequence = delivered
             pending.removeValue(forKey: id)?.resume(returning: message)
             return
         }
         // A notification, or a request from the agent. Both belong to the
         // session's owner, not to this layer.
+        delivered += 1
+        message.sequence = delivered
         inboundContinuation?.yield(message)
     }
+    /// Notifications and agent requests yielded so far.
+    private var delivered = 0
 
     /// The pipe closed with requests outstanding. Every one of them fails with
     /// its own reason rather than hanging until its timeout, because "the
@@ -230,7 +236,9 @@ public actor ACPClient {
             "sessionId": session,
             "prompt": [["type": "text", "text": text]],
         ])
-        return message.result(ACPWire.PromptResult.self) ?? ACPWire.PromptResult()
+        var result = message.result(ACPWire.PromptResult.self) ?? ACPWire.PromptResult()
+        result.sequence = message.sequence
+        return result
     }
 
     /// Sessions the agent already knows about.
@@ -240,9 +248,25 @@ public actor ACPClient {
     /// that existed before the client attached is invisible for ever. That
     /// exact defect shipped once already, on 14 Sep, against local OpenCode
     /// over HTTP; the conformance suite caught it here before it could.
-    public func listSessions() async throws -> [ACPWire.SessionList.Item] {
-        let message = try await request("session/list")
+    ///
+    /// `cwd` is a filter, and the agent applies it: measured 15 Sep against
+    /// `opencode acp`, a process in one directory asked for another's
+    /// sessions got that other directory's sessions. Passed explicitly so the
+    /// list is the workspace's regardless of where the process happens to run.
+    public func listSessions(cwd: String? = nil) async throws -> [ACPWire.SessionList.Item] {
+        let message = try await request("session/list", params: cwd.map { ["cwd": $0] } ?? [:])
         return message.result(ACPWire.SessionList.self)?.sessions ?? []
+    }
+
+    /// `session/load`: bring a session this process has only LISTED back into
+    /// it. A listed session is not a loaded one: measured 15 Sep, a prompt to
+    /// a listed-but-unloaded id is refused with "session not found". The agent
+    /// replays the session's history as `session/update` notifications before
+    /// answering, which the caller has to expect and must not announce.
+    public func loadSession(_ session: String, cwd: String) async throws {
+        try await request("session/load", params: [
+            "sessionId": session, "cwd": cwd, "mcpServers": [],
+        ])
     }
 
     public func cancel(session: String) async throws {
