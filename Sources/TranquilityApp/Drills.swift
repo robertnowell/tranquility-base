@@ -1316,23 +1316,24 @@ extension StatusHUD {
             // questions are asked through one function precisely so this
             // cannot come apart.
             ("amberRowIsStillLive", SessionRow.isLive(row("amber", .fault))),
-            // Blue joined amber on 24 Aug, same reason and not a second
-            // one: work in hand is not an unread turn, so the tap is the
-            // door rather than the voice.
-            ("workingRowGoesToAgent",
+            // Ruled 15 Sep: only amber goes straight to the agent. Blue and
+            // quiet open the card when they have a turn to read, and take
+            // the door only when nothing is recorded, exactly as green does.
+            ("workingRowWithATurnOpensTheCard",
+             SessionRow.action(for: SessionRow(id: "working", name: "working", aux: "working",
+                                               lamp: .working, read: .opened)) == .announce),
+            ("workingRowWithNothingRecordedTakesTheDoor",
              SessionRow.action(for: row("working", .working)) == .goToAgent),
             ("workingRowIsStillLive", SessionRow.isLive(row("working", .working))),
-            // ...and the dark lamp closed the rule the same day. Announce
-            // on a quiet row read nothing and returned to the grid, so the
-            // tap was a silent no-op — amber's 18 Aug complaint, surviving
-            // where it was hardest to see.
-            ("quietRowGoesToAgent",
-             SessionRow.action(for: row("quiet", .running)) == .goToAgent),
+            ("quietRowWithATurnOpensTheCard",
+             SessionRow.action(for: SessionRow(id: "quiet", name: "quiet", aux: "quiet",
+                                               lamp: .running, read: .opened)) == .announce),
             ("quietRowIsStillLive", SessionRow.isLive(row("quiet", .running))),
-            // Green is the only lamp left that speaks.
-            ("greenIsTheOnlyLampThatAnnounces",
+            // Amber is the only lamp that never speaks.
+            ("onlyAmberGoesStraightToTheAgent",
              SessionRow.action(for: liveGreen) == .announce
-             && SessionRow.action(for: row("quiet", .running)) != .announce),
+             && SessionRow.action(for: SessionRow(id: "amber2", name: "amber2", aux: "amber2",
+                                                  lamp: .fault, read: .opened)) == .goToAgent),
             ("revivableRowRevives",
              SessionRow.action(for: row("dead", unlit, revivable: true)) == .revive),
             ("unprovenRowDoesNothing",
