@@ -1404,6 +1404,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         hud.onShowRecentAudio = { [weak self] in self?.showRecentAudio() }
+        // Where this Mac stands with credits, as one amber line on the grid
+        // that opens Setup. The summariser keeps the standing; the panel only
+        // shows it. Ruled 15 Sep after a floor summary read as a broken prompt.
+        CreditStanding.observe { [weak self] standing in
+            DispatchQueue.main.async { self?.hud.setCreditStanding(standing.line) }
+        }
         // One door per pane. The panel asks for a tab; the host assembles that
         // tab's data and shows it. Nothing re-renders a pane it has not fed.
         hud.onOpenSettingsTab = { [weak self] tab in

@@ -102,6 +102,7 @@ public enum ManagedCredits {
             }
             let outbox = try ManagedSummaryOutbox(url: outboxURL)
             log("credits: managed summaries at \(gatewayURL.host ?? "?") as \(signer.storage)")
+            CreditStanding.set(.onCredits)
             // Managed first. A pasted key follows ONLY for a Mac the hub says
             // is not on credits yet (see SummarizerChain); a failure of the
             // credits path itself lands on the floor.

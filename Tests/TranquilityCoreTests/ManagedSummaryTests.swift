@@ -124,8 +124,9 @@ final class ManagedSummaryTests: XCTestCase {
         let calls = await counter.calls; XCTAssertEqual(calls, 0)
     }
 
-    /// The one exception to never-BYOK: a Mac the hub says is not on credits
-    /// at all. Paired before key binding, it has no grant to protect, and the
+    /// The exceptions to never-BYOK: a Mac the hub says is not on credits at
+    /// all, and a Mac whose grant is spent (ruled 15 Sep: out of credits is a
+    /// state with a door, shown in amber, not a fault that hides the key). Paired before key binding, it has no grant to protect, and the
     /// key the person pasted is the right next thing. The failure stays
     /// visible so the app can say "connect again".
     func testAMacNotYetOnCreditsKeepsItsOwnKey() async throws {
@@ -135,7 +136,7 @@ final class ManagedSummaryTests: XCTestCase {
                 throw ManagedSummaryFailure.refused(code: code, operationId: nil)
             }
         }
-        for code in ["rebinding_required", "not_connected"] {
+        for code in ["rebinding_required", "not_connected", "insufficient_credit"] {
             let counter = Counter()
             let chain = SummarizerChain(providers: [ManagedSummaryProvider(client: try client(NotEnrolled(code: code), name: code)), Direct(counter: counter)])
             let summary = await chain.summarize(request)
