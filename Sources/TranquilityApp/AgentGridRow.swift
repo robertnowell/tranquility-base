@@ -19,11 +19,15 @@ import TranquilityCore
 /// in to something TB cannot then use is worse than no tile.
 final class AgentGridRow: NSView {
 
-    /// Three across. Four agents today, so the fourth wraps and the grid has
-    /// room to grow without relayout.
-    static let columns = 3
-    static let tileHeight: CGFloat = 72
-    static let markSize: CGFloat = 34
+    /// **Four across, so today's four agents are one row.**
+    ///
+    /// Three columns wrapped the fourth onto a second row and doubled the
+    /// grid's height, which pushed LAUNCH and DIRECTORY off the bottom of the
+    /// panel. Robert, with the screenshot: *"the UI is getting cut off at the
+    /// bottom."*
+    static let columns = 4
+    static let tileHeight: CGFloat = 64
+    static let markSize: CGFloat = 26
 
     private var tiles: [String: NSButton] = [:]
     private var agents: [AgentRoster.Agent] = []
@@ -57,6 +61,9 @@ final class AgentGridRow: NSView {
             if let png = AgentMarks.png(agent.id), let image = NSImage(data: png) {
                 image.size = NSSize(width: Self.markSize, height: Self.markSize)
                 button.image = image
+                // Without this the cell draws the mark at its own pixel size
+                // and the tile grows past the height it was given.
+                button.imageScaling = .scaleProportionallyDown
             }
             addSubview(button)
             tiles[agent.id] = button
@@ -71,11 +78,20 @@ final class AgentGridRow: NSView {
                 button.topAnchor.constraint(equalTo: topAnchor,
                                             constant: row * Self.tileHeight),
             ])
+            // **The last row pins the bottom, so this view's height is DERIVED
+            // rather than asserted.** It used to carry a constant of
+            // `rows * tileHeight` while each tile laid out taller than that
+            // constant, so the view reported one height and drew another and
+            // the panel sized itself to the lie. A view whose height is a
+            // claim can disagree with itself; one whose height comes from its
+            // own content cannot.
+            if row == CGFloat(rows - 1) {
+                button.bottomAnchor.constraint(equalTo: bottomAnchor).isActive = true
+            }
         }
 
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: width),
-            heightAnchor.constraint(equalToConstant: CGFloat(rows) * Self.tileHeight),
         ])
         paint()
     }
