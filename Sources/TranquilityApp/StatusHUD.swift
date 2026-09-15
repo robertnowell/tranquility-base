@@ -575,10 +575,28 @@ final class StatusHUD: NSObject {
         render()
     }
 
+    /// Whatever is on the typed line becomes a chip, now: the same chip a
+    /// pasted sentence makes, staged after any files already there, so it
+    /// rides the next send after the attachments and before the words
+    /// (ruled 15 Sep: "when the mic is used, the typed text should be sent
+    /// the same, right after the attachments, before the user message").
+    /// Called when the microphone opens and again when the capture closes,
+    /// so words typed while talking ride too. Nothing on the line is a no-op.
+    @discardableResult
+    func flushTypedLineIntoTray() -> Bool {
+        let text = trayRow.composedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        guard onItemsStaged?([.text(text)], .typed) == true else { return false }
+        trayRow.compose.stringValue = ""
+        Permissions.log("typed line: \(text.count) chars staged to ride the dictation")
+        return true
+    }
+
     func showListening(level: @escaping () -> Float) {
         let prior = state
         guard transition(to: .listening(eventId: currentEventId), because: "recording started")
         else { return }
+        flushTypedLineIntoTray()
         rememberCaptureCard(from: prior)
         // An armed face that upgraded no longer has anything to revert to.
         stashBeforeArming = nil
