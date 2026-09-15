@@ -104,6 +104,15 @@ public enum DeepLink {
         case hear(session: String?)
         case reply(session: String?)
         case show
+        /// "Start a session", the same verb as the panel's button and the
+        /// status menu's item, with the agent Settings has selected. Carries
+        /// no parameters for the reason `connect` gives: a link that could
+        /// name an agent or a directory would be the app taking a launch
+        /// target from whatever page opened it. It exists because the button
+        /// and the menu are the only two doors to a launch, and neither is
+        /// reachable from a script, a drill or the hub without synthetic input,
+        /// which collides with a live dictation (ruled 11 Sep).
+        case new
         /// "Start connecting this Mac to the hub."
         ///
         /// It carries NO parameters, and that is the design rather than an
@@ -138,6 +147,7 @@ public enum DeepLink {
         case "reply":   return .reply(session: value("session"))
         case "show":    return .show
         case "connect": return .connect
+        case "new":     return .new
         case let other: return .unknown(other)
         }
     }
