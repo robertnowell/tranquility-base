@@ -597,7 +597,6 @@ final class StatusHUD: NSObject {
         let prior = state
         guard transition(to: .listening(eventId: currentEventId), because: "recording started")
         else { return }
-        flushTypedLineIntoTray()
         rememberCaptureCard(from: prior)
         // An armed face that upgraded no longer has anything to revert to.
         stashBeforeArming = nil
