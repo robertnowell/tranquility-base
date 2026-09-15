@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1210</title>
+      <sparkle:version>1210</sparkle:version>
+      <sparkle:shortVersionString>0.3.1210</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Tue, 15 Sep 2026 17:16:30 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1210-81c6e12ce/TranquilityBase-0.3.1210.dmg" type="application/octet-stream" length="15422687" sparkle:edSignature="Gh6jAWZK8a5P5pYheFoKbTjw7KwE04D8RYkVLqqvzoeWkXMCLNkySJxPiyS5dvtcG/fa47RA9TU6scT1+wKEDg==" />
+    </item>
+    <item>
       <title>Version 0.3.1209</title>
       <sparkle:version>1209</sparkle:version>
       <sparkle:shortVersionString>0.3.1209</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Tue, 15 Sep 2026 00:39:49 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1201-685c9f047/TranquilityBase-0.3.1201.dmg" type="application/octet-stream" length="15381229" sparkle:edSignature="AiJNW8QtCl/tYFoNShFBNKzKnm4Jk89wjaZftgbXP5ieu6Lk6HygcjuUM4YSgPWnehyJbFt0z2cNcklpkZ2oBQ==" />
     </item>
-    <item>
-      <title>Version 0.3.1200</title>
-      <sparkle:version>1200</sparkle:version>
-      <sparkle:shortVersionString>0.3.1200</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Tue, 15 Sep 2026 00:17:14 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1200-7a7768bfc/TranquilityBase-0.3.1200.dmg" type="application/octet-stream" length="15382029" sparkle:edSignature="oF1Au1vI0YRjXPE02lpEtGtYVeToNEg/aT63uyH3YAhXbGfEY6ekav56EdIVP8LljsS5/Xkuy5bBfcgQwHoxBw==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: AgTxbteRluFl3sfaxPtJpm2fGw3rrRG44hbgd8codZeBNZ5X9q2pdjF8fcd+b0jc/W8GE3VVdKLwOIpBa+UoDA==
+edSignature: e16pEsaKmFrdPydwLbC2ltbBWe3EcG3ax8hfp7dpmG2/MCflJoPrtC67SDZHrsXSbWKWeGn0j1mWp4T+iGI7CQ==
 length: 6457
 -->
