@@ -2644,11 +2644,11 @@ final class StatusHUD: NSObject {
             if let target = replyTargetForDrop?() {
                 let staged = stagedFragments?(target.sessionId) ?? []
                 trayRow.apply(staged)
-                // The row shows with chips on any conversational face, as it
-                // always did, and EMPTY on a card or a capture (ruled 15 Sep,
-                // mockup 2): "no attachments" and the Attach door, where the
-                // chip will land. Never empty on the grid, which names no one.
-                trayShown = !(staged.isEmpty && !(state.isCardOnStage || state.isCapturingAudio))
+                // The tray shows for its chips on any conversational face, as
+                // it always did, and for the type-or-attach row while the
+                // card is selected or the line has words (ruled 15 Sep,
+                // second pass). Never for nothing.
+                trayShown = !staged.isEmpty || trayRow.isComposeRowShown
                 // Something to send: Send stands in for Controls (ruled 15
                 // Sep), on a card as well as during a capture.
                 let hasWords = !trayRow.composedText.trimmingCharacters(in: .whitespaces).isEmpty
@@ -3515,8 +3515,8 @@ final class StatusHUD: NSObject {
         panel.makeKeyAndOrderFront(nil)
         Permissions.log("paste: armed for \(target.sessionId.prefix(8)) via \(door)")
         Track.record("paste_armed", ["via": .token(door)])
-        // The typed line takes the keys (ruled 15 Sep). It is on the tray
-        // row, which render() shows on every card that can take a reply.
+        // The type-or-attach row appears and takes the keys (ruled 15 Sep):
+        // selecting the card is what shows it.
         trayRow.setComposing(true)
         render()
         let took = panel.makeFirstResponder(trayRow.compose)
@@ -3558,17 +3558,8 @@ final class StatusHUD: NSObject {
             render(); return
         }
         pasteNote = nil
-        // One rule (15 Sep: "paste sometimes goes as an attachment and
-        // sometimes to the text field"): words paste into the typed line
-        // while it is taking keys, as they would in any message box; a file
-        // or an image is a chip, always.
-        if trayRow.compose.currentEditor() != nil,
-           reading.items.count == 1, case .text(let words) = reading.items[0] {
-            trayRow.compose.currentEditor()?.insertText(words)
-            Permissions.log("paste: \(words.count) chars into the typed line")
-            Track.record("pasted", ["accepted": true, "into": "typed_line"])
-            render(); return
-        }
+        // One rule (re-ruled 15 Sep, second pass): a paste is an attachment,
+        // words included. The typed line is for typing only.
         _ = onItemsStaged?(reading.items, .paste)
         Permissions.log("paste: \(reading.items.count) item(s) for \(target.sessionId.prefix(8))")
         render()
