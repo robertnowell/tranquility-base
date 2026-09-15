@@ -254,6 +254,25 @@ public extension GridAssembler {
             $0[$1.key] = $1.value.harness
         }
 
+        // **A provider owns its agents' rows.** (#459, 15 Sep 2026.)
+        //
+        // Driving a remote agent writes a record into the LOCAL store under
+        // the agent's addressable id: a reply is a `waiting` turn, a sighting
+        // is a `known` session. So the better an agent was integrated, the more
+        // certainly a local band claimed its id first and drew a husk — no
+        // harness, a terminal door onto a pane this Mac never opened, and an
+        // unlit lamp because the liveness probe finds no local process, which
+        // is correct and beside the point. Measured on the real panel: the one
+        // crobot task drawn as `harness=nil door=terminal`, its tap opening a
+        // tmux session that exited on arrival.
+        //
+        // The remote row is the true one — it has the provider's own title,
+        // state, page and lamp — so the local bands skip any id a provider
+        // owns, and band 5 draws it. `placed` is NOT pre-seeded with these:
+        // band 5 itself checks `!placed.contains`, and seeding would make it
+        // skip the very rows this exists to rescue.
+        let providerOwned = Set(input.remote.agents.map(\.id))
+
         // BAND 1: sessions with an unanswered turn.
         //
         // **An unanswered turn does not keep a dead process lit** (fixed 14 Sep
@@ -277,7 +296,9 @@ public extension GridAssembler {
         // should grey the whole panel. `smoothedLive` has already absorbed the
         // transient misses by the time the rows are built.
         let livenessKnown = !input.liveById.isEmpty
-        var rows = input.waiting.map { (event: WaitingSession) -> SessionRow in
+        var rows = input.waiting
+            .filter { !providerOwned.contains($0.sessionId) }
+            .map { (event: WaitingSession) -> SessionRow in
             let evidence = event.transcriptPath.flatMap {
                 input.evidence($0, input.boundaries[event.sessionId])
             }
@@ -349,8 +370,14 @@ public extension GridAssembler {
         // latestId DESC — so the band is recency-ordered like the one above it,
         // never Dictionary.values hash order, which reshuffled between
         // refreshes.
-        var placed = Set(input.waiting.map(\.sessionId))
-        for stored in input.known where !placed.contains(stored.sessionId) {
+        // Seeded from the DRAWN waiting rows, not the raw input: a
+        // provider-owned id was filtered out of band 1 above, and if it stayed
+        // in `placed` band 5 would skip the real remote row as already placed —
+        // which is the exact husk this fix removes, reappearing one band later.
+        var placed = Set(input.waiting.map(\.sessionId)
+            .filter { !providerOwned.contains($0) })
+        for stored in input.known
+        where !placed.contains(stored.sessionId) && !providerOwned.contains(stored.sessionId) {
             guard let live = input.liveById[stored.sessionId] else { continue }
             // Ruled 12 Aug: headless is headless whether it is running or not.
             // Liveness used to hide these by accident — a cron job is gone
@@ -379,7 +406,8 @@ public extension GridAssembler {
 
         // BAND 3: live sessions with no stored events yet. Nothing to rank them
         // by, so they close the live half of the grid.
-        for live in input.liveById.values where !placed.contains(live.sessionId) {
+        for live in input.liveById.values
+        where !placed.contains(live.sessionId) && !providerOwned.contains(live.sessionId) {
             let path = live.cwd.map {
                 TranscriptTitles.defaultPath(cwd: $0, sessionId: live.sessionId)
             }
@@ -414,7 +442,8 @@ public extension GridAssembler {
         // and two routes to one answer is how they start disagreeing. Disk
         // enumerates only the population the process list cannot: the dead.
         for found in input.discovered
-        where !placed.contains(found.sessionId) && found.liveness != .live {
+        where !placed.contains(found.sessionId) && found.liveness != .live
+              && !providerOwned.contains(found.sessionId) {
             placed.insert(found.sessionId)
             // One conversation, one row (ruled 10 Sep). A session Claude Code
             // continued under a new id (the left arrow does this) is the same

@@ -345,3 +345,49 @@ final class GridRowsTests: XCTestCase {
         XCTAssertEqual(verdict.harnessById[B], CodexAdapter().id)
     }
 }
+
+// MARK: - A provider owns its agents' rows (#459, 15 Sep 2026)
+
+extension GridRowsTests {
+
+    /// **Driving a remote agent must not make its row disappear.** Sending to
+    /// it wrote a local `waiting` record under its addressable id; band 1 used
+    /// to claim that id and draw a husk — no harness, a terminal door, an
+    /// unlit lamp — while band 5 skipped the real remote row as already placed.
+    /// Measured on Robert's panel: the crobot task drawn twice, the tap opening
+    /// a tmux pane that exited on arrival.
+    func testAProviderOwnsItsRowEvenWhenDrivingItWroteALocalRecord() {
+        let id = AgentSession.id("ui-task", provider: "crobot")
+        var agent = AgentSession.of("ui-task", provider: "crobot", state: .completed)
+        agent.title = "the real one"
+        agent.repository = "Coframe/crobot"
+        agent.url = URL(string: "https://crobot.example/task/ui-task")
+
+        // The husk the drive left behind: a waiting turn AND a known session,
+        // both under the agent's addressable id.
+        var husk = WaitingSession(sessionId: id, latestId: 1, createdAtMs: 0, hookEvent: .stop)
+        husk.heardThrough = nil
+
+        let rows = GridAssembler.rows(inputs(
+            waiting: [husk], known: [husk], live: [id: live(id)],
+            remote: .init(agents: [agent]))).rows
+
+        let forID = rows.filter { $0.id == id }
+        XCTAssertEqual(forID.count, 1, "the agent must have exactly one row, not a husk plus a real one")
+        let row = forID.first
+        XCTAssertEqual(row?.harness, "crobot", "the row is the provider's, so it names the provider")
+        XCTAssertEqual(row?.name, "the real one", "with the provider's own title, not a short id")
+        XCTAssertEqual(row?.door, .page(URL(string: "https://crobot.example/task/ui-task")!),
+                       "and its door is the page, never a terminal onto a pane we do not own")
+        XCTAssertNotEqual(row?.lamp, .unlit, "a finished cloud turn is green, not a dead husk")
+    }
+
+    /// The guard is narrow: a purely local session that a provider does NOT
+    /// own is untouched, so this cannot swallow ordinary rows.
+    func testALocalSessionAProviderDoesNotOwnIsUnaffected() {
+        let verdict = GridAssembler.rows(inputs(
+            waiting: [waiting(A)], live: [A: live(A)],
+            remote: .init(agents: [AgentSession.of("elsewhere", provider: "crobot")])))
+        XCTAssertTrue(verdict.rows.contains { $0.id == A }, "the local row is still drawn")
+    }
+}
