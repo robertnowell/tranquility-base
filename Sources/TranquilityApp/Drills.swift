@@ -375,8 +375,8 @@ extension StatusHUD {
     ///
     /// Two properties carry it. The verb has to match the row — offering
     /// REVIVE on a session that is still running is how the app crashed twice
-    /// — and the filter has to be a plain predictable substring, because a
-    /// filter you cannot predict is one you stop trusting.
+    /// — and searching must preserve those actions. Ranked filtering and
+    /// asynchronous completion are exercised by PastAgentsSearchDrill.
     func pastAgentsDrill() {
         func item(_ id: String, _ name: String, live: Bool, cwd: String)
             -> PastAgentsList.Item {
