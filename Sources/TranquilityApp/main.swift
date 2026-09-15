@@ -1114,8 +1114,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Track.record("chip_removed", ["agent_id": Track.hash(session)])
             self?.coordinator?.attachments.unstage(fragment, session: session)
         }
+        // The Attach door (ruled 15 Sep). A picker needs the app in front
+        // for the moment it is open; the panel stays non-activating and the
+        // terminal gets the keyboard back when the sheet closes. What was
+        // picked is staged exactly as a drop is.
+        hud.onAttach = { [weak self] in
+            guard let self else { return }
+            let picker = NSOpenPanel()
+            picker.canChooseFiles = true
+            picker.canChooseDirectories = false
+            picker.allowsMultipleSelection = true
+            picker.prompt = StateLegend.attachTitle
+            picker.message = "Send with your reply"
+            NSApp.activate(ignoringOtherApps: true)
+            picker.begin { [weak self] response in
+                guard let self else { return }
+                guard response == .OK, !picker.urls.isEmpty else {
+                    Permissions.log("picker: cancelled")
+                    Track.record("files_picked", ["count": .int(0), "accepted": false, "staged": 0])
+                    return
+                }
+                let items = picker.urls.map { DroppedItem.file($0.path) }
+                let accepted = hud.onItemsStaged?(items, .picker) ?? false
+                if accepted { hud.render() }
+            }
+        }
         hud.onItemsStaged = { [weak self] items, via in
-            let event = via == .drop ? "files_dropped" : "pasted"
+            let event: String = {
+                switch via {
+                case .drop: return "files_dropped"
+                case .paste: return "pasted"
+                case .picker: return "files_picked"
+                }
+            }()
             guard let self, let coordinator, let target = dropTarget else {
                 // Refused rather than swallowed. The overlay never appears
                 // without a target, so this is the race where the last

@@ -642,6 +642,13 @@ enum StateLegend {
     // hidden for exactly as long as the microphone is open.
     static let recordTitle = "Record"
     static let sendTitle = "Send"
+    // The tray row (ruled 15 Sep, mockup 2): shown on every card that can
+    // take a reply, "no attachments" at the left while empty, Attach at the
+    // right. Attach opens a file picker; what you pick becomes a chip, the
+    // same chip a paste or a drop makes.
+    static let attachTitle = "Attach"
+    static let noAttachmentsTitle = "no attachments"
+    static let attachTip = "Pick a file to send with your reply. Or \u{2318}V to paste, or drop a file on the card."
     static let recordTip = "Click, talk, then click Send. Or hold \u{2325} Option."
     static let sendTip = "Send what you said. Or tap \u{2325} Option."
 

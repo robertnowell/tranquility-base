@@ -386,6 +386,10 @@ extension StatusHUD {
         stripRule.heightAnchor.constraint(equalToConstant: 1).isActive = true
 
         trayRow = TrayRowView()
+        trayRow.onAttach = { [weak self] in
+            Track.record("door_opened", ["door": "attach"])
+            self?.onAttach?()
+        }
         trayRow.onRemove = { [weak self] path in
             guard let self, let session = currentTarget?.sessionId else { return }
             onUnstage?(session, path)

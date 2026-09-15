@@ -307,6 +307,9 @@ final class StatusHUD: NSObject {
     var onNextDoor: (() -> Void)?
     var onSpeakDoor: (() -> Void)?
     var onHearMoreDoor: (() -> Void)?
+    /// The tray row's Attach door: the app opens the picker and stages what
+    /// was picked through `onItemsStaged`, the same way a drop is staged.
+    var onAttach: (() -> Void)?
 
     // MARK: - Public surface
 
@@ -2598,7 +2601,11 @@ final class StatusHUD: NSObject {
             if let target = replyTargetForDrop?() {
                 let staged = stagedFragments?(target.sessionId) ?? []
                 trayRow.apply(staged)
-                trayRow.isHidden = staged.isEmpty
+                // The row shows with chips on any conversational face, as it
+                // always did, and EMPTY on a card or a capture (ruled 15 Sep,
+                // mockup 2): "no attachments" and the Attach door, where the
+                // chip will land. Never empty on the grid, which names no one.
+                trayRow.isHidden = staged.isEmpty && !(state.isCardOnStage || state.isCapturingAudio)
             } else {
                 trayRow.apply([])
             }

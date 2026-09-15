@@ -21,6 +21,8 @@ enum DroppedItem {
 /// only the receipt line and the analytics event say which door they used.
 enum StagingSource: String {
     case drop, paste
+    /// The Attach door on the tray row (ruled 15 Sep): a file picker.
+    case picker
 }
 
 /// One pasteboard, read into items, with the reason when it could not be.
@@ -178,11 +180,21 @@ final class TrayRowView: NSStackView {
     /// Per-fragment, never clear-all (a cross that took entries you did not
     /// point at is the surprise this whole feature exists to avoid).
     var onRemove: ((String) -> Void)?
+    /// The Attach door was clicked (ruled 15 Sep, mockup 2): the row is
+    /// where a chip lands, so the button that makes one sits on it, at the
+    /// right end, with "no attachments" at the left while it is empty.
+    var onAttach: (() -> Void)?
 
     /// What is drawn right now, so `apply` can skip identical repaints —
     /// render() runs on every tick and rebuilding subviews under the pointer
     /// would kill the hover state on the ✕ you are reaching for.
     private(set) var fragments: [String] = []
+
+    /// The header line: the empty state and the door. Persistent; the chip
+    /// rows are rebuilt under it.
+    private let header = NSView()
+    private let empty = NSTextField(labelWithString: "")
+    let attach = DoorLabel(labelWithString: "")
 
     init() {
         super.init(frame: .zero)
@@ -190,13 +202,39 @@ final class TrayRowView: NSStackView {
         alignment = .leading
         spacing = 3
         translatesAutoresizingMaskIntoConstraints = false
+
+        header.translatesAutoresizingMaskIntoConstraints = false
+        empty.attributedStringValue = ChromeType.line(
+            StateLegend.noAttachmentsTitle, font: ChromeType.mono(ofSize: 10.5, weight: .regular),
+            color: StateLegend.Palette.faint)
+        empty.translatesAutoresizingMaskIntoConstraints = false
+        attach.attributedStringValue = StateLegend.BottomLine.quiet(StateLegend.attachTitle)
+        attach.isADoor = true
+        attach.toolTip = StateLegend.attachTip
+        attach.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(attachTapped)))
+        attach.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(empty); header.addSubview(attach)
+        NSLayoutConstraint.activate([
+            header.widthAnchor.constraint(equalToConstant: 348),
+            header.heightAnchor.constraint(equalToConstant: 16),
+            empty.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            empty.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            attach.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            attach.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+        ])
+        addArrangedSubview(header)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func attachTapped() { onAttach?() }
 
     func apply(_ next: [String]) {
         guard next != fragments else { return }
         fragments = next
-        removeAllArrangedSubviews()
+        for view in arrangedSubviews where view !== header {
+            removeArrangedSubview(view); view.removeFromSuperview()
+        }
+        empty.isHidden = !next.isEmpty
         for fragment in next {
             let row = ChipRow(fragment: fragment)
             row.onRemove = { [weak self] in self?.onRemove?(fragment) }
@@ -210,10 +248,11 @@ final class TrayRowView: NSStackView {
         arrangedSubviews.compactMap { ($0 as? ChipRow)?.displayName }
     }
 
-    /// The stack's own count, not the rows'. A view removed from the tree but
-    /// left in the arrangement is invisible to `displayedNamesForTesting` and
-    /// visible here, which is the difference the teardown fix is about.
-    var arrangedSubviewCountForTesting: Int { arrangedSubviews.count }
+    /// The stack's own count of CHIP rows, not counting the header. A view
+    /// removed from the tree but left in the arrangement is invisible to
+    /// `displayedNamesForTesting` and visible here, which is the difference
+    /// the teardown fix is about.
+    var arrangedSubviewCountForTesting: Int { arrangedSubviews.filter { $0 !== header }.count }
 
     var removeButtonsForTesting: [ConsoleButton] {
         arrangedSubviews.compactMap { ($0 as? ChipRow)?.removeButton }
