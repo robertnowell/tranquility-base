@@ -1234,8 +1234,16 @@ extension StatusHUD {
     func closedRowsDrill() {
         func row(_ id: String, _ lamp: Lamp,
                  revivable: Bool = false) -> SessionRow {
-            SessionRow(id: id, name: id, aux: id,
-                                   lamp: lamp, revivable: revivable)
+            // A green row carries an unread turn, because that is what a green
+            // LOCAL row always is: band 1 stamps `.unread` or `.opened` and
+            // nothing else builds one. #458 made announce require that turn (a
+            // green remote row that never spoke does nothing instead of reading
+            // an empty store), and updated the unit fixtures but not this
+            // drill — so `liveRowAnnounces` went red on the live panel while
+            // `swift test` stayed green. Rule 7, again.
+            SessionRow(id: id, name: id, aux: id, lamp: lamp,
+                       revivable: revivable,
+                       read: lamp == .ready ? .unread : .none)
         }
         // A green LOCAL row always carries its turn: band 1 stamps `.unread`
         // or `.opened` and nothing else builds one. Since #458 a green row
