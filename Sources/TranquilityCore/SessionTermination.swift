@@ -157,15 +157,37 @@ public enum SessionTermination {
     /// for one harness is a trap for every other, and the compiler is the
     /// only reviewer that reads every call site. Callers say
     /// `KnownHarnesses.adapter(for: harness).processCommandFragment`.
+    /// Whether this instance may end a process it did not make.
+    ///
+    /// A TEST build shares the real registry and the real process table
+    /// with the real app, and isolates only its data directory and its tmux
+    /// socket. So it sees every real agent and can reach none of their
+    /// panes, and on 15 Sep it read that as "hand-started", ended two live
+    /// agents and resumed them where the real app could not follow. The
+    /// test channel therefore ends only what its own ledger says it made.
+    /// Production and development share one ledger and one socket, and are
+    /// not narrowed.
+    public nonisolated(unsafe) static var mayEndForeignProcesses: @Sendable () -> Bool = {
+        AppIdentity.channel != .test
+    }
+
     public static func end(
         pid: Int,
         named name: String,
         expectedTty: String? = nil,
         expectedCommand: String,
         control: some ProcessControlling = LiveProcessControl(),
-        policy: Policy = .default
+        policy: Policy = .default,
+        ledger: any SessionOwnershipStore = FileSessionOwnershipStore.shared
     ) -> Outcome {
         let label = "\(name) (pid \(pid))"
+
+        if !mayEndForeignProcesses(), !ledger.all().contains(where: { $0.pid == pid }) {
+            let why = "this is a test build and pid \(pid) is not in its own ledger; a test "
+                + "build ends only agents it launched"
+            trace?("terminate: REFUSED \(label): \(why)")
+            return .refused(why)
+        }
 
         guard let identity = control.identity(of: pid) else {
             trace?("terminate: \(label) was already gone")
