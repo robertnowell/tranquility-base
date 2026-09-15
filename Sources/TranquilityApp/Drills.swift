@@ -1159,6 +1159,13 @@ extension StatusHUD {
         // on VOICES proves nothing about AGENTS.
         showSettingsTab(.agents)
         panel?.contentView?.layoutSubtreeIfNeeded()
+        // The real path resizes on every render; this drill switches tabs
+        // directly and so has to do the same, or it measures a state the app
+        // never actually shows. Not a concession: the assertion below is about
+        // whether the panel CAN hold the agents tab, and that question is only
+        // meaningful once the panel has been asked to.
+        if let panel { resizeToFit(panel) }
+        panel?.contentView?.layoutSubtreeIfNeeded()
         func findGrid(_ view: NSView) -> AgentGridRow? {
             if let grid = view as? AgentGridRow { return grid }
             for sub in view.subviews { if let found = findGrid(sub) { return found } }
@@ -1171,7 +1178,46 @@ extension StatusHUD {
             grid.subviews.contains { !$0.isHidden && $0.frame.width > 0 }
         } ?? false
 
+        // **Does the pane FIT?**
+        //
+        // The grid shipped visible and too tall: each tile laid out around
+        // 145pt against a declared 64, so the view reported one height and
+        // drew another, the panel sized itself to the report, and LAUNCH and
+        // DIRECTORY fell off the bottom. Every other assertion in this drill
+        // passed while that was true, because none of them asked whether the
+        // content fit the window it was in.
+        // Measured against the height the layout DECIDED on, not against the
+        // live frame: `resizeToFit` animates, so `panel.frame.height` a moment
+        // after it runs is the old size mid-flight. The first version of this
+        // compared the two and read 317 of content against a 158pt frame that
+        // was already on its way to 317.
+        //
+        // Both halves matter. The panel must be sized to hold the content, AND
+        // that size must fit the screen — a pane taller than the display is
+        // the one case where being correctly sized still clips.
+        let stackHeight = contentStack?.fittingSize.height ?? 0
+        let decided = intendedHeight ?? panel?.frame.height ?? 0
+        let screenHeight = NSScreen.main?.visibleFrame.height ?? 0
+        let paneFits = stackHeight > 0 && decided > 0
+            && stackHeight <= decided + 1
+            && decided <= screenHeight
+        // And the grid must not be taller than the rows it says it has.
+        let claimed = onScreen.map {
+            CGFloat(($0.subviews.count + AgentGridRow.columns - 1) / AgentGridRow.columns)
+                * AgentGridRow.tileHeight
+        } ?? 0
+        let gridIsTheHeightItClaims = onScreen.map {
+            abs($0.frame.height - claimed) <= 2
+        } ?? false
+
+        Permissions.log("agentGrid geometry: stack=\(stackHeight) "
+            + "decided=\(decided) "
+            + "grid=\(onScreen?.frame.height ?? -1) claimed=\(claimed) "
+            + "screen=\(NSScreen.main?.visibleFrame.height ?? -1)")
+
         SelfTest.report("agentGrid", [
+            ("theSettingsPaneFitsItsPanel", paneFits),
+            ("gridIsTheHeightItClaims", gridIsTheHeightItClaims),
             ("gridIsInThePanel", gridIsInThePanel),
             ("gridIsVisibleOnTheAgentsTab", gridIsVisible),
             ("itsTilesAreDrawn", tilesAreVisible),
