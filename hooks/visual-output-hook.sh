@@ -101,9 +101,45 @@ else
   WHOSE="Never write a page into another agent's directory."
 fi
 
-python3 - "$DIR" "$WHOSE" "${AGENT:-<your session id>}" <<'PYCTX' 2>/dev/null || true
+# WHAT THE OTHER AGENTS ARE DOING, in the session that is starting.
+#
+# The hub has been readable since 14 Sep: four endpoints and a command, `hq`.
+# Robert, the day after: "No one's typing hq ask into the terminal. Maybe
+# agents will, but how is it going to be discoverable for your future agents?"
+#
+# This is the answer, and it follows the rule this file learned the hard way
+# about directories: NAME IT, DO NOT DESCRIBE HOW TO DERIVE IT. A session is
+# not told that a searchable archive exists and left to find the verb. It is
+# handed the three most recent agents and what they last said, and then the
+# exact commands. The instruction arrives already useful, which is the only
+# form of instruction that gets used.
+#
+# Silent unless this Mac is connected: no key, no hub address, no network, or
+# a slow one, and this prints nothing. The hook's contract is never block,
+# never fail, always exit 0, and a shared archive is not worth a hung session.
+HUBLINES=""
+HQ_BIN=$(command -v hq 2>/dev/null || true)
+[ -n "$HQ_BIN" ] || HQ_BIN="$HOME/.local/bin/hq"
+if [ -x "$HQ_BIN" ]; then
+  HUBLINES=$(HQ_TIMEOUT=2 "$HQ_BIN" ask 2d 3 2>/dev/null | python3 -c '
+import json, sys
+try:
+    rows = json.load(sys.stdin).get("agents", [])
+except Exception:
+    raise SystemExit
+out = []
+for a in rows[:3]:
+    who = (a.get("agent") or a.get("session", "")[:8] or "an agent")[:52]
+    said = (a.get("headline") or "no headline yet")[:78]
+    out.append("  - " + who + ": " + said)
+print("\n".join(out))
+' 2>/dev/null || true)
+fi
+
+python3 - "$DIR" "$WHOSE" "${AGENT:-<your session id>}" "$HUBLINES" <<'PYCTX' 2>/dev/null || true
 import json, sys
 directory, whose, agent = sys.argv[1], sys.argv[2], sys.argv[3]
+hublines = sys.argv[4] if len(sys.argv) > 4 else ""
 # Where the page is read decides what the session is told to do after
 # writing it. With a hub app configured (hq.json app.base_url), the app
 # mirrors the page and announces it, so the session leaves a pointer at the
@@ -170,6 +206,19 @@ text = (
     "one-line answer, and your own intermediate reasoning. When in doubt, ask "
     "whether you would be happy for them to miss it entirely -- if not, it is a page."
 )
+if hublines.strip():
+    text += (
+        "\n\nTHE OTHER AGENTS ON THIS MAC SHARE ONE ARCHIVE, AND YOU CAN READ IT. "
+        "Every page and every finished turn, searchable from here, with `hq`:\n"
+        "  hq ask                     who is working on what, and what they last said\n"
+        "  hq find \"<words>\"          search every page and turn, ranked\n"
+        "  hq page <session> <slug>   read one page as text\n"
+        "Right now:\n" + hublines + "\n"
+        "Search it BEFORE starting research or a design somebody may already have "
+        "done: the record names what they concluded and what they rejected, which is "
+        "usually cheaper than repeating it. If it holds no answer, say so rather than "
+        "inventing one."
+    )
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "SessionStart", "additionalContext": text}}))
 PYCTX
