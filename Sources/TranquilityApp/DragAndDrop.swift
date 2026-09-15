@@ -254,9 +254,14 @@ final class TrayRowView: NSStackView, NSTextFieldDelegate {
         compose.focusRingType = .none
         compose.font = ChromeType.mono(ofSize: 11, weight: .regular)
         compose.textColor = StateLegend.Lens.content.color
-        compose.placeholderAttributedString = ChromeType.line(
-            StateLegend.composePlaceholder, font: ChromeType.mono(ofSize: 11, weight: .regular),
-            color: StateLegend.Palette.faint)
+        // A plain attributed string, NOT through the mark composer: the
+        // composer sets a baseline offset, and a placeholder on one baseline
+        // with the typed words on another is "the text moves up a little
+        // when you start typing" (15 Sep).
+        compose.placeholderAttributedString = NSAttributedString(
+            string: StateLegend.composePlaceholder,
+            attributes: [.font: ChromeType.mono(ofSize: 11, weight: .regular),
+                         .foregroundColor: StateLegend.Palette.faint])
         compose.lineBreakMode = .byTruncatingHead
         compose.maximumNumberOfLines = 1
         compose.cell?.usesSingleLineMode = true

@@ -731,7 +731,7 @@ extension StatusHUD {
         if let commandV { panel.sendEvent(commandV) }
         let pasteStagedOnce = received.count == 1 && received.first?.via == .paste
         let chip = trayRow.displayedNamesForTesting.first ?? ""
-        let chipIsCutAndCounted = chip == "pasted-one.png"
+        let chipIsCutAndCounted = chip == FragmentPreview.preview(AttachmentTray.quoted("/tmp/pasted-one.png"))
 
         // A refused paste says why, on the card, and stages nothing.
         board.clearContents()

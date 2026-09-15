@@ -2315,10 +2315,15 @@ final class StatusHUD: NSObject {
         // funnel exists to close, and it would draw a line across a card that
         // has nothing under it.
         stripLabel.isHidden = true; stripRule.isHidden = true
-        // The chips are baselined off like every other widget and re-derived
-        // below. Never left standing from a previous face: a chip belongs to
-        // one session, and a face that addresses nobody must not show one.
-        trayRow.isHidden = true
+        // The chips are re-derived below like every other widget, and never
+        // left standing from a previous face: a chip belongs to one session,
+        // and a face that addresses nobody must not show one. But NOT
+        // baselined to hidden first (15 Sep): hiding a view, even for the
+        // length of one render, ends the field editor's editing inside it,
+        // and render runs twenty times a second while the microphone is
+        // open. "You lose the focus on every keystroke" was this line. The
+        // decision is made once, below, and written only when it changes.
+        var trayShown = false
         // The footer belongs to the grid alone, and the sticky dies with it: a
         // note left open while the face changes underneath is exactly the
         // residue class render()'s baseline exists to make impossible.
@@ -2621,7 +2626,7 @@ final class StatusHUD: NSObject {
                 // always did, and EMPTY on a card or a capture (ruled 15 Sep,
                 // mockup 2): "no attachments" and the Attach door, where the
                 // chip will land. Never empty on the grid, which names no one.
-                trayRow.isHidden = staged.isEmpty && !(state.isCardOnStage || state.isCapturingAudio)
+                trayShown = !(staged.isEmpty && !(state.isCardOnStage || state.isCapturingAudio))
                 // Something to send: Send stands in for Controls (ruled 15
                 // Sep), on a card as well as during a capture.
                 let hasWords = !trayRow.composedText.trimmingCharacters(in: .whitespaces).isEmpty
@@ -2630,6 +2635,7 @@ final class StatusHUD: NSObject {
                 trayRow.apply([])
             }
         }
+        if trayRow.isHidden != !trayShown { trayRow.isHidden = !trayShown }
 
         // Controls belongs to every face where a gesture is the next thing you
         // might do, not to the grid alone (ruled 18 Aug). That is the grid — in
