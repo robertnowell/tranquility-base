@@ -169,7 +169,7 @@ final class OpenCodeClientTests: XCTestCase {
     func testARequestCarryingNoQuestionsIsNotARequest() async throws {
         let fake = Fake()
         fake.routes["GET /question"] = (200, #"[{"id":"q1","sessionID":"s","questions":[]}]"#)
-        fake.routes["GET /api/session/s/permission"] = (200, "[]")
+        fake.routes["GET /permission"] = (200, "[]")
         let request = try await client(fake).pendingRequest("s")
         XCTAssertNil(request)
     }
@@ -190,7 +190,7 @@ final class OpenCodeClientTests: XCTestCase {
     func testAPermissionBecomesAOneQuestionRequestInACPsVocabulary() async throws {
         let fake = Fake()
         fake.routes["GET /question"] = (200, "[]")
-        fake.routes["GET /api/session/s/permission"] = (200, """
+        fake.routes["GET /permission"] = (200, """
         [{"id":"p1","sessionID":"s","action":"run rm -rf","resources":["build/"]}]
         """)
         let request = try await client(fake).pendingRequest("s")
@@ -202,13 +202,18 @@ final class OpenCodeClientTests: XCTestCase {
     }
 
     /// The prefix is OpenCode's own inconsistency: questions live at
-    /// `/question`, permissions at `/api/session/.../permission`.
-    func testThePermissionRouteKeepsItsApiPrefix() async throws {
+    /// `/question`, and permissions at the UNSCOPED `/permission` too. The
+    /// scoped `/api/session/{id}/permission` answers `{"data":[]}` even while
+    /// one is pending; measured live 14 Sep 2026, an agent on `edit: ask` sat
+    /// blocked for 240 s reading as working because of it.
+    func testThePermissionRouteIsUnscopedLikeTheQuestionRoute() async throws {
         let fake = Fake()
         fake.routes["GET /question"] = (200, "[]")
-        fake.routes["GET /api/session/s/permission"] = (200, "[]")
+        fake.routes["GET /permission"] = (200, "[]")
         _ = try await client(fake).pendingRequest("s")
-        XCTAssertTrue(fake.calls.contains { $0.path == "/api/session/s/permission" })
+        XCTAssertTrue(fake.calls.contains { $0.path == "/permission" }, "called: \(fake.calls.map(\.path))")
+        XCTAssertFalse(fake.calls.contains { $0.path.hasPrefix("/api/session/") && $0.path.hasSuffix("/permission") },
+                       "the scoped route lies: it answers an empty envelope while a permission is pending")
     }
 
     // MARK: - Answering

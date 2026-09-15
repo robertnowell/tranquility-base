@@ -156,12 +156,18 @@ enum Wire {
     struct Permission: Decodable {
         var id: String
         var sessionID: String
+        /// What the live server sends: `permission` ("edit", "bash") and
+        /// `patterns` (["greet.py"]). The first draft guessed `action` and
+        /// `resources`; both spellings decode so a fixture written either way
+        /// still means something, but the live one is the one that matters.
+        var permission: String?
+        var patterns: [String]?
         var action: String?
         var resources: [String]?
 
         func pending(session: AgentSession.ID) -> PendingRequest {
-            let what = action ?? "run this"
-            let on = (resources ?? []).prefix(3).joined(separator: ", ")
+            let what = permission ?? action ?? "run this"
+            let on = (patterns ?? resources ?? []).prefix(3).joined(separator: ", ")
             let asked = on.isEmpty ? "Allow \(what)?" : "Allow \(what) on \(on)?"
             return PendingRequest(
                 id: id, session: session,
@@ -190,6 +196,9 @@ enum Wire {
     ///     message.updated, session.updated, session.status, session.created,
     ///     session.diff, session.idle, server.connected, catalog.updated,
     ///     reference.updated, integration.updated
+    ///
+    /// and, once a permission rule says `ask`, `permission.asked` carrying
+    /// `{id, sessionID, permission, patterns, metadata}` under `properties`.
     ///
     /// Returning nil rather than throwing for the rest is rule 1: OpenCode adds
     /// event types on a release nobody here controls, and a client that fell
@@ -273,7 +282,12 @@ enum Wire {
             // `session.status` had just reported correctly.
             return changed(.unknown)
 
-        case "question.updated", "permission.updated":
+        case "question.asked", "permission.asked",
+             "question.v2.asked", "permission.v2.asked",
+             "question.updated", "permission.updated":
+            // `permission.asked` is what a live 1.18.30 emits when an agent
+            // blocks on `edit: ask` (captured 14 Sep 2026); the first draft
+            // matched only `.updated` and the ask never reached the row.
             // The REQUEST ITSELF is not on this event in a shape worth trusting
             // across versions, and it is one cheap fetch away. So this says
             // "something is asking" and the caller fetches it, which is the
