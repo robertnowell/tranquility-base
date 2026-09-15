@@ -352,10 +352,20 @@ public struct SessionRow: Equatable, Sendable {
         // anything. Robert, 15 Sep, on 29 such rows in Past Agents: "clicking
         // on them does nothing. It's very weird that they're there." Every
         // one was a probe session that had never spoken. So: the door if it
-        // has one, otherwise nothing, and never an announce that finds nothing.
+        // has one, and never an announce that finds nothing.
+        //
+        // THE DOOR, not `.none`. #458 returned `.none` here, and `isLive`
+        // reads liveness off this verb, so a green row with nothing to say
+        // was reported dead: no Go to Agent, no End Session, and the panel's
+        // `terminate` drill went red on every launch from 14:02 on 15 Sep
+        // until this. A green row is an agent that finished a turn. It is
+        // alive by definition, and every other live lamp that cannot announce
+        // gets its door; this one does too. A remote row with no pane and no
+        // page still lands on `.none`, through `goTo`, for the reason stated
+        // there.
         case .ready:
-            if row.door.isPage { return goTo(row) }
-            return row.read == .none ? .none : .announce
+            if row.door.isPage || row.read == .none { return goTo(row) }
+            return .announce
         case .unlit: return row.revivable ? .revive : .none
         }
     }
