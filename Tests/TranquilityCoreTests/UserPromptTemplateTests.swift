@@ -53,6 +53,26 @@ final class UserPromptTemplateTests: XCTestCase {
         XCTAssertEqual(checked, 48, "every combination of the optional blocks")
     }
 
+    /// A slot name inside a VALUE is text. The renderer used to substitute
+    /// slot by slot over its own output, so a message that mentioned
+    /// "{git_branch}" came out carrying the branch where the person had
+    /// written a brace; an audit reproduced it in 200 repeats (finding A3).
+    /// The shipped `userPrompt(for:)` interpolates and was never wrong here,
+    /// so equality with it is the assertion, plus the literal survival.
+    func testASlotNameInsideAValueIsNotASlot() {
+        let r = SummaryRequest(
+            lastAssistantMessage: "Rename {git_branch} and {previous_goal} in the template; keep {\"ok\": true}.",
+            projectLabel: "Kopi", firstUserMessage: "{last_assistant_message}",
+            previousGoal: "Ship {corrective_note}", gitBranch: "feat/{x}",
+            hookEvent: .stop, notificationMatcher: nil, correctiveNote: nil)
+        let rendered = AnthropicSummaryProvider.userPromptFromTemplate(for: r)
+        XCTAssertEqual(rendered, AnthropicSummaryProvider.userPrompt(for: r))
+        XCTAssertTrue(rendered.contains("Rename {git_branch} and {previous_goal} in the template; keep {\"ok\": true}."))
+        XCTAssertTrue(rendered.contains("feat/{x}"))
+        XCTAssertTrue(rendered.contains("Ship {corrective_note}"))
+        XCTAssertFalse(rendered.contains("{git_branch}\n\n") && !rendered.contains("feat/{x}"))
+    }
+
     /// The matcher has a default, and a default that only one side knows is a
     /// default that produces two different prompts.
     func testTheNotificationMatcherFallsBackIdentically() {

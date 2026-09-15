@@ -95,8 +95,10 @@ public struct UserPromptTemplate: Sendable {
         }
     }
 
+    /// A slot is a bare identifier in single braces, and nothing else is.
+    private static let slot = try! NSRegularExpression(pattern: "\\{([a-z_]+)\\}")
+
     private func substitute(_ text: String, _ r: SummaryRequest) -> String {
-        var out = text
         let values: [String: String] = [
             "project_label": r.projectLabel,
             "notification_matcher": r.notificationMatcher
@@ -107,11 +109,24 @@ public struct UserPromptTemplate: Sendable {
             "last_assistant_message": r.lastAssistantMessage,
             "corrective_note": r.correctiveNote ?? "",
         ]
-        // Replacement, never a format function: the prompt contains JSON braces
-        // and a formatter would treat them as slots of its own.
-        for (slot, value) in values {
-            out = out.replacingOccurrences(of: "{\(slot)}", with: value)
+        // One pass over the TEMPLATE text, and only the template text. This
+        // was a loop of replacingOccurrences per slot, each over the output of
+        // the last, so a value that itself contained "{git_branch}" was
+        // expanded on the next pass; an audit reproduced it by putting a slot
+        // name in a message (finding A3). A slot is a position in the
+        // template, never a pattern to search for in what a user wrote.
+        // Unknown braces stay as they are: the prompt is full of JSON and
+        // none of it is a slot. The Gateway's renderer does exactly this.
+        let ns = text as NSString
+        var out = ""
+        var cursor = 0
+        for match in Self.slot.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            out += ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+            let name = ns.substring(with: match.range(at: 1))
+            out += values[name] ?? ns.substring(with: match.range)
+            cursor = match.range.location + match.range.length
         }
+        out += ns.substring(from: cursor)
         return out
     }
 }

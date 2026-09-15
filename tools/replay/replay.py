@@ -4,7 +4,7 @@
 The prompt template is a plain text file containing the ENTIRE prompt (system +
 user scaffolding merged — `claude -p` takes one prompt).
 
-THE PROMPT IS contracts/gateway/v1/summary-prompt.txt, and there is no longer a
+THE PROMPT IS contracts/gateway/v1/summary.prompt.txt, and there is no longer a
 folder of candidates beside this script. There used to be seven, and by 14 Sep
 2026 the shipped Swift prompt had grown to 2,228 words against the largest of
 them at 1,216: this harness had been replaying a prompt that did not ship, for
@@ -77,7 +77,7 @@ def fill(template, rec):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--prompt", default="../../contracts/gateway/v1/summary-prompt.txt",
+    ap.add_argument("--prompt", default="../../contracts/gateway/v1/summary.prompt.txt",
                     help="path to a prompt template; defaults to the shipped one")
     ap.add_argument("--corpus", default=DEFAULT_CORPUS)
     ap.add_argument("--model", default="haiku",
