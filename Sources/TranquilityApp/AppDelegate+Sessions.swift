@@ -1405,82 +1405,75 @@ extension AppDelegate {
     /// Off-main because the scan can walk the archive, then applied on the main
     /// actor in one shot.
     func openPastAgents() {
-        // The SAME rows the grid is built from, minus the ones it is showing.
-        // Not a second query: two queries can disagree, and the disagreement
-        // was visible — every live session appeared in both surfaces at once,
-        // and appeared here with a quiet lamp whatever it was actually doing.
-        // A working agent read as idle, which is the lamp lying.
-        let rows = sessionRowsNow()
-        let hidden = Array(StatusHUD.pastAgents(rows))
-        // The directory is the one thing a row does not carry and the filter
-        // wants, so it comes from the scan the rows were built from — already
-        // warm, since sessionRowsNow just used it.
-        let scanned = SessionDiscovery.discoverIfScanned()?.sessions ?? []
-        let cwds = Dictionary(scanned.map { ($0.sessionId, $0.cwd ?? "") },
-                              uniquingKeysWith: { first, _ in first })
-        // When each agent last MOVED — the conversation's own clock, not the
-        // file's. It rides the same scan the rows and the directories came from,
-        // so the column, the lamp and the ranking are all reading one number;
-        // a second source here is how the list would start disagreeing with the
-        // band order it is drawn in.
-        let moved = Dictionary(scanned.map { ($0.sessionId, $0.lastActivityAt) },
-                               uniquingKeysWith: { first, _ in first })
+        let warm = SessionDiscovery.hasScanned()
+        let initial = warm ? pastAgentItems() : []
+        hud.pastList?.archiveRead = warm
+        hud.showPastAgents(items: initial)
+        guard case .pastAgents = hud.state, let list = hud.pastList else { return }
+        let opening = list.openingGeneration
+        let index = pastAgentSearch
+        let store = store
         let now = Date()
-        let items = hidden.map { row -> PastAgentsList.Item in
-            // Everything the filter matches, lowercased once: the name you half
-            // remember, the id you would have grepped for, and the directory you
-            // were working in.
-            let haystack = [row.name, row.id, cwds[row.id] ?? ""]
-                .joined(separator: " ").lowercased()
-            // The column answers "when", because that is the question this face
-            // exists for (ruled 19 Aug). A stopped session used to spend the
-            // whole column on its stall reason — a 46-character sentence,
-            // right-aligned — and the name label yields its width to it, so the
-            // three longest-stalled rows on the list rendered with no visible
-            // name at all. The reason is not lost; it moves to the tooltip,
-            // uncut, next to the id it now shares that space with.
-            let when = moved[row.id].map { SessionActivity.lastMovedLabel($0, now: now) }
+        let since = now.addingTimeInterval(-SessionDiscovery.defaultWindow)
+        pastAgentPreparation?.cancel()
+        pastAgentPreparation = Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let scanned = SessionDiscovery.discover().sessions
+                try Task.checkCancellation()
+                let documents: [SessionKeywordIndex.Document]? = await MainActor.run {
+                    guard let self, case .pastAgents = self.hud.state,
+                          self.hud.pastList.openingGeneration == opening else { return nil }
+                    let items = warm ? initial : self.pastAgentItems()
+                    if !warm { self.hud.pastList.finishArchive(items: items, opening: opening) }
+                    let byID = Dictionary(scanned.map { ($0.sessionId, $0) },
+                                          uniquingKeysWith: { first, _ in first })
+                    Track.record("past_agents_opened", ["rows": .int(items.count)])
+                    return items.map { item in
+                        let session = byID[item.row.id]
+                        return SessionKeywordIndex.Document(id: item.row.id, title: item.row.name,
+                            metadata: item.haystack,
+                            activity: session?.lastActivityAt ?? .distantPast)
+                    }
+                }
+                guard let documents else { return }
+                let sources = try SessionKeywordIndex.sources(documents: documents,
+                    discovered: scanned, store: store, since: since, reportsRoot: HomeBase.root)
+                let preparation = try await index.prepare(sources: sources, since: since)
+                try Task.checkCancellation()
+                await MainActor.run {
+                    guard let self, case .pastAgents = self.hud.state else { return }
+                    self.hud.pastList.installSearch({ query in try await index.search(query) },
+                        opening: opening, partial: preparation.unreadableSources > 0)
+                    Permissions.log("past agents keyword index: \(preparation.documents) sessions, "
+                        + "\(preparation.unreadableSources) unreadable sources")
+                }
+            } catch is CancellationError { }
+            catch {
+                await MainActor.run {
+                    guard let self, case .pastAgents = self.hud.state else { return }
+                    self.hud.pastList.searchFailed(opening: opening)
+                    Permissions.log("past agents keyword preparation failed: \(error)")
+                }
+            }
+        }
+    }
+
+    /// Use the grid's own partition and names. The archive and index never
+    /// invent a competing set of row identities or navigation actions.
+    private func pastAgentItems() -> [PastAgentsList.Item] {
+        let hidden = Array(StatusHUD.pastAgents(sessionRowsNow()))
+        let scanned = SessionDiscovery.discoverIfScanned()?.sessions ?? []
+        let byID = Dictionary(scanned.map { ($0.sessionId, $0) },
+                              uniquingKeysWith: { first, _ in first })
+        let now = Date()
+        return hidden.map { row in
+            let session = byID[row.id]
+            let haystack = [row.name, row.id, session?.cwd ?? ""].joined(separator: " ")
+            let when = session.map { SessionActivity.lastMovedLabel($0.lastActivityAt, now: now) }
             let hover = [SessionRow.hoverText(for: row), SessionRow.shortId(row.id)]
                 .compactMap { $0 }.joined(separator: "\n")
-            // The row's OWN lamp, carried through. A session below the fold is
-            // usually quiet, but it is not quiet by definition — on a small
-            // screen an agent can be working and still not fit — and the lamp
-            // must say which.
             return PastAgentsList.Item(row: row, revivable: row.revivable,
-                                       haystack: haystack,
-                                       aux: when, tooltip: hover)
-        }
-        // Tell the list whether the archive has actually been read, so an
-        // empty one can say "reading" rather than "0 sessions".
-        hud.pastList?.archiveRead = SessionDiscovery.hasScanned()
-        // A text census of the same list, for answering "is this harness in
-        // here at all" without squinting at a screenshot of the first ten
-        // rows. Logged, not printed: this runs inside a live app.
-        let codex = items.filter { $0.row.id.hasPrefix("01a0") }.count
-        Permissions.log("past agents: \(items.count) rows "
-            + "(\(codex) codex, \(items.count - codex) claude-code), "
-            + "archiveRead=\(SessionDiscovery.hasScanned())")
-        Track.record("past_agents_opened", ["rows": .int(items.count), "codex": .int(codex)])
-        hud.showPastAgents(items: items)
-
-        // The list is on screen and usable before a single transcript is read.
-        // What the sessions SAID arrives afterwards, off-main, because it costs
-        // 0.26s over the sessions shown — nothing on a background queue, and a
-        // visibly frozen open if the main actor paid it (rule 9). Robert asked
-        // for this so that "microphone" finds "recording lost": the name tells
-        // you what a session was CALLED, and the turns tell you what it was
-        // about. See `TranscriptSearchText` for the bound and its measurement.
-        let paths = Dictionary(scanned.map { ($0.sessionId, $0.transcriptPath) },
-                               uniquingKeysWith: { first, _ in first })
-        let wanted = hidden.map(\.id)
-        Task.detached(priority: .userInitiated) {
-            var extra: [String: [UInt8]] = [:]
-            for id in wanted {
-                guard let path = paths[id] else { continue }
-                let text = TranscriptSearchText.shared.bytes(forTranscriptAt: path)
-                if !text.isEmpty { extra[id] = text }
-            }
-            await MainActor.run { [weak self] in self?.hud.widenPastAgents(extra) }
+                                       haystack: haystack, aux: when, tooltip: hover)
         }
     }
 
