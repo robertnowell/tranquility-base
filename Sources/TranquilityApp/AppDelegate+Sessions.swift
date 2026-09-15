@@ -669,6 +669,10 @@ extension AppDelegate {
                 let answering = (try? coordinator.waiting())?
                     .first { $0.sessionId == spokenTo }?.latestId
                 delivering.began(sessionId: spokenTo, answering: answering)
+                // Words typed while the microphone was open ride this
+                // dictation too: staged as a chip BEFORE Core snapshots the
+                // tray onto the utterance below.
+                hud.flushTypedLineIntoTray()
                 // One clear-site, not eight. Every exit below closes the window
                 // — the supersede return, the six terminal outcomes, the catch —
                 // except `.readyToSend`, which hands the delivery to the undo
