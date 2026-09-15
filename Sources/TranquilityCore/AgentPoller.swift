@@ -246,7 +246,15 @@ public final class AgentPoller: @unchecked Sendable {
     func apply(_ event: AgentEvent) {
         sync {
             switch event.kind {
-            case .appeared(let session), .changed(let session):
+            case .appeared(let session):
+                // The one line that answers "did the row reach the grid" from
+                // the log. Measured 15 Sep: New Agent started an OpenCode
+                // session, the process ran, the card said so, and nothing in
+                // the log could say whether the poller had heard of it.
+                trace?("\(event.provider) appeared \(session.id.prefix(8)) \(session.state)")
+                merge([session], from: event.provider)
+                state.confirmedAt[session.id] = event.at
+            case .changed(let session):
                 merge([session], from: event.provider)
                 state.confirmedAt[session.id] = event.at
             case .asks(let request):
