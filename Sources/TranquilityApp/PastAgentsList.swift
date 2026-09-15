@@ -68,7 +68,10 @@ final class PastAgentsList: NSView {
     /// the needle has moved on belongs to a question nobody is asking any more.
     private var filterGeneration = 0
 
-    var onPick: ((_ id: String, _ revivable: Bool) -> Void)?
+    /// The tap. Carries the row's lamp because the verb depends on it (ruled
+    /// 15 Sep): an amber row's tap is Go to Agent, a green or quiet row's tap
+    /// picks it up, a dead row's tap revives it.
+    var onPick: ((_ id: String, _ revivable: Bool, _ lamp: Lamp) -> Void)?
     /// A click on the LAMP COLUMN, which is the session's power switch and
     /// never navigation — see `SessionRow.lampAction(for:)`. The whole row is
     /// handed over rather than an id, because the switch's verb is a function
@@ -391,7 +394,7 @@ final class PastAgentsList: NSView {
     @objc private func rowTapped(_ sender: NSControl) {
         guard let id = sender.identifier?.rawValue,
               let item = shown.first(where: { $0.row.id == id }) else { return }
-        onPick?(id, item.revivable)
+        onPick?(id, item.revivable, item.row.lamp)
     }
 
     @objc private func goToPicked(_ sender: NSMenuItem) {
@@ -629,6 +632,12 @@ final class PastRowView: NSControl {
     /// recomputed — a drill that recomputes the answer cannot catch a label
     /// that stopped being set from it.
     var verbForTesting: String { verbLabel.stringValue }
+
+    /// The row names its verb, and amber's is the terminal (ruled 15 Sep).
+    static func verb(for item: PastAgentsList.Item) -> String {
+        if item.revivable { return "REVIVE ›" }
+        return item.row.lamp == .fault ? "GO TO ›" : "OPEN ›"
+    }
     var auxWidthForTesting: CGFloat { idLabel.frame.width }
     private let highlight = NSView()
     /// Held so the hover can step its ink and put it back — see `setHovered`.
@@ -639,7 +648,7 @@ final class PastRowView: NSControl {
         idLabel = NSTextField(labelWithString: item.aux ?? item.row.aux)
         // Green for a resurrection, advisory grey for a door — the same two
         // channels the card uses for the same two meanings.
-        verbLabel = NSTextField(labelWithString: item.revivable ? "REVIVE ›" : "OPEN ›")
+        verbLabel = NSTextField(labelWithString: Self.verb(for: item))
         super.init(frame: .zero)
         self.target = target
         self.action = action
@@ -724,7 +733,7 @@ final class PastRowView: NSControl {
         idLabel.translatesAutoresizingMaskIntoConstraints = false
 
         verbLabel.attributedStringValue = Widgets.letterspaced(
-            item.revivable ? "REVIVE ›" : "OPEN ›", size: 9.5, tracking: 1.33,
+            Self.verb(for: item), size: 9.5, tracking: 1.33,
             color: item.revivable ? StateLegend.Palette.ready : StateLegend.Palette.accent)
         verbLabel.alignment = .right
         verbLabel.isHidden = true
