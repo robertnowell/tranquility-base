@@ -46,6 +46,10 @@ public enum Prerequisites {
         case hooks(harness: String)
         /// The cloud hub. Sign in once in the browser; the app keeps the token.
         case hub
+        /// Summaries on us. The same sign-in; the row is where the standing
+        /// lives and what the amber line opens. Ruled 15 Sep; the name is
+        /// provisional.
+        case credits
         /// Spoken summaries. The product.
         case anthropicKey
         /// The voice. Falls back to the system voice, audibly.
@@ -76,6 +80,7 @@ public enum Prerequisites {
             case .tmux: return "tmux"
             case .hooks(let harness): return "hooks." + harness
             case .hub: return "hub"
+            case .credits: return "credits"
             case .anthropicKey: return "anthropicKey"
             case .elevenLabsKey: return "elevenLabsKey"
             case .assemblyAIKey: return "assemblyAIKey"
@@ -88,6 +93,7 @@ public enum Prerequisites {
             switch id {
             case "tmux": self = .tmux
             case "hub": self = .hub
+            case "credits": self = .credits
             case "anthropicKey": self = .anthropicKey
             case "elevenLabsKey": self = .elevenLabsKey
             case "assemblyAIKey": self = .assemblyAIKey
@@ -116,6 +122,7 @@ public enum Prerequisites {
             // row is the whole point of there being two of them.
             case .hooks: return (harness?.label ?? "Agent") + " hooks"
             case .hub: return "Your hub"
+            case .credits: return "Credits"
             case .anthropicKey: return "Anthropic"
             case .elevenLabsKey: return "ElevenLabs"
             case .assemblyAIKey: return "AssemblyAI"
@@ -131,6 +138,7 @@ public enum Prerequisites {
             case .tmux: return "the only way a reply reaches a session"
             case .hooks: return "finished turns, and results as pages you can open"
             case .hub: return "everything your agents write, in one place, on every device"
+            case .credits: return "spoken summaries on us, ten dollars to start, with the same sign-in"
             // "a tenth of a cent", not "$0.001". Same number, and it is the
             // phrasing the onboarding body already uses. The currency sign is
             // also a MARK by `ChromeType.isMark`, and this row renders inside
@@ -178,7 +186,10 @@ public enum Prerequisites {
             // cloud provider is a machine using the product as it has always
             // worked. Neither one is the Anthropic case, where the fallback is
             // "a floor, not a product".
-            case .elevenLabsKey, .assemblyAIKey, .openAIKey, .provider: return false
+            // Credits are optional for the same reason: a Mac on its own key
+            // is a Mac using the product as it always has. The row's amber
+            // is about a Mac that WAS on credits and fell off them.
+            case .elevenLabsKey, .assemblyAIKey, .openAIKey, .provider, .credits: return false
             }
         }
 
@@ -186,7 +197,7 @@ public enum Prerequisites {
         /// not credentials at all.
         public var secret: Secrets.Key? {
             switch self {
-            case .tmux, .hooks, .hub: return nil
+            case .tmux, .hooks, .hub, .credits: return nil
             case .anthropicKey: return .anthropicAPIKey
             case .elevenLabsKey: return .elevenLabsAPIKey
             case .assemblyAIKey: return .assemblyAIAPIKey
@@ -211,7 +222,7 @@ public enum Prerequisites {
             // 1 Sep); only the reporting splits. Pressing it on either row
             // repairs every harness this machine has.
             case .hooks: return "Wire them"
-            case .hub: return "Sign in"
+            case .hub, .credits: return "Sign in"
             case .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey,
                  .provider: return "Paste key"
             }
@@ -252,7 +263,7 @@ public enum Prerequisites {
     ) -> [Item] {
         [.tmux]
             + harnesses.map { Item.hooks(harness: $0) }
-            + [.hub, .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey]
+            + [.hub, .credits, .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey]
             // A provider gets a row once this machine has an ADDRESS for it,
             // the same way a harness gets a hooks row once it is detected.
             // Listing every provider the app can drive would tell someone
@@ -349,6 +360,9 @@ public enum Prerequisites {
         /// string cannot carry both, and when it tried, a revoked token kept
         /// a green lamp.
         public var hubStatus: @Sendable () -> HubState? = { nil }
+        /// Where this Mac stands with credits. The live value is the one
+        /// standing the summariser keeps; tests hand in whichever they mean.
+        public var creditStanding: @Sendable () -> CreditStanding = { .notOnCredits(connectAgain: false) }
 
         public init(
             tmuxPath: @escaping @Sendable () -> String?,
@@ -362,7 +376,8 @@ public enum Prerequisites {
             // deterministic answer; defaulting it to `ProviderConfig.configured()`
             // would reintroduce exactly the bypass this field exists to close.
             providers: @escaping @Sendable () -> [String] = { [] },
-            hubStatus: @escaping @Sendable () -> HubState? = { nil }
+            hubStatus: @escaping @Sendable () -> HubState? = { nil },
+            creditStanding: @escaping @Sendable () -> CreditStanding = { .notOnCredits(connectAgain: false) }
         ) {
             self.tmuxPath = tmuxPath
             self.providers = providers
@@ -371,6 +386,7 @@ public enum Prerequisites {
             self.hasSecret = hasSecret
             self.keyVerdict = keyVerdict
             self.hubStatus = hubStatus
+            self.creditStanding = creditStanding
         }
 
         public static let live = Probes(
@@ -417,7 +433,8 @@ public enum Prerequisites {
                 // the button back, not a green one with bad news in the text.
                 return HubState(connected: !beat.note.hasPrefix("not connected"),
                                 detail: "\(device) · \(beat.note)")
-            })
+            },
+            creditStanding: { CreditStanding.current })
     }
 
     /// The canonical install locations, checked WITHOUT `Tmux.resolveBinary`'s memo.
@@ -488,6 +505,15 @@ public enum Prerequisites {
                 }
                 return State(item: item, satisfied: false,
                              detail: "not connected. Sign in and your agents' pages and turns appear in the hub")
+            case .credits:
+                let standing = probes.creditStanding()
+                switch standing {
+                case .good, .onCredits:
+                    return State(item: item, satisfied: true, detail: standing.detail)
+                default: break
+                }
+                return State(item: item, satisfied: false, detail: standing.detail,
+                             attention: standing.needsAttention)
             default:
                 return State(item: item, satisfied: true, detail: "")
             }

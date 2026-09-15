@@ -633,8 +633,14 @@ public struct SummarizerChain: Sendable {
                         // if they pasted one, is the right next thing. Every
                         // other managed failure lands on the floor and never
                         // on their bill, which is what `break` is for.
+                        //
+                        // And out of credits is not a credits failure either: the
+                        // grant is spent, there is nothing left to protect, and the
+                        // person's own key (if pasted) is what they would choose.
+                        // The standing says so in amber; see CreditStanding.
                         if case let .refused(code, _) = managedFailure!,
-                           code == "rebinding_required" || code == "not_connected" {
+                           code == "rebinding_required" || code == "not_connected"
+                           || code == "insufficient_credit" {
                             continue
                         }
                         break
@@ -680,6 +686,14 @@ public struct SummarizerChain: Sendable {
                 proposal, maxWords: SpokenTextSanitizer.proposalWords)
         }
 
+        // The one app-level state about credits, derived from this summary.
+        // Only a chain that has a managed provider says anything; a BYOK chain
+        // is not on credits and must not paint the row.
+        if providers.contains(where: \.usesManagedCredits),
+           let standing = CreditStanding.from(receipt: managedReceipt, failure: managedFailure,
+                                              provider: providerName) {
+            CreditStanding.set(standing)
+        }
         return Summary(
             spoken: sanitizer.sanitize(brief.spokenText(), allowing: speakable),
             brief: brief,
