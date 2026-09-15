@@ -195,6 +195,24 @@ final class SessionRowTests: XCTestCase {
                        "asks-for-you, then blue, each in arrival order; then quiet, then closed")
     }
 
+    // MARK: - A green row with nothing to say is still alive (15 Sep 2026)
+
+    /// #458 made a green row with `read: .none` answer `.none`, and `isLive`
+    /// reads liveness off that verb: so the row lost Go to Agent and End
+    /// Session, and the panel's `terminate` drill went red on every launch
+    /// from 14:02 that day. Green means its agent finished a turn; it is alive
+    /// by definition, and like every other live lamp that cannot announce it
+    /// gets its door. The remote case with no pane and no page still answers
+    /// `.none`, through the door, and RemoteRowsTests holds that.
+    func testAGreenRowWithNothingToAnnounceGetsItsDoorAndIsLive() {
+        let silent = SessionRow(id: "s", name: "s", aux: "", lamp: .ready, read: .none)
+        XCTAssertEqual(SessionRow.action(for: silent), .goToAgent)
+        XCTAssertTrue(SessionRow.isLive(silent))
+        let heard = SessionRow(id: "h", name: "h", aux: "", lamp: .ready, read: .opened)
+        XCTAssertEqual(SessionRow.action(for: heard), .announce,
+                       "a row with a turn in the store still announces it")
+    }
+
     // MARK: - Green above blue (ruled 15 Sep 2026)
 
     /// Robert, on the screenshot #458 produced: "the green lamps should
