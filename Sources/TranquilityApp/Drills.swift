@@ -718,31 +718,27 @@ extension StatusHUD {
         let letterA = key("a", code: 0)
         let escape = key("\u{1B}", code: 53)
 
-        // Command-V while armed (re-ruled 15 Sep: one rule, not two). WORDS
-        // go into the typed line, as in any message box, and stage nothing;
-        // the card stays armed. A FILE is a chip, through the handler, as a
-        // paste. The chip's cut-and-counted preview is FragmentPreview's own
-        // test now that a pasted paragraph is no longer a chip.
+        // Command-V while armed (re-ruled 15 Sep, second pass): a paste is an
+        // attachment, words included, and the typed line is for typing only.
+        // The card stays armed and the line stays empty. A file is a chip
+        // the same way.
         let paragraph = String(repeating: "the quick brown fox jumps over the lazy dog ", count: 6)
             .trimmingCharacters(in: .whitespaces)
         board.clearContents()
         board.setString(paragraph, forType: .string)
         if let commandV { panel.sendEvent(commandV) }
-        let wordsPasteIntoTheLine = received.isEmpty
-            && trayRow.compose.stringValue == paragraph
+        let wordsPasteIntoTheLine = received.count == 1 && received.first?.via == .paste
+            && trayRow.compose.stringValue.isEmpty
+            && trayRow.displayedNamesForTesting.first == FragmentPreview.preview(paragraph)
         let staysArmedAfterPaste = pasteArmed
-        // Empty the line WITHOUT hiding it: clearComposed hides, and a hidden
-        // field ends its own editing, which is the very thing this drill is
-        // here to catch happening by accident.
-        trayRow.compose.stringValue = ""
         board.clearContents()
         board.writeObjects([URL(fileURLWithPath: "/tmp/pasted-one.png") as NSURL])
         if let commandV { panel.sendEvent(commandV) }
-        let pasteStagedOnce = received.count == 1 && received.first?.via == .paste
+        let pasteStagedOnce = received.count == 2 && received.last?.via == .paste
         // The drill's own stager keeps text only, so the proof a file became
         // a chip is the item the handler received, not a rendered row.
         let chipIsCutAndCounted: Bool = {
-            if case .file(let path)? = received.first?.items.first { return path == "/tmp/pasted-one.png" }
+            if case .file(let path)? = received.last?.items.first { return path == "/tmp/pasted-one.png" }
             return false
         }()
 
@@ -750,7 +746,7 @@ extension StatusHUD {
         board.clearContents()
         board.setString(String(repeating: "x", count: DropSurfaceView.itemCap + 1), forType: .string)
         if let commandV { panel.sendEvent(commandV) }
-        let refusalOnTheCard = received.count == 1
+        let refusalOnTheCard = received.count == 2
             && pasteHintForTesting.contains("too large")
 
         // A typed key is WORDS now (ruled 15 Sep): it lands on the typed line
@@ -797,7 +793,7 @@ extension StatusHUD {
             ("ringIsWorkingBlue", ringIsWorkingBlue),
             ("armAddsNoHint", armAddsNoHint),
             ("armAddsTheTypedLineOnly", armKeepsGeometry),
-            ("wordsPasteIntoTheLine", wordsPasteIntoTheLine),
+            ("pastedWordsAreAChip", wordsPasteIntoTheLine),
             ("pasteStagedOnce", pasteStagedOnce),
             ("staysArmedAfterPaste", staysArmedAfterPaste),
             ("fileIsAChip", chipIsCutAndCounted),

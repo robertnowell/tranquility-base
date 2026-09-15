@@ -3557,17 +3557,8 @@ final class StatusHUD: NSObject {
             render(); return
         }
         pasteNote = nil
-        // One rule (15 Sep: "paste sometimes goes as an attachment and
-        // sometimes to the text field"): words paste into the typed line
-        // while it is taking keys, as they would in any message box; a file
-        // or an image is a chip, always.
-        if trayRow.compose.currentEditor() != nil,
-           reading.items.count == 1, case .text(let words) = reading.items[0] {
-            trayRow.compose.currentEditor()?.insertText(words)
-            Permissions.log("paste: \(words.count) chars into the typed line")
-            Track.record("pasted", ["accepted": true, "into": "typed_line"])
-            render(); return
-        }
+        // One rule (re-ruled 15 Sep, second pass): a paste is an attachment,
+        // words included. The typed line is for typing only.
         _ = onItemsStaged?(reading.items, .paste)
         Permissions.log("paste: \(reading.items.count) item(s) for \(target.sessionId.prefix(8))")
         render()
