@@ -1285,17 +1285,21 @@ final class StatusHUD: NSObject {
     /// their own `onCommit`/browse-completion handlers) rather than round-
     /// tripping back through here.
     func showAgentFields(for harness: String) {
-        // **A provider has no launch command and no working directory**, and
-        // showing empty ones would invite the user to configure something
-        // nothing reads. The fields belong to a harness this Mac starts; an
-        // agent that lives behind an API or a pipe is configured by its
-        // credential and nothing else.
+        // **A provider has no launch command**, and showing an empty one
+        // would invite the user to configure something nothing reads: an
+        // agent behind a pipe is started by the catalog's own argv. It DOES
+        // have a working directory, the workspace a new agent starts in and
+        // the one `session/list` is filtered to, and the registry reads it
+        // from the same setting a terminal harness uses (#471). Before this
+        // the pane was empty for a provider default and two launch drills
+        // went red on every deploy after Robert chose OpenCode.
         let isHarness = KnownHarnesses.all.contains { $0.id == harness }
         launchRow.isHidden = !isHarness
-        directoryRow.isHidden = !isHarness
-        guard isHarness else { return }
-        launchRow.show(AgentDefaults.load(for: harness))
-        launchRow.setPlaceholder(AgentDefaults.fallback(for: harness))
+        directoryRow.isHidden = false
+        if isHarness {
+            launchRow.show(AgentDefaults.load(for: harness))
+            launchRow.setPlaceholder(AgentDefaults.fallback(for: harness))
+        }
         directoryRow.show(AgentDefaults.directoryAsTyped(for: harness))
         directoryRow.setPlaceholder(AgentDefaults.fallbackDirectory)
     }

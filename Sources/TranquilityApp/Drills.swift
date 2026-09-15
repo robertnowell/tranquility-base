@@ -298,11 +298,15 @@ extension StatusHUD {
     /// on the list's filter), and a keyboard the pane forgets to give back.
     func launchSettingsDrill() {
         showSettings(voices: [], roster: [], note: "drill")
-        let shown = launchRow?.isHidden == false && directoryRow?.isHidden == false
+        // A terminal harness has a launch command and a directory; a provider
+        // (OpenCode over the protocol) has only the directory. The drill asks
+        // for what the default agent actually has, whichever kind it is.
+        let isHarness = KnownHarnesses.all.contains { $0.id == AgentDefaults.defaultHarness }
+        let shown = launchRow?.isHidden == !isHarness && directoryRow?.isHidden == false
         let tookKeyboard = panel?.acceptsKey == true
         // What the fields SHOW is the stored value, not the resolved one — a
         // directory that has gone missing must be visible as itself.
-        let showsStored = launchRow?.input.stringValue == AgentDefaults.load()
+        let showsStored = (!isHarness || launchRow?.input.stringValue == AgentDefaults.load())
             && directoryRow?.input.stringValue == AgentDefaults.directoryAsTyped()
         // The tabs, which is what this pane was supposed to have all along.
         let tabsShown = settingsTabs?.isHidden == false
@@ -311,7 +315,7 @@ extension StatusHUD {
             && launchRow?.isHidden == true && directoryRow?.isHidden == true
         let keyboardHandedBack = panel?.acceptsKey == false
         showSettingsTab(.agents)
-        let backOnAgents = launchRow?.isHidden == false
+        let backOnAgents = directoryRow?.isHidden == false
 
         // THE REGRESSION, pinned: RECENT then VOICES used to draw the title
         // "Recent audio" over an empty roster with the voices hint beneath it,

@@ -1264,7 +1264,7 @@ extension AppDelegate {
     /// a promise for. A failure is a card with the provider's reason, because
     /// a silent no-op after pressing New Agent is the defect this replaces.
     private func startProviderAgent(_ provider: any AgentProvider) {
-        let dir = AgentDefaults.fallbackDirectory
+        let dir = AgentDefaults.directory(for: provider.id)
         let label = (dir as NSString).lastPathComponent
         let line = LaunchGreeting.nextLine()
         let voice = (try? store?.nextVoiceInRotation(roster: VoiceRoster.load())) ?? nil
