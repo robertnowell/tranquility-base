@@ -153,6 +153,38 @@ fi
         self.assertIn("behind origin/main", result.stderr)
         self.assertFalse(self.log.exists())
 
+    def test_release_recovery_audits_current_and_historical_targets(self):
+        # Execute the actual workflow's source-gate block. Historical commits
+        # carry preflight.sh but cannot contain today's audit-source.sh.
+        workflow = (SOURCE / ".github/workflows/release-every-merge.yml").read_text()
+        gate = workflow.split('          [[ "$TARGET_COMMIT"', 1)[1]
+        gate = '[[ "$TARGET_COMMIT"' + gate.split('          scripts/prepare-release-app.sh', 1)[0]
+        for historical in (False, True):
+            with self.subTest(historical=historical):
+                if historical:
+                    (self.repo / "scripts/audit-source.sh").unlink()
+                    (self.repo / "scripts/preflight.sh").write_text('''#!/bin/bash
+set -eu
+test "$(git rev-parse --abbrev-ref HEAD)" != HEAD
+test "$(git rev-parse "$1")" = "$(git rev-parse HEAD^)"
+scripts/test.sh
+''')
+                    self.git("add", "scripts")
+                    self.git("commit", "-qm", "historical gate fixture")
+                target = self.git("rev-parse", "HEAD")
+                self.git("checkout", "-q", "--detach", target)
+                for fail in ("0", "1"):
+                    result = subprocess.run(
+                        ["bash", "-euo", "pipefail", "-c", gate], cwd=self.repo,
+                        env=dict(self.env, TARGET_COMMIT=target, AUDIT_TEST_FAIL=fail),
+                        text=True, capture_output=True,
+                    )
+                    if fail == "0":
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.git("rev-parse", "HEAD"), target)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
