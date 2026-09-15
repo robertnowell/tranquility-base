@@ -761,7 +761,7 @@ extension StatusHUD {
         if let escape { panel.sendEvent(escape) }
         let escapeReleases = !pasteArmed
         pasteIntoTray()
-        let releasedPastesNothing = received.count == 1
+        let releasedPastesNothing = received.count == 2
         armPaste(via: "drill")
         if let escape { panel.sendEvent(escape) }
         let escapeReleasesAgain = !pasteArmed
