@@ -106,7 +106,8 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
 
         // The app is an accessory (no dock icon), so it must be activated explicitly
         // or the window opens behind whatever the user is looking at.
-        NSApp.setActivationPolicy(.regular)
+        // The activation policy is the Dock's (AppDelegate+Dock), set at
+        // launch before this window exists; this used to flip it twice.
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
 
@@ -167,8 +168,6 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         refreshTimer?.invalidate()
         refreshTimer = nil
         window = nil
-        // Back to menu-bar-only once the user is done here.
-        NSApp.setActivationPolicy(.accessory)
         onDone?()
     }
 

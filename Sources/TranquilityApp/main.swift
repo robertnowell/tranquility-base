@@ -956,7 +956,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
-        hud.onPresenceChanged = { [weak self] in self?.refreshDockPresence(because: "panel") }
         hud.onContinueWork = { [weak self] id, name in
             self?.continueWork(from: id, name: name)
         }
@@ -1854,6 +1853,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // are ever missing you should show the onboarding screen not the
         // grid because the grid won't work."
         Permissions.logEnvironment()
+        // The Dock tile, before either branch: a menu-bar-only app on a full
+        // menu bar is invisible, and this is the door that is always there.
+        showDockTile(because: "launch")
         // `stageTwoOwed`: the restart that stage one demands used to end the
         // onboarding outright, because this line only ever asked macOS. A
         // process whose permissions are all active can still owe the keys
@@ -1871,12 +1873,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // for, and a collapsed column teaches nothing.
                 self?.hud.setCollapsed(false)
                 self?.showIdleGrid()
-                self?.refreshDockPresence(because: "onboarding done")
             }
         }
-        // After the gate, whichever branch ran: the first thing a new install
-        // can rely on seeing is the Dock tile, not the status item.
-        refreshDockPresence(because: "launch")
         deepLinksReady = true
         drainPendingDeepLinksIfReady()
     }
@@ -1977,12 +1975,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// button window sits off-screen or nowhere; log only on change so the tick
     /// stays quiet.
     var menuBarWasPresent: Bool?
-
-    /// Whether the status item has been clicked since this process started:
-    /// the only proof there is that the menu bar is drawing it right now. In
-    /// memory on purpose, never on disk (AppDelegate+Dock): a bar with room
-    /// yesterday has none today.
-    var menuBarClickedThisLaunch = false
 
     /// One probe in flight, newest wins; the pending rows never cross an
     /// isolation boundary — they wait here for the probe's verdict.

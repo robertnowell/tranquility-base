@@ -1,50 +1,56 @@
 import AppKit
 import TranquilityCore
 
-/// The Dock tile, and when the app wears one.
+/// The Dock tile: there while Tranquility Base is open, and nothing decides
+/// otherwise.
 ///
-/// Ruled 14 Sep 2026 after Gary Marx's first run, and tightened 15 Sep. The
-/// status item is the app's only permanent door, and macOS drops status
-/// items silently when the menu bar is full: on his Mac the popover floated
-/// under a bar that had no room for the icon, and "it is not in the menu
-/// bar" was the plain truth. `autosaveName` keeps a position the user has
-/// dragged to, but there is no public API to pin an item, to ask whether it
-/// is drawn, or to find it once it is not. A hidden icon cannot be dragged.
+/// Ruled 15 Sep 2026, replacing two days of rules that tried to be clever.
+/// The status item is the app's only other door, and macOS drops status
+/// items silently when the menu bar is full: on Gary Marx's first run the
+/// popover floated under a bar that had no room for the icon. There is no
+/// public API to pin an item, to ask whether it is drawn, or to find it once
+/// it is not, so every recovery a guide can offer presupposes the icon is
+/// visible. The 14 Sep rule showed a tile until the icon was clicked once
+/// and then hid it for good; the next morning Robert's own tile was gone.
+/// A per-launch rule was drafted and rejected the same hour: "I think that's
+/// going to be confusing, whether the dock tile is there or not. Just show
+/// the dock tile, it doesn't hurt. It's a lot simpler."
 ///
-/// So the Dock tile is the door that is always there when it is needed, and
-/// "needed" is decided per LAUNCH, never per install (15 Sep: "let's obsess
-/// if it's going to be in the bottom bar when you need it"). The 14 Sep rule
-/// hid the tile for ever after one click, and a bar that had room yesterday
-/// has none today: a new app, an external display, a notch.
+/// So: a tile while the app runs. A click on it brings the grid forward.
+/// The Dock menu carries the status item's own items, and macOS adds its
+/// Hide and Quit under them; Hide is mapped to the panel's own hide, so it
+/// does what the word says and does not park the app in a state where an
+/// arriving turn cannot surface the panel.
 ///
-/// The tile is shown unless all three hold: the status item has been
-/// clicked in THIS launch, which is the only proof it is drawn right now;
-/// the panel is not on screen (the Wispr Flow rule: while the UI is up, so
-/// is a tile that focuses it); and onboarding is not showing.
-///
-/// A click on the tile shows the grid; a right-click carries the status
-/// item's own menu, so nothing the menu bar offers is lost with the icon.
-///
-/// One writer for the activation policy. Onboarding sets `.regular` for its
-/// own window and `.accessory` when it closes; its `onDone` then runs this,
-/// which is why the tile comes straight back on a machine whose menu bar has
-/// not been clicked yet.
+/// One writer for the activation policy: this. Onboarding used to set it
+/// twice on its own; it no longer touches it.
 extension AppDelegate {
 
-    /// Apply the rule. Idempotent; logs and records only a change.
-    func refreshDockPresence(because reason: String) {
-        let proven = menuBarClickedThisLaunch
-        let wanted: NSApplication.ActivationPolicy =
-            (proven && !hud.isOnScreen && !onboarding.isShowing) ? .accessory : .regular
-        guard NSApp.activationPolicy() != wanted else { return }
-        NSApp.setActivationPolicy(wanted)
-        let shown = wanted == .regular
-        Permissions.log("dock: tile \(shown ? "shown" : "hidden") (\(reason); "
-            + "menuBarClickedThisLaunch=\(proven) panel=\(hud.isOnScreen) "
-            + "onboarding=\(onboarding.isShowing))")
-        Track.record("dock_presence", ["shown": .bool(shown), "reason": Track.token(from: reason),
-                                       "menu_bar_clicked_this_launch": .bool(proven),
-                                       "panel_on_screen": .bool(hud.isOnScreen)])
+    /// Wear the tile. Called once at launch; idempotent after that.
+    func showDockTile(because reason: String) {
+        guard NSApp.activationPolicy() != .regular else { return }
+        NSApp.setActivationPolicy(.regular)
+        Permissions.log("dock: tile shown (\(reason))")
+        Track.record("dock_presence", ["shown": true, "reason": Track.token(from: reason)])
+        // The system's Hide (Dock menu, ⌘H) hides every window and the panel
+        // with it, and a hidden app's panel cannot be ordered front by an
+        // ambient turn until the app is unhidden. Unhide at once and hide the
+        // PANEL instead, which is what the person meant.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didHideNotification, object: NSApp, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                // Without activation: `unhide(_:)` would make this app active
+                // and put its menu bar over whatever the person was in.
+                NSApp.unhideWithoutActivation()
+                guard let self else { return }
+                Track.record("dock_clicked", ["button": "right", "result": "hide"])
+                if self.hud.isOnScreen {
+                    if self.hud.canSurfaceAmbiently { self.hud.hide() } else { self.hud.dismiss() }
+                }
+                Permissions.log("dock: Hide mapped to the panel")
+            }
+        }
     }
 
     /// A click on the tile: the grid, exactly as a click on the status item.
@@ -58,7 +64,8 @@ extension AppDelegate {
 
     /// A right-click on the tile: the status item's menu, the same items in
     /// the same order (ruled 14 Sep 2026). A copy, because the status item
-    /// attaches and detaches the original around its own click.
+    /// attaches and detaches the original around its own click. macOS
+    /// appends Hide and Quit itself.
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         rebuildMenu()
         Track.record("dock_clicked", ["button": "right", "result": "menu"])
